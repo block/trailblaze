@@ -34,8 +34,16 @@ data class CliRunRequest(
   val llmProvider: String? = null,
   /** LLM model override (e.g., "gpt-4.1"). */
   val llmModel: String? = null,
-  /** Use recorded tool sequences instead of LLM inference. */
-  val useRecordedSteps: Boolean = false,
+  /**
+   * Tri-state replay-vs-AI control:
+   *   - `true`  — force replay (use the trail's `recording:` tools verbatim).
+   *   - `false` — force AI (ignore any recordings; LLM drives each step).
+   *   - `null`  — daemon decides via `hasRecordedSteps(...)` auto-detect.
+   *
+   * Callers that previously sent `false` to mean "auto-detect" must now send
+   * `null` to keep that behavior; `false` is the explicit force-AI signal.
+   */
+  val useRecordedSteps: Boolean? = null,
   /** Show the browser window (for web trails). */
   val showBrowser: Boolean = false,
   /** When true, uses a no-op logger so no session files are written to disk. */
@@ -61,6 +69,12 @@ data class CliRunRequest(
    * whatever the daemon's saved app config says.
    */
   val captureNetworkTraffic: Boolean = false,
+  /**
+   * Per-objective cap on LLM calls for the legacy TRAILBLAZE_RUNNER agent. Forwarded from
+   * the CLI's `--max-llm-calls` flag into [RunYamlRequest.maxLlmCalls]. Null = use the
+   * runner's built-in default.
+   */
+  val maxLlmCalls: Int? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:

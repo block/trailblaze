@@ -31,6 +31,15 @@ data class ScreenContext(
   val deviceWidth: Int,
   /** Device screen height in pixels */
   val deviceHeight: Int,
+  /**
+   * Un-annotated (raw) screenshot bytes, when distinct from the bytes sent to
+   * the LLM. Set by callers that send a set-of-mark *annotated* screenshot to
+   * the model but still have the clean pixels available — used by the sampling
+   * source's logging path to honor the `saveAnnotatedScreenshots` config flag
+   * (when false, the raw bytes are persisted to logs while the annotated bytes
+   * still go to the LLM). Null when no raw twin exists.
+   */
+  val rawScreenshotBytes: ByteArray? = null,
 )
 
 /**

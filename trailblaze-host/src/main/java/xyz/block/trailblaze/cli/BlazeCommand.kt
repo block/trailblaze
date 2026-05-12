@@ -98,9 +98,10 @@ class BlazeCommand : Callable<Int> {
     names = ["--snapshot-details"],
     description = [
       "Comma-separated snapshot detail levels passed through to the daemon's blaze tool: " +
-        "BOUNDS, OFFSCREEN, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses " +
+        "BOUNDS, OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses " +
         "the on-device accessibility-importance filter so RecyclerView children land in the " +
-        "captured trailblazeNodeTree."
+        "captured trailblazeNodeTree. OCCLUDED is web-only and surfaces elements hidden under " +
+        "popups/modals so the captured tree includes what's actually behind the overlay."
     ],
   )
   var snapshotDetails: String? = null

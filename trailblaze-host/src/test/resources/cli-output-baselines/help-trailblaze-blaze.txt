@@ -34,10 +34,14 @@ Drive a device with AI — describe what to do in plain English
       --snapshot-details=<snapshotDetails>
                             Comma-separated snapshot detail levels passed
                               through to the daemon's blaze tool: BOUNDS,
-                              OFFSCREEN, ALL_ELEMENTS. Useful for waypoint
-                              capture: ALL_ELEMENTS bypasses the on-device
-                              accessibility-importance filter so RecyclerView
-                              children land in the captured trailblazeNodeTree.
+                              OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Useful for
+                              waypoint capture: ALL_ELEMENTS bypasses the
+                              on-device accessibility-importance filter so
+                              RecyclerView children land in the captured
+                              trailblazeNodeTree. OCCLUDED is web-only and
+                              surfaces elements hidden under popups/modals so
+                              the captured tree includes what's actually behind
+                              the overlay.
       --target=<target>     Target app ID, saved as the default for future
                               commands. List available targets with `trailblaze
                               toolbox` (no args).

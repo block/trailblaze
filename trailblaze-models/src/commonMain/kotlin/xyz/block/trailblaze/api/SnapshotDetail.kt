@@ -28,6 +28,21 @@ enum class SnapshotDetail {
   OFFSCREEN,
 
   /**
+   * Include elements that are in the viewport but visually covered by another element
+   * (modal, popup, toast, autocomplete dropdown, etc.).
+   *
+   * By default these are filtered out — the LLM can't actually click an occluded
+   * element (the topmost overlay intercepts the click), so listing them in the
+   * prompt is misleading. Requesting OCCLUDED surfaces them with `(occluded)`
+   * annotations so the LLM can inspect what's under an overlay.
+   *
+   * Currently a no-op on platforms without a hit-test signal (Android, iOS,
+   * Compose). Web (Playwright) uses `document.elementFromPoint` to compute
+   * occlusion accurately.
+   */
+  OCCLUDED,
+
+  /**
    * Include all visible elements, bypassing the "meaningful" filter.
    *
    * By default, snapshots only show interactive or content-bearing elements

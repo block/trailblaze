@@ -5,6 +5,7 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.util.escapeForIdentifier
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -261,13 +262,13 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
         Console.log("  selector:")
         Console.log("    androidAccessibility:")
         ancestorDetail.className?.let {
-          Console.log("      classNameRegex: \"${escapeYamlString(escapeForYamlRegex(it))}\"")
+          Console.log("      classNameRegex: \"${escapeYamlString(escapeForIdentifier(it))}\"")
         }
         Console.log("      isSelected: true")
         Console.log("    containsChild:")
         Console.log("      androidAccessibility:")
         leafDetail.className?.let {
-          Console.log("        classNameRegex: \"${escapeYamlString(escapeForYamlRegex(it))}\"")
+          Console.log("        classNameRegex: \"${escapeYamlString(escapeForIdentifier(it))}\"")
         }
         when {
           leafDetail.text != null -> Console.log(
@@ -296,14 +297,6 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
 
   private fun walkUp(node: TrailblazeNode, parentMap: Map<Long, TrailblazeNode>): Sequence<TrailblazeNode> =
     generateSequence(parentMap[node.nodeId]) { parentMap[it.nodeId] }
-
-  /**
-   * Escape a literal string for inclusion in a regex pattern (Java regex `\Q...\E`
-   * equivalent of [Regex.escape] — kept identical to what
-   * `TrailblazeNodeSelectorGeneratorAndroidAccessibility.escapeForSelector` produces so
-   * anchored selectors round-trip through the same matcher.
-   */
-  private fun escapeForYamlRegex(s: String): String = "\\Q$s\\E"
 
   private fun resolveTarget(
     tree: TrailblazeNode,

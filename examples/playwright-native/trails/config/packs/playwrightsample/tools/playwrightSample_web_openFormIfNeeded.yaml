@@ -1,4 +1,4 @@
-script: ./trails/config/tools/playwrightSample_web_openFormIfNeeded.js
+script: ./playwrightSample_web_openFormIfNeeded.js
 name: playwrightSample_web_openFormIfNeeded
 description: Open the sample form section only when it is not already visible.
 _meta:

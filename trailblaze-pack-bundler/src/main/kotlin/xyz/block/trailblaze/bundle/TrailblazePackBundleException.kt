@@ -49,4 +49,10 @@ sealed class TrailblazePackBundleException(message: String, cause: Throwable? = 
 
   /** A property's `inputSchema` declares an enum constraint that's empty or otherwise unusable. */
   class InvalidInputSchema(message: String) : TrailblazePackBundleException(message)
+
+  /** A `dependencies:` chain forms a cycle — fail loudly with the offending chain. */
+  class CyclicDependencies(message: String) : TrailblazePackBundleException(message)
+
+  /** Two workspace packs declare the same `id:` — pack ids are the dep-graph key, must be unique. */
+  class DuplicatePackId(message: String) : TrailblazePackBundleException(message)
 }

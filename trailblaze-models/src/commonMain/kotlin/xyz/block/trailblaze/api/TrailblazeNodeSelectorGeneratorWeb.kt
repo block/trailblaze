@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForSelector
+
 // ---------------------------------------------------------------------------
 // Web strategies
 // ---------------------------------------------------------------------------

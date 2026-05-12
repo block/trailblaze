@@ -207,7 +207,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     fun getViewHierarchy(): TreeNode? {
-      val rootNode = getApplicationWindowRoot() ?: return null
+      val rootNode = getRootNodeInfo() ?: return null
       return try {
         rootNode.toTreeNode()
       } finally {
@@ -215,9 +215,72 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
     }
 
-    /** Returns the raw [AccessibilityNodeInfo] root for direct, high-fidelity tree capture. */
-    fun getRootNodeInfo(): android.view.accessibility.AccessibilityNodeInfo? =
-      getApplicationWindowRoot()
+    /**
+     * Returns the raw [AccessibilityNodeInfo] root for direct, high-fidelity tree capture.
+     *
+     * Two layered mitigations cover post-gesture freshness:
+     *
+     * 1. **`UiDevice.waitForIdle()`** inside
+     *    `AccessibilityDeviceManager.dispatchAndAwaitSettle` waits for the platform's
+     *    accessibility-event quiet window (~500ms in UiAutomation) so we don't query a
+     *    tree mid-animation. Handles the general "events still firing" case.
+     *
+     * 2. **`refreshTreeInPlace`** here forces `AccessibilityNodeInfo.refresh()` on every
+     *    reachable node so subsequent text/state reads see the source view's current
+     *    values rather than the platform's cached ones. Some Compose `Text` widgets
+     *    (notably the sample app's `SwipeScreen` page-indicator header that reads
+     *    "Page 1 of 5") don't fire a cache-invalidating accessibility event when they
+     *    recompose — `waitForIdle()` returns cleanly but the cached text is stale.
+     *    The refresh walk busts that cache.
+     *
+     * Both are needed. Empirical: dropping the refresh while keeping `waitForIdle`
+     * regressed the swipe-directions test (body labels updated, header stayed stale
+     * through the full 5s assertion poll). Measured per-test cost of the refresh walk
+     * was within noise across before/after CI runs.
+     */
+    fun getRootNodeInfo(): AccessibilityNodeInfo? {
+      val root = getApplicationWindowRoot() ?: return null
+      refreshTreeInPlace(root)
+      return root
+    }
+
+    /**
+     * Pre-order walk that calls [AccessibilityNodeInfo.refresh] on every node reachable from
+     * [root], recycling each child after recursion. The cached node-info entries seen by
+     * later `getChild()` calls in the same capture remain populated with the freshly-fetched
+     * data, so downstream tree walks read current text/state without their own refresh.
+     *
+     * Bounded by [MAX_REFRESH_DEPTH] to guard against StackOverflowError on pathological
+     * Compose semantics trees — typical Android UIs stay well under this depth.
+     */
+    internal fun refreshTreeInPlace(root: AccessibilityNodeInfo, depth: Int = 0) {
+      if (depth >= MAX_REFRESH_DEPTH) {
+        Console.log(
+          "refreshTreeInPlace: stopped descending at depth $depth (>= MAX_REFRESH_DEPTH); " +
+            "deeper subtree will use last-cached data",
+        )
+        return
+      }
+      // Refresh returning false means the source view is gone — leave the cached fields as
+      // a last-known-good fallback rather than aborting the capture.
+      root.refresh()
+      for (i in 0 until root.childCount) {
+        val child = root.getChild(i) ?: continue
+        try {
+          refreshTreeInPlace(child, depth + 1)
+        } finally {
+          child.recycle()
+        }
+      }
+    }
+
+    /**
+     * Maximum recursion depth for [refreshTreeInPlace]. 200 is far above any realistic
+     * Android UI tree (typical screens are under 50 levels); the cap exists purely to
+     * keep a pathological Compose layout from turning the screen-state build into a
+     * StackOverflowError that's hard to attribute back to this path.
+     */
+    private const val MAX_REFRESH_DEPTH = 200
 
     /**
      * Returns the foreground application window's root, bypassing the IME's `SoftInputWindow`.

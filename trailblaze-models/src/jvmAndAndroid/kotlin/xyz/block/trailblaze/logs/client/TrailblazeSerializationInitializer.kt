@@ -30,6 +30,19 @@ object TrailblazeSerializationInitializer {
     Map<ToolName, KSerializer<out TrailblazeTool>>? = null
   private val imperativeTools = mutableMapOf<ToolName, KClass<out TrailblazeTool>>()
 
+  // Workspace-discovered `*.tool.yaml` configs (Mode.TOOLS) that don't ship on the JVM
+  // classpath — they live under `<workspace>/trails/config/tools/` or `<pack>/tools/` in a
+  // user-authored pack. Populated lazily from `AppTargetDiscovery` (host-side discovery
+  // path) via [registerWorkspaceYamlTools]. Held in a separate field rather than mutating
+  // [cachedYamlDefined] so the classpath cache keeps its set-once contract and so a future
+  // workspace-rediscovery (CWD change in a long-running daemon) can replace the workspace
+  // overlay without invalidating the classpath cache.
+  //
+  // Read by [buildYamlDefinedTools] which unions classpath + workspace before returning,
+  // so every consumer (`ToolNameResolver`, `TrailblazeToolRepo` runtime lookup, the koog
+  // descriptor builder, etc.) sees both sets without needing its own discovery path.
+  @Volatile private var workspaceYamlDefined: Map<ToolName, ToolYamlConfig> = emptyMap()
+
   /**
    * Registers tool classes imperatively. These classes are merged with classpath-discovered tools
    * during [buildAllTools].
@@ -60,8 +73,7 @@ object TrailblazeSerializationInitializer {
    * `trailblaze-common` to build LLM-visible descriptors for YAML-defined tools.
    */
   fun buildYamlDefinedTools(): Map<ToolName, ToolYamlConfig> {
-    cachedYamlDefined?.let { return it }
-    return synchronized(this) {
+    val classpath = cachedYamlDefined ?: synchronized(this) {
       cachedYamlDefined ?: run {
         val configs =
           try {
@@ -85,6 +97,70 @@ object TrailblazeSerializationInitializer {
         configs
       }
     }
+    // Workspace tools overlay the classpath set. On a key collision the workspace wins —
+    // an end-user-authored `<workspace>/trails/config/tools/foo.tool.yaml` that happens
+    // to share a name with a classpath-bundled tool is a deliberate override (same
+    // contract as the filesystem resource source layering in `AppTargetDiscovery`,
+    // where workspace files override bundled framework files on filename collision).
+    return if (workspaceYamlDefined.isEmpty()) classpath else classpath + workspaceYamlDefined
+  }
+
+  /**
+   * Registers workspace-discovered `Mode.TOOLS` YAML configs (e.g.
+   * `<workspace>/trails/config/tools/<id>.tool.yaml` or `<pack>/tools/<id>.tool.yaml` in a
+   * user pack) as an overlay on top of the cached classpath-discovered set. Idempotent for
+   * identical inputs; subsequent calls with a different config set REPLACE the overlay
+   * rather than appending — the host-side discovery pipeline is the single source of truth
+   * for "what workspace tools should be visible right now."
+   *
+   * Called from `AppTargetDiscovery.discover()` once per discovery pass with the
+   * Mode.TOOLS subset of the discovered configs. Pure classpath callers (tests, the
+   * standalone trail YAML decoder) don't need to invoke this — they keep getting the
+   * cached classpath set.
+   *
+   * **Override contract.** When a workspace key collides with a classpath key, the overlay
+   * wins in [buildYamlDefinedTools]'s `classpath + overlay` union (kotlin `Map.plus` is
+   * last-write-wins). Callers that want a workspace tool to override a framework-bundled
+   * tool can do so by registering a config with the same id here; the union's collision
+   * semantics make the override the natural shape. Pre-filtering the input by
+   * "not-already-in-classpath" would silently discard such overrides — don't.
+   *
+   * Mutable-singleton-state caveat: the daemon's current contract is one workspace per
+   * process (CWD captured at startup), so the "replace" semantics are equivalent to "set"
+   * in practice. If we ever support hot-swapping workspaces mid-process, this overlay
+   * mechanism stays correct (last-write-wins). Tests that exercise multiple workspaces in
+   * a single JVM should call this with `emptyMap()` between cases to reset the overlay.
+   */
+  fun registerWorkspaceYamlTools(configs: Map<ToolName, ToolYamlConfig>) {
+    synchronized(this) {
+      workspaceYamlDefined = configs
+      // Drop the cached serializer map — it was built from the previous classpath-only
+      // (or previous workspace overlay) view, and any consumer that asked for a serializer
+      // before this call would now race the new overlay. The next `buildYamlDefinedSerializers`
+      // call will rebuild from the union.
+      cachedYamlDefinedSerializers = null
+    }
+  }
+
+  /**
+   * Returns the cached **classpath-only** YAML-defined tool set, distinct from
+   * [buildYamlDefinedTools] which returns the union of classpath + workspace overlay.
+   *
+   * Diagnostics and overlay-management code (e.g. `AppTargetDiscovery.registerWorkspaceYamlTools`
+   * computing the "new vs override classpath" split for its log line) need to see the
+   * classpath set without the overlay layered on top. Using [buildYamlDefinedTools] for
+   * that comparison is the bug pattern that hit pre-#2837-followup: on a second
+   * `discover()` pass the previously-registered overlay would appear in the "classpath
+   * names" snapshot, making "workspace-only" empty and the override-detection wrong.
+   *
+   * Forces the classpath cache to be computed if it isn't yet (lazy init contract is
+   * identical to [buildYamlDefinedTools]).
+   */
+  fun getClasspathYamlDefinedTools(): Map<ToolName, ToolYamlConfig> {
+    // Trigger the lazy-init in buildYamlDefinedTools (it populates `cachedYamlDefined`),
+    // then return that snapshot directly — bypassing the overlay union.
+    buildYamlDefinedTools()
+    return cachedYamlDefined ?: emptyMap()
   }
 
   /**

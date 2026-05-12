@@ -113,7 +113,7 @@ trailblaze blaze [OPTIONS] [<<objectiveWords>>]
 | `-v`, `--verbose` | Enable verbose output (show daemon logs, MCP calls) | - |
 | `--target` | Target app ID, saved as the default for future commands. List available targets with `trailblaze toolbox` (no args). | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
-| `--snapshot-details` | Comma-separated snapshot detail levels passed through to the daemon's blaze tool: BOUNDS, OFFSCREEN, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses the on-device accessibility-importance filter so RecyclerView children land in the captured trailblazeNodeTree. | - |
+| `--snapshot-details` | Comma-separated snapshot detail levels passed through to the daemon's blaze tool: BOUNDS, OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses the on-device accessibility-importance filter so RecyclerView children land in the captured trailblazeNodeTree. OCCLUDED is web-only and surfaces elements hidden under popups/modals so the captured tree includes what's actually behind the overlay. | - |
 | `--save` | Save current session as a trail file. Shows steps if --setup not specified. | - |
 | `--setup` | Step range for setup/trailhead (e.g., '1-3'). Use with --save. | - |
 | `--no-setup` | Save without setup steps. Use with --save. | - |
@@ -286,7 +286,7 @@ trailblaze trail [OPTIONS] <<trailFile>>
 |--------|-------------|---------|
 | `-d`, `--device` | Device: platform (android, ios, web), platform/instance-id, or instance ID | - |
 | `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
-| `--use-recorded-steps` | Use recorded tool sequences instead of LLM inference | - |
+| `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_ONDEVICE_INSTRUMENTATION). Overrides driver from trail config. | - |
@@ -294,6 +294,7 @@ trailblaze trail [OPTIONS] <<trailFile>>
 | `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
 | `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
 | `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
+| `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 50 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--no-record` | Skip saving the recording back to the trail source directory | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
@@ -873,6 +874,8 @@ trailblaze config reset
 | `android-driver` | Android driver type | accessibility, instrumentation |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
+| `max-llm-calls` | Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent | positive integer, or 'unset' to clear |
+| `annotated-screenshots` | Save set-of-mark annotated screenshots to logs (LLM always receives annotated) | true, false |
 | `mode` | CLI working mode: trail (author reproducible trails) or blaze (explore device) | trail, blaze |
 | `web-headless` | Default for `--headless` on web devices (CLI flag still wins when explicitly passed) | true, false |
 | `device` | Default device platform for CLI commands | android, ios, web |

@@ -1,7 +1,7 @@
 package xyz.block.trailblaze.viewmatcher.search
 
 import xyz.block.trailblaze.api.TrailblazeElementSelector
-import xyz.block.trailblaze.api.TrailblazeElementSelector.Companion.isBlank
+import xyz.block.trailblaze.api.isBlank
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.asTrailblazeElementSelector
 import xyz.block.trailblaze.viewmatcher.matching.CenterPointMatcher.centerPointsMatch

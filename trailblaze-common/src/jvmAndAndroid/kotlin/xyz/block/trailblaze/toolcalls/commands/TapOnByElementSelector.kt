@@ -55,12 +55,7 @@ data class TapOnByElementSelector(
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    // Maestro command projection is only meaningful when the legacy flat [selector] is
-    // populated — that's the field whose shape Maestro's Orchestra knows how to consume.
-    // Accessibility-only recordings (selector=null, nodeSelector!=null) can't be lowered
-    // into a Maestro command at all; emit an empty command list and rely on the
-    // accessibility dispatch path in [execute] to handle them.
-    val maestroSelector = selector ?: return emptyList()
+    val maestroSelector = lowerToMaestroSelector(selector, nodeSelector) ?: return emptyList()
     return listOf(
       TapOnElementCommand(
         selector = maestroSelector.toMaestroElementSelector(),
@@ -156,20 +151,19 @@ data class TapOnByElementSelector(
   }
 
   /**
-   * Runs the legacy Maestro command path via [super.execute] only when [selector] is set —
-   * the parent class' [toMaestroCommands] would otherwise produce an empty command list and
-   * Maestro would silently no-op. Accessibility-only recordings (selector=null) reach this
-   * point only when nodeSelector dispatch failed, so failing loud is the right behavior.
+   * Runs the Maestro command path via [super.execute]. When [selector] is set, that's the
+   * canonical projection; when only [nodeSelector] is set (post-migration recordings),
+   * [toMaestroCommands] lowers it through [TrailblazeNodeSelector.toTrailblazeElementSelector]
+   * so the same Maestro orchestra resolves it. Only when neither is set do we fail loudly —
+   * that combination is a malformed recording.
    */
   private suspend fun runMaestroFallbackOrFail(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    if (selector == null) {
-      val message = "tapOnElementBySelector: nodeSelector dispatch failed and no Maestro " +
-        "fallback selector is set on this recording. Accessibility-only recordings must " +
-        "resolve via the on-device agent. Check that the device is running with the " +
-        "accessibility driver and the target node is present in the live tree."
-      Console.log("### tap (no fallback): $message — nodeSelector=${nodeSelector?.driverMatch?.description() ?: "?"}")
+    if (selector == null && nodeSelector == null) {
+      val message = "tapOnElementBySelector: neither legacy `selector` nor `nodeSelector` " +
+        "is set on this recording. Cannot resolve a tap target."
+      Console.log("### tap (no fallback): $message")
       return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
     }
     return super.execute(toolExecutionContext)

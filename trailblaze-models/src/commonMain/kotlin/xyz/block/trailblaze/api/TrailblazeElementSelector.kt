@@ -200,9 +200,40 @@ data class TrailblazeElementSelector(
     )
   }
 
-  companion object {
-    private val BLANK_TRAILBLAZE_ELEMENT_SELECTOR = TrailblazeElementSelector()
+  companion object
+}
 
-    fun TrailblazeElementSelector.isBlank(): Boolean = this == BLANK_TRAILBLAZE_ELEMENT_SELECTOR
+/**
+ * Returns true if this selector carries no Maestro-matchable predicate, anywhere in its
+ * structural tree. A "matchable" predicate is one Maestro Orchestra can actually filter on:
+ * [textRegex], [idRegex], the state booleans, [index], [css], [traits], [size]. Structural
+ * relations ([containsChild], [childOf], [below], [above], [leftOf], [rightOf],
+ * [containsDescendants]) only matter if they themselves contain a matchable predicate —
+ * a structural wrapper around an empty inner selector is just as blank as no wrapper at all.
+ *
+ * This is the "would Maestro receive a selector with zero predicates?" check, used as the
+ * gate when lowering a [TrailblazeNodeSelector] into a [TrailblazeElementSelector] for the
+ * Maestro orchestra path. A blank lowering would silently match an arbitrary element rather
+ * than failing, so callers throw on it.
+ *
+ * Note: [optional] is intentionally ignored — it changes the missing-element handling
+ * policy, not which element matches.
+ */
+fun TrailblazeElementSelector.isBlank(): Boolean {
+  // Any scalar matchable predicate set? Not blank.
+  if (textRegex != null || idRegex != null ||
+    focused != null || selected != null || enabled != null || checked != null ||
+    css != null || index != null || size != null || !traits.isNullOrEmpty()
+  ) {
+    return false
   }
+  // Any structural relation with a non-blank inner selector? Not blank.
+  if (below != null && !below.isBlank()) return false
+  if (above != null && !above.isBlank()) return false
+  if (leftOf != null && !leftOf.isBlank()) return false
+  if (rightOf != null && !rightOf.isBlank()) return false
+  if (childOf != null && !childOf.isBlank()) return false
+  if (containsChild != null && !containsChild.isBlank()) return false
+  if (containsDescendants?.any { !it.isBlank() } == true) return false
+  return true
 }

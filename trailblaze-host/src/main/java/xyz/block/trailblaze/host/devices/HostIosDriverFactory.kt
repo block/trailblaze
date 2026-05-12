@@ -67,8 +67,18 @@ internal object HostIosDriverFactory {
       cachedDriverHostPort == targetPort &&
       !cachedMaestro!!.driver.isShutdown()
     ) {
-      Console.log("Reusing existing iOS driver for device $deviceId on port $targetPort")
-      return cachedMaestro!!
+      // isShutdown() is an in-process flag and stays false when the XCTest runner is
+      // reaped externally (SIGKILL, OS reap, crash). Confirm the port is still
+      // accepting connections before handing the cached driver back.
+      if (HostDriverPortUtils.isPortReachable(defaultXctestHost, targetPort, timeoutMs = 500)) {
+        Console.log("Reusing existing iOS driver for device $deviceId on port $targetPort")
+        return cachedMaestro!!
+      }
+      Console.log(
+        "Discarding cached iOS driver for device $deviceId — port $targetPort is unreachable " +
+          "(subprocess likely reaped externally); will create a fresh driver",
+      )
+      clearCachedDriver()
     }
 
     // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)

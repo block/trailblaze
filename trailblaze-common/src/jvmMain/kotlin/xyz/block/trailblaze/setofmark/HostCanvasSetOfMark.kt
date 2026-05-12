@@ -47,6 +47,28 @@ class HostCanvasSetOfMark(
   companion object {
     const val NUMBER_FONT_SIZE = 24f
     const val BOX_OUTLINE_THICKNESS = 2.0f
+
+    /** Compact font for high-resolution screenshots (desktop / landscape tablet). */
+    const val COMPACT_NUMBER_FONT_SIZE = 14f
+
+    /** Thinner stroke pairs with [COMPACT_NUMBER_FONT_SIZE] — full-width borders eat content. */
+    const val COMPACT_BOX_OUTLINE_THICKNESS = 1.25f
+
+    /**
+     * Image area (width × height) at or above which we switch to compact-mode sizing.
+     * `1280 × 800 = 1.024M` so any desktop-class viewport trips it; mobile portrait
+     * (`390 × 844 ≈ 329k`) stays on the original 24pt font.
+     */
+    private const val COMPACT_MODE_IMAGE_AREA = 1_000_000L
+
+    /**
+     * Cap on how many annotation boxes we paint in compact mode. The interactive-only
+     * filter on the Playwright side usually keeps the count well below this; this is
+     * a safety net for pathological dense pages (huge admin grids, monitoring dashboards).
+     * Items past the cap still appear in the text representation — they just don't get
+     * a painted box, which is preferable to a wall of overlapping rectangles.
+     */
+    private const val MAX_ANNOTATIONS_COMPACT_MODE = 60
   }
 
   /**
@@ -167,10 +189,32 @@ class HostCanvasSetOfMark(
    * Uses the same nodeId + bounds that the compact element list emits in the text
    * representation, ensuring the numbers drawn on the screenshot exactly match
    * the `[nID]` refs in the LLM prompt text.
+   *
+   * On high-resolution images (≥ [COMPACT_MODE_IMAGE_AREA]) switches to compact-mode
+   * sizing and applies three rendering tweaks aimed at dense landscape/desktop views:
+   * 1. **Smaller font + thinner stroke** so labels don't dominate small UI atoms.
+   * 2. **Density cap** ([MAX_ANNOTATIONS_COMPACT_MODE]) so a 200-row admin table
+   *    doesn't paint 200 boxes.
+   * 3. **Collision-avoiding label placement** — when a label badge would overlap a
+   *    previously-painted badge, tries top-right / bottom-left / top-left of the
+   *    element's bounding box before falling back to the default bottom-right.
+   *
+   * Mobile portrait screenshots (~390 × 844 ≈ 329k px) stay on the original sizing
+   * and unbounded element count — they don't have the density problem.
    */
   fun drawAnnotations(elements: List<AnnotationElement>) {
+    val compactMode = isCompactMode()
+    val fontSize = if (compactMode) COMPACT_NUMBER_FONT_SIZE else NUMBER_FONT_SIZE
+    val outlineThickness = if (compactMode) COMPACT_BOX_OUTLINE_THICKNESS else BOX_OUTLINE_THICKNESS
+    val drawable = if (compactMode && elements.size > MAX_ANNOTATIONS_COMPACT_MODE) {
+      elements.take(MAX_ANNOTATIONS_COMPACT_MODE)
+    } else {
+      elements
+    }
+    val paintedLabelRects = mutableListOf<ViewHierarchyFilter.Bounds>()
+
     bufferedImage.graphics { graphics2D ->
-      elements.forEachIndexed { index, element ->
+      drawable.forEachIndexed { index, element ->
         val bounds = ViewHierarchyFilter.Bounds(
           x1 = element.bounds.left,
           y1 = element.bounds.top,
@@ -181,28 +225,116 @@ class HostCanvasSetOfMark(
 
         val text = element.refLabel ?: element.nodeId.toString()
         val color = Color(colors[index % colors.size])
-        drawRectOutline(scaledBounds, color)
+        drawRectOutline(scaledBounds, color, outlineThickness)
 
-        val (rawBoxWidth, rawBoxHeight) = textCalc(listOf(text))
+        val (rawBoxWidth, rawBoxHeight) = textCalc(listOf(text), fontSize)
         val textPadding = 5
         val boxWidth = rawBoxWidth + textPadding * 2
         val boxHeight = rawBoxHeight + textPadding * 2
-        val bottomRightTextRect = ViewHierarchyFilter.Bounds(
-          scaledBounds.x2 - boxWidth,
-          scaledBounds.y2 - boxHeight,
-          scaledBounds.x2,
-          scaledBounds.y2,
-        )
-        drawRect(bottomRightTextRect, color)
+        val labelRect = if (compactMode) {
+          pickNonCollidingLabelRect(scaledBounds, boxWidth, boxHeight, paintedLabelRects)
+        } else {
+          // Mobile/non-compact: keep the historical bottom-right placement (a 4 × 1
+          // change shouldn't bother existing snapshot tests / golden screenshots).
+          ViewHierarchyFilter.Bounds(
+            scaledBounds.x2 - boxWidth,
+            scaledBounds.y2 - boxHeight,
+            scaledBounds.x2,
+            scaledBounds.y2,
+          )
+        }
+        paintedLabelRects.add(labelRect)
+        drawRect(labelRect, color)
         drawText(
-          (bottomRightTextRect.x1 + textPadding).toFloat(),
-          (bottomRightTextRect.y1 + textPadding + rawBoxHeight).toFloat(),
+          (labelRect.x1 + textPadding).toFloat(),
+          (labelRect.y1 + textPadding + rawBoxHeight).toFloat(),
           listOf(text),
           Color.WHITE,
+          fontSize,
         )
       }
     }
   }
+
+  /**
+   * Whether the current target should render in compact mode.
+   *
+   * Uses the **logical** viewport area (`deviceInfo.widthGrid × heightGrid`) when
+   * available, falling back to the raw bitmap area only when no DeviceInfo is supplied.
+   * This matters on iOS / Web with deviceScaleFactor > 1: a 390×844 mobile-portrait
+   * viewport produces a 780×1688 bitmap (≈1.32M px) at DPR=2, which would falsely
+   * trigger compact mode if we used pixel area — and would silently apply the
+   * 60-element cap + smaller labels on phones, exactly the regression we promised
+   * not to ship. The logical-coords path keeps mobile portrait at 329k regardless
+   * of DPR.
+   */
+  private fun isCompactMode(): Boolean {
+    val area = if (deviceInfo != null && deviceInfo.widthGrid > 0 && deviceInfo.heightGrid > 0) {
+      deviceInfo.widthGrid.toLong() * deviceInfo.heightGrid
+    } else {
+      bufferedImage.width.toLong() * bufferedImage.height
+    }
+    return area >= COMPACT_MODE_IMAGE_AREA
+  }
+
+  /**
+   * Pick a label badge rectangle that doesn't overlap any previously-painted label rect.
+   *
+   * Tries four corner positions on the element's bounding box in priority order
+   * (bottom-right → top-right → bottom-left → top-left). Falls back to bottom-right
+   * if all four collide — at that point the page is dense enough that some overlap
+   * is unavoidable, and a consistent default is more readable than something random.
+   *
+   * The badge rect is clamped to the image canvas so labels at the page edge don't
+   * draw partially off-screen.
+   */
+  private fun pickNonCollidingLabelRect(
+    elementBounds: ViewHierarchyFilter.Bounds,
+    boxWidth: Int,
+    boxHeight: Int,
+    paintedLabelRects: List<ViewHierarchyFilter.Bounds>,
+  ): ViewHierarchyFilter.Bounds {
+    val candidates = listOf(
+      // Bottom-right (default — preserves the original visual mapping)
+      ViewHierarchyFilter.Bounds(
+        elementBounds.x2 - boxWidth, elementBounds.y2 - boxHeight,
+        elementBounds.x2, elementBounds.y2,
+      ),
+      // Top-right
+      ViewHierarchyFilter.Bounds(
+        elementBounds.x2 - boxWidth, elementBounds.y1,
+        elementBounds.x2, elementBounds.y1 + boxHeight,
+      ),
+      // Bottom-left
+      ViewHierarchyFilter.Bounds(
+        elementBounds.x1, elementBounds.y2 - boxHeight,
+        elementBounds.x1 + boxWidth, elementBounds.y2,
+      ),
+      // Top-left
+      ViewHierarchyFilter.Bounds(
+        elementBounds.x1, elementBounds.y1,
+        elementBounds.x1 + boxWidth, elementBounds.y1 + boxHeight,
+      ),
+    )
+    val firstFree = candidates.firstOrNull { candidate ->
+      paintedLabelRects.none { it.overlaps(candidate) }
+    }
+    return clampToCanvas(firstFree ?: candidates[0])
+  }
+
+  /** Keep a label rect inside the canvas so it doesn't get clipped at the page edge. */
+  private fun clampToCanvas(r: ViewHierarchyFilter.Bounds): ViewHierarchyFilter.Bounds {
+    val w = r.x2 - r.x1
+    val h = r.y2 - r.y1
+    val maxX = bufferedImage.width
+    val maxY = bufferedImage.height
+    var x1 = r.x1.coerceIn(0, maxOf(0, maxX - w))
+    var y1 = r.y1.coerceIn(0, maxOf(0, maxY - h))
+    return ViewHierarchyFilter.Bounds(x1, y1, x1 + w, y1 + h)
+  }
+
+  private fun ViewHierarchyFilter.Bounds.overlaps(other: ViewHierarchyFilter.Bounds): Boolean =
+    x1 < other.x2 && other.x1 < x2 && y1 < other.y2 && other.y1 < y2
 
   fun drawNodes(nodes: List<ViewHierarchyTreeNode>) {
     bufferedImage.graphics { graphics2D ->
@@ -246,23 +378,27 @@ class HostCanvasSetOfMark(
     }
   }
 
-  private fun textCalc(texts: List<String>): Pair<Int, Int> = bufferedImage.graphics { graphics2D ->
+  private fun textCalc(
+    texts: List<String>,
+    fontSize: Float = NUMBER_FONT_SIZE,
+  ): Pair<Int, Int> = bufferedImage.graphics { graphics2D ->
     // Set the font size for layout calculation
     val currentFont = graphics2D.font
-    graphics2D.font = currentFont.deriveFont(NUMBER_FONT_SIZE)
+    graphics2D.font = currentFont.deriveFont(fontSize)
     val frc: FontRenderContext = graphics2D.getFontRenderContext()
     val longestLineWidth = texts.map {
       calcTextLayout(
         it,
         graphics2D,
         frc,
+        fontSize,
       ).getPixelBounds(frc, 0F, 0F).width
     }.maxBy {
       it
     }
     longestLineWidth to (
       texts.sumOf {
-        calcTextLayout(it, graphics2D, frc).bounds.height + 1
+        calcTextLayout(it, graphics2D, frc, fontSize).bounds.height + 1
       }
       ).toInt()
   }
@@ -289,19 +425,24 @@ class HostCanvasSetOfMark(
     }
   }
 
-  private fun drawText(textPointX: Float, textPointY: Float, texts: List<String>, color: Color) {
-    bufferedImage.graphics {
-      val graphics2D = bufferedImage.createGraphics()
+  private fun drawText(
+    textPointX: Float,
+    textPointY: Float,
+    texts: List<String>,
+    color: Color,
+    fontSize: Float = NUMBER_FONT_SIZE,
+  ) {
+    bufferedImage.graphics { graphics2D ->
       graphics2D.color = color
       // Set the font size for numbers
       val currentFont = graphics2D.font
-      graphics2D.font = currentFont.deriveFont(NUMBER_FONT_SIZE)
+      graphics2D.font = currentFont.deriveFont(fontSize)
 
       val frc: FontRenderContext = graphics2D.getFontRenderContext()
 
       var nextY = textPointY
       for (text in texts) {
-        val layout = calcTextLayout(text, graphics2D, frc)
+        val layout = calcTextLayout(text, graphics2D, frc, fontSize)
         val height = layout.bounds.height
         layout.draw(
           graphics2D,
@@ -313,10 +454,14 @@ class HostCanvasSetOfMark(
     }
   }
 
-  private fun drawRectOutline(r: ViewHierarchyFilter.Bounds, color: Color) {
+  private fun drawRectOutline(
+    r: ViewHierarchyFilter.Bounds,
+    color: Color,
+    thickness: Float = BOX_OUTLINE_THICKNESS,
+  ) {
     bufferedImage.graphics { graphics2D ->
       graphics2D.color = color
-      val stroke = BasicStroke(BOX_OUTLINE_THICKNESS)
+      val stroke = BasicStroke(thickness)
       graphics2D.setStroke(stroke)
       graphics2D.drawRect(
         r.x1,
@@ -341,14 +486,15 @@ class HostCanvasSetOfMark(
     }
   }
 
-  private val textCache = hashMapOf<String, TextLayout>()
+  private val textCache = hashMapOf<Pair<String, Float>, TextLayout>()
 
   private fun calcTextLayout(
     text: String,
     graphics2D: Graphics2D,
     frc: FontRenderContext,
-  ) = textCache.getOrPut(text) {
-    TextLayout(text, graphics2D.font, frc)
+    fontSize: Float = NUMBER_FONT_SIZE,
+  ) = textCache.getOrPut(text to fontSize) {
+    TextLayout(text, graphics2D.font.deriveFont(fontSize), frc)
   }
 
   private fun BufferedImage.toByteArrayWithQuality(format: String = "JPEG", quality: Float = 0.85f): ByteArray = ByteArrayOutputStream().use { baos ->

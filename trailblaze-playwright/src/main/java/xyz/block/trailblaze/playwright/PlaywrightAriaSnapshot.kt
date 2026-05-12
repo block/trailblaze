@@ -354,10 +354,17 @@ object PlaywrightAriaSnapshot {
    * @property descriptor The ARIA descriptor (e.g., `link "Hardware"`) for locator resolution.
    * @property nthIndex The 0-based occurrence index when multiple elements share the same
    *   descriptor. Used with Playwright's `.nth(index)` to pick the correct one.
+   * @property imageAnnotatable Whether to paint a bounding-box overlay for this element on
+   *   the set-of-mark screenshot. Narrower than text-list inclusion: cells, rows, headings,
+   *   and named generic elements appear in the text view (so the LLM can reference them by
+   *   name) but only interactive controls (buttons, links, inputs, etc.) get drawn on the
+   *   image. This stops dense landscape views (1280x800+ tables) from painting 60+
+   *   overlapping boxes on every visible cell.
    */
   data class ElementRef(
     val descriptor: String,
     val nthIndex: Int,
+    val imageAnnotatable: Boolean = true,
   )
 
   /**
@@ -476,6 +483,7 @@ object PlaywrightAriaSnapshot {
         elementIdMapping[id] = ElementRef(
           descriptor = descriptor,
           nthIndex = occurrenceIndex,
+          imageAnnotatable = isImageAnnotatable(pl.parsed),
         )
         val normalizedIndent = ((pl.indent - minIndent) / 2).coerceAtLeast(0)
         val indentStr = "  ".repeat(normalizedIndent)
@@ -499,6 +507,21 @@ object PlaywrightAriaSnapshot {
    */
   private fun isLandmarkNode(parsed: AriaLineParsed): Boolean {
     return parsed.ariaRole in LANDMARK_ROLES
+  }
+
+  /**
+   * Whether to paint a bounding-box overlay for this element on the set-of-mark screenshot.
+   *
+   * Deliberately narrower than [isLlmRelevantNode]: the text view broadly indexes every
+   * named non-structural element (so the LLM can reference rows/cells/headings by name),
+   * but the image overlay restricts to interactive controls. On dense landscape views
+   * (e.g., a 1280x800 admin table with 15 rows × 6 cells = ~90 named elements) painting
+   * every named element produces unreadable overlap; restricting to roles the LLM can
+   * actually act on (`button`, `link`, `textbox`, `combobox`, `checkbox`, …) cuts the
+   * paint count without hiding any text-level information.
+   */
+  private fun isImageAnnotatable(parsed: AriaLineParsed): Boolean {
+    return parsed.ariaRole in INTERACTIVE_ROLES
   }
 
   /**

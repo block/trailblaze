@@ -24,6 +24,7 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.mcp.handlers.DrainSessionRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetExecutionStatusRequestHandler
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler
 import xyz.block.trailblaze.mcp.handlers.ListActiveSessionsRequestHandler
@@ -103,6 +104,13 @@ class OnDeviceRpcServer(
         // bound, and the window is populated, subsuming the old EnsureAccessibilityReady RPC.
         // Pass device classifiers so the host can learn the actual device type.
         registerRpcHandler(GetScreenStateRequestHandler(deviceClassifiers))
+
+        // DrainSession lets the host proactively clear UiAutomation cache before tearing down
+        // its persistent driver — prevents the system_server-wedge pattern from build 5463
+        // where stale Instrumentation.mUiAutomation kept yielding DeadObjectException across
+        // session re-connects. Host-old/APK-new: handler unused. Host-new/APK-old: hits the
+        // catch-all 404 below and the host treats it as a no-op.
+        registerRpcHandler(DrainSessionRequestHandler())
 
         // Register progress-related handlers for MCP clients (Phase 6)
         registerRpcHandler(SubscribeToProgressRequestHandler(progressManager))

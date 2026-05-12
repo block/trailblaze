@@ -10,6 +10,7 @@ import xyz.block.trailblaze.host.WorkspaceCompileBootstrap
 import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.canRunDesktopGui
@@ -87,6 +88,11 @@ object TrailblazeCli {
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
   ) {
+    // Fail fast on Intel macOS / Windows with a clear "platform unsupported"
+    // message — runs before any code path could touch Skiko's JNI loader and
+    // surface a cryptic LibraryLoadException instead.
+    TrailblazeDesktopUtil.assertSupportedPlatform()
+
     // Install thread-local stdout/stderr capture BEFORE any code references
     // `System.out` — Console.jvm.kt caches it into a field at class init time,
     // so the capture has to be in place before the first Console.log call.

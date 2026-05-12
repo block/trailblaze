@@ -9,7 +9,9 @@ import android.telephony.TelephonyManager
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
+import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -36,7 +38,11 @@ import xyz.block.trailblaze.util.Console
  */
 class AccessibilityDeviceManager(
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-) {
+  // Settle primitive — `UiDevice.waitForIdle()` in production. Exposed as an injectable lambda
+  // so unit tests can substitute a counting stub without standing up an instrumentation context.
+  // Lambda invocation cost is negligible compared to the settle itself.
+  private val awaitSettle: () -> Unit = { withUiDevice { waitForIdle() } },
+) : DriverDispatch {
 
   companion object {
     /** Polling interval for element resolution loops. Balances responsiveness with CPU usage. */
@@ -216,56 +222,89 @@ class AccessibilityDeviceManager(
 
   // --- Gestures ---
 
+  /**
+   * [DriverDispatch] implementation for the Android accessibility path. Suspend-friendly form
+   * for cross-driver polymorphic callers; the per-gesture `fun tap()` / `fun swipe()` / etc.
+   * methods below use the private [dispatchAndAwaitSettleBlocking] variant to avoid forcing a
+   * coroutine context onto blocking call sites.
+   *
+   * The body never actually suspends — it invokes [action] (which may suspend), then calls the
+   * blocking [awaitSettle] primitive inline. The settle runs whether [action] returns normally
+   * or throws (see [DriverDispatch] kdoc for the exception contract).
+   */
+  override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R = try {
+    action()
+  } finally {
+    awaitSettle()
+  }
+
+  /**
+   * Blocking variant of [dispatchAndAwaitSettle] for the per-gesture `fun` methods. Same
+   * exception-safe shape (`try { action() } finally { awaitSettle() }`) with a non-suspend
+   * signature so `tap()` / `swipe()` / etc. and their callers stay outside any coroutine context.
+   *
+   * Uses `UiDevice.waitForIdle()` (via [awaitSettle]) — the platform's own idle detection.
+   * UiAutomation waits for no accessibility events within its internal idle window (currently
+   * 500ms in the SDK). This is the same signal `UiAutomator.dumpWindowHierarchy` waits on
+   * internally — before PR #2843 moved screen-state capture off the UiAutomator path, gesture
+   * playback was getting this wait by side effect of every subsequent dump. Switching to
+   * `AccessibilityServiceScreenState` silently dropped that wait, exposing a Compose-recomposition
+   * race where the next gesture would fire before the previous transition's late content-changed
+   * event had propagated to the accessibility tree. Calling `waitForIdle()` here restores the
+   * signal we always had, just explicitly.
+   *
+   * `waitForIdle()` is not a blind sleep — it returns immediately once the event stream has
+   * been quiet for the platform's idle window. No content events fire → no extra wait.
+   */
+  private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R = try {
+    action()
+  } finally {
+    awaitSettle()
+  }
+
   /** Taps at the given coordinates and waits for the UI to settle. */
-  fun tap(x: Int, y: Int) {
+  fun tap(x: Int, y: Int) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.tap(x, y)
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   /** Long-presses at the given coordinates and waits for the UI to settle. */
-  fun longPress(x: Int, y: Int, durationMs: Long = 500L) {
+  fun longPress(x: Int, y: Int, durationMs: Long = 500L) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.longPress(x, y, durationMs)
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   /** Swipes between two points and waits for the UI to settle. */
-  fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long) {
-    TrailblazeAccessibilityService.directionalSwipe(durationMs, startX, startY, endX, endY)
-    TrailblazeAccessibilityService.waitForSettled()
-  }
+  fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long) =
+    dispatchAndAwaitSettleBlocking {
+      TrailblazeAccessibilityService.directionalSwipe(durationMs, startX, startY, endX, endY)
+    }
 
   /** Scrolls forward (up) or backward (down) and waits for the UI to settle. */
-  fun scroll(forward: Boolean) {
+  fun scroll(forward: Boolean) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.scroll(forward)
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   // --- Text input ---
 
   /** Sets text on the focused editable node and waits for the UI to settle. */
-  fun inputText(text: String) {
+  fun inputText(text: String) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.inputText(text)
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   /** Erases characters from the focused editable node and waits for the UI to settle. */
-  fun eraseText(charactersToErase: Int) {
+  fun eraseText(charactersToErase: Int) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.eraseText(charactersToErase)
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   // --- Navigation ---
 
   /** Presses the back button via accessibility global action and waits for settle. */
-  fun pressBack() {
+  fun pressBack() = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.pressBack()
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   /** Presses the home button via accessibility global action and waits for settle. */
-  fun pressHome() {
+  fun pressHome() = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.pressHome()
-    TrailblazeAccessibilityService.waitForSettled()
   }
 
   // --- App lifecycle ---
@@ -278,11 +317,9 @@ class AccessibilityDeviceManager(
    * `pm clear` and `am force-stop` require shell-level permissions that aren't
    * available from the instrumentation app process, so we rely on intent flags instead.
    */
-  private fun executeLaunchApp(action: AccessibilityAction.LaunchApp) {
+  private fun executeLaunchApp(action: AccessibilityAction.LaunchApp) = dispatchAndAwaitSettleBlocking {
     Console.log("Launching ${action.appId} via Context.startActivity()")
     TrailblazeAccessibilityService.launchApp(action.appId)
-    // Wait for the app to render and settle
-    TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
   }
 
   // --- Clipboard ---
@@ -329,7 +366,7 @@ class AccessibilityDeviceManager(
   // --- Links ---
 
   /** Opens a URL via Intent.ACTION_VIEW, matching MaestroAndroidUiAutomatorDriver.openLink(). */
-  private fun executeOpenLink(action: AccessibilityAction.OpenLink) {
+  private fun executeOpenLink(action: AccessibilityAction.OpenLink) = dispatchAndAwaitSettleBlocking {
     withInstrumentation {
       val intent = Intent(Intent.ACTION_VIEW, Uri.parse(action.link)).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -337,7 +374,6 @@ class AccessibilityDeviceManager(
       }
       context.startActivity(intent)
     }
-    TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
   }
 
   // --- Airplane mode ---
@@ -406,8 +442,7 @@ class AccessibilityDeviceManager(
    * navigate away in that case, but this is rare and mirrors Maestro's behavior.
    */
   fun hideKeyboard() {
-    TrailblazeAccessibilityService.hideKeyboard()
-    TrailblazeAccessibilityService.waitForSettled()
+    dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
     // Note: intentionally NOT using pressBack() as a fallback here. The isKeyboardVisible()
     // heuristic (based on editable focus) can produce false positives, and pressBack() may
     // navigate away from the current screen — which is far more destructive than leaving

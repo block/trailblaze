@@ -247,6 +247,77 @@ class PackScriptedToolFileTest {
   }
 
   @Test
+  fun `requiresHost top-level shortcut translates into the _meta namespaced key`() {
+    // The on-device QuickJS bundler reads `_meta["trailblaze/requiresHost"]` to decide
+    // whether to skip a tool during on-device registration. The top-level
+    // `requiresHost: true` shortcut must fold into the meta object so that gate fires —
+    // otherwise the host dispatcher routes the tool to on-device via `executeToolViaRpc`,
+    // the on-device side can't find the workspace .ts source, and the user sees
+    // `Unknown tool 'X' is not registered`. The typed `InlineScriptToolConfig.requiresHost`
+    // field already propagates, but only the meta path reaches the dispatch gate.
+    val source = """
+      script: ./tools/host_only.js
+      name: host_only_tool
+      requiresHost: true
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(PackScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    val meta = assertNotNull(inline.meta, "requiresHost: true must produce a non-null _meta")
+    assertEquals(
+      JsonPrimitive(true),
+      meta["trailblaze/requiresHost"],
+      "Top-level `requiresHost: true` must fold into `_meta.trailblaze/requiresHost`",
+    )
+  }
+
+  @Test
+  fun `requiresHost false default does not emit the _meta key`() {
+    // The schema default for `requiresHost` is `false`. Folding `false` into _meta would
+    // change the wire shape for the overwhelmingly-common case (descriptor without an
+    // explicit requiresHost), and some downstream consumers distinguish "key absent" from
+    // "key explicitly false". Pin "no key emitted on default" so that subtle change doesn't
+    // sneak in.
+    val source = """
+      script: ./tools/foo.js
+      name: foo_tool
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(PackScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    // With no shortcuts and no explicit _meta, the merged meta should be null entirely.
+    assertEquals(null, inline.meta)
+  }
+
+  @Test
+  fun `requiresHost top-level shortcut wins over stale explicit _meta value`() {
+    // Same conflict-resolution rule as supportedPlatforms — copy-pasted stale `_meta:`
+    // blocks shouldn't silently override the top-level shortcut. Pin the rule.
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      requiresHost: true
+      _meta:
+        trailblaze/requiresHost: false
+        trailblaze/customKey: "preserved"
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(PackScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    val meta = assertNotNull(inline.meta)
+    assertEquals(
+      JsonPrimitive(true),
+      meta["trailblaze/requiresHost"],
+      "Top-level requiresHost: true must override _meta.trailblaze/requiresHost: false",
+    )
+    assertEquals(
+      JsonPrimitive("preserved"),
+      meta["trailblaze/customKey"],
+      "Unrelated _meta keys must flow through unchanged",
+    )
+  }
+
+  @Test
   fun `supportedPlatforms top-level shortcut translates into the _meta namespaced key`() {
     val source = """
       script: ./tools/foo.ts

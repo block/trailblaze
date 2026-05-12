@@ -587,6 +587,21 @@ object TrailblazeProjectConfigLoader {
     val resolvedScriptedTools: List<InlineScriptToolConfig> =
       loadedManifest.manifest.target?.tools.orEmpty()
         .map { path ->
+          // `target.tools:` accepts ONLY scripted (`script:` + `name:`) descriptors. A user who
+          // lists a `*.tool.yaml` (pure-YAML composed tool) here will hit a `MissingFieldException`
+          // from kotlinx-serialization complaining about missing `script` / `name` — actionable only
+          // if you happen to know that two tool flavors share the same directory but bind through
+          // different mechanisms. Intercept the common mistake by suffix and emit a pack-author-
+          // facing diagnostic that names the right path (auto-discovery from `<pack>/tools/`).
+          if (path.endsWith(".tool.yaml")) {
+            throw TrailblazeProjectConfigException(
+              "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
+                "`target.tools:` listed `$path`, but `.tool.yaml` files are pure-YAML composed tools " +
+                "that auto-discover from `<pack>/tools/` by filename suffix — they don't belong in " +
+                "the manifest. Remove this entry. Only scripted tool descriptors (the `.yaml` half of " +
+                "a `.yaml` + `.ts` pair, with top-level `script:` and `name:` fields) go in `target.tools:`.",
+            )
+          }
           loadPackSibling(path, loadedManifest.source, PackScriptedToolFile.serializer(), "pack scripted tool")
             .toInlineScriptToolConfig()
         }

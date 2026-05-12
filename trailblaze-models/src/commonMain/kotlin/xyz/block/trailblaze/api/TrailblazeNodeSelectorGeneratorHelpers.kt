@@ -1,25 +1,11 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.util.escapeForSelector
+
 /** Wraps a [DriverNodeMatch] in a [TrailblazeNodeSelector]. */
 internal fun selectorWith(match: DriverNodeMatch): TrailblazeNodeSelector =
   TrailblazeNodeSelector.withMatch(match)
-
-/**
- * Regex metacharacters that require escaping for selector patterns.
- * When text contains none of these, it can be used as-is (it's a valid regex
- * that matches literally). When it contains any, wrap in `\Q...\E`.
- */
-internal val REGEX_METACHARACTERS = setOf(
-  '\\', '^', '$', '.', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}',
-)
-
-/**
- * Escapes text for use in selector regex fields. Returns the text as-is when it
- * contains no regex metacharacters (producing cleaner YAML), or wraps in `\Q...\E`
- * when escaping is needed.
- */
-internal fun escapeForSelector(text: String): String =
-  if (text.any { it in REGEX_METACHARACTERS }) Regex.escape(text) else text
 
 /**
  * Builds a map from each child node's id to its parent node, for the entire tree.
@@ -73,8 +59,8 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
         textRegex = text?.let { escapeForSelector(it) },
         contentDescriptionRegex = desc?.let { escapeForSelector(it) },
         hintTextRegex = hint?.let { escapeForSelector(it) },
-        classNameRegex = className?.let { escapeForSelector(it) },
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
       )
     } else {
       null
@@ -86,7 +72,7 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
     if (text != null || rid != null) {
       DriverNodeMatch.AndroidMaestro(
         textRegex = text?.let { escapeForSelector(it) },
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
       )
     } else {
       null
@@ -118,7 +104,7 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
     if (text != null || rid != null) {
       DriverNodeMatch.IosMaestro(
         textRegex = text?.let { escapeForSelector(it) },
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
       )
     } else {
       null
@@ -158,8 +144,8 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
     val uid = detail.uniqueId
     if (className != null || rid != null || uid != null) {
       DriverNodeMatch.AndroidAccessibility(
-        classNameRegex = className?.let { escapeForSelector(it) },
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
         uniqueId = uid,
       )
     } else {
@@ -171,8 +157,8 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
     val className = detail.className
     if (rid != null || className != null) {
       DriverNodeMatch.AndroidMaestro(
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
-        classNameRegex = className?.let { escapeForSelector(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
       )
     } else {
       null
@@ -209,8 +195,8 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
     val className = detail.className
     if (rid != null || className != null) {
       DriverNodeMatch.IosMaestro(
-        resourceIdRegex = rid?.let { escapeForSelector(it) },
-        classNameRegex = className?.let { escapeForSelector(it) },
+        resourceIdRegex = rid?.let { escapeForIdentifier(it) },
+        classNameRegex = className?.let { escapeForIdentifier(it) },
       )
     } else {
       null
@@ -225,7 +211,7 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
     if (uid != null || type != null || role != null) {
       DriverNodeMatch.IosAxe(
         uniqueId = uid,
-        typeRegex = type?.let { escapeForSelector(it) },
+        typeRegex = type?.let { escapeForIdentifier(it) },
         roleRegex = role?.let { escapeForSelector(it) },
       )
     } else {

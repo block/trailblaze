@@ -44,14 +44,14 @@ dependencies {
 // always the module's own directory; a rootProject-relative path would change meaning when
 // the rootProject does.
 val sampleAppMcpToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trails/config/mcp")
+  .dir("../examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp")
 
 // Sister install dir for the `@trailblaze/scripting` reference example under the same target.
 // Resolves the SDK dependency via a `file:` link inside the example's package.json, so the
 // install task ends up building the local SDK into this directory's node_modules. Same
 // projectDir-relative anchoring rationale as [sampleAppMcpToolsDir] above.
 val sampleAppMcpSdkToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trails/config/mcp-sdk")
+  .dir("../examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk")
 
 // The `@trailblaze/scripting` SDK itself. Bun installs `file:` deps by symlinking each file in
 // the linked package individually (not the package root), so a consumer's `import` from the

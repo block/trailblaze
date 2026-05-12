@@ -1,6 +1,4 @@
-# Per-file scripted tool for the Playwright Sample pack.
-# `script:` paths resolve from the JVM working directory, which is the example workspace root when `trailblaze` is invoked there via walk-up discovery.
-script: ./trails/config/tools/playwrightSample_web_openFixtureAndVerifyText.js
+script: ./playwrightSample_web_openFixtureAndVerifyText.js
 name: playwrightSample_web_openFixtureAndVerifyText
 description: Open the Playwright sample page and verify visible text.
 _meta:

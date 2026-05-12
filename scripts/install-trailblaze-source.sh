@@ -128,6 +128,31 @@ fi
 # binary which carry the inherited `Internal` variant.
 echo "--- Building trailblaze release artifacts (${TRAILBLAZE_MODULE}:releaseArtifacts)"
 cd "$REPO_ROOT"
+
+# Bootstrap local.properties if missing. The Android Gradle Plugin reads this file for the
+# SDK location and fails with a generic "SDK location not found" error pointing at this
+# exact path. On a fresh worktree the file doesn't exist; rather than punt that error to
+# the user, populate it from ANDROID_HOME / ANDROID_SDK_ROOT / the standard macOS install
+# path (in priority order). This script only fails loudly if NONE of those resolve a real
+# SDK dir — at that point the user genuinely doesn't have the SDK installed.
+if [ ! -f "${REPO_ROOT}/local.properties" ]; then
+  resolved_sdk=""
+  for candidate in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${HOME}/Library/Android/sdk" "${HOME}/Android/Sdk"; do
+    if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+      resolved_sdk="$candidate"
+      break
+    fi
+  done
+  if [ -n "$resolved_sdk" ]; then
+    echo "Bootstrapping ${REPO_ROOT}/local.properties (sdk.dir=$resolved_sdk)"
+    printf 'sdk.dir=%s\n' "$resolved_sdk" > "${REPO_ROOT}/local.properties"
+  else
+    echo "Warning: no Android SDK found at ANDROID_HOME, ANDROID_SDK_ROOT, ~/Library/Android/sdk, or ~/Android/Sdk." >&2
+    echo "  The build will likely fail with 'SDK location not found'." >&2
+    echo "  Install the Android SDK (e.g. via Android Studio) or set ANDROID_HOME, then re-run." >&2
+  fi
+fi
+
 ./gradlew "${TRAILBLAZE_MODULE}:releaseArtifacts" --stacktrace \
   -Ptrailblaze.variant=source
 

@@ -29,10 +29,17 @@
           direction: LEFT
       - swipe:
           direction: RIGHT
-  - step: Verify "Page 2 of 5" is displayed
+  - step: Verify the page-body label shows "Page 2"
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: The objective is to verify that 'Page 2 of 5' is displayed. Node 38 corresponds to the TextView containing this text.
+          reason: Verify the page-body label (set imperatively by SwipePageFragment via
+            TextView.setText) shows "Page 2" — proves the ViewPager has settled on page 2.
+            We intentionally do NOT assert on the header "Page 2 of 5" here even though it
+            visually updates, because that header is a Compose `Text` whose state-driven
+            recomposition doesn't reliably fire an accessibility-cache-invalidating event,
+            making it an unreliable target on the accessibility driver. The body label is
+            a plain Android TextView in a fragment that's swapped on page change, so its
+            accessibility node is naturally fresh on every read.
           selector:
-            textRegex: Page 2 of 5
+            textRegex: ^Page 2$

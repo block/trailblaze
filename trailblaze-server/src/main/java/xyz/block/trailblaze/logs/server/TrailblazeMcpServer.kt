@@ -204,6 +204,14 @@ class TrailblazeMcpServer(
   val llmModelProvider: (() -> TrailblazeLlmModel?)? = null,
   /** Provider for all supported LLM model lists (for the trailblaze://llm/providers resource). */
   val llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
+  /**
+   * Provider for the `saveAnnotatedScreenshots` config flag. The annotated
+   * screenshot is always sent to the LLM regardless of this flag — only the
+   * variant persisted to logs changes. Defaults to `{ true }` so the OSS
+   * distro keeps the current "save what the model saw" behavior unless a host
+   * wires up its settings repo.
+   */
+  val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
 ) {
   /**
    * Default tool profile for new MCP sessions.
@@ -401,9 +409,29 @@ class TrailblazeMcpServer(
         clearSessionScriptToolRuntime(sessionId)
       }
 
+      // Resolve the active target's declared toolsets (e.g. the `wikipedia` pack's
+      // `platforms.android.tool_sets: [wikipedia_extras]`) so YAML-defined tool names that
+      // arrive via a toolset reference — not via the pack's `target.tools:` array — end up
+      // in the session repo's `registeredYamlToolNames`. Without this, a pack's pure-YAML
+      // composed tool is visible in the toolbox and the inner-agent descriptor list but the
+      // dispatch-time resolver (`TrailblazeToolRepo.toolCallToTrailblazeTool`) classifies it
+      // as an `OtherTrailblazeTool` and `StepToolSet` rejects with "Unknown tool". Mirrors
+      // the resolution the inner-agent provider does at line ~1417 — same catalog +
+      // driverType + toolSetIds inputs, just plumbed through to the dispatch repo too.
+      //
+      // Workspace-authored toolset ids resolve correctly here because
+      // `AppTargetDiscovery.discover()` registers the workspace-aware merged toolset map
+      // into `TrailblazeToolSetCatalog`'s overlay (see `registerWorkspaceToolSets` on the
+      // catalog). `resolveForDriver` reads `defaultEntries()`, which merges the classpath
+      // cache with that overlay — so both classpath-bundled and workspace toolsets are
+      // visible at session-init time. Pinned by
+      // `target toolset resolution surfaces workspace yaml tool names for dispatch repo`
+      // in `AppTargetDiscoveryTest`.
+      val declaredToolSetIds = target.getDeclaredToolSetIdsForDriver(driverType)
+      val resolvedFromPack = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
       val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
         customToolClasses = collectCustomToolClasses(driverType),
-        customYamlToolNames = collectCustomYamlToolNames(driverType),
+        customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromPack.yamlToolNames,
         excludedToolClasses = target.getExcludedToolsForDriver(driverType),
         catalog = TrailblazeToolSetCatalog.defaultEntries(),
         driverType = driverType,
@@ -943,7 +971,7 @@ class TrailblazeMcpServer(
 
         // End the Trailblaze session gracefully and cancel running automation
         sessionContext.associatedDeviceId?.let { deviceId ->
-          cleanupDeviceOnSessionClose(deviceId, "MCP session closure")
+          cleanupDeviceOnSessionClose(deviceId, "MCP session closure", closedSessionId)
         }
 
         // Release device claims for this session
@@ -1360,6 +1388,7 @@ class TrailblazeMcpServer(
           llmModel = llmModel,
           logsRepo = logsRepo,
           sessionIdProvider = { mcpBridge.getActiveSessionId() },
+          saveAnnotatedScreenshotsProvider = saveAnnotatedScreenshotsProvider,
         )
         InnerLoopScreenAnalyzer(
           samplingSource = innerSamplingSource,
@@ -1795,7 +1824,7 @@ class TrailblazeMcpServer(
       }
       // End session gracefully and cancel running automation for this STDIO session
       sessionContext.associatedDeviceId?.let { deviceId ->
-        cleanupDeviceOnSessionClose(deviceId, "STDIO session closure")
+        cleanupDeviceOnSessionClose(deviceId, "STDIO session closure", mcpSessionId.sessionId)
       }
       deviceClaimRegistry.releaseAllForSession(mcpSessionId.sessionId)
 
@@ -1842,6 +1871,7 @@ class TrailblazeMcpServer(
   private fun cleanupDeviceOnSessionClose(
     deviceId: TrailblazeDeviceId,
     closeReason: String,
+    closingMcpSessionId: String,
   ) {
     Console.log("Ending session and cancelling automation on device ${deviceId.instanceId} due to $closeReason")
 
@@ -1866,7 +1896,22 @@ class TrailblazeMcpServer(
       Console.error("Error cancelling automation: ${e.message}")
     }
 
-    mcpBridge.releasePersistentDeviceConnection(deviceId)
+    if (shouldReleasePersistentDeviceConnectionOnSessionClose(deviceId, closingMcpSessionId)) {
+      mcpBridge.releasePersistentDeviceConnection(deviceId)
+    }
+  }
+
+  internal fun shouldReleasePersistentDeviceConnectionOnSessionClose(
+    deviceId: TrailblazeDeviceId,
+    closingMcpSessionId: String,
+  ): Boolean {
+    // Android: releasing while a yielded-to session still claims the device
+    // tears down the on-device RPC server and wedges system_server (build 5463).
+    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) {
+      return true
+    }
+    val currentClaim = deviceClaimRegistry.getClaim(deviceId)
+    return currentClaim == null || currentClaim.mcpSessionId == closingMcpSessionId
   }
 
   private suspend fun resolveSessionIdForLog(

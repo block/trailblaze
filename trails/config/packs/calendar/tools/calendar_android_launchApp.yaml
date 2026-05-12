@@ -1,4 +1,4 @@
-script: ./trails/config/packs/calendar/tools/calendar_android_launchApp.ts
+script: ./calendar_android_launchApp.ts
 name: calendar_android_launchApp
 description: |
   Force-stops Google Calendar and re-launches it via the package's default launcher

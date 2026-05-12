@@ -50,11 +50,12 @@ class ComposeTypeTool(
           )
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
       val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
-      if (clearFirst) {
-        target.clearText(node)
+      target.dispatchAndAwaitSettle {
+        if (clearFirst) {
+          target.clearText(node)
+        }
+        target.typeText(node, interpolatedText)
       }
-      target.typeText(node, interpolatedText)
-      target.waitForIdle()
       val action = if (clearFirst) "Filled" else "Typed"
       TrailblazeToolResult.Success(message = "$action '$interpolatedText' into '$description'.")
     } catch (e: Exception) {

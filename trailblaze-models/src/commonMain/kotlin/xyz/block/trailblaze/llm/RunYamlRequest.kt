@@ -111,11 +111,38 @@ data class RunYamlRequest(
    * to. See `init` block.
    */
   val memorySnapshot: Map<String, String> = emptyMap(),
+
+  /**
+   * Per-objective cap on LLM calls issued by the legacy [AgentImplementation.TRAILBLAZE_RUNNER]
+   * inner loop. When non-null, overrides the runner's built-in default
+   * (`xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS`). Surfaced as
+   * `--max-llm-calls` on the CLI so users on metered or expensive providers can cut off a
+   * stuck self-heal loop before it racks up many round trips.
+   *
+   * The cap is per [xyz.block.trailblaze.yaml.PromptStep]/objective, not per trail — a trail
+   * with three prompt blocks runs the inner loop up to 3 × maxLlmCalls times in the worst
+   * case. The runner's existing cycle/stuck detection still trips earlier when the LLM
+   * spins on the same tool call.
+   *
+   * Not honored by [AgentImplementation.MULTI_AGENT_V3], which has its own iteration knobs
+   * (see [xyz.block.trailblaze.agent.BlazeConfig]). The `init` block rejects the combination
+   * at construction time rather than silently dropping the cap, so direct RPC callers and
+   * tests can't bypass the invariant the CLI also enforces. Follow-up: wire V3 to an
+   * equivalent primitive so the flag means the same thing across agent implementations.
+   */
+  val maxLlmCalls: Int? = null,
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {
       "RunYamlRequest with awaitCompletion=false cannot carry a memorySnapshot — memory " +
         "sync requires a round-trip. Either set awaitCompletion=true or send empty memory."
+    }
+    require(maxLlmCalls == null || maxLlmCalls > 0) {
+      "maxLlmCalls must be a positive integer when set, was $maxLlmCalls."
+    }
+    require(maxLlmCalls == null || agentImplementation != AgentImplementation.MULTI_AGENT_V3) {
+      "maxLlmCalls is not honored by AgentImplementation.MULTI_AGENT_V3; pass null or use " +
+        "AgentImplementation.TRAILBLAZE_RUNNER."
     }
   }
 

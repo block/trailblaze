@@ -149,6 +149,36 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
+    // Per-machine fallback below the workspace `trailblaze.yaml` `defaults.max-llm-calls`.
+    // Use case: a developer wants a lower local cap for a debugging session without
+    // editing the committed workspace file. The CLI flag and env var still win when set.
+    name = "max-llm-calls",
+    description = "Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent",
+    validValues = "positive integer, or 'unset' to clear",
+    get = { config -> config.maxLlmCalls?.toString() ?: "(not set)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(maxLlmCalls = null)
+      } else {
+        val parsed = value.toIntOrNull()
+        if (parsed == null || parsed <= 0) null else config.copy(maxLlmCalls = parsed)
+      }
+    },
+  ),
+  ConfigKey(
+    // The annotated (set-of-mark) screenshot is always sent to the LLM regardless
+    // of this flag — model accuracy depends on it. This flag only controls which
+    // variant is persisted to logs for inspection. Flip off when downstream tooling
+    // (e.g. waypoint authoring) wants clean screenshots in committed artifacts.
+    name = "annotated-screenshots",
+    description = "Save set-of-mark annotated screenshots to logs (LLM always receives annotated)",
+    validValues = "true, false",
+    get = { config -> config.saveAnnotatedScreenshots.toString() },
+    set = { config, value ->
+      value.toBooleanStrictOrNull()?.let { config.copy(saveAnnotatedScreenshots = it) }
+    },
+  ),
+  ConfigKey(
     name = "mode",
     description = "CLI working mode: trail (author reproducible trails) or blaze (explore device)",
     validValues = "trail, blaze",

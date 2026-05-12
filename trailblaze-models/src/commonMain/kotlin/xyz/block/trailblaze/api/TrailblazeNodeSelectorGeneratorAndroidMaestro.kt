@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.util.escapeForSelector
+
 // ---------------------------------------------------------------------------
 // Android Maestro strategies (mirrors TapSelectorV2 logic)
 // ---------------------------------------------------------------------------
@@ -12,7 +15,7 @@ internal fun androidMaestroStrategies(
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
   "Resource ID" to {
     detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.AndroidMaestro(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.AndroidMaestro(resourceIdRegex = escapeForIdentifier(rid)))
     }
   },
   "Text" to {
@@ -45,12 +48,12 @@ internal fun namedStructuralAndroidMaestroStrategies(
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
   "Structural: resource ID" to {
     detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.AndroidMaestro(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.AndroidMaestro(resourceIdRegex = escapeForIdentifier(rid)))
     }
   },
   "Structural: class name" to {
     detail.className?.let { cn ->
-      selectorWith(DriverNodeMatch.AndroidMaestro(classNameRegex = escapeForSelector(cn)))
+      selectorWith(DriverNodeMatch.AndroidMaestro(classNameRegex = escapeForIdentifier(cn)))
     }
   },
   structuralChildOfParentStrategy(root, target, detail, parentMap),

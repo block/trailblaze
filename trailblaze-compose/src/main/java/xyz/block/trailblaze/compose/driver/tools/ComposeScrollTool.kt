@@ -41,8 +41,7 @@ class ComposeScrollTool(
           ?: hasScrollAction()
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
       val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
-      target.scrollToIndex(node, index)
-      target.waitForIdle()
+      target.dispatchAndAwaitSettle { target.scrollToIndex(node, index) }
       TrailblazeToolResult.Success(message = "Scrolled '$description' to index $index.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Scroll failed on '$description': ${e.message}")

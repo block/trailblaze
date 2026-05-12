@@ -48,7 +48,6 @@ class TrailblazeBundlePluginFunctionalTest {
         }
         trailblazeBundle {
           packsDir.set(layout.projectDirectory.dir("packs"))
-          toolsDir.set(layout.projectDirectory.dir("tools"))
         }
       """.trimIndent(),
     )
@@ -80,7 +79,7 @@ class TrailblazeBundlePluginFunctionalTest {
     assertTrue(":build was not executed in: ${result.tasks.map { it.path }}") {
       result.task(":build") != null
     }
-    val bindings = File(projectDir, "tools/.trailblaze/tools.d.ts")
+    val bindings = File(projectDir, "packs/p/tools/.trailblaze/tools.d.ts")
     assertTrue("expected bindings file at $bindings") { bindings.isFile }
     assertTrue("bindings should declare sayHi: ${bindings.readText()}") {
       bindings.readText().contains("sayHi: {")
@@ -95,9 +94,8 @@ class TrailblazeBundlePluginFunctionalTest {
           base
           id("trailblaze.bundle")
         }
-        // toolsDir set, packsDir omitted — should fail at task time, not at config time.
+        // packsDir omitted — should fail at task time, not at config time.
         trailblazeBundle {
-          toolsDir.set(layout.projectDirectory.dir("tools"))
         }
       """.trimIndent(),
     )
@@ -109,7 +107,11 @@ class TrailblazeBundlePluginFunctionalTest {
   }
 
   @Test
-  fun `task fails with directed error when toolsDir is not configured`() {
+  fun `second invocation with no input changes reports UP-TO-DATE`() {
+    // Output tracking via @OutputDirectories gives Gradle a stable input/output snapshot
+    // to compare against. Without it the task always ran. With the filtered input file
+    // tree excluding `**/.trailblaze/**`, the generated `.d.ts` doesn't feed back into
+    // the input snapshot on the second run, so Gradle reports UP-TO-DATE immediately.
     val projectDir = newFixtureProject(
       buildScript = """
         plugins {
@@ -121,15 +123,260 @@ class TrailblazeBundlePluginFunctionalTest {
         }
       """.trimIndent(),
     )
-    // packsDir's @InputDirectory requires a real on-disk directory; create an empty one
-    // so we exercise the toolsDir-missing path specifically (rather than tripping
-    // Gradle's input-snapshot check first).
-    File(projectDir, "packs").mkdirs()
+    writePack(
+      projectDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - tools/sayHi.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
+      toolYaml = """
+        script: ./tools/sayHi.js
+        name: sayHi
+        inputSchema:
+          message: { type: string }
+      """.trimIndent(),
+    )
 
-    val result = runner(projectDir, "bundleTrailblazePack").buildAndFail()
-    assertTrue("expected directed error in: ${result.output}") {
-      result.output.contains("'toolsDir' is not configured")
+    val first = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":bundleTrailblazePack")?.outcome)
+
+    val second = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(
+      TaskOutcome.UP_TO_DATE,
+      second.task(":bundleTrailblazePack")?.outcome,
+      "expected UP-TO-DATE on the second invocation; got ${second.output}",
+    )
+  }
+
+  @Test
+  fun `editing a tool descriptor regenerates that pack's bindings`() {
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+      """.trimIndent(),
+    )
+    writePack(
+      projectDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - tools/sayHi.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
+      toolYaml = """
+        script: ./tools/sayHi.js
+        name: sayHi
+        inputSchema:
+          message: { type: string }
+      """.trimIndent(),
+    )
+
+    val first = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":bundleTrailblazePack")?.outcome)
+    val bindings = File(projectDir, "packs/p/tools/.trailblaze/tools.d.ts")
+    assertTrue("first run should have written bindings: $bindings") { bindings.isFile }
+    val before = bindings.readText()
+
+    // Change the tool descriptor — add a second param. The task should rerun (not UP-TO-DATE)
+    // and the regenerated `.d.ts` should reflect the new shape.
+    writeTool(
+      projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
+      toolYaml = """
+        script: ./tools/sayHi.js
+        name: sayHi
+        inputSchema:
+          message: { type: string }
+          times: { type: integer }
+      """.trimIndent(),
+    )
+
+    val second = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, second.task(":bundleTrailblazePack")?.outcome)
+    val after = bindings.readText()
+    assertTrue("expected regenerated bindings to declare 'times': $after") {
+      after.contains("times: number;")
     }
+    assertTrue("expected regenerated bindings to differ from first run") { after != before }
+  }
+
+  @Test
+  fun `removing a pack cleans up its stale dts on the next run`() {
+    // Rename / delete scenario: a pack's `pack.yaml` (and `.d.ts`) lives in source for
+    // one build, then a developer removes the manifest. The bundler's orphan cleanup
+    // pass (see TrailblazePackBundler.generate kdoc) deletes the stale `.d.ts` so it
+    // doesn't feed into the next `tsc` pass as a phantom `TrailblazeToolMap` entry.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+      """.trimIndent(),
+    )
+    writePack(
+      projectDir, packId = "alpha",
+      packYaml = """
+        id: alpha
+        target:
+          display_name: Alpha
+          tools:
+            - tools/alphaTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "alpha", toolFile = "tools/alphaTool.yaml",
+      toolYaml = """
+        script: ./tools/alphaTool.js
+        name: alphaTool
+      """.trimIndent(),
+    )
+    writePack(
+      projectDir, packId = "beta",
+      packYaml = """
+        id: beta
+        target:
+          display_name: Beta
+          tools:
+            - tools/betaTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "beta", toolFile = "tools/betaTool.yaml",
+      toolYaml = """
+        script: ./tools/betaTool.js
+        name: betaTool
+      """.trimIndent(),
+    )
+
+    val first = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":bundleTrailblazePack")?.outcome)
+    val alphaBindings = File(projectDir, "packs/alpha/tools/.trailblaze/tools.d.ts")
+    val betaBindings = File(projectDir, "packs/beta/tools/.trailblaze/tools.d.ts")
+    assertTrue("alpha bindings should exist") { alphaBindings.isFile }
+    assertTrue("beta bindings should exist") { betaBindings.isFile }
+
+    // Remove the entire beta pack — simulates a developer deleting a pack from `packs/`.
+    File(projectDir, "packs/beta").deleteRecursively()
+
+    val second = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, second.task(":bundleTrailblazePack")?.outcome)
+    assertTrue("alpha bindings should still exist after removing beta") { alphaBindings.isFile }
+    // beta dir is gone; the `.d.ts` went with it. Nothing further to verify there.
+
+    // Now exercise the orphan-cleanup branch: bring beta back as an EMPTY pack (no
+    // scripted tools). The previous `.d.ts` from when beta had `betaTool` would otherwise
+    // remain and feed a stale `TrailblazeToolMap` augmentation into `tsc`.
+    val betaDir = File(projectDir, "packs/beta").apply { mkdirs() }
+    File(betaDir, "pack.yaml").writeText(
+      """
+      id: beta
+      target:
+        display_name: Beta
+        tools: []
+      """.trimIndent(),
+    )
+    // Plant a stale `.d.ts` as if a previous run had written one when beta had tools.
+    File(betaDir, "tools/.trailblaze").mkdirs()
+    val staleBeta = File(betaDir, "tools/.trailblaze/tools.d.ts")
+    staleBeta.writeText("// stale content from a previous configuration\nexport {};\n")
+
+    val third = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, third.task(":bundleTrailblazePack")?.outcome)
+    assertTrue("stale beta bindings should have been cleaned up: ${staleBeta.exists()}") {
+      !staleBeta.exists()
+    }
+  }
+
+  @Test
+  fun `library pack inheriting tools via dependencies gets bindings on build`() {
+    // Plugin-level coverage of the dep-aware emission rule introduced upstream of this PR
+    // (see TrailblazePackBundler kdoc: "Per-pack output, dep-aware aggregation"). A library
+    // pack with empty own-tools but a `dependencies:` edge to a pack that DOES declare
+    // tools must still get its own `tools.d.ts` written, and `discoverExpectedOutputDirs`
+    // must declare that pack's output dir so Gradle's UP-TO-DATE check stays accurate.
+    // Without this test, a regression that drops the closure walk from
+    // `discoverExpectedOutputDirs` (declaring only packs with own tools) would land green.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+      """.trimIndent(),
+    )
+    // `lib` declares the actual tool.
+    writePack(
+      projectDir, packId = "lib",
+      packYaml = """
+        id: lib
+        target:
+          display_name: Lib
+          tools:
+            - tools/libTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "lib", toolFile = "tools/libTool.yaml",
+      toolYaml = """
+        script: ./tools/libTool.js
+        name: libTool
+        inputSchema:
+          message: { type: string }
+      """.trimIndent(),
+    )
+    // `consumer` has no own tools but depends on `lib`. Closure-aware bundler should still
+    // emit bindings for it covering `libTool`.
+    writePack(
+      projectDir, packId = "consumer",
+      packYaml = """
+        id: consumer
+        dependencies:
+          - lib
+      """.trimIndent(),
+    )
+
+    val first = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":bundleTrailblazePack")?.outcome)
+
+    val consumerBindings = File(projectDir, "packs/consumer/tools/.trailblaze/tools.d.ts")
+    assertTrue("consumer pack should receive bindings via inherited tools: $consumerBindings") {
+      consumerBindings.isFile
+    }
+    assertTrue("consumer bindings should include libTool: ${consumerBindings.readText()}") {
+      consumerBindings.readText().contains("libTool: {")
+    }
+
+    // UP-TO-DATE on re-run also exercises that `discoverExpectedOutputDirs` declared the
+    // consumer's output dir — if it hadn't, Gradle would see a new output file appearing
+    // and run the task again.
+    val second = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(
+      TaskOutcome.UP_TO_DATE,
+      second.task(":bundleTrailblazePack")?.outcome,
+      "expected UP-TO-DATE on the second invocation; got ${second.output}",
+    )
   }
 
   @Test
@@ -154,7 +401,6 @@ class TrailblazeBundlePluginFunctionalTest {
         }
         trailblazeBundle {
           packsDir.set(layout.projectDirectory.dir("packs"))
-          toolsDir.set(layout.projectDirectory.dir("tools"))
         }
       """.trimIndent(),
     )

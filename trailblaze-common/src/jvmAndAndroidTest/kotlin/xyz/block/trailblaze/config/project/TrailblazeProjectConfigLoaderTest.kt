@@ -81,6 +81,32 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `decodes defaults max-llm-calls under the kebab-case key`() {
+    val file = tempFolder.writeConfig(
+      """
+      defaults:
+        max-llm-calls: 30
+      """.trimIndent(),
+    )
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)
+    assertNotNull(resolved)
+    assertEquals(30, resolved.defaults?.maxLlmCalls)
+  }
+
+  @Test
+  fun `defaults max-llm-calls defaults to null when absent`() {
+    val file = tempFolder.writeConfig(
+      """
+      defaults:
+        target: sampleapp
+      """.trimIndent(),
+    )
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)
+    assertNotNull(resolved)
+    assertNull(resolved.defaults?.maxLlmCalls)
+  }
+
+  @Test
   fun `provider ref loads BuiltInProviderConfig`() {
     val providersDir = File(tempFolder.root, "providers").apply { mkdirs() }
     File(providersDir, "custom.yaml").writeText(
@@ -283,6 +309,67 @@ class TrailblazeProjectConfigLoaderTest {
     )
   }
 
+
+  @Test
+  fun `tool_yaml mis-listed in target tools drops the pack and a sibling pack still resolves`() {
+    // Pin the helpful-diagnostic behavior: when a user lists a `*.tool.yaml` (pure-YAML
+    // composed tool, auto-discovered from `<pack>/tools/`) in their pack manifest's
+    // `target.tools:` list (which is for scripted `.yaml` + `.ts` pairs), the loader
+    // throws a TrailblazeProjectConfigException with an author-facing diagnostic. The
+    // atomic-per-pack catch in resolvePackArtifacts logs the diagnostic and drops the
+    // offending pack — siblings still resolve. Pre-fix the user got a generic
+    // kotlinx-serialization `MissingFieldException` for `script` / `name` that gave no
+    // hint they'd dropped a composed-tool file in the wrong slot; this test pins both
+    // (a) the mis-listed pack drops out, and (b) the loader still emits a sibling pack
+    // — i.e. one bad `.tool.yaml` mistake doesn't take down the whole workspace.
+    val validPackDir = File(tempFolder.root, "packs/validpack").apply { mkdirs() }
+    File(validPackDir, "pack.yaml").writeText(
+      """
+      id: validpack
+      target:
+        display_name: Valid Pack
+      """.trimIndent(),
+    )
+    val packDir = File(tempFolder.root, "packs/wronglisted").apply { mkdirs() }
+    File(packDir, "tools").mkdirs()
+    File(packDir, "tools/wrong_listed.tool.yaml").writeText(
+      """
+      id: wrong_listed
+      description: Pure-YAML composed tool that doesn't belong in target.tools:
+      parameters: []
+      tools:
+        - maestro:
+            commands:
+              - back: {}
+      """.trimIndent(),
+    )
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: wronglisted
+      target:
+        display_name: Mis-Listed Pack
+        platforms:
+          android:
+            app_ids: [com.example.wronglisted]
+        tools:
+          - tools/wrong_listed.tool.yaml
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - validpack
+        - wronglisted
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    // The mis-listed pack drops out (the new diagnostic from resolvePackSiblings is logged
+    // by the atomic-per-pack catch in resolvePackArtifacts); the valid sibling still
+    // resolves and shows up in the final target list.
+    assertEquals(listOf("validpack"), resolved.targets)
+  }
 
   @Test
   fun `unresolvable dependency surfaces as a strict consolidated error`() {

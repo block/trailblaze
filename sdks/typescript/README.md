@@ -78,7 +78,7 @@ reentrance cap hit, transport error) — so the happy path is a plain sequence
 of awaits, no success-flag branching.
 
 A working example lives at
-`examples/android-sample-app/trails/config/mcp-sdk/tools.ts`
+`examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk/tools.ts`
 (look for `signUpNewUserSdk`).
 
 ## Runtimes — the same TS runs in two places
@@ -138,7 +138,7 @@ Marked `private: true` while the SDK surface stabilizes — `package.json`'s
 `main` / `exports` / `types` point at `./src/index.ts` and the package has
 no build step. Authors consume via a TS-capable runtime (bun or node+tsx)
 through the `file:` link shown in the sample-app example
-(`examples/android-sample-app/trails/config/mcp-sdk/package.json`).
+(`examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk/package.json`).
 Publishing a proper `dist/` build with `.js` + `.d.ts` outputs (and flipping
 `private` off) is a follow-up once the surface stabilizes.
 

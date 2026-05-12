@@ -18,15 +18,17 @@ import org.junit.Assume.assumeTrue
  * End-to-end demo proving the three sample-app tool flavors compose correctly with the new
  * QuickJS-tool architecture:
  *
- *  1. **Pure JS** — `examples/android-sample-app/trails/config/quickjs-tools/pure.js`. No
- *     TypeScript, no SDK imports, no build step. Loaded into QuickJS as-is; populates
+ *  1. **Pure JS** — `examples/android-sample-app/trails/config/packs/sampleapp/tools/quickjs-tools/pure.js`.
+ *     No TypeScript, no SDK imports, no build step. Loaded into QuickJS as-is; populates
  *     `globalThis.__trailblazeTools` directly via plain JS.
- *  2. **On-device-compatible TS** — `examples/android-sample-app/trails/config/quickjs-tools/typed.ts`.
+ *  2. **On-device-compatible TS** —
+ *     `examples/android-sample-app/trails/config/packs/sampleapp/tools/quickjs-tools/typed.ts`.
  *     Imports `@trailblaze/tools` (the tiny non-MCP SDK). Bundled by the
  *     `trailblaze.author-tool-bundle` Gradle plugin; the produced `.bundle.js` is read via
  *     the `trailblaze.test.sampleAppTypedBundle` system property and evaluated in QuickJS.
- *  3. **Host-only TS** — `examples/android-sample-app/trails/config/host-tools/tools.ts`. Uses
- *     `node:fs`, so it can't run in QuickJS. Documented as a source file; the future
+ *  3. **Host-only TS** —
+ *     `examples/android-sample-app/trails/config/packs/sampleapp/tools/host-tools/tools.ts`.
+ *     Uses `node:fs`, so it can't run in QuickJS. Documented as a source file; the future
  *     integration PR will exercise it via the existing subprocess infrastructure.
  *
  * The bundle test depends on the plugin task running first via Gradle; the
@@ -42,9 +44,9 @@ class SampleAppToolsDemoTest {
   // in either, no per-layout literal needed.
   private val frameworkRoot: File = locateFrameworkRoot()
   private val sampleAppQuickJsToolsDir: File get() =
-    File(frameworkRoot, "examples/android-sample-app/trails/config/quickjs-tools")
+    File(frameworkRoot, "examples/android-sample-app/trails/config/packs/sampleapp/tools/quickjs-tools")
   private val sampleAppHostToolsDir: File get() =
-    File(frameworkRoot, "examples/android-sample-app/trails/config/host-tools")
+    File(frameworkRoot, "examples/android-sample-app/trails/config/packs/sampleapp/tools/host-tools")
 
   private val hosts = mutableListOf<QuickJsToolHost>()
 

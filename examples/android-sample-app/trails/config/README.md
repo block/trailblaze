@@ -82,7 +82,7 @@ that can't `cd` into the workspace.
 The TypeScript MCP server (`mcp/tools.ts`) uses `@modelcontextprotocol/sdk`. Install once:
 
 ```bash
-cd examples/android-sample-app/trails/config/mcp
+cd examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp
 npm install     # or: bun install
 ```
 

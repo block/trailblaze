@@ -146,8 +146,13 @@ object InstrumentationUtil {
    *    Android versions Trailblaze targets today; the outer try/catch absorbs a future rename.
    *
    * Returns true on either success path; false if both attempts threw.
+   *
+   * Public so the host->on-device drain RPC can call it from its handler in
+   * `trailblaze-android-ondevice-mcp` (separate Gradle module — `internal` would not
+   * cross the module boundary). Both call sites share the same private-API risk surface,
+   * so the reflection logic stays centralized here.
    */
-  private fun clearInstrumentationUiAutomationCache(): Boolean {
+  fun clearInstrumentationUiAutomationCache(): Boolean {
     // Path 1: the platform's own disconnect.
     runCatching {
       val method = Instrumentation::class.java.getDeclaredMethod("disconnectUiAutomation")

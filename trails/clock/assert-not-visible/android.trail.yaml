@@ -26,8 +26,6 @@
         tools:
           - tapOnElementBySelector:
               reason: Navigate to STOPWATCH to change context for next assertion.
-              selector:
-                textRegex: STOPWATCH
               nodeSelector:
                 androidAccessibility:
                   textRegex: STOPWATCH

@@ -15,8 +15,6 @@
         tools:
           - assertVisibleBySelector:
               reason: The ALARM tab should be visible on the Clock app's main screen.
-              selector:
-                textRegex: ALARM
               nodeSelector:
                 androidAccessibility:
                   textRegex: ALARM
@@ -26,8 +24,6 @@
         tools:
           - assertVisibleBySelector:
               reason: The FAB button to add a new alarm should be visible.
-              selector:
-                idRegex: "com.android.deskclock:id/fab"
               nodeSelector:
                 androidAccessibility:
                   contentDescriptionRegex: Add alarm

@@ -310,6 +310,10 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
       trailblazeNodeTree = screenState.trailblazeNodeTree,
       deviceWidth = screenState.deviceWidth,
       deviceHeight = screenState.deviceHeight,
+      // The LLM receives the annotated screenshot (see screenshotBytes below);
+      // surface the un-annotated bytes here so LocalLlmSamplingSource can swap
+      // them in for the logged variant when `saveAnnotatedScreenshots` is off.
+      rawScreenshotBytes = screenState.screenshotBytes,
     )
 
     // 5. Wrap available tools with analysis parameters

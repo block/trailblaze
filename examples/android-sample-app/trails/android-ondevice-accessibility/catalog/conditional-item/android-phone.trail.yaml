@@ -12,9 +12,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
-          selector:
-            containsChild:
-              textRegex: Catalog
           nodeSelector:
             androidAccessibility:
               textRegex: Catalog
@@ -24,9 +21,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Tap the "Show seasonal" filter chip to reveal seasonal items.
-          selector:
-            containsChild:
-              textRegex: Show seasonal
           nodeSelector:
             androidAccessibility:
               textRegex: Show seasonal
@@ -35,16 +29,11 @@
       tools:
       - assertVisibleBySelector:
           reason: Verify that "Pumpkin Spice" is now visible after enabling the seasonal filter.
-          selector:
-            textRegex: Pumpkin Spice
           nodeSelector:
             androidAccessibility:
               textRegex: Pumpkin Spice
       - tapOnElementBySelector:
           reason: Tap on the "Pumpkin Spice" item row to open its detail dialog.
-          selector:
-            containsChild:
-              textRegex: Pumpkin Spice
           nodeSelector:
             androidAccessibility:
               textRegex: Pumpkin Spice
@@ -53,8 +42,6 @@
       tools:
       - assertVisibleBySelector:
           reason: Verify the item detail dialog is showing "Pumpkin Spice".
-          selector:
-            textRegex: Pumpkin Spice
           nodeSelector:
             androidAccessibility:
               textRegex: Pumpkin Spice

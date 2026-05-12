@@ -58,17 +58,13 @@ data class AssertVisibleBySelectorTrailblazeTool(
   val timeoutMs: Long? = null,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    // Maestro fallback only applies when a legacy selector exists. Post-migration tools
-    // carrying only a nodeSelector skip this path entirely (the runtime takes the
-    // nodeSelector path in `execute` and never calls super.execute → toMaestroCommands).
-    val legacy = selector
+    val maestroSelector = lowerToMaestroSelector(selector, nodeSelector)
       ?: error(
-        "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with no legacy " +
-          "selector — this tool was migrated to nodeSelector-only and shouldn't fall back " +
-          "to the Maestro path. Check NodeSelectorMode wiring.",
+        "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with neither " +
+          "`selector` nor `nodeSelector` set — malformed recording.",
       )
     return listOf(
-      AssertConditionCommand(condition = Condition(visible = legacy.toMaestroElementSelector())),
+      AssertConditionCommand(condition = Condition(visible = maestroSelector.toMaestroElementSelector())),
     )
   }
 

@@ -29,6 +29,7 @@ class SamplingSourceResolver(
   private val llmModel: TrailblazeLlmModel?,
   private val logsRepo: LogsRepo? = null,
   private val sessionIdProvider: (() -> SessionId?)? = null,
+  private val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
 ) {
 
   private val mcpSource: McpClientSamplingSource by lazy {
@@ -41,6 +42,7 @@ class SamplingSourceResolver(
       llmModel = llmModel,
       logsRepo = logsRepo,
       sessionIdProvider = sessionIdProvider,
+      saveAnnotatedScreenshotsProvider = saveAnnotatedScreenshotsProvider,
     )
   }
 

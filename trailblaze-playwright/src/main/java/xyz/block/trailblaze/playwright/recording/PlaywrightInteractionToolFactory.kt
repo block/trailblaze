@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.playwright.recording
 
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.util.escapeForSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
@@ -29,11 +30,6 @@ class PlaywrightInteractionToolFactory(
   companion object {
     /** Tag names whose `name` attribute is a stable form-control identifier. */
     private val FORM_CONTROL_TAGS: Set<String> = setOf("input", "select", "textarea", "button")
-
-    /** Regex metacharacters that need escaping in [escapeNameForSelector]. */
-    private val REGEX_METACHARACTERS = setOf(
-      '\\', '^', '$', '.', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}',
-    )
   }
 
   override fun createTapTool(
@@ -182,7 +178,7 @@ class PlaywrightInteractionToolFactory(
         TrailblazeNodeSelector(
           web = DriverNodeMatch.Web(
             ariaRole = c.role,
-            ariaNameRegex = escapeNameForSelector(c.name),
+            ariaNameRegex = escapeForSelector(c.name),
           ),
         ) to "ARIA role + name"
       c.interactive && c.name.isNotBlank() ->
@@ -223,15 +219,6 @@ class PlaywrightInteractionToolFactory(
     }
     return identifierScore - c.depth * 30
   }
-
-  /**
-   * Escapes a plain accessible-name for use as a regex pattern. Wraps in `\Q…\E` when the
-   * name contains regex metacharacters; otherwise returns it as-is so the recorded YAML
-   * stays readable. Mirrors the model module's internal `escapeForSelector` helper —
-   * inlined here because that one isn't exposed across module boundaries.
-   */
-  private fun escapeNameForSelector(name: String): String =
-    if (name.any { it in REGEX_METACHARACTERS }) Regex.escape(name) else name
 
   /** Reuse the stream's CSS-attribute escaper so attribute-value quoting stays consistent. */
   private fun cssEscape(value: String): String =

@@ -194,7 +194,9 @@ org.jetbrains.compose.animation:animation-desktop:1.11.0-alpha04
 org.jetbrains.compose.animation:animation:1.11.0-alpha04
 org.jetbrains.compose.annotation-internal:annotation:1.11.0-alpha04
 org.jetbrains.compose.collection-internal:collection:1.11.0-alpha04
-org.jetbrains.compose.desktop:desktop-jvm_PLATFORM_:1.11.0-alpha04
+org.jetbrains.compose.desktop:desktop-jvm-linux-arm64:1.11.0-alpha04
+org.jetbrains.compose.desktop:desktop-jvm-linux-x64:1.11.0-alpha04
+org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.0-alpha04
 org.jetbrains.compose.desktop:desktop-jvm:1.11.0-alpha04
 org.jetbrains.compose.desktop:desktop:1.11.0-alpha04
 org.jetbrains.compose.foundation:foundation-desktop:1.11.0-alpha04
@@ -266,7 +268,9 @@ org.jetbrains.kotlinx:kotlinx-serialization-json-io:1.10.0
 org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.10.0
 org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0
 org.jetbrains.runtime:jbr-api:1.9.0
-org.jetbrains.skiko:skiko-awt-runtime_PLATFORM_:0.144.4
+org.jetbrains.skiko:skiko-awt-runtime-linux-arm64:0.144.4
+org.jetbrains.skiko:skiko-awt-runtime-linux-x64:0.144.4
+org.jetbrains.skiko:skiko-awt-runtime-macos-arm64:0.144.4
 org.jetbrains.skiko:skiko-awt:0.144.4
 org.jetbrains.skiko:skiko:0.144.4
 org.jetbrains:annotations:26.0.2-1

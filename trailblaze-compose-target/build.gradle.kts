@@ -17,6 +17,10 @@ dependencies {
   // Interface depends on compose-ui (SemanticsNode, SemanticsActions, ImageBitmap)
   api(compose.desktop.currentOs)
 
+  // DriverDispatch marker — ComposeTestTarget implements it to declare the
+  // "dispatch action, then settle" contract shared with the other driver managers.
+  api(project(":trailblaze-models"))
+
   // ComposeUiTestTarget wraps ComposeUiTest — callers must provide this dependency
   compileOnly(libs.compose.ui.test.junit4)
 }

@@ -358,11 +358,18 @@ class TrailblazeLogger(
    * Helper method to convert Koog messages to Trailblaze format.
    * Handles Tool messages, attachments, and regular content.
    */
-  private fun List<Message>.toTrailblazeLlmMessages() = map { messageFromHistory ->
+  internal fun List<Message>.toTrailblazeLlmMessages() = map { messageFromHistory ->
     when (messageFromHistory) {
       is Message.Tool -> {
+        // Both Tool.Call and Tool.Result inherit role="tool" so they collapse in the
+        // serialized log; split them explicitly to keep them distinguishable for triage.
+        val toolRole = when (messageFromHistory) {
+          is Message.Tool.Call -> "tool_use"
+          is Message.Tool.Result -> "tool_result"
+          else -> messageFromHistory.role.name.lowercase()
+        }
         TrailblazeLlmMessage(
-          role = messageFromHistory.role.name.lowercase(),
+          role = toolRole,
           message = buildString {
             appendLine("**${messageFromHistory.tool}**")
             appendLine("")
@@ -370,6 +377,7 @@ class TrailblazeLogger(
             appendLine(messageFromHistory.content)
             appendLine("```")
           },
+          toolName = messageFromHistory.tool,
         )
       }
 

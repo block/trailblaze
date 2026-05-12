@@ -3,6 +3,9 @@ package xyz.block.trailblaze.host
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.compile.TrailblazeCompiler
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
+import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
+import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.toLowerHex
@@ -165,7 +168,24 @@ object WorkspaceCompileBootstrap {
       // already a foregrounded operation the user opted into; the daemon-init
       // rebundle is implicit and hiding it in quiet mode would look like a hang.
       Console.info("Recompiling workspace packs...")
-      val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+      // Reference validation needs to see workspace-authored toolsets and tools that live
+      // on the filesystem under the user's `trails/config/`, not only classpath-bundled
+      // ids. Pass a composite source layered like `AppTargetDiscovery.buildResourceSource`
+      // (classpath + workspace filesystem) so a workspace `trails/config/toolsets/<id>.yaml`
+      // or `trails/config/tools/<id>.tool.yaml` resolves cleanly. Without this layering, a
+      // pack that references its own workspace toolset would fail compile with "unknown
+      // toolset" even though the toolset is right there on disk.
+      val referenceSource = CompositeConfigResourceSource(
+        sources = listOf(
+          ClasspathConfigResourceSource,
+          FilesystemConfigResourceSource(rootDir = configDir),
+        ),
+      )
+      val result = TrailblazeCompiler.compile(
+        packsDir = packsDir,
+        outputDir = outputDir,
+        referenceSource = referenceSource,
+      )
       if (!result.isSuccess) {
         // Drop a stale hash file so a subsequent edit-and-retry doesn't accidentally pass
         // the up-to-date check against last run's hash. The user expects "fix and retry"

@@ -54,4 +54,22 @@ enum class ViewHierarchyDetail {
    * included and offscreen ones are annotated with `(offscreen)`.
    */
   OFFSCREEN_ELEMENTS,
+
+  /**
+   * Include elements that are in the viewport but visually covered (painted under)
+   * another element (modal, popup, toast, autocomplete dropdown, etc.).
+   *
+   * Uses VISUAL paint order (`document.elementsFromPoint`), not click hit-testing
+   * (`document.elementFromPoint`). The two differ for `pointer-events: none`
+   * overlays — common for non-modal toasts that visually float on top while leaving
+   * the page beneath interactive. The visual signal is the right one for SoM
+   * because the LLM reasons from the screenshot: if it can't see an element, it
+   * shouldn't be told the element is actionable in the prompt.
+   *
+   * By default these are filtered out of the compact element list. When this
+   * detail is requested, occluded elements are included with `(occluded)`
+   * annotations so the LLM can see what's hidden under the overlay and decide
+   * whether to dismiss it first.
+   */
+  OCCLUDED_ELEMENTS,
 }

@@ -64,6 +64,7 @@ import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -129,11 +130,17 @@ object TrailblazeHostYamlRunner {
   internal fun resolvePlaywrightCacheReuse(
     cachedModel: TrailblazeLlmModel?,
     cachedBrowserManager: PlaywrightPageManager?,
+    cachedMaxLlmCalls: Int?,
     requestedModel: TrailblazeLlmModel,
+    requestedMaxLlmCalls: Int?,
   ): PlaywrightCacheResolution = when {
     cachedModel == null -> PlaywrightCacheResolution.NoCachedTest
-    cachedModel == requestedModel -> PlaywrightCacheResolution.ReuseCachedTest
+    cachedModel == requestedModel && cachedMaxLlmCalls == requestedMaxLlmCalls ->
+      PlaywrightCacheResolution.ReuseCachedTest
     cachedBrowserManager != null ->
+      // Either the model OR the max-llm-calls cap changed. Both are baked into the lazy
+      // TrailblazeRunner inside the cached test, so the test instance has to be rebuilt;
+      // we keep the cached browser to avoid relaunching Chromium every time.
       PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)
     // Defensive: cached model exists but no browser to reuse — treat as no cache.
     // In practice cachedBrowserManager is always non-null when cachedModel is, but
@@ -462,7 +469,9 @@ object TrailblazeHostYamlRunner {
     val cacheResolution = resolvePlaywrightCacheReuse(
       cachedModel = cachedTest?.trailblazeLlmModel,
       cachedBrowserManager = cachedTest?.browserManager,
+      cachedMaxLlmCalls = cachedTest?.maxLlmCalls,
       requestedModel = runYamlRequest.trailblazeLlmModel,
+      requestedMaxLlmCalls = runYamlRequest.maxLlmCalls,
     )
     val existingTest =
       if (cacheResolution is PlaywrightCacheResolution.ReuseCachedTest) cachedTest else null
@@ -503,6 +512,7 @@ object TrailblazeHostYamlRunner {
       appTarget = runOnHostParams.targetTestApp,
       trailblazeDeviceId = trailblazeDeviceId,
       existingBrowserManager = staleBrowserToReuse,
+      maxLlmCalls = runYamlRequest.maxLlmCalls,
     )
 
     // Reset the browser session only when starting a new Trailblaze session.
@@ -634,6 +644,7 @@ object TrailblazeHostYamlRunner {
       config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
       trailblazeDeviceId = trailblazeDeviceId,
+      maxLlmCalls = runYamlRequest.maxLlmCalls,
     )
 
     if (isReusingTest) {
@@ -840,6 +851,7 @@ object TrailblazeHostYamlRunner {
       sessionProvider = {
         loggingRule.session ?: error("Session not available - ensure test is running")
       },
+      maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
     )
 
     val elementComparator = TrailblazeElementComparator(
@@ -1094,6 +1106,7 @@ object TrailblazeHostYamlRunner {
         sessionProvider = {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
+        maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
       )
 
       val elementComparator = TrailblazeElementComparator(
@@ -1479,6 +1492,9 @@ object TrailblazeHostYamlRunner {
       llmModel = trailblazeLlmModel,
       logsRepo = loggingRule.logsRepo,
       sessionIdProvider = { loggingRule.session?.sessionId },
+      saveAnnotatedScreenshotsProvider = {
+        CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
+      },
     )
 
     val screenAnalyzer = InnerLoopScreenAnalyzer(
@@ -1836,6 +1852,7 @@ object TrailblazeHostYamlRunner {
       trailblazeToolRepo = toolRepo,
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
+      maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
     )
 
     val elementComparator = TrailblazeElementComparator(

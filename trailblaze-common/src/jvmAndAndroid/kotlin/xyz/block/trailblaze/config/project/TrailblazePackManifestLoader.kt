@@ -232,6 +232,90 @@ object TrailblazePackManifestLoader {
     return parseManifest(content, source, identifier = packFile.absolutePath)
   }
 
+  /**
+   * Resolves relative `mcp_servers[].script` entries to absolute paths anchored at the
+   * pack manifest's directory, and validates each resolved file exists on disk.
+   *
+   * **Mutation note:** the returned manifest's `target.mcpServers[].script` fields are
+   * rewritten to absolute paths and will not match the source YAML byte-for-byte.
+   * Downstream consumers relying on text fidelity (round-trip serialization,
+   * comparison-by-script-string) should re-read the source.
+   *
+   * Absolute paths and `command:` entries pass through unchanged. Classpath-sourced
+   * packs (no filesystem anchor) are rejected at the call site before reaching this
+   * function, because subprocess MCP servers need a real filesystem path to spawn.
+   */
+  private fun resolveMcpServerScripts(
+    manifest: TrailblazePackManifest,
+    packDir: File,
+    identifier: String,
+  ): TrailblazePackManifest {
+    val target = manifest.target ?: return manifest
+    val servers = target.mcpServers ?: return manifest
+    val packDirCanonical = try {
+      packDir.canonicalFile
+    } catch (e: IOException) {
+      throw TrailblazeProjectConfigException(
+        "Pack manifest $identifier: failed to canonicalize pack directory " +
+          "${packDir.absolutePath}: ${e.message}",
+        e,
+      )
+    }
+    val rewritten = servers.map { entry ->
+      val rawScript = entry.script
+      if (rawScript == null) return@map entry
+      val asFile = File(rawScript)
+      if (asFile.isAbsolute) {
+        // Absolute paths bypass the pack-containment check by design — authors who write
+        // an absolute path opt into pointing outside the pack (e.g. a shared script under
+        // their workspace root). The `isFile` check still applies.
+        if (!asFile.isFile) {
+          throw TrailblazeProjectConfigException(
+            "Pack manifest $identifier: mcp_servers script '$rawScript' not found at " +
+              "${asFile.absolutePath}.",
+          )
+        }
+        return@map entry
+      }
+      // Relative paths: anchor at pack dir, normalize via pure string manipulation, then
+      // require canonical containment under the pack so `script: ../../etc/passwd` can't
+      // resolve out of the pack even if such a file exists on disk. Defense-in-depth
+      // matching the same guarantee `TrailblazePackBundler.resolvePackRelativeToolFile`
+      // enforces for `tools[].script`.
+      //
+      // Stored value is the absolute (non-canonical) path so the form is predictable and
+      // matches `File.absolutePath` on downstream constructions. Canonicalization is only
+      // used for the containment check — without it, a symlink could escape the pack on
+      // platforms where the textual path looks contained but resolves elsewhere.
+      val resolvedAbsolute = File(packDir, rawScript).toPath().normalize().toFile().absoluteFile
+      val resolvedCanonical = try {
+        resolvedAbsolute.canonicalFile
+      } catch (e: IOException) {
+        throw TrailblazeProjectConfigException(
+          "Pack manifest $identifier: failed to canonicalize mcp_servers script " +
+            "'$rawScript' → ${resolvedAbsolute.absolutePath}: ${e.message}",
+          e,
+        )
+      }
+      if (!resolvedCanonical.toPath().startsWith(packDirCanonical.toPath())) {
+        throw TrailblazeProjectConfigException(
+          "Pack manifest $identifier: mcp_servers script '$rawScript' resolves outside " +
+            "the pack directory (resolved to ${resolvedCanonical.absolutePath}, pack at " +
+            "${packDirCanonical.absolutePath}). Relative scripts must stay inside the pack.",
+        )
+      }
+      if (!resolvedAbsolute.isFile) {
+        throw TrailblazeProjectConfigException(
+          "Pack manifest $identifier: mcp_servers script '$rawScript' not found at " +
+            "${resolvedAbsolute.absolutePath}. Check the pack-relative path against files " +
+            "actually present under the pack directory.",
+        )
+      }
+      entry.copy(script = resolvedAbsolute.absolutePath)
+    }
+    return manifest.copy(target = target.copy(mcpServers = rewritten))
+  }
+
   private fun parseManifest(
     content: String,
     source: PackSource,
@@ -263,19 +347,37 @@ object TrailblazePackManifestLoader {
     warnOnRemovedComposeFields(manifest, content, identifier)
     warnOnRemovedNavFields(manifest, content, identifier)
     enforceLibraryPackContract(manifest, identifier)
+    // Rewrite `mcp_servers[].script` only when the pack is loaded from the filesystem —
+    // classpath-sourced packs can't host subprocess MCP servers (the script would need to
+    // be an extractable JS file on disk, not a classpath resource). Reject classpath packs
+    // that declare any so the failure points at the YAML, not at spawn time.
+    val resolved = when (source) {
+      is PackSource.Filesystem -> resolveMcpServerScripts(manifest, source.packDir, identifier)
+      is PackSource.Classpath -> {
+        val mcpServers = manifest.target?.mcpServers.orEmpty()
+        if (mcpServers.isNotEmpty()) {
+          throw TrailblazeProjectConfigException(
+            "Pack manifest $identifier is loaded from the classpath but declares mcp_servers: " +
+              "(${mcpServers.size} entries). Subprocess MCP servers need a filesystem path to " +
+              "spawn; classpath-bundled packs can't host them. Remove the mcp_servers: block " +
+              "or ship the pack from a workspace directory.",
+          )
+        }
+        manifest
+      }
+    }
     return LoadedTrailblazePackManifest(
-      manifest = manifest,
+      manifest = resolved,
       source = source,
     )
   }
 
   /**
    * Enforces the library-pack contract from [TrailblazePackManifest]'s kdoc: a pack with
-   * no `target:` block (a *library pack*) cannot declare `waypoints:`. A waypoint binds
-   * to a target's screen geometry — declaring waypoints in a target-less pack is a
-   * category error that would silently surface those waypoints under no owner. We catch
-   * it at parse time so the failure points at the exact pack and field rather than
-   * showing up later as "no target found for waypoint X" during reverse-lookup.
+   * no `target:` block (a *library pack*) cannot declare `waypoints:` (bind to a target's
+   * screen state) or `mcp_servers:` (need a target session to spawn into). Declaring either
+   * in a target-less pack is a category error that we catch at parse time so the failure
+   * points at the exact pack and field rather than showing up later as "no target found".
    *
    * The library-pack trailhead-tools rule is enforced separately in
    * `TrailblazeProjectConfigLoader.resolvePackSiblings` because it requires reading each
@@ -286,7 +388,8 @@ object TrailblazePackManifestLoader {
     manifest: TrailblazePackManifest,
     identifier: String,
   ) {
-    if (manifest.target == null && manifest.waypoints.isNotEmpty()) {
+    if (manifest.target != null) return
+    if (manifest.waypoints.isNotEmpty()) {
       throw TrailblazeProjectConfigException(
         "Pack manifest $identifier declares waypoints: but has no target: block. " +
           "Library packs (no target) cannot own waypoints — waypoints bind to a target's " +

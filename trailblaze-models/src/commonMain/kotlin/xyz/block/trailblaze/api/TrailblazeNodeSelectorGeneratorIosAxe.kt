@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.util.escapeForSelector
+
 // ---------------------------------------------------------------------------
 // iOS AXe strategies — selector-generation strategies for DriverNodeDetail.IosAxe nodes,
 // driven off Apple's native AX vocabulary (role, subrole, label, value, uniqueId, etc.)
@@ -144,7 +147,7 @@ internal fun namedStructuralIosAxeStrategies(
   },
   "Structural: type" to {
     detail.type?.let { type ->
-      selectorWith(DriverNodeMatch.IosAxe(typeRegex = escapeForSelector(type)))
+      selectorWith(DriverNodeMatch.IosAxe(typeRegex = escapeForIdentifier(type)))
     }
   },
   // Trailing hierarchy/spatial/index — shared across all generators.

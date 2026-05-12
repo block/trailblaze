@@ -234,11 +234,57 @@ object PlaywrightDriverManager {
   private fun isChromiumInstalled(): Boolean {
     val cacheDir = getPlaywrightBrowsersCacheDir()
     if (!cacheDir.exists() || !cacheDir.isDirectory) return false
-    // Playwright writes an INSTALLATION_COMPLETE marker file after downloading a browser.
-    // Checking only the directory name is insufficient — the directory can exist without
-    // the actual binary (e.g., partial download, interrupted install, or cleanup).
-    // We need *both* chromium and chromium_headless_shell because headless mode (the default)
-    // uses the headless shell variant, while headed mode needs the full browser.
+
+    // Look up the EXACT chromium revisions this driver expects from its bundled
+    // `browsers.json` manifest. Matching on prefix alone (any `chromium-*` dir present)
+    // is a trap on Playwright upgrades — e.g. 1.54 ships rev 1181, 1.59 ships rev 1217.
+    // A binary user upgrading 1.54 → 1.59 has the 1181 dirs still cached and would
+    // skip the install, then crash at browser launch looking for 1217. Read the manifest
+    // and require the specific revision dirs to exist with the install marker.
+    val (chromiumRev, headlessRev) = readExpectedChromiumRevisions() ?: run {
+      // Manifest unreadable (driver dir missing, malformed json, etc.) — fall back to
+      // the prefix-only check rather than refusing to ever start.
+      return legacyPrefixOnlyChromiumCheck(cacheDir)
+    }
+
+    val chromiumDir = File(cacheDir, "$CHROMIUM_DIR_PREFIX$chromiumRev")
+    val headlessDir = File(cacheDir, "$CHROMIUM_HEADLESS_SHELL_DIR_PREFIX$headlessRev")
+    val hasChromium = chromiumDir.isDirectory && File(chromiumDir, INSTALLATION_COMPLETE_MARKER).exists()
+    val hasHeadlessShell = headlessDir.isDirectory && File(headlessDir, INSTALLATION_COMPLETE_MARKER).exists()
+    return hasChromium && hasHeadlessShell
+  }
+
+  /**
+   * Parses the driver's `browsers.json` manifest and returns the expected revisions for
+   * `chromium` and `chromium-headless-shell`. Both have to be installable-by-default
+   * (i.e. `installByDefault: true`) to match what `playwright install chromium` produces.
+   * Returns null if the manifest is missing, malformed, or doesn't declare both browsers.
+   */
+  private fun readExpectedChromiumRevisions(): Pair<String, String>? {
+    val cliDir = System.getProperty("playwright.cli.dir")?.let { File(it) } ?: return null
+    val manifest = File(cliDir, "package/browsers.json")
+    if (!manifest.isFile) return null
+    val text = runCatching { manifest.readText() }.getOrNull() ?: return null
+    // Minimal hand-parse so we don't need a JSON dependency at this layer. The manifest
+    // is a flat `{ "browsers": [ { "name": "chromium", "revision": "1217", ... }, ... ] }`.
+    var chromiumRev: String? = null
+    var headlessRev: String? = null
+    val entryPattern = Regex(
+      "\\{[^{}]*\"name\"\\s*:\\s*\"([^\"]+)\"[^{}]*\"revision\"\\s*:\\s*\"([^\"]+)\"[^{}]*}",
+    )
+    for (match in entryPattern.findAll(text)) {
+      val name = match.groupValues[1]
+      val rev = match.groupValues[2]
+      when (name) {
+        "chromium" -> chromiumRev = rev
+        "chromium-headless-shell" -> headlessRev = rev
+      }
+    }
+    return if (chromiumRev != null && headlessRev != null) chromiumRev to headlessRev else null
+  }
+
+  /** Pre-revision-aware behavior preserved as a safety net when the manifest can't be parsed. */
+  private fun legacyPrefixOnlyChromiumCheck(cacheDir: File): Boolean {
     val dirs = cacheDir.listFiles() ?: return false
     val hasChromium = dirs.any { file ->
       file.isDirectory &&

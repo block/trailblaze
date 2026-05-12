@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.util.escapeForSelector
+
 // ---------------------------------------------------------------------------
 // Android Accessibility strategies (22 strategies, most → least precise)
 // ---------------------------------------------------------------------------
@@ -21,7 +24,7 @@ internal fun androidAccessibilityStrategies(
     detail.uniqueId?.let { uid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(uniqueId = uid))
     } ?: detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForIdentifier(rid)))
     } ?: detail.composeTestTag?.let { tt ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = escapeForSelector(tt)))
     }
@@ -47,7 +50,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           contentDescriptionRegex = escapeForSelector(detail.contentDescription),
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {
@@ -70,7 +73,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           hintTextRegex = escapeForSelector(detail.hintText),
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {
@@ -98,7 +101,7 @@ internal fun androidAccessibilityStrategies(
         selectorWith(
           DriverNodeMatch.AndroidAccessibility(
             textRegex = escapeForSelector(text),
-            classNameRegex = escapeForSelector(className),
+            classNameRegex = escapeForIdentifier(className),
           ),
         )
       } else {
@@ -115,7 +118,7 @@ internal fun androidAccessibilityStrategies(
     if (rid != null && text != null) {
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
-          resourceIdRegex = escapeForSelector(rid),
+          resourceIdRegex = escapeForIdentifier(rid),
           textRegex = escapeForSelector(text),
         ),
       )
@@ -137,7 +140,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           labeledByTextRegex = escapeForSelector(label),
-          classNameRegex = escapeForSelector(className),
+          classNameRegex = escapeForIdentifier(className),
         ),
       )
     } else {
@@ -157,14 +160,14 @@ internal fun androidAccessibilityStrategies(
   // Strategy 12: className alone (single-instance widgets: SeekBar, ProgressBar, RatingBar)
   "Class name" to {
     detail.className?.let { cn ->
-      selectorWith(DriverNodeMatch.AndroidAccessibility(classNameRegex = escapeForSelector(cn)))
+      selectorWith(DriverNodeMatch.AndroidAccessibility(classNameRegex = escapeForIdentifier(cn)))
     }
   },
   // Strategy 13: className + rich state flags (broader than the old 3-flag version)
   "Class + state flags" to {
     detail.className?.let { cn ->
       val match = DriverNodeMatch.AndroidAccessibility(
-        classNameRegex = escapeForSelector(cn),
+        classNameRegex = escapeForIdentifier(cn),
         isEditable = if (detail.isEditable) true else null,
         isCheckable = if (detail.isCheckable) true else null,
         isHeading = if (detail.isHeading) true else null,
@@ -192,7 +195,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           isPassword = true,
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {
@@ -205,7 +208,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           inputType = detail.inputType,
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {
@@ -223,7 +226,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           stateDescriptionRegex = escapeForSelector(state),
-          classNameRegex = escapeForSelector(className),
+          classNameRegex = escapeForIdentifier(className),
         ),
       )
     } else {
@@ -241,7 +244,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           roleDescriptionRegex = escapeForSelector(role),
-          classNameRegex = escapeForSelector(className),
+          classNameRegex = escapeForIdentifier(className),
         ),
       )
     } else {
@@ -288,7 +291,7 @@ internal fun namedStructuralAndroidAccessibilityStrategies(
     detail.uniqueId?.let { uid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(uniqueId = uid))
     } ?: detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForIdentifier(rid)))
     } ?: detail.composeTestTag?.let { tt ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = escapeForSelector(tt)))
     }
@@ -296,14 +299,14 @@ internal fun namedStructuralAndroidAccessibilityStrategies(
   // 2: className alone (works for singleton widgets: SeekBar, ProgressBar, etc.)
   "Structural: class name" to {
     detail.className?.let { cn ->
-      selectorWith(DriverNodeMatch.AndroidAccessibility(classNameRegex = escapeForSelector(cn)))
+      selectorWith(DriverNodeMatch.AndroidAccessibility(classNameRegex = escapeForIdentifier(cn)))
     }
   },
   // 3: className + state flags (distinguishes editable fields, checkboxes, etc.)
   "Structural: class + state" to {
     detail.className?.let { cn ->
       val match = DriverNodeMatch.AndroidAccessibility(
-        classNameRegex = escapeForSelector(cn),
+        classNameRegex = escapeForIdentifier(cn),
         isClickable = if (detail.isClickable) true else null,
         isEditable = if (detail.isEditable) true else null,
         isCheckable = if (detail.isCheckable) true else null,
@@ -326,7 +329,7 @@ internal fun namedStructuralAndroidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           inputType = detail.inputType,
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {

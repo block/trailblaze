@@ -65,6 +65,19 @@ open class BasePlaywrightNativeTest(
    * was already launched (e.g. via WebBrowserManager in the desktop app).
    */
   existingBrowserManager: PlaywrightPageManager? = null,
+  /**
+   * Per-objective cap on LLM calls forwarded into [TrailblazeRunner.maxSteps]. Surfaced as
+   * the CLI's `--max-llm-calls` flag and threaded through
+   * [xyz.block.trailblaze.llm.RunYamlRequest.maxLlmCalls] into this rule's constructor.
+   * Null = use the runner's built-in [TrailblazeRunner.DEFAULT_MAX_STEPS].
+   *
+   * Tracked as a public `val` so the daemon's cache-reuse logic (in
+   * [xyz.block.trailblaze.host.TrailblazeHostYamlRunner.resolvePlaywrightCacheReuse])
+   * can compare the request's cap against the cached test's cap and rebuild the test
+   * when they differ — otherwise the lazy `trailblazeRunner` field would freeze the
+   * cap at construction time and silently ignore later flag changes.
+   */
+  val maxLlmCalls: Int? = null,
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -124,6 +137,7 @@ open class BasePlaywrightNativeTest(
       systemPromptTemplate = systemPromptTemplate,
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
     )
   }
 
@@ -159,13 +173,13 @@ open class BasePlaywrightNativeTest(
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
+    // `useRecordedSteps` is forwarded to `runPromptSuspend` to switch the agent loop
+    // between recording-replay and live-LLM mode. As of the playwright-mcp settle
+    // adoption, Playwright-layer settling (PlaywrightPageManager.dispatchAndAwaitSettle)
+    // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ) {
-    // In recording playback, skip DOM stability in post-action settle — element readiness
-    // waits handle the critical timing, and DOM stability always times out on real SPAs.
-    playwrightAgent.skipPostActionDomStability = useRecordedSteps
-
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->

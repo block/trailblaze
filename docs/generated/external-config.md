@@ -121,14 +121,17 @@ target:
     android:
       app_ids:
         - xyz.block.trailblaze.examples.sampleapp
-  mcp_servers:
-    - script: ./examples/android-sample-app/trails/config/mcp/tools.ts
-    - script: ./examples/android-sample-app/trails/config/mcp-sdk/tools.ts
-  # Pack scripted tools — flat-schema authoring surface, one tool per file under tools/.
-  # Lighter-weight than the `mcp_servers:` block above (no `bun install` required, no
-  # subprocess MCP server). The host runner synthesizes a small wrapper at session start.
+  # Preferred authoring surface for new packs: pack scripted tools — flat-schema, one tool
+  # per file under tools/. No `bun install` required, no subprocess. The host runner
+  # synthesizes a small wrapper at session start.
   tools:
     - tools/host_writeArtifact.yaml
+  # Subprocess MCP servers — kept for capability coverage so the path doesn't bitrot. The
+  # framework supports this if a consumer needs it (deal-breaker scenarios), but prefer the
+  # `tools:` block above for new authoring: zero install step, smaller dependency surface.
+  mcp_servers:
+    - script: ./tools/mcp/tools.ts
+    - script: ./tools/mcp-sdk/tools.ts
 ```
 
 ## Authoring Toolsets
@@ -216,13 +219,6 @@ mcp_servers:
 ```
 
 Current path resolution for `script:` is against the JVM's current working directory (where you launched `trailblaze`), not the YAML file's directory. Use a repo-relative path that works from your launch directory.
-
-### Reference JS / TS Tool Packages in This Repo
-
-- `examples/android-sample-app/trails/config/mcp/tools.ts`
-- `examples/android-sample-app/trails/config/mcp-sdk/tools.ts`
-
-The sample app intentionally carries both the raw MCP SDK authoring surface and the `@trailblaze/scripting` SDK authoring surface side-by-side.
 
 ## Distribution Pattern for Pre-Vetted Target Packs
 

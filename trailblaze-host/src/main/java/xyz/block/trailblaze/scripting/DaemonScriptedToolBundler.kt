@@ -63,6 +63,19 @@ class DaemonScriptedToolBundler(
       val baseDir = packBaseDirs[pack] ?: continue
       for (toolYamlRelPath in toolPaths) {
         val toolYamlFile = File(baseDir, toolYamlRelPath)
+        // Pack-containment check for the descriptor itself — without this, a manifest declaring
+        // `target.tools: [../outside.yaml]` would resolve a YAML file outside the pack and
+        // decode it before the script-side guard below ever ran. Same canonical-startsWith
+        // pattern used for `script:` paths; absolute entries bypass (consistent with the
+        // script-side bypass and the loader's mcp_servers resolver).
+        requirePathInsidePack(
+          packId = pack.id,
+          baseDir = baseDir,
+          path = toolYamlFile,
+          rawPath = toolYamlRelPath,
+          kind = "tool descriptor",
+          rawIsAbsolute = File(toolYamlRelPath).isAbsolute,
+        )
         if (!toolYamlFile.isFile) {
           throw IOException(
             "Pack '${pack.id}': scripted-tool descriptor '$toolYamlRelPath' not found at " +
@@ -70,11 +83,32 @@ class DaemonScriptedToolBundler(
           )
         }
         val descriptor = decodeDescriptor(toolYamlFile)
-        // `script:` paths in the descriptor are documented to resolve against the JVM working
-        // directory, not the pack directory. See the kdoc on PackScriptedToolFile.script. The
-        // bundler honors that contract verbatim — Sub-PR-A3 will revisit if/when pack-relative
-        // resolution lands.
-        val scriptFile = File(descriptor.script).let { if (it.isAbsolute) it else it.absoluteFile }
+        // Resolve `script:` relative to the descriptor YAML file's parent directory so the
+        // implementation lives next to the descriptor inside the pack. Absolute paths pass
+        // through unchanged. `Path.normalize()` collapses `./` and `../` segments via pure
+        // string manipulation (no filesystem I/O, no IOException) so error messages embed
+        // the clean form `packDir/tools/foo.ts` rather than `packDir/tools/./foo.ts`,
+        // matching the loader's mcp_servers path-rewrite contract.
+        val scriptFile = File(descriptor.script).let {
+          if (it.isAbsolute) {
+            it
+          } else {
+            File(toolYamlFile.parentFile, descriptor.script).toPath().normalize().toFile().absoluteFile
+          }
+        }
+        // Canonical-path containment for relative scripts: same posture as the loader's
+        // mcp_servers resolver and the build-time `TrailblazePackBundler.resolvePackRelativeToolFile`.
+        // Absolute paths bypass by design — authors who write an absolute path opt into pointing
+        // outside the pack. Symlinks are canonicalized away on both sides so a textually-contained
+        // path can't disguise an out-of-pack target.
+        requirePathInsidePack(
+          packId = pack.id,
+          baseDir = baseDir,
+          path = scriptFile,
+          rawPath = descriptor.script,
+          kind = "tool '${descriptor.name}' script",
+          rawIsAbsolute = File(descriptor.script).isAbsolute,
+        )
         if (!scriptFile.isFile) {
           throw IOException(
             "Pack '${pack.id}': tool '${descriptor.name}' references script '${descriptor.script}' " +
@@ -385,6 +419,48 @@ class DaemonScriptedToolBundler(
 
   private fun decodeDescriptor(yamlFile: File): PackScriptedToolFile =
     yaml.decodeFromString(PackScriptedToolFile.serializer(), yamlFile.readText())
+
+  /**
+   * Canonical-startsWith containment check applied to both `target.tools[]` descriptor refs
+   * and per-tool `script:` paths. Mirrors the load-time loader's `resolveMcpServerScripts`
+   * check and the build-time `TrailblazePackBundler.resolvePackRelativeToolFile` — relative
+   * paths must resolve strictly under the pack directory once symlinks are canonicalized
+   * away. Absolute paths bypass (consistent with the loader's `mcp_servers:` behavior and
+   * the contract documented on [PackScriptedToolFile.script]).
+   */
+  private fun requirePathInsidePack(
+    packId: String,
+    baseDir: File,
+    path: File,
+    rawPath: String,
+    kind: String,
+    rawIsAbsolute: Boolean,
+  ) {
+    if (rawIsAbsolute) return
+    val baseDirCanonical = try {
+      baseDir.canonicalFile
+    } catch (e: IOException) {
+      throw IOException(
+        "Pack '$packId': failed to canonicalize pack directory ${baseDir.absolutePath}: ${e.message}",
+        e,
+      )
+    }
+    val pathCanonical = try {
+      path.canonicalFile
+    } catch (e: IOException) {
+      throw IOException(
+        "Pack '$packId': failed to canonicalize $kind '$rawPath' → ${path.absolutePath}: ${e.message}",
+        e,
+      )
+    }
+    if (!pathCanonical.toPath().startsWith(baseDirCanonical.toPath())) {
+      throw IOException(
+        "Pack '$packId': $kind '$rawPath' resolves outside the pack directory " +
+          "(resolved to ${pathCanonical.absolutePath}, pack at ${baseDirCanonical.absolutePath}). " +
+          "Relative paths must stay inside the pack.",
+      )
+    }
+  }
 
   /**
    * Encode an arbitrary string as a JS string literal. Just `\` and `"` need escaping for

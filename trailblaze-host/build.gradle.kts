@@ -112,6 +112,42 @@ dependencies {
 
   // Compose dependencies for JVM UI code moved from trailblaze-ui
   implementation(compose.desktop.currentOs)
+
+  // --------------------------------------------------------------------------
+  // Cross-host Skiko native bundling
+  // --------------------------------------------------------------------------
+  // Skiko is the JNI binding behind `org.jetbrains.skia.*`, used for WebP
+  // screenshot encoding (and pulled in by Compose Desktop). It ships as one
+  // JAR per host OS+arch, each containing a single `lib*.so` / `.dylib`.
+  //
+  // Without the explicit declarations below, the only contributor would be
+  // `compose.desktop.currentOs` (transitively), which resolves to *just* the
+  // build host's variant. That's how the uber JAR built on macOS-arm64
+  // Runway agents historically shipped only `libskiko-macos-arm64.dylib` —
+  // running it on Linux CI failed with:
+  //   `LibraryLoadException: Cannot find libskiko-linux-x64.so.sha256`
+  // the first time anything touched WebP encoding (the default screenshot
+  // format). See #2844 for the breaking build, and the sibling
+  // `runtimeOnly("org.jetbrains.compose.desktop:desktop-jvm-<os>:…")` block
+  // in `trailblaze-compose`'s build.gradle.kts that handles the same
+  // category of bug for the Compose Desktop aggregator artifact.
+  //
+  // Declaring all 3 supported variants as `runtimeOnly` makes the uber JAR
+  // OS-portable regardless of build host, and lets the dependency-guard
+  // baseline read as plain documentation of which platforms we ship.
+  //
+  // Intel macOS and Windows are intentionally omitted — see
+  // `TrailblazeDesktopUtil.assertSupportedPlatform()`, which rejects those
+  // hosts at startup with a clear message rather than crashing later inside
+  // Skiko's JNI loader.
+  listOf(
+    "linux-x64",
+    "linux-arm64",
+    "macos-arm64",
+  ).forEach { target ->
+    runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-$target:${libs.versions.skiko.get()}")
+  }
+
   implementation(libs.compose.ui)
   implementation(libs.compose.runtime)
   implementation(libs.compose.foundation)
@@ -212,9 +248,5 @@ tasks.named("processResources") {
 }
 
 dependencyGuard {
-  configuration("runtimeClasspath") {
-    @Suppress("UNCHECKED_CAST")
-    val map = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
-    baselineMap = map
-  }
+  configuration("runtimeClasspath")
 }

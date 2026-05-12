@@ -16,15 +16,21 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Tests for [DaemonScriptedToolBundler]. The tests require a real `esbuild` binary
- * because we exercise the actual bundling pipeline end-to-end (the cache hit path
- * has no useful semantics if it never sees a successful initial bundle to cache).
+ * Tests for [DaemonScriptedToolBundler]. The tests split into two flavors:
+ *
+ *  - **esbuild-independent** (containment guards, wrapper synthesis, tool-name validation,
+ *    the stubbed empty-output path): run unconditionally on every host. These never invoke
+ *    the real `esbuild` binary — either they throw at validation/containment time before
+ *    `runEsbuild` is reached, or they construct their own stub binary inline.
+ *  - **esbuild-driven** (full-bundle production, cache-hit, descriptor-relative resolution,
+ *    duplicate-name detection, stale-wrapper sweep): require a real `esbuild` on disk and
+ *    call [assumeEsbuildPresent] up-front to skip cleanly when the binary is absent.
  *
  * The binary is located via [resolveEsbuildBinary], which mirrors the Gradle plugin's
  * `defaultEsbuildBinary` walk-up to the framework root and looks for
  * `sdks/typescript/node_modules/.bin/esbuild`. When the binary is absent (e.g. on a
- * fresh checkout where `bun install` hasn't run), every test in this class is
- * skipped with a JUnit Assume — keeping CI green without making the suite flaky.
+ * fresh checkout where `bun install` hasn't run), only the esbuild-driven tests
+ * assume-skip — esbuild-independent coverage still runs.
  */
 class DaemonScriptedToolBundlerTest {
 
@@ -37,19 +43,27 @@ class DaemonScriptedToolBundlerTest {
 
   @Before
   fun setup() {
-    val resolved = resolveEsbuildBinary()
+    cacheDir = tempFolder.newFolder("scripted-bundles-cache")
+    // Tests that don't actually invoke esbuild (containment guards, wrapper synthesis,
+    // tool-name validation) run unconditionally; tests that DO drive a bundle through
+    // esbuild call [assumeEsbuildPresent] up-front to skip cleanly when the binary is
+    // missing. Without this split, every test in the class skipped on hosts lacking
+    // `bun install`, masking genuinely useful coverage that has no esbuild dependency.
+    esbuild = resolveEsbuildBinary() ?: File(tempFolder.root, "missing-esbuild")
+    bundler = DaemonScriptedToolBundler(esbuildBinary = esbuild, cacheDir = cacheDir)
+  }
+
+  private fun assumeEsbuildPresent() {
     assumeTrue(
       "esbuild binary not found under sdks/typescript/node_modules/.bin/esbuild — " +
         "run `bun install` in sdks/typescript to enable this test.",
-      resolved != null && resolved.isFile,
+      esbuild.isFile,
     )
-    esbuild = resolved!!
-    cacheDir = tempFolder.newFolder("scripted-bundles-cache")
-    bundler = DaemonScriptedToolBundler(esbuildBinary = esbuild, cacheDir = cacheDir)
   }
 
   @Test
   fun `bundleOne produces a non-empty bundle for a tiny inline ts file`() = runBlocking {
+    assumeEsbuildPresent()
     val src = writeTinyTs("hello.ts")
     val out = bundler.bundleOne(src, toolName = "run")
     assertTrue(out.isFile, "expected bundle file to exist at ${out.absolutePath}")
@@ -73,6 +87,7 @@ class DaemonScriptedToolBundlerTest {
 
   @Test
   fun `bundleOne hits cache on second call with unchanged source`() = runBlocking {
+    assumeEsbuildPresent()
     val src = writeTinyTs("cache-me.ts")
     val first = bundler.bundleOne(src, toolName = "run")
     val firstMtime = first.lastModified()
@@ -92,7 +107,43 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `bundleAll resolves script path relative to the descriptor YAML file`() = runBlocking {
+    // Pins the descriptor-relative resolution added alongside the pack self-containment
+    // refactor. Before this change, `script: ./tool.ts` resolved from the JVM CWD (repo
+    // root), forcing authors to write long paths like `./trails/config/packs/mypacks/tool.ts`.
+    // After: a bare `./tool.ts` in a descriptor at `packDir/tools/tool.yaml` resolves to
+    // `packDir/tools/tool.ts` — the implementation lives next to the descriptor in the pack.
+    assumeEsbuildPresent()
+    val packDir = tempFolder.newFolder("relativePathPack")
+    val toolScript = File(packDir, "tools/myPack_relativePathTool.ts").apply {
+      parentFile.mkdirs()
+      writeText(
+        """
+        |const value: number = 1;
+        |export function myPack_relativePathTool(): void { console.log(value); }
+        |""".trimMargin(),
+      )
+    }
+    // Descriptor uses a descriptor-relative path — just the filename with no dir prefix.
+    val toolYaml = File(packDir, "tools/myPack_relativePathTool.yaml").apply {
+      writeText(toolDescriptorYaml(name = "myPack_relativePathTool", scriptPath = "./${toolScript.name}"))
+    }
+    val pack = TrailblazePackManifest(
+      id = "relativePathPack",
+      target = packTarget(displayName = "Relative Path Pack", toolPaths = listOf(toolYaml.relativeTo(packDir).path)),
+    )
+    val result = bundler.bundleAll(
+      packs = listOf(pack),
+      packBaseDirs = mapOf(pack to packDir),
+    )
+    assertTrue(result.containsKey("myPack_relativePathTool"), "expected tool to be bundled; got keys: ${result.keys}")
+    assertTrue(result["myPack_relativePathTool"]!!.isFile, "expected bundle file to exist")
+    assertTrue(result["myPack_relativePathTool"]!!.length() > 0L, "expected non-empty bundle")
+  }
+
+  @Test
   fun `bundleAll across two synthetic packs returns map keyed by tool name`() = runBlocking {
+    assumeEsbuildPresent()
     val packADir = tempFolder.newFolder("packA")
     val packBDir = tempFolder.newFolder("packB")
 
@@ -136,10 +187,77 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `bundleAll rejects relative descriptor path that escapes the pack dir`() = runBlocking {
+    // Pins descriptor-path containment. Without this guard, a manifest declaring
+    // `target.tools: [../outside.yaml]` would decode an unrelated YAML file outside the
+    // pack before the script-side check ever ran — same threat model as the script case
+    // but one level earlier. Caught by Copilot review on PR #2889.
+    val packDir = tempFolder.newFolder("descriptorContainmentPack")
+    // Create a real YAML file outside the pack so the test pins containment, not file-not-found.
+    val outsideDescriptor = File(packDir.parentFile, "outside-descriptor.yaml").apply {
+      writeText(toolDescriptorYaml(name = "outsideTool", scriptPath = "./outside.ts"))
+    }
+    assertTrue(outsideDescriptor.isFile, "outside descriptor must exist for containment to be the real failure")
+    val pack = TrailblazePackManifest(
+      id = "descriptorContainmentPack",
+      target = packTarget(displayName = "Descriptor Containment", toolPaths = listOf("../${outsideDescriptor.name}")),
+    )
+    val thrown = assertFailsWith<IOException> {
+      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    }
+    val message = thrown.message.orEmpty()
+    assertTrue(
+      message.contains("resolves outside the pack directory"),
+      "expected message to call out pack containment; got: $message",
+    )
+    assertTrue(
+      message.contains("tool descriptor"),
+      "expected message to name the descriptor as the offending path kind; got: $message",
+    )
+  }
+
+  @Test
+  fun `bundleAll rejects relative script that escapes the pack dir`() = runBlocking {
+    // Pins canonical-path containment for the session-time resolver, matching the loader's
+    // mcp_servers containment guarantee and the build-time bundler. Without this check, a
+    // descriptor declaring `script: ../sibling.ts` would resolve outside the pack at session
+    // start with no guard — defense-in-depth across all three resolvers (build-time,
+    // load-time, session-time).
+    val packDir = tempFolder.newFolder("containmentPack")
+    // Sibling file OUTSIDE the pack — exists so the test pins containment, not file-not-found.
+    val outsideScript = File(packDir.parentFile, "sibling-outside.ts").apply {
+      writeText("export function escapeTool(): void {}")
+    }
+    assertTrue(outsideScript.isFile, "outside script must exist for containment to be the real failure")
+    // Place the descriptor at the pack root so `../sibling-outside.ts` resolves to the
+    // pack's parent directory — outside the pack.
+    val toolYaml = File(packDir, "escapeTool.yaml").apply {
+      writeText(toolDescriptorYaml(name = "escapeTool", scriptPath = "../${outsideScript.name}"))
+    }
+    val pack = TrailblazePackManifest(
+      id = "containmentPack",
+      target = packTarget(displayName = "Containment Pack", toolPaths = listOf(toolYaml.name)),
+    )
+    val thrown = assertFailsWith<IOException> {
+      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    }
+    val message = thrown.message.orEmpty()
+    assertTrue(
+      message.contains("resolves outside the pack directory"),
+      "expected message to call out pack containment; got: $message",
+    )
+    assertTrue(
+      message.contains("escapeTool"),
+      "expected message to name the offending tool; got: $message",
+    )
+  }
+
+  @Test
   fun `bundleAll throws when two packs declare the same scripted tool name`() = runBlocking {
     // Pins the duplicate-name detection added in 520bb7ac5. Pre-fix, a LinkedHashMap.put
     // would silently overwrite the earlier entry; downstream dispatch would route to
     // whichever bundle won the race. We want a loud failure that names both pack ids.
+    assumeEsbuildPresent()
     val packADir = tempFolder.newFolder("dupPackA")
     val packBDir = tempFolder.newFolder("dupPackB")
 
@@ -272,6 +390,7 @@ class DaemonScriptedToolBundlerTest {
 
   @Test
   fun `bundleOneInternal sweeps stale wrapper files left by previous abrupt exits`() = runBlocking {
+    assumeEsbuildPresent()
     val src = writeTinyTs("sweep-source.ts", exportName = "doSomething")
     // Drop a stale wrapper alongside the user's script — what an abrupt JVM exit would
     // have left behind.

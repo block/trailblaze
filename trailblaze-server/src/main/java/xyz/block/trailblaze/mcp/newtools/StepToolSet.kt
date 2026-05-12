@@ -257,7 +257,7 @@ class StepToolSet(
     hint: String? = null,
     @LLMDescription("YAML tool sequence to execute directly, bypassing AI agent. Same format as recording.tools in trail files.")
     tools: String? = null,
-    @LLMDescription("Comma-separated snapshot detail levels: BOUNDS, OFFSCREEN, ALL_ELEMENTS. Enriches the screen summary in the response.")
+    @LLMDescription("Comma-separated snapshot detail levels: BOUNDS, OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Enriches the screen summary in the response. OCCLUDED is web-only — surfaces elements hidden under popups/modals.")
     snapshotDetails: String? = null,
     @LLMDescription("Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens), and skip disk logging.")
     fast: Boolean = false,

@@ -19,6 +19,11 @@ Available detail types:
   By default, elements outside the viewport are filtered out to save tokens. Request this
   to see all elements with offscreen ones annotated as (offscreen). Useful when you need
   to find elements that require scrolling to reach.
+- OCCLUDED_ELEMENTS: Include elements visually covered by something on top (modal,
+  popup, toast, autocomplete dropdown). By default these are filtered out because clicks
+  on them time out — Playwright's actionability check refuses to fire on a non-topmost
+  element. Request this when you suspect a popup/modal is hiding the elements you need
+  and you want to see what's underneath before deciding whether to dismiss the overlay.
 
 ### Command Class
 `xyz.block.trailblaze.playwright.tools.PlaywrightNativeRequestDetailsTool`
@@ -30,7 +35,8 @@ Available detail types:
     "entries": [
       "BOUNDS",
       "CSS_SELECTORS",
-      "OFFSCREEN_ELEMENTS"
+      "OFFSCREEN_ELEMENTS",
+      "OCCLUDED_ELEMENTS"
     ],
     "name": "ENUM"
   },

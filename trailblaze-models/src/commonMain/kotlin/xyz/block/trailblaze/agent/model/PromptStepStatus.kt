@@ -311,7 +311,7 @@ data class PromptStepStatus(
      * to the LLM for context, and older messages are evicted to bound memory usage —
      * critical for on-device Android execution where the ART heap is ~192 MB.
      */
-    const val DEFAULT_MAX_HISTORY_SIZE = 5
+    const val DEFAULT_MAX_HISTORY_SIZE = 10
   }
 
   fun handleEmptyToolCall(llmResponseContent: String?) {

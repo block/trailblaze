@@ -44,17 +44,21 @@ class PlaywrightCacheReuseTest {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = null,
       cachedBrowserManager = null,
+      cachedMaxLlmCalls = null,
       requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = null,
     )
     assertEquals(PlaywrightCacheResolution.NoCachedTest, resolution)
   }
 
   @Test
-  fun `cached model matches requested model means reuse cached test`() {
+  fun `cached model and max-llm-calls match request means reuse cached test`() {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = openaiGpt4,
       cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = 25,
       requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = 25,
     )
     assertEquals(PlaywrightCacheResolution.ReuseCachedTest, resolution)
   }
@@ -64,11 +68,46 @@ class PlaywrightCacheReuseTest {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = openaiGpt4,
       cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
       requestedModel = anthropicSonnet,
+      requestedMaxLlmCalls = null,
     )
     val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
     // Critical: the live browser is preserved across the rebuild so the page
     // state (URL, cookies, in-flight forms) survives the LLM-config switch.
+    assertSame(fakeBrowserManager, rebuild.browser)
+  }
+
+  @Test
+  fun `max-llm-calls differs means rebuild around the cached browser`() {
+    // The lazy TrailblazeRunner inside BasePlaywrightNativeTest bakes maxSteps at
+    // construction time, so a cap change (e.g. cap=10 first run, cap=1 second run) needs
+    // a fresh test instance — otherwise the second run silently inherits the first run's
+    // cap. Preserve the browser so the page state isn't lost.
+    val resolution = resolvePlaywrightCacheReuse(
+      cachedModel = openaiGpt4,
+      cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = 10,
+      requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = 1,
+    )
+    val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
+    assertSame(fakeBrowserManager, rebuild.browser)
+  }
+
+  @Test
+  fun `null max-llm-calls vs explicit value also triggers rebuild`() {
+    // A previously-unset cap becoming explicit (or vice versa) is the most common
+    // real-world transition — user starts a daemon without the flag, then runs with
+    // `--max-llm-calls 5`. Treat that as a rebuild so the new cap is honored.
+    val resolution = resolvePlaywrightCacheReuse(
+      cachedModel = openaiGpt4,
+      cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
+      requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = 5,
+    )
+    val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
     assertSame(fakeBrowserManager, rebuild.browser)
   }
 
@@ -84,7 +123,9 @@ class PlaywrightCacheReuseTest {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = openaiGpt4,
       cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
       requestedModel = mismatchedProvider,
+      requestedMaxLlmCalls = null,
     )
     val rebuild = assertIs<PlaywrightCacheResolution.RebuildWithCachedBrowser>(resolution)
     assertSame(fakeBrowserManager, rebuild.browser)
@@ -98,7 +139,9 @@ class PlaywrightCacheReuseTest {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = openaiGpt4,
       cachedBrowserManager = null,
+      cachedMaxLlmCalls = null,
       requestedModel = anthropicSonnet,
+      requestedMaxLlmCalls = null,
     )
     assertEquals(PlaywrightCacheResolution.NoCachedTest, resolution)
   }
@@ -110,7 +153,9 @@ class PlaywrightCacheReuseTest {
     val resolution = resolvePlaywrightCacheReuse(
       cachedModel = null,
       cachedBrowserManager = fakeBrowserManager,
+      cachedMaxLlmCalls = null,
       requestedModel = openaiGpt4,
+      requestedMaxLlmCalls = null,
     )
     assertTrue(resolution is PlaywrightCacheResolution.NoCachedTest)
   }

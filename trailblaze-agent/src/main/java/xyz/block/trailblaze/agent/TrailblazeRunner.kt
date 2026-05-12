@@ -57,7 +57,7 @@ class TrailblazeRunner(
   override val screenStateProvider: () -> ScreenState,
   llmClient: LLMClient,
   val trailblazeLlmModel: TrailblazeLlmModel,
-  private val maxSteps: Int = 50,
+  private val maxSteps: Int = DEFAULT_MAX_STEPS,
   private val trailblazeToolRepo: TrailblazeToolRepo,
   val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
@@ -356,6 +356,13 @@ class TrailblazeRunner(
   )
 
   companion object {
+    /**
+     * Default per-objective LLM call cap. The single source of truth — `RunYamlRequest.maxLlmCalls`
+     * resolves to this when the caller didn't specify one, and host/on-device wiring reads it from
+     * here so the in-process, daemon, and on-device paths agree.
+     */
+    const val DEFAULT_MAX_STEPS: Int = 50
+
     /**
      * Sliding window over the last N tool fingerprints, used by `detectActionCycleHint`
      * to spot repeating cycles (length 1, 2, or 3) in the suffix.

@@ -1,4 +1,4 @@
-script: ./trails/config/tools/playwrightSample_web_openDuplicateProductDetail.js
+script: ./playwrightSample_web_openDuplicateProductDetail.js
 name: playwrightSample_web_openDuplicateProductDetail
 description: Open the duplicate-list demo, click a specific product row, and verify its detail panel.
 _meta:

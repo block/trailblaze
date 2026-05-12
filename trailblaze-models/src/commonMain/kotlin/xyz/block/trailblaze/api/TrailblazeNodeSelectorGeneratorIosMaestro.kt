@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.util.escapeForSelector
+
 // ---------------------------------------------------------------------------
 // iOS Maestro strategies (mirrors Android Maestro with iOS-specific fields)
 // ---------------------------------------------------------------------------
@@ -12,7 +15,7 @@ internal fun iosMaestroStrategies(
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
   "Resource ID" to {
     detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.IosMaestro(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.IosMaestro(resourceIdRegex = escapeForIdentifier(rid)))
     }
   },
   "Accessibility text" to {
@@ -45,7 +48,7 @@ internal fun iosMaestroStrategies(
       selectorWith(
         DriverNodeMatch.IosMaestro(
           textRegex = escapeForSelector(text),
-          classNameRegex = escapeForSelector(className),
+          classNameRegex = escapeForIdentifier(className),
         ),
       )
     } else {
@@ -57,7 +60,7 @@ internal fun iosMaestroStrategies(
       selectorWith(
         DriverNodeMatch.IosMaestro(
           hintTextRegex = escapeForSelector(detail.hintText),
-          classNameRegex = escapeForSelector(detail.className),
+          classNameRegex = escapeForIdentifier(detail.className),
         ),
       )
     } else {
@@ -70,7 +73,7 @@ internal fun iosMaestroStrategies(
     if (rid != null && text != null) {
       selectorWith(
         DriverNodeMatch.IosMaestro(
-          resourceIdRegex = escapeForSelector(rid),
+          resourceIdRegex = escapeForIdentifier(rid),
           textRegex = escapeForSelector(text),
         ),
       )
@@ -80,7 +83,7 @@ internal fun iosMaestroStrategies(
   },
   "Class name" to {
     detail.className?.let { cn ->
-      selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForSelector(cn)))
+      selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForIdentifier(cn)))
     }
   },
   childOfUniqueParentStrategy(root, target, detail, parentMap),
@@ -101,12 +104,12 @@ internal fun namedStructuralIosMaestroStrategies(
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
   "Structural: resource ID" to {
     detail.resourceId?.let { rid ->
-      selectorWith(DriverNodeMatch.IosMaestro(resourceIdRegex = escapeForSelector(rid)))
+      selectorWith(DriverNodeMatch.IosMaestro(resourceIdRegex = escapeForIdentifier(rid)))
     }
   },
   "Structural: class name" to {
     detail.className?.let { cn ->
-      selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForSelector(cn)))
+      selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForIdentifier(cn)))
     }
   },
   structuralChildOfParentStrategy(root, target, detail, parentMap),

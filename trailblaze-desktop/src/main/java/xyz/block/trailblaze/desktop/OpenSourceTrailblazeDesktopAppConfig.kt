@@ -140,16 +140,29 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     return resolvedModelLists
   }
 
+  /**
+   * Reads the persisted provider/model selection from settings and delegates to
+   * [LlmAuthResolver.selectedLlmInstrumentationArgs] for the pure decision. Shared by
+   * [additionalInstrumentationArgs] (trail-run path) and [OpenSourceTrailblazeDesktopApp]'s
+   * `onDeviceInstrumentationArgsProvider` lambda (session-start / MCP-bridge path) so the
+   * two paths cannot drift.
+   */
+  internal fun selectedLlmInstrumentationArgs(): LlmAuthResolver.SelectedLlmInstrumentationArgs {
+    val appConfig = trailblazeSettingsRepo.serverStateFlow.value.appConfig
+    return LlmAuthResolver.selectedLlmInstrumentationArgs(
+      persistedProviderId = appConfig.llmProvider,
+      persistedModelId = appConfig.llmModel,
+    )
+  }
+
   override suspend fun additionalInstrumentationArgs(): Map<String, String> {
     val config = LlmConfigLoader.load()
     val auths = LlmAuthResolver.resolveAll(config)
-    val appConfig = trailblazeSettingsRepo.serverStateFlow.value.appConfig
-    val selectedProvider = appConfig.llmProvider
-    val selectedModel = appConfig.llmModel
+    val selected = selectedLlmInstrumentationArgs()
     return LlmAuthResolver.toInstrumentationArgs(
       auths = auths,
-      selectedProviderId = selectedProvider,
-      defaultModel = "$selectedProvider/$selectedModel",
+      selectedProviderId = selected.selectedProviderId,
+      defaultModel = selected.defaultModel,
     )
   }
 

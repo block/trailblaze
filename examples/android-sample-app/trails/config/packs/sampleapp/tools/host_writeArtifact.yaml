@@ -4,7 +4,7 @@
 # It marks the tool as host-only — the on-device agent skips it at registration so this tool
 # only loads under the host subprocess runtime (where Node APIs like `node:fs/promises`
 # exist) and is invisible to the on-device QuickJS bundle (where they don't).
-script: ./examples/android-sample-app/trails/config/mcp-sdk/host_writeArtifact.js
+script: ./host_writeArtifact.js
 name: host_writeArtifact
 description: Write a text artifact to a per-session tmp directory on the host machine.
 requiresHost: true

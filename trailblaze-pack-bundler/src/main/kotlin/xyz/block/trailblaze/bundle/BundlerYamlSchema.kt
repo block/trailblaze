@@ -13,16 +13,17 @@ import kotlinx.serialization.Serializable
  * CLI / daemon paths.
  *
  * **Drift mitigation.** kaml is configured with `strictMode = false` — fields the
- * bundler doesn't care about (`dependencies`, `defaults`, `toolsets`, `waypoints`,
- * `routes`, etc.) are silently ignored. Drift is only observable when a field this
- * file *does* declare diverges from the authoritative shape (rename, type change). When
- * that happens, both must move in lockstep. A future consolidation could replace this
- * file with a direct dependency on trailblaze-models if the build-logic classpath
- * concern is solved (e.g., by extracting trailblaze-models' YAML schema into its own
- * leaner module).
+ * bundler doesn't care about (`defaults`, `toolsets`, `waypoints`, `routes`, etc.) are
+ * silently ignored. Drift is only observable when a field this file *does* declare
+ * diverges from the authoritative shape (rename, type change). When that happens, both
+ * must move in lockstep. A future consolidation could replace this file with a direct
+ * dependency on trailblaze-models if the build-logic classpath concern is solved (e.g.,
+ * by extracting trailblaze-models' YAML schema into its own leaner module).
  */
 @Serializable
 internal data class BundlerPackManifest(
+  @SerialName("id") val id: String,
+  @SerialName("dependencies") val dependencies: List<String> = emptyList(),
   @SerialName("target") val target: BundlerTarget? = null,
 )
 

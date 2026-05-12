@@ -40,9 +40,7 @@ class PlaywrightElectronBrowserManager(
   val analyticsUrlPatterns: List<String> = emptyList(),
 ) : PlaywrightPageManager {
 
-  companion object {
-    const val DOM_STABILITY_QUIET_MS = PlaywrightBrowserManager.DOM_STABILITY_QUIET_MS
-  }
+  // Settle constants live on PlaywrightPageManager.Companion alongside their consumers.
 
   private lateinit var playwrightThread: Thread
   private val playwrightExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -232,12 +230,12 @@ class PlaywrightElectronBrowserManager(
 
     if (idlingConfig.waitForDomStability && domStabilityTimeoutMs > 0) {
       val result = try {
-        Console.log("  [idle] Waiting for DOM stability (quiet: ${DOM_STABILITY_QUIET_MS}ms, timeout: ${domStabilityTimeoutMs.toLong()}ms)...")
+        Console.log("  [idle] Waiting for DOM stability (quiet: ${PlaywrightPageManager.DOM_STABILITY_QUIET_MS}ms, timeout: ${domStabilityTimeoutMs.toLong()}ms)...")
         val start = System.currentTimeMillis()
         currentPage.waitForFunction(
           """() => {
               if (typeof window.__tbLastDomChange === 'undefined') return true;
-              return (Date.now() - window.__tbLastDomChange) > $DOM_STABILITY_QUIET_MS;
+              return (Date.now() - window.__tbLastDomChange) > ${PlaywrightPageManager.DOM_STABILITY_QUIET_MS};
             }""",
           null,
           Page.WaitForFunctionOptions().setTimeout(domStabilityTimeoutMs),

@@ -49,6 +49,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -279,6 +280,9 @@ abstract class BaseHostTrailblazeTest(
       llmModel = trailblazeLlmModel,
       logsRepo = hostLoggingRule.logsRepo,
       sessionIdProvider = { loggingRule.session?.sessionId },
+      saveAnnotatedScreenshotsProvider = {
+        CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
+      },
     )
     val screenAnalyzer = InnerLoopScreenAnalyzer(
       samplingSource = samplingSource,

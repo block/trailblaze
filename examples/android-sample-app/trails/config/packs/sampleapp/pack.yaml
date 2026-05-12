@@ -5,11 +5,14 @@ target:
     android:
       app_ids:
         - xyz.block.trailblaze.examples.sampleapp
-  mcp_servers:
-    - script: ./examples/android-sample-app/trails/config/mcp/tools.ts
-    - script: ./examples/android-sample-app/trails/config/mcp-sdk/tools.ts
-  # Pack scripted tools — flat-schema authoring surface, one tool per file under tools/.
-  # Lighter-weight than the `mcp_servers:` block above (no `bun install` required, no
-  # subprocess MCP server). The host runner synthesizes a small wrapper at session start.
+  # Preferred authoring surface for new packs: pack scripted tools — flat-schema, one tool
+  # per file under tools/. No `bun install` required, no subprocess. The host runner
+  # synthesizes a small wrapper at session start.
   tools:
     - tools/host_writeArtifact.yaml
+  # Subprocess MCP servers — kept for capability coverage so the path doesn't bitrot. The
+  # framework supports this if a consumer needs it (deal-breaker scenarios), but prefer the
+  # `tools:` block above for new authoring: zero install step, smaller dependency surface.
+  mcp_servers:
+    - script: ./tools/mcp/tools.ts
+    - script: ./tools/mcp-sdk/tools.ts

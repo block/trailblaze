@@ -254,7 +254,21 @@ class OnDeviceRpcClient(
       false -> "ABSENT"
       null -> "UNKNOWN"
     }
-    return "host_forward=$portStatus, re-forwarded"
+    val runnerPidStatus = probeRunnerPid()
+    return "host_forward=$portStatus, re-forwarded, runner_pid=$runnerPidStatus"
+  }
+
+  /**
+   * Disambiguates host-side eviction (runner pid present) from on-device death (pid absent).
+   * Public so the host-side re-warm-fail branches can include it in their failure note.
+   */
+  fun probeRunnerPid(): String {
+    val output = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+      deviceId = trailblazeDeviceId,
+      args = listOf("pidof", RUNNER_PACKAGE),
+    ) ?: return "UNKNOWN"
+    val trimmed = output.trim()
+    return if (trimmed.isEmpty()) "ABSENT" else trimmed
   }
 
   private companion object {
@@ -266,6 +280,8 @@ class OnDeviceRpcClient(
      * as a probe budget; this keeps one stuck probe from blowing the overall readiness window.
      */
     const val PROBE_MAX_MS = 5_000L
+
+    const val RUNNER_PACKAGE = "xyz.block.trailblaze.runner"
   }
 
   override fun close() {

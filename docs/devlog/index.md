@@ -11,6 +11,9 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-05-12 | [Use npm for Trailmap Distribution](2026-05-12-npm-distribution-for-trailmaps.md) | Decision |
+| 2026-05-12 | [DriverDispatch and the iOS settle gap](2026-05-12-driver-dispatch-and-the-ios-settle-gap.md) | Devlog |
+| 2026-05-11 | [Why Trailblaze beats code generators](2026-05-11-code-generation-and-the-thin-shim-tradeoff.md) | Decision |
 | 2026-05-08 | [Waypoint --target Flag and Magic capture-example](2026-05-08-waypoint-target-flag-and-magic-capture.md) | Decision |
 | 2026-05-08 | [Waypoint + shortcut graph: planner/executor, express routes, semantic recording](2026-05-08-waypoint-shortcut-graph-vision.md) | Decision |
 | 2026-05-08 | [Waypoint graph viewer: focal+depth, agent prompt tab, dock UX](2026-05-08-waypoint-graph-viewer-rebuild.md) | Devlog |

@@ -29,7 +29,7 @@ import xyz.block.trailblaze.config.JsonObjectYamlSerializer
  * convention #2783):
  * ```yaml
  * # trails/config/packs/playwrightsample/tools/playwrightSample_web_openFixtureAndVerifyText.yaml
- * script: ./trails/config/packs/playwrightsample/tools/playwrightSample_web_openFixtureAndVerifyText.ts
+ * script: ./playwrightSample_web_openFixtureAndVerifyText.ts
  * name: playwrightSample_web_openFixtureAndVerifyText
  * description: Open the Playwright sample page and verify visible text.
  * supportedPlatforms:
@@ -61,29 +61,18 @@ import xyz.block.trailblaze.config.JsonObjectYamlSerializer
 @Serializable
 data class PackScriptedToolFile(
   /**
-   * Absolute or relative path to the JS module backing this tool.
+   * Absolute or relative path to the JS/TS module backing this tool.
    *
-   * **Resolution rule (intentional asymmetry with the rest of the pack)**: relative `script:`
-   * paths resolve against the **JVM working directory**, not the pack directory. This is the
-   * `McpSubprocessSpawner` contract — the subprocess runs in CWD and imports its module
-   * relative to that working directory. Pack-relative resolution would require the host
-   * runtime to materialize each pack into a transient working directory before spawning bun,
-   * which we don't do today.
+   * **Resolution rule**: relative `script:` paths resolve against the **directory containing
+   * the descriptor YAML file** — i.e. pack-relative. This means a tool whose descriptor lives
+   * at `packs/mypack/tools/myTool.yaml` can declare `script: ./myTool.ts` and the runtime
+   * finds it at `packs/mypack/tools/myTool.ts`. Absolute paths pass through unchanged.
    *
-   * **Authoring convention**: even though the resolver is JVM-CWD-relative, **the `.ts`
-   * source itself should live next to its descriptor under the owning pack** —
-   * `trails/config/packs/<pack>/tools/<tool>.ts` co-located with
-   * `trails/config/packs/<pack>/tools/<tool>.yaml`. The `script:` value then writes the
-   * long form `./trails/config/packs/<pack>/tools/<tool>.ts` (resolves from the repo
-   * root). This keeps the on-disk ownership boundary clean — each pack owns the
-   * implementation files of every tool it contributes — without requiring framework
-   * changes to the resolver. The longer path is the workaround until pack-relative
-   * resolution lands; pack sibling resolution via `tools/<id>.yaml` is for the
-   * descriptor YAMLs themselves, not for the scripts those YAMLs reference.
-   *
-   * If pack-relative `script:` resolution becomes a hard requirement, route through
-   * `PackSource.readSibling` and stage the script into a per-pack scratch dir before
-   * subprocess spawn.
+   * **Authoring convention**: the `.ts` source should live next to its descriptor under the
+   * owning pack — `trails/config/packs/<pack>/tools/<tool>.ts` co-located with
+   * `trails/config/packs/<pack>/tools/<tool>.yaml`. The `script:` field is then simply
+   * `./tool-name.ts` (or `.js` for pre-compiled files). This keeps the pack a self-contained
+   * directory that can be zipped or published as-is.
    */
   val script: String,
   val name: String,
@@ -185,15 +174,25 @@ fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
   // consumer noticed, masking the author error. We'd rather fail loudly with a `<pack>/tools/<id>.yaml`-aware
   // message at parse time.
   validateKnownMetaShapes(name, meta)
-  // Merge the top-level shortcut field [supportedPlatforms] into the [_meta] JsonObject so
-  // downstream consumers that read namespaced keys directly (`TrailblazeToolMeta`, toolset
-  // filtering, etc.) keep working without needing to know about the new shortcut field.
-  // Top-level wins on key conflicts — explicit YAML `supportedPlatforms: [android]` overrides
-  // any stale `_meta: { trailblaze/supportedPlatforms: [...] }` an author might have copied
-  // from a different descriptor.
+  // Merge the top-level shortcut fields [supportedPlatforms] and [requiresHost] into the
+  // [_meta] JsonObject so downstream consumers that read namespaced keys directly
+  // (`TrailblazeToolMeta`, toolset filtering, the on-device QuickJS bundler's host-vs-device
+  // dispatch gate, etc.) keep working without needing to know about the top-level shortcut
+  // fields. Top-level wins on key conflicts — explicit YAML `requiresHost: true` /
+  // `supportedPlatforms: [android]` overrides any stale `_meta: { trailblaze/requiresHost:
+  // false }` an author might have copied from a different descriptor.
+  //
+  // Folding `requiresHost: true` into `_meta` is what makes the on-device dispatch gate
+  // actually skip host-only workspace tools. Without it, the on-device QuickJS bundler reads
+  // `_meta` (finds no `trailblaze/requiresHost` key, defaults to false), registers the tool
+  // on-device, the host dispatcher routes the call via `executeToolViaRpc`, and the on-device
+  // side can't find the workspace's `.ts` source → "Unknown tool 'X' is not registered". The
+  // typed `InlineScriptToolConfig.requiresHost` field already propagates, but only the meta
+  // route reaches the dispatch gate.
   val mergedMeta = mergeMetaShortcuts(
     explicitMeta = meta,
     supportedPlatforms = supportedPlatforms,
+    requiresHost = requiresHost,
   )
   return InlineScriptToolConfig(
     script = script,
@@ -244,10 +243,18 @@ private fun JsonPrimitive.isBooleanLiteral(): Boolean =
 private fun mergeMetaShortcuts(
   explicitMeta: JsonObject?,
   supportedPlatforms: List<String>?,
+  requiresHost: Boolean,
 ): JsonObject? {
   val explicit = explicitMeta ?: JsonObject(emptyMap())
   val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
-  if (explicit.isEmpty() && !needsSupportedPlatforms) {
+  // Only fold the requiresHost shortcut into _meta when it's `true`. A false top-level value
+  // is the schema default — emitting `trailblaze/requiresHost: false` into the meta object
+  // would change the wire shape for the common case (descriptor without an explicit
+  // requiresHost) and could surprise downstream consumers that distinguish "key absent"
+  // from "key explicitly false". Authors that need the explicit-false shape can author it
+  // directly in `_meta`.
+  val needsRequiresHost = requiresHost
+  if (explicit.isEmpty() && !needsSupportedPlatforms && !needsRequiresHost) {
     return null
   }
   return buildJsonObject {
@@ -260,6 +267,9 @@ private fun mergeMetaShortcuts(
         "trailblaze/supportedPlatforms",
         buildJsonArray { supportedPlatforms!!.forEach { add(JsonPrimitive(it)) } },
       )
+    }
+    if (needsRequiresHost) {
+      put("trailblaze/requiresHost", JsonPrimitive(true))
     }
   }
 }

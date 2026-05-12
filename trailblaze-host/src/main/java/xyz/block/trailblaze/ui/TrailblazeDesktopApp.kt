@@ -205,8 +205,11 @@ abstract class TrailblazeDesktopApp(
       TrailYamlTemplateResolver.resolve(yamlContent, File(path))
     } ?: yamlContent
 
-    // Auto-detect recorded steps: if the trail YAML contains recordings, use them.
-    val effectiveUseRecordedSteps = request.useRecordedSteps || try {
+    // Three-way: caller can force replay (`true`), force AI (`false`), or send `null`
+    // to defer to daemon-side auto-detect via `hasRecordedSteps`. CLI's
+    // `--no-use-recorded-steps` sends `false` and MUST be honored here — an earlier
+    // version used `||` and silently re-resolved false back to true via auto-detect.
+    val effectiveUseRecordedSteps = request.useRecordedSteps ?: try {
       val trailItems = TrailblazeYaml().decodeTrail(resolvedYaml)
       TrailblazeYaml().hasRecordedSteps(trailItems)
     } catch (_: Exception) {
@@ -253,6 +256,7 @@ abstract class TrailblazeDesktopApp(
       // matches and parallel CLI delegations don't cancel each other.
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
+      maxLlmCalls = request.maxLlmCalls,
     )
 
     // Execute and wait for completion

@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.playwright
 
-import com.microsoft.playwright.TimeoutError
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.BaseTrailblazeAgent
@@ -170,86 +169,61 @@ class PlaywrightTrailblazeAgent(
     }
   }
 
-  /**
-   * When true, skips DOM stability in post-action settle and relies on element readiness
-   * waits instead. This dramatically speeds up recording playback where DOM stability
-   * never resolves on real-world SPAs (stability checks time out on every action).
-   *
-   * Set by the test runner when using `--use-recorded-steps`.
-   */
-  var skipPostActionDomStability: Boolean = false
-
-  /**
-   * Default timeout for waiting for a target element to be present before executing a tool.
-   * 10 seconds handles slow page transitions (e.g., login → password form on staging sites).
-   */
-  private val elementReadinessTimeoutMs = 10_000.0
-
-  companion object {
-    /**
-     * Reduced DOM stability timeout for recording playback post-action settle.
-     *
-     * DOM stability uses a MutationObserver — it's event-driven, not a blind sleep.
-     * On stable pages, it resolves immediately. On busy SPAs with continuous DOM
-     * mutations (analytics, animations), it acts as a ceiling that gives in-flight
-     * requests (e.g., login POST ~472ms) time to complete before the next tool fires.
-     */
-    private const val RECORDING_DOM_STABILITY_TIMEOUT_MS = 500.0
-  }
-
   private fun executePlaywrightToolBlocking(
     tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
     val toolName = tool::class.simpleName ?: "unknown"
     TrailblazeTracer.traceSuspend("executePlaywrightTool", "tool", mapOf("tool" to toolName)) {
-      // Wait for the target element to be present before executing.
-      // This is critical for recording playback where there's no LLM latency between tools
-      // and page transitions (e.g., email → password form) may not have completed.
-      val effectiveContext = waitForElementReadiness(tool, context)
+      // Pre-action screenshot for the agent-driver overlay. captureScreenStateForLogging
+      // does NOT trigger settling — that's the job of the previous tool's dispatchAndAwaitSettle.
+      val preScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
 
-      // Capture screen state BEFORE execution for the screenshot overlay
-      val preScreenState = try { browserManager.getScreenState() } catch (_: Exception) { null }
-
-      // Resolve element coordinates BEFORE execution for logging. After a click causes
-      // navigation, the element no longer exists on the page, so post-click resolution
-      // would return (0, 0).
-      val preResolvedCenter = resolveToolCenter(tool, effectiveContext)
+      // Resolve element coordinates BEFORE execution for logging. Clicks may navigate
+      // away, after which the element no longer exists on the page.
+      val preResolvedCenter = resolveToolCenter(tool, context)
 
       // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
       // timeline shows the tap coordinates on the pre-click screenshot.
       val timeBeforeExecution = Clock.System.now()
-      logAgentDriverAction(tool, preScreenState, timeBeforeExecution, preResolvedCenter, effectiveContext.traceId)
+      logAgentDriverAction(tool, preScreenState, timeBeforeExecution, preResolvedCenter, context.traceId)
 
-      val result = TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
-        tool.executeWithPlaywright(browserManager.currentPage, effectiveContext)
+      // Run the tool inside the request-tracking settle. Playwright's actionability
+      // checks (visible/stable/enabled/editable) inside locator.fill/click/hover/...
+      // gate per-tool readiness; dispatchAndAwaitSettle handles the post-action settle
+      // — see PlaywrightPageManager.dispatchAndAwaitSettle for the strategy.
+      val result = browserManager.dispatchAndAwaitSettle {
+        TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
+          tool.executeWithPlaywright(browserManager.currentPage, context)
+        }
       }
 
       // Enrich tool with TrailblazeNodeSelector before logging so recordings capture
       // rich selectors (ARIA role+name, CSS selector, data-testid, nth-index).
-      // Uses the pre-execution screen state's trailblazeNodeTree since the tool's ref
-      // was resolved against that snapshot.
+      //
+      // We try a fresh post-action screen state first. With element-attached auto-wait
+      // inside validateAndResolveRef, an element may not be in the DOM yet at pre-action
+      // capture but is present after the tool completes — e.g. dashboard tabs that render
+      // 1-2s after a login navigation's `load` event. Fall back to the pre-action context
+      // for clicks that navigate away (the clicked element is gone from the new page).
+      //
+      // Gate the post-action capture on the tool having something to enrich — `web_navigate`,
+      // `web_wait`, `web_snapshot`, and other no-element tools shouldn't pay the ARIA-snapshot
+      // cost twice per execution.
       val enrichedTool = if (result.isSuccess()) {
-        enrichToolWithNodeSelector(tool, effectiveContext)
+        val needsEnrichment = tool.targetRef != null || tool.targetNodeSelector != null
+        if (needsEnrichment) {
+          val postScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
+          val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(tool, context, it) }
+          if (postEnriched != null && postEnriched !== tool) postEnriched
+          else enrichToolWithNodeSelector(tool, context, null)
+        } else {
+          tool
+        }
       } else {
         tool
       }
-      logToolExecution(enrichedTool, timeBeforeExecution, effectiveContext, result)
-
-      if (result.isSuccess()) {
-        TrailblazeTracer.trace("postActionSettle", "tool") {
-          if (skipPostActionDomStability) {
-            // Recording playback: use reduced DOM stability timeout. DOM stability is
-            // event-driven (MutationObserver) — resolves early on stable pages, and the
-            // 500ms ceiling gives form submissions (e.g., login POST ~472ms) time to
-            // complete before the next tool fires. Without this, rapid tool execution
-            // can navigate away before in-flight requests finish.
-            browserManager.waitForPageReady(domStabilityTimeoutMs = RECORDING_DOM_STABILITY_TIMEOUT_MS)
-          } else {
-            browserManager.waitForPageReady()
-          }
-        }
-      }
+      logToolExecution(enrichedTool, timeBeforeExecution, context, result)
 
       if (tool is PlaywrightNativeRequestDetailsTool && result.isSuccess()) {
         browserManager.requestDetails(tool.include.toSet())
@@ -274,9 +248,10 @@ class PlaywrightTrailblazeAgent(
   private fun enrichToolWithNodeSelector(
     tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
+    screenStateOverride: ScreenState? = null,
   ): PlaywrightExecutableTool {
     val ref = tool.targetRef ?: return tool
-    val screenState = context.screenState as? PlaywrightScreenState ?: return tool
+    val screenState = (screenStateOverride ?: context.screenState) as? PlaywrightScreenState ?: return tool
     val tree = screenState.trailblazeNodeTree ?: return tool
 
     return try {
@@ -310,96 +285,6 @@ class PlaywrightTrailblazeAgent(
       Console.log("WARNING: TrailblazeNodeSelector generation failed for ref='$ref': ${e.message}")
       tool
     }
-  }
-
-  /**
-   * Waits for the tool's target element to be present on the page, then returns
-   * an updated context with a fresh screen state (so element ID mappings are current).
-   *
-   * During recording playback, tools fire in rapid succession without LLM latency.
-   * After a page transition (e.g., clicking "Continue" on a login form), the next
-   * tool's target element may not exist yet, and stale element ID mappings (e.g., "e4")
-   * would resolve to the wrong element. This method:
-   *
-   * 1. Builds a Playwright locator from the tool's [PlaywrightExecutableTool.targetNodeSelector]
-   *    (or, for legacy trails, an ARIA-/CSS-shaped [PlaywrightExecutableTool.targetRef])
-   * 2. Waits for that locator to be visible
-   * 3. Captures a fresh screen state so positional element IDs map correctly
-   *
-   * For tools without a usable target (e.g., navigate, wait, or LLM live with only an
-   * `e5`-style ref), this is a no-op that returns the original context — the LLM-driven
-   * path has its own latency between tool calls so a readiness gate is unnecessary.
-   */
-  private fun waitForElementReadiness(
-    tool: PlaywrightExecutableTool,
-    context: TrailblazeToolExecutionContext,
-  ): TrailblazeToolExecutionContext {
-    val (locator, label) = resolveReadinessLocator(tool) ?: return context
-
-    val result = TrailblazeTracer.trace(
-      "waitForElement",
-      "tool",
-      mapOf("element" to label),
-    ) {
-      try {
-        locator.waitFor(
-          com.microsoft.playwright.Locator.WaitForOptions()
-            .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
-            .setTimeout(elementReadinessTimeoutMs),
-        )
-        Console.log("  [ready] Element '$label' is present")
-        "ok"
-      } catch (_: TimeoutError) {
-        Console.log("  [ready] Element '$label' not found after ${elementReadinessTimeoutMs.toLong()}ms")
-        "timeout"
-      } catch (e: Exception) {
-        Console.log("  [ready] Element '$label' readiness check failed: ${e::class.simpleName}: ${e.message}")
-        "error"
-      }
-    }
-
-    // Refresh screen state so element ID mappings reflect the current DOM.
-    // getScreenState() internally calls waitForPageReady() with 2000ms DOM stability.
-    // On SPA login pages with continuous DOM mutations (resource loads, script
-    // execution, reCAPTCHA initialization, analytics), this keeps the MutationObserver
-    // active for the full 2000ms, which is enough time for third-party scripts to
-    // initialize. On simpler pages with no mutations, DOM stability resolves immediately.
-    if (result == "ok") {
-      val freshScreenState = browserManager.getScreenState()
-      return TrailblazeToolExecutionContext(
-        screenState = freshScreenState,
-        traceId = context.traceId,
-        trailblazeDeviceInfo = context.trailblazeDeviceInfo,
-        sessionProvider = context.sessionProvider,
-        screenStateProvider = context.screenStateProvider,
-        trailblazeLogger = context.trailblazeLogger,
-        memory = context.memory,
-        maestroTrailblazeAgent = context.maestroTrailblazeAgent,
-        workingDirectory = context.workingDirectory,
-        sessionDirProvider = context.sessionDirProvider,
-        inflightRequestTracker = context.inflightRequestTracker,
-      )
-    }
-
-    return context
-  }
-
-  /**
-   * Build a Playwright locator for the readiness wait, with a label for tracing/logs.
-   * Prefers the durable [TrailblazeNodeSelector]; falls back to an ARIA- or CSS-shaped
-   * legacy [targetRef]. Returns null when no usable target exists (skip the wait).
-   */
-  private fun resolveReadinessLocator(
-    tool: PlaywrightExecutableTool,
-  ): Pair<com.microsoft.playwright.Locator, String>? {
-    tool.targetNodeSelector?.let { selector ->
-      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(browserManager.currentPage, selector)
-        ?.let { return it to selector.description() }
-    }
-    val ref = tool.targetRef ?: return null
-    if (ref.isBlank()) return null
-    if (!ref.contains('"') && !ref.startsWith("css=")) return null
-    return PlaywrightAriaSnapshot.resolveRef(browserManager.currentPage, ref) to ref
   }
 
   private fun executeToolBlocking(

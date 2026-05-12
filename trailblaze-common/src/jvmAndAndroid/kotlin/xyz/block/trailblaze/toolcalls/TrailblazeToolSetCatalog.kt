@@ -54,10 +54,23 @@ data class ResolvedToolSet(
 object TrailblazeToolSetCatalog {
 
   /**
-   * Returns the default catalog entries, discovered from YAML toolset files on the classpath.
-   * Cached after the first call since classpath discovery is not free.
+   * Returns the catalog entries — classpath-discovered + workspace overlay merged. The classpath
+   * set is lazy-cached on first call (discovery is not free); the workspace overlay is registered
+   * by `AppTargetDiscovery.discover()` via [registerWorkspaceToolSets] after walking the
+   * workspace's `trails/config/toolsets/` directory. On id collision the workspace overlay
+   * wins — same precedence rule as the filesystem resource source layering in `AppTargetDiscovery`
+   * and the YAML-tool overlay in `TrailblazeSerializationInitializer`.
    */
-  fun defaultEntries(): List<ToolSetCatalogEntry> = defaultEntriesCache
+  fun defaultEntries(): List<ToolSetCatalogEntry> {
+    val classpath = defaultEntriesCache
+    val overlay = workspaceCatalogEntries
+    if (overlay.isEmpty()) return classpath
+    // Merge by id with workspace winning. `associateBy` + `+` is the kotlin-idiomatic
+    // last-write-wins for Map shape; convert back to a sorted list to keep stable iteration
+    // order (`defaultEntries()` callers depend on it for log determinism).
+    val merged = (classpath + overlay).associateBy { it.id }
+    return merged.values.sortedBy { it.id }
+  }
 
   private val defaultEntriesCache: List<ToolSetCatalogEntry> by lazy {
     val resolver = ToolNameResolver.fromBuiltInAndCustomTools()
@@ -65,6 +78,54 @@ object TrailblazeToolSetCatalog {
       .map { it.toCatalogEntry() }
       .sortedBy { it.id }
   }
+
+  // Workspace-discovered toolset entries that don't ship on the JVM classpath — they live in
+  // a user's `<workspace>/trails/config/toolsets/<id>.yaml` (or a workspace pack's bundled
+  // toolset). Populated lazily from `AppTargetDiscovery` via [registerWorkspaceToolSets].
+  // Held in a separate field rather than mutating [defaultEntriesCache] so the classpath
+  // cache keeps its set-once contract and so a workspace-rediscovery can replace the
+  // workspace overlay without invalidating the classpath cache.
+  //
+  // Read by [defaultEntries] which merges classpath + workspace before returning. The
+  // `TrailblazeMcpServer.ensureSessionScriptToolRuntime` and inner-agent-tools-provider
+  // call sites use `defaultEntries()` (directly or via `resolveForDriver` / `resolve`),
+  // so this overlay is what makes workspace-toolset-pulled YAML tool names reachable at
+  // dispatch time.
+  @Volatile private var workspaceCatalogEntries: List<ToolSetCatalogEntry> = emptyList()
+
+  /**
+   * Registers workspace-discovered toolset entries as an overlay on top of the cached
+   * classpath-discovered set. Called from `AppTargetDiscovery.discover()` once per discovery
+   * pass with every toolset the workspace pipeline resolved (including workspace files,
+   * workspace pack toolsets, and any other source the discovery's composite resource source
+   * picked up).
+   *
+   * Idempotent for identical inputs; subsequent calls REPLACE the overlay rather than
+   * appending — the host-side discovery pipeline is the single source of truth for "what
+   * workspace toolsets should be visible right now."
+   *
+   * **Override contract.** When a workspace toolset's id collides with a classpath-bundled
+   * toolset's id, the overlay wins in [defaultEntries]'s merge — same precedence as the
+   * filesystem resource source layering in `AppTargetDiscovery` (where workspace files
+   * override bundled framework files on filename collision) and the YAML-tool overlay in
+   * `TrailblazeSerializationInitializer.registerWorkspaceYamlTools`. Pre-filtering the input
+   * by "not-already-in-classpath" would silently discard such overrides — don't.
+   *
+   * Tests that exercise multiple workspaces in a single JVM should call this with
+   * `emptyList()` between cases to reset the overlay.
+   */
+  fun registerWorkspaceToolSets(entries: List<ToolSetCatalogEntry>) {
+    workspaceCatalogEntries = entries
+  }
+
+  /**
+   * Returns the cached **classpath-only** catalog set, distinct from [defaultEntries] which
+   * returns the merged view. Diagnostics that need to differentiate "this entry came from
+   * the framework JAR" from "this entry came from the workspace" use this accessor to
+   * compute the breakdown without round-tripping the overlay. Forces the classpath cache to
+   * be computed if it isn't yet (lazy-init contract identical to [defaultEntries]).
+   */
+  fun getClasspathEntries(): List<ToolSetCatalogEntry> = defaultEntriesCache
 
   /**
    * Resolves a set of toolset IDs to the combined set of tool classes and YAML-defined tool

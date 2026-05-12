@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.host.devices
 
+import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -76,6 +78,31 @@ internal object HostDriverPortUtils {
       }
     } catch (e: Exception) {
       // Ignore cleanup failures — don't prevent new connections
+    }
+  }
+
+  /**
+   * Probes whether a TCP listener is accepting connections at [host]:[port].
+   *
+   * Used to detect cached driver subprocesses that were reaped externally (SIGKILL,
+   * OS reap, crash) — the in-process shutdown flag stays stale in that case, so we
+   * confirm liveness with a short connect before reusing a cached client.
+   *
+   * Never throws; returns false on refused connection, timeout, or unknown host.
+   */
+  fun isPortReachable(host: String, port: Int, timeoutMs: Int = 500): Boolean {
+    val socket = Socket()
+    return try {
+      socket.connect(InetSocketAddress(host, port), timeoutMs)
+      true
+    } catch (e: Exception) {
+      false
+    } finally {
+      try {
+        socket.close()
+      } catch (e: Exception) {
+        // Ignore close failures
+      }
     }
   }
 

@@ -16,7 +16,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *
  *  1. **Legacy arg envelope** under the reserved `_trailblazeContext` argument key — shape
  *     frozen by the conventions devlog (§ 2): `{ memory, device }`. Existing raw-SDK tools
- *     (e.g. `examples/android-sample-app/trails/config/mcp/tools.ts`) read from
+ *     (e.g. `examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp/tools.ts`) read from
  *     this key directly. Must stay backwards-compatible.
  *
  *  2. **`_meta.trailblaze` envelope** — richer shape the scripting SDK consumes, per the

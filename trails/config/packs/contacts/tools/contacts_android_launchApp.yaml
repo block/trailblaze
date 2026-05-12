@@ -1,13 +1,4 @@
-# Per-file in-process scripted tool descriptor for `contacts_android_launchApp`.
-#
-# This descriptor declares a tool whose body lives in `script:` below. The pack loader
-# translates it into an `InlineScriptToolConfig` and the framework registers the tool
-# under the workspace `contacts` pack — see `target.tools:` in `../../packs/contacts/pack.yaml`.
-#
-# `script:` resolves against the JVM's current working directory (i.e. the directory
-# `trailblaze` was invoked from). The `.ts` lives next to this descriptor under the
-# owning pack — the convention library/target packs adopted in #2783.
-script: ./trails/config/packs/contacts/tools/contacts_android_launchApp.ts
+script: ./contacts_android_launchApp.ts
 name: contacts_android_launchApp
 description: |
   Force-stops the Google Contacts app and re-launches it via the package's default

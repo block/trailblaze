@@ -66,6 +66,14 @@ class LocalLlmSamplingSource(
   private val llmCallTimeoutMs: Long = DEFAULT_LLM_CALL_TIMEOUT_MS,
   /** Which agent architecture this sampling source is part of — recorded in LLM request logs. */
   private val agentImplementation: AgentImplementation = AgentImplementation.MULTI_AGENT_V3,
+  /**
+   * Provider for the `saveAnnotatedScreenshots` config flag (default: true).
+   * When false and [ScreenContext.rawScreenshotBytes] is available, the
+   * un-annotated bytes are persisted to logs instead of the annotated bytes that
+   * were sent to the LLM. The LLM still receives the annotated screenshot
+   * regardless — flipping the flag never changes what the model sees.
+   */
+  private val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
 ) : SamplingSource {
 
   override fun isAvailable(): Boolean = llmClient != null && llmModel != null
@@ -521,9 +529,28 @@ class LocalLlmSamplingSource(
 
     // Save screenshot to disk if available. saveScreenshotBytes sniffs the payload
     // and picks the right extension internally — caller doesn't supply it.
-    val screenshotFile = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+    //
+    // The `saveAnnotatedScreenshots` flag only affects the *log* variant; the
+    // model already received the annotated bytes via `buildMessages` above.
+    // When the flag is off and the caller provided clean pixels via
+    // [ScreenContext.rawScreenshotBytes], persist those instead so downstream
+    // tooling (e.g. waypoint authoring) gets un-annotated examples.
+    //
+    // Gate on `screenshotBytes` (the bytes actually sent to the model) — not
+    // `rawScreenshotBytes` — so that fast-mode text-only calls (which pass
+    // `screenshotBytes = null` but may still populate `rawScreenshotBytes`)
+    // don't accidentally start persisting an image. `includedScreenshot` then
+    // matches what's actually on disk.
+    val rawScreenshotBytes = screenContext?.rawScreenshotBytes
+    val swapToRaw = !saveAnnotatedScreenshotsProvider() &&
+      screenshotBytes != null &&
+      screenshotBytes.isNotEmpty() &&
+      rawScreenshotBytes != null &&
+      rawScreenshotBytes.isNotEmpty()
+    val screenshotBytesToSave = if (swapToRaw) rawScreenshotBytes else screenshotBytes
+    val screenshotFile = if (screenshotBytesToSave != null && screenshotBytesToSave.isNotEmpty()) {
       try {
-        repo.saveScreenshotBytes(sessionId, screenshotBytes)
+        repo.saveScreenshotBytes(sessionId, screenshotBytesToSave)
       } catch (e: Exception) {
         Console.log("[LocalLlmSamplingSource] Failed to save screenshot: ${e.message}")
         null
@@ -531,6 +558,10 @@ class LocalLlmSamplingSource(
     } else {
       null
     }
+    // True when the persisted file is the set-of-mark annotated variant.
+    // Null when no screenshot was saved (kept null rather than false so the
+    // field is meaningful only on logs that actually reference a file).
+    val screenshotIsAnnotated: Boolean? = if (screenshotFile != null) !swapToRaw else null
 
     // Emit TrailblazeLlmRequestLog for full insights (if we have screen context)
     val viewHierarchy = screenContext?.viewHierarchy
@@ -573,6 +604,7 @@ class LocalLlmSamplingSource(
         toolOptions = toolOptions,
         llmRequestUsageAndCost = usageAndCost,
         screenshotFile = screenshotFile,
+        screenshotIsAnnotated = screenshotIsAnnotated,
         durationMs = durationMs,
         session = sessionId,
         timestamp = startTime,

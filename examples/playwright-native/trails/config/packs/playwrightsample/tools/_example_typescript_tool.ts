@@ -3,11 +3,11 @@
 // This file is NOT registered in any pack — it exists purely as an IDE-supported
 // authoring template demonstrating typed `args`, `ctx`, and `client`.
 //
-// To turn an export here (or in a sibling `.ts` file) into a real tool, two steps:
+// To turn an export here (or in a new sibling `.ts` file) into a real tool, two steps:
 //
-// 1. Create a YAML descriptor at `../packs/playwrightsample/tools/<your-tool>.yaml`:
+// 1. Create a YAML descriptor in this directory (`<your-tool>.yaml`):
 //
-//      script: ./examples/playwright-native/trailblaze-config/tools/<filename>.ts
+//      script: ./<filename>.ts
 //      name: <export-name-from-this-file>
 //      description: ...
 //      inputSchema:
@@ -15,10 +15,7 @@
 //          type: string
 //          description: ...
 //
-// 2. Add the descriptor to the pack manifest at
-//    `../packs/playwrightsample/pack.yaml` under `target.tools:` — the pack loader
-//    only resolves scripted tools that are explicitly listed there. Without this
-//    step the YAML is ignored and the tool never registers at runtime.
+// 2. Add the descriptor to the pack manifest at `../pack.yaml` under `target.tools:`:
 //
 //      target:
 //        tools:

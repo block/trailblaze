@@ -25,6 +25,59 @@ import xyz.block.trailblaze.util.Console
 
 object TrailblazeDesktopUtil {
 
+  /**
+   * Aborts startup with a clear error if the current OS+arch is not one we ship
+   * Skiko native libraries for in the uber JAR. Without this check, an unsupported
+   * host would fail several layers deep inside Skiko's JNI loader the first time
+   * anything touched WebP screenshot encoding — typically as
+   * `LibraryLoadException: Cannot find libskiko-<os>-<arch>.so.sha256`.
+   *
+   * Supported: macOS Apple Silicon (arm64), Linux x64, Linux arm64.
+   * Unsupported: Intel macOS, Windows, FreeBSD, and any other OS/arch — deliberately
+   * omitted from the per-OS `skiko-awt-runtime-*` declarations in this module's build
+   * to keep the uber JAR small.
+   *
+   * Reads `os.name` / `os.arch` directly rather than going through `DesktopOsType`'s
+   * mac/Windows/Linux trichotomy: the latter classifies every non-Mac/non-Windows host
+   * as Linux, which would let a FreeBSD or Linux-PowerPC host pass this gate and fail
+   * later inside the JNI loader instead of here. We also require an explicit
+   * `x86_64` / `amd64` / `aarch64` / `arm64` value so unusual Linux architectures
+   * (s390x, ppc64le, riscv64) are rejected up front.
+   *
+   * On failure: prints the message to stderr via [Console.error] and `exitProcess(1)`
+   * — same pattern as [xyz.block.trailblaze.host.WorkspaceCompileBootstrap.bootstrapOrExit] —
+   * so users see a clean message instead of an uncaught-exception stack trace.
+   *
+   * Called once per JVM at the top of [xyz.block.trailblaze.cli.TrailblazeCli.run].
+   * That funnel covers every entry point: CLI subcommands, the daemon
+   * (`app start`), MCP server, and the desktop GUI.
+   */
+  fun assertSupportedPlatform() {
+    val osName = System.getProperty("os.name") ?: ""
+    val osArch = System.getProperty("os.arch") ?: ""
+    val osNameLower = osName.lowercase()
+    val osArchLower = osArch.lowercase()
+
+    val isMacKernel = osNameLower.contains("mac")
+    val isLinuxKernel = osNameLower.contains("linux")
+    val isX86_64 = osArchLower == "x86_64" || osArchLower == "amd64"
+    val isArm64 = osArchLower == "aarch64" || osArchLower == "arm64"
+
+    val supported = (isMacKernel && isArm64) || (isLinuxKernel && (isX86_64 || isArm64))
+    if (supported) return
+
+    Console.error(
+      buildString {
+        appendLine("Trailblaze does not support this platform: $osName ($osArch).")
+        appendLine("Supported platforms:")
+        appendLine("  - macOS Apple Silicon (arm64)")
+        appendLine("  - Linux x64 (x86_64 / amd64)")
+        append("  - Linux arm64 (aarch64)")
+      },
+    )
+    kotlin.system.exitProcess(1)
+  }
+
   const val DOT_TRAILBLAZE_DIR_NAME: String = ".trailblaze"
 
   /**

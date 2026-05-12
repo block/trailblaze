@@ -15,8 +15,6 @@
         tools:
           - tapOnElementBySelector:
               reason: Navigate to the TIMER tab to test assertions after navigation.
-              selector:
-                textRegex: TIMER
               nodeSelector:
                 androidAccessibility:
                   textRegex: TIMER
@@ -26,8 +24,6 @@
         tools:
           - assertVisibleBySelector:
               reason: After tapping TIMER, the timer setup view should be visible.
-              selector:
-                idRegex: "com.android.deskclock:id/timer_setup"
               nodeSelector:
                 androidAccessibility:
                   resourceIdRegex: "com.android.deskclock:id/timer_setup"
@@ -36,8 +32,6 @@
         tools:
           - tapOnElementBySelector:
               reason: Navigate back to the ALARM tab.
-              selector:
-                textRegex: ALARM
               nodeSelector:
                 androidAccessibility:
                   textRegex: ALARM
@@ -47,8 +41,6 @@
         tools:
           - assertVisibleBySelector:
               reason: The FAB to add alarms should be visible after navigating back.
-              selector:
-                idRegex: "com.android.deskclock:id/fab"
               nodeSelector:
                 androidAccessibility:
                   contentDescriptionRegex: Add alarm

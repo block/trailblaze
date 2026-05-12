@@ -56,8 +56,8 @@ private fun tryParseJson(text: String): JsonElement? {
 fun LlmMessageComposable(message: TrailblazeLlmMessage) {
   val isUser = message.role == "user"
   val isAssistant = message.role == "assistant"
-  val isToolCall = message.role == "tool_call"
-  val isTool = message.role == "tool" || message.role == "function" || isToolCall
+  val isToolCall = message.role == "tool_call" || message.role == "tool_use"
+  val isTool = message.role == "tool" || message.role == "function" || message.role == "tool_result" || isToolCall
   val isSystem = message.role == "system"
 
   // Determine icon and colors based on role

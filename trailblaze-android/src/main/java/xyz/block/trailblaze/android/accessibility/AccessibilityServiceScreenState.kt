@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.android.accessibility
 
+import android.app.UiAutomation
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.concurrent.thread
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
@@ -94,7 +98,7 @@ class AccessibilityServiceScreenState(
 
     // Single-pass capture: the UI is already settled (caller guarantees via waitForSettled),
     // so we capture the tree and screenshot once without a consistency retry loop.
-    val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo()
+    val rootNodeInfo = getUiAutomationRootNodeInfo()
 
     // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()
     // is independent of AccessibilityNodeInfo traversal, and starting both concurrently also
@@ -206,4 +210,47 @@ class AccessibilityServiceScreenState(
         oomContext = "AccessibilityServiceScreenState.annotatedScreenshotBytes",
       )
     }
+
+  companion object {
+    /**
+     * Returns the root [AccessibilityNodeInfo] via [UiAutomation], bypassing the user-space
+     * accessibility service. Uses [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES] to
+     * preserve the running [TrailblazeAccessibilityService] while querying the hierarchy.
+     *
+     * Mirrors the window-selection logic in
+     * [TrailblazeAccessibilityService.getApplicationWindowRoot]: prefers an active
+     * TYPE_APPLICATION window, falls back to any application window, then to
+     * [UiAutomation.rootInActiveWindow].
+     */
+    private fun getUiAutomationRootNodeInfo(): AccessibilityNodeInfo? {
+      return try {
+        val uiAutomation = InstrumentationRegistry.getInstrumentation()
+          .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+        val root = getApplicationWindowRoot(uiAutomation) ?: return null
+        TrailblazeAccessibilityService.refreshTreeInPlace(root)
+        root
+      } catch (e: Exception) {
+        Console.log(
+          "[AccessibilityServiceScreenState] UiAutomation tree read failed (${e.message}); " +
+            "falling back to accessibility service root"
+        )
+        TrailblazeAccessibilityService.getRootNodeInfo()
+      }
+    }
+
+    private fun getApplicationWindowRoot(uiAutomation: UiAutomation): AccessibilityNodeInfo? {
+      val windows = try {
+        uiAutomation.windows
+      } catch (_: Exception) {
+        null
+      }
+      if (windows.isNullOrEmpty()) return uiAutomation.rootInActiveWindow
+
+      val applicationWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+      applicationWindows.firstOrNull { it.isActive }?.root?.let { return it }
+      applicationWindows.firstNotNullOfOrNull { it.root }?.let { return it }
+
+      return uiAutomation.rootInActiveWindow
+    }
+  }
 }

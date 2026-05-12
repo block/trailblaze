@@ -212,6 +212,25 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
 
 // Task to build release artifacts.
 // Use -Ptrailblaze.proguard=true to produce a ProGuard-shrunk JAR.
+// `packageUberJarForCurrentOS` emits a timestamped jar each run
+// (`Trailblaze-macos-arm64-<timestamp>.jar`) and doesn't clean stale jars from prior
+// incremental builds. If `compose/jars/` ends up with both an old and a new jar, the
+// `releaseArtifacts` Copy task below picks one non-deterministically — observed in
+// practice when invoking `releaseArtifacts` twice in a row with a source edit in
+// between: the old jar would sometimes win and silently install pre-edit bytecode.
+// Wipe the staging dir before the producer runs so only the current build's jar
+// reaches the copy. Configured at the top level rather than inside `releaseArtifacts`
+// because Gradle's task-container API forbids `.configure` calls on a named task from
+// inside another task's configuration block.
+tasks.matching { it.name == "packageUberJarForCurrentOS" }.configureEach {
+  doFirst {
+    val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
+    if (jarsDir.exists()) {
+      jarsDir.listFiles { _, name -> name.endsWith(".jar") }?.forEach { it.delete() }
+    }
+  }
+}
+
 val releaseArtifacts by tasks.registering(Copy::class) {
   description = "Builds the release JAR artifact for distribution"
   group = "distribution"
@@ -266,9 +285,5 @@ afterEvaluate {
 }
 
 dependencyGuard {
-  configuration("runtimeClasspath") {
-    @Suppress("UNCHECKED_CAST")
-    val map = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
-    baselineMap = map
-  }
+  configuration("runtimeClasspath")
 }

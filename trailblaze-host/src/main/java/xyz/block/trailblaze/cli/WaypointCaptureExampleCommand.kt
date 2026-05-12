@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import picocli.CommandLine
@@ -402,7 +403,9 @@ class WaypointCaptureExampleCommand : Callable<Int> {
   /**
    * Picks the raw screenshot for the captured step.
    *
-   * Twin-search applies ONLY to `_TrailblazeLlmRequestLog.json` sources. On Android the
+   * Twin-search applies ONLY to `_TrailblazeLlmRequestLog.json` sources whose
+   * `screenshotIsAnnotated` field is `true` (or missing — older logs predate the
+   * field and historically always referenced the annotated variant). On Android the
    * framework writes two screenshots per step — one annotated (set-of-mark overlays for
    * the model) and one raw — and the LLM log's `screenshotFile` field points at the
    * annotated one. The raw twin is the temporally-closest sibling within ~1 second.
@@ -412,6 +415,11 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    * twin-search on those would risk picking a NEIGHBORING step's image whose filename
    * timestamp happens to land within the 1s window, silently committing the wrong screen.
    * For those log types we use [referencedFile] as-is and skip the twin lookup entirely.
+   *
+   * Same skip applies when the LLM log itself declares `screenshotIsAnnotated: false`
+   * (sessions captured with `trailblaze config annotated-screenshots false`) — the
+   * referenced image is already the raw variant, and twin-searching would risk picking
+   * an adjacent step's screenshot in dense sessions.
    *
    * iOS today writes a single un-annotated screenshot per LLM-step, so when no second
    * file exists within the 1-second window we fall back to the referenced file.
@@ -425,6 +433,12 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     // Non-LLM logs don't have an annotated/raw split — the referenced image IS raw.
     val isLlmRequestLog = logFile.name.endsWith("_TrailblazeLlmRequestLog.json")
     if (!isLlmRequestLog) return referencedFile
+
+    // LLM log explicitly tagged as already-raw (annotated-screenshots flag was off
+    // at capture time) — use referencedFile directly, skip the twin neighbor scan.
+    val screenshotIsAnnotated = (sourceJson["screenshotIsAnnotated"] as? JsonPrimitive)
+      ?.booleanOrNull
+    if (screenshotIsAnnotated == false) return referencedFile
 
     val referencedTimestampMs = extractTimestampMs(referencedName) ?: return referencedFile
     val candidates = (dir.listFiles { f -> f.isFile && IMAGE_EXTENSIONS.any(f.name::endsWith) } ?: emptyArray())

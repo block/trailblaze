@@ -72,7 +72,7 @@ data class PlaywrightNativeIdlingConfig(
    * identify slow endpoints, and understand page loading behavior.
    */
   val traceHttpRequests: Boolean = true,
-  /** Phase 3: Wait until the DOM stops mutating for [PlaywrightBrowserManager.DOM_STABILITY_QUIET_MS]. */
+  /** Phase 3: Wait until the DOM stops mutating for [PlaywrightPageManager.DOM_STABILITY_QUIET_MS]. */
   val waitForDomStability: Boolean = true,
   /** Inject CSS to disable all animations/transitions for stable screenshots. */
   val disableAnimations: Boolean = true,
@@ -109,19 +109,8 @@ class PlaywrightBrowserManager(
     const val DEFAULT_VIEWPORT_WIDTH = 1280
     const val DEFAULT_VIEWPORT_HEIGHT = 800
 
-    /**
-     * Default timeout for the DOM stability phase of [waitForPageReady].
-     * 2 seconds allows most JS-driven re-renders and animations to complete.
-     */
-    const val DEFAULT_DOM_STABILITY_TIMEOUT_MS = 2000.0
-
-    /**
-     * How long the DOM must be quiet (no mutations) before it's considered stable.
-     * 300ms balances responsiveness with reliability — most React/Vue re-renders
-     * complete within a single frame (~16ms), but chained updates or transitions
-     * can take a few hundred milliseconds.
-     */
-    const val DOM_STABILITY_QUIET_MS = 300
+    // Settle constants live on PlaywrightPageManager.Companion alongside their consumers
+    // (`dispatchAndAwaitSettle`, `waitForPageReady` default param). See that file for definitions.
   }
 
   /**
@@ -465,7 +454,7 @@ class PlaywrightBrowserManager(
    *    executed. This is the minimum bar for a meaningful ARIA snapshot.
    *
    * 2. **DOM stability** — Uses a `MutationObserver` to wait until the DOM stops changing
-   *    for [DOM_STABILITY_QUIET_MS] milliseconds. This catches:
+   *    for [PlaywrightPageManager.DOM_STABILITY_QUIET_MS] milliseconds. This catches:
    *    - React/Vue/Angular re-renders after state updates
    *    - Loading spinners disappearing
    *    - Modals or toasts animating in (JS-driven, since CSS animations are disabled)
@@ -510,12 +499,12 @@ class PlaywrightBrowserManager(
 
     if (idlingConfig.waitForDomStability && domStabilityTimeoutMs > 0) {
       val result = try {
-        Console.log("  [idle] Waiting for DOM stability (quiet: ${DOM_STABILITY_QUIET_MS}ms, timeout: ${domStabilityTimeoutMs.toLong()}ms)...")
+        Console.log("  [idle] Waiting for DOM stability (quiet: ${PlaywrightPageManager.DOM_STABILITY_QUIET_MS}ms, timeout: ${domStabilityTimeoutMs.toLong()}ms)...")
         val start = System.currentTimeMillis()
         currentPage.waitForFunction(
           """() => {
               if (typeof window.__tbLastDomChange === 'undefined') return true;
-              return (Date.now() - window.__tbLastDomChange) > $DOM_STABILITY_QUIET_MS;
+              return (Date.now() - window.__tbLastDomChange) > ${PlaywrightPageManager.DOM_STABILITY_QUIET_MS};
             }""",
           null,
           Page.WaitForFunctionOptions().setTimeout(domStabilityTimeoutMs),

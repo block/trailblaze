@@ -20,8 +20,10 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.AndroidAssetsUtil
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
@@ -74,6 +76,35 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.util.Console
+
+/** Which screen-state implementation [AndroidTrailblazeRule] should build for a given run. */
+internal enum class ScreenStateKind { UIAUTOMATOR, ACCESSIBILITY }
+
+/**
+ * Picks the screen-state implementation whose tree shape matches the runtime agent.
+ *
+ * The accessibility runtime resolves [TrailblazeNodeSelector]s against the live accessibility
+ * tree, and [TrailblazeNodeSelectorResolver] is strictly typed-pair: an `AndroidMaestro` selector
+ * cannot match an `AndroidAccessibility` node. If the rule built a UiAutomator screen state under
+ * the accessibility driver, every selector generated from it would `NoMatch` at dispatch time —
+ * the failure mode reported in the OSS bug.
+ *
+ * Migration mode is the exception: when `trailblaze.captureSecondaryTree=true` we're replaying
+ * pre-migration Maestro selectors and need them to resolve against the UiAutomator shape, so the
+ * primary stays UiAutomator regardless of driver. The accessibility tree rides on the
+ * [MigrationScreenState] side channel instead.
+ */
+internal fun chooseScreenStateKind(
+  isAccessibilityDriver: Boolean,
+  isMigrationMode: Boolean,
+  isAccessibilityServiceRunning: Boolean,
+): ScreenStateKind = if (
+  isAccessibilityDriver && !isMigrationMode && isAccessibilityServiceRunning
+) {
+  ScreenStateKind.ACCESSIBILITY
+} else {
+  ScreenStateKind.UIAUTOMATOR
+}
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -176,6 +207,15 @@ open class AndroidTrailblazeRule(
    * response. Defaults to a fresh instance for the in-process / unit-test case.
    */
   agentMemoryOverride: AgentMemory? = null,
+  /**
+   * Per-objective cap on LLM calls forwarded into [TrailblazeRunner.maxSteps]. Surfaced as
+   * the CLI's `--max-llm-calls` flag and threaded through
+   * [xyz.block.trailblaze.llm.RunYamlRequest.maxLlmCalls] into this rule's constructor.
+   * Null = use the runner's built-in default. Ignored when
+   * [AgentImplementation.MULTI_AGENT_V3] is selected (the V3 path tunes iterations via
+   * [BlazeConfig] instead, and the CLI rejects the combination at parse time).
+   */
+  private val maxLlmCalls: Int? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
@@ -232,15 +272,39 @@ open class AndroidTrailblazeRule(
     customToolClasses?.toTrailblazeToolRepo() ?: TrailblazeToolRepo.withDynamicToolSets()
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
-    val base = AndroidOnDeviceUiAutomatorScreenState(
-      includeScreenshot = true,
-      deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
-    )
+    // Source of truth is the *agent* the rule will dispatch through, not the driver type
+    // label. A caller can pass [agentOverride] with a non-accessibility agent while
+    // [driverTypeOverride] stays at the now-default ANDROID_ONDEVICE_ACCESSIBILITY; reading the
+    // label there would build an accessibility-shaped tree that doesn't match the agent's
+    // resolver. Reading the agent's [usesAccessibilityDriver] keeps screen-state and dispatch
+    // aligned in both the default-construction and the agentOverride path.
+    val isAccessibilityDriver = trailblazeAgent.usesAccessibilityDriver
+    val migrationMode = InstrumentationArgUtil.shouldCaptureSecondaryTree()
+    val deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val base: ScreenState = when (
+      chooseScreenStateKind(
+        isAccessibilityDriver = isAccessibilityDriver,
+        isMigrationMode = migrationMode,
+        isAccessibilityServiceRunning = TrailblazeAccessibilityService.isServiceRunning(),
+      )
+    ) {
+      ScreenStateKind.ACCESSIBILITY -> {
+        TrailblazeAccessibilityService.waitForSettled()
+        AccessibilityServiceScreenState(
+          includeScreenshot = true,
+          deviceClassifiers = deviceClassifiers,
+        )
+      }
+      ScreenStateKind.UIAUTOMATOR -> AndroidOnDeviceUiAutomatorScreenState(
+        includeScreenshot = true,
+        deviceClassifiers = deviceClassifiers,
+      )
+    }
     // Migration-mode side-channel. When `trailblaze.captureSecondaryTree=true`, capture an
-    // accessibility-shape tree alongside the Maestro-derived primary state and ride it on
+    // accessibility-shape tree alongside the (UiAutomator) primary state and ride it on
     // the [MigrationScreenState] decorator so the snapshot logger can persist it without
     // any change to ScreenState consumers. Off-mode returns the plain primary state.
-    if (xyz.block.trailblaze.android.InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
+    if (migrationMode) {
       xyz.block.trailblaze.api.MigrationScreenState.wrap(
         primary = base,
         driverMigrationTreeNode =
@@ -337,6 +401,7 @@ open class AndroidTrailblazeRule(
         agent = trailblazeAgent,
         trailblazeLogger = trailblazeLoggingRule.logger,
         sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
+        maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
       )
     }
   }

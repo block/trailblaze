@@ -141,6 +141,7 @@ class PlaywrightScreenState(
    *
    * [SnapshotDetail.BOUNDS] maps directly to [ViewHierarchyDetail.BOUNDS].
    * [SnapshotDetail.OFFSCREEN] maps to [ViewHierarchyDetail.OFFSCREEN_ELEMENTS].
+   * [SnapshotDetail.OCCLUDED] maps to [ViewHierarchyDetail.OCCLUDED_ELEMENTS].
    * [SnapshotDetail.ALL_ELEMENTS] maps to [ViewHierarchyDetail.CSS_SELECTORS] —
    * Playwright's compact list already shows interactive + content-bearing nodes,
    * so "show me everything" is most usefully interpreted as "surface DOM elements
@@ -151,6 +152,7 @@ class PlaywrightScreenState(
     val translated = buildSet {
       if (SnapshotDetail.BOUNDS in details) add(ViewHierarchyDetail.BOUNDS)
       if (SnapshotDetail.OFFSCREEN in details) add(ViewHierarchyDetail.OFFSCREEN_ELEMENTS)
+      if (SnapshotDetail.OCCLUDED in details) add(ViewHierarchyDetail.OCCLUDED_ELEMENTS)
       if (SnapshotDetail.ALL_ELEMENTS in details) add(ViewHierarchyDetail.CSS_SELECTORS)
     }
     if (translated.isEmpty()) return viewHierarchyTextRepresentation
@@ -165,8 +167,9 @@ class PlaywrightScreenState(
         enrichCompactElementList(compactAriaElements, details)
       }
       val includeOffscreen = ViewHierarchyDetail.OFFSCREEN_ELEMENTS in details
-      val elementsText = TrailblazeTracer.trace("handleOffscreenElements", "screenState") {
-        handleOffscreenElements(baseText, compactAriaElements, includeOffscreen)
+      val includeOccluded = ViewHierarchyDetail.OCCLUDED_ELEMENTS in details
+      val elementsText = TrailblazeTracer.trace("handleHiddenElements", "screenState") {
+        handleHiddenElements(baseText, compactAriaElements, includeOffscreen, includeOccluded)
       }
       val pageContext = TrailblazeTracer.trace("buildPageContextHeader", "screenState") {
         buildPageContextHeader()
@@ -355,77 +358,59 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Handles offscreen elements in the compact list based on the [includeOffscreen] flag.
+   * Filters or annotates elements in the compact list based on visibility signals
+   * from [elementVisibility] — currently offscreen (outside the viewport) and
+   * occluded (in-viewport but visually covered by another element).
    *
-   * - **Default** ([includeOffscreen] = false): Removes offscreen element lines from the
-   *   text and appends a summary line showing how many were hidden. Also removes landmark
-   *   header lines (e.g., `navigation:`) that become empty after all their children are
-   *   filtered out.
-   * - **OFFSCREEN_ELEMENTS requested** ([includeOffscreen] = true): Keeps all elements
-   *   and annotates offscreen ones with `(offscreen)` (legacy behavior).
+   * - **Default** (neither detail flag set): both offscreen and occluded element
+   *   lines are *removed*, empty landmark headers cleaned up, and a summary line
+   *   is appended saying how many of each kind were hidden plus the detail flags
+   *   to request them back. This matches the offscreen-only behavior we shipped
+   *   originally, extended to also drop occluded refs — the LLM can't click
+   *   either kind, and listing them is misleading.
+   * - **[ViewHierarchyDetail.OFFSCREEN_ELEMENTS] requested**: offscreen lines are
+   *   kept with `(offscreen)` annotation, occluded lines are still filtered.
+   * - **[ViewHierarchyDetail.OCCLUDED_ELEMENTS] requested**: occluded lines are
+   *   kept with `(occluded)` annotation, offscreen lines are still filtered.
+   * - **Both requested**: every element line is kept with the appropriate
+   *   annotation.
    *
-   * Uses a **single batched JavaScript evaluation** to check all element positions at once,
-   * instead of making individual Playwright API calls per element. This avoids O(n) CDP
-   * round-trips that caused timeouts on large pages (e.g., Wikipedia's Golden Gate Bridge
-   * article with ~1920 interactive elements).
-   *
-   * The JavaScript function walks the DOM in document order, computes ARIA roles and
-   * accessible names to match elements against the compact list's descriptors, and checks
-   * bounding boxes against the viewport — all in one browser round-trip.
-   *
-   * Elements whose position can't be determined (e.g., role/name mismatch between
-   * Playwright's ARIA snapshot and the simplified JS computation) are left unchanged —
-   * the LLM can infer from the screenshot whether they're visible.
+   * Elements whose visibility can't be determined (role/name mismatch between
+   * Playwright's ARIA snapshot and the simplified JS DOM walk) are left unchanged
+   * — the safe default, since the LLM can still see them in the screenshot.
    */
-  private fun handleOffscreenElements(
+  private fun handleHiddenElements(
     text: String,
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
     includeOffscreen: Boolean,
+    includeOccluded: Boolean,
   ): String {
     if (compact.elementIdMapping.isEmpty()) return text
 
-    // Batch-check all element positions in a single JavaScript evaluation.
-    val offscreenIds = batchCheckOffscreenElements(compact)
+    val visibility = elementVisibility
+    val offscreenIds = visibility.offscreen
+    val occludedIds = visibility.occluded
 
-    if (offscreenIds.isEmpty()) return text
+    if (offscreenIds.isEmpty() && occludedIds.isEmpty()) return text
 
-    if (includeOffscreen) {
-      // Annotate offscreen elements with "(offscreen)" but keep them in the list
-      return text.lines().joinToString("\n") { line ->
-        val match = ELEMENT_ID_PATTERN.find(line) ?: return@joinToString line
-        val elementId = "e${match.groupValues[1]}"
-        if (elementId in offscreenIds) {
-          "$line (offscreen)"
-        } else {
-          line
-        }
+    // Annotation pass: tag every kept line with its visibility status.
+    val annotatedLines = text.lines().map { line ->
+      val match = ELEMENT_ID_PATTERN.find(line) ?: return@map line
+      val elementId = "e${match.groupValues[1]}"
+      when (elementId) {
+        in offscreenIds -> if (includeOffscreen) "$line (offscreen)" else null
+        in occludedIds -> if (includeOccluded) "$line (occluded)" else null
+        else -> line
       }
     }
 
-    // Default: remove offscreen element lines and empty landmark headers
-    val filteredLines = mutableListOf<String>()
-    val lines = text.lines()
-    var i = 0
-    while (i < lines.size) {
-      val line = lines[i]
-      val match = ELEMENT_ID_PATTERN.find(line)
-      if (match != null) {
-        val elementId = "e${match.groupValues[1]}"
-        if (elementId in offscreenIds) {
-          i++
-          continue // skip offscreen element lines
-        }
-      }
-      filteredLines.add(line)
-      i++
-    }
+    // Filter pass: drop null-marked lines (the ones we're hiding).
+    val filteredLines = annotatedLines.filterNotNull().toMutableList()
 
-    // Remove landmark header lines that have no remaining children.
-    // A landmark header is a line like "navigation:" or "  main:" followed by indented
-    // element lines. If all children were removed, the header is now empty.
-    // Loop until stable to handle nested landmarks (e.g., navigation: > banner: where
-    // both become empty after offscreen elements are removed).
-    var result = filteredLines.toMutableList()
+    // Remove landmark header lines that no longer have children. Loop until stable
+    // to handle nested landmarks where the parent only becomes empty after the
+    // child's removal.
+    var result = filteredLines
     var changed = true
     while (changed) {
       changed = false
@@ -433,12 +418,11 @@ class PlaywrightScreenState(
       for (j in result.indices) {
         val line = result[j]
         if (LANDMARK_HEADER_PATTERN.matches(line)) {
-          // Check if the next non-blank line is indented more (i.e., a child)
           val nextContentLine = result.subList(j + 1, result.size)
             .firstOrNull { it.isNotBlank() }
           if (nextContentLine == null || !nextContentLine.startsWith(line.takeWhile { it == ' ' } + "  ")) {
             changed = true
-            continue // skip empty landmark header
+            continue
           }
         }
         pass.add(line)
@@ -446,49 +430,84 @@ class PlaywrightScreenState(
       result = pass
     }
 
-    val hiddenCount = offscreenIds.size
-    result.add("($hiddenCount offscreen elements hidden — request OFFSCREEN_ELEMENTS for full list)")
+    val hiddenOffscreen = if (!includeOffscreen) offscreenIds.size else 0
+    val hiddenOccluded = if (!includeOccluded) occludedIds.size else 0
+    if (hiddenOffscreen > 0) {
+      result.add("($hiddenOffscreen offscreen elements hidden — request OFFSCREEN_ELEMENTS for full list)")
+    }
+    if (hiddenOccluded > 0) {
+      result.add("($hiddenOccluded occluded elements hidden — request OCCLUDED_ELEMENTS for full list)")
+    }
     return result.joinToString("\n")
   }
 
   /**
-   * Checks which elements from the compact list are offscreen using a single batched
-   * JavaScript evaluation instead of per-element Playwright API calls.
+   * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS].
    *
-   * The JS function walks the DOM in document order, computes simplified ARIA roles and
-   * accessible names, and checks bounding boxes — all in one browser round-trip. This
-   * replaces the previous O(n) approach that made individual `count()` + `boundingBox()`
-   * CDP calls per element.
+   * Three signals collapsed into a single CDP round-trip:
+   * - [offscreen]: element's bbox is outside the viewport.
+   * - [occluded]: element is in-viewport but visually covered by something on top
+   *   ([document.elementFromPoint](https://developer.mozilla.org/en-US/docs/Web/API/Document/elementFromPoint) — the same hit-test
+   *   Playwright's `click()` actionability check runs internally).
+   * - [bounds]: viewport-relative bbox per id, so [annotationElements] can drop its
+   *   per-element CDP `locator.boundingBox()` calls.
    *
-   * **Performance**: One CDP round-trip regardless of element count. The JS DOM walk is
-   * fast even for large pages (50K+ nodes) since `querySelectorAll` and
-   * `getBoundingClientRect` are native browser operations.
-   *
-   * **Matching accuracy**: The simplified JS role/name computation may not perfectly match
-   * Playwright's full ARIA snapshot algorithm in edge cases. When a match fails, the
-   * element is left unannotated (kept in the list) — the safe default.
-   *
-   * @return Set of element IDs (e.g., "e1", "e5") that are offscreen.
+   * [occlusionReliable] is false on canvas-rendered pages (Compose Web Wasm and friends)
+   * where `elementFromPoint` always returns the canvas / body / html — in that case
+   * we keep bounds + offscreen and skip occlusion filtering entirely.
    */
+  private data class ElementVisibility(
+    val offscreen: Set<String>,
+    val occluded: Set<String>,
+    val bounds: Map<String, TrailblazeNode.Bounds>,
+    val occlusionReliable: Boolean,
+  ) {
+    companion object {
+      val EMPTY = ElementVisibility(emptySet(), emptySet(), emptyMap(), occlusionReliable = false)
+    }
+  }
+
+  /**
+   * Lazily-computed visibility data, shared between [annotationElements] (image overlay)
+   * and [handleHiddenElements] (text view filtering). The lazy property ensures the
+   * batched JS call only runs once per [PlaywrightScreenState], even when both the
+   * screenshot and the text representation are accessed.
+   */
+  private val elementVisibility: ElementVisibility by lazy {
+    computeElementVisibility(compactAriaElements)
+  }
+
   @Suppress("UNCHECKED_CAST")
-  private fun batchCheckOffscreenElements(
+  private fun computeElementVisibility(
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
-  ): Set<String> {
-    try {
-      // Build input for the JS function: list of {id, role, name, nth}
+  ): ElementVisibility {
+    if (compact.elementIdMapping.isEmpty()) return ElementVisibility.EMPTY
+    return try {
       val elements = compact.elementIdMapping.map { (id, ref) ->
         val (role, name) = parseAriaDescriptor(ref.descriptor)
         mapOf("id" to id, "role" to role, "name" to name, "nth" to ref.nthIndex)
       }
-
-      val offscreenList = page.evaluate(
+      val result = page.evaluate(
         BATCH_VIEWPORT_CHECK_JS,
         mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
-      ) as? List<String> ?: return emptySet()
+      ) as? Map<String, Any?> ?: return ElementVisibility.EMPTY
 
-      return offscreenList.toSet()
+      val offscreen = (result["offscreen"] as? List<String>)?.toSet() ?: emptySet()
+      val occluded = (result["occluded"] as? List<String>)?.toSet() ?: emptySet()
+      val occlusionReliable = (result["occlusionReliable"] as? Boolean) ?: false
+      val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
+      val bounds = rawBounds.mapNotNull { (id, b) ->
+        val x = (b["x"] as? Number)?.toInt()
+        val y = (b["y"] as? Number)?.toInt()
+        val w = (b["w"] as? Number)?.toInt()
+        val h = (b["h"] as? Number)?.toInt()
+        if (x == null || y == null || w == null || h == null || w <= 0 || h <= 0) null
+        else id to TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
+      }.toMap()
+
+      ElementVisibility(offscreen, occluded, bounds, occlusionReliable)
     } catch (_: Exception) {
-      return emptySet()
+      ElementVisibility.EMPTY
     }
   }
 
@@ -847,38 +866,57 @@ class PlaywrightScreenState(
    * [e5], [e6], [e7]" in text — the two never line up, so the model can't reliably
    * map a label to an element.
    *
-   * Bounds are resolved through the same locator API that [enrichViewHierarchyWithBounds]
-   * uses, so element positions match Playwright's accessibility tree (the bounds
-   * source the LLM trusts) rather than raw `getBoundingClientRect` (which is wrong
-   * for Compose-Web and other a11y-overlay engines). Elements that fail to resolve
-   * or have zero-size bounds are dropped — we'd rather emit fewer labels than draw
-   * a label in the wrong place.
+   * Bounds are read out of [elementVisibility], the same batched JS call that powers
+   * offscreen + occlusion detection — so this previously made N CDP round-trips
+   * (one per imageAnnotatable element), and now makes 0. For elements the batched
+   * call couldn't match (role/name mismatch on Compose Web Wasm and friends), we
+   * fall back to per-element `locator.boundingBox()` so the overlay still renders
+   * via Playwright's accessibility-aware locator path.
+   *
+   * Filtered to [PlaywrightAriaSnapshot.ElementRef.imageAnnotatable] elements only,
+   * **minus** anything in [ElementVisibility.offscreen] or [ElementVisibility.occluded]
+   * — boxes for offscreen elements would draw outside the screenshot, and boxes for
+   * occluded elements would paint over the popup/modal hiding them, both misleading
+   * to the LLM. Cells, rows, headings, and named generic elements still appear in
+   * the text view (so the LLM can address them by name) but don't get image boxes.
    */
   override val annotationElements: List<AnnotationElement>? by lazy {
+    val visibility = elementVisibility
     val out = mutableListOf<AnnotationElement>()
     var nodeId = 1L
     for ((id, ref) in elementIdMapping) {
-      try {
-        val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
-        val box = locator.boundingBox(
-          Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
-        ) ?: continue
-        if (box.width <= 0 || box.height <= 0) continue
-        out.add(
-          AnnotationElement(
-            nodeId = nodeId++,
-            bounds = TrailblazeNode.Bounds(
-              left = box.x.toInt(),
-              top = box.y.toInt(),
-              right = (box.x + box.width).toInt(),
-              bottom = (box.y + box.height).toInt(),
-            ),
-            refLabel = id,
-          ),
-        )
-      } catch (_: Exception) {
-        // Skip elements that can't be resolved
-      }
+      if (!ref.imageAnnotatable) continue
+      if (id in visibility.offscreen) continue
+      if (id in visibility.occluded) continue
+
+      val bounds = visibility.bounds[id] ?: run {
+        // Batched check didn't match this element (role/name mismatch, common on
+        // Compose Web Wasm where overlay elements may not expose computedRole).
+        // Fall back to the locator-based path — accessibility-aware bbox.
+        try {
+          val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
+          val box = locator.boundingBox(
+            Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
+          ) ?: return@run null
+          if (box.width <= 0 || box.height <= 0) return@run null
+          TrailblazeNode.Bounds(
+            left = box.x.toInt(),
+            top = box.y.toInt(),
+            right = (box.x + box.width).toInt(),
+            bottom = (box.y + box.height).toInt(),
+          )
+        } catch (_: Exception) {
+          null
+        }
+      } ?: continue
+
+      out.add(
+        AnnotationElement(
+          nodeId = nodeId++,
+          bounds = bounds,
+          refLabel = id,
+        ),
+      )
     }
     out.takeIf { it.isNotEmpty() }
   }
@@ -1141,10 +1179,49 @@ class PlaywrightScreenState(
     )
 
     /**
-     * JavaScript function that batch-checks element viewport positions in a single evaluation.
+     * JavaScript function that batch-computes per-element visibility data in a single evaluation.
      *
-     * Receives `{elements: [{id, role, name, nth}], vw, vh}` and returns a list of
-     * element IDs that are offscreen.
+     * Receives `{elements: [{id, role, name, nth}], vw, vh}` and returns
+     * `{offscreen: [...ids], occluded: [...ids], bounds: {id: {x,y,w,h}}, occlusionReliable: bool}`.
+     *
+     * Three signals per element, all derived from one DOM walk to keep the cost at a
+     * single CDP round-trip regardless of element count:
+     *
+     * 1. **Bounds** — `getBoundingClientRect()` viewport-relative coordinates. Replaces
+     *    the per-element `locator.boundingBox()` CDP calls in `annotationElements`, so
+     *    the SoM overlay can be drawn from this payload alone.
+     *
+     * 2. **Offscreen** — center of bbox lies outside the viewport. Same semantics as
+     *    before; element gets dropped (or annotated `(offscreen)` when OFFSCREEN_ELEMENTS
+     *    is requested).
+     *
+     * 3. **Occluded** — `document.elementFromPoint(centerX, centerY)` after
+     *    injecting a page-wide stylesheet rule `* { pointer-events: auto
+     *    !important }` that neutralizes every `pointer-events: none` declaration
+     *    on the page. The browser then runs its own full CSS stacking-context math
+     *    (z-index buckets, position-creates-context, opacity/transform-creates-
+     *    context, etc.) and returns the visually-topmost element including
+     *    overlays that would otherwise be skipped because they're set to be
+     *    click-transparent. The stylesheet is removed in a `finally` block within
+     *    the same synchronous JS evaluation, so MutationObservers and other page
+     *    code never observe the temporary state.
+     *
+     *    Why a stylesheet rule, not a per-element flip: real-world popups (e.g.,
+     *    Square Dashboard's Managerbot toast) sit inside a NON-POSITIONED
+     *    full-viewport wrapper that itself carries `pointer-events: none` (so
+     *    clicks pass through to the page underneath). A previous version of this
+     *    code walked only `position: fixed/absolute/sticky` elements and missed
+     *    the wrapper case — confirmed broken against the live Square Dashboard.
+     *    The global rule catches every wrapper regardless of positioning or DOM
+     *    depth in O(1), since the browser applies the rule to the entire stylesheet
+     *    cascade in one operation. `pointer-events` doesn't affect layout, only
+     *    hit-testing, so there's no reflow penalty either.
+     *
+     * **Compose Web Wasm fail-open**: on canvas-rendered pages the relevant
+     * accessibility-overlay elements may not have position:absolute/fixed and the
+     * canvas takes up the whole viewport. `elementFromPoint` returns the canvas
+     * for any point. Per-element rule: if the topmost is CANVAS / HTML / BODY,
+     * treat the verdict as unknown rather than occluded.
      *
      * Uses Chromium's `Element.computedRole` and `Element.computedName` properties to
      * match elements — these are the same values the browser's accessibility tree exposes,
@@ -1282,21 +1359,122 @@ class PlaywrightScreenState(
         roleNameMap[key].push(el);
       }
 
-      // Check each requested element's viewport position
-      const offscreen = [];
-      for (const elem of elements) {
-        const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
-        const matches = roleNameMap[key];
-        if (!matches || elem.nth >= matches.length) continue;
-        const el = matches[elem.nth];
-        const rect = el.getBoundingClientRect();
-        const inViewport = rect.bottom > 0 && rect.top < vh
-          && rect.right > 0 && rect.left < vw
-          && rect.width > 0 && rect.height > 0;
-        if (!inViewport) offscreen.push(elem.id);
+      // Visual-occlusion strategy:
+      //
+      // 1. Inject a stylesheet rule `* { pointer-events: auto !important }` so
+      //    no element gets skipped by hit-testing for being click-transparent.
+      //    Removed in a finally block, bounded to this synchronous JS eval.
+      //
+      // 2. For each element, walk `document.elementsFromPoint(centerX, centerY)`
+      //    front-to-back looking for the first VISUALLY OPAQUE element. An
+      //    element counts as opaque iff it has a non-transparent
+      //    background-color OR a non-none background-image OR a non-trivial
+      //    border. Transparent click-through wrappers (like the full-viewport
+      //    container Square's Managerbot popup uses) get skipped, so they
+      //    don't get treated as occluders just because they exist in the
+      //    paint stack.
+      //
+      // 3. If the first opaque element is `el` itself or a descendant, the
+      //    element is visible. Otherwise it's occluded.
+      //
+      // Why this combination: just neutralizing pointer-events:none with the
+      // stylesheet rule makes hit-tests return the topmost element regardless
+      // of click-through tricks (which fixes the case where popups sit inside
+      // a non-positioned pointer-events:none wrapper). But the rule alone
+      // would also make transparent wrappers register as occluders, which is
+      // wrong — the LLM looking at the screenshot can see right through them.
+      // Walking the stack for the first opaque element fixes that without
+      // having to manually reimplement CSS stacking-context rules.
+      const peOverrideStyle = document.createElement('style');
+      peOverrideStyle.textContent = '* { pointer-events: auto !important; }';
+      document.head.appendChild(peOverrideStyle);
+
+      function isVisuallyOpaqueAt(node) {
+        // Has non-transparent background color? `rgba(0, 0, 0, 0)` and
+        // `transparent` are the standard transparent-color renderings.
+        const cs = window.getComputedStyle(node);
+        const bg = cs.backgroundColor;
+        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true;
+        // Has a background image?
+        if (cs.backgroundImage && cs.backgroundImage !== 'none') return true;
+        // Has a non-trivial border on at least one side?
+        const bw = parseFloat(cs.borderTopWidth || '0')
+          + parseFloat(cs.borderRightWidth || '0')
+          + parseFloat(cs.borderBottomWidth || '0')
+          + parseFloat(cs.borderLeftWidth || '0');
+        if (bw > 0) return true;
+        // Has a non-empty image or replaced content?
+        if (node.tagName === 'IMG' || node.tagName === 'SVG'
+          || node.tagName === 'CANVAS' || node.tagName === 'VIDEO') return true;
+        return false;
       }
 
-      return offscreen;
+      const offscreen = [];
+      const occluded = [];
+      const bounds = {};
+      let occlusionReliable = false;
+      try {
+        for (const elem of elements) {
+          const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
+          const matches = roleNameMap[key];
+          if (!matches || elem.nth >= matches.length) continue;
+          const el = matches[elem.nth];
+          const rect = el.getBoundingClientRect();
+
+          bounds[elem.id] = {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          };
+
+          const inViewport = rect.bottom > 0 && rect.top < vh
+            && rect.right > 0 && rect.left < vw
+            && rect.width > 0 && rect.height > 0;
+          if (!inViewport) {
+            offscreen.push(elem.id);
+            continue; // occlusion check is meaningless for offscreen elements
+          }
+
+          const cx = rect.x + rect.width / 2;
+          const cy = rect.y + rect.height / 2;
+          const stack = document.elementsFromPoint(cx, cy);
+          if (!stack || stack.length === 0) continue;
+
+          // Find the first visually opaque element in the paint stack.
+          // Transparent wrappers (click-through containers) get skipped.
+          let visualTop = null;
+          for (const node of stack) {
+            const tag = node.tagName;
+            if (tag === 'HTML' || tag === 'BODY') break; // hit the page background — stop
+            if (isVisuallyOpaqueAt(node)) {
+              visualTop = node;
+              break;
+            }
+          }
+          if (visualTop == null) continue; // nothing opaque between top and body — unknown
+          if (visualTop.tagName === 'CANVAS') continue; // canvas-rendered, unreliable
+          // Visible iff visualTop is `el` or related by ancestry in either direction:
+          //  - visualTop IS el or descendant of el: el's own opaque content is on top.
+          //  - visualTop IS ancestor of el: el sits inside visualTop's opaque region —
+          //    visualTop is the background the LLM sees el painted onto, which means
+          //    el is still visible (a transparent-text-inside-opaque-card case, e.g.,
+          //    the "Square's AI terms" link inside the Managerbot popup card).
+          if (el.contains(visualTop) || visualTop.contains(el)) {
+            occlusionReliable = true;
+            continue;
+          }
+          occluded.push(elem.id);
+          occlusionReliable = true;
+        }
+      } finally {
+        // Always remove the injected override stylesheet, even if the loop above
+        // threw. Bounded to this synchronous JS evaluation: no MutationObserver
+        // microtask runs between append and remove.
+        peOverrideStyle.remove();
+      }
+
+      return { offscreen, occluded, bounds, occlusionReliable };
     }"""
 
     /**

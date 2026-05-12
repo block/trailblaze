@@ -9,6 +9,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.OnDeviceOpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
@@ -49,6 +50,7 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       trailblazeDeviceId = this.trailblazeDeviceId,
       trailblazeLoggingRule = trailblazeLoggingRule,
       agentMemoryOverride = agentMemory,
+      maxLlmCalls = runYamlRequest.maxLlmCalls,
     )
     startInTestCoroutineScope {
       androidTrailblazeRule.runSuspend(
@@ -64,25 +66,33 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     // Reuse the cached HTTP client to prevent "unknown client" errors
     val ollamaBaseUrl =
       InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.BASE_URL_ARG)
+    val llmClients = mutableMapOf<LLMProvider, LLMClient>(
+      TrailblazeLlmProvider.NONE.toKoogLlmProvider() to NoOpLlmClient(),
+      LLMProvider.Ollama to OllamaClient(
+        baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
+        baseClient = cachedHttpClient,
+      ),
+    )
+    InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))?.let { openAiApiKey ->
+      llmClients[LLMProvider.OpenAI] = OpenAILLMClient(
+        baseClient = cachedHttpClient,
+        apiKey = openAiApiKey,
+      )
+    }
+    // Custom openai_compatible providers from the workspace `trailblaze.yaml` arrive via
+    // instrumentation args and are rebuilt on-device by [OnDeviceOpenAICompatibleLlmClientFactory].
+    // The host only emits PROVIDER_TYPE_ARG=openai_compatible for the *currently selected*
+    // provider, so reaching a non-null result here means the user explicitly configured this
+    // provider as openai_compatible — register/replace under the active provider id even when
+    // it collides with a built-in (e.g. redefining `providers.openai` with a custom base_url).
+    OnDeviceOpenAICompatibleLlmClientFactory
+      .createOrNull(trailblazeLlmModel, cachedHttpClient)
+      ?.let { customClient ->
+        llmClients[trailblazeLlmModel.trailblazeLlmProvider.toKoogLlmProvider()] = customClient
+      }
     return DefaultDynamicLlmClient(
       trailblazeLlmModel = trailblazeLlmModel,
-      llmClients = mutableMapOf<LLMProvider, LLMClient>(
-        TrailblazeLlmProvider.NONE.toKoogLlmProvider() to NoOpLlmClient(),
-        LLMProvider.Ollama to OllamaClient(
-          baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
-          baseClient = cachedHttpClient,
-        ),
-      ).apply {
-        InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))?.let { openAiApiKey ->
-          put(
-            LLMProvider.OpenAI,
-            OpenAILLMClient(
-              baseClient = cachedHttpClient,
-              apiKey = openAiApiKey,
-            ),
-          )
-        }
-      },
+      llmClients = llmClients,
     )
   }
 

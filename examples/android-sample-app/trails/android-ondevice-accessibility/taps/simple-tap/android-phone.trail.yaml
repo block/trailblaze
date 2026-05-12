@@ -12,9 +12,6 @@
       tools:
       - tapOnElementBySelector:
           reason: The objective is to tap the 'Tap Me' button. Node 6 is the clickable container for the 'Tap Me' text.
-          selector:
-            containsChild:
-              textRegex: Tap Me
           nodeSelector:
             androidAccessibility:
               textRegex: Tap Me

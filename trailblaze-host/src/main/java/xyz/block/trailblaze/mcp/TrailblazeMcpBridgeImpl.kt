@@ -42,9 +42,13 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
+import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.requiresHostInstance
+import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
@@ -492,6 +496,52 @@ class TrailblazeMcpBridgeImpl(
 
   companion object {
     /**
+     * Pure expansion helper: synthesizes the [TrailblazeToolExecutionContext] needed by
+     * `DelegatingTrailblazeTool.toExecutableTrailblazeTools` and returns the flattened
+     * list of executable primitives. No bridge instance required — testable in isolation.
+     *
+     * `YamlDefinedTrailblazeTool.toExecutableTrailblazeTools` (the typical implementer of
+     * `DelegatingTrailblazeTool`) reads `config.toolsList` and substitutes `{{params.x}}`
+     * tokens — it doesn't actually consume the `executionContext` argument today, but the
+     * API requires a non-null value. Synthesize a minimal one with a no-op logger and a
+     * fresh `AgentMemory()` since the expansion only needs structural data, not
+     * session-scoped state. Standard fallback sizing (1080x2400) mirrors the
+     * synthetic-device pattern in `TrailblazeMcpServer.buildSyntheticDeviceInfo` —
+     * `YamlDefinedTrailblazeTool` doesn't read screen dimensions during expansion.
+     */
+    internal fun expandDelegatingToolHostSide(
+      tool: DelegatingTrailblazeTool,
+      trailblazeDeviceId: TrailblazeDeviceId,
+      driverType: TrailblazeDriverType,
+      traceId: TraceId?,
+    ): List<ExecutableTrailblazeTool> {
+      val expansionContext = TrailblazeToolExecutionContext(
+        screenState = null,
+        traceId = traceId,
+        trailblazeDeviceInfo = xyz.block.trailblaze.devices.TrailblazeDeviceInfo(
+          trailblazeDeviceId = trailblazeDeviceId,
+          trailblazeDriverType = driverType,
+          widthPixels = 1080,
+          heightPixels = 2400,
+        ),
+        sessionProvider = {
+          TrailblazeSession(
+            sessionId = SessionId("host-expand-${trailblazeDeviceId.instanceId}"),
+            startTime = Clock.System.now(),
+          )
+        },
+        screenStateProvider = null,
+        androidDeviceCommandExecutor = null,
+        trailblazeLogger = TrailblazeLogger(
+          logEmitter = NoOpLogEmitter,
+          screenStateLogger = ScreenStateLogger { "" },
+        ),
+        memory = AgentMemory(),
+      )
+      return tool.toExecutableTrailblazeTools(expansionContext)
+    }
+
+    /**
      * How long to wait for the Maestro driver during device connect. Sized to cover the
      * worst real first-connection case: an iOS XCTest setup against a device-farm simulator,
      * which can take 60+ seconds end-to-end. The previous 5s value was the source of the
@@ -569,6 +619,13 @@ class TrailblazeMcpBridgeImpl(
     val key = deviceId.instanceId
     // Cancel any in-progress driver creation latch so waiters don't block forever
     driverCreationLatches.remove(key)?.countDown()
+    // Drain on-device UiAutomation cache BEFORE we drop the Maestro driver and (later) the
+    // adb forward — otherwise the on-device server keeps a stale Instrumentation.mUiAutomation
+    // handle that explodes with DeadObjectException on the next reconnect (build 5463 pattern).
+    // Best-effort: any failure (404 on old APK, 2s timeout on already-wedged server, network
+    // drop) is logged and swallowed; teardown must not block on a remote that's likely already
+    // gone. Skipped on non-Android because the on-device server only ships in the test APK.
+    drainOnDeviceSessionBestEffort(deviceId)
     // Synchronize on the same lock used by selectDevice() to prevent a race where
     // another thread creates a new connection between our remove and the lock cleanup.
     // We intentionally never remove from persistentDeviceLocks — they are tiny Any objects
@@ -583,6 +640,50 @@ class TrailblazeMcpBridgeImpl(
           Console.log("[MCP Bridge] Exception closing persistent device $key (already closed?): ${e.message}")
         }
       }
+    }
+  }
+
+  /**
+   * Sends [DrainSessionRequest] to the on-device server so it can drop its cached
+   * `Instrumentation.mUiAutomation` handle before the host tears down. Best-effort: any
+   * failure (HTTP 404 from an older APK that lacks the handler, a 2s timeout from an
+   * already-wedged server, or a network drop from a stale adb forward) is logged and
+   * swallowed — the host must still proceed with teardown because the remote may already
+   * be gone.
+   *
+   * Android-gated because the on-device RPC server only exists in the Trailblaze test APK;
+   * iOS/Web have nothing to drain. Runs synchronously inside the existing `closePersistentDevice`
+   * call (which is itself called off the request hot path) and is bounded by the request's
+   * own [DrainSessionRequest.requestTimeoutMs] so the worst case is 2s of host-side wait.
+   */
+  private fun drainOnDeviceSessionBestEffort(deviceId: TrailblazeDeviceId) {
+    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return
+    val rpcClient = OnDeviceRpcClient(
+      trailblazeDeviceId = deviceId,
+      sendProgressMessage = { Console.log("[MCP Bridge] [drain ${deviceId.instanceId}] $it") },
+    )
+    try {
+      runBlocking {
+        when (val result = rpcClient.rpcCall(DrainSessionRequest(reason = "host_close_persistent_device"))) {
+          is RpcResult.Success ->
+            Console.log(
+              "[MCP Bridge] Drain RPC succeeded for ${deviceId.instanceId} " +
+                "(uiAutomationCleared=${result.data.uiAutomationCleared})",
+            )
+          is RpcResult.Failure ->
+            Console.log(
+              "[MCP Bridge] Drain RPC failed for ${deviceId.instanceId} " +
+                "(errorType=${result.errorType}, message=${result.message}) — continuing teardown",
+            )
+        }
+      }
+    } catch (t: Throwable) {
+      Console.log(
+        "[MCP Bridge] Drain RPC threw for ${deviceId.instanceId} " +
+          "(${t::class.java.simpleName}: ${t.message}) — continuing teardown",
+      )
+    } finally {
+      rpcClient.close()
     }
   }
 
@@ -1097,6 +1198,29 @@ class TrailblazeMcpBridgeImpl(
   ): String {
     val trailblazeDeviceId = assertDeviceIsSelected()
 
+    // Host-only `DelegatingTrailblazeTool` (e.g. `YamlDefinedTrailblazeTool` — the
+    // composed-tools-mode YAML body) with per-instance `requires_host = true` MUST expand
+    // host-side before any per-child dispatch. The default RPC path below ships the whole
+    // delegating-tool object to the device, where decode fails because the workspace
+    // config that defines the tool's body doesn't ship on-device — surfacing as
+    // `Unknown tool 'X' is not registered (YamlDefinedTrailblazeTool failed)`.
+    //
+    // Runs BEFORE the `trailblazeToolExecutor` short-circuit so custom executors (test
+    // fixtures, OSS desktop callers) ALSO receive expanded primitives instead of the
+    // delegating wrapper. The host-expansion is a correctness contract, not an optional
+    // behavior — the test path needs the same shape as production.
+    //
+    // Expansion semantics: call `toExecutableTrailblazeTools(context)` to flatten the
+    // composition into a list of primitives, then recurse `executeTrailblazeTool(child)`
+    // for each — so per-child routing kicks in. Maestro primitives (`back`, `inputText`,
+    // etc.) take the device RPC path; nested host-only children take the local path. The
+    // delegating tool's `toolMetadata.requiresHost` is the gate: workspace YAML configs
+    // default to `requires_host = true` via `AppTargetDiscovery.registerWorkspaceYamlTools`;
+    // classpath-bundled `*.tool.yaml` files set the field explicitly (or leave it null).
+    if (tool is DelegatingTrailblazeTool && tool.requiresHostInstance()) {
+      return expandDelegatingToolAndDispatch(tool, trailblazeDeviceId, blocking, traceId)
+    }
+
     // Use custom executor if provided, otherwise convert to YAML and run
     if (trailblazeToolExecutor != null) {
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
@@ -1358,6 +1482,48 @@ class TrailblazeMcpBridgeImpl(
       )
     }
   }
+
+  /**
+   * Host-side expansion + recursive dispatch for a `DelegatingTrailblazeTool` that's
+   * flagged `requires_host = true`. Extracted from [executeTrailblazeTool] so the
+   * expansion contract is testable in isolation without going through the rest of the
+   * driver-routing chain.
+   *
+   * The pure expansion math lives in the companion's [expandDelegatingToolHostSide]
+   * (testable without a bridge instance). This method composes it with the
+   * device-state lookup and the recursive per-child dispatch.
+   */
+  internal suspend fun expandDelegatingToolAndDispatch(
+    tool: DelegatingTrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): String {
+    val driverType = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)
+      ?.device?.trailblazeDriverType
+      ?: error(
+        "DelegatingTrailblazeTool expansion needs the selected device's driver type — " +
+          "device state was null for ${trailblazeDeviceId.instanceId}",
+      )
+    val expanded = TrailblazeMcpBridgeImpl.expandDelegatingToolHostSide(
+      tool = tool,
+      trailblazeDeviceId = trailblazeDeviceId,
+      driverType = driverType,
+      traceId = traceId,
+    )
+    Console.log(
+      "[executeTrailblazeTool] Host-expanding DelegatingTrailblazeTool " +
+        "'${tool::class.simpleName}' (requires_host=true) into ${expanded.size} child(ren); " +
+        "recursing per-child for routing.",
+    )
+    var lastResult = "Host-expanded delegating tool produced 0 children"
+    for (child in expanded) {
+      lastResult = executeTrailblazeTool(child, blocking, traceId)
+    }
+    cachedScreenStates.remove(trailblazeDeviceId.instanceId)
+    return lastResult
+  }
+
 
   /**
    * Executes a tool on the on-device agent via direct RPC, waiting for completion.

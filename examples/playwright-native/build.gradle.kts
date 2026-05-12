@@ -6,7 +6,6 @@ plugins {
 
 trailblazeBundle {
   packsDir.set(layout.projectDirectory.dir("trails/config/packs"))
-  toolsDir.set(layout.projectDirectory.dir("trails/config/tools"))
 }
 
 dependencies {

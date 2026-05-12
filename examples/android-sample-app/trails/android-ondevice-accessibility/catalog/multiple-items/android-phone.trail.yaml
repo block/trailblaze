@@ -12,9 +12,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
-          selector:
-            containsChild:
-              textRegex: Catalog
           nodeSelector:
             androidAccessibility:
               textRegex: Catalog
@@ -23,22 +20,16 @@
       tools:
       - assertVisibleBySelector:
           reason: Verify "Coffee" is visible in the catalog list.
-          selector:
-            textRegex: Coffee
           nodeSelector:
             androidAccessibility:
               textRegex: Coffee
       - assertVisibleBySelector:
           reason: Verify "Coffee Latte" is visible in the catalog list.
-          selector:
-            textRegex: Coffee Latte
           nodeSelector:
             androidAccessibility:
               textRegex: Coffee Latte
       - assertVisibleBySelector:
           reason: Verify "Coffee Americano" is visible in the catalog list.
-          selector:
-            textRegex: Coffee Americano
           nodeSelector:
             androidAccessibility:
               textRegex: Coffee Americano
@@ -47,9 +38,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Tap precisely on "Coffee Americano" to avoid ambiguity with other Coffee items.
-          selector:
-            containsChild:
-              textRegex: Coffee Americano
           nodeSelector:
             androidAccessibility:
               textRegex: Coffee Americano
@@ -58,8 +46,6 @@
       tools:
       - assertVisibleBySelector:
           reason: Verify the item detail dialog is showing "Coffee Americano".
-          selector:
-            textRegex: Coffee Americano
           nodeSelector:
             androidAccessibility:
               textRegex: Coffee Americano
@@ -68,9 +54,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Tap "Dismiss" to close the detail dialog.
-          selector:
-            containsChild:
-              textRegex: Dismiss
           nodeSelector:
             androidAccessibility:
               textRegex: Dismiss

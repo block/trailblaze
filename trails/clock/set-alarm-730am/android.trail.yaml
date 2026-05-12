@@ -21,52 +21,62 @@
         tools:
           - tapOnElementBySelector:
               reason: Switch to the ALARM tab before adding a new alarm.
-              selector:
-                textRegex: ALARM
-                idRegex: android:id/text1
+              nodeSelector:
+                androidMaestro:
+                  textRegex: ALARM
+                  resourceIdRegex: android:id/text1
           - tapOnElementBySelector:
               reason: To add a new alarm, I need to tap on the 'Add alarm' button, which is visually represented by the plus icon at the bottom center of the screen.
-              selector:
-                textRegex: Add alarm
-                idRegex: com.android.deskclock:id/fab
+              nodeSelector:
+                androidMaestro:
+                  textRegex: Add alarm
+                  resourceIdRegex: com.android.deskclock:id/fab
           - tapOnElementBySelector:
               reason: Select 7 as the hour for the alarm on the radial time picker to set the alarm hour to 7.
-              selector:
-                textRegex: "7"
+              nodeSelector:
+                androidMaestro:
+                  textRegex: '7'
           - tapOnElementBySelector:
               reason: Choose 30 as the minute for the alarm, as required by the objective.
-              selector:
-                textRegex: "30"
+              nodeSelector:
+                androidMaestro:
+                  textRegex: '30'
           - tapOnElementBySelector:
               reason: Confirm setting the alarm for 7:30 AM by tapping the 'AM' radio button (currently 'PM' is selected).
-              selector:
-                textRegex: AM
-                idRegex: android:id/am_label
+              nodeSelector:
+                androidMaestro:
+                  textRegex: AM
+                  resourceIdRegex: android:id/am_label
           - tapOnElementBySelector:
               reason: To finalize adding the new alarm for 7:30 AM, I need to confirm the selected time by tapping the 'OK' button.
-              selector:
-                textRegex: OK
-                idRegex: android:id/button1
+              nodeSelector:
+                androidMaestro:
+                  textRegex: OK
+                  resourceIdRegex: android:id/button1
     - step: After it's been added, turn it off
       recording:
         tools:
           - tapOnElementBySelector:
               reason: To turn off the alarm added for 7:30 AM as required by the objective.
-              selector:
-                idRegex: com.android.deskclock:id/onoff
-                checked: true
+              nodeSelector:
+                androidMaestro:
+                  resourceIdRegex: com.android.deskclock:id/onoff
+                  checked: true
     - step: Delete the alarm
       recording:
         tools:
           - tapOnElementBySelector:
               reason: To expand the 7:30 AM alarm and access alarm management options such as delete.
-              selector:
-                textRegex: Expand alarm
-                idRegex: com.android.deskclock:id/arrow
+              nodeSelector:
+                androidMaestro:
+                  textRegex: Expand alarm
+                  resourceIdRegex: com.android.deskclock:id/arrow
                 childOf:
-                  textRegex: 7:30 AM Alarm
+                  androidMaestro:
+                    textRegex: 7:30 AM Alarm
           - tapOnElementBySelector:
               reason: To delete the 7:30 AM alarm as instructed.
-              selector:
-                textRegex: Delete
-                idRegex: com.android.deskclock:id/delete
+              nodeSelector:
+                androidMaestro:
+                  textRegex: Delete
+                  resourceIdRegex: com.android.deskclock:id/delete

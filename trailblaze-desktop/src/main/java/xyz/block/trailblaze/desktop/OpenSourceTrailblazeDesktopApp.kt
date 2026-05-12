@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.desktop
 
+import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
@@ -60,8 +61,19 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       installedAppIdsProviderBlocking = { desktopAppConfig.getInstalledAppIds(it) },
       appVersionInfoProviderBlocking = { deviceId, appId -> desktopAppConfig.getAppVersionInfo(deviceId, appId) },
       logsRepo = desktopAppConfig.logsRepo,
+      // Match the args produced by [OpenSourceTrailblazeDesktopAppConfig.additionalInstrumentationArgs]
+      // used on the trail-run path. Without selectedProviderId/defaultModel,
+      // `trailblaze.llm.provider.type`, `base_url`, `chat_completions_path`, `headers`,
+      // `auth_required`, and `default_model` never reach the on-device APK — and any
+      // openai_compatible provider then fails on-device with "Unsupported provider"
+      // because the on-device LLM client map is keyed by provider id.
       onDeviceInstrumentationArgsProvider = {
-        JvmLLMProvidersUtil.getAdditionalInstrumentationArgs()
+        // Safe cast: `OpenSourceTrailblazeDesktopApp`'s ctor pins this to OpenSourceTrailblazeDesktopAppConfig.
+        val selected = (desktopAppConfig as OpenSourceTrailblazeDesktopAppConfig).selectedLlmInstrumentationArgs()
+        JvmLLMProvidersUtil.getAdditionalInstrumentationArgs(
+          selectedProviderId = selected.selectedProviderId,
+          defaultModel = selected.defaultModel,
+        )
       },
       trailblazeAnalytics = TrailblazeAnalytics.NoOp
     )
@@ -103,6 +115,9 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       },
       llmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
       llmModelListsProvider = { desktopAppConfig.getAllSupportedLlmModelLists() },
+      saveAnnotatedScreenshotsProvider = {
+        CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
+      },
     )
   }
 

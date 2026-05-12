@@ -114,6 +114,18 @@ sealed interface TrailblazeLog {
      * Null for backward compatibility with older logs.
      */
     val llmRequestLabel: String? = null,
+    /**
+     * Whether [screenshotFile] points at the set-of-mark *annotated* variant or
+     * the un-annotated raw variant. Lets downstream consumers (notably
+     * `WaypointCaptureExampleCommand.findRawScreenshot`) skip the
+     * annotated→raw twin-search when this log already references the raw
+     * image — without this hint, the twin search would risk picking a
+     * neighboring step's screenshot whose timestamp lands within its 1-second
+     * window. `null` on older logs predating the `annotated-screenshots`
+     * config flag, in which case consumers should assume `true` (the historical
+     * default — every persisted LLM log screenshot was the annotated variant).
+     */
+    val screenshotIsAnnotated: Boolean? = null,
   ) : TrailblazeLog,
     HasAgentTaskStatus,
     HasTraceId,

@@ -5,7 +5,7 @@
   "description": "Sister to ../mcp — same two tools, authored via @trailblaze/scripting instead of the raw MCP SDK. Both directories are wired into the sample-app target so CI exercises the raw-SDK and SDK authoring surfaces in parallel.",
   "type": "module",
   "dependencies": {
-    "@trailblaze/scripting": "file:../../../../../sdks/typescript",
+    "@trailblaze/scripting": "file:../../../../../../../../sdks/typescript",
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "4.3.6"
   },

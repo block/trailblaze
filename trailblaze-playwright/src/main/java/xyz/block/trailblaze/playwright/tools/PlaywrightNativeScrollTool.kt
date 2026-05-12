@@ -72,14 +72,12 @@ class PlaywrightNativeScrollTool(
         val (locator, error) =
           PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
         if (error != null) return error
-        val box =
-          locator!!.first().boundingBox()
-            ?: return TrailblazeToolResult.Error.ExceptionThrown(
-              "Could not determine bounding box for '$description'.",
-            )
-        val centerX = box.x + box.width / 2
-        val centerY = box.y + box.height / 2
-        page.mouse().move(centerX, centerY)
+        // Position the mouse over the scroll target via `locator.hover()` rather than
+        // raw `page.mouse().move(coords)`. Playwright's hover does the full actionability
+        // dance (visible, stable, receives events) so the subsequent `page.mouse().wheel`
+        // dispatches inside a real container, not on top of an overlay. Wheel itself has
+        // no locator-based equivalent — coordinate-driven is the Playwright primitive.
+        locator!!.first().hover()
       }
 
       page.mouse().wheel(deltaX, deltaY)

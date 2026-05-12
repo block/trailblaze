@@ -668,4 +668,537 @@ class PlaywrightScreenStateBoundsTest {
       }
     }
   }
+
+  // ---- Occlusion tests ----
+
+  /**
+   * HTML page with two interactive buttons and a modal overlay covering one of them.
+   * The overlay is a fixed `<div role="dialog">` positioned to cover the area where
+   * "Covered Button" renders. The button is still in the DOM, still rendered, but
+   * not the topmost element at its center point — so `elementFromPoint` returns the
+   * overlay and our occlusion check should flag the button.
+   */
+  private val occludedPageHtml = """
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0; padding:0;">
+      <main>
+        <button id="visible-button" style="position: absolute; left: 50px; top: 50px; width: 160px; height: 40px;">Visible Button</button>
+        <button id="covered-button" style="position: absolute; left: 50px; top: 200px; width: 160px; height: 40px;">Covered Button</button>
+        <div role="dialog" aria-label="Modal Overlay"
+             style="position: fixed; left: 30px; top: 180px; width: 400px; height: 200px; background: rgba(0,0,0,0.8); z-index: 999;">
+          <button id="modal-button">Modal Button</button>
+        </div>
+      </main>
+    </body>
+    </html>
+  """.trimIndent()
+
+  @Test
+  fun `occluded elements are filtered from text view by default`() {
+    page.setContent(occludedPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // The covered button is hidden behind the modal overlay — drop it from text.
+    assertFalse(
+      text.contains("\"Covered Button\""),
+      "'Covered Button' should be filtered out as occluded, but got:\n$text",
+    )
+    // The visible button and the modal's own button are not occluded — they stay.
+    assertTrue(text.contains("\"Visible Button\""), "'Visible Button' should be present in:\n$text")
+    assertTrue(text.contains("\"Modal Button\""), "'Modal Button' (in the dialog) should be present in:\n$text")
+    // Summary line tells the LLM how to surface them if it wants to.
+    assertTrue(
+      text.contains("occluded elements hidden"),
+      "Summary line should mention occluded elements hidden, but got:\n$text",
+    )
+    assertTrue(
+      text.contains("request OCCLUDED_ELEMENTS"),
+      "Summary should mention OCCLUDED_ELEMENTS detail flag, but got:\n$text",
+    )
+  }
+
+  @Test
+  fun `occluded elements appear annotated when OCCLUDED_ELEMENTS detail requested`() {
+    page.setContent(occludedPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(ViewHierarchyDetail.OCCLUDED_ELEMENTS),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    val coveredButtonLine = text.lines().find { it.contains("\"Covered Button\"") }
+    assertNotNull(coveredButtonLine, "Should find 'Covered Button' when OCCLUDED_ELEMENTS requested:\n$text")
+    assertTrue(
+      coveredButtonLine.contains("(occluded)"),
+      "'Covered Button' should be annotated (occluded): $coveredButtonLine",
+    )
+
+    // Visible elements should NOT be annotated.
+    val visibleButtonLine = text.lines().find { it.contains("\"Visible Button\"") }
+    assertNotNull(visibleButtonLine, "Should find 'Visible Button' in:\n$text")
+    assertFalse(
+      visibleButtonLine.contains("(occluded)"),
+      "'Visible Button' should not be occluded: $visibleButtonLine",
+    )
+
+    // No summary line for occluded since we're including them.
+    assertFalse(
+      text.contains("occluded elements hidden"),
+      "Should not have occluded summary when OCCLUDED_ELEMENTS requested, but got:\n$text",
+    )
+  }
+
+  /**
+   * SoM-side mirror of the text-side filter: image annotations for occluded
+   * elements must also be dropped so the screenshot overlay matches what the
+   * text view shows. Otherwise the LLM sees `[e60]` painted on the popup that's
+   * covering `e60`, which is exactly the kind of stale annotation the PR is
+   * trying to eliminate.
+   */
+  @Test
+  fun `annotationElements skips occluded refs to keep image and text views consistent`() {
+    page.setContent(occludedPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val annotations = screenState.annotationElements
+    assertNotNull(annotations, "Should produce annotations for the page")
+    // No annotation should carry the refLabel for the covered button — the
+    // covered button's `[eN]` ID won't even appear in elementIdMapping after
+    // filtering, but the strict check is: among emitted annotations none should
+    // resolve back to the covered button's bounds.
+    val coveredButtonEntry = screenState.elementIdMapping.entries
+      .find { it.value.descriptor.contains("Covered Button") }
+    if (coveredButtonEntry != null) {
+      assertFalse(
+        annotations.any { it.refLabel == coveredButtonEntry.key },
+        "Covered button (${coveredButtonEntry.key}) should NOT be in painted annotations",
+      )
+    }
+    // Visible button SHOULD have an annotation.
+    val visibleButtonEntry = screenState.elementIdMapping.entries
+      .find { it.value.descriptor.contains("Visible Button") }
+    assertNotNull(visibleButtonEntry, "Visible Button should be in elementIdMapping")
+    assertTrue(
+      annotations.any { it.refLabel == visibleButtonEntry.key },
+      "Visible button (${visibleButtonEntry.key}) SHOULD be in painted annotations",
+    )
+  }
+
+  /**
+   * Real-world reproduction of the Square Dashboard Managerbot popup case:
+   * a popup container with `pointer-events: none` sits visually on top of
+   * page elements, while the page remains interactive underneath because
+   * clicks pass through. Set-of-mark uses VISUAL occlusion (paint stack
+   * via `elementsFromPoint`), not click occlusion (`elementFromPoint`),
+   * so this case correctly flags the underlying button — the LLM looking
+   * at the screenshot cannot see the button regardless of whether
+   * Playwright could technically click it through the popup.
+   *
+   * Why we accept this trade-off: drawing a labeled box on the screenshot
+   * at a position the LLM can't see is misleading. Listing the underlying
+   * button in the text view while the screenshot shows it covered is also
+   * misleading. The LLM can always request OCCLUDED_ELEMENTS detail to
+   * surface what's behind the overlay if needed.
+   */
+  @Test
+  fun `pointer-events none overlay visually occludes underlying element`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="real-button" style="position: absolute; left: 50px; top: 50px; width: 160px; height: 40px;">Real Button</button>
+        <!-- Opaque overlay covering the button with pointer-events: none.
+             Mirrors Square Dashboard's Managerbot toast pattern — visually
+             on top but pointer-events:none keeps page underneath interactive. -->
+        <div aria-hidden="true"
+             style="position: absolute; left: 30px; top: 30px; width: 200px; height: 80px;
+                    background: #222; pointer-events: none;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Real Button\""),
+      "pointer-events:none overlay should visually occlude the underlying button (Managerbot case):\n$text",
+    )
+    assertTrue(
+      text.contains("occluded elements hidden"),
+      "Should produce an occluded-summary line:\n$text",
+    )
+  }
+
+  /**
+   * Negative case: `elementFromPoint` returning a DESCENDANT of our element
+   * is the visible case, not the occluded case. Buttons routinely contain
+   * inner `<span>` / icon nodes, and the hit-test will return whichever inner
+   * node sits at the click point.
+   *
+   * `el.contains(top)` returns true when `top === el` OR `top` is any descendant,
+   * which is exactly the "visible" semantics we want.
+   */
+  @Test
+  fun `descendant of target returned by elementFromPoint counts as visible`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button aria-label="Iconic Button"
+                style="position: absolute; left: 50px; top: 50px; width: 100px; height: 100px;
+                       display: flex; align-items: center; justify-content: center;">
+          <span class="icon" style="display: inline-block; width: 40px; height: 40px; background: #333;"></span>
+        </button>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    assertTrue(
+      text.contains("\"Iconic Button\""),
+      "Button containing inner span/icon should remain visible (descendant returned by elementFromPoint):\n$text",
+    )
+    assertFalse(
+      text.contains("(occluded)"),
+      "Should NOT flag a button as occluded by its own child:\n$text",
+    )
+  }
+
+  /**
+   * Negative case: partial coverage where the element's CENTER is still in
+   * the clear. Element's bottom edge sits under an overlay, but its center
+   * point hits the element itself. Should remain visible.
+   *
+   * This is the most common partial-coverage scenario — e.g., a sticky footer
+   * bar sitting at the bottom of the page covers the lower portion of every
+   * page element below the fold, but the page element's center is usually
+   * still in the open area.
+   */
+  @Test
+  fun `element with partially-covered bottom-edge but visible center is not flagged`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <!-- Tall button, center at (130, 200) -->
+        <button id="tall-button" style="position: absolute; left: 50px; top: 100px; width: 160px; height: 200px;">Tall Button</button>
+        <!-- Sticky footer-style overlay across the bottom of the button, covering only
+             the lower portion — the button's center is in the clear. -->
+        <div role="status" aria-label="Sticky Notice"
+             style="position: fixed; left: 0; top: 280px; width: 100%; height: 40px;
+                    background: rgba(0,0,0,0.7); z-index: 100;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    val tallButtonLine = text.lines().find { it.contains("\"Tall Button\"") }
+    assertNotNull(tallButtonLine, "'Tall Button' should be present in:\n$text")
+    assertFalse(
+      tallButtonLine.contains("(occluded)"),
+      "Partial bottom-edge cover should NOT flag the button as occluded: $tallButtonLine",
+    )
+  }
+
+  /**
+   * Element fully covered by a stacked-z overlay even though the overlay is
+   * an EARLIER sibling in document order. Document order alone isn't enough
+   * to determine paint order; z-index decides. The browser's elementFromPoint
+   * respects z-index, so we get the right answer for free.
+   */
+  @Test
+  fun `element covered by earlier-sibling overlay with higher z-index is flagged occluded`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <!-- Overlay appears FIRST in document order, but z-index puts it on top. -->
+        <div role="dialog" aria-label="Z-Stacked Overlay"
+             style="position: absolute; left: 30px; top: 30px; width: 300px; height: 200px;
+                    background: rgba(0,0,255,0.9); z-index: 50;"></div>
+        <button id="under-overlay" style="position: absolute; left: 80px; top: 80px; width: 120px; height: 40px;">Stacked-Covered Button</button>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Stacked-Covered Button\""),
+      "Button covered by earlier-sibling overlay with higher z-index should be filtered: $text",
+    )
+  }
+
+  /**
+   * Joint case: an element is BOTH offscreen AND occluded. With both detail
+   * flags requested, only one annotation kind appears — the implementation
+   * marks offscreen first and bails on the occlusion check (occlusion is
+   * meaningless for elements outside the viewport).
+   */
+  @Test
+  fun `offscreen elements bypass the occlusion check entirely`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="visible-btn" style="position: absolute; left: 50px; top: 50px; width: 120px; height: 40px;">Visible Above</button>
+        <div role="dialog" aria-label="Big Overlay"
+             style="position: fixed; left: 0; top: 0; width: 100%; height: 1500px;
+                    background: rgba(0,0,0,0.5); z-index: 999;"></div>
+        <!-- Way below the 800px viewport, behind a tall overlay -->
+        <button id="offscreen-btn" style="position: absolute; left: 50px; top: 1200px; width: 120px; height: 40px;">Far Below</button>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(
+        ViewHierarchyDetail.OFFSCREEN_ELEMENTS,
+        ViewHierarchyDetail.OCCLUDED_ELEMENTS,
+      ),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    val farBelowLine = text.lines().find { it.contains("\"Far Below\"") }
+    assertNotNull(farBelowLine, "Should find 'Far Below' element with both flags set:\n$text")
+    // Should be annotated offscreen, NOT occluded — the offscreen path is checked
+    // first and we skip the occlusion check for offscreen elements (it's meaningless
+    // outside the viewport).
+    assertTrue(
+      farBelowLine.contains("(offscreen)"),
+      "Far Below should be annotated offscreen: $farBelowLine",
+    )
+    assertFalse(
+      farBelowLine.contains("(occluded)"),
+      "Far Below should NOT be annotated occluded (it's offscreen — the occlusion check is skipped): $farBelowLine",
+    )
+  }
+
+  /**
+   * Same-page combination: one element offscreen and one element occluded.
+   * By default both are filtered with their respective summary lines.
+   */
+  @Test
+  fun `default filtering produces separate summary lines for offscreen and occluded`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="visible-btn" style="position: absolute; left: 50px; top: 50px; width: 120px; height: 40px;">Always Visible</button>
+        <button id="covered-btn" style="position: absolute; left: 50px; top: 200px; width: 120px; height: 40px;">In-Viewport Covered</button>
+        <div role="dialog" aria-label="Mid Overlay"
+             style="position: fixed; left: 30px; top: 180px; width: 300px; height: 100px;
+                    background: rgba(0,0,0,0.8); z-index: 999;"></div>
+        <div style="height: 2000px;"></div>
+        <button id="scroll-btn" style="position: absolute; left: 50px; top: 1200px; width: 120px; height: 40px;">Below Fold</button>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // Both kinds of hidden elements get their own summary line so the LLM sees
+    // exactly which detail flag to request for which kind.
+    assertTrue(text.contains("offscreen elements hidden"), "Should have offscreen summary:\n$text")
+    assertTrue(text.contains("occluded elements hidden"), "Should have occluded summary:\n$text")
+    assertTrue(text.contains("request OFFSCREEN_ELEMENTS"), "Should mention OFFSCREEN_ELEMENTS:\n$text")
+    assertTrue(text.contains("request OCCLUDED_ELEMENTS"), "Should mention OCCLUDED_ELEMENTS:\n$text")
+    // Visible-button stays.
+    assertTrue(text.contains("\"Always Visible\""), "Visible button should remain:\n$text")
+    // Both filtered elements are gone.
+    assertFalse(text.contains("\"In-Viewport Covered\""), "Covered button should be filtered:\n$text")
+    assertFalse(text.contains("\"Below Fold\""), "Offscreen button should be filtered:\n$text")
+  }
+
+  /**
+   * Regression guard for the batched-bounds path: bounds emitted by
+   * [BATCH_VIEWPORT_CHECK_JS] must match what [Locator.boundingBox] returns
+   * (within rounding). The old [annotationElements] path did N CDP
+   * [boundingBox] calls; the new path reads bounds out of the batched JS
+   * payload. If the batched bounds drift from the locator-based bounds, the
+   * set-of-mark overlay would draw boxes at the wrong positions.
+   */
+  @Test
+  fun `annotation bounds from batched JS match locator-based boundingBox`() {
+    page.setContent(testHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val annotations = screenState.annotationElements
+    assertNotNull(annotations, "Should produce annotations")
+    assertTrue(annotations.isNotEmpty(), "Should produce at least one annotation")
+
+    for (annotation in annotations) {
+      val refLabel = annotation.refLabel ?: continue
+      val elementRef = screenState.elementIdMapping[refLabel] ?: continue
+      val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+      if (locator.count() == 0) continue
+      val box = locator.boundingBox() ?: continue
+      // Allow ±2px rounding tolerance (Math.round vs. raw float)
+      val tolerance = 2
+      assertTrue(
+        kotlin.math.abs(annotation.bounds.left - box.x.toInt()) <= tolerance,
+        "$refLabel left mismatch: batched=${annotation.bounds.left} locator=${box.x.toInt()}",
+      )
+      assertTrue(
+        kotlin.math.abs(annotation.bounds.top - box.y.toInt()) <= tolerance,
+        "$refLabel top mismatch: batched=${annotation.bounds.top} locator=${box.y.toInt()}",
+      )
+      assertTrue(
+        kotlin.math.abs((annotation.bounds.right - annotation.bounds.left) - box.width.toInt()) <= tolerance,
+        "$refLabel width mismatch: batched=${annotation.bounds.right - annotation.bounds.left} locator=${box.width.toInt()}",
+      )
+      assertTrue(
+        kotlin.math.abs((annotation.bounds.bottom - annotation.bounds.top) - box.height.toInt()) <= tolerance,
+        "$refLabel height mismatch: batched=${annotation.bounds.bottom - annotation.bounds.top} locator=${box.height.toInt()}",
+      )
+    }
+  }
+
+  /**
+   * Empty page (no interactive content): visibility computation must not
+   * crash and must produce no annotations. Regression guard for the
+   * `compact.elementIdMapping.isEmpty()` early-out.
+   */
+  @Test
+  fun `empty page produces no annotations and does not crash visibility check`() {
+    page.setContent("<!DOCTYPE html><html><body></body></html>")
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    // Text view shouldn't crash and shouldn't contain spurious summary lines.
+    val text = screenState.viewHierarchyTextRepresentation!!
+    assertFalse(text.contains("occluded elements hidden"))
+    assertFalse(text.contains("offscreen elements hidden"))
+
+    // No annotations to paint.
+    val annotations = screenState.annotationElements
+    assertTrue(
+      annotations == null || annotations.isEmpty(),
+      "Empty page should produce zero annotations, got $annotations",
+    )
+  }
+
+  /**
+   * Compose-Web-Wasm fail-open: on canvas-rendered pages, `elementFromPoint`
+   * returns the canvas for every interior point. Naive occlusion-by-hit-test
+   * would flag every accessibility-overlay element as occluded and we'd produce
+   * zero annotations.
+   *
+   * The per-element fail-open in BATCH_VIEWPORT_CHECK_JS catches this: when
+   * `elementFromPoint` returns CANVAS/HTML/BODY for an element's center, the
+   * hit-test isn't a trustworthy signal for that element and we leave it
+   * unflagged rather than falsely mark it occluded. Bounds + offscreen still
+   * work since they don't depend on hit-testing.
+   */
+  @Test
+  fun `canvas-rendered page does not falsely flag accessibility elements as occluded`() {
+    // A canvas absolutely-positioned at top:0, left:0, full viewport — so
+    // elementFromPoint(vw/2, vh/2) hits the canvas. The two role=button divs
+    // sit at corners where the canvas is technically still on top but the buttons
+    // are also at the same position. The point of this fixture is the sentinel:
+    // because the viewport center hits a CANVAS tag, occlusionReliable=false and
+    // we skip occlusion filtering entirely.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <canvas width="1280" height="800" style="position: absolute; top: 0; left: 0; width: 1280px; height: 800px;"></canvas>
+        <div role="button" aria-label="Wasm Button A"
+             style="position: absolute; top: 100px; left: 100px; width: 80px; height: 40px;"></div>
+        <div role="button" aria-label="Wasm Button B"
+             style="position: absolute; top: 200px; left: 100px; width: 80px; height: 40px;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // Both wasm-style buttons should survive — the sentinel-canvas fail-open
+    // drops the (unreliable) occlusion verdict and keeps them in the list.
+    assertTrue(
+      text.contains("\"Wasm Button A\""),
+      "Canvas-page button A should NOT be filtered (occlusion-check unreliable on canvas pages):\n$text",
+    )
+    assertTrue(
+      text.contains("\"Wasm Button B\""),
+      "Canvas-page button B should NOT be filtered (occlusion-check unreliable on canvas pages):\n$text",
+    )
+    assertFalse(
+      text.contains("occluded elements hidden"),
+      "Should not have any occluded summary on a canvas-rendered page, but got:\n$text",
+    )
+  }
 }

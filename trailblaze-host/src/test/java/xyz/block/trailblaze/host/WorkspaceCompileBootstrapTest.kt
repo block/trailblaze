@@ -47,6 +47,54 @@ class WorkspaceCompileBootstrapTest {
     )
 
   @Test
+  fun `pack referencing a workspace-authored toolset compiles cleanly`() {
+    // Regression: before WorkspaceCompileBootstrap wired its referenceSource to the
+    // workspace filesystem, a pack that referenced its own `<workspace>/trails/config/toolsets/
+    // <id>.yaml` would compile-fail with "unknown toolset" because the compiler defaulted
+    // to a classpath-only resource source. The end-user reproducer: a `wikipedia_extras`
+    // workspace toolset listed in a pack's `platforms.android.tool_sets:` and authored as a
+    // workspace file rather than a classpath resource. The pack-resolved toolset wasn't on
+    // the classpath, so reference validation rejected it even though it sat right next to
+    // the pack on disk.
+    val configDir = tempFolder.newFolder("trails", "config")
+    val packsDir = File(configDir, "packs").apply { mkdirs() }
+    val toolsetsDir = File(configDir, "toolsets").apply { mkdirs() }
+    File(toolsetsDir, "workspace_extras.yaml").writeText(
+      """
+      id: workspace_extras
+      description: "Workspace-authored toolset that only exists on disk."
+      drivers:
+        - android-ondevice-instrumentation
+      tools:
+        - launchApp
+      """.trimIndent(),
+    )
+    val packDir = File(packsDir, "workspaceapp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: workspaceapp
+      target:
+        display_name: Workspace App
+        platforms:
+          android:
+            app_ids:
+              - com.example.workspace
+            tool_sets:
+              - workspace_extras
+      """.trimIndent(),
+    )
+
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.Recompiled(emitted = 1), result)
+    assertTrue(
+      File(targetsDir(configDir), "workspaceapp.yaml").isFile,
+      "Compile must succeed and emit the target YAML when the pack's referenced toolset " +
+        "lives only on the workspace filesystem, not the classpath.",
+    )
+  }
+
+  @Test
   fun `no packs directory returns NoWorkspacePacks`() {
     val configDir = tempFolder.newFolder("trails", "config")
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")

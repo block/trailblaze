@@ -109,6 +109,24 @@ data class TrailblazeServerState(
     val cliDevicePlatform: String? = null,
     // Agent execution location: true = host controls via RPC, false = agent runs entirely on-device
     val preferHostAgent: Boolean = true,
+    // Save the set-of-mark annotated screenshot variant to logs. The annotated
+    // bytes are *always* sent to the LLM (set-of-mark improves model accuracy);
+    // this flag only controls which variant gets persisted to `LogsRepo` for
+    // inspection. When false, the un-annotated (raw) screenshot is saved
+    // instead — useful when the saved screenshots feed downstream tooling that
+    // wants clean pixels (e.g. waypoint authoring promotes raw screenshots as
+    // committed examples).
+    val saveAnnotatedScreenshots: Boolean = true,
+    /**
+     * Persisted per-machine cap on LLM calls per objective for the legacy TRAILBLAZE_RUNNER
+     * agent. Set via `trailblaze config max-llm-calls <N>`. The CLI flag, the
+     * `TRAILBLAZE_MAX_LLM_CALLS` env var, and workspace `trailblaze.yaml`
+     * `defaults.max-llm-calls` all take precedence over this field; it kicks in only when
+     * the higher tiers are silent. Null = inherit from those tiers (or fall back to the
+     * runner's built-in default when they are all silent). See
+     * `TrailCommand.resolveEffectiveMaxLlmCalls` for the full chain.
+     */
+    val maxLlmCalls: Int? = null,
   )
 
   @Serializable

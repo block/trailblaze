@@ -8,12 +8,12 @@
 Usage: trailblaze trail [-hvV] [--capture-all] [--capture-logcat]
                         [--capture-network] [--[no-]capture-video] [--[no-]
                         headless] [--markdown] [--no-daemon] [--no-logging]
-                        [--no-record] [--no-report] [--self-heal]
-                        [--use-recorded-steps] [-a=<agent>]
+                        [--no-record] [--no-report] [--self-heal] [--[no-]
+                        use-recorded-steps] [-a=<agent>]
                         [--compose-port=<composePort>] [-d=<device>]
                         [--driver=<driverType>] [--llm=<llm>]
                         [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
-                        <trailFile>...
+                        [--max-llm-calls=<maxLlmCalls>] <trailFile>...
 Run a trail file (.trail.yaml) — execute a scripted test on a device
       <trailFile>...         One or more trail files (.trail.yaml or blaze.
                                yaml). Use your shell's glob to run a batch (e.
@@ -53,6 +53,13 @@ Run a trail file (.trail.yaml) — execute a scripted test on a device
                              LLM provider override (e.g., openai, anthropic,
                                google)
       --markdown             Generate a markdown report after execution
+      --max-llm-calls=<maxLlmCalls>
+                             Cap the number of LLM calls per objective for the
+                               legacy TRAILBLAZE_RUNNER agent. Useful on
+                               metered or expensive providers to cut off a
+                               stuck self-heal loop. Must be a positive
+                               integer. Default: 50 (the runner's built-in
+                               cap). Not compatible with --agent MULTI_AGENT_V3.
       --no-daemon            Run in-process without delegating to or starting a
                                persistent daemon. The server shuts down when
                                the run completes.
@@ -66,7 +73,19 @@ Run a trail file (.trail.yaml) — execute a scripted test on a device
                                config self-heal' setting for this run. Omit to
                                inherit the saved setting (opt-in, off by
                                default).
-      --use-recorded-steps   Use recorded tool sequences instead of LLM
-                               inference
+      --[no-]use-recorded-steps
+                             Three-way switch for replay vs. AI-driven
+                               execution:
+                               --use-recorded-steps      Force replay mode (use
+                               the trail's `recording:` tools verbatim).
+                               --no-use-recorded-steps   Force AI mode (ignore
+                               any recordings; LLM drives each step from `step:
+                               ` NL).
+                               (unset, default)          Auto-detect: AI mode
+                               if no `recording:` blocks present, replay if
+                               they are.
+                             Use --no-use-recorded-steps to re-run a trail with
+                               stale selectors and let the agent re-pick
+                               selectors from current page state.
   -v, --verbose              Enable verbose output
   -V, --version              Print version information and exit.

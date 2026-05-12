@@ -2,7 +2,7 @@ package xyz.block.trailblaze.viewhierarchy
 
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TrailblazeElementSelector
-import xyz.block.trailblaze.api.TrailblazeElementSelector.Companion.isBlank
+import xyz.block.trailblaze.api.isBlank
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 

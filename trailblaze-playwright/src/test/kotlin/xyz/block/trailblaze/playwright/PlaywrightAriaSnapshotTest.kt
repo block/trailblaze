@@ -170,6 +170,90 @@ class PlaywrightAriaSnapshotTest {
   }
 
   @Test
+  fun `interactive controls are marked imageAnnotatable`() {
+    val yaml = """
+      - document:
+        - button "Submit"
+        - link "Home"
+        - textbox "Email"
+        - checkbox "Agree"
+        - tab "Details"
+        - combobox "Size"
+        - slider "Volume"
+    """.trimIndent()
+
+    val result = PlaywrightAriaSnapshot.buildCompactElementList(yaml)
+    assertEquals(7, result.elementIdMapping.size)
+    for ((id, ref) in result.elementIdMapping) {
+      assertTrue(ref.imageAnnotatable, "$id (${ref.descriptor}) should be imageAnnotatable")
+    }
+  }
+
+  @Test
+  fun `cells rows headings and generic named elements are NOT imageAnnotatable`() {
+    // Dense-table case: the LLM should still see cells/headings in the text view so it
+    // can reference them by name, but they must NOT paint boxes on the screenshot.
+    val yaml = """
+      - document:
+        - table:
+          - cell "1772f32a"
+          - cell "Available"
+          - cell "${'$'}12.34"
+        - heading "Item Library" [level=1]
+        - text: Plain row label
+        - button "Save"
+    """.trimIndent()
+
+    val result = PlaywrightAriaSnapshot.buildCompactElementList(yaml)
+
+    // Find each kind by descriptor and check the imageAnnotatable flag
+    val annotatableDescriptors = result.elementIdMapping.values
+      .filter { it.imageAnnotatable }
+      .map { it.descriptor }
+    val nonAnnotatableDescriptors = result.elementIdMapping.values
+      .filterNot { it.imageAnnotatable }
+      .map { it.descriptor }
+
+    // Only the button should get a box drawn.
+    assertContains(annotatableDescriptors, "button \"Save\"")
+    assertEquals(1, annotatableDescriptors.size, "Expected only the button to be image-annotatable")
+
+    // Cells, heading, and plain text are present in the text view but NOT annotatable.
+    assertTrue(
+      nonAnnotatableDescriptors.any { it.startsWith("cell ") },
+      "Cells should appear in text view but not be image-annotatable: $nonAnnotatableDescriptors",
+    )
+    assertTrue(
+      nonAnnotatableDescriptors.any { it.startsWith("heading ") },
+      "Headings should appear in text view but not be image-annotatable: $nonAnnotatableDescriptors",
+    )
+  }
+
+  @Test
+  fun `text representation still includes non-annotatable elements with eN IDs`() {
+    // Regression guard for the Tier 1 contract: the text view must remain broad even
+    // though the image annotation set is narrow. The LLM still needs to be able to
+    // reference rows / cells / headings by their `[eN]` ID in tool calls.
+    val yaml = """
+      - document:
+        - table:
+          - cell "Item A"
+          - cell "Item B"
+        - heading "Items" [level=1]
+    """.trimIndent()
+
+    val result = PlaywrightAriaSnapshot.buildCompactElementList(yaml)
+
+    // All three non-interactive named elements must still appear with their IDs.
+    assertContains(result.text, "cell \"Item A\"")
+    assertContains(result.text, "cell \"Item B\"")
+    assertContains(result.text, "heading \"Items\"")
+    assertEquals(3, result.elementIdMapping.size)
+    // ...even though none of them are image-annotatable.
+    assertTrue(result.elementIdMapping.values.none { it.imageAnnotatable })
+  }
+
+  @Test
   fun `special characters in text are preserved`() {
     val yaml = """
       - document:

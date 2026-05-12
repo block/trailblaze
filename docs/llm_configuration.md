@@ -328,6 +328,41 @@ adb shell am instrument \
 
 If neither a config file nor a `trailblaze.llm.default_model` arg is present, `AndroidLlmClientResolver` auto-detects the provider from the first available API key token. The provider priority order is: OpenAI, OpenRouter, Anthropic, Google, Ollama. The provider's `default_model` (defined in the built-in provider YAML) is used. This order is defined in [`PROVIDER_PRIORITY` in `AndroidLlmClientResolver`](https://github.com/block/trailblaze/blob/main/trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt).
 
+### Custom `openai_compatible` providers on-device
+
+> **Scope of this section.** The args below describe the contract honored by the **daemon-driven on-device path** — i.e. when the desktop app or CLI ships a trail to the device through `AndroidStandaloneServerTest`, which delegates to [`OnDeviceOpenAICompatibleLlmClientFactory`](https://github.com/block/trailblaze/blob/main/trailblaze-android/src/main/java/xyz/block/trailblaze/android/OnDeviceOpenAICompatibleLlmClientFactory.kt). The instrumentation-test path documented in "Standalone instrumentation tests" above (running `AndroidTrailblazeRule` directly without a host) goes through a separate, narrower openai_compatible code path in [`AndroidLlmClientResolver.createClient`](https://github.com/block/trailblaze/blob/main/trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt) that currently only honors `base_url` and the per-provider auth token — `provider.type`, `chat_completions_path`, `headers`, and `auth_required` are not yet wired through it. Consolidating those two on-device paths is tracked as a follow-up; until that lands, the args below apply only to the daemon-driven path.
+
+A workspace `openai_compatible` provider (Azure, vLLM, LM Studio, custom gateways, etc.) reaches the on-device APK through a small set of additional instrumentation args. When you run trails via the desktop daemon, the host emits these args automatically. When you run `am instrument` directly (e.g. CI pipelines outside the daemon, custom test rigs), you can pass them yourself.
+
+> **Security note.** Tokens and credential-bearing headers passed as `-e` args on the `am instrument` command line appear in `ps -ef` output (visible to other users on the device for the lifetime of the process), shell history files (`~/.bash_history`, `~/.zsh_history`), and CI build logs (which often persist for weeks). For real credentials, prefer the **desktop daemon path** — it resolves tokens from env vars via the `auth.env_var` field in your workspace `trailblaze.yaml` and never puts them on a command line. The direct `am instrument` recipe below is best treated as a debugging tool, not a production CI pattern. Header values passed via `provider.headers` can also carry secrets (tenant tokens, signed routing keys, etc.) — treat them with the same care.
+
+```bash
+adb shell am instrument \
+  -e trailblaze.llm.default_model "my_gateway/some-model-id" \
+  -e trailblaze.llm.provider.type "openai_compatible" \
+  -e trailblaze.llm.provider.base_url "https://my-gateway.example.com" \
+  -e trailblaze.llm.provider.chat_completions_path "v1/chat/completions" \
+  -e trailblaze.llm.provider.headers '{"X-Tenant":"acme","X-Route":"default"}' \
+  -e trailblaze.llm.provider.auth_required "true" \
+  -e trailblaze.llm.auth.token.my_gateway "your-token-here" \
+  -w com.example.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Each arg, in detail:
+
+| Arg | Required | Value |
+|-----|----------|-------|
+| `trailblaze.llm.provider.type` | Yes | Must be `openai_compatible` (case-insensitive). Without this, the on-device factory skips custom-provider registration and falls back to the built-in OpenAI/Ollama/NONE map. |
+| `trailblaze.llm.provider.base_url` | Yes | Gateway endpoint (e.g. `https://my-gateway.example.com`). |
+| `trailblaze.llm.provider.chat_completions_path` | No | Custom path appended to `base_url`. Supports `{{model_id}}` substitution at the device — useful for per-deployment serving endpoints. |
+| `trailblaze.llm.provider.headers` | No | JSON-encoded `Map<String, String>` of static request headers (e.g. tenant/routing keys). Malformed JSON is tolerated with a warning and proceeds with no static headers. |
+| `trailblaze.llm.provider.auth_required` | No | `"true"` (default) or `"false"`. When `false`, the on-device client is constructed even if no auth token is present — useful for local LLM servers that don't need auth. |
+| `trailblaze.llm.auth.token.<provider_id>` | Yes (unless `auth_required=false`) | The provider's auth token. The `<provider_id>` segment must match the `id` of the active provider (e.g. `trailblaze.llm.auth.token.my_gateway` if `default_model=my_gateway/...`). |
+
+**Important:** the host already encodes provider metadata correctly when you use the desktop daemon — the args above are mostly relevant when you're running `am instrument` directly. The on-device factory ([`OnDeviceOpenAICompatibleLlmClientFactory`](https://github.com/block/trailblaze/blob/main/trailblaze-android/src/main/java/xyz/block/trailblaze/android/OnDeviceOpenAICompatibleLlmClientFactory.kt)) is the authoritative parser of these keys.
+
+If `auth_required=true` but no token arg is passed, the on-device runner fails fast with a clear error message naming the provider id and pointing at the remediation paths (set the env var, or set `auth.required: false` in your workspace yaml). This is by design — without it, the failure would surface several frames later as a generic "Unsupported provider" error that's hard to diagnose without source access. Note: this fail-fast lives in `OnDeviceOpenAICompatibleLlmClientFactory`; the older `AndroidLlmClientResolver` openai_compatible branch used by `AndroidTrailblazeRule` doesn't yet have the equivalent guard — it silently skips registering the custom client when the token is missing, and `DefaultDynamicLlmClient.createLlmClient()` then throws the generic "Unsupported provider" error a few frames later. The consolidation follow-up above brings both paths into parity.
+
 ## Built-in Models
 
 Trailblaze ships with a registry of models from major providers. See [Built-in LLM Models](generated/LLM_MODELS.md) for the full list with pricing and capabilities.

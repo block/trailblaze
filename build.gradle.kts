@@ -127,20 +127,3 @@ subprojects
     }
   }
 
-/**
- * Standard baseline map for dependency-guard that normalizes platform-specific dependency names.
- * This allows baselines to work across macOS and Linux machines.
- *
- * Usage in module build.gradle.kts:
- * ```
- * dependencyGuard {
- *   configuration("runtimeClasspath") {
- *     baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
- *   }
- * }
- * ```
- */
-extra["trailblazePlatformBaselineMap"] = { dep: String ->
-  dep.replace("-macos-arm64", "_PLATFORM_")
-    .replace("-linux-x64", "_PLATFORM_")
-}

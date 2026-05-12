@@ -662,6 +662,197 @@ class TrailblazePackManifestLoaderTest {
     }
   }
 
+  // ==========================================================================
+  // mcp_servers[].script path rewrite. Relative paths in pack manifests resolve
+  // against the pack manifest's directory so a pack is self-contained: the
+  // loader normalizes them to absolute paths and validates existence at load
+  // time, before any subprocess spawn. Absolute paths and `command:` entries
+  // pass through unchanged. Classpath packs can't host subprocess servers, so
+  // the loader rejects `mcp_servers:` on those entries.
+  // ==========================================================================
+
+  @Test
+  fun `loader rewrites relative mcp_servers script paths to absolute under the pack dir`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      File(tempDir, "tools").mkdirs()
+      val scriptFile = File(tempDir, "tools/server.ts").apply { writeText("// stub\n") }
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: rewrite-test
+          target:
+            display_name: Rewrite Test
+            mcp_servers:
+              - script: ./tools/server.ts
+          """.trimIndent(),
+        )
+      }
+
+      val resolved = TrailblazePackManifestLoader.load(packFile).manifest.target?.mcpServers
+      assertNotNull(resolved)
+      assertEquals(1, resolved.size)
+      assertEquals(scriptFile.absolutePath, resolved[0].script)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `loader leaves absolute mcp_servers script paths unchanged`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val scriptFile = File(tempDir, "external.ts").apply { writeText("// stub\n") }
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: absolute-test
+          target:
+            display_name: Absolute Test
+            mcp_servers:
+              - script: ${scriptFile.absolutePath}
+          """.trimIndent(),
+        )
+      }
+
+      val resolved = TrailblazePackManifestLoader.load(packFile).manifest.target?.mcpServers
+      assertNotNull(resolved)
+      assertEquals(scriptFile.absolutePath, resolved[0].script)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `loader throws when relative mcp_servers script does not exist on disk`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: missing-test
+          target:
+            display_name: Missing Test
+            mcp_servers:
+              - script: ./tools/does-not-exist.ts
+          """.trimIndent(),
+        )
+      }
+
+      val thrown = kotlin.runCatching { TrailblazePackManifestLoader.load(packFile) }.exceptionOrNull()
+      assertNotNull(thrown)
+      assertTrue(thrown is TrailblazeProjectConfigException, "expected TrailblazeProjectConfigException, got $thrown")
+      val message = thrown.message.orEmpty()
+      assertTrue(message.contains("./tools/does-not-exist.ts"), "expected message to name the raw path, got: $message")
+      assertTrue(message.contains("not found"), "expected 'not found' in message, got: $message")
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `loader rejects mcp_servers on classpath-loaded packs`() {
+    TrailblazePackManifestLoader.clearClasspathPackCacheForTesting()
+    val root = newTempDir()
+    val packDir = File(root, "trailblaze-config/packs/classpath-mcp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: classpath-mcp
+      target:
+        display_name: Classpath MCP
+        mcp_servers:
+          - script: ./tools/server.ts
+      """.trimIndent(),
+    )
+
+    withClasspathRoot(root) {
+      // Discovery itself is resilient — a classpath pack with mcp_servers is logged + skipped,
+      // not surfaced as a thrown exception, so the result list omits the rejected pack.
+      val discovered = TrailblazePackManifestLoader.discoverAndLoadFromClasspath()
+      assertFalse(
+        discovered.any { it.manifest.id == "classpath-mcp" },
+        "expected classpath pack with mcp_servers to be skipped, but it was discovered: ${discovered.map { it.manifest.id }}",
+      )
+      assertTrue(
+        capturedText().contains("classpath") && capturedText().contains("mcp_servers"),
+        "expected warning about classpath packs and mcp_servers, got: ${capturedText()}",
+      )
+    }
+  }
+
+  @Test
+  fun `loader passes through command-only mcp_servers entries untouched`() {
+    // `command:` entries (no `script:`) have no path to rewrite, so the resolver should
+    // leave them exactly as-authored. Pins the `if (rawScript == null) return@map entry`
+    // early-return branch.
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: cmd-test
+          target:
+            display_name: Command Test
+            mcp_servers:
+              - command: python
+                args: [foo.py, --flag]
+                env:
+                  FOO: bar
+          """.trimIndent(),
+        )
+      }
+
+      val resolved = TrailblazePackManifestLoader.load(packFile).manifest.target?.mcpServers
+      assertNotNull(resolved)
+      assertEquals(1, resolved.size)
+      assertEquals(null, resolved[0].script)
+      assertEquals("python", resolved[0].command)
+      assertEquals(listOf("foo.py", "--flag"), resolved[0].args)
+      assertEquals(mapOf("FOO" to "bar"), resolved[0].env)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `loader rejects relative mcp_servers script that escapes the pack dir`() {
+    // Defense in depth: `Path.normalize()` collapses `..` segments but doesn't reject
+    // them — without the canonical-containment check, a relative path like
+    // `../sibling.ts` would resolve outside the pack if such a file existed on disk.
+    // The loader must reject these so `mcp_servers:` matches the same self-containment
+    // guarantee `tools[].script` has (via TrailblazePackBundler.resolvePackRelativeToolFile).
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      // Create the escape target (a real file outside the pack dir) so the test exercises
+      // the containment check rather than just tripping the file-not-found check.
+      val outsideTarget = File(tempDir, "sibling.ts").apply { writeText("// outside\n") }
+      val packDir = File(tempDir, "pack-inside").apply { mkdirs() }
+      val packFile = File(packDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: escape-test
+          target:
+            display_name: Escape Test
+            mcp_servers:
+              - script: ../sibling.ts
+          """.trimIndent(),
+        )
+      }
+      // Sanity — the escape target must really exist so the test isolates the containment
+      // failure from a generic file-not-found.
+      assertTrue(outsideTarget.isFile)
+
+      val thrown = kotlin.runCatching { TrailblazePackManifestLoader.load(packFile) }.exceptionOrNull()
+      assertNotNull(thrown)
+      assertTrue(thrown is TrailblazeProjectConfigException, "expected TrailblazeProjectConfigException, got $thrown")
+      val message = thrown.message.orEmpty()
+      assertTrue(message.contains("resolves outside the pack directory"), "expected escape detection, got: $message")
+      assertTrue(message.contains("../sibling.ts"), "expected message to name the raw path, got: $message")
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
   @Test
   fun `target pack with waypoints loads cleanly`() {
     val tempDir = createTempDirectory("pack-loader-test").toFile()

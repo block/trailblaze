@@ -8,7 +8,9 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.messageContains
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -31,6 +33,7 @@ import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -442,6 +445,85 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         )
     }
     assertThat(result).isNull()
+  }
+
+  /** Without the breaker a wedged emulator hangs the trail for the full per-tool RPC budget;
+   *  trip early with a TrailblazeException naming the device-unhealthy state. */
+  @Test
+  fun `circuit breaker trips after 3 consecutive UiAutomation-wedge GetScreenState failures`() {
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"UNKNOWN_ERROR","message":"GetScreenState failed",""" +
+        """"details":"java.lang.RuntimeException: Error while connecting UiAutomation@1a3e9fe""" +
+        """ caused by android.os.DeadObjectException"}"""
+    }
+
+    val agent = createAgent()
+    val failure: Throwable? = runBlocking {
+      assertThat(agent.captureScreenState()).isNull()
+      assertThat(agent.captureScreenState()).isNull()
+      try {
+        agent.captureScreenState()
+        null
+      } catch (t: Throwable) {
+        t
+      }
+    }
+    assertThat(failure).isNotNull()
+    assertThat(failure!!).isInstanceOf(TrailblazeException::class)
+    assertThat(failure).messageContains("Device unhealthy")
+    assertThat(failure).messageContains("Error while connecting UiAutomation")
+  }
+
+  /** Reset on any successful capture: an unbroken streak of wedge-signature failures
+   *  trips the breaker, but a clean success in between resets the counter. */
+  @Test
+  fun `circuit breaker resets on intervening success`() {
+    val healthy = AtomicBoolean(false)
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      if (healthy.get()) {
+        HttpStatusCode.OK to
+          """{"viewHierarchy":{},"screenshotBase64":null,"deviceWidth":1080,"deviceHeight":1920}"""
+      } else {
+        HttpStatusCode.InternalServerError to
+          """{"errorType":"UNKNOWN_ERROR","message":"GetScreenState failed",""" +
+          """"details":"java.lang.RuntimeException: Error while connecting UiAutomation@1a3e9fe""" +
+          """ caused by android.os.DeadObjectException"}"""
+      }
+    }
+
+    val agent = createAgent()
+    runBlocking {
+      assertThat(agent.captureScreenState()).isNull()
+      assertThat(agent.captureScreenState()).isNull()
+      // Flip the mock healthy: the next capture succeeds and must reset the counter.
+      healthy.set(true)
+      assertThat(agent.captureScreenState()).isNotNull()
+      // Flip back to wedged: two more failures alone must NOT trip — counter is 0 again.
+      healthy.set(false)
+      assertThat(agent.captureScreenState()).isNull()
+      assertThat(agent.captureScreenState()).isNull()
+    }
+  }
+
+  /** Non-wedge failures (network, generic 500s) must NOT count against the breaker —
+   *  an unrelated flake shouldn't falsely abort an otherwise-recoverable trail. */
+  @Test
+  fun `circuit breaker ignores non-wedge GetScreenState failures`() {
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"NETWORK_ERROR","message":"Network error during RPC call",""" +
+        """"details":"Failed to connect to localhost/127.0.0.1:56166"}"""
+    }
+
+    val agent = createAgent()
+    // Even after 5 non-wedge failures the breaker must NOT throw — the existing retry path
+    // returns null and the caller decides what to do.
+    runBlocking {
+      repeat(5) {
+        assertThat(agent.captureScreenState()).isNull()
+      }
+    }
   }
 
   @Test

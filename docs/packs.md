@@ -118,6 +118,37 @@ rules:
 The migrated `contacts` pack (39 lines → 18 lines) is a worked example — see
 `trailblaze-models/src/commonMain/resources/trailblaze-config/packs/contacts/pack.yaml`.
 
+## Tool flavors: which kind do I write?
+
+A pack can contribute two flavors of custom tool. They share the `<pack>/tools/`
+directory but bind through entirely different mechanisms — easy to copy-paste-confuse,
+so this table is the rubric:
+
+| | **Scripted (TypeScript)** | **Pure-YAML composed** |
+| --- | --- | --- |
+| Filename | `<id>.yaml` + `<id>.ts` (pair) | `<id>.tool.yaml` (note the double suffix) |
+| Body | JavaScript/TypeScript in the sibling `.ts` | `tools:` block — declarative composition of existing tools |
+| Manifest entry | Listed under `target.tools:` in `pack.yaml` | **Auto-discovered** — do NOT list in `pack.yaml` |
+| Surfaced to a target via | Direct `target.tools:` reference | A toolset (`<workspace>/trails/config/toolsets/<id>.yaml` or `<pack>/toolsets/<id>.yaml`) that names the tool, declared from `platforms.<p>.tool_sets:` |
+| Param schema field | `inputSchema:` (map keyed by param name) | `parameters:` (list of `{name, type, required?, description?}`) |
+| Host vs on-device | Honors `requiresHost: true` on the descriptor (gate at registration time) | Workspace tools default to `requires_host: true` (config can't ship on-device); bundled framework `*.tool.yaml` runs on either side because the file is on both classpaths |
+| Pick when | You need branching, retries, async, multi-step orchestration | You need a thin wrapper that substitutes parameters into existing tool calls |
+
+The two most common mistakes when authoring a pack from scratch:
+
+1. **Listing a `.tool.yaml` under `target.tools:` in `pack.yaml`.** The framework treats
+   `target.tools:` entries as scripted tool descriptors and tries to decode each one as a
+   `PackScriptedToolFile` (which needs `script:` and `name:`). The loader now intercepts
+   `.tool.yaml` paths and emits an actionable diagnostic that names the offending path
+   and points at the auto-discovery convention. If you see
+   `Pack '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...`,
+   delete that entry from the manifest — leave the file in place.
+
+2. **Using `parameters:` (list) in a scripted descriptor or `inputSchema:` (map) in a
+   pure-YAML composed tool.** Each flavor uses a different shape; the other shape is
+   silently ignored by the YAML decoder. Symptom: the tool registers but params behave
+   as if the schema were empty. Check the columns above when params aren't flowing.
+
 ## Per-file scripted tools
 
 This section is the **schema reference**. For a step-by-step authoring walkthrough that
@@ -163,7 +194,7 @@ suffix. The loader enforces that the file's content matches what the suffix prom
 
 | Suffix              | Pack subdir   | Class      | Available when                       | Required block       |
 | ------------------- | ------------- | ---------- | ------------------------------------ | -------------------- |
-| `*.tool.yaml`       | `tools/`      | tool       | toolset rules (existing)             | (none)               |
+| `*.tool.yaml`       | `tools/`      | tool       | a toolset names it under `tools:`    | (none)               |
 | `*.shortcut.yaml`   | `shortcuts/`  | shortcut   | current waypoint matches `from`      | `shortcut:`          |
 | `*.trailhead.yaml`  | `trailheads/` | trailhead  | always (bootstrap from any state)    | `trailhead:`         |
 
@@ -175,6 +206,17 @@ discovery works.
 The three classes share one data class (`ToolYamlConfig`) with two optional metadata
 blocks (`shortcut`, `trailhead`); they're mutually exclusive — a tool can't be both a
 shortcut and a trailhead.
+
+> **Workspace `*.tool.yaml` auto-discovery.** A workspace-authored pure-YAML composed
+> tool is discoverable by the resolver at session start (no manifest entry needed), but
+> the framework only surfaces it to a target when **some toolset names it under `tools:`**.
+> The common shape is one workspace toolset at `<workspace>/trails/config/toolsets/<id>.yaml`
+> (or `<pack>/toolsets/<id>.yaml`) that lists the tool, and one target referencing that
+> toolset under `platforms.<p>.tool_sets:`. Workspace tools default to host-side
+> execution (`requires_host = true` implicit) — the framework's bundled `*.tool.yaml`
+> resources ride on both host and device classpaths and execute on whichever side runs
+> them, but workspace files only live on the host, so the dispatcher routes them locally.
+> Authors who explicitly set `requires_host: false` keep that explicit value.
 
 ### Shortcut tools
 

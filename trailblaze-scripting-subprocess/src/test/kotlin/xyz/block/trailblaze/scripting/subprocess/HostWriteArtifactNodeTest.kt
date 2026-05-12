@@ -70,7 +70,7 @@ class HostWriteArtifactNodeTest {
      */
     private val hostWriteArtifactExampleFile: File = run {
       val relative =
-        "examples/android-sample-app/trails/config/mcp-sdk/host_writeArtifact.js"
+        "examples/android-sample-app/trails/config/packs/sampleapp/tools/host_writeArtifact.js"
       var cursor: File? = File(System.getProperty("user.dir")).absoluteFile
       while (cursor != null) {
         val candidate = cursor.resolve(relative)
@@ -90,7 +90,7 @@ class HostWriteArtifactNodeTest {
       )
       check(hostWriteArtifactExampleFile.isFile) {
         "host_writeArtifact.js not found via walk-up from cwd=${System.getProperty("user.dir")}; " +
-          "expected at examples/android-sample-app/trails/config/mcp-sdk/host_writeArtifact.js"
+          "expected at examples/android-sample-app/trails/config/packs/sampleapp/tools/host_writeArtifact.js"
       }
       workDir = Files.createTempDirectory("host_writeArtifact_node_test_").toFile()
       runnerFile = File(workDir, "runner.mjs").apply {

@@ -76,4 +76,17 @@ data class TrailblazeProjectConfig(
 data class ProjectDefaults(
   @SerialName("target") val target: String? = null,
   @SerialName("llm") val llm: String? = null,
+  /**
+   * Team-wide cap on LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent.
+   * Committed alongside the project so every developer / CI runner inherits the same
+   * default without each invocation needing to pass `--max-llm-calls` or set
+   * `TRAILBLAZE_MAX_LLM_CALLS`. Per-run CLI flag and env var still win when set; the
+   * persisted per-machine `trailblaze config max-llm-calls` setting is consulted only
+   * when this workspace value is absent.
+   *
+   * Must be a positive integer when set. Validation happens at the resolver site rather
+   * than `init` so a malformed workspace file can be ignored with a warning rather than
+   * crashing every CLI invocation in that workspace.
+   */
+  @SerialName("max-llm-calls") val maxLlmCalls: Int? = null,
 )

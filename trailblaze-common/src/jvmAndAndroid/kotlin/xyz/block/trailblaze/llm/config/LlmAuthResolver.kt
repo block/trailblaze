@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.llm.config
 
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
@@ -45,6 +48,59 @@ object LlmAuthResolver {
 
   /** Instrumentation arg for the default model key (e.g., "openai/gpt-4.1"). */
   const val DEFAULT_MODEL_ARG = "trailblaze.llm.default_model"
+
+  /**
+   * Instrumentation arg carrying the selected provider's static request headers as a
+   * JSON-encoded `Map<String, String>`. Some openai_compatible gateways require static
+   * headers for routing, tenant identity, use-case tagging, or feature flags. These come
+   * from `providers.<id>.headers` in the workspace `trailblaze.yaml`.
+   */
+  const val HEADERS_ARG = "trailblaze.llm.provider.headers"
+
+  /**
+   * Instrumentation arg encoding whether the selected provider's auth token is required
+   * (`"true"` / `"false"`). Mirrors `auth.required` in the workspace yaml. When `false`,
+   * the on-device client constructs without throwing if the token is absent.
+   */
+  const val AUTH_REQUIRED_ARG = "trailblaze.llm.provider.auth_required"
+
+  /**
+   * Pure decision: given the persisted (provider, model) selection from
+   * `SavedTrailblazeAppConfig`, what should we pass to [toInstrumentationArgs] as
+   * `selectedProviderId` / `defaultModel`?
+   *
+   * Returns `(null, null)` when no real LLM is configured — either half is blank, or the
+   * user explicitly selected the [TrailblazeLlmProvider.NONE] sentinel via
+   * `trailblaze config llm none`. Without this guard we would ship `default_model=none/none`
+   * to the device, where the on-device resolver would then try to parse it as a real
+   * provider/model key. Centralized here so both host paths (trail-run and
+   * session-start/MCP-bridge) cannot drift if the selection rules grow new sentinels.
+   *
+   * Pure function — no I/O, no settings lookup — so unit tests can exercise every branch
+   * deterministically without network or filesystem.
+   */
+  fun selectedLlmInstrumentationArgs(
+    persistedProviderId: String,
+    persistedModelId: String,
+  ): SelectedLlmInstrumentationArgs {
+    val configured =
+      persistedProviderId.isNotBlank() &&
+        persistedModelId.isNotBlank() &&
+        persistedProviderId != TrailblazeLlmProvider.NONE.id
+    return if (configured) {
+      SelectedLlmInstrumentationArgs(
+        selectedProviderId = persistedProviderId,
+        defaultModel = "$persistedProviderId/$persistedModelId",
+      )
+    } else {
+      SelectedLlmInstrumentationArgs(selectedProviderId = null, defaultModel = null)
+    }
+  }
+
+  data class SelectedLlmInstrumentationArgs(
+    val selectedProviderId: String?,
+    val defaultModel: String?,
+  )
 
   /**
    * Resolves auth for all providers in the config.
@@ -100,6 +156,13 @@ object LlmAuthResolver {
         config.type?.let { put(PROVIDER_TYPE_ARG, it.name.lowercase()) }
         config.baseUrl?.let { put(BASE_URL_ARG, it) }
         config.chatCompletionsPath?.let { put(CHAT_COMPLETIONS_PATH_ARG, it) }
+        if (config.headers.isNotEmpty()) {
+          put(
+            HEADERS_ARG,
+            Json.encodeToString(MapSerializer(String.serializer(), String.serializer()), config.headers),
+          )
+        }
+        config.auth.required?.let { put(AUTH_REQUIRED_ARG, it.toString()) }
       }
     }
 

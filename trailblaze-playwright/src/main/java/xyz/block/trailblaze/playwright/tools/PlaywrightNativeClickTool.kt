@@ -45,13 +45,14 @@ class PlaywrightNativeClickTool(
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
-      val box = locator!!.first().boundingBox()
-        ?: return TrailblazeToolResult.Error.ExceptionThrown(
-          "Element '$description' has no bounding box (not visible or zero-sized).",
-        )
-      val centerX = box.x + box.width / 2
-      val centerY = box.y + box.height / 2
-      page.mouse().click(centerX, centerY)
+      // Use Playwright's locator-driven click rather than `page.mouse().click(coords)`.
+      // This inherits the full actionability gate (visible, stable, **receives events**,
+      // enabled) so clicks that would silently land on the wrong element (e.g. an
+      // animating overlay, a slot-projected label, a not-yet-hydrated component) error
+      // out loudly with a diagnostic instead of firing into the void. The agent already
+      // pre-resolves the click center in `resolveToolCenter` for the screenshot overlay,
+      // so we don't need to compute coords here.
+      locator!!.first().click()
 
       val urlAfter = page.url()
       val navigated = urlBefore != urlAfter

@@ -12,32 +12,21 @@
       tools:
       - tapOnElementBySelector:
           reason: Tap the 'Tap Me' button as required by the objective. This is the first tap out of three.
-          selector:
-            containsChild:
-              textRegex: Tap Me
           nodeSelector:
             androidAccessibility:
               textRegex: Tap Me
       - tapOnElementBySelector:
           reason: This is the second tap on the 'Tap Me' button as required by the objective.
-          selector:
-            containsChild:
-              textRegex: Tap Me
           nodeSelector:
             androidAccessibility:
               textRegex: Tap Me
       - tapOnElementBySelector:
           reason: This is the third and final tap on the 'Tap Me' button to reach a tap count of 3, per the objective.
-          selector:
-            containsChild:
-              textRegex: Tap Me
           nodeSelector:
             androidAccessibility:
               textRegex: Tap Me
       - assertVisibleBySelector:
           reason: Confirm that the tap count displays as 3 after tapping the 'Tap Me' button three times.
-          selector:
-            textRegex: 'Tap Count: 3'
           nodeSelector:
             androidAccessibility:
               textRegex: 'Tap Count: 3'
@@ -46,9 +35,6 @@
       tools:
       - assertVisibleBySelector:
           reason: This is the clickable View containing the TextView labeled 'Now Enabled!', which is the button that needs to be verified as visible and enabled according to the objective.
-          selector:
-            containsChild:
-              textRegex: Now Enabled!
           nodeSelector:
             androidAccessibility:
               textRegex: Now Enabled!
@@ -57,8 +43,6 @@
       tools:
       - tapOnElementBySelector:
           reason: The element with nodeId 10 has the accessibility description 'accessibility_tap_button' as requested in the objective.
-          selector:
-            textRegex: accessibility_tap_button
           nodeSelector:
             androidAccessibility:
               textRegex: A11y Tap
@@ -67,18 +51,12 @@
       tools:
       - tapOnElementBySelector:
           reason: To open the long press dialog, I need to long press the 'Long Press Me' button as the first step.
-          selector:
-            containsChild:
-              textRegex: Long Press Me
           longPress: true
           nodeSelector:
             androidAccessibility:
               textRegex: Long Press Me
       - tapOnElementBySelector:
           reason: The dialog displayed after the long press contains a 'Copy' button. Tapping 'Copy' will dismiss the dialog, completing the objective.
-          selector:
-            containsChild:
-              textRegex: Copy
           nodeSelector:
             androidAccessibility:
               textRegex: Copy
@@ -87,9 +65,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Tap on the 'Toggle A' button as required by the objective.
-          selector:
-            containsChild:
-              textRegex: Toggle A
           nodeSelector:
             androidAccessibility:
               textRegex: Toggle A
@@ -100,8 +75,6 @@
             is checked. The wait above ensures Compose has recomposed and the
             AccessibilityDelegate has synced the checked=true state to UiAutomator
             before the assertion runs.
-          selector:
-            checked: true
           nodeSelector:
             androidAccessibility:
               textRegex: Toggle A

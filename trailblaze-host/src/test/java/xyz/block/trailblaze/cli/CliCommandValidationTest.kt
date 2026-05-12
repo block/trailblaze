@@ -2,6 +2,7 @@ package xyz.block.trailblaze.cli
 
 import java.io.File
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import picocli.CommandLine
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -196,6 +197,86 @@ class CliCommandValidationTest {
     cmdLine.parseArgs("any.trail.yaml")
 
     assertNull(cmd.selfHeal)
+  }
+
+  @Test
+  fun `trail --max-llm-calls 0 returns USAGE`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--max-llm-calls", "0", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `trail --max-llm-calls negative returns USAGE`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--max-llm-calls", "-5", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `trail --max-llm-calls with --agent MULTI_AGENT_V3 returns USAGE`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--max-llm-calls", "5", "--agent", "MULTI_AGENT_V3", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `trail with persisted max-llm-calls plus --agent V3 returns USAGE`() {
+    // Regression: the V3 incompatibility check originally only fired when the CLI flag was
+    // set, so a non-null cap reaching the resolver via env / workspace / persisted tiers
+    // would silently slip past USAGE validation and trip RunYamlRequest.init with an
+    // IllegalArgumentException. The check now runs on the resolved value, catching every
+    // tier — exercised here through the persisted-config tier (easiest to set up in a unit
+    // test without mutating the JVM environment).
+    val priorAppDataDir = System.getProperty("trailblaze.appdata.dir")
+    val tempFolder = TemporaryFolder().apply { create() }
+    try {
+      val appDataDir = tempFolder.newFolder("appdata")
+      System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+      CliConfigHelper.updateConfig { it.copy(maxLlmCalls = 12) }
+
+      val cmd = TrailCommand()
+      CommandLine(cmd).parseArgs("--agent", "MULTI_AGENT_V3", "any.trail.yaml")
+      assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    } finally {
+      tempFolder.delete()
+      if (priorAppDataDir == null) {
+        System.clearProperty("trailblaze.appdata.dir")
+      } else {
+        System.setProperty("trailblaze.appdata.dir", priorAppDataDir)
+      }
+    }
+  }
+
+  @Test
+  fun `trail --max-llm-calls is null when the flag is not passed`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+
+    cmdLine.parseArgs("any.trail.yaml")
+
+    assertNull(cmd.maxLlmCalls)
+  }
+
+  @Test
+  fun `resolveEffectiveMaxLlmCalls returns CLI flag value when set`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--max-llm-calls", "42", "any.trail.yaml")
+
+    assertEquals(42, cmd.resolveEffectiveMaxLlmCalls())
   }
 
   // ---------------------------------------------------------------------------

@@ -41,7 +41,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `single pack with one scripted tool emits a typed entry`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "alpha",
       packYaml = """
@@ -69,8 +68,8 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "alpha").readText()
 
     assertTrue("rendered: $rendered") { rendered.contains("declare module \"@trailblaze/scripting\"") }
     assertTrue("rendered: $rendered") { rendered.contains("interface TrailblazeToolMap") }
@@ -85,7 +84,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `enum field becomes a string-literal union`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -108,8 +106,8 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
 
     assertTrue("rendered: $rendered") { rendered.contains("mode: \"fast\" | \"slow\";") }
   }
@@ -117,7 +115,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `array and boolean and object types translate to TS equivalents`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -145,8 +142,8 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
 
     assertTrue("rendered: $rendered") { rendered.contains("tags: unknown[];") }
     assertTrue("rendered: $rendered") { rendered.contains("enabled: boolean;") }
@@ -158,7 +155,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `empty inputSchema renders Record string never`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -178,16 +174,19 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
 
     assertTrue("rendered: $rendered") { rendered.contains("noargs: Record<string, never>;") }
   }
 
   @Test
-  fun `duplicate tool names across packs fail with a clear message`() {
+  fun `same tool name in two different packs is allowed (per-pack scoping)`() {
+    // Per-pack output: each pack writes its own .d.ts, so two packs declaring the same
+    // tool name no longer collide at the bundler level — they live in separate
+    // augmentation files. Cross-pack collisions (when both .d.ts files end up in the
+    // same tsconfig include scope) are TypeScript's job to surface.
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "alpha",
       packYaml = """
@@ -227,16 +226,56 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> {
-      runGenerator(packsDir, outputDir)
-    }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("Duplicate scripted tool name 'sharedTool'") == true }
+    runGenerator(packsDir)
+
+    val alphaRendered = dtsFile(packsDir, "alpha").readText()
+    val betaRendered = dtsFile(packsDir, "beta").readText()
+    assertTrue("alpha: $alphaRendered") { alphaRendered.contains("sharedTool: {") && alphaRendered.contains("x: string;") }
+    assertTrue("beta: $betaRendered") { betaRendered.contains("sharedTool: {") && betaRendered.contains("y: number;") }
   }
 
   @Test
-  fun `multi-pack output is sorted by tool name`() {
+  fun `same tool name twice inside one pack fails with a clear message`() {
+    // Per-pack dedup still applies — a typo in the same pack that registers two YAML
+    // descriptors with the same `name:` would silently produce a broken `.d.ts` without
+    // this guard.
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - tools/a.yaml
+            - tools/b.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/a.yaml",
+      toolYaml = """
+        script: ./tools/a.js
+        name: dupTool
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/b.yaml",
+      toolYaml = """
+        script: ./tools/b.js
+        name: dupTool
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("Duplicate scripted tool name 'dupTool'") == true }
+  }
+
+  @Test
+  fun `multi-pack run produces one dts per pack`() {
+    // With per-pack output, two packs each get their own bindings file containing only
+    // their own tools. The within-pack tool ordering is still sorted by name (only
+    // matters when a pack declares multiple tools).
+    val packsDir = newTempDir()
     writePack(
       packsDir, packId = "z",
       packYaml = """
@@ -272,18 +311,387 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
 
-    val appleAt = rendered.indexOf("appleTool:")
-    val zebraAt = rendered.indexOf("zebraTool:")
-    assertTrue("apple should be before zebra: $rendered") { appleAt in 0 until zebraAt }
+    val zRendered = dtsFile(packsDir, "z").readText()
+    val aRendered = dtsFile(packsDir, "a").readText()
+    assertTrue("z pack should contain zebraTool, not appleTool: $zRendered") {
+      zRendered.contains("zebraTool:") && !zRendered.contains("appleTool:")
+    }
+    assertTrue("a pack should contain appleTool, not zebraTool: $aRendered") {
+      aRendered.contains("appleTool:") && !aRendered.contains("zebraTool:")
+    }
+  }
+
+  @Test
+  fun `target pack inherits scripted tools from a library pack via dependencies`() {
+    // Phase 2: A target pack with `dependencies: [<library-pack-with-tools>]` should have
+    // a `.d.ts` containing BOTH its own tools AND the library pack's tools, with consistent
+    // (sorted-by-name) ordering. Mirrors the runtime-side per-target tool aggregation.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "lib",
+      packYaml = """
+        id: lib
+        target:
+          display_name: Lib
+          tools:
+            - tools/libTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "lib", toolFile = "tools/libTool.yaml",
+      toolYaml = """
+        script: ./tools/libTool.js
+        name: libTool
+        description: Provided by the library pack.
+        inputSchema:
+          payload: { type: string }
+      """.trimIndent(),
+    )
+    writePack(
+      packsDir, packId = "app",
+      packYaml = """
+        id: app
+        dependencies:
+          - lib
+        target:
+          display_name: App
+          tools:
+            - tools/appTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "app", toolFile = "tools/appTool.yaml",
+      toolYaml = """
+        script: ./tools/appTool.js
+        name: appTool
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+
+    val appRendered = dtsFile(packsDir, "app").readText()
+    assertTrue("app rendered should contain own tool appTool: $appRendered") {
+      appRendered.contains("appTool:")
+    }
+    assertTrue("app rendered should contain inherited tool libTool: $appRendered") {
+      appRendered.contains("libTool: {")
+    }
+    // The sourcePath comment on the inherited entry points at lib's tool YAML, naming the
+    // pack of origin. Authors see at-a-glance where an unexpected entry came from.
+    // (On macOS, temp dirs are symlinks under /private/var/..., so relative paths can
+    // include ../ prefixes; assert just on the trailing pack/file path that's always
+    // present in the rendered sourcePath comment.)
+    assertTrue("app rendered should attribute libTool back to lib's tool YAML: $appRendered") {
+      appRendered.contains("lib/tools/libTool.yaml")
+    }
+    // Sort order: entries are alphabetical by tool name. appTool < libTool.
+    val appIndex = appRendered.indexOf("appTool:")
+    val libIndex = appRendered.indexOf("libTool:")
+    assertTrue("expected appTool before libTool (sorted by name): app=$appIndex lib=$libIndex") {
+      appIndex in 0 until libIndex
+    }
+
+    // The library pack's own `.d.ts` should still cover only its own tools — there's no
+    // implicit self-inclusion through dependencies, and `lib` doesn't depend on `app`.
+    val libRendered = dtsFile(packsDir, "lib").readText()
+    assertTrue("lib rendered should contain libTool: $libRendered") {
+      libRendered.contains("libTool:")
+    }
+    assertTrue("lib rendered should NOT contain appTool (no reverse inheritance): $libRendered") {
+      !libRendered.contains("appTool:")
+    }
+  }
+
+  @Test
+  fun `transitive dependency chain A to B to C aggregates all three packs into A's bindings`() {
+    // Pack A depends on B; B depends on C. A's `.d.ts` should contain its own + B's + C's
+    // scripted tools. Cycle-free three-level chain validates the transitive DFS.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "c",
+      packYaml = """
+        id: c
+        target:
+          display_name: C
+          tools:
+            - tools/cTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "c", toolFile = "tools/cTool.yaml",
+      toolYaml = """
+        script: ./tools/cTool.js
+        name: cTool
+      """.trimIndent(),
+    )
+    writePack(
+      packsDir, packId = "b",
+      packYaml = """
+        id: b
+        dependencies: [c]
+        target:
+          display_name: B
+          tools:
+            - tools/bTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "b", toolFile = "tools/bTool.yaml",
+      toolYaml = """
+        script: ./tools/bTool.js
+        name: bTool
+      """.trimIndent(),
+    )
+    writePack(
+      packsDir, packId = "a",
+      packYaml = """
+        id: a
+        dependencies: [b]
+        target:
+          display_name: A
+          tools:
+            - tools/aTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "a", toolFile = "tools/aTool.yaml",
+      toolYaml = """
+        script: ./tools/aTool.js
+        name: aTool
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+
+    val aRendered = dtsFile(packsDir, "a").readText()
+    assertTrue("a should contain its own aTool: $aRendered") { aRendered.contains("aTool:") }
+    assertTrue("a should inherit bTool through 1-deep dep: $aRendered") { aRendered.contains("bTool:") }
+    assertTrue("a should inherit cTool through 2-deep transitive dep: $aRendered") { aRendered.contains("cTool:") }
+    // B inherits only C; A is not in B's closure.
+    val bRendered = dtsFile(packsDir, "b").readText()
+    assertTrue("b should NOT contain aTool: $bRendered") { !bRendered.contains("aTool:") }
+    assertTrue("b should contain bTool: $bRendered") { bRendered.contains("bTool:") }
+    assertTrue("b should inherit cTool: $bRendered") { bRendered.contains("cTool:") }
+    // C has no deps.
+    val cRendered = dtsFile(packsDir, "c").readText()
+    assertTrue("c should contain only cTool: $cRendered") {
+      cRendered.contains("cTool:") && !cRendered.contains("aTool:") && !cRendered.contains("bTool:")
+    }
+  }
+
+  @Test
+  fun `diamond dependency does not double-include the shared transitive pack's tools`() {
+    // Root depends on A and B; both A and B depend on D. D's tools must appear ONCE in
+    // root's .d.ts — a naive DFS without memoization would double-emit and produce a
+    // TypeScript declaration-merging error on the same interface key.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "d",
+      packYaml = """
+        id: d
+        target:
+          display_name: D
+          tools:
+            - tools/dTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "d", toolFile = "tools/dTool.yaml",
+      toolYaml = """
+        script: ./tools/dTool.js
+        name: dTool
+      """.trimIndent(),
+    )
+    writePack(packsDir, packId = "leftA", packYaml = "id: leftA\ndependencies: [d]\n")
+    writePack(packsDir, packId = "leftB", packYaml = "id: leftB\ndependencies: [d]\n")
+    writePack(
+      packsDir, packId = "root",
+      packYaml = """
+        id: root
+        dependencies: [leftA, leftB]
+        target:
+          display_name: Root
+          tools:
+            - tools/rootTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "root", toolFile = "tools/rootTool.yaml",
+      toolYaml = """
+        script: ./tools/rootTool.js
+        name: rootTool
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+
+    val rootRendered = dtsFile(packsDir, "root").readText()
+    // dTool must appear once; lastIndexOf == indexOf means single occurrence.
+    val firstDTool = rootRendered.indexOf("dTool:")
+    val lastDTool = rootRendered.lastIndexOf("dTool:")
+    assertTrue("dTool should appear exactly once in root bindings: first=$firstDTool last=$lastDTool") {
+      firstDTool >= 0 && firstDTool == lastDTool
+    }
+    assertTrue("rootTool present: $rootRendered") { rootRendered.contains("rootTool:") }
+  }
+
+  @Test
+  fun `missing dependency is silently skipped at build time`() {
+    // At build time the bundler can't see classpath-shipped packs (e.g. the framework
+    // `trailblaze` stdlib pack). Listing a missing dep is benign — the runtime loader's
+    // strict missing-dep check fires at daemon start, not here.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        dependencies: [trailblaze]
+        target:
+          display_name: P
+          tools:
+            - tools/pTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/pTool.yaml",
+      toolYaml = """
+        script: ./tools/pTool.js
+        name: pTool
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
+    assertTrue("p rendered should contain its own pTool: $rendered") { rendered.contains("pTool:") }
+  }
+
+  @Test
+  fun `cyclic dependencies fail loudly`() {
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "a",
+      packYaml = """
+        id: a
+        dependencies: [b]
+        target:
+          display_name: A
+          tools:
+            - tools/aTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "a", toolFile = "tools/aTool.yaml",
+      toolYaml = """
+        script: ./tools/aTool.js
+        name: aTool
+      """.trimIndent(),
+    )
+    writePack(packsDir, packId = "b", packYaml = "id: b\ndependencies: [a]\n")
+
+    val ex = assertFailsWith<TrailblazePackBundleException.CyclicDependencies> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("Cycle detected") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'a'") == true }
+  }
+
+  @Test
+  fun `self-referential dependency is detected as a cycle`() {
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        dependencies: [p]
+        target:
+          display_name: P
+          tools:
+            - tools/pTool.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/pTool.yaml",
+      toolYaml = """
+        script: ./tools/pTool.js
+        name: pTool
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.CyclicDependencies> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'p'") == true }
+  }
+
+  @Test
+  fun `same tool name in pack and dependency fails with a clear cross-pack message`() {
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "lib",
+      packYaml = """
+        id: lib
+        target:
+          display_name: Lib
+          tools:
+            - tools/clash.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "lib", toolFile = "tools/clash.yaml",
+      toolYaml = """
+        script: ./tools/clash.js
+        name: clashingName
+      """.trimIndent(),
+    )
+    writePack(
+      packsDir, packId = "consumer",
+      packYaml = """
+        id: consumer
+        dependencies: [lib]
+        target:
+          display_name: Consumer
+          tools:
+            - tools/myclash.yaml
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "consumer", toolFile = "tools/myclash.yaml",
+      toolYaml = """
+        script: ./tools/myclash.js
+        name: clashingName
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.DuplicateToolName> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("clashingName") == true &&
+        ex.message?.contains("'lib'") == true &&
+        ex.message?.contains("'consumer'") == true
+    }
+  }
+
+  @Test
+  fun `two workspace packs declaring the same id fail loudly`() {
+    // Pack ids are the dep-graph routing key — sibling collisions are non-recoverable.
+    val packsDir = newTempDir()
+    File(packsDir, "first").mkdirs()
+    File(packsDir, "first/pack.yaml").writeText("id: duplicated\n")
+    File(packsDir, "second").mkdirs()
+    File(packsDir, "second/pack.yaml").writeText("id: duplicated\n")
+
+    val ex = assertFailsWith<TrailblazePackBundleException.DuplicatePackId> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'duplicated'") == true }
   }
 
   @Test
   fun `tool name with hyphen is emitted as a quoted property`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -302,16 +710,17 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
 
     assertTrue("rendered: $rendered") { rendered.contains("\"weird-tool-name\":") }
   }
 
   @Test
-  fun `pack without target block is skipped silently`() {
+  fun `library pack with no scripted tools writes no dts file`() {
+    // Library pack (no `target:`) — bundler should silently skip emission rather than
+    // writing a placeholder `.d.ts`. A no-tools target pack behaves the same way.
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "lib",
       packYaml = """
@@ -322,16 +731,14 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
 
-    assertTrue("expected empty-fallback file: $rendered") { rendered.contains("No scripted tools found") }
+    assertTrue("expected no dts written for library pack") { !dtsFile(packsDir, "lib").exists() }
   }
 
   @Test
   fun `parent-segment tool refs are rejected`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -343,14 +750,13 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") { ex.message?.contains("'..' segments") == true }
   }
 
   @Test
   fun `absolute tool refs are rejected`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -362,14 +768,13 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") { ex.message?.contains("must not start with '/'") == true }
   }
 
   @Test
   fun `URL-encoded tool refs are rejected`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -381,7 +786,7 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") { ex.message?.contains("URL encoding") == true }
   }
 
@@ -399,8 +804,7 @@ class TrailblazePackBundlerTest {
       supportsSymlinks(),
     )
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
-    val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
+val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
       writeText(
         """
         script: ./tools/outside.js
@@ -425,7 +829,7 @@ class TrailblazePackBundlerTest {
       outsideTarget.toPath(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") {
       ex.message?.contains("resolves outside the pack directory") == true
     }
@@ -434,7 +838,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `malformed inputSchema property value fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -458,7 +861,7 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     // kaml rejects the property-value type mismatch when decoding into BundlerScriptedToolProperty;
     // the bundler wraps that as "is not a valid YAML object the bundler can parse: ...".
     assertTrue("message: ${ex.message}") {
@@ -469,7 +872,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `dangling scripted tool path fails with a clear message`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -481,15 +883,14 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") { ex.message?.contains("missing.yaml") == true }
   }
 
   @Test
   fun `target-tools as a non-list value fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
-    // Author wrote `tools: 42` instead of a list — runtime would reject; generator must too.
+// Author wrote `tools: 42` instead of a list — runtime would reject; generator must too.
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -499,7 +900,7 @@ class TrailblazePackBundlerTest {
           tools: 42
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     // kaml rejects scalar `42` when decoding into List<String>; bundler wraps the error.
     assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
   }
@@ -507,7 +908,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `target-tools containing a non-string scalar fails when the resolved path does not exist`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -531,14 +931,13 @@ class TrailblazePackBundlerTest {
     // the bundler tries to resolve `42` as a tool ref, finds no file at that path, and
     // throws "does not exist." Different surface than under SnakeYAML (which threw at
     // schema-time), same fail-loud outcome.
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") { ex.message?.contains("does not exist") == true }
   }
 
   @Test
   fun `target as a non-map value fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -546,7 +945,7 @@ class TrailblazePackBundlerTest {
         target: 42
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     // kaml rejects scalar 42 when decoding into BundlerTarget object shape.
     assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
   }
@@ -554,7 +953,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `inputSchema as a non-map value fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -573,7 +971,7 @@ class TrailblazePackBundlerTest {
         inputSchema: "string"
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     // kaml rejects the scalar string when decoding inputSchema as Map<String, ...>.
     assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
   }
@@ -581,7 +979,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `tool YAML missing the name field fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -600,7 +997,7 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
     val ex = assertFailsWith<TrailblazePackBundleException.MalformedScriptedTool> {
-      runGenerator(packsDir, outputDir)
+      runGenerator(packsDir)
     }
     // kaml rejects the missing required `name` field on BundlerToolFile.
     assertTrue("message: ${ex.message}") {
@@ -611,7 +1008,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `tool YAML with blank name field fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -634,7 +1030,7 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
     val ex = assertFailsWith<TrailblazePackBundleException.BlankToolName> {
-      runGenerator(packsDir, outputDir)
+      runGenerator(packsDir)
     }
     assertTrue("message: ${ex.message}") {
       ex.message?.contains("blank 'name' field") == true
@@ -644,7 +1040,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `tool YAML with whitespace-only name field fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -663,7 +1058,7 @@ class TrailblazePackBundlerTest {
       """.trimIndent(),
     )
     val ex = assertFailsWith<TrailblazePackBundleException.BlankToolName> {
-      runGenerator(packsDir, outputDir)
+      runGenerator(packsDir)
     }
     assertTrue("message: ${ex.message}") {
       ex.message?.contains("blank 'name' field") == true
@@ -673,7 +1068,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `numeric inputSchema property key is coerced to string and rendered as quoted property`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -698,15 +1092,14 @@ class TrailblazePackBundlerTest {
           1: { type: string }
       """.trimIndent(),
     )
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
     assertTrue("rendered: $rendered") { rendered.contains("\"1\": string;") }
   }
 
   @Test
   fun `empty enum list fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -726,7 +1119,7 @@ class TrailblazePackBundlerTest {
           mode: { type: string, enum: [] }
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") {
       ex.message?.contains("'enum' must contain at least one value") == true
     }
@@ -735,7 +1128,6 @@ class TrailblazePackBundlerTest {
   @Test
   fun `mixed-type enum is coerced to string-literal union`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -760,15 +1152,14 @@ class TrailblazePackBundlerTest {
     // error; under kaml the lenient coercion produces a `"fast" | "42"` union. Acceptable —
     // the runtime YAML loader behaves the same way, and author intent (a string-y enum) is
     // preserved.
-    runGenerator(packsDir, outputDir)
-    val rendered = File(outputDir, "tools.d.ts").readText()
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
     assertTrue("rendered: $rendered") { rendered.contains("mode: \"fast\" | \"42\";") }
   }
 
   @Test
   fun `non-list enum value fails loudly`() {
     val packsDir = newTempDir()
-    val outputDir = newTempDir()
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -788,16 +1179,48 @@ class TrailblazePackBundlerTest {
           mode: { type: string, enum: fast }
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir, outputDir) }
+    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     // kaml rejects the scalar when decoding enum as List<String>?.
     assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
+  }
+
+  @Test
+  fun `orphan cleanup leaves dts files at non-standard layouts alone`() {
+    // The orphan-cleanup filter requires the file shape `<packDir>/tools/.trailblaze/tools.d.ts`
+    // — verifying parent==`.trailblaze` AND grandparent==`tools`. A file at any other depth
+    // that happens to be named `tools.d.ts` inside a `.trailblaze/` directory (e.g. an
+    // author-created `unrelated/.trailblaze/tools.d.ts`) must NOT be deleted by cleanup.
+    // Without the grandparent check, a future refactor that drops it would silently start
+    // sweeping files outside the bundler's own output shape.
+    val packsDir = newTempDir()
+    // A pack is present so `generate()` runs the cleanup pass.
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools: []
+      """.trimIndent(),
+    )
+    // Plant a file matching the bundler's filename + `.trailblaze` parent, but with a
+    // grandparent that is NOT `tools/`. Cleanup must leave it alone.
+    val outOfShape = File(packsDir, "unrelated/.trailblaze/tools.d.ts")
+    outOfShape.parentFile.mkdirs()
+    outOfShape.writeText("// author-created, not bundler-managed\nexport {};\n")
+
+    runGenerator(packsDir)
+
+    assertTrue("non-bundler `.trailblaze/tools.d.ts` must not be swept: $outOfShape") {
+      outOfShape.exists()
+    }
   }
 
   // ---- Fixtures ----
 
   private fun newTempDir(): File = createTempDirectory("trailblaze-bindings-test").toFile().also(tempDirs::add)
 
-  private fun writePack(packsDir: File, packId: String, packYaml: String) {
+  private fun     writePack(packsDir: File, packId: String, packYaml: String) {
     val dir = File(packsDir, packId).apply { mkdirs() }
     File(dir, "pack.yaml").writeText(packYaml)
   }
@@ -808,9 +1231,13 @@ class TrailblazePackBundlerTest {
     out.writeText(toolYaml)
   }
 
-  private fun runGenerator(packsDir: File, outputDir: File) {
-    TrailblazePackBundler(packsDir = packsDir, outputDir = outputDir).generate()
+  private fun runGenerator(packsDir: File) {
+    TrailblazePackBundler(packsDir = packsDir).generate()
   }
+
+  /** Resolves the per-pack `tools.d.ts` location the bundler now writes to. */
+  private fun dtsFile(packsDir: File, packId: String): File =
+    File(packsDir, "$packId/tools/.trailblaze/tools.d.ts")
 
   /**
    * Probe for symlink-creation support — `Files.createSymbolicLink` requires elevated

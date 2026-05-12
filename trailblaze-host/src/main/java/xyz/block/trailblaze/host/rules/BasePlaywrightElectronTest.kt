@@ -62,6 +62,8 @@ class BasePlaywrightElectronTest(
   val trailblazeDeviceId: TrailblazeDeviceId,
   val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
+  /** Per-objective LLM call cap. See [BasePlaywrightNativeTest.maxLlmCalls] for semantics. */
+  val maxLlmCalls: Int? = null,
 ) {
 
   /** Manages the Electron app process (if we launched it). */
@@ -126,6 +128,7 @@ class BasePlaywrightElectronTest(
       systemPromptTemplate = PLAYWRIGHT_ELECTRON_SYSTEM_PROMPT,
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
     )
   }
 
@@ -161,11 +164,13 @@ class BasePlaywrightElectronTest(
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
+    // `useRecordedSteps` is forwarded to `runPromptSuspend` to switch the agent loop
+    // between recording-replay and live-LLM mode. As of the playwright-mcp settle
+    // adoption, Playwright-layer settling (PlaywrightPageManager.dispatchAndAwaitSettle)
+    // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ) {
-    playwrightAgent.skipPostActionDomStability = useRecordedSteps
-
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->

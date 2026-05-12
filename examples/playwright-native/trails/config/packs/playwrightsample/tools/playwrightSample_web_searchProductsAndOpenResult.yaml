@@ -1,4 +1,4 @@
-script: ./trails/config/tools/playwrightSample_web_searchProductsAndOpenResult.js
+script: ./playwrightSample_web_searchProductsAndOpenResult.js
 name: playwrightSample_web_searchProductsAndOpenResult
 description: Search the products demo, open one result, and verify its detail text.
 _meta:

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
@@ -10,6 +11,7 @@ import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -83,6 +85,10 @@ class HostOnDeviceRpcTrailblazeAgent(
   /** Last observed RPC failure from [captureScreenState], surfaced by [screenStateProvider]. */
   @Volatile private var lastCaptureFailure: String? = null
 
+  /** Consecutive wedge-signature [captureScreenState] failures; trips circuit breaker
+   *  at [MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES] to fail fast on dead `system_server`. */
+  private val consecutiveDeviceWedgeFailures = AtomicInteger(0)
+
   /** RPC-backed screen state provider for the host-side TrailblazeRunner. */
   val screenStateProvider: () -> ScreenState = {
     runBlocking { captureScreenState() }
@@ -107,7 +113,11 @@ class HostOnDeviceRpcTrailblazeAgent(
   suspend fun captureScreenState(includeScreenshot: Boolean = true): ScreenState? {
     val request = GetScreenStateRequest(includeScreenshot = includeScreenshot)
     when (val first = rpcClient.rpcCall(request)) {
-      is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
+      is RpcResult.Success -> {
+        consecutiveDeviceWedgeFailures.set(0)
+        lastCaptureFailure = null
+        return RpcScreenStateAdapter.from(first.data)
+      }
       is RpcResult.Failure -> {
         val detail = first.message + (first.details?.let { " | $it" } ?: "")
         lastCaptureFailure = detail
@@ -124,13 +134,15 @@ class HostOnDeviceRpcTrailblazeAgent(
         requireAndroidAccessibilityService = requireAndroidAccessibilityServiceOnRewarm,
       )
     } catch (e: Exception) {
-      val detail = "re-warm failed: ${e.message}"
+      val detail = "re-warm failed: ${e.message} | runner_pid=${rpcClient.probeRunnerPid()}"
       lastCaptureFailure = "$lastCaptureFailure | $detail"
       Console.log("[HostOnDeviceRpcAgent] $detail")
+      tripCircuitBreakerIfDeviceWedged()
       return null
     }
     return when (val retry = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> {
+        consecutiveDeviceWedgeFailures.set(0)
         lastCaptureFailure = null
         RpcScreenStateAdapter.from(retry.data)
       }
@@ -142,9 +154,41 @@ class HostOnDeviceRpcTrailblazeAgent(
             "${retry.errorType}: ${retry.message}" +
             (retry.details?.let { "\n  Details: $it" } ?: ""),
         )
+        tripCircuitBreakerIfDeviceWedged()
         null
       }
     }
+  }
+
+  /** Circuit breaker for a wedged `system_server`: cache-clear-and-reconnect can't recover
+   *  a dead remote, so fail fast after N consecutive wedge-signature failures. */
+  private fun tripCircuitBreakerIfDeviceWedged() {
+    val detail = lastCaptureFailure ?: return
+    val matchesWedge = DEVICE_WEDGE_SIGNATURES.any { detail.contains(it) }
+    if (!matchesWedge) {
+      consecutiveDeviceWedgeFailures.set(0)
+      return
+    }
+    val count = consecutiveDeviceWedgeFailures.incrementAndGet()
+    if (count >= MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES) {
+      throw TrailblazeException(
+        "Device unhealthy: $count consecutive GetScreenState " +
+          "failures matched a UiAutomation-wedge signature (system_server appears dead). " +
+          "Aborting trail — restart the emulator / device to recover. " +
+          "Last failure: $detail",
+      )
+    }
+  }
+
+  companion object {
+    private const val MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES = 3
+
+    /** Substrings identifying a wedged-device failure vs a recoverable transient
+     *  (daemon log: `Error while connecting UiAutomation` / `DeadObjectException`). */
+    private val DEVICE_WEDGE_SIGNATURES = listOf(
+      "Error while connecting UiAutomation",
+      "DeadObjectException",
+    )
   }
 
   override fun executeTool(
@@ -302,7 +346,7 @@ class HostOnDeviceRpcTrailblazeAgent(
                 requireAndroidAccessibilityService = requireAndroidAccessibilityServiceOnRewarm,
               )
             } catch (e: Exception) {
-              val detail = "re-warm failed: ${e.message}"
+              val detail = "re-warm failed: ${e.message} | runner_pid=${rpcClient.probeRunnerPid()}"
               Console.log("[HostOnDeviceRpcAgent] $detail")
               return@runBlocking TrailblazeToolResult.Error.ExceptionThrown(
                 errorMessage = "RPC call failed for '$name': $firstDetail | $detail",

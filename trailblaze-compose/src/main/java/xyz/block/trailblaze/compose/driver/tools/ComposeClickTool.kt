@@ -42,8 +42,7 @@ class ComposeClickTool(
           )
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
       val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
-      target.click(node)
-      target.waitForIdle()
+      target.dispatchAndAwaitSettle { target.click(node) }
       TrailblazeToolResult.Success(message = "Clicked on '$description'.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Click failed on '$description': ${e.message}")

@@ -8,6 +8,8 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -42,6 +44,7 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
+import java.nio.file.Paths
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
@@ -86,9 +89,16 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["--use-recorded-steps"],
-    description = ["Use recorded tool sequences instead of LLM inference"]
+    description = [
+      "Three-way switch for replay vs. AI-driven execution:",
+      "  --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).",
+      "  --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).",
+      "  (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are.",
+      "Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state.",
+    ],
+    negatable = true,
   )
-  var useRecordedSteps: Boolean = false
+  var useRecordedSteps: Boolean? = null
 
   @Option(
     names = ["--self-heal"],
@@ -150,6 +160,17 @@ open class TrailCommand : Callable<Int> {
     description = ["LLM model ID override (e.g., gemini-3-flash, gpt-4-1)"]
   )
   var llmModel: String? = null
+
+  @Option(
+    names = ["--max-llm-calls"],
+    description = [
+      "Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. " +
+        "Useful on metered or expensive providers to cut off a stuck self-heal loop. " +
+        "Must be a positive integer. Default: 50 (the runner's built-in cap). " +
+        "Not compatible with --agent MULTI_AGENT_V3."
+    ]
+  )
+  var maxLlmCalls: Int? = null
 
   @Option(
     names = ["--no-report"],
@@ -252,6 +273,36 @@ open class TrailCommand : Callable<Int> {
         llmProvider = parts[0]
         llmModel = parts[1]
       }
+    }
+
+    // Validate --max-llm-calls flag value early so a CLI typo (e.g. `--max-llm-calls 0`)
+    // exits USAGE rather than later tripping the model-layer require with an
+    // IllegalArgumentException. Non-flag tiers (env / workspace / persisted) get their
+    // own warn-and-fall-through validation inside resolveEffectiveMaxLlmCalls().
+    maxLlmCalls?.let { cap ->
+      if (cap <= 0) {
+        Console.error("Error: --max-llm-calls must be a positive integer (got $cap).")
+        return CommandLine.ExitCode.USAGE
+      }
+    }
+
+    // Agent-incompatibility check fires on the *resolved* value — any tier that contributes
+    // a non-null cap (CLI flag, env var, workspace yaml, persisted config) combined with
+    // MULTI_AGENT_V3 produces the same friendly USAGE exit instead of an
+    // IllegalArgumentException from RunYamlRequest.init. The resolver is cheap enough to call
+    // twice (once here, once at request construction); workspace yaml lookup is the only I/O
+    // and it's a one-off file read.
+    if (resolveEffectiveMaxLlmCalls() != null &&
+      agent.equals(AgentImplementation.MULTI_AGENT_V3.name, ignoreCase = true)
+    ) {
+      Console.error(
+        "Error: max-llm-calls is not supported with --agent ${AgentImplementation.MULTI_AGENT_V3.name}. " +
+          "The V3 agent has its own iteration limits; use those instead. " +
+          "Clear the cap by omitting --max-llm-calls, unsetting TRAILBLAZE_MAX_LLM_CALLS, " +
+          "removing defaults.max-llm-calls from trailblaze.yaml, or running " +
+          "`trailblaze config max-llm-calls unset`.",
+      )
+      return CommandLine.ExitCode.USAGE
     }
 
     // Resolve --device: flag takes priority, fall back to config default.
@@ -420,14 +471,17 @@ open class TrailCommand : Callable<Int> {
         deviceId = device,
         llmProvider = llmProvider,
         llmModel = llmModel,
-        useRecordedSteps = useRecordedSteps,
+        useRecordedSteps = resolveUseRecordedSteps(yamlContent),
         // --show-browser is the legacy flag; --headless is the new spelling. Either
         // produces a visible browser when explicitly requested. Both are off by default.
         showBrowser = showBrowser || !headless,
         noLogging = noLogging,
         agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
         selfHeal = selfHeal,
+        captureVideo = captureVideo || captureAll,
+        captureLogcat = captureLogcat || captureAll,
         captureNetworkTraffic = captureNetwork || captureAll,
+        maxLlmCalls = resolveEffectiveMaxLlmCalls(),
       )
 
       val response = daemon.runSync(request) { progress ->
@@ -724,14 +778,7 @@ open class TrailCommand : Callable<Int> {
 
     val testName = deriveTestName(file)
 
-    // Auto-detect recorded steps: if the trail YAML contains recordings, use them.
-    val effectiveUseRecordedSteps = useRecordedSteps || try {
-      val trailYaml = createTrailblazeYaml()
-      val trailItems = trailYaml.decodeTrail(yamlContent)
-      trailYaml.hasRecordedSteps(trailItems)
-    } catch (_: Exception) {
-      false
-    }
+    val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
 
     // Pin a session ID upfront so the post-completion status check can target THIS
     // trail's session rather than enumerating every "new" session in the logs repo.
@@ -758,6 +805,7 @@ open class TrailCommand : Callable<Int> {
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
+      maxLlmCalls = resolveEffectiveMaxLlmCalls(),
     )
 
     return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file, pinnedSessionId)
@@ -1147,6 +1195,108 @@ open class TrailCommand : Callable<Int> {
       ?: System.getenv("TRAILBLAZE_SELF_HEAL_ENABLED")?.lowercase()?.toBooleanStrictOrNull()
       ?: CliConfigHelper.readConfig()?.selfHealEnabled
       ?: false
+
+  /**
+   * Resolves the effective per-objective LLM call cap for this run, honoring:
+   *   1. `--max-llm-calls` CLI flag (explicit per-run intent).
+   *   2. `TRAILBLAZE_MAX_LLM_CALLS` env var (CI / pipeline cap — a build runner sets this
+   *      once on shared steps rather than passing the flag per invocation).
+   *   3. Workspace `trailblaze.yaml` `defaults.maxLlmCalls` (committed team-wide default —
+   *      everyone in the workspace inherits the same cap without per-machine setup).
+   *   4. Persisted per-machine `trailblaze config max-llm-calls` setting (individual
+   *      developer's local fallback when the workspace file is silent).
+   *   5. `null` — the legacy [xyz.block.trailblaze.agent.TrailblazeRunner] falls back to its
+   *      own built-in [xyz.block.trailblaze.agent.TrailblazeRunner.DEFAULT_MAX_STEPS].
+   *
+   * Returns `null` (not a default integer) so the model-layer guard on `RunYamlRequest.init`
+   * sees "unspecified" rather than a sentinel and only the runner constructor materializes
+   * the default. Each tier is independently validated: malformed values (non-integer or
+   * non-positive) fall through to the next tier with a single warning rather than crashing
+   * the invocation.
+   */
+  internal fun resolveEffectiveMaxLlmCalls(): Int? = resolveEffectiveMaxLlmCalls(
+    cwd = Paths.get(""),
+    envReader = { name -> System.getenv(name) },
+    persistedConfigReader = { CliConfigHelper.readConfig()?.maxLlmCalls },
+  )
+
+  /**
+   * Testable overload — callers can inject [cwd] (used to discover the workspace
+   * `trailblaze.yaml`), an [envReader] for the env-var tier, and a
+   * [persistedConfigReader] for the persisted-config tier. The default-arg overload above
+   * binds these to real process state.
+   */
+  internal fun resolveEffectiveMaxLlmCalls(
+    cwd: java.nio.file.Path,
+    envReader: (String) -> String?,
+    persistedConfigReader: () -> Int?,
+  ): Int? =
+    maxLlmCalls
+      ?: parsePositiveIntOrWarn(envReader("TRAILBLAZE_MAX_LLM_CALLS"), "TRAILBLAZE_MAX_LLM_CALLS env var")
+      ?: workspaceMaxLlmCalls(cwd)
+      ?: parsePositiveIntOrWarn(
+        persistedConfigReader(),
+        "persisted `trailblaze config max-llm-calls` value",
+      )
+
+  /**
+   * Reads `defaults.maxLlmCalls` from the workspace `trailblaze.yaml` discovered from
+   * [cwd], or null when no workspace file resolves or the field is absent / invalid.
+   * Loader failures are caught and logged so a parse error in the workspace file never
+   * blocks a CLI invocation — the cap falls through to the persisted-config tier instead.
+   */
+  private fun workspaceMaxLlmCalls(cwd: java.nio.file.Path): Int? {
+    val resolved = try {
+      TrailblazeWorkspaceConfigResolver.resolve(cwd)
+    } catch (e: Exception) {
+      Console.log("Skipping workspace trailblaze.yaml for max-llm-calls: ${e.message}")
+      return null
+    }
+    val configFile = resolved.configFile ?: return null
+    val rawValue = try {
+      TrailblazeProjectConfigLoader.load(configFile)?.raw?.defaults?.maxLlmCalls
+    } catch (e: Exception) {
+      Console.log("Skipping workspace trailblaze.yaml for max-llm-calls: ${e.message}")
+      return null
+    }
+    return parsePositiveIntOrWarn(rawValue, "${configFile.absolutePath} defaults.max-llm-calls")
+  }
+
+  private fun parsePositiveIntOrWarn(raw: String?, source: String): Int? {
+    if (raw == null) return null
+    val parsed = raw.toIntOrNull()
+    if (parsed == null || parsed <= 0) {
+      Console.error("Ignoring $source=\"$raw\" — expected a positive integer.")
+      return null
+    }
+    return parsed
+  }
+
+  private fun parsePositiveIntOrWarn(raw: Int?, source: String): Int? {
+    if (raw == null) return null
+    if (raw <= 0) {
+      Console.error("Ignoring $source=$raw — expected a positive integer.")
+      return null
+    }
+    return raw
+  }
+
+  /**
+   * Three-way resolution for replay vs. AI-driven execution:
+   *   `--use-recorded-steps`      → force replay (use the trail's `recording:` tools verbatim).
+   *   `--no-use-recorded-steps`   → force AI (ignore recordings, drive every step via LLM).
+   *   (unset, null)               → auto-detect: AI mode if no `recording:` blocks present, replay if they are.
+   *
+   * Use `--no-use-recorded-steps` to re-run a trail with stale selectors and let the agent
+   * re-pick selectors from current page state (which writes a fresh enriched recording).
+   */
+  private fun resolveUseRecordedSteps(yamlContent: String): Boolean =
+    useRecordedSteps ?: try {
+      val trailYaml = createTrailblazeYaml()
+      trailYaml.hasRecordedSteps(trailYaml.decodeTrail(yamlContent))
+    } catch (_: Exception) {
+      false
+    }
 
   companion object {
     /**

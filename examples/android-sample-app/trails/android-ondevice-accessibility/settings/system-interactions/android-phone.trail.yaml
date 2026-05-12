@@ -12,9 +12,6 @@
       tools:
       - tapOnElementBySelector:
           reason: The 'Settings' tab is represented by the clickable view with nodeId 53 and contains the text 'Settings'. Tapping this should navigate to the Settings tab.
-          selector:
-            containsChild:
-              textRegex: Settings
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
@@ -25,9 +22,6 @@
       tools:
       - tapOnElementBySelector:
           reason: The toggle for 'Enable Notifications' is part of the clickable view with nodeId 10, which is visually associated with the label and switch.
-          selector:
-            containsChild:
-              textRegex: Enable Notifications
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
@@ -37,36 +31,26 @@
       tools:
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' needs to be visible.
-          selector:
-            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
               textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as either 'Online' or 'Offline'.
-          selector:
-            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
               textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays 'Online' which is an acceptable network status for the requirement.
-          selector:
-            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
               textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' must be visible.
-          selector:
-            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
               textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. 'Online' or 'Offline' must be visible.
-          selector:
-            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
               textRegex: (Online|Offline)
@@ -75,9 +59,6 @@
       tools:
       - tapOnElementBySelector:
           reason: Node 21 is the clickable parent view containing both the 'Accept Terms' label and the checkbox. Tapping this should check the checkbox as intended.
-          selector:
-            containsChild:
-              textRegex: Accept Terms
           nodeSelector:
             androidAccessibility:
               textRegex: Accept Terms
