@@ -1,6 +1,7 @@
 package xyz.block.trailblaze
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
@@ -10,6 +11,7 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RecordableHostLocalTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -116,7 +118,12 @@ abstract class BaseTrailblazeAgent(
             // trail YAML + outcomes; richer per-call telemetry is tracked as follow-up.
             is HostLocalExecutableTrailblazeTool -> {
               toolsExecuted.add(resolved)
-              runBlocking { resolved.execute(context) }
+              val timeBeforeExecution = Clock.System.now()
+              val hostResult = runBlocking { resolved.execute(context) }
+              if (resolved is RecordableHostLocalTool) {
+                logToolExecution(resolved, timeBeforeExecution, context, hostResult)
+              }
+              hostResult
             }
             else -> executeTool(resolved, context, toolsExecuted)
           }

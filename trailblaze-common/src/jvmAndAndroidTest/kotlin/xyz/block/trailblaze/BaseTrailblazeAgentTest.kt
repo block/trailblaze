@@ -21,7 +21,11 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.ScreenStateLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RecordableHostLocalTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -409,5 +413,56 @@ class BaseTrailblazeAgentTest {
     assertThat(captured[0] === captured[1]).isEqualTo(false)
     // After both batches, the slot is cleared again.
     assertThat(ToolExecutionContextThreadLocal.get()).isNull()
+  }
+
+  // ── RecordableHostLocalTool: opt-in logging for host-local provisioning tools ──
+
+  private fun capturingAgent(captured: MutableList<TrailblazeLog>): TestAgent =
+    object : TestAgent() {
+      override val trailblazeLogger: TrailblazeLogger = TrailblazeLogger(
+        logEmitter = LogEmitter { log -> captured.add(log) },
+        screenStateLogger = ScreenStateLogger { "" },
+      )
+    }
+
+  @Serializable
+  @TrailblazeToolClass("recordable_stub")
+  private class RecordableStubTool(
+    val outputValue: String? = null,
+  ) : RecordableHostLocalTool {
+    override val advertisedToolName: String = "recordable_stub"
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      toolExecutionContext.recordedToolOverride =
+        RecordableStubTool(outputValue = "produced-value")
+      return TrailblazeToolResult.Success()
+    }
+  }
+
+  @Test
+  fun `RecordableHostLocalTool emits a TrailblazeToolLog with the override applied`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+
+    val result = run(agent, RecordableStubTool())
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs).hasSize(1)
+    assertThat(toolLogs[0].toolName).isEqualTo("recordable_stub")
+    assertThat(toolLogs[0].trailblazeTool.toString().contains("produced-value")).isEqualTo(true)
+  }
+
+  @Test
+  fun `plain HostLocalExecutableTrailblazeTool stays log-suppressed`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+
+    val result = run(agent, StubHostLocalTool())
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs).hasSize(0)
   }
 }

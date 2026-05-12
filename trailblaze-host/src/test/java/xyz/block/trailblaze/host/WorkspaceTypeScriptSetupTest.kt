@@ -159,6 +159,7 @@ class WorkspaceTypeScriptSetupTest {
       resolvedTargets = listOf(target),
       packsDir = packsDir,
       onlyInstallIfMissing = true,
+      isBunAvailable = { true },
     )
 
     // Exactly one entry, of the Skipped variant — pack had package.json AND node_modules.

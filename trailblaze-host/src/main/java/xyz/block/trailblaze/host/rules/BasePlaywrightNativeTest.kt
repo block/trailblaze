@@ -45,7 +45,7 @@ import kotlin.reflect.KClass
  * [PlaywrightTrailblazeAgent] instead of Maestro-based components. No Maestro
  * driver, host runner, or connected device is needed.
  */
-class BasePlaywrightNativeTest(
+open class BasePlaywrightNativeTest(
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
   val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
@@ -57,6 +57,7 @@ class BasePlaywrightNativeTest(
   val trailblazeDeviceId: TrailblazeDeviceId,
   val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
+  val systemPromptTemplate: String = PLAYWRIGHT_NATIVE_SYSTEM_PROMPT,
   /**
    * Optional existing browser manager to reuse instead of launching a new browser.
    * When provided, no new browser is launched — all Playwright operations go through
@@ -120,7 +121,7 @@ class BasePlaywrightNativeTest(
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       trailblazeToolRepo = toolRepo,
-      systemPromptTemplate = PLAYWRIGHT_NATIVE_SYSTEM_PROMPT,
+      systemPromptTemplate = systemPromptTemplate,
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     )

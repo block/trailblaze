@@ -152,6 +152,7 @@ object WorkspaceTypeScriptSetup {
     resolvedTargets: List<AppTargetYamlConfig>,
     packsDir: File,
     onlyInstallIfMissing: Boolean,
+    isBunAvailable: () -> Boolean = ::isBunOnPath,
   ): List<PackInstall> {
     if (resolvedTargets.isEmpty()) return emptyList()
     if (!packsDir.isDirectory) return emptyList()
@@ -168,7 +169,7 @@ object WorkspaceTypeScriptSetup {
       }
       .sortedBy { it.first }
     if (packsWithPackageJson.isEmpty()) return emptyList()
-    if (!isBunOnPath()) {
+    if (!isBunAvailable()) {
       Console.error(
         "trailblaze: bun not found in PATH. Per-pack node_modules not populated; IDE " +
           "typing for `@trailblaze/scripting` won't resolve until you install bun:\n" +
