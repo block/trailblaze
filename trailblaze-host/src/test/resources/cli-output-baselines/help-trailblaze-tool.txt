@@ -17,20 +17,28 @@ Run a Trailblaze tool by name (e.g., tap, inputText)
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser
-                            headless. When omitted, falls back to the persisted
-                            `web-headless` config (see `trailblaze config
-                            web-headless`). Pass --headless=false to force a
-                            visible browser, --headless=true to force headless.
-                            Ignored for non-web devices.
+                            headless. When omitted, auto-detects: headless on
+                            machines with no display (remote workstations, CI),
+                            headed otherwise. Falls back to the persisted
+                            `web-headless` config when a display is present
+                            (see `trailblaze config web-headless`). Pass
+                            --headless=false to force a visible browser,
+                            --headless=true to force headless. Ignored for
+                            non-web devices.
   -o, --objective=<objective>
                           Natural language intent — describe what, not how.
                           If the UI changes, Trailblaze uses this to retry the
                             step with AI.
                           'Navigate to Settings' survives a redesign; 'tap
                             button at 200,400' does not.
-      --target=<target>   Target app ID, saved as the default for future
-                            commands. List available targets with `trailblaze
-                            toolbox` (no args).
+      --target=<target>   Target app ID for this command's bound device. Scoped
+                            to the device as a daemon-process override (dies on
+                            daemon restart or device release). Pass
+                            `--target=clear` to remove a previously-set
+                            override for this device. To set a persistent
+                            default, use `trailblaze config target`. List
+                            available targets with `trailblaze toolbox` (no
+                            args).
       --text-only, --no-screenshots
                           Skip screenshots — the LLM only sees the textual view
                             hierarchy, no vision tokens, and disk logging of

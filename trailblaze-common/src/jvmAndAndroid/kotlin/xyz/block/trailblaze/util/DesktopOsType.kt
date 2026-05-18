@@ -58,3 +58,21 @@ fun isArm(): Boolean {
  * Currently requires macOS with a display available.
  */
 fun canRunDesktopGui(): Boolean = isMacOs() && !java.awt.GraphicsEnvironment.isHeadless()
+
+/**
+ * Returns true if a graphical display is available for launching visible (non-headless) UI.
+ * On Linux, checks for an X11 (`$DISPLAY`) or Wayland (`$WAYLAND_DISPLAY`) display server.
+ * On macOS/Windows, defers to the JVM's headless detection.
+ *
+ * Tests can pin the result deterministically by setting the `trailblaze.test.hasDisplay`
+ * system property to `"true"` or `"false"` — same seam pattern as `trailblaze.appdata.dir`.
+ */
+fun hasDisplay(): Boolean {
+  System.getProperty("trailblaze.test.hasDisplay")?.let { return it.toBoolean() }
+  if (java.awt.GraphicsEnvironment.isHeadless()) return false
+  if (isLinux()) {
+    return !System.getenv("DISPLAY").isNullOrBlank() ||
+      !System.getenv("WAYLAND_DISPLAY").isNullOrBlank()
+  }
+  return true
+}

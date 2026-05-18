@@ -445,6 +445,78 @@ class StepToolSetDirectToolsTest {
   }
 
   @Test
+  fun `direct tools rejects openUrl on web with hint to use web_navigate`() = runTest {
+    // openUrl is a mobile-only tool (Maestro-backed). On a Playwright web device it isn't
+    // in the available tool catalog, so it must be rejected. The error message should include
+    // a specific hint pointing the user to web_navigate rather than the generic fallback.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(
+            TrailblazeToolDescriptor(name = "web_navigate"),
+            TrailblazeToolDescriptor(name = "web_click"),
+          )
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective = "Open example.com",
+        tools =
+          """
+          - tools:
+              - openUrl:
+                  url: https://example.com
+          """
+            .trimIndent(),
+      )
+
+    assertContains(result, "not valid for the current device/target")
+    assertContains(result, "openUrl")
+    assertContains(result, "web_navigate")
+  }
+
+  @Test
+  fun `direct tools rejects openUrl without web hint when web_navigate not available`() = runTest {
+    // Suppression branch: if openUrl is rejected on a device whose catalog does not include
+    // web_navigate (e.g., an iOS target where openUrl is filtered out for some other reason),
+    // the web-specific hint must NOT leak into the error message.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(
+            TrailblazeToolDescriptor(name = "tapOnElementWithText"),
+            TrailblazeToolDescriptor(name = "inputText"),
+          )
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective = "Open example.com",
+        tools =
+          """
+          - tools:
+              - openUrl:
+                  url: https://example.com
+          """
+            .trimIndent(),
+      )
+
+    assertContains(result, "not valid for the current device/target")
+    assertContains(result, "openUrl")
+    assertFalse(result.contains("web_navigate"), "Web hint must not leak when web_navigate is unavailable")
+  }
+
+  @Test
   fun `direct tools skip availability check when provider returns empty list`() = runTest {
     // Empty provider is the transient state during device boot — the gate logs and skips
     // rather than failing, so the call still proceeds to rawToolExecutor.

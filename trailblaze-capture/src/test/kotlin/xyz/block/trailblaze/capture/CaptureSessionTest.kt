@@ -119,12 +119,24 @@ class CaptureSessionTest {
   }
 
   @Test
-  fun `WEB platform skips all platform-gated streams`() {
+  fun `WEB platform with captureVideo on adds PlaywrightVideoCapture only`() {
     val session = CaptureSession.fromOptions(
       CaptureOptions(captureVideo = true, captureLogcat = true, captureIosLogs = true),
       TrailblazeDevicePlatform.WEB,
     )
-    // Nothing wires up for WEB today; fromOptions returns null.
+    // logcat / iOS logs don't apply to web; only the Playwright video stream is wired.
+    assertNotNull(session)
+    val streams = streamsOf(session).map { it::class.simpleName!! }
+    assertContains(streams, "PlaywrightVideoCapture")
+    kotlin.test.assertEquals(1, streams.size, "WEB only registers the Playwright video stream")
+  }
+
+  @Test
+  fun `WEB platform with captureVideo off skips all streams`() {
+    val session = CaptureSession.fromOptions(
+      CaptureOptions(captureVideo = false, captureLogcat = true, captureIosLogs = true),
+      TrailblazeDevicePlatform.WEB,
+    )
     assertNull(session)
   }
 

@@ -10,19 +10,19 @@ required:
   - description: "Modal sheet grabber — only present on the new-contact bottom sheet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "New Contact title"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"
   - description: "Insert-add-phone affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add phone$"
+        accessibilityTextRegex: "add phone"
   - description: "Insert-add-pronouns row (specific to the new-contact form on iOS 26+)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add pronouns$"
+        accessibilityTextRegex: "add pronouns"
 forbidden: []
 # NOTE: in iPad-style split-view the underlying contact-detail (with Edit + Remove rows)
 # stays in the tree while the new-contact sheet is open over it, so we don't forbid those

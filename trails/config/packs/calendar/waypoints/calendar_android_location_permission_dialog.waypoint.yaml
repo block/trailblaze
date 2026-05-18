@@ -4,7 +4,7 @@ required:
   - description: "Permission grant dialog container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/grant_dialog$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/grant_dialog"
   - description: "Permission message about approximate location"
     selector:
       androidAccessibility:
@@ -12,12 +12,12 @@ required:
   - description: "'While using the app' button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button"
   - description: "'Only this time' button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_one_time_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_allow_one_time_button"
   - description: "'Don't allow' button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_deny_and_dont_ask_again_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_deny_and_dont_ask_again_button"

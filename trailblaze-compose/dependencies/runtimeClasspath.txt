@@ -161,6 +161,8 @@ io.ktor:ktor-server-core-jvm:3.3.3
 io.ktor:ktor-server-core:3.3.3
 io.ktor:ktor-server-sse-jvm:3.2.2
 io.ktor:ktor-server-sse:3.2.2
+io.ktor:ktor-server-websockets-jvm:3.3.3
+io.ktor:ktor-server-websockets:3.3.3
 io.ktor:ktor-sse-jvm:3.3.3
 io.ktor:ktor-sse:3.3.3
 io.ktor:ktor-utils-jvm:3.3.3

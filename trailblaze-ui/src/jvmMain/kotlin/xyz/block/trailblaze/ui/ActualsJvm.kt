@@ -63,6 +63,19 @@ actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
   return imageLoader.getImageModel(sessionId, screenshotFile)
 }
 
+// Empty on JVM so `ScreenshotPreloadStrip` is a true no-op on desktop. File-system reads
+// are already fast and pre-decoding full-resolution bitmaps for every screenshot in a long
+// session would balloon JVM heap. The visible slideshow paints fast enough without help.
+@Composable
+actual fun preloadedScreenshotKeys(): Set<String> = emptySet()
+
+// Autoplay-on-load is a WASM-report-only signal — the JVM desktop app has its own UX
+// for browsing sessions and never needs to coordinate with an external screen recorder.
+actual fun isExportAutoplayRequested(): Boolean = false
+actual fun signalExportPlaybackEnded() {
+  // no-op on JVM
+}
+
 actual fun openVideoInSystemPlayer(filePath: String) {
   try {
     java.awt.Desktop.getDesktop().open(File(filePath))

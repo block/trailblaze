@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
 @TrailblazeToolClass(
-  name = "androidSystemUiDemoMode",
+  name = "android_systemUiDemoMode",
   isForLlm = false
 )
 @LLMDescription("Enable demo mode on the device, freezing the clock so it doesn't change.")

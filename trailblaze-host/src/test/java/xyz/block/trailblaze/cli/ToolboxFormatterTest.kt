@@ -239,6 +239,154 @@ class ToolboxFormatterTest {
   }
 
   // ---------------------------------------------------------------------------------------
+  // Role rendering — renderRoleSection / renderRoleEmptyMessage / collectToolDescriptions
+  // ---------------------------------------------------------------------------------------
+
+  @Test
+  fun `renderRoleSection returns empty list when no tool names`() {
+    val out = ToolboxFormatter.renderRoleSection(
+      header = "Trailheads (start your trail here):",
+      toolNames = emptyList(),
+      descriptionsByName = emptyMap(),
+    )
+    assertEquals(emptyList(), out, "empty role list must produce no output so headline silently elides")
+  }
+
+  @Test
+  fun `renderRoleSection renders header + indented tool rows with descriptions inlined`() {
+    // Short descriptions deliberately stay under COMPACT_DESC_MAX_CHARS so this test pins the
+    // wrapping (header line, two-space row indent, `- name: desc`) without re-exercising the
+    // truncation logic — that's covered by the compactToolPeekLine tests above.
+    val out = ToolboxFormatter.renderRoleSection(
+      header = "Trailheads (start your trail here):",
+      toolNames = listOf("trailheadOne", "trailheadTwo"),
+      descriptionsByName = mapOf(
+        "trailheadOne" to "Bootstraps trail one.",
+        "trailheadTwo" to "Bootstraps trail two.",
+      ),
+    )
+    assertEquals(
+      listOf(
+        "Trailheads (start your trail here):",
+        "  - trailheadOne: Bootstraps trail one.",
+        "  - trailheadTwo: Bootstraps trail two.",
+      ),
+      out,
+    )
+  }
+
+  @Test
+  fun `renderRoleSection falls back to bare name when description is missing`() {
+    val out = ToolboxFormatter.renderRoleSection(
+      header = "Shortcuts (jump between waypoints):",
+      toolNames = listOf("sample_navigate_more_to_addons"),
+      descriptionsByName = emptyMap(),
+    )
+    assertEquals(
+      listOf(
+        "Shortcuts (jump between waypoints):",
+        "  - sample_navigate_more_to_addons",
+      ),
+      out,
+      "tools without descriptions render as bare `- name` (no orphan trailing colon)",
+    )
+  }
+
+  @Test
+  fun `renderRoleSection does not emit leading or trailing blank lines`() {
+    // The caller controls spacing between sections; the formatter itself MUST stay
+    // tight so two consecutive sections don't accumulate blank lines.
+    val out = ToolboxFormatter.renderRoleSection(
+      header = "Trailheads (start your trail here):",
+      toolNames = listOf("foo"),
+      descriptionsByName = mapOf("foo" to "Does foo."),
+    )
+    assertFalse(out.first().isBlank(), "first line must not be blank")
+    assertFalse(out.last().isBlank(), "last line must not be blank")
+  }
+
+  @Test
+  fun `renderRoleEmptyMessage tells the author no role tools exist and points at waypoints skill`() {
+    val out = ToolboxFormatter.renderRoleEmptyMessage(
+      role = "trailheads",
+      target = "sampleapp",
+      platform = "android",
+      suffix = "*.trailhead.yaml",
+    )
+    assertEquals(
+      listOf(
+        "No trailheads tools available for sampleapp on android.",
+        "",
+        "If you need one, use the `waypoints` skill to author a new *.trailhead.yaml in the relevant pack.",
+      ),
+      out,
+    )
+  }
+
+  @Test
+  fun `renderRoleEmptyMessage falls back to placeholder text when target or platform unknown`() {
+    // Used by `toolbox trailheads` invoked without --target/--device — the empty hint
+    // should still read coherently rather than emit "for null on null".
+    val out = ToolboxFormatter.renderRoleEmptyMessage(
+      role = "shortcuts",
+      target = null,
+      platform = null,
+      suffix = "*.shortcut.yaml",
+    )
+    assertTrue(out.first().contains("for this target on this platform"))
+    assertTrue(out.last().contains("waypoints"))
+  }
+
+  @Test
+  fun `collectToolDescriptions reads from toolDetails entries in both platform and target toolsets`() {
+    val platform = jsonArr(
+      """[{"name":"core_interaction","toolDetails":[{"name":"tap","description":"Tap something."}]}]""",
+    )
+    val target = jsonArr(
+      """[{"name":"sample_android_general","toolDetails":[{"name":"sample_launchAppSignedIn","description":"Launch the sample app signed in."}]}]""",
+    )
+    val out = ToolboxFormatter.collectToolDescriptions(platform, target)
+    assertEquals(
+      mapOf("tap" to "Tap something.", "sample_launchAppSignedIn" to "Launch the sample app signed in."),
+      out,
+    )
+  }
+
+  @Test
+  fun `collectToolDescriptions returns empty map when only compact toolset form is present`() {
+    // The compact form (`tools: [name, name, ...]`, no `toolDetails`) carries no
+    // descriptions; the role view will render bare names rather than ranching out a
+    // second daemon call per tool.
+    val platform = jsonArr("""[{"name":"core_interaction","tools":["tap","inputText"]}]""")
+    val out = ToolboxFormatter.collectToolDescriptions(platform, null)
+    assertTrue(out.isEmpty(), "no toolDetails → no descriptions (compact form is descriptions-less)")
+  }
+
+  @Test
+  fun `collectToolDescriptions first-write-wins on duplicate tool name`() {
+    // If a tool appears in both platform and target toolsets (rare but legal), the
+    // platform definition wins because it's the more general one. Authors who notice
+    // this can disambiguate via `toolbox --name <id>`.
+    val platform = jsonArr(
+      """[{"name":"core_interaction","toolDetails":[{"name":"launchApp","description":"Generic launch."}]}]""",
+    )
+    val target = jsonArr(
+      """[{"name":"sample_android_general","toolDetails":[{"name":"launchApp","description":"Target-specific launch override."}]}]""",
+    )
+    val out = ToolboxFormatter.collectToolDescriptions(platform, target)
+    assertEquals(
+      "Generic launch.",
+      out["launchApp"],
+      "first toolset listed wins — preserves the platform-layer definition over a target override",
+    )
+  }
+
+  @Test
+  fun `collectToolDescriptions tolerates null arguments`() {
+    assertEquals(emptyMap(), ToolboxFormatter.collectToolDescriptions(null, null))
+  }
+
+  // ---------------------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------------------
 

@@ -7,25 +7,25 @@ required:
   - description: "Haptics header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Haptics$"
+        accessibilityTextRegex: "Haptics"
   - description: "Heartbeat haptic option (always-present, distinguishes from ringtone list)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Heartbeat$"
+        accessibilityTextRegex: "Heartbeat"
   - description: "S.O.S. haptic option"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^S\\.O\\.S\\.$"
+        accessibilityTextRegex: "S\\.O\\.S\\."
 forbidden:
   - description: "Ringtone header — would mean we're on the Ringtone picker, not Haptics"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Ringtone$"
+        accessibilityTextRegex: "Ringtone"
   - description: "Text Tone header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text Tone$"
+        accessibilityTextRegex: "Text Tone"
   - description: "Default reset row — only on the parent Ringtone/TextTone picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Default$"
+        accessibilityTextRegex: "Default"

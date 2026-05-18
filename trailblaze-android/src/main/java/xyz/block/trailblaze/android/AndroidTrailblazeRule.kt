@@ -54,7 +54,9 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.CustomTrailblazeTools
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.toTrailblazeToolRepo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
@@ -216,10 +218,68 @@ open class AndroidTrailblazeRule(
    * [BlazeConfig] instead, and the CLI rejects the combination at parse time).
    */
   private val maxLlmCalls: Int? = null,
+  /**
+   * Optional pack-manifest target this rule is running against. Captured so the scripted-tool
+   * runtime (`_meta.trailblaze.target` → `ctx.target`) surfaces `ctx.target?.resolveAppId()` to
+   * bundled tools dispatching in-process through this rule's QuickJS / MCP-bundle launchers.
+   *
+   * Null by default — the rule is target-agnostic out of the box, and authors writing
+   * target-aware scripted tools should optional-chain (`ctx.target?.resolveAppId(...)`) so the
+   * same source works either way. Callers that want `ctx.target` populated pass a target; the
+   * agent then carries it and its device-resolved app id through to every execution context.
+   */
+  private val target: TrailblazeHostAppTarget? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
   private val agentMemory: AgentMemory = agentMemoryOverride ?: AgentMemory()
+
+  /**
+   * Pre-built `ResolvedTarget` pairing [target] with [trailblazeDeviceId]. Threaded into the
+   * lazy agents below so [MaestroTrailblazeAgent.buildExecutionContext] populates the
+   * scripted-tool envelope with the data fields `ctx.target` exposes. Null when no target
+   * was supplied — matches the documented "no target → ctx.target undefined" contract.
+   */
+  private val resolvedTargetForSession: ResolvedTarget? =
+    target?.let { ResolvedTarget(target = it, deviceId = trailblazeDeviceId) }
+
+  /**
+   * Resolved Android app id for the supplied target — picked at session start by intersecting
+   * the target's declared `app_ids:` list against the device's installed packages via
+   * `AdbCommandUtil.listInstalledApps()` (which on-device shells out to `pm list packages`).
+   * Lazy so callers that never read it don't pay the shell-out, and so the value is fixed
+   * for the rule's lifetime (Android instrumentation processes don't get apps installed mid-
+   * test). Null when no target was supplied, or when none of the target's declared candidates
+   * is installed.
+   */
+  private val appIdForSession: String? by lazy {
+    val resolved = resolvedTargetForSession ?: return@lazy null
+    runCatching {
+      val installed = AdbCommandUtil.listInstalledApps().toSet()
+      resolved.target.getAppIdIfInstalled(
+        platform = TrailblazeDevicePlatform.ANDROID,
+        installedAppIds = installed,
+      )
+    }
+      .onFailure { e ->
+        // Log-and-soft-fall-through: a probe failure (`pm list packages` shell error, weird
+        // device permissions, transient ADB hiccup) still falls back to `null` so the trail can
+        // attempt to launch via `ctx.target.appIds[0]`, but the failure shouldn't be invisible
+        // in trail logs. Without this, a scripted tool that silently launches the wrong
+        // candidate is indistinguishable from one that ran correctly — a known on-device
+        // debugging dead end. The wrapping `.getOrNull()` below still returns null on failure;
+        // this only adds the diagnostic signal.
+        Console.log(
+          "[AndroidTrailblazeRule] failed to resolve installed app id for target " +
+            "'${resolved.id}' on device ${trailblazeDeviceId.instanceId}: " +
+            // Null-coalesce: a bare `RuntimeException()` or an anonymous-object exception
+            // can have a null message, in which case `${e.message}` interpolates the literal
+            // string "null" and the log line buries the useful signal (the exception class).
+            "${e::class.simpleName}: ${e.message ?: "<no message>"}"
+        )
+      }
+      .getOrNull()
+  }
 
   /**
    * Selects the runtime agent based on
@@ -252,6 +312,11 @@ open class AndroidTrailblazeRule(
         // device-shaped element matching/filtering loses the dimension.
         deviceClassifiers = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiers(),
         memory = agentMemory,
+        // Surfaces `ctx.target.{id, appIds, appId}` to scripted tools dispatching
+        // through `MaestroTrailblazeAgent.buildExecutionContext`. Both fields are null when
+        // no [target] was supplied — the documented `ctx.target === undefined` shape.
+        resolvedTarget = resolvedTargetForSession,
+        appId = appIdForSession,
       )
       else -> AndroidMaestroTrailblazeAgent(
         trailblazeLogger = trailblazeLoggingRule.logger,
@@ -264,6 +329,11 @@ open class AndroidTrailblazeRule(
         // Propagate the host bridge's capture toggle to the on-device agent so capture-aware
         // launch tools can flip their app's debug SharedPref gates in the pre-launch seeding step.
         captureNetworkTraffic = config.captureNetworkTraffic,
+        // See accessibility-agent branch above for why these are threaded into both paths —
+        // scripted tools dispatched through MaestroTrailblazeAgent.buildExecutionContext need
+        // `ctx.target` populated regardless of which Android driver the trail picked.
+        resolvedTarget = resolvedTargetForSession,
+        appId = appIdForSession,
       )
     }
   }
@@ -524,6 +594,14 @@ open class AndroidTrailblazeRule(
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
+      // Pre-wired even though postcondition assertion is dormant on this code path today
+      // (screenStateProvider/waypointResolver are left null) — the moment the rule enables
+      // postconditions, templated waypoints (`{{target.appId}}`) need to expand correctly.
+      // Threading it now means turning the asserter on later is a one-line change, not a
+      // hunt for every TrailblazeRunnerUtil call site.
+      target = resolvedTargetForSession?.let {
+        xyz.block.trailblaze.api.TargetTemplateContext(appId = appIdForSession, appIds = it.appIds)
+      },
     )
   }
 

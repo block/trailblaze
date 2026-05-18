@@ -84,7 +84,9 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     description = [
       "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/ — the " +
         "canonical workspace-pack location. Warns if no such pack exists. Mutually exclusive " +
-        "with --root (--root wins if both given).",
+        "with --root (--root wins if both given). Also supplies the pack's declared " +
+        "`app_ids:` to expand `{{target.appId}}` placeholders during matching; exits with " +
+        "a usage error if the named pack can't be resolved or declares no `app_ids:`.",
     ],
   )
   var targetId: String? = null
@@ -114,10 +116,18 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     // the precedence rules; in short, --root wins, then --target → workspace pack convention,
     // then a default with a "no target specified" warning.
     val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
+    val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
+      is TargetContextResolution.Error -> {
+        Console.error(r.message)
+        return CommandLine.ExitCode.USAGE
+      }
+      is TargetContextResolution.Resolved -> r.context
+      is TargetContextResolution.NoTarget -> null
+    }
     // We need the waypoint definition early — both for the search (so the matcher can
     // identify a matching step) and for the eventual write. Resolve it once up front.
     val (def, defFile) = findWaypointFile(root) ?: return CommandLine.ExitCode.USAGE
-    val logFile = resolveLogFile(def) ?: return CommandLine.ExitCode.USAGE
+    val logFile = resolveLogFile(def, target) ?: return CommandLine.ExitCode.USAGE
 
     // Parse the source log into a JsonObject so we can copy fields verbatim
     val rawJson = logFile.readText()
@@ -171,7 +181,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
 
     // Self-test: the waypoint must match its own example, otherwise the example is wrong.
     val screen = SessionLogScreenState.loadStep(exampleJsonFile)
-    val matchResult = WaypointMatcher.match(def, screen)
+    val matchResult = WaypointMatcher.match(def, screen, target)
     if (!matchResult.matched) {
       Console.error("Waypoint did not match its own example — deleting partial files.")
       Console.error(formatResult(matchResult))
@@ -204,7 +214,10 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    *    `--logs-dir <path>` overrides for the rare case where the corpus lives elsewhere
    *    (e.g. CI artifacts staged into a one-off directory).
    */
-  private fun resolveLogFile(def: WaypointDefinition): File? {
+  private fun resolveLogFile(
+    def: WaypointDefinition,
+    target: xyz.block.trailblaze.api.TargetTemplateContext?,
+  ): File? {
     positionalLogFile?.let { return validateLogFile(it, label = "Log file") }
     // --step is meaningful ONLY in combination with --session — it indexes into a
     // session's step list. Silently dropping it (and falling through to global auto-search)
@@ -233,7 +246,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
         return logs[idx]
       }
       // --session alone: search just this session.
-      return findMatchingLog(def, listOf(sessionDir), scopeLabel = "session $sessionId")
+      return findMatchingLog(def, listOf(sessionDir), scopeLabel = "session $sessionId", target = target)
     }
 
     // No args — magic auto-search across every session.
@@ -246,7 +259,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
       Console.error("No session directories found under: ${effectiveLogsDir.absolutePath}")
       return null
     }
-    return findMatchingLog(def, sessionDirs, scopeLabel = "all sessions under ${effectiveLogsDir.absolutePath}")
+    return findMatchingLog(def, sessionDirs, scopeLabel = "all sessions under ${effectiveLogsDir.absolutePath}", target = target)
   }
 
   /**
@@ -304,6 +317,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     def: WaypointDefinition,
     sessionDirs: List<File>,
     scopeLabel: String,
+    target: xyz.block.trailblaze.api.TargetTemplateContext?,
   ): File? {
     // Display key (session/file) is kept separate from the sort key so the status line stays
     // human-readable while ordering is driven by parsed timestamp.
@@ -322,7 +336,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
         } catch (_: Exception) {
           continue
         }
-        if (WaypointMatcher.match(def, screen).matched) {
+        if (WaypointMatcher.match(def, screen, target).matched) {
           matches += Candidate(
             file = logFile,
             timestamp = SessionLogScreenState.readTimestamp(logFile),

@@ -167,23 +167,52 @@ class SessionToolSet(
     // Start capture (video + device logs by default)
     val captureStatus = startCapture(sessionId, noVideo, noLogs)
 
+    val (effectiveTarget, targetSource) = resolveTargetForSession(sessionId)
+    val targetLine = renderTargetLine(effectiveTarget, targetSource)
+
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
     Console.log("│ [session] Started: ${title ?: "(unnamed)"}")
     Console.log("│ Session ID: ${sessionId.value}")
     Console.log("│ Capture: $captureStatus")
+    if (targetLine != null) Console.log("│ Target: $targetLine")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
     return SessionResult(
       sessionId = sessionId.value,
       title = title,
       status = "started",
+      target = effectiveTarget,
+      targetSource = targetSource,
       message = buildString {
         append("Session started")
         if (title != null) append(": $title")
         append(". $captureStatus")
+        if (targetLine != null) append(" Target: $targetLine.")
       },
     ).toJson()
+  }
+
+  /**
+   * Resolves the effective target for a session and returns `(target?, source?)`.
+   * Source values are documented as [TARGET_SOURCE_SESSION_OVERRIDE],
+   * [TARGET_SOURCE_DAEMON_WIDE], or `null` (no target configured anywhere).
+   * Surfaced to users in session-start / session-info so they don't lose
+   * track of which target a recording is running under — especially
+   * important after `session stop` because the per-session override dies
+   * and a fresh session falls back to daemon-wide.
+   */
+  private fun resolveTargetForSession(sessionId: SessionId): Pair<String?, String?> {
+    val sessionTarget = mcpBridge.getTargetForSession(sessionId)
+    if (sessionTarget != null) return sessionTarget to TARGET_SOURCE_SESSION_OVERRIDE
+    val daemonWide = mcpBridge.getCurrentAppTargetId()
+    if (daemonWide != null) return daemonWide to TARGET_SOURCE_DAEMON_WIDE
+    return null to null
+  }
+
+  private fun renderTargetLine(target: String?, source: String?): String? {
+    if (target == null) return null
+    return "$target ($source)"
   }
 
   private fun startCapture(
@@ -218,6 +247,12 @@ class SessionToolSet(
         false
       }
     } else false
+
+    // Capture whether this session had a per-session target override BEFORE
+    // `endSession` clears the registry entry. Used below to gate the cleared-
+    // override hint so we don't add noise to stops on sessions that never had
+    // a `--target` set in the first place.
+    val hadTargetOverride = sessionId?.let { mcpBridge.getTargetForSession(it) } != null
 
     // Stop capture
     val artifacts = stopCapture()
@@ -254,6 +289,17 @@ class SessionToolSet(
           append(" Trail saved.")
         } else if (save && !saveSucceeded) {
           append(" Trail save failed.")
+        }
+        // Only emit the cleared-override hint when an override actually
+        // existed on this session — `hadTargetOverride` is captured above,
+        // before `endSession` clears the registry entry. Stops on sessions
+        // that never had a target stay quiet.
+        if (hadTargetOverride) {
+          append(
+            " Note: the `--target` override set on this session is cleared. " +
+              "The next command on this device will use the daemon-wide default " +
+              "unless you pass `--target=<id>` to set a fresh per-session override.",
+          )
         }
       },
       saveResult = saveResult,
@@ -499,6 +545,19 @@ class SessionToolSet(
       }
     } else null
 
+    // Historical sessions: the override was cleared when the session ended,
+    // so the resolver would fall through to the *current* daemon-wide
+    // default — misleading because the session probably ran under a different
+    // target. Skip the resolver and surface null so consumers render "n/a"
+    // (a `SessionStarted` log-based lookup is the right answer for the
+    // forensic case, but that's a bigger change — punt to a follow-up).
+    val isHistoricalSession = info?.latestStatus is SessionStatus.Ended
+    val (effectiveTarget, targetSource) = if (isHistoricalSession) {
+      null to null
+    } else {
+      resolveTargetForSession(sessionId)
+    }
+    val targetLine = renderTargetLine(effectiveTarget, targetSource)
     return SessionResult(
       sessionId = sessionId.value,
       title = displayTitle,
@@ -509,10 +568,13 @@ class SessionToolSet(
         ?: sessionContext?.associatedDeviceId?.trailblazeDevicePlatform?.name,
       path = sessionDir?.absolutePath,
       steps = stepEntries,
+      target = effectiveTarget,
+      targetSource = targetSource,
       message = buildString {
         append("Session: ${sessionId.value}")
         if (displayTitle != null) append(" ($displayTitle)")
         append(" — $statusStr")
+        if (targetLine != null) append(" — Target: $targetLine")
       },
     ).toJson()
   }
@@ -734,6 +796,16 @@ class SessionToolSet(
       else -> "other"
     }
   }
+
+  companion object {
+    /**
+     * Wire values for [SessionResult.targetSource]. Defined here so producer
+     * (this class) and any future consumer share a single source of truth —
+     * a typo in either site would otherwise be silent across the MCP boundary.
+     */
+    const val TARGET_SOURCE_SESSION_OVERRIDE = "session-override"
+    const val TARGET_SOURCE_DAEMON_WIDE = "daemon-wide"
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -755,6 +827,20 @@ data class SessionResult(
   val artifacts: List<ArtifactEntry>? = null,
   val saveResult: String? = null,
   val steps: List<SessionStepEntry>? = null,
+  /**
+   * Target app id effective for this session. Resolved as: per-session
+   * override → daemon-wide default → null. The [targetSource] field
+   * disambiguates the three.
+   */
+  val target: String? = null,
+  /**
+   * Where [target] came from. One of:
+   *  - [SessionToolSet.TARGET_SOURCE_SESSION_OVERRIDE] (`"session-override"`)
+   *  - [SessionToolSet.TARGET_SOURCE_DAEMON_WIDE] (`"daemon-wide"`)
+   *  - `null` (no target configured anywhere — historical session with the
+   *    override already cleared, or a daemon with no `selectedTargetAppId` set).
+   */
+  val targetSource: String? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
 }

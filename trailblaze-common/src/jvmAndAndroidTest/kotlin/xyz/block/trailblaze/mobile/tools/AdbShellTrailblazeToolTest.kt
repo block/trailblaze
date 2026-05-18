@@ -2,8 +2,10 @@ package xyz.block.trailblaze.mobile.tools
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.hasLength
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -30,15 +32,15 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
  *
  * Mirrors the shape of [AndroidSendBroadcastSerializationTest][xyz.block.trailblaze.yaml.AndroidSendBroadcastSerializationTest]:
  * exercises YAML round-trip plus the failure-mode branches of `execute` that don't
- * require a real `AndroidDeviceCommandExecutor` — non-Android platform, blank command,
+ * require a real `AndroidDeviceCommandExecutor` — non-Android platform, empty command,
  * missing executor. Happy-path execution is covered by the local-emulator integration
- * pass on the clock OSS example trail (`clock_android_launchApp.ts` composes `adbShell`
+ * pass on the clock OSS example trail (`clock_android_launchApp.ts` composes `android_adbShell`
  * end-to-end), which is the load-bearing validation for the executor shell-out.
  *
  * The dual-mode contract (`requiresHost = false`, implements [ExecutableTrailblazeTool]
  * not [HostLocalExecutableTrailblazeTool]) is pinned by reflection so a future refactor
  * that accidentally adds the host-only marker fails this test instead of silently
- * routing all `adbShell` calls through the host RPC path even when on-device dispatch
+ * routing all `android_adbShell` calls through the host RPC path even when on-device dispatch
  * is appropriate.
  */
 class AdbShellTrailblazeToolTest {
@@ -49,14 +51,17 @@ class AdbShellTrailblazeToolTest {
   fun `decodes minimal command from trail YAML`() {
     val yaml = """
       - tools:
-          - adbShell:
-              command: am force-stop com.example.app
+          - android_adbShell:
+              command:
+                - am
+                - force-stop
+                - com.example.app
     """.trimIndent()
 
     val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AdbShellTrailblazeTool
 
-    assertThat(tool.command).isEqualTo("am force-stop com.example.app")
+    assertThat(tool.command).isEqualTo(listOf("am", "force-stop", "com.example.app"))
     assertThat(tool.runAs).isEqualTo(null)
   }
 
@@ -64,21 +69,23 @@ class AdbShellTrailblazeToolTest {
   fun `decodes runAs override from trail YAML`() {
     val yaml = """
       - tools:
-          - adbShell:
-              command: cat /data/data/com.example.app/files/state.json
+          - android_adbShell:
+              command:
+                - cat
+                - /data/data/com.example.app/files/state.json
               runAs: com.example.app
     """.trimIndent()
 
     val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AdbShellTrailblazeTool
 
-    assertThat(tool.command).isEqualTo("cat /data/data/com.example.app/files/state.json")
+    assertThat(tool.command).isEqualTo(listOf("cat", "/data/data/com.example.app/files/state.json"))
     assertThat(tool.runAs).isEqualTo("com.example.app")
   }
 
   @Test
   fun `executeReturnsErrorOnNonAndroidPlatform`() = runBlocking {
-    val tool = AdbShellTrailblazeTool(command = "pm list packages")
+    val tool = AdbShellTrailblazeTool(command = listOf("pm", "list", "packages"))
     val result = tool.execute(createContext(TrailblazeDevicePlatform.IOS))
 
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
@@ -87,7 +94,7 @@ class AdbShellTrailblazeToolTest {
 
   @Test
   fun `executeReturnsErrorOnWebPlatform`() = runBlocking {
-    val tool = AdbShellTrailblazeTool(command = "pm list packages")
+    val tool = AdbShellTrailblazeTool(command = listOf("pm", "list", "packages"))
     val result = tool.execute(createContext(TrailblazeDevicePlatform.WEB))
 
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
@@ -95,23 +102,65 @@ class AdbShellTrailblazeToolTest {
   }
 
   @Test
-  fun `executeReturnsErrorOnBlankCommand`() = runBlocking {
-    val tool = AdbShellTrailblazeTool(command = "   ")
-    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
-
-    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
-    assertThat(result.errorMessage).contains("non-blank command")
+  fun `constructor rejects empty command list`() {
+    // The only invariant the init block enforces: the list is non-empty. A 0-element
+    // list would produce an empty `sh -c ""` that succeeds silently — almost certainly
+    // an authoring slip rather than intent. Catch it at construction.
+    val error = assertFailsWith<IllegalArgumentException> {
+      AdbShellTrailblazeTool(command = emptyList())
+    }
+    assertThat(error.message ?: "").contains("non-empty")
   }
 
   @Test
   fun `executeReturnsErrorWhenExecutorIsMissing`() = runBlocking {
-    val tool = AdbShellTrailblazeTool(command = "pm list packages")
+    val tool = AdbShellTrailblazeTool(command = listOf("pm", "list", "packages"))
     // Android platform, valid command, but no AndroidDeviceCommandExecutor wired in —
     // the same scenario unit tests hit (real executor lives behind dadb / instrumentation).
     val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
 
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
     assertThat(result.errorMessage).contains("AndroidDeviceCommandExecutor")
+    // The missing-executor error includes the joined-and-quoted would-have-run command,
+    // which doubles as confirmation that execute() ran the join end-to-end (not just at
+    // the unit-test layer). A future refactor that bypassed the join would fail this.
+    assertThat(result.errorMessage).contains("'pm' 'list' 'packages'")
+  }
+
+  @Test
+  fun `execute() with runAs composes the same joined command (runAs is orthogonal to the join)`() = runBlocking {
+    // The runAs branch in execute() dispatches to executeShellCommandAs after the same
+    // join + sentinel-wrap pipeline. We can't directly mock the expect-class executor,
+    // but we can still pin that constructing with both fields produces the expected
+    // joined string visible in the missing-executor error path — same trace as the
+    // non-runAs case, just with a different executor method downstream.
+    val tool = AdbShellTrailblazeTool(
+      command = listOf("cat", "/data/data/com.example/files/state.json"),
+      runAs = "com.example",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("'cat' '/data/data/com.example/files/state.json'")
+  }
+
+  @Test
+  fun `execute() with long command truncates effectiveCommand to 200 chars in error message`() = runBlocking {
+    // Each 1-char element becomes `'X'` after shell-escape (3 chars + space separator
+    // = 4 chars per element). 80 elements gives a joined length well over 200, so
+    // truncation must engage on the join-derived effectiveCommand path.
+    val tool = AdbShellTrailblazeTool(command = List(80) { "X" })
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    // Pull the would-have-run substring out and verify it's exactly 200 chars,
+    // matching the `.take(200)` cap in the production code. Anchoring on the literal
+    // prefix/suffix avoids brittleness if the rest of the error wording shifts.
+    val msg = result.errorMessage
+    val prefix = "would have run: '"
+    val start = msg.indexOf(prefix) + prefix.length
+    val end = msg.indexOf("')", start)
+    assertThat(msg.substring(start, end)).hasLength(200)
   }
 
   /**
@@ -120,17 +169,33 @@ class AdbShellTrailblazeToolTest {
    * `@TrailblazeToolClass` annotation MUST have `requiresHost = false` (the default).
    *
    * Either of those flipping would silently break on-device dispatch: a scripted tool
-   * that composes `adbShell` and is dispatched by the on-device QuickJS runner would
-   * fail to find `adbShell` in the on-device registry (because host-only tools are
+   * that composes `android_adbShell` and is dispatched by the on-device QuickJS runner would
+   * fail to find `android_adbShell` in the on-device registry (because host-only tools are
    * filtered out at registration), even though the underlying
    * [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.executeShellCommand]
    * implementation works on both sides.
    */
+  @Test
+  fun `is dual-mode (plain ExecutableTrailblazeTool, requiresHost defaulted false)`() {
+    val tool = AdbShellTrailblazeTool(command = listOf("pm", "list", "packages"))
+    assertThat(tool).isInstanceOf(ExecutableTrailblazeTool::class)
+    // Inverse check: must NOT be host-local. Without this assertion, accidentally adding
+    // `HostLocalExecutableTrailblazeTool` to the implements list would silently regress
+    // the dual-mode property; this test would still pass the ExecutableTrailblazeTool
+    // check above (since HostLocalExecutableTrailblazeTool extends it).
+    assertk.assertThat(tool !is HostLocalExecutableTrailblazeTool).isEqualTo(true)
+
+    val annotation = AdbShellTrailblazeTool::class.java.getAnnotation(TrailblazeToolClass::class.java)!!
+    assertThat(annotation.name).isEqualTo("android_adbShell")
+    assertThat(annotation.requiresHost).isEqualTo(false)
+    assertThat(annotation.isForLlm).isEqualTo(false)
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Exit-code sentinel parsing
   //
   // The underlying AndroidDeviceCommandExecutor.executeShellCommand returns only the
-  // combined stdout — no exit-code channel. AdbShellTrailblazeTool wraps the user's
+  // combined stdout — no exit-code channel. AdbShellTrailblazeTool wraps the joined
   // command with `; echo __TBZ_ADBSHELL_EXIT__$?` and parses the trailing sentinel
   // line out of the output. These tests pin the parser logic (pure function, no
   // executor needed) for every realistic shape: success, non-zero, missing sentinel,
@@ -219,20 +284,121 @@ class AdbShellTrailblazeToolTest {
     assertThat(parsed.exitCode).isEqualTo(0)
   }
 
-  @Test
-  fun `is dual-mode (plain ExecutableTrailblazeTool, requiresHost defaulted false)`() {
-    val tool = AdbShellTrailblazeTool(command = "pm list packages")
-    assertThat(tool).isInstanceOf(ExecutableTrailblazeTool::class)
-    // Inverse check: must NOT be host-local. Without this assertion, accidentally adding
-    // `HostLocalExecutableTrailblazeTool` to the implements list would silently regress
-    // the dual-mode property; this test would still pass the ExecutableTrailblazeTool
-    // check above (since HostLocalExecutableTrailblazeTool extends it).
-    assertk.assertThat(tool !is HostLocalExecutableTrailblazeTool).isEqualTo(true)
+  // ─────────────────────────────────────────────────────────────────────────────
+  // joinCommandAsShellString: POSIX single-quote escape, then space-join. The wrapping
+  // single quotes make every interior shell metacharacter literal — `$`, backtick, `;`,
+  // `&&`, newline, space, `*`, `~`. The only character that needs special handling is
+  // the single quote itself, which gets the standard `'\''` dance (close-quote, escaped
+  // literal, reopen-quote). Delegates to the shared `String.shellEscape()` helper.
+  // ─────────────────────────────────────────────────────────────────────────────
 
-    val annotation = AdbShellTrailblazeTool::class.java.getAnnotation(TrailblazeToolClass::class.java)!!
-    assertThat(annotation.name).isEqualTo("adbShell")
-    assertThat(annotation.requiresHost).isEqualTo(false)
-    assertThat(annotation.isForLlm).isEqualTo(false)
+  @Test
+  fun `joinCommandAsShellString wraps a plain argument in single quotes`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("pm")))
+      .isEqualTo("'pm'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString joins multiple arguments with spaces`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("pm", "list", "packages")))
+      .isEqualTo("'pm' 'list' 'packages'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString escapes embedded single quote via close-escape-reopen dance`() {
+    // The POSIX trick: `it's` becomes `'it'\''s'` — closes the wrapping quote, emits an
+    // escaped literal single quote, reopens the wrapping quote. Functionally equivalent
+    // to `it's` to the shell.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("it's")))
+      .isEqualTo("'it'\\''s'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves double quotes literally inside single-quote wrapper`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("say \"hi\"")))
+      .isEqualTo("'say \"hi\"'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves dollar sign literally (no parameter expansion)`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("\$HOME")))
+      .isEqualTo("'\$HOME'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves backtick literally (no command substitution)`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("`whoami`")))
+      .isEqualTo("'`whoami`'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves semicolon literally (no statement separator)`() {
+    // Injection-safety probe: a naive concat would turn `; rm -rf ~` into a separate
+    // statement. With single-quote wrapping, the semicolon is just a literal byte.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("; rm -rf ~")))
+      .isEqualTo("'; rm -rf ~'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves spaces inside a single argument`() {
+    // The argument boundary is the list element, not whitespace — `hello world` as one
+    // element produces one quoted token, not two.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("hello world")))
+      .isEqualTo("'hello world'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves newline literally`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("line1\nline2")))
+      .isEqualTo("'line1\nline2'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves glob characters literally (no expansion)`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("*.txt")))
+      .isEqualTo("'*.txt'")
+  }
+
+  @Test
+  fun `joinCommandAsShellString preserves empty-string element as empty single-quoted token`() {
+    // A list with one empty element is a legal argv slot (think `sh -c ''`); render it
+    // as `''` rather than dropping it, so the joined command preserves arity.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(listOf("")))
+      .isEqualTo("''")
+  }
+
+  @Test
+  fun `command composes with wrapWithExitSentinel (joined string flows through unchanged)`() {
+    // Sanity check: command list → join → sentinel-wrap produces what we expect when
+    // handed to the device shell. The sentinel parser doesn't care about the inner
+    // structure.
+    val joined = AdbShellTrailblazeTool.joinCommandAsShellString(listOf("am", "force-stop", "com.example"))
+    val wrapped = AdbShellTrailblazeTool.wrapWithExitSentinel(joined)
+    assertThat(wrapped).isEqualTo("'am' 'force-stop' 'com.example'; echo __TBZ_ADBSHELL_EXIT__\$?")
+  }
+
+  @Test
+  fun `round-trips command through YAML encode-then-decode`() {
+    // Pins that building the tool in code, encoding to YAML, and decoding back yields
+    // an equal tool. Catches any future serializer drift (e.g. emitting `command: null`
+    // for an empty-but-present list) that would break recorded trail baselines.
+    val original = AdbShellTrailblazeTool(command = listOf("am", "force-stop", "com.example.app"))
+    val yamlInstance = trailblazeYaml.getInstance()
+    val encoded = yamlInstance.encodeToString(AdbShellTrailblazeTool.serializer(), original)
+    val decoded = yamlInstance.decodeFromString(AdbShellTrailblazeTool.serializer(), encoded)
+    assertThat(decoded).isEqualTo(original)
+  }
+
+  @Test
+  fun `round-trips command + runAs through YAML encode-then-decode`() {
+    val original = AdbShellTrailblazeTool(
+      command = listOf("cat", "/data/data/com.example/files/state.json"),
+      runAs = "com.example",
+    )
+    val yamlInstance = trailblazeYaml.getInstance()
+    val encoded = yamlInstance.encodeToString(AdbShellTrailblazeTool.serializer(), original)
+    val decoded = yamlInstance.decodeFromString(AdbShellTrailblazeTool.serializer(), encoded)
+    assertThat(decoded).isEqualTo(original)
   }
 
   private fun createContext(platform: TrailblazeDevicePlatform): TrailblazeToolExecutionContext {

@@ -4,12 +4,24 @@ import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification
+import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams
+import io.modelcontextprotocol.kotlin.sdk.types.Method
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.Console
 
 /**
  * One running subprocess MCP session: the spawned `bun` / `tsx` [Process], the
@@ -122,6 +134,17 @@ class McpSubprocessSession internal constructor(
         },
       )
       val client = Client(clientInfo, ClientOptions())
+      // Route scripted-tool `ctx.logger.*` calls — emitted by the subprocess as MCP
+      // `notifications/message` — into the host's `Console` so authors see their log lines
+      // in the daemon stdout / session log without rolling their own emitter. The handler
+      // runs on the client's IO dispatcher; we keep it allocation-light and never throw —
+      // logging must not be able to take down a tool dispatch.
+      client.setNotificationHandler<LoggingMessageNotification>(
+        Method.Defined.NotificationsMessage,
+      ) { notification ->
+        routeLoggingMessage(notification.params, spawnedProcess.scriptFile.name)
+        CompletableDeferred(Unit)
+      }
       try {
         client.connect(transport)
       } catch (t: Throwable) {
@@ -140,6 +163,54 @@ class McpSubprocessSession internal constructor(
     }
   }
 }
+
+/**
+ * Routes an inbound MCP `notifications/message` (sent by scripted tools via `ctx.logger.*`)
+ * into the host's [Console]. `error` / `critical` / `alert` / `emergency` go to
+ * [Console.error]; everything else to [Console.log], which honors the host's stdout/stderr
+ * redirect and quiet-mode settings.
+ *
+ * The `data` field on the wire is either a plain string (for `ctx.logger.info("foo")`) or a
+ * JSON object containing `message` and optional `fields` (for `ctx.logger.info("foo", { ...
+ * })`). We unwrap both shapes into a flat `[<logger>] <message> <fields-json>` line so the
+ * Console abstraction sees a single string just like every other log emitter on the host.
+ */
+internal fun routeLoggingMessage(
+  params: LoggingMessageNotificationParams,
+  fallbackLoggerName: String,
+) {
+  val loggerLabel = params.logger ?: fallbackLoggerName
+  val line = "[$loggerLabel] " + renderLoggingData(params.data)
+  when (params.level) {
+    LoggingLevel.Error,
+    LoggingLevel.Critical,
+    LoggingLevel.Alert,
+    LoggingLevel.Emergency,
+    LoggingLevel.Warning -> Console.error(line)
+    LoggingLevel.Notice,
+    LoggingLevel.Info,
+    LoggingLevel.Debug -> Console.log(line)
+  }
+}
+
+private fun renderLoggingData(data: JsonElement): String =
+  when (data) {
+    is JsonPrimitive ->
+      // Bare-string payload (`ctx.logger.info("foo")`) → unwrap from JSON quoting.
+      data.contentOrNull ?: data.toString()
+    is JsonObject -> {
+      // Structured payload from the TS SDK: `{ message, fields? }`. Render as
+      // "<message> <fields-json>" when fields present; otherwise just the message.
+      val msg = data["message"]?.jsonPrimitive?.contentOrNull
+      val fields = data["fields"]?.jsonObject
+      when {
+        msg != null && fields != null && fields.isNotEmpty() -> "$msg ${fields}"
+        msg != null -> msg
+        else -> data.toString()
+      }
+    }
+    else -> data.toString()
+  }
 
 /**
  * Escalates [process] teardown under one [exitWait] knob: SIGTERM → wait → SIGKILL → wait.

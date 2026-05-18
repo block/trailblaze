@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Manage accounts on this device$"
+          textRegex: "Manage accounts on this device"

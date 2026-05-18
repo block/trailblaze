@@ -4,21 +4,21 @@ required:
   - description: "Dialog title resource"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/log_access_dialog_title$"
+        resourceIdRegex: "android:id/log_access_dialog_title"
   - description: "Dialog body explaining device logs"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/log_access_dialog_body$"
+        resourceIdRegex: "android:id/log_access_dialog_body"
   - description: "Allow one-time access button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/log_access_dialog_allow_button$"
+        resourceIdRegex: "android:id/log_access_dialog_allow_button"
   - description: "Deny button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/log_access_dialog_deny_button$"
+        resourceIdRegex: "android:id/log_access_dialog_deny_button"
 forbidden:
   - description: "Approximate-location accuracy radio (a different OS dialog)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_location_accuracy$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_location_accuracy"

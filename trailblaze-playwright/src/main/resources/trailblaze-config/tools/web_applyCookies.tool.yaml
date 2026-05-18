@@ -1,0 +1,2 @@
+id: web_applyCookies
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeApplyCookiesTool

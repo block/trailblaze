@@ -8,7 +8,7 @@ required:
   - description: "Sheet Grabber"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "Add-contacts-to-list header"
     selector:
       iosMaestro:
@@ -16,9 +16,9 @@ required:
   - description: "Selected checkmark for at least one contact"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^selected$"
+        accessibilityTextRegex: "selected"
 forbidden:
   - description: "InlineActionsHStack — only on contact-detail"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

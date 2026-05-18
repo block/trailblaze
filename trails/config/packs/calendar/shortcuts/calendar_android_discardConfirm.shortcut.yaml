@@ -9,5 +9,5 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Discard$"
-          classNameRegex: "\\Qandroid.widget.Button\\E"
+          textRegex: "Discard"
+          classNameRegex: "android.widget.Button"

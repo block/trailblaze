@@ -35,5 +35,9 @@ the most recent step that the waypoint matches AND that has a real screenshot.
                             <workspace>/packs/<id>/waypoints/ — the canonical
                             workspace-pack location. Warns if no such pack
                             exists. Mutually exclusive with --root (--root wins
-                            if both given).
+                            if both given). Also supplies the pack's declared
+                            `app_ids:` to expand `{{target.appId}}`
+                            placeholders during matching; exits with a usage
+                            error if the named pack can't be resolved or
+                            declares no `app_ids:`.
   -V, --version           Print version information and exit.

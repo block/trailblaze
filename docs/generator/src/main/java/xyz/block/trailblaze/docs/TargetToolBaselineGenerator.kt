@@ -1,7 +1,12 @@
 package xyz.block.trailblaze.docs
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.config.AppTargetCompanion
 import xyz.block.trailblaze.config.AppTargetYamlLoader
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ResolvedToolSet
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolSetYamlLoader
@@ -20,6 +25,13 @@ import java.io.File
 class TargetToolBaselineGenerator(
   private val generatedDir: File,
   private val companions: Map<String, AppTargetCompanion> = emptyMap(),
+  /**
+   * Base directory for resolving relative `mcp_servers[].script` paths so the doc can list
+   * MCP-provided tool names alongside Kotlin ones. Defaults to the JVM's current working
+   * directory, matching the runtime contract for bundled / legacy target YAMLs (see
+   * [McpServerConfig.script]).
+   */
+  private val scriptBaseDir: File = File(System.getProperty("user.dir")),
 ) {
 
   fun generate() {
@@ -121,6 +133,61 @@ class TargetToolBaselineGenerator(
       }
     }
 
+    // From `mcp_servers:` script files (target-root scope — applies to every driver this
+    // target supports). Tool names are read statically from the script source via
+    // [McpToolNameExtractor] so doc generation doesn't need bun / node_modules on the host.
+    //
+    // Label as `script:<filename>` (not `mcp:<filename>`) to keep the user-facing baseline
+    // transport-agnostic — per the "trailblaze-tool-is-an-rpc-request" devlog, MCP is the
+    // transport we ship for scripted tools today, not part of the authoring surface.
+    config.mcpServers?.forEach { mcp ->
+      val scriptPath = mcp.script ?: return@forEach
+      val scriptFile = McpToolNameExtractor.resolveScript(scriptPath, scriptBaseDir)
+      val tsLabel = "script:${scriptFile.name}"
+      for (toolName in McpToolNameExtractor.extractToolNames(scriptFile)) {
+        val entry = toolEntries.getOrPut(toolName) { ToolEntry() }
+        entry.toolSets.add(tsLabel)
+        for (dt in allDrivers) {
+          if (toolName in (excluded[dt] ?: emptySet())) {
+            entry.excludedOn.add(dt)
+          } else {
+            entry.availableOn.add(dt)
+          }
+        }
+      }
+    }
+
+    // From target-level scripted tools (`target.tools:` — the `List<InlineScriptToolConfig>`).
+    // This is the pack-authoring path: each `<pack>/tools/<name>.yaml` descriptor is
+    // resolved by the pack loader into one [InlineScriptToolConfig] entry, with the tool
+    // name already extracted from the descriptor's `name:` field — no need to grep the
+    // script source like [McpToolNameExtractor] does for `mcp_servers:`.
+    //
+    // Scope: target-root by default, narrowed to the drivers matching the descriptor's
+    // `supportedPlatforms:` list (carried through to runtime as
+    // `_meta["trailblaze/supportedPlatforms"]`). A descriptor that declares
+    // `supportedPlatforms: [android]` is restricted to Android drivers in the table;
+    // omitting the field defaults to every driver the target supports.
+    //
+    // Label as `script:<filename>` so the source format matches the `mcp_servers:` rows —
+    // either path emits "this tool came from a JS/TS module," with the filename being the
+    // `.ts`/`.js` script for pack-authored tools or the bundle's `.js` for `mcp_servers:`.
+    config.tools?.forEach { inlineScript ->
+      val toolName = inlineScript.name
+      val scriptFile = File(inlineScript.script)
+      val tsLabel = "script:${scriptFile.name}"
+      val supportedDrivers = driversForScriptedTool(inlineScript, allDrivers)
+      val entry = toolEntries.getOrPut(toolName) { ToolEntry() }
+      entry.toolSets.add(tsLabel)
+      for (dt in supportedDrivers) {
+        if (toolName in (excluded[dt] ?: emptySet())) {
+          entry.excludedOn.add(dt)
+        } else {
+          entry.availableOn.add(dt)
+        }
+      }
+    }
+
     // Column headers
     val driverHeaders = allDrivers.map { "${it.yamlKey} (${it.platform.name})" }
 
@@ -142,6 +209,46 @@ class TargetToolBaselineGenerator(
     appendLine()
 
     appendLine(DocsGenerator.THIS_DOC_IS_GENERATED_MESSAGE)
+  }
+
+  /**
+   * Drivers this scripted tool applies to, derived from `_meta["trailblaze/supportedPlatforms"]`.
+   *
+   * The metadata key is set by the pack loader from the descriptor's `supportedPlatforms:`
+   * field. Values are platform names \u2014 `"android"`, `"ios"`, `"web"`, or `"compose"` \u2014
+   * matching the lowercase enum names on [xyz.block.trailblaze.devices.TrailblazeDevicePlatform].
+   *
+   * When the metadata is missing or empty, scope falls back to [allDrivers] (every driver
+   * the target supports) \u2014 same default the `mcp_servers:` path uses. When present, the
+   * returned set is the subset of [allDrivers] whose `platform` is named in the list. If
+   * the list contains a platform the target doesn't actually support, that platform is just
+   * silently absent from the result \u2014 the doc accurately reflects "where this tool could
+   * fire given the target's driver matrix" rather than what the descriptor wishfully claims.
+   */
+  private fun driversForScriptedTool(
+    inlineScript: InlineScriptToolConfig,
+    allDrivers: Set<TrailblazeDriverType>,
+  ): Set<TrailblazeDriverType> {
+    val supportedPlatforms = readSupportedPlatforms(inlineScript.meta) ?: return allDrivers
+    if (supportedPlatforms.isEmpty()) return allDrivers
+    return allDrivers.filterTo(linkedSetOf()) { dt ->
+      dt.platform.name.lowercase() in supportedPlatforms
+    }
+  }
+
+  /**
+   * Parses `meta["trailblaze/supportedPlatforms"]` as a list of lowercase platform names,
+   * or returns null when the key is absent / malformed. Malformed in-line entries (non-
+   * string array members) get silently dropped; the doc still renders against the
+   * remaining valid entries rather than failing the whole generator run on a typo in one
+   * descriptor's metadata.
+   */
+  private fun readSupportedPlatforms(meta: JsonObject?): Set<String>? {
+    val raw = meta?.get("trailblaze/supportedPlatforms") ?: return null
+    val array: JsonArray = runCatching { raw.jsonArray }.getOrNull() ?: return null
+    return array.mapNotNullTo(linkedSetOf()) { element ->
+      runCatching { element.jsonPrimitive.content.lowercase() }.getOrNull()
+    }
   }
 
   companion object {

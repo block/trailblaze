@@ -157,7 +157,13 @@ class WorkspaceClientDtsGenerator(
     }
     scriptedTools.forEach { st ->
       // Scripted-tool entries lose to a Kotlin descriptor of the same name (see kdoc).
-      byName.putIfAbsent(st.name, st.toEntry())
+      // Each descriptor expands to 1..N entries: single-tool descriptors yield one entry,
+      // multi-tool descriptors (with `tools: [...]`) yield one entry per `tools:` entry. The
+      // bundler's typed `client.tools.<name>(...)` surface needs one entry per advertised
+      // tool, so the flat list collapses multi-tool descriptors back to per-tool granularity here.
+      st.toEntries().forEach { entry ->
+        byName.putIfAbsent(entry.name, entry)
+      }
     }
     return byName.values.sortedBy { it.name }
   }
@@ -200,11 +206,38 @@ class WorkspaceClientDtsGenerator(
     is ToolParameterType.AnyOf -> jsonSchemaToTsType(null, null, propertyContext)
   }
 
-  private fun PackScriptedToolFile.toEntry(): ToolEntry = ToolEntry(
-    name = name,
-    description = description?.takeUnless { it.isBlank() },
-    params = inputSchema.map { (key, prop) -> prop.toParam(key, owner = name) },
-  )
+  /**
+   * Expands a [PackScriptedToolFile] into 1..N [ToolEntry] values:
+   *
+   *  - Single-tool descriptor (top-level `name:` + `inputSchema:`) → one entry.
+   *  - Multi-tool descriptor (`tools: [...]`) → one entry per `tools:` entry, each carrying
+   *    its own name / description / inputSchema. File-wide shortcuts (`supportedPlatforms`,
+   *    `requiresHost`, `_meta`) don't surface in the typed `.d.ts` client surface — they're
+   *    framework-level routing concerns, not author-facing tool args.
+   */
+  private fun PackScriptedToolFile.toEntries(): List<ToolEntry> {
+    val multiToolEntries = tools
+    if (multiToolEntries != null) {
+      return multiToolEntries.map { entry ->
+        ToolEntry(
+          name = entry.name,
+          description = entry.description?.takeUnless { it.isBlank() },
+          params = entry.inputSchema.map { (key, prop) -> prop.toParam(key, owner = entry.name) },
+        )
+      }
+    }
+    val singleName = requireNotNull(name) {
+      "Single-tool scripted-tool descriptor for script '$script' is missing the required `name:` field. " +
+        "Either set `name:` or use the multi-tool shape with `tools:`."
+    }
+    return listOf(
+      ToolEntry(
+        name = singleName,
+        description = description?.takeUnless { it.isBlank() },
+        params = inputSchema.map { (key, prop) -> prop.toParam(key, owner = singleName) },
+      ),
+    )
+  }
 
   /**
    * Sister of [collectEntries] for the post-compile [InlineScriptToolConfig] shape. The merge

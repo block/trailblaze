@@ -14,8 +14,18 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -26,6 +36,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.StepPostcondition
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -317,11 +328,9 @@ class TrailblazeRunnerUtilTest {
 
   @Test
   fun `null recording falls through to AI runSuspend`() = runBlocking {
-    // Pre-existing contract for unrecorded steps (recording = null) is unchanged: replay
-    // falls through to the AI runner. The previous variant of this test used
-    // ToolRecording(emptyList()), which is now invalid construction (see ToolRecording's
-    // init { require(...) } block); auto-satisfied is the explicit alternative for empty
-    // tool recordings.
+    // A step without a `recording:` block falls through to the AI runner. Empty `ToolRecording`
+    // instances are rejected at construction (see ToolRecording's init block) — to express
+    // "no recording", omit the block entirely so this path triggers.
     val runner = FakeTestAgentRunner(runSuspendReturn = { objectiveComplete("ran") })
     val callbackInvocations = mutableListOf<List<TrailblazeTool>>()
     val util =
@@ -343,35 +352,93 @@ class TrailblazeRunnerUtilTest {
     assertEquals(listOf<PromptStep>(step), runner.runSuspendCalls)
   }
 
-  @Test
-  fun `auto-satisfied recording is treated as recorded and skipped without AI fallback`() = runBlocking {
-    // Auto-satisfied recordings are explicit no-op recorded steps. They must NOT fall through
-    // to the AI runner — they advance deterministically with zero tools fired.
-    val runner = FakeTestAgentRunner(runSuspendReturn = { objectiveComplete("ai-ran") })
-    val callbackInvocations = mutableListOf<List<TrailblazeTool>>()
-    val util =
-      TrailblazeRunnerUtil(
-        runTrailblazeTool = { tools ->
-          callbackInvocations += tools
-          TrailblazeToolResult.Success()
-        },
-        trailblazeRunner = runner,
-      )
+  // --- TargetTemplateContext forwarding to StepPostconditionAsserter ---
+  //
+  // `TrailblazeRunnerUtil` ctor accepts an optional `target` and forwards it to
+  // `StepPostconditionAsserter.assert` so a templated `verifyWaypoint:` selector
+  // (`{{target.appId}}`) expands against the session's resolved app id. These two
+  // tests pin the forwarding end-to-end — same step, same postcondition, only the
+  // ctor's `target` arg differs.
 
+  @Test
+  fun `templated postcondition matches when ctor target is supplied`() = runBlocking {
+    val def = templatedResourceIdWaypoint(id = "test/templated-pc", suffix = "submit")
+    val screen = screenWithResourceIds(listOf("com.example.test:id/submit"))
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { TrailblazeToolResult.Success() },
+      trailblazeRunner = FakeTestAgentRunner(),
+      screenStateProvider = { screen },
+      waypointResolver = { id -> if (id == def.id) def else null },
+      target = TargetTemplateContext(appId = "com.example.test"),
+    )
     val step = DirectionStep(
-      step = "Skip on this platform",
+      step = "Tap submit",
       recordable = true,
-      recording = ToolRecording(tools = emptyList(), autoSatisfied = true),
+      recording = ToolRecording(listOf(tool("dummy"))),
+      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 500, pollIntervalMs = 100),
     )
 
-    val result =
-      util.runPromptSuspend(prompts = listOf(step), useRecordedSteps = true, selfHeal = false)
+    val result = util.runPromptSuspend(listOf(step), useRecordedSteps = true, selfHeal = false)
+    assertTrue(result is TrailblazeToolResult.Success, "expected Success, got $result")
+  }
 
-    assertTrue(result is TrailblazeToolResult.Success)
-    assertTrue(callbackInvocations.isEmpty(), "Auto-satisfied step should not fire any tools")
-    assertTrue(
-      runner.runSuspendCalls.isEmpty(),
-      "Auto-satisfied step should not fall through to AI runSuspend; got ${runner.runSuspendCalls}",
+  @Test
+  fun `templated postcondition throws when ctor target is null`() {
+    val def = templatedResourceIdWaypoint(id = "test/templated-pc-null", suffix = "submit")
+    val screen = screenWithResourceIds(listOf("com.example.test:id/submit"))
+    val util = TrailblazeRunnerUtil(
+      runTrailblazeTool = { TrailblazeToolResult.Success() },
+      trailblazeRunner = FakeTestAgentRunner(),
+      screenStateProvider = { screen },
+      waypointResolver = { id -> if (id == def.id) def else null },
+      // target = null (default) — placeholder stays literal, asserter reports NotMatched,
+      // which the runner converts to a thrown TrailblazeException.
+    )
+    val step = DirectionStep(
+      step = "Tap submit",
+      recordable = true,
+      recording = ToolRecording(listOf(tool("dummy"))),
+      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 200, pollIntervalMs = 100),
+    )
+
+    val ex = assertThrowsTrailblazeException {
+      runBlocking { util.runPromptSuspend(listOf(step), useRecordedSteps = true, selfHeal = false) }
+    }
+    val msg = ex.message ?: ""
+    assertTrue(msg.contains("Postcondition"), "msg should mention postcondition: $msg")
+    assertTrue(msg.contains(def.id), "msg should name the waypoint: $msg")
+  }
+
+  private fun templatedResourceIdWaypoint(id: String, suffix: String): WaypointDefinition =
+    WaypointDefinition(
+      id = id,
+      required = listOf(
+        WaypointSelectorEntry(
+          selector = TrailblazeNodeSelector(
+            androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+              resourceIdRegex = "^{{target.appId}}:id/$suffix$",
+            ),
+          ),
+        ),
+      ),
+    )
+
+  private fun screenWithResourceIds(resourceIds: List<String>): ScreenState = object : ScreenState {
+    override val screenshotBytes: ByteArray? = null
+    override val deviceWidth: Int = 1080
+    override val deviceHeight: Int = 1920
+    override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+    override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+    override val trailblazeNodeTree: TrailblazeNode = TrailblazeNode(
+      nodeId = 1,
+      children = resourceIds.mapIndexed { i, rid ->
+        TrailblazeNode(
+          nodeId = (i + 2).toLong(),
+          driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = rid),
+        )
+      },
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
     )
   }
 

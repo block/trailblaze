@@ -236,6 +236,20 @@ sealed interface TrailblazeLog {
      * a lower-level executor tool used to implement it.
      */
     val isTopLevelToolCall: Boolean = false,
+    /**
+     * `true` when the dispatch ran on the host JVM (subprocess MCP tool, in-process QuickJS tool,
+     * `@TrailblazeToolClass(requiresHost = true)`, or one of the dual-mode primitives the host
+     * preferentially picks up). `false` when the dispatch was RPC-routed to a device / browser /
+     * cloud driver — those entries are emitted on the dispatch target and pulled back via
+     * `adb pull` etc., so they're naturally `dispatchedHostSide = false`.
+     *
+     * Surfaced for developer-experience reasons: a scripted-tool author calling a primitive that
+     * silently routes host-side (via `prefersHostSideForCallback`) used to have no log breadcrumb
+     * for *where* the dispatch actually ran. Reports / session viewers can filter or badge on this
+     * field. Defaults to `false` for backward compatibility with older logs and for paths that
+     * don't (yet) opt in — semantically "unknown / not host-side."
+     */
+    val dispatchedHostSide: Boolean = false,
   ) : TrailblazeLog,
     HasTrailblazeTool,
     HasTraceId,

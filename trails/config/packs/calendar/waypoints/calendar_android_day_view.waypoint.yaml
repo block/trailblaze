@@ -4,7 +4,7 @@ required:
   - description: "Toolbar 'May' date picker button (calendar header is present)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/date_picker_button"
   - description: "Single-day timeline cell with 'Open Schedule View' action — present only on Day view"
     selector:
       androidAccessibility:
@@ -12,7 +12,7 @@ required:
   - description: "Create-new-event FAB"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/floating_action_button"
 forbidden:
   - description: "Multi-day cell w/ 'Open Day View' would mean we're on schedule/3-day/week, not day"
     selector:

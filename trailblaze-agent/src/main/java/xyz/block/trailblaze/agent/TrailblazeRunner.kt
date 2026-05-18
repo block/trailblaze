@@ -19,6 +19,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplet
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.agent.model.VerifyAssertionLedger
 import xyz.block.trailblaze.agent.util.toLlmResponseHistory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -62,6 +63,18 @@ class TrailblazeRunner(
   val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
   systemPromptTemplate: String? = null,
+  /**
+   * When true, multi-target verify steps are auto-terminated as soon as every required
+   * assertion (one per quoted target on a non-blank line) has been satisfied by a successful
+   * verification tool call. This breaks the rotating-assertion loop where the LLM never emits
+   * `objectiveStatus(COMPLETED)` and burns the full LLM-call budget until MAX_CALLS_REACHED.
+   *
+   * Defaults to the env-var-driven value for safety; flip on per-run via constructor wiring
+   * once the structural fix has been canaried. Single-bullet verify steps and verify text
+   * without quoted targets are unaffected — the ledger reports zero required targets and
+   * `allSatisfied()` returns false, so behavior matches the legacy flow.
+   */
+  private val autoTerminateVerifySteps: Boolean = isAutoTerminateVerifyStepsEnabledByDefault(),
 ) : TestAgentRunner {
 
   private val tracingLlmClient: LLMClient = TracingLlmClient(llmClient)
@@ -116,6 +129,17 @@ class TrailblazeRunner(
   ): AgentTaskStatus {
     logObjectiveStart(prompt)
     val stepToolStrategy = prompt.getToolStrategy()
+    // Attach the verify-step ledger before the LLM loop starts. The helper checks for it on
+    // each tool response — null ledger means legacy behavior. Skipping when one is already
+    // present preserves any ledger an upstream caller set manually (e.g., recover()).
+    if (autoTerminateVerifySteps && prompt is VerificationStep && stepStatus.verifyAssertionLedger == null) {
+      val ledger = VerifyAssertionLedger(verifyText = prompt.verify)
+      stepStatus.attachVerifyAssertionLedger(ledger)
+      Console.info(
+        "  [VERIFY_AUTO_COMPLETE] Ledger attached: ${ledger.requiredTargets.size} parsed " +
+          "target(s) + behavioral rotating-loop detection.",
+      )
+    }
     // Sliding window of recent tool call fingerprints (tool:args) for loop detection.
     // Capped at STUCK_FINGERPRINT_WINDOW entries to avoid unbounded growth.
     // Each entry represents one tool call from an LLM response — a single response may
@@ -409,6 +433,20 @@ class TrailblazeRunner(
 
     @Deprecated("Use composeSystemPrompt() instead", ReplaceWith("composeSystemPrompt()"))
     val defaultSystemPrompt: String get() = composeSystemPrompt()
+
+    /**
+     * Reads the verify-step auto-termination default from the `TRAILBLAZE_AUTO_TERMINATE_VERIFY_STEPS`
+     * environment variable or the JVM system property of the same name. Accepts `1`/`true`/`yes`
+     * (case-insensitive) as on; anything else is off. The runner's constructor flag overrides this
+     * for callers that want explicit control (e.g., unit tests).
+     */
+    internal fun isAutoTerminateVerifyStepsEnabledByDefault(): Boolean {
+      val envName = "TRAILBLAZE_AUTO_TERMINATE_VERIFY_STEPS"
+      val raw = System.getenv(envName)?.takeIf { it.isNotBlank() }
+        ?: System.getProperty(envName)?.takeIf { it.isNotBlank() }
+        ?: return false
+      return raw.trim().lowercase() in setOf("1", "true", "yes")
+    }
   }
 }
 

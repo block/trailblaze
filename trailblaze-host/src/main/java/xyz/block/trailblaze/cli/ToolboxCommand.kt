@@ -32,6 +32,22 @@ import java.util.concurrent.Callable
 )
 class ToolboxCommand : Callable<Int> {
 
+  @CommandLine.Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "ROLE",
+    description = [
+      "Optional role filter — show only tools tagged with this role.",
+      "Valid values: trailheads, shortcuts.",
+      "  trailheads — tools that bring the device to a known starting state " +
+        "(launch + sign-in, deep-link, etc.). Use one at the start of every trail.",
+      "  shortcuts  — tools that jump between named waypoints during a trail.",
+      "Omit to show everything; trailheads and shortcuts will be called out as " +
+        "headline sections above the toolset listing.",
+    ],
+  )
+  var role: String? = null
+
   @Option(
     names = ["--name", "-n"],
     description = ["Show details for a single tool by name"],
@@ -46,13 +62,13 @@ class ToolboxCommand : Callable<Int> {
 
   @Option(
     names = ["--search", "-s"],
-    description = ["Search tools by keyword (matches names and descriptions)"],
+    description = ["Substring search on tool name and description."],
   )
   var search: String? = null
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Filter by platform: android, ios, web"],
+    description = ["Target device (e.g. android, android/emulator-5554)."],
   )
   var device: String? = null
 
@@ -69,6 +85,20 @@ class ToolboxCommand : Callable<Int> {
   var verbose: Boolean = false
 
   override fun call(): Int {
+    // Validate the optional positional role filter early — surface usage rather than letting
+    // a typo silently render the unfiltered grouped view.
+    role?.let { r ->
+      if (r.lowercase() !in setOf("trailheads", "shortcuts")) {
+        Console.error("Unknown role '$r'. Valid roles: trailheads, shortcuts.")
+        Console.error("")
+        Console.error("Examples:")
+        Console.error("  trailblaze toolbox trailheads --device android --target square")
+        Console.error("  trailblaze toolbox shortcuts --device android --target square")
+        Console.error("  trailblaze toolbox --device android --target square    # everything")
+        return CommandLine.ExitCode.USAGE
+      }
+    }
+
     // --name lookups work without --device/--target (asking about a specific tool)
     // Everything else requires both to avoid showing inapplicable tools
     if (name == null && (device == null || target == null)) {
@@ -112,7 +142,7 @@ class ToolboxCommand : Callable<Int> {
         return@cliWithDaemon CommandLine.ExitCode.SOFTWARE
       }
 
-      formatToolsResult(result.content, name, target, search, detail)
+      formatToolsResult(result.content, name, target, search, detail, role?.lowercase())
 
       CommandLine.ExitCode.OK
     }
@@ -124,6 +154,7 @@ class ToolboxCommand : Callable<Int> {
     targetFilter: String?,
     searchQuery: String?,
     showDetail: Boolean,
+    roleFilter: String?,
   ) {
     val json = try {
       Json.parseToJsonElement(content).jsonObject
@@ -151,6 +182,14 @@ class ToolboxCommand : Callable<Int> {
       return
     }
 
+    // Role-filtered mode: just the trailhead-tagged (or shortcut-tagged) tools for the current
+    // target/platform, with descriptions inlined. Renders before the target/index dispatch so
+    // `toolbox trailheads --target=square` doesn't get routed through the broader target view.
+    if (roleFilter != null) {
+      formatRoleFilterResult(json, roleFilter)
+      return
+    }
+
     // Target mode: tools for a specific target (default target routes to index mode)
     if (targetFilter != null &&
       !targetFilter.equals(DefaultTrailblazeHostAppTarget.id, ignoreCase = true)
@@ -159,7 +198,7 @@ class ToolboxCommand : Callable<Int> {
       return
     }
 
-    // Index mode: full overview
+    // Index mode: full overview (now leads with role-grouped sections when present)
     formatIndexResult(json, showDetail)
   }
 
@@ -181,6 +220,27 @@ class ToolboxCommand : Callable<Int> {
 
     val platformToolsets = json["platformToolsets"]?.jsonArray
     val targetToolsets = json["targetToolsets"]?.jsonArray
+
+    // Role-grouped headlines — every trail starts with a trailhead, so trailheads and shortcuts
+    // get called out before the toolset listing so authors see them first. The data comes from
+    // the daemon's response (`trailheadTools` / `shortcutTools` lists), looked up by name into
+    // the toolsets we just received so each entry can carry its tool description on the same
+    // line. When the lists are empty (no trailhead-tagged tools for this target/platform), the
+    // sections are silently omitted.
+    renderRoleHeadline(
+      json = json,
+      roleKey = "trailheadTools",
+      header = "Trailheads (start your trail here):",
+      platformToolsets = platformToolsets,
+      targetToolsets = targetToolsets,
+    )
+    renderRoleHeadline(
+      json = json,
+      roleKey = "shortcutTools",
+      header = "Shortcuts (jump between waypoints):",
+      platformToolsets = platformToolsets,
+      targetToolsets = targetToolsets,
+    )
 
     // Platform toolsets
     if (platformToolsets != null && platformToolsets.isNotEmpty()) {
@@ -247,6 +307,79 @@ class ToolboxCommand : Callable<Int> {
         Console.info("  toolbox --target <name>     Show target-specific tools")
       }
     }
+  }
+
+  /**
+   * Filtered view: only the tools with the given role (`trailheads` or `shortcuts`) for the
+   * current target/platform. Fired by the positional ROLE arg on the CLI; rendered via
+   * [ToolboxFormatter.renderRoleSection] so the line-shape is unit-tested.
+   */
+  private fun formatRoleFilterResult(json: kotlinx.serialization.json.JsonObject, role: String) {
+    val currentTarget = json["currentTarget"]?.jsonPrimitive?.content
+    val currentPlatform = json["currentPlatform"]?.jsonPrimitive?.content
+    if (currentTarget != null && currentPlatform != null) {
+      Console.info("$currentTarget ($currentPlatform)")
+      Console.info("")
+    }
+
+    val roleKey = roleKeyFor(role) ?: run {
+      Console.error("Internal error: unknown role '$role'") // validated upstream
+      return
+    }
+    val names = json[roleKey]?.jsonArray?.mapNotNull { it.jsonPrimitive.content } ?: emptyList()
+    if (names.isEmpty()) {
+      val suffix = if (role == "trailheads") "*.trailhead.yaml" else "*.shortcut.yaml"
+      ToolboxFormatter.renderRoleEmptyMessage(role, currentTarget, currentPlatform, suffix)
+        .forEach { Console.info(it) }
+      return
+    }
+
+    // Pull descriptions from both index-mode (`platformToolsets`/`targetToolsets`) and
+    // target-mode (`toolGroups`/`toolsByPlatform`) shapes — `toolbox <role> --target=<non-default>`
+    // returns a target-mode envelope, and we need its descriptors to inline descriptions.
+    val descriptionsByName = ToolboxFormatter.collectToolDescriptions(
+      json["platformToolsets"]?.jsonArray,
+      json["targetToolsets"]?.jsonArray,
+      json["toolGroups"]?.jsonArray,
+      json["toolsByPlatform"]?.jsonArray,
+    )
+    ToolboxFormatter.renderRoleSection(headerFor(role), names, descriptionsByName)
+      .forEach { Console.info(it) }
+    Console.info("")
+    Console.info("Use `trailblaze toolbox --name <tool>` for full description, parameters, and usage.")
+  }
+
+  /**
+   * Top-of-listing headline section for a role. Reads tool names from the JSON response and
+   * delegates rendering to [ToolboxFormatter.renderRoleSection]; emits the section followed
+   * by a blank-line separator. Silently emits nothing when the role list is empty.
+   */
+  private fun renderRoleHeadline(
+    json: kotlinx.serialization.json.JsonObject,
+    roleKey: String,
+    header: String,
+    platformToolsets: kotlinx.serialization.json.JsonArray?,
+    targetToolsets: kotlinx.serialization.json.JsonArray?,
+  ) {
+    val names = json[roleKey]?.jsonArray?.mapNotNull { it.jsonPrimitive.content } ?: return
+    if (names.isEmpty()) return
+    val descriptionsByName = ToolboxFormatter.collectToolDescriptions(platformToolsets, targetToolsets)
+    ToolboxFormatter.renderRoleSection(header, names, descriptionsByName)
+      .forEach { Console.info(it) }
+    Console.info("")
+  }
+
+  /** Maps the CLI's positional role string to the JSON key in the daemon response. */
+  private fun roleKeyFor(role: String): String? = when (role) {
+    "trailheads" -> "trailheadTools"
+    "shortcuts" -> "shortcutTools"
+    else -> null
+  }
+
+  /** Maps the CLI's positional role string to the section header rendered in output. */
+  private fun headerFor(role: String): String = when (role) {
+    "trailheads" -> "Trailheads (start your trail here):"
+    else -> "Shortcuts (jump between waypoints):"
   }
 
   private fun formatNameResult(json: kotlinx.serialization.json.JsonObject) {

@@ -9,7 +9,7 @@ required:
   - description: "Sheet Grabber affordance (modal sheet)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "Add-contacts-to-list header (regex matches any list name in curly quotes)"
     selector:
       iosMaestro:
@@ -17,13 +17,13 @@ required:
   - description: "Select Contacts footer button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Select Contacts$"
+        accessibilityTextRegex: "Select Contacts"
 forbidden:
   - description: "New Contact title — would mean we're on the new-contact draft sheet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"
   - description: "InlineActionsHStack — only on contact-detail (no contact-detail in sheet)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

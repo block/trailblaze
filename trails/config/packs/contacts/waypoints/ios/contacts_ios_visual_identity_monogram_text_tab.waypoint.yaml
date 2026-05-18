@@ -7,19 +7,19 @@ required:
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Text editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Text"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Keyboard accessory (text input is active)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^AutoFill$"
+        accessibilityTextRegex: "AutoFill"
 forbidden:
   - description: "Crop tab — only on the photo editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Crop$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Crop"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

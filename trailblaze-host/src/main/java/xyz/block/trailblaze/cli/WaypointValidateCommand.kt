@@ -91,7 +91,15 @@ class WaypointValidateCommand : Callable<Int> {
     }
     val logFile = resolveScreenStateFile(root) ?: return CommandLine.ExitCode.USAGE
     val screen = SessionLogScreenState.loadStep(logFile)
-    val r = WaypointMatcher.match(def, screen)
+    val target = when (val res = resolveTargetTemplateContext(targetId = targetId)) {
+      is TargetContextResolution.Error -> {
+        Console.error(res.message)
+        return CommandLine.ExitCode.USAGE
+      }
+      is TargetContextResolution.Resolved -> res.context
+      is TargetContextResolution.NoTarget -> null
+    }
+    val r = WaypointMatcher.match(def, screen, target)
     Console.log("Definition: ${def.id}")
     def.description?.let { Console.log("  $it") }
     Console.log("Screen state: ${logFile.name}")

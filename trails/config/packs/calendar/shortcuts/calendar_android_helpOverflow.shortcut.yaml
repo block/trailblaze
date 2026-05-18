@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^More options$"
+          contentDescriptionRegex: "More options"

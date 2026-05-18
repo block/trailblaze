@@ -13,6 +13,7 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -52,9 +53,16 @@ class BundleTrailblazeTool(
    * is omitted and no invocation is registered.
    */
   private val callbackContext: BundleToolRegistration.JsScriptingCallbackContext? = null,
-) : HostLocalExecutableTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
 
   override val advertisedToolName: String get() = advertisedName.toolName
+
+  // Surface the LLM-supplied args as `rawToolArguments` so `toLogPayload()` writes them
+  // into the `TrailblazeToolLog.raw` field verbatim. Without this, the class-backed encoder
+  // falls through to `encodeAsRawJsonOrEmpty()` — which fails (no `@Serializable`) and
+  // emits an empty `raw`, leaving recordings with this tool's dispatch reduced to a name
+  // and no args. Same shape `SubprocessTrailblazeTool` uses for the same reason.
+  override val rawToolArguments: JsonObject get() = args
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val legacyEnvelope = TrailblazeContextEnvelope.buildLegacyArgEnvelope(toolExecutionContext)

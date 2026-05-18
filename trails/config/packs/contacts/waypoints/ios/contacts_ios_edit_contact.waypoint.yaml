@@ -10,29 +10,29 @@ required:
   - description: "Close (X) leading nav button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
   - description: "Add Photo button (the editable-photo affordance, only present when editing)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add Photo$"
+        accessibilityTextRegex: "Add Photo"
   - description: "Remove photo button (RemoveAvatarPosterButton resourceId)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^RemoveAvatarPosterButton$"
+        resourceIdRegex: "RemoveAvatarPosterButton"
   - description: "Insert-add-phone affordance — only on the edit/new contact form"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add phone$"
+        accessibilityTextRegex: "add phone"
 forbidden:
   - description: "New Contact header — would mean we're on the new-contact draft, not edit"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"
   - description: "Sheet Grabber — only present on the new-contact bottom sheet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "Edit nav button — present on read-only detail, not in edit mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

@@ -118,6 +118,15 @@ sealed interface AccessibilityAction {
     val fallbackX: Int? = null,
     val fallbackY: Int? = null,
     val timeoutMs: Long = DEFAULT_ELEMENT_TIMEOUT_MS,
+    /**
+     * When true, a timeout-exhausted no-match is treated as success (no-op) instead of an
+     * error. Mirrors Maestro's `tapOn`-with-`optional: true` semantics so legacy recordings
+     * that gate on transient runtime permission dialogs ("Allow BLUETOOTH_CONNECT", etc.)
+     * keep working under the accessibility driver. Without this flag, a warm emulator where
+     * the permission was already granted on a prior run has no dialog, the selector times
+     * out, and the trail fails on what's supposed to be a best-effort step.
+     */
+    val optional: Boolean = false,
   ) : AccessibilityAction {
     override val description: String
       get() = "${if (longPress) "Long press" else "Tap"} on ${nodeSelector.description()}"

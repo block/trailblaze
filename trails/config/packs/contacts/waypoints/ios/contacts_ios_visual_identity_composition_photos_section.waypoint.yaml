@@ -8,19 +8,19 @@ required:
   - description: "Visual identity Done button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityDoneButton$"
+        resourceIdRegex: "VisualIdentityDoneButton"
   - description: "Photos StickyHeader"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Photos$"
-        resourceIdRegex: "^StickyHeaderContent$"
+        accessibilityTextRegex: "Photos"
+        resourceIdRegex: "StickyHeaderContent"
   - description: "New Photo create-suggestion button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Photo$"
-        resourceIdRegex: "^StickyHeaderContent$"
+        accessibilityTextRegex: "New Photo"
+        resourceIdRegex: "StickyHeaderContent"
 forbidden:
   - description: "Choose button — only on the per-type editor, not the composition"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"

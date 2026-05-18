@@ -337,11 +337,139 @@ class SessionToolSetTest {
 
     assertContains(json["error"]!!.jsonPrimitive.content, "No active session")
   }
+
+  // ── target / targetSource fields ────────────────────────────────────────
+  //
+  // These pin the visibility plumbing the PR added — session-start, session-
+  // info and session-stop must surface the effective target (or report "none")
+  // so users / agents don't lose track of which target a recording is running
+  // under. Foot-gun closer: after `session stop`, the override is gone; the
+  // hint reminds the user.
+
+  @Test
+  fun `session START reports session-override when a per-session target is set`() = runTest {
+    val bridge = SessionTestBridge(
+      activeSessionId = trailblazeSessionId,
+      sessionTargets = mutableMapOf(trailblazeSessionId to "myapp"),
+      daemonWideTarget = "default",
+    )
+    val toolSet = SessionToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      sessionIdProvider = { trailblazeSessionId },
+    )
+
+    val result = toolSet.session(action = SessionToolSet.SessionAction.START)
+    val json = Json.parseToJsonElement(result).jsonObject
+
+    assertEquals("myapp", json["target"]?.jsonPrimitive?.content)
+    assertEquals(
+      SessionToolSet.TARGET_SOURCE_SESSION_OVERRIDE,
+      json["targetSource"]?.jsonPrimitive?.content,
+    )
+    assertContains(json["message"]!!.jsonPrimitive.content, "Target: myapp (session-override)")
+  }
+
+  @Test
+  fun `session START reports daemon-wide when no override is set`() = runTest {
+    val bridge = SessionTestBridge(
+      activeSessionId = trailblazeSessionId,
+      daemonWideTarget = "default",
+      // sessionTargets intentionally empty — fall through to daemon-wide.
+    )
+    val toolSet = SessionToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      sessionIdProvider = { trailblazeSessionId },
+    )
+
+    val result = toolSet.session(action = SessionToolSet.SessionAction.START)
+    val json = Json.parseToJsonElement(result).jsonObject
+
+    assertEquals("default", json["target"]?.jsonPrimitive?.content)
+    assertEquals(
+      SessionToolSet.TARGET_SOURCE_DAEMON_WIDE,
+      json["targetSource"]?.jsonPrimitive?.content,
+    )
+  }
+
+  @Test
+  fun `session START reports null target when nothing is configured`() = runTest {
+    val bridge = SessionTestBridge(
+      activeSessionId = trailblazeSessionId,
+      // No session override, no daemon-wide default.
+    )
+    val toolSet = SessionToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      sessionIdProvider = { trailblazeSessionId },
+    )
+
+    val result = toolSet.session(action = SessionToolSet.SessionAction.START)
+    val json = Json.parseToJsonElement(result).jsonObject
+
+    // kotlinx-serialization omits null fields, so the keys are absent (not
+    // present-with-JsonNull). Use containsKey to distinguish "absent" from
+    // "null literal" — they're both rendered the same way over the wire
+    // but the assertion's intent is clearer.
+    kotlin.test.assertNull(json["target"])
+    kotlin.test.assertNull(json["targetSource"])
+  }
+
+  @Test
+  fun `session STOP includes cleared-override hint only when an override existed`() = runTest {
+    val bridge = SessionTestBridge(
+      activeSessionId = trailblazeSessionId,
+      sessionTargets = mutableMapOf(trailblazeSessionId to "myapp"),
+    )
+    val toolSet = SessionToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      sessionIdProvider = { trailblazeSessionId },
+    )
+
+    val result = toolSet.session(action = SessionToolSet.SessionAction.STOP)
+    val json = Json.parseToJsonElement(result).jsonObject
+
+    assertContains(
+      json["message"]!!.jsonPrimitive.content,
+      "the `--target` override set on this session is cleared",
+    )
+  }
+
+  @Test
+  fun `session STOP omits cleared-override hint when no override was set`() = runTest {
+    val bridge = SessionTestBridge(
+      activeSessionId = trailblazeSessionId,
+      // sessionTargets empty — no override on this session.
+    )
+    val toolSet = SessionToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      sessionIdProvider = { trailblazeSessionId },
+    )
+
+    val result = toolSet.session(action = SessionToolSet.SessionAction.STOP)
+    val json = Json.parseToJsonElement(result).jsonObject
+
+    kotlin.test.assertFalse(
+      "override is cleared" in json["message"]!!.jsonPrimitive.content,
+      "stops on sessions without an override should not mention overrides — got: ${json["message"]}",
+    )
+  }
 }
 
 /** Mock bridge for session tool tests. */
 class SessionTestBridge(
   private val activeSessionId: SessionId? = null,
+  /**
+   * Per-session target overrides — keyed by session id. Mirrors the
+   * production registry on `TrailblazeDeviceManager`. Tests populate this
+   * to drive the resolver in `SessionToolSet.resolveTargetForSession`.
+   */
+  private val sessionTargets: MutableMap<SessionId, String> = mutableMapOf(),
+  /** Returned by [getCurrentAppTargetId] — the daemon-wide fallback. */
+  private val daemonWideTarget: String? = null,
 ) : TrailblazeMcpBridge {
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> = emptySet()
 
@@ -393,5 +521,7 @@ class SessionTestBridge(
 
   override fun selectAppTarget(appTargetId: String): String? = null
 
-  override fun getCurrentAppTargetId(): String? = null
+  override fun getCurrentAppTargetId(): String? = daemonWideTarget
+
+  override fun getTargetForSession(sessionId: SessionId): String? = sessionTargets[sessionId]
 }

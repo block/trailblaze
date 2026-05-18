@@ -8,17 +8,17 @@ required:
   - description: "Camera source button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^CameraButton$"
+        resourceIdRegex: "CameraButton"
   - description: "Photo Library source button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoLibraryButton$"
+        resourceIdRegex: "PhotoLibraryButton"
 forbidden:
   - description: "PXGGridLayout-Group — would mean we're on the actual photo grid"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PXGGridLayout-Group$"
+        resourceIdRegex: "PXGGridLayout-Group"
   - description: "Take Picture — would mean we're in the camera capture screen"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoCapture$"
+        resourceIdRegex: "PhotoCapture"

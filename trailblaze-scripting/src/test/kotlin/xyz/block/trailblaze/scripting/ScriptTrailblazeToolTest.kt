@@ -39,7 +39,7 @@ class ScriptTrailblazeToolTest {
     @BeforeClass
     fun initSerialization() {
       // Populates TrailblazeYaml.Default with every YAML-registered tool so the
-      // script's returned YAML can decode built-ins like tapOnPoint and pasteClipboard.
+      // script's returned YAML can decode built-ins like tapOnPoint and mobile_pasteClipboard.
       // Reading the lazy val triggers TrailblazeSerializationInitializer.buildAllTools()
       // (which is `internal` and not callable from here).
       xyz.block.trailblaze.yaml.TrailblazeYaml.Default
@@ -54,7 +54,7 @@ class ScriptTrailblazeToolTest {
         - tapOnPoint:
             x: 100
             y: 200
-        - pasteClipboard: {}
+        - mobile_pasteClipboard: {}
         `;
       """.trimIndent(),
     )
@@ -99,7 +99,7 @@ class ScriptTrailblazeToolTest {
     // Memory is empty → script takes the "empty" branch.
     val source = """
       if (input.memory.loggedIn === 'true') {
-        return '- pasteClipboard: {}';
+        return '- mobile_pasteClipboard: {}';
       } else {
         return `
         - tapOnPoint:
@@ -190,7 +190,7 @@ class ScriptTrailblazeToolTest {
 
     val tool = ScriptTrailblazeTool(
       source = """
-        const r = trailblaze.execute("pasteClipboard", {});
+        const r = trailblaze.execute("mobile_pasteClipboard", {});
         return "";
       """.trimIndent(),
     )
@@ -200,8 +200,8 @@ class ScriptTrailblazeToolTest {
 
     val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
     assertThat(toolLogs).hasSize(1)
-    assertThat(toolLogs[0].toolName).isEqualTo("pasteClipboard")
-    // pasteClipboard requires a Maestro agent in context; without one it throws, which the
+    assertThat(toolLogs[0].toolName).isEqualTo("mobile_pasteClipboard")
+    // mobile_pasteClipboard requires a Maestro agent in context; without one it throws, which the
     // dispatcher maps to an Error.ExceptionThrown result — still recorded.
     assertThat(toolLogs[0].successful).isEqualTo(false)
   }

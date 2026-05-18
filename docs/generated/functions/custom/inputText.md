@@ -19,6 +19,7 @@ NOTE:
 
 ### Optional Parameters
 - `reasoning`: `String`
+- `hideKeyboardAfter`: `Boolean`
 
 
 

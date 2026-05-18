@@ -6,20 +6,20 @@ required:
   - description: "Color editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Color$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Color"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Emoji editor tab in segmented control (sibling)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Emoji$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Emoji"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
 forbidden:
   - description: "Font tab — only on monogram editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Font$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Font"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

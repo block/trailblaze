@@ -15,10 +15,13 @@ Ask a question about what's on screen (uses AI vision, no actions taken)
   -h, --help               Show this help message and exit.
       --headless=<headless>
                            For --device web/...: launch the Playwright browser
-                             headless. When omitted, falls back to the
-                             persisted `web-headless` config (see `trailblaze
-                             config web-headless`). Pass --headless=false to
-                             force a visible browser, --headless=true to force
-                             headless. Ignored for non-web devices.
+                             headless. When omitted, auto-detects: headless on
+                             machines with no display (remote workstations,
+                             CI), headed otherwise. Falls back to the persisted
+                             `web-headless` config when a display is present
+                             (see `trailblaze config web-headless`). Pass
+                             --headless=false to force a visible browser,
+                             --headless=true to force headless. Ignored for
+                             non-web devices.
   -v, --verbose            Enable verbose output (show daemon logs, MCP calls)
   -V, --version            Print version information and exit.

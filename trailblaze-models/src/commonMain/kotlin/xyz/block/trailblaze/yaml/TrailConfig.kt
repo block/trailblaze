@@ -33,6 +33,21 @@ data class TrailConfig(
   val driver: String? = null,
   /** Optional Electron app configuration for [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] trails. */
   val electron: ElectronAppConfig? = null,
+  /**
+   * Optional labels for grouping and filtering trails (e.g., `[smoke, login, flaky]`). Free-form
+   * strings; informal namespacing is allowed (`flaky:retry-once`). Honored by future CLI tag
+   * filters; today this field is metadata-only.
+   */
+  val tags: List<String>? = null,
+  /**
+   * When non-null, mark this trail as skipped with the given reason. A skipped trail is parsed
+   * and validated but not executed — the CLI prints `Skipping <path>: <reason>` and exits 0 for
+   * that file. Empty strings are treated as "not skipped" so an accidental `skip: ""` doesn't
+   * silently disable a trail. The reason is required by convention (no `skip: true` shortcut)
+   * so every disabled trail carries a tracked reason — typically an issue reference like
+   * `"Compact element list regression — see #2194"`.
+   */
+  val skip: String? = null,
 )
 
 @Serializable

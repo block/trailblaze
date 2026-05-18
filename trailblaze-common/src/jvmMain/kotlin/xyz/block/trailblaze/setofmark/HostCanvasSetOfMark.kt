@@ -20,7 +20,15 @@ import javax.imageio.ImageWriteParam
 import kotlin.math.round
 import xyz.block.trailblaze.util.Console
 
-/** https://github.com/takahirom/arbigent/blob/5871d8a92a499423b00c1c5c280a55be9e5561cd/arbigent-core/src/main/java/io/github/takahirom/arbigent/ArbigentCanvas.kt */
+/**
+ * https://github.com/takahirom/arbigent/blob/5871d8a92a499423b00c1c5c280a55be9e5561cd/arbigent-core/src/main/java/io/github/takahirom/arbigent/ArbigentCanvas.kt
+ *
+ * Cross-platform atoms (base text size, base padding, color palette) live in
+ * [SetOfMarkPalette] so this AWT-based implementation stays in sync with
+ * `AndroidCanvasSetOfMark` on those shared values. The per-platform scale math and
+ * outline thickness stay local — see [SetOfMarkPalette]'s kdoc for the rationale on
+ * what's shared vs. local.
+ */
 class HostCanvasSetOfMark(
   private val bufferedImage: BufferedImage,
   private val deviceInfo: DeviceInfo? = null,
@@ -31,21 +39,14 @@ class HostCanvasSetOfMark(
     Src,
   }
 
-  internal val colors = listOf(
-    0x3F9101,
-    0x0E4A8E,
-    0xBCBF01,
-    0xBC0BA2,
-    0x61AA0D,
-    0x3D017A,
-    0xD6A60A,
-    0x7710A3,
-    0xA502CE,
-    0xeb5a00,
-  )
-
   companion object {
-    const val NUMBER_FONT_SIZE = 24f
+    /**
+     * Base label font size. Routed through [SetOfMarkPalette] so Android and Host stay
+     * in lockstep on what "default text" is sized to — Android's `Paint.textSize`
+     * (pixels) and AWT's `Font.deriveFont(Float)` (points-but-typically-pixels at 72 DPI)
+     * accept the same numeric value.
+     */
+    const val NUMBER_FONT_SIZE: Float = SetOfMarkPalette.BASE_TEXT_SIZE
     const val BOX_OUTLINE_THICKNESS = 2.0f
 
     /** Compact font for high-resolution screenshots (desktop / landscape tablet). */
@@ -159,19 +160,14 @@ class HostCanvasSetOfMark(
         val scaledBounds = scaleBoundsForPlatform(bounds)
 
         val text = element.nodeId.toString()
-        val color = Color(colors[index % colors.size])
+        val color = Color(SetOfMarkPalette.colorRgbAtIndex(index))
         drawRectOutline(scaledBounds, color)
 
         val (rawBoxWidth, rawBoxHeight) = textCalc(listOf(text))
-        val textPadding = 5
+        val textPadding = SetOfMarkPalette.BASE_PADDING
         val boxWidth = rawBoxWidth + textPadding * 2
         val boxHeight = rawBoxHeight + textPadding * 2
-        val bottomRightTextRect = ViewHierarchyFilter.Bounds(
-          scaledBounds.x2 - boxWidth,
-          scaledBounds.y2 - boxHeight,
-          scaledBounds.x2,
-          scaledBounds.y2,
-        )
+        val bottomRightTextRect = SetOfMarkLayout.bottomRightLabelRect(scaledBounds, boxWidth, boxHeight)
         drawRect(bottomRightTextRect, color)
         drawText(
           (bottomRightTextRect.x1 + textPadding).toFloat(),
@@ -224,11 +220,11 @@ class HostCanvasSetOfMark(
         val scaledBounds = scaleBoundsForPlatform(bounds)
 
         val text = element.refLabel ?: element.nodeId.toString()
-        val color = Color(colors[index % colors.size])
+        val color = Color(SetOfMarkPalette.colorRgbAtIndex(index))
         drawRectOutline(scaledBounds, color, outlineThickness)
 
         val (rawBoxWidth, rawBoxHeight) = textCalc(listOf(text), fontSize)
-        val textPadding = 5
+        val textPadding = SetOfMarkPalette.BASE_PADDING
         val boxWidth = rawBoxWidth + textPadding * 2
         val boxHeight = rawBoxHeight + textPadding * 2
         val labelRect = if (compactMode) {
@@ -236,12 +232,7 @@ class HostCanvasSetOfMark(
         } else {
           // Mobile/non-compact: keep the historical bottom-right placement (a 4 × 1
           // change shouldn't bother existing snapshot tests / golden screenshots).
-          ViewHierarchyFilter.Bounds(
-            scaledBounds.x2 - boxWidth,
-            scaledBounds.y2 - boxHeight,
-            scaledBounds.x2,
-            scaledBounds.y2,
-          )
+          SetOfMarkLayout.bottomRightLabelRect(scaledBounds, boxWidth, boxHeight)
         }
         paintedLabelRects.add(labelRect)
         drawRect(labelRect, color)
@@ -296,10 +287,7 @@ class HostCanvasSetOfMark(
   ): ViewHierarchyFilter.Bounds {
     val candidates = listOf(
       // Bottom-right (default — preserves the original visual mapping)
-      ViewHierarchyFilter.Bounds(
-        elementBounds.x2 - boxWidth, elementBounds.y2 - boxHeight,
-        elementBounds.x2, elementBounds.y2,
-      ),
+      SetOfMarkLayout.bottomRightLabelRect(elementBounds, boxWidth, boxHeight),
       // Top-right
       ViewHierarchyFilter.Bounds(
         elementBounds.x2 - boxWidth, elementBounds.y1,
@@ -345,7 +333,7 @@ class HostCanvasSetOfMark(
           // Scale bounds for iOS coordinate system
           val scaledBounds = scaleBoundsForPlatform(bounds)
           val text = viewHierarchyNode.nodeId.toString()
-          val color = Color(colors[viewHierarchyNode.nodeId.toInt() % colors.size])
+          val color = Color(SetOfMarkPalette.colorRgbAtIndex(viewHierarchyNode.nodeId.toInt()))
 
           drawRectOutline(
             topLeftX = scaledBounds.x1,
@@ -356,7 +344,7 @@ class HostCanvasSetOfMark(
           )
 
           val (textWidth, textHeight) = textCalc(listOf(text))
-          val textPadding = 5
+          val textPadding = SetOfMarkPalette.BASE_PADDING
           val textBoxWidth = textWidth + (textPadding * 2)
           val textBoxHeight = textHeight + (textPadding * 2)
 

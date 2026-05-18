@@ -73,8 +73,7 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
      * streams.
      *
      * @param platform The device platform, used to select the correct platform-specific
-     *   capture implementation. Pass `null` for platforms that don't support capture
-     *   (e.g., [TrailblazeDevicePlatform.WEB] today).
+     *   capture implementation. Pass `null` for platforms that don't support capture.
      */
     fun fromOptions(options: CaptureOptions, platform: TrailblazeDevicePlatform?): CaptureSession? {
       if (!options.hasAnyCaptureEnabled) return null
@@ -89,6 +88,8 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
           //  the recording + stale-lock fixes that are ready once the format is sorted out.
           // TrailblazeDevicePlatform.IOS ->
           //   streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
+          TrailblazeDevicePlatform.WEB ->
+            streams.add(xyz.block.trailblaze.capture.video.PlaywrightVideoCapture())
           else -> Unit
         }
       }

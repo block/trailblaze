@@ -16,11 +16,13 @@ import kotlinx.serialization.Serializable
  *    QuickJS bundle path). First-class for authoring Trailblaze-aware tools
  *    with typesafe annotations through `@trailblaze/scripting`.
  *
- *  - [command] — explicit stdio MCP server command. Host-agent only — cannot
- *    be bundled for on-device. Any MCP-speaking executable works: Python
- *    servers, compiled binaries, `npx`-vendored npm packages. **Reserved in
- *    the schema for forward compatibility; not implemented in the current
- *    landing.** See
+ *  - [command] — explicit stdio MCP server command as an argument list, where
+ *    the first element is the executable and the rest are arguments (e.g.
+ *    `["python", "my-server.py"]`, `["npx", "my-package"]`). Host-agent only
+ *    — cannot be bundled for on-device. Any MCP-speaking executable works.
+ *    Using a list instead of a shell string avoids shell-injection risks and
+ *    escaping errors. **Reserved in the schema for forward compatibility; not
+ *    implemented in the current landing.** See
  *    `docs/devlog/2026-04-21-scripted-tools-mcp-integration-patterns.md`
  *    for the future integration design.
  *
@@ -47,21 +49,22 @@ data class McpServerConfig(
    */
   val script: String? = null,
   /**
-   * Explicit stdio MCP server command (e.g. `python`, `npx`, `./my-binary`).
-   * Host-agent only. Mutually exclusive with [script]. [args] and [env]
-   * configure the spawn. **Schema reserved; the current landing does not
-   * yet implement `command:` spawns.**
+   * Explicit stdio MCP server command as an argument list (`[executable, arg1, arg2, ...]`,
+   * e.g. `["python", "my-server.py"]` or `["npx", "my-package"]`). The first element is the
+   * executable; remaining elements are passed as individual arguments — no shell is invoked,
+   * so no escaping is required. Host-agent only. Mutually exclusive with [script]. [env]
+   * configures the spawn environment. **Schema reserved; the current landing does not yet
+   * implement `command:` spawns.**
    */
-  val command: String? = null,
-  val args: List<String>? = null,
+  val command: List<String>? = null,
   val env: Map<String, String>? = null,
 ) {
   init {
-    require((script?.isNotBlank() == true) xor (command?.isNotBlank() == true)) {
-      "mcp_servers entry requires exactly one of `script:` or `command:` (non-blank)"
+    require((script?.isNotBlank() == true) xor (command?.isNotEmpty() == true)) {
+      "mcp_servers entry requires exactly one of `script:` or `command:` (non-empty list)"
     }
-    require(command != null || (args == null && env == null)) {
-      "mcp_servers `args:` and `env:` are only valid alongside `command:` entries"
+    require(command != null || env == null) {
+      "mcp_servers `env:` is only valid alongside `command:` entries"
     }
   }
 

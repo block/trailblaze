@@ -4,19 +4,19 @@ required:
   - description: "Drag handle"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"
   - description: "Collapse action — sheet expanded"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Collapse event sheet$"
+        contentDescriptionRegex: "Collapse event sheet"
   - description: "Availability row shows Free"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"
-        textRegex: "^Free$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/first_line_text"
+        textRegex: "Free"
 forbidden:
   - description: "Default Busy state would be the unmodified case"
     selector:
       androidAccessibility:
-        textRegex: "^Busy$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"
+        textRegex: "Busy"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/first_line_text"

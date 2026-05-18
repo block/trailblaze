@@ -113,10 +113,6 @@ data class TapTrailblazeTool(
       return listOf(
         TapOnByElementSelector(
           reason = reasoning,
-          // Best-effort placeholder so the data class' non-null `selector` is satisfied. The
-          // accessibility dispatch path uses [nodeSelector]; this field is never consulted on
-          // the accessibility path (TapOnByElementSelector.execute refuses Maestro fallback).
-          selector = accessibilityNodeSelector.toTrailblazeElementSelector(),
           longPress = longPress,
           nodeSelector = accessibilityNodeSelector,
         ),

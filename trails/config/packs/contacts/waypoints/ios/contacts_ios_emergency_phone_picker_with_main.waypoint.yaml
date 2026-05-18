@@ -8,14 +8,14 @@ required:
   - description: "main row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^main$"
+        accessibilityTextRegex: "main"
   - description: "mobile row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^mobile$"
+        accessibilityTextRegex: "mobile"
 forbidden:
   - description: "Add to Favorites action picker would not have main+mobile rows directly"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Mail$"
-        resourceIdRegex: "^envelope$"
+        accessibilityTextRegex: "Mail"
+        resourceIdRegex: "envelope"

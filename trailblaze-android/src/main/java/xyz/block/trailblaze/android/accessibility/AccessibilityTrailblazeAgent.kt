@@ -13,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
@@ -41,11 +42,15 @@ class AccessibilityTrailblazeAgent(
   sessionProvider: TrailblazeSessionProvider,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   memory: AgentMemory = AgentMemory(),
+  resolvedTarget: ResolvedTarget? = null,
+  appId: String? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   memory = memory,
+  resolvedTarget = resolvedTarget,
+  appId = appId,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
@@ -53,6 +58,9 @@ class AccessibilityTrailblazeAgent(
   private val deviceManager =
     AccessibilityDeviceManager(
       deviceClassifiers = deviceClassifiers,
+      templateContext = resolvedTarget?.let {
+        xyz.block.trailblaze.api.TargetTemplateContext(appId = appId, appIds = it.appIds)
+      },
     )
 
   /**

@@ -42,11 +42,23 @@ class AccessibilityDeviceManager(
   // so unit tests can substitute a counting stub without standing up an instrumentation context.
   // Lambda invocation cost is negligible compared to the settle itself.
   private val awaitSettle: () -> Unit = { withUiDevice { waitForIdle() } },
+  // Per-session template context surfaced to every internal resolve() call so selectors
+  // carrying `{{target.appId}}` placeholders expand correctly. Null when the agent
+  // wasn't constructed with a target (target-agnostic rules / unit-test fixtures);
+  // selectors authored without templates work either way.
+  private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
 ) : DriverDispatch {
 
   companion object {
     /** Polling interval for element resolution loops. Balances responsiveness with CPU usage. */
     private const val POLL_INTERVAL_MS = 100L
+
+    /**
+     * Upper bound for the [hideKeyboard] post-check poll. The Compose EditText + emulator
+     * dismissal animation completes well under 100ms in practice; 1.5s is a generous
+     * ceiling that still fails fast on a genuinely-stuck keyboard.
+     */
+    private const val HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS = 1500L
   }
 
   // --- Screen state ---
@@ -433,23 +445,25 @@ class AccessibilityDeviceManager(
   // --- Keyboard ---
 
   /**
-   * Hides the keyboard by clearing focus on the active editable field.
-   * Prefers ACTION_CLEAR_FOCUS (safe, won't navigate away), falling back to
-   * pressBack() only if focus-clearing didn't dismiss the keyboard.
-   *
-   * Note: [isKeyboardVisible] is a heuristic that can produce false positives
-   * (editable focus retained without keyboard). The pressBack() fallback could
-   * navigate away in that case, but this is rare and mirrors Maestro's behavior.
+   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard], which gates
+   * GLOBAL_ACTION_BACK on [isKeyboardVisible] so it only fires when there's actually a
+   * keyboard to dismiss. Throws on failure rather than silently logging — earlier versions
+   * fell back to ACTION_CLEAR_FOCUS, which is a no-op against modern soft keyboards and
+   * caused trails to report success without dismissing anything.
    */
   fun hideKeyboard() {
-    dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
-    // Note: intentionally NOT using pressBack() as a fallback here. The isKeyboardVisible()
-    // heuristic (based on editable focus) can produce false positives, and pressBack() may
-    // navigate away from the current screen — which is far more destructive than leaving
-    // the keyboard open. If the keyboard persists, the next element tap will still work
-    // since the accessibility tree includes elements regardless of keyboard state.
-    if (isKeyboardVisible()) {
-      Console.log("WARNING: Keyboard may still be visible after hideKeyboard()")
+    val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
+    if (!dispatched) {
+      error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+    }
+    // Post-check polls the cheap in-process windows enumeration for fast-fail, then
+    // gates the final answer on the authoritative `dumpsys input_method` signal —
+    // closes both the dismissal-animation race (enumeration stale right after BACK)
+    // and the windows-null bypass (getServiceWindows() returning null under
+    // FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES would otherwise let a stuck keyboard
+    // pass the post-check). See `waitForImeDismissed` for the full rationale.
+    if (!TrailblazeAccessibilityService.waitForImeDismissed(timeoutMs = HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS)) {
+      error("hideKeyboard failed: IME window still present after dismissal attempt")
     }
   }
 
@@ -499,14 +513,14 @@ class AccessibilityDeviceManager(
     selector: TrailblazeNodeSelector,
   ): TrailblazeNodeSelectorResolver.ResolveResult {
     val filtered = baseTree.filterImportantForAccessibility()
-    val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector)
+    val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector, templateContext)
     if (filteredResult !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
       return filteredResult
     }
     // Selector did not match in the default (filtered) tree shape. Try the unfiltered
     // tree to support [SnapshotDetail.ALL_ELEMENTS]-generated selectors that target
     // non-important nodes.
-    return TrailblazeNodeSelectorResolver.resolve(baseTree, selector)
+    return TrailblazeNodeSelectorResolver.resolve(baseTree, selector, templateContext)
   }
 
   // --- Private helpers ---
@@ -570,6 +584,12 @@ class AccessibilityDeviceManager(
       )
       tapOrLongPress(action.fallbackX, action.fallbackY, action.longPress)
       return ExecutionResult(resolvedX = action.fallbackX, resolvedY = action.fallbackY)
+    } else if (action.optional) {
+      // Maestro `optional: true` — selector wasn't found within the timeout and that's
+      // expected for best-effort steps (e.g. dismissing a runtime permission dialog that
+      // may or may not be present). Skip rather than fail.
+      Console.log("Optional tap: skipping (no match within timeout)")
+      return ExecutionResult(resolvedX = null, resolvedY = null)
     } else {
       error(
         "Element not found for selector: ${action.nodeSelector.description()}. " +

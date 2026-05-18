@@ -135,7 +135,7 @@ object McpSubprocessSpawner {
   }
 
   /** Keep in sync with `ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS`. */
-  private const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 30_000L
+  private const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 120_000L
   private const val CLIENT_FETCH_BUFFER_MS: Long = 2_000L
 
   internal fun resolveClientFetchTimeoutMs(): Long {

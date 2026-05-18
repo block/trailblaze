@@ -812,7 +812,7 @@ private fun PromptsItemContent(
 
       // Second line: Recording information (indented to align with text)
       val recording = step.recording // Capture for smart cast
-      val hasRecording = recording != null && recording.tools.isNotEmpty()
+      val hasRecording = recording != null
       val showRecordingInfo = hasRecording || !step.recordable
 
       if (showRecordingInfo) {

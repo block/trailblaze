@@ -8,4 +8,4 @@ tools:
   - tapOnElementBySelector:
       nodeSelector:
         iosMaestro:
-          resourceIdRegex: "^VisualIdentityChooseButton$"
+          resourceIdRegex: "VisualIdentityChooseButton"

@@ -794,8 +794,7 @@ class TrailblazePackManifestLoaderTest {
           target:
             display_name: Command Test
             mcp_servers:
-              - command: python
-                args: [foo.py, --flag]
+              - command: [python, foo.py, --flag]
                 env:
                   FOO: bar
           """.trimIndent(),
@@ -806,8 +805,7 @@ class TrailblazePackManifestLoaderTest {
       assertNotNull(resolved)
       assertEquals(1, resolved.size)
       assertEquals(null, resolved[0].script)
-      assertEquals("python", resolved[0].command)
-      assertEquals(listOf("foo.py", "--flag"), resolved[0].args)
+      assertEquals(listOf("python", "foo.py", "--flag"), resolved[0].command)
       assertEquals(mapOf("FOO" to "bar"), resolved[0].env)
     } finally {
       tempDir.deleteRecursively()

@@ -6,12 +6,16 @@ import com.microsoft.playwright.options.ScreenshotAnimations
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.DeviceInfoPrefix
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.OcclusionDetector
+import xyz.block.trailblaze.api.OpaqueRegion
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.VisibilityCandidate
+import xyz.block.trailblaze.api.VisibilityInput
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
@@ -442,28 +446,25 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS].
+   * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS]
+   * and finalized in Kotlin by [OcclusionDetector.detect].
    *
-   * Three signals collapsed into a single CDP round-trip:
-   * - [offscreen]: element's bbox is outside the viewport.
-   * - [occluded]: element is in-viewport but visually covered by something on top
-   *   ([document.elementFromPoint](https://developer.mozilla.org/en-US/docs/Web/API/Document/elementFromPoint) — the same hit-test
-   *   Playwright's `click()` actionability check runs internally).
+   * Three signals collapsed into a single CDP round-trip plus a pure-Kotlin sort:
+   * - [offscreen]: element's bbox center is outside the viewport.
+   * - [occluded]: element is in-viewport but visually covered by an unrelated
+   *   [OpaqueRegion] painting on top of it. The web supplies candidates + opaque
+   *   regions; [OcclusionDetector] makes the actual decision so the algorithm can
+   *   be reused by Android / iOS / Compose without re-implementing it per platform.
    * - [bounds]: viewport-relative bbox per id, so [annotationElements] can drop its
    *   per-element CDP `locator.boundingBox()` calls.
-   *
-   * [occlusionReliable] is false on canvas-rendered pages (Compose Web Wasm and friends)
-   * where `elementFromPoint` always returns the canvas / body / html — in that case
-   * we keep bounds + offscreen and skip occlusion filtering entirely.
    */
   private data class ElementVisibility(
     val offscreen: Set<String>,
     val occluded: Set<String>,
     val bounds: Map<String, TrailblazeNode.Bounds>,
-    val occlusionReliable: Boolean,
   ) {
     companion object {
-      val EMPTY = ElementVisibility(emptySet(), emptySet(), emptyMap(), occlusionReliable = false)
+      val EMPTY = ElementVisibility(emptySet(), emptySet(), emptyMap())
     }
   }
 
@@ -492,23 +493,77 @@ class PlaywrightScreenState(
         mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
       ) as? Map<String, Any?> ?: return ElementVisibility.EMPTY
 
-      val offscreen = (result["offscreen"] as? List<String>)?.toSet() ?: emptySet()
-      val occluded = (result["occluded"] as? List<String>)?.toSet() ?: emptySet()
-      val occlusionReliable = (result["occlusionReliable"] as? Boolean) ?: false
       val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
       val bounds = rawBounds.mapNotNull { (id, b) ->
-        val x = (b["x"] as? Number)?.toInt()
-        val y = (b["y"] as? Number)?.toInt()
-        val w = (b["w"] as? Number)?.toInt()
-        val h = (b["h"] as? Number)?.toInt()
-        if (x == null || y == null || w == null || h == null || w <= 0 || h <= 0) null
-        else id to TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
+        val boundsObj = b.toBoundsOrNull() ?: return@mapNotNull null
+        id to boundsObj
       }.toMap()
 
-      ElementVisibility(offscreen, occluded, bounds, occlusionReliable)
+      val rawInputs = result["inputs"] as? List<Map<String, Any?>> ?: emptyList()
+      val inputs = rawInputs.mapNotNull { row ->
+        val candidateMap = row["candidate"] as? Map<String, Any?> ?: return@mapNotNull null
+        val id = candidateMap["id"] as? String ?: return@mapNotNull null
+        val boundsObj = (candidateMap["bounds"] as? Map<String, Any?>)?.toBoundsOrZero()
+          ?: return@mapNotNull null
+        val candAncestors = (candidateMap["ancestorIds"] as? List<String>) ?: emptyList()
+        val rawStack = row["paintStackAtCenter"] as? List<Map<String, Any?>> ?: emptyList()
+        val stack = rawStack.mapNotNull { regionMap ->
+          val regionId = regionMap["id"] as? String ?: return@mapNotNull null
+          val regionAncestors = (regionMap["ancestorIds"] as? List<String>) ?: emptyList()
+          OpaqueRegion(id = regionId, ancestorIds = regionAncestors)
+        }
+        VisibilityInput(
+          candidate = VisibilityCandidate(id = id, bounds = boundsObj, ancestorIds = candAncestors),
+          paintStackAtCenter = stack,
+        )
+      }
+
+      val viewport = TrailblazeNode.Bounds(
+        left = 0,
+        top = 0,
+        right = viewportWidth,
+        bottom = viewportHeight,
+      )
+      val verdict = OcclusionDetector.detect(inputs, viewport)
+
+      ElementVisibility(
+        offscreen = verdict.offscreen,
+        occluded = verdict.occluded,
+        bounds = bounds,
+      )
     } catch (_: Exception) {
       ElementVisibility.EMPTY
     }
+  }
+
+  /**
+   * Parses a JS bounds map into [TrailblazeNode.Bounds], dropping zero/negative-size
+   * rectangles. Used when downstream consumers (annotation overlay) only care about
+   * paintable regions.
+   */
+  private fun Map<String, Any?>.toBoundsOrNull(): TrailblazeNode.Bounds? {
+    val x = (this["x"] as? Number)?.toInt() ?: return null
+    val y = (this["y"] as? Number)?.toInt() ?: return null
+    val w = (this["w"] as? Number)?.toInt() ?: return null
+    val h = (this["h"] as? Number)?.toInt() ?: return null
+    if (w <= 0 || h <= 0) return null
+    return TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
+  }
+
+  /**
+   * Same as [toBoundsOrNull] but keeps zero-size rectangles so candidates with
+   * empty bboxes still reach [OcclusionDetector.detect], which explicitly classifies
+   * them as offscreen (a `(x, y, 0, 0)` bbox has zero paintable surface — its
+   * `centerX/centerY` would otherwise be `(x, y)`, fooling the viewport test).
+   * Opaque regions still go through [toBoundsOrNull] since a zero-area paint
+   * surface can't occlude anything.
+   */
+  private fun Map<String, Any?>.toBoundsOrZero(): TrailblazeNode.Bounds? {
+    val x = (this["x"] as? Number)?.toInt() ?: return null
+    val y = (this["y"] as? Number)?.toInt() ?: return null
+    val w = (this["w"] as? Number)?.toInt() ?: return null
+    val h = (this["h"] as? Number)?.toInt() ?: return null
+    return TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
   }
 
   /**
@@ -1179,56 +1234,59 @@ class PlaywrightScreenState(
     )
 
     /**
-     * JavaScript function that batch-computes per-element visibility data in a single evaluation.
+     * JavaScript function that captures the visibility inputs for [OcclusionDetector] in
+     * a single page evaluation.
      *
-     * Receives `{elements: [{id, role, name, nth}], vw, vh}` and returns
-     * `{offscreen: [...ids], occluded: [...ids], bounds: {id: {x,y,w,h}}, occlusionReliable: bool}`.
+     * Receives `{elements: [{id, role, name, nth}], vw, vh}` (where `elements` enumerates
+     * the candidates the LLM cares about) and returns:
+     * ```
+     * {
+     *   inputs: [{
+     *     candidate: { id, bounds: {x,y,w,h}, ancestorIds: [...] },
+     *     paintStackAtCenter: [{ id, ancestorIds: [...] }, ...]   // topmost first
+     *   }],
+     *   bounds: { id: {x,y,w,h} }
+     * }
+     * ```
      *
-     * Three signals per element, all derived from one DOM walk to keep the cost at a
-     * single CDP round-trip regardless of element count:
+     * The supplier delegates ALL paint-order math to the browser's
+     * `document.elementsFromPoint(cx, cy)`, which returns the exact paint stack
+     * the user sees at a point (full CSS stacking-context implementation,
+     * including positioned vs static, transform-creates-context,
+     * opacity-creates-context, shadow DOM, pseudo-element backgrounds, and
+     * every CSS-spec quirk). The supplier then filters that stack to entries
+     * with a non-transparent paint — and the Kotlin algorithm just picks the
+     * first.
      *
-     * 1. **Bounds** — `getBoundingClientRect()` viewport-relative coordinates. Replaces
-     *    the per-element `locator.boundingBox()` CDP calls in `annotationElements`, so
-     *    the SoM overlay can be drawn from this payload alone.
+     * Why hit-testing per candidate instead of a global opaque-region sweep:
+     * a global sweep with our own `(z-index, document order)` approximation
+     * silently mis-ranks elements on real production DOMs (this is exactly
+     * what surfaced on Square Dashboard's Managerbot popup, where the popup's
+     * dark card sits in a CSS structure our simple predicate couldn't
+     * identify as opaque). `elementsFromPoint` gets it right by definition —
+     * it's whatever the browser actually painted at that pixel.
      *
-     * 2. **Offscreen** — center of bbox lies outside the viewport. Same semantics as
-     *    before; element gets dropped (or annotated `(offscreen)` when OFFSCREEN_ELEMENTS
-     *    is requested).
+     * **Pointer-events override**: `elementsFromPoint` skips elements with
+     * `pointer-events: none`. Popups like Managerbot use that on a wrapper
+     * for click-through. We inject a temporary stylesheet rule
+     * `* { pointer-events: auto !important }` before the hit-tests and
+     * remove it in a `finally` block within the same synchronous JS
+     * evaluation — bounded scope, no MutationObserver microtask can run
+     * between append and remove.
      *
-     * 3. **Occluded** — `document.elementFromPoint(centerX, centerY)` after
-     *    injecting a page-wide stylesheet rule `* { pointer-events: auto
-     *    !important }` that neutralizes every `pointer-events: none` declaration
-     *    on the page. The browser then runs its own full CSS stacking-context math
-     *    (z-index buckets, position-creates-context, opacity/transform-creates-
-     *    context, etc.) and returns the visually-topmost element including
-     *    overlays that would otherwise be skipped because they're set to be
-     *    click-transparent. The stylesheet is removed in a `finally` block within
-     *    the same synchronous JS evaluation, so MutationObservers and other page
-     *    code never observe the temporary state.
+     * **Canvas fail-open**: if `elementsFromPoint` at the candidate's center
+     * returns only `<canvas>` / `<html>` / `<body>` (no real opaque element
+     * in between), we emit an empty paint stack. The algorithm fail-opens
+     * and leaves the candidate unfiltered. Mirrors the behavior we want on
+     * Compose Web Wasm pages where the accessibility-overlay divs are
+     * intentionally above an opaque canvas.
      *
-     *    Why a stylesheet rule, not a per-element flip: real-world popups (e.g.,
-     *    Square Dashboard's Managerbot toast) sit inside a NON-POSITIONED
-     *    full-viewport wrapper that itself carries `pointer-events: none` (so
-     *    clicks pass through to the page underneath). A previous version of this
-     *    code walked only `position: fixed/absolute/sticky` elements and missed
-     *    the wrapper case — confirmed broken against the live Square Dashboard.
-     *    The global rule catches every wrapper regardless of positioning or DOM
-     *    depth in O(1), since the browser applies the rule to the entire stylesheet
-     *    cascade in one operation. `pointer-events` doesn't affect layout, only
-     *    hit-testing, so there's no reflow penalty either.
-     *
-     * **Compose Web Wasm fail-open**: on canvas-rendered pages the relevant
-     * accessibility-overlay elements may not have position:absolute/fixed and the
-     * canvas takes up the whole viewport. `elementFromPoint` returns the canvas
-     * for any point. Per-element rule: if the topmost is CANVAS / HTML / BODY,
-     * treat the verdict as unknown rather than occluded.
-     *
-     * Uses Chromium's `Element.computedRole` and `Element.computedName` properties to
-     * match elements — these are the same values the browser's accessibility tree exposes,
-     * which Playwright's `ariaSnapshot()` reads from. This provides near-exact matching
-     * without reimplementing the ARIA role/name computation in JavaScript.
-     *
-     * Falls back to a simplified manual computation if the browser APIs are unavailable.
+     * **Aria-hidden filter** (role/name map only): elements with
+     * `aria-hidden="true"` and elements with `display: none` / `visibility:
+     * hidden` are excluded when building the role/name map (so candidate
+     * nth-indices align with Playwright's `ariaSnapshot()`), but NOT when
+     * building the paint stack. Visual occlusion is about pixels, and
+     * aria-hidden elements still paint.
      */
     private val BATCH_VIEWPORT_CHECK_JS = """(args) => {
       const { elements, vw, vh } = args;
@@ -1343,13 +1401,64 @@ class PlaywrightScreenState(
         return false;
       }
 
+      // Recursive descent that pierces open shadow roots. Real production
+      // dashboards (Square Dashboard, GitHub, modern enterprise UIs) wrap most
+      // interactive content in Web Components with shadow DOM — `<market-button>`,
+      // `<market-tile>`, `<sl-button>`, etc. `document.querySelectorAll('*')`
+      // returns the shadow HOST but stops at the shadow boundary, so the
+      // role/name map ends up missing ~87% of the candidates that Playwright's
+      // accessibility-tree-aware `ariaSnapshot()` does see (those traverse the
+      // shadow tree). Walking shadow roots here brings the map back in sync.
+      //
+      // Order matters for nth-index alignment with Playwright's `ariaSnapshot()`:
+      // host element first, then its shadow children in document order, then
+      // its light-DOM children. Closed shadow roots are inaccessible by design;
+      // only `mode: 'open'` shadow roots are traversed.
+      function* walkAllInclShadow(root) {
+        if (!root || root.nodeType !== 1) return;
+        yield root;
+        const sr = root.shadowRoot;
+        if (sr) {
+          for (const c of sr.children) {
+            yield* walkAllInclShadow(c);
+          }
+        }
+        for (const c of root.children) {
+          yield* walkAllInclShadow(c);
+        }
+      }
+
+      // Composed-tree `elementsFromPoint` — pierces open shadow roots so the
+      // paint stack we hand to `OcclusionDetector` includes both shadow-host
+      // and shadow-child elements at the candidate's center. Without this,
+      // `document.elementsFromPoint` stops at shadow boundaries: a shadow-DOM
+      // popup card (e.g., Market's `<market-toast>` with the visible fill on
+      // a shadow `<div>`) would never appear in the stack and the underlying
+      // candidate would silently leak to the LLM.
+      function piercingElementsFromPoint(cx, cy) {
+        const out = [];
+        const visited = new Set();
+        function walk(stack) {
+          for (const el of stack) {
+            if (!el || visited.has(el)) continue;
+            visited.add(el);
+            out.push(el);
+            const sr = el.shadowRoot;
+            if (sr && typeof sr.elementsFromPoint === 'function') {
+              walk(sr.elementsFromPoint(cx, cy));
+            }
+          }
+        }
+        walk(document.elementsFromPoint(cx, cy));
+        return out;
+      }
+
       // Walk DOM in document order (matching the accessibility tree traversal),
       // build lookup: "role\nname" -> [el, el, ...]
       // Skips elements hidden from the accessibility tree to keep nth-indices aligned
       // with Playwright's ariaSnapshot() output.
       const roleNameMap = {};
-      const allEls = document.querySelectorAll('*');
-      for (const el of allEls) {
+      for (const el of walkAllInclShadow(document.documentElement)) {
         if (isHiddenFromAccessibilityTree(el)) continue;
         const role = getRole(el);
         if (!role) continue;
@@ -1359,60 +1468,125 @@ class PlaywrightScreenState(
         roleNameMap[key].push(el);
       }
 
-      // Visual-occlusion strategy:
-      //
-      // 1. Inject a stylesheet rule `* { pointer-events: auto !important }` so
-      //    no element gets skipped by hit-testing for being click-transparent.
-      //    Removed in a finally block, bounded to this synchronous JS eval.
-      //
-      // 2. For each element, walk `document.elementsFromPoint(centerX, centerY)`
-      //    front-to-back looking for the first VISUALLY OPAQUE element. An
-      //    element counts as opaque iff it has a non-transparent
-      //    background-color OR a non-none background-image OR a non-trivial
-      //    border. Transparent click-through wrappers (like the full-viewport
-      //    container Square's Managerbot popup uses) get skipped, so they
-      //    don't get treated as occluders just because they exist in the
-      //    paint stack.
-      //
-      // 3. If the first opaque element is `el` itself or a descendant, the
-      //    element is visible. Otherwise it's occluded.
-      //
-      // Why this combination: just neutralizing pointer-events:none with the
-      // stylesheet rule makes hit-tests return the topmost element regardless
-      // of click-through tricks (which fixes the case where popups sit inside
-      // a non-positioned pointer-events:none wrapper). But the rule alone
-      // would also make transparent wrappers register as occluders, which is
-      // wrong — the LLM looking at the screenshot can see right through them.
-      // Walking the stack for the first opaque element fixes that without
-      // having to manually reimplement CSS stacking-context rules.
-      const peOverrideStyle = document.createElement('style');
-      peOverrideStyle.textContent = '* { pointer-events: auto !important; }';
-      document.head.appendChild(peOverrideStyle);
+      // Map each requested candidate (id from Kotlin) to its DOM element via the
+      // role/name/nth lookup. The element's region ID in OcclusionDetector's
+      // graph equals the candidate's ID, so the algorithm's "topmost is the
+      // candidate itself" check resolves trivially.
+      const elToCandidateId = new Map();
+      for (const elem of elements) {
+        const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
+        const matches = roleNameMap[key];
+        if (!matches || elem.nth >= matches.length) continue;
+        elToCandidateId.set(matches[elem.nth], elem.id);
+      }
 
-      function isVisuallyOpaqueAt(node) {
-        // Has non-transparent background color? `rgba(0, 0, 0, 0)` and
-        // `transparent` are the standard transparent-color renderings.
-        const cs = window.getComputedStyle(node);
+      // Lazily assign region IDs to every DOM element we touch. Candidates get
+      // their candidate ID (currently 'e<N>'); everything else gets a synthetic
+      // '__d<N>'. The double-underscore prefix is reserved so non-candidate
+      // synthetic IDs can't collide with candidate IDs and silently misclassify
+      // an unrelated opaque element as "self" inside OcclusionDetector.
+      let dCounter = 0;
+      const elToRegionId = new Map();
+      function getRegionId(el) {
+        let id = elToRegionId.get(el);
+        if (id != null) return id;
+        const cand = elToCandidateId.get(el);
+        id = cand != null ? cand : ('__d' + (dCounter++));
+        elToRegionId.set(el, id);
+        return id;
+      }
+
+      // Walk ancestors, crossing open shadow root boundaries via the host.
+      // Critical for Web Component popups: a candidate inside `<market-dialog>`'s
+      // shadow root has `parentElement === null` at the shadow root edge
+      // (parentNode is the shadow root, which is a DocumentFragment, not an
+      // Element). Without the host crossover, the candidate's ancestorIds
+      // misses `<market-dialog>` and the algorithm thinks the visible host is
+      // an unrelated occluder — falsely flagging the candidate.
+      function computeAncestorIds(el) {
+        const ids = [];
+        let cur = el;
+        while (true) {
+          let next = cur.parentElement;
+          if (!next) {
+            const root = cur.getRootNode();
+            if (root && root.host) next = root.host;
+          }
+          if (!next || next.tagName === 'BODY' || next.tagName === 'HTML') break;
+          ids.push(getRegionId(next));
+          cur = next;
+        }
+        return ids;
+      }
+
+      // Predicate: does this element actually paint visible pixels at its
+      // position? Used to filter the elementsFromPoint stack down to the
+      // entries that contribute to what the user actually sees. We do NOT
+      // use this as the source of truth for global paint order — only as a
+      // filter on the browser's own hit-test results.
+      //
+      // Each branch corresponds to a CSS pattern that paints opaque pixels.
+      // Empirically validated against real-world UI library popup cards via
+      // the markup-variant tests in `PlaywrightScreenStateBoundsTest`; a
+      // previous version missed `box-shadow`, pseudo-element backgrounds,
+      // and iframes, which is what defeated the filter on real production
+      // dashboard popups that use CSS-in-JS card surfaces.
+      function hasOpaqueBg(cs) {
         const bg = cs.backgroundColor;
         if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true;
-        // Has a background image?
         if (cs.backgroundImage && cs.backgroundImage !== 'none') return true;
-        // Has a non-trivial border on at least one side?
+        return false;
+      }
+      function isVisuallyOpaqueAt(node) {
+        if (!node || node === document.documentElement || node === document.body) return false;
+        const tag = node.tagName;
+        // Replaced-content tags always paint something user-visible. IFRAME
+        // is included because embedded widgets (analytics popups, support
+        // chats, the real Managerbot toast on some routes) render via iframe
+        // and the parent page's hit-test stops at the iframe boundary.
+        if (tag === 'IMG' || tag === 'SVG' || tag === 'VIDEO' || tag === 'IFRAME') return true;
+        const cs = window.getComputedStyle(node);
+        if (hasOpaqueBg(cs)) return true;
+        // Pseudo-element backgrounds are extremely common for card surfaces
+        // in CSS-in-JS frameworks (Emotion / styled-components / Material UI
+        // all use `::before` for the visible fill while the parent stays
+        // transparent for hit-testing). `content !== 'none'` filters out
+        // pseudos that aren't actually generated.
+        for (const pseudo of ['::before', '::after']) {
+          const ps = window.getComputedStyle(node, pseudo);
+          const content = ps.content;
+          if (content && content !== 'none' && content !== 'normal') {
+            if (hasOpaqueBg(ps)) return true;
+          }
+        }
+        // Non-`none` box-shadow paints visible pixels — most often used for
+        // depth/elevation on card components, but also for full-fill via
+        // `inset 0 0 0 999px <color>`. Over-counts elements that have only
+        // a subtle decorative shadow (their layout box gets treated as
+        // fully opaque), but in practice elements with shadows almost
+        // always also have an opaque background, so the over-count is
+        // harmless in real UI.
+        if (cs.boxShadow && cs.boxShadow !== 'none') return true;
+        // Non-trivial border.
         const bw = parseFloat(cs.borderTopWidth || '0')
           + parseFloat(cs.borderRightWidth || '0')
           + parseFloat(cs.borderBottomWidth || '0')
           + parseFloat(cs.borderLeftWidth || '0');
         if (bw > 0) return true;
-        // Has a non-empty image or replaced content?
-        if (node.tagName === 'IMG' || node.tagName === 'SVG'
-          || node.tagName === 'CANVAS' || node.tagName === 'VIDEO') return true;
         return false;
       }
 
-      const offscreen = [];
-      const occluded = [];
+      // Inject a stylesheet rule that neutralizes every `pointer-events: none`
+      // on the page so elementsFromPoint sees the actual paint stack, not the
+      // click-target stack. Bounded to this synchronous JS evaluation — no
+      // MutationObserver microtask can run between append and remove.
+      const peOverrideStyle = document.createElement('style');
+      peOverrideStyle.textContent = '* { pointer-events: auto !important; }';
+      document.head.appendChild(peOverrideStyle);
+
+      const inputs = [];
       const bounds = {};
-      let occlusionReliable = false;
+
       try {
         for (const elem of elements) {
           const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
@@ -1421,60 +1595,65 @@ class PlaywrightScreenState(
           const el = matches[elem.nth];
           const rect = el.getBoundingClientRect();
 
-          bounds[elem.id] = {
+          const boundsObj = {
             x: Math.round(rect.x),
             y: Math.round(rect.y),
             w: Math.round(rect.width),
             h: Math.round(rect.height),
           };
+          bounds[elem.id] = boundsObj;
+          // Register the candidate's region ID before any descendant looks it
+          // up via computeAncestorIds.
+          getRegionId(el);
+          const candAncestors = computeAncestorIds(el);
 
+          // Build the paint stack at the candidate's center.
+          // - Zero-size: empty stack. OcclusionDetector will short-circuit to
+          //   `offscreen` based on bounds, never reading the stack.
+          // - Outside viewport: same.
+          // - In viewport: hit-test, filter to opaque entries, emit topmost-first.
+          let stack = [];
           const inViewport = rect.bottom > 0 && rect.top < vh
             && rect.right > 0 && rect.left < vw
             && rect.width > 0 && rect.height > 0;
-          if (!inViewport) {
-            offscreen.push(elem.id);
-            continue; // occlusion check is meaningless for offscreen elements
-          }
-
-          const cx = rect.x + rect.width / 2;
-          const cy = rect.y + rect.height / 2;
-          const stack = document.elementsFromPoint(cx, cy);
-          if (!stack || stack.length === 0) continue;
-
-          // Find the first visually opaque element in the paint stack.
-          // Transparent wrappers (click-through containers) get skipped.
-          let visualTop = null;
-          for (const node of stack) {
-            const tag = node.tagName;
-            if (tag === 'HTML' || tag === 'BODY') break; // hit the page background — stop
-            if (isVisuallyOpaqueAt(node)) {
-              visualTop = node;
-              break;
+          if (inViewport) {
+            const cx = rect.x + rect.width / 2;
+            const cy = rect.y + rect.height / 2;
+            const hitStack = piercingElementsFromPoint(cx, cy);
+            for (const node of hitStack) {
+              if (!node) continue;
+              const tag = node.tagName;
+              // Stop at HTML/BODY — anything past that is the page background.
+              if (tag === 'HTML' || tag === 'BODY') break;
+              // Canvas fail-open: don't treat canvas as opaque. If the candidate's
+              // center has a canvas on top (e.g., Compose Web Wasm rendering all
+              // pixels via canvas), we want the stack to be empty so the algorithm
+              // leaves the candidate unfiltered.
+              if (tag === 'CANVAS') continue;
+              if (!isVisuallyOpaqueAt(node)) continue;
+              stack.push({
+                id: getRegionId(node),
+                ancestorIds: computeAncestorIds(node),
+              });
             }
           }
-          if (visualTop == null) continue; // nothing opaque between top and body — unknown
-          if (visualTop.tagName === 'CANVAS') continue; // canvas-rendered, unreliable
-          // Visible iff visualTop is `el` or related by ancestry in either direction:
-          //  - visualTop IS el or descendant of el: el's own opaque content is on top.
-          //  - visualTop IS ancestor of el: el sits inside visualTop's opaque region —
-          //    visualTop is the background the LLM sees el painted onto, which means
-          //    el is still visible (a transparent-text-inside-opaque-card case, e.g.,
-          //    the "Square's AI terms" link inside the Managerbot popup card).
-          if (el.contains(visualTop) || visualTop.contains(el)) {
-            occlusionReliable = true;
-            continue;
-          }
-          occluded.push(elem.id);
-          occlusionReliable = true;
+
+          inputs.push({
+            candidate: {
+              id: elem.id,
+              bounds: boundsObj,
+              ancestorIds: candAncestors,
+            },
+            paintStackAtCenter: stack,
+          });
         }
       } finally {
-        // Always remove the injected override stylesheet, even if the loop above
-        // threw. Bounded to this synchronous JS evaluation: no MutationObserver
-        // microtask runs between append and remove.
+        // Always remove the injected override stylesheet, even if the loop
+        // above threw.
         peOverrideStyle.remove();
       }
 
-      return { offscreen, occluded, bounds, occlusionReliable };
+      return { inputs, bounds };
     }"""
 
     /**

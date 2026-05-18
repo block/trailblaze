@@ -230,17 +230,17 @@ class BridgeUiActionExecutor(
 
     // Resolve display name → bundle ID for well-known iOS system apps
     // (e.g. "Contacts" → "com.apple.MobileAddressBook")
-    val resolvedAppId = IOS_SYSTEM_APP_DISPLAY_NAMES[appId.lowercase()] ?: appId
+    val resolvedBundleId = IOS_SYSTEM_APP_DISPLAY_NAMES[appId.lowercase()] ?: appId
 
     // Skip validation for system apps (they're always "installed")
-    if (isIosSystemApp(resolvedAppId)) {
+    if (isIosSystemApp(resolvedBundleId)) {
       return null
     }
 
     // Check if app is installed
     return try {
       val installedApps = mcpBridge.getInstalledAppIds()
-      if (!installedApps.contains(resolvedAppId)) {
+      if (!installedApps.contains(resolvedBundleId)) {
         // Include full app list in error so LLM can retry with correct app
         val sortedApps = installedApps.sorted()
 

@@ -12,10 +12,12 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -103,6 +105,13 @@ class PlaywrightBrowserManager(
   val analyticsUrlPatterns: List<String> = emptyList(),
   /** Called during first-time Chromium install with (percentComplete 0–100, statusMessage). */
   private val onBrowserInstallProgress: ((Int, String) -> Unit)? = null,
+  /**
+   * Trailblaze device id used to look up a per-session video-record directory in
+   * [PlaywrightVideoRecordDir]. When `null` (e.g. internal unit tests, or the recording-
+   * tab browser that is not driven through `CaptureSession`), video recording is left
+   * disabled and `Browser.NewContextOptions` is built without `setRecordVideoDir`.
+   */
+  private val deviceId: String? = null,
 ) : PlaywrightPageManager {
 
   companion object {
@@ -111,6 +120,25 @@ class PlaywrightBrowserManager(
 
     // Settle constants live on PlaywrightPageManager.Companion alongside their consumers
     // (`dispatchAndAwaitSettle`, `waitForPageReady` default param). See that file for definitions.
+
+    /**
+     * JVM-wide guard against concurrent `Playwright.create()` invocations. The upstream
+     * `com.microsoft.playwright` Java client is not thread-safe under simultaneous init —
+     * observed under parallel test workloads as "Failed to read message from driver,
+     * pipe closed" when two [PlaywrightBrowserManager] instances initialized at the same
+     * instant. Each manager has its own dedicated [playwrightExecutor] thread + its own
+     * driver subprocess, but the upstream library's process-spawning code races on
+     * internal static state (driver-binary resolution, stdio handshake setup).
+     *
+     * Serializing `Playwright.create()` JVM-wide is the cheapest fix: concurrent
+     * BrowserManager inits spend at most ~200ms back-to-back on the init handshake
+     * instead of in parallel, but the resulting Playwright instances + driver
+     * subprocesses + browsers all run fully in parallel after init. A future
+     * higher-parallelism setup may prefer a pre-warmed singleton model instead, but
+     * this lock is sufficient for the parallel-test-runner workloads we ship today.
+     */
+    @kotlin.jvm.JvmStatic
+    private val playwrightCreateLock = Any()
   }
 
   /**
@@ -327,6 +355,15 @@ class PlaywrightBrowserManager(
   private lateinit var browserContext: BrowserContext
 
   /**
+   * Directory the *current* `browserContext` is recording video into, or null when the
+   * context was built without video. Compared against the latest [PlaywrightVideoRecordDir]
+   * registration by [syncRecordingWithRegistry] so a cached browser can pick up a freshly
+   * published per-session record dir without the caller having to know whether the manager
+   * is new or reused.
+   */
+  @Volatile private var currentRecordingDir: File? = null
+
+  /**
    * Details requested by the LLM for the next view hierarchy snapshot.
    *
    * When the LLM calls [PlaywrightNativeRequestDetailsTool], the requested detail types
@@ -359,7 +396,12 @@ class PlaywrightBrowserManager(
       // Ensure the Chromium browser binary is installed. This is a no-op after first install.
       PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
       runBlocking(playwrightDispatcher) {
-        playwright = Playwright.create()
+        // See [playwrightCreateLock] kdoc for why this is serialized JVM-wide. Each
+        // manager still runs on its own [playwrightDispatcher] thread; the lock only
+        // serializes the upstream library's racy init handshake. After this call
+        // returns, all further Playwright operations on the resulting instance happen
+        // independently from any other manager's instance.
+        playwright = synchronized(playwrightCreateLock) { Playwright.create() }
         val browserType =
           when (browserEngine) {
             BrowserEngine.CHROMIUM -> playwright.chromium()
@@ -367,15 +409,7 @@ class PlaywrightBrowserManager(
             BrowserEngine.WEBKIT -> playwright.webkit()
           }
         browser = browserType.launch(launchOptions)
-        browserContext =
-          browser.newContext(
-            Browser.NewContextOptions()
-              .setViewportSize(viewportWidth, viewportHeight)
-              .setDeviceScaleFactor(if (isCI) 1.0 else 2.0),
-          )
-        currentPage = browserContext.newPage()
-        setupPageForAutomation(currentPage)
-        disableWebAuthn()
+        createFreshContextAndPage()
       }
     } catch (e: Exception) {
       playwrightExecutor.shutdownNow()
@@ -607,31 +641,115 @@ class PlaywrightBrowserManager(
     }
   }
 
-  /** Resets the browser session - clears cookies, closes extra tabs, navigates to blank. */
+  /**
+   * Resets the browser session for true Playwright-style isolation between Trailblaze
+   * sessions. Closes the current [BrowserContext] and creates a fresh one on the same
+   * long-lived [Browser] process — equivalent to what `@playwright/test` gives each
+   * test by default via per-test contexts.
+   *
+   * `clearCookies()` alone would NOT wipe `localStorage`, `sessionStorage`, `IndexedDB`,
+   * HTTP cache, service workers, or permissions — so any site that stores its auth
+   * token in `localStorage` (the modern SPA pattern) would survive a cookie-only
+   * reset and the next session would inherit the prior session's login. Closing and
+   * recreating the context wipes all of it in one shot.
+   *
+   * The Chromium process + Playwright driver are untouched, so this is ~instant and
+   * preserves the "browser is the device" model — only session-scoped state turns over.
+   */
   override fun resetSession() {
-    browserContext.clearCookies()
     inFlightRequests.clear()
-
-    // Close extra pages, keep only the first
-    val pages = browserContext.pages()
-    if (pages.size > 1) {
-      pages.drop(1).forEach { it.close() }
+    try {
+      browserContext.close()
+    } catch (_: Exception) {
+      // Best-effort — a context that's already half-torn-down from a crash should
+      // not block creation of a fresh one below.
     }
+    createFreshContextAndPage()
+  }
 
-    val existingPage = browserContext.pages().firstOrNull()
-    if (existingPage != null) {
-      currentPage = existingPage
-    } else {
-      currentPage = browserContext.newPage()
-      setupPageForAutomation(currentPage)
+  /**
+   * Reconciles the active `BrowserContext`'s video recording with the latest
+   * [PlaywrightVideoRecordDir] registration. If the registry's dir for this manager's
+   * [deviceId] differs from what the current context is recording to (including the
+   * "registry empty / context recording" and "registry set / context not recording" cases),
+   * tears down the current context and builds a new one with the right `setRecordVideoDir`.
+   *
+   * Trail runners call this at the start of every trail so a cached manager (constructed
+   * before the per-session capture dir was published) picks up the recording before the
+   * first action runs. No-op when [deviceId] is null (manager not wired to a capture session
+   * — e.g. recording-tab browser, unit tests).
+   */
+  fun syncRecordingWithRegistry() {
+    val dev = deviceId ?: return
+    val desired = PlaywrightVideoRecordDir.getRecordDir(dev)
+    if (desired == currentRecordingDir) return
+    if (closed.get()) return
+    Console.log(
+      "[PlaywrightBrowserManager] reconciling recordVideoDir: current=$currentRecordingDir desired=$desired",
+    )
+    runBlocking(playwrightDispatcher) {
+      try {
+        browserContext.close()
+      } catch (_: Exception) {}
+      createFreshContextAndPage()
     }
-    currentPage.navigate("about:blank")
+  }
+
+  /**
+   * Creates a new [BrowserContext] on the long-lived [browser] and opens an initial
+   * page wired up for automation (init scripts, timeouts, popup tracking, WebAuthn
+   * suppression). Assigns the new context/page to the manager's lateinit fields.
+   *
+   * Must be called on the Playwright dispatcher thread.
+   */
+  private fun createFreshContextAndPage() {
+    val recordVideoDir = deviceId?.let { PlaywrightVideoRecordDir.getRecordDir(it) }
+    val options = Browser.NewContextOptions()
+      .setViewportSize(viewportWidth, viewportHeight)
+      .setDeviceScaleFactor(if (isCI) 1.0 else 2.0)
+    if (recordVideoDir != null) {
+      // Playwright finalizes the `.webm` only when the context closes — wire a finalizer
+      // so PlaywrightVideoCapture.stop() can force-flush in the kept-alive case, where
+      // the manager's own close() isn't called between sessions.
+      options.setRecordVideoDir(recordVideoDir.toPath())
+        .setRecordVideoSize(viewportWidth, viewportHeight)
+      Console.log(
+        "[PlaywrightBrowserManager] recording video to ${recordVideoDir.absolutePath} (deviceId=$deviceId)",
+      )
+    }
+    browserContext = browser.newContext(options)
+    currentRecordingDir = recordVideoDir
+    currentPage = browserContext.newPage()
+    setupPageForAutomation(currentPage)
+    disableWebAuthn()
+    if (deviceId != null && recordVideoDir != null) {
+      PlaywrightVideoRecordDir.setFinalizer(deviceId) {
+        // Close-and-recreate flushes the WebM. Must run on the Playwright dispatcher
+        // thread for thread-affinity correctness.
+        if (closed.get()) return@setFinalizer
+        runBlocking(playwrightDispatcher) {
+          try {
+            browserContext.close()
+          } catch (_: Exception) {}
+          // After flushing, drop the registration so any subsequent fresh context for
+          // this device id is built without recording (capture has already moved on).
+          PlaywrightVideoRecordDir.clearRecordDir(deviceId)
+          PlaywrightVideoRecordDir.clearFinalizer(deviceId)
+          // Recreate so the manager remains usable in the kept-alive case.
+          createFreshContextAndPage()
+        }
+      }
+    }
   }
 
   /** Closes the browser and cleans up Playwright resources. */
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     inFlightRequests.clear()
+    // Drop any video finalizer we registered so a later capture.stop() doesn't try
+    // to drive this torn-down manager. The `browserContext.close()` below already
+    // flushes the in-progress WebM.
+    deviceId?.let { PlaywrightVideoRecordDir.clearFinalizer(it) }
     val closeResources = {
       try {
         browserContext.close()

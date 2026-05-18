@@ -26,41 +26,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
-import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
-import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
-import xyz.block.trailblaze.host.devices.WebBrowserState
-import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
-import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
-import xyz.block.trailblaze.host.recording.MaestroInteractionToolFactory
-import xyz.block.trailblaze.host.recording.OnDeviceRpcDeviceScreenStream
-import xyz.block.trailblaze.host.recording.OnDeviceRpcScreenStateProvider
-import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
-import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
-import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
-import java.io.IOException
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
-import xyz.block.trailblaze.playwright.recording.PlaywrightInteractionToolFactory
 import xyz.block.trailblaze.recording.InteractionRecorder
 import xyz.block.trailblaze.host.recording.RecordingLlmService
-import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
-import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.TrailheadMetadata
@@ -70,7 +47,6 @@ import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.recording.ConnectionState
 import xyz.block.trailblaze.ui.recording.DeviceDropdown
-import xyz.block.trailblaze.ui.recording.RecordingDeviceConnection
 import xyz.block.trailblaze.ui.recording.RecordingTabState
 import xyz.block.trailblaze.ui.recording.TargetDropdown
 import xyz.block.trailblaze.ui.recording.formatDeviceLabel
@@ -329,7 +305,7 @@ fun RecordingTabComposable(
         fun triggerConnect(device: TrailblazeConnectedDeviceSummary) {
           connectionState = ConnectionState.Connecting
           scope.launch {
-            val result = connectToDevice(device, deviceManager, currentTrailblazeLlmModelProvider)
+            val result = deviceManager.connectionService.connectToDevice(device)
             connectionState = result
             if (result is ConnectionState.Connected) {
               val session = TrailblazeSession(
@@ -503,240 +479,3 @@ fun RecordingTabComposable(
   }
 }
 
-/**
- * Connects to a device and returns the appropriate stream + tool factory.
- * Runs device creation on IO dispatcher since it can be slow.
- */
-private suspend fun connectToDevice(
-  device: TrailblazeConnectedDeviceSummary,
-  deviceManager: TrailblazeDeviceManager,
-  currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
-): ConnectionState {
-  return try {
-    when (device.platform) {
-      TrailblazeDevicePlatform.WEB -> {
-        // The user picked a web slot. If it's already running, just grab its page manager.
-        // Otherwise launch it on demand — the device list shows `Playwright Browser (Native)`
-        // as an always-available virtual entry, and we want clicking Connect to "just work"
-        // without making the user bounce out to the Devices tab to start the browser first.
-        //
-        // Force headless when we have to launch one ourselves. The whole point of the
-        // recording surface is that the streamed frames ARE the user's window into the
-        // device, and that path needs to be the only path under test. A headed browser
-        // would let the user "cheat" by interacting with the real Chrome window, hiding
-        // bugs in the frame-stream / coordinate-mapping layer we'll eventually expose
-        // over HTTP for the WASM client. If a headed browser is already running for this
-        // slot, we reuse it as-is — the launchBrowser call no-ops on already-running, so
-        // this doesn't override anyone's existing setup.
-        val instanceId = device.instanceId
-        val pageManager = deviceManager.webBrowserManager.getPageManager(instanceId)
-          ?: run {
-            // Don't rely on launchBrowser's success-only callback — observe the slot's
-            // state flow instead. The catch path inside launchBrowser sets state=Error
-            // without invoking onComplete, so a callback-only await would hang forever
-            // when (e.g.) the Playwright driver fails to install or Chromium fails to
-            // start. Awaiting "Running OR Error" guarantees we make progress in both
-            // outcomes and surface a real error to the user.
-            val stateFlow = deviceManager.webBrowserManager.browserStateFlow(instanceId)
-            deviceManager.webBrowserManager.launchBrowser(
-              instanceId = instanceId,
-              headless = true,
-            )
-            val terminal = withContext(Dispatchers.IO) {
-              stateFlow.first { it is WebBrowserState.Running || it is WebBrowserState.Error }
-            }
-            if (terminal is WebBrowserState.Error) {
-              return ConnectionState.Error("Failed to launch browser '$instanceId': ${terminal.message}")
-            }
-            deviceManager.webBrowserManager.getPageManager(instanceId)
-              ?: return ConnectionState.Error("Failed to launch browser '$instanceId'")
-          }
-        val stream = PlaywrightDeviceScreenStream(pageManager)
-        val toolFactory = PlaywrightInteractionToolFactory(stream)
-
-        // Adopt the running browser as the device manager's "active Playwright-native test"
-        // for this device id. Without this, a per-card Replay round-trips through
-        // `runYaml` → `runPlaywrightNativeYaml`, finds no cached test, and constructs a
-        // fresh `BasePlaywrightNativeTest` — which launches a NEW headed browser and
-        // executes the YAML there while the recording surface (still wired to the original
-        // pageManager) shows nothing. Mirror of the MCP bridge's WEB device handler
-        // (`TrailblazeMcpBridgeImpl.executeToolViaRpc`): wrap the existing pageManager and
-        // register it so subsequent `runYaml` calls flow through the same browser.
-        // The test does NOT own the browser (existingBrowserManager non-null), so closing
-        // the cache entry on disconnect won't kill the user's active page.
-        val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
-        val customToolClasses =
-          targetTestApp?.getCustomToolsForDriver(device.trailblazeDriverType) ?: emptySet()
-        val configuredLlmModel = currentTrailblazeLlmModelProvider()
-        val playwrightTest = BasePlaywrightNativeTest(
-          trailblazeLlmModel = configuredLlmModel,
-          customToolClasses = customToolClasses,
-          appTarget = targetTestApp,
-          trailblazeDeviceId = device.trailblazeDeviceId,
-          existingBrowserManager = pageManager,
-        )
-        deviceManager.setActivePlaywrightNativeTest(device.trailblazeDeviceId, playwrightTest)
-
-        ConnectionState.Connected(
-          RecordingDeviceConnection(
-            stream = stream,
-            toolFactory = toolFactory,
-            deviceLabel = formatDeviceLabel(device),
-            trailblazeDeviceId = device.trailblazeDeviceId,
-            trailblazeDriverType = device.trailblazeDriverType,
-          )
-        )
-      }
-      TrailblazeDevicePlatform.ANDROID -> {
-        // Android takes the on-device RPC path: the accessibility / instrumentation drivers
-        // already own the screenshot pipeline and accessibility tree on-device, so the host
-        // just polls `GetScreenStateRequest` and dispatches taps via `RunYamlRequest` (the
-        // same API production tests use). Going through Maestro from the host would fight
-        // with the on-device runner for the `am instrument` slot — that was the wrong shape.
-        val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
-          ?: return ConnectionState.Error(
-            "No target app selected. Pick one in the Target dropdown before connecting.",
-          )
-        val instrumentationTarget = targetTestApp.getTrailblazeOnDeviceInstrumentationTarget()
-        val needsAccessibility =
-          device.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
-
-        val rpcClient = OnDeviceRpcClient(
-          trailblazeDeviceId = device.trailblazeDeviceId,
-          sendProgressMessage = { Console.log("[Recording connect] $it") },
-        )
-        val screenStateProvider = OnDeviceRpcScreenStateProvider(
-          rpc = rpcClient,
-          requireAccessibilityService = needsAccessibility,
-        )
-
-        val (initialResponse, recordingSessionId) = withContext(Dispatchers.IO) {
-          // Bootstrap the on-device server: install/reuse APK, ensure `am instrument` is
-          // running, and set up the adb-forward port. Idempotent — if the runner is already
-          // up, this returns near-instantly.
-          HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-            sendProgressMessage = { Console.log("[Recording connect] $it") },
-            deviceId = device.trailblazeDeviceId,
-            trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
-            // Match production's connect path so any user-set instrumentation args (e.g.
-            // network capture toggles) carry through here too. The replay path through
-            // `deviceManager.runYaml` already passes these; the recording connect needs the
-            // same behavior or the on-device server starts with a different argv than what
-            // a subsequent replay expects.
-            additionalInstrumentationArgs = deviceManager.onDeviceInstrumentationArgsProvider(),
-          )
-          if (needsAccessibility) {
-            // Accessibility driver needs the on-device service bound before any tap or
-            // hierarchy fetch will work. Production's `connectAndEnsureReady` does the same.
-            AccessibilityServiceSetupUtils.enableAccessibilityService(
-              deviceId = device.trailblazeDeviceId,
-              hostPackage = instrumentationTarget.testAppId,
-              sendProgressMessage = { Console.log("[Recording connect] $it") },
-            )
-          }
-          rpcClient.waitForReady(
-            timeoutMs = 60_000L,
-            requireAndroidAccessibilityService = needsAccessibility,
-          )
-
-          // First screen-state call gives us the device dimensions for the `DeviceScreenStream`
-          // contract. Without this, the recorder builds with placeholder dimensions and every
-          // tap hit-tests against the wrong viewport. Routing through the provider so this
-          // call uses the same code path as every subsequent frame poll.
-          val response = screenStateProvider.getScreenState(includeScreenshot = false)
-            ?: throw IOException("GetScreenState failed at connect")
-          response to TrailblazeSessionManager.generateSessionId("recording")
-        }
-
-        // Per-tap RunYamlRequest template — copied with new YAML on every gesture and sent
-        // straight to the on-device handler via `rpc.rpcCall`. Bypasses
-        // `deviceManager.runYaml`'s session-creation + log-await polling, which was adding
-        // ~2s per tap in interactive recording. The on-device server still creates a session
-        // (overrideSessionId = recordingSessionId pins them all together), but with
-        // `awaitCompletion = true` the handler returns the moment the tool finishes.
-        val settingsState = deviceManager.settingsRepo.serverStateFlow.value
-        val runYamlRequestTemplate = RunYamlRequest(
-          yaml = "",
-          testName = "recording",
-          useRecordedSteps = false,
-          trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
-          targetAppName = settingsState.appConfig.selectedTargetAppId,
-          trailFilePath = null,
-          config = TrailblazeConfig(
-            overrideSessionId = recordingSessionId,
-            sendSessionStartLog = false,
-            sendSessionEndLog = false,
-            browserHeadless = !settingsState.appConfig.showWebBrowser,
-            preferHostAgent = settingsState.appConfig.preferHostAgent,
-            captureNetworkTraffic = settingsState.appConfig.captureNetworkTraffic,
-          ),
-          trailblazeDeviceId = device.trailblazeDeviceId,
-          driverType = device.trailblazeDriverType,
-          referrer = TrailblazeReferrer.RECORDING_TAB_REPLAY,
-        )
-
-        val stream = OnDeviceRpcDeviceScreenStream(
-          rpc = rpcClient,
-          provider = screenStateProvider,
-          runYamlRequestTemplate = runYamlRequestTemplate,
-          initialDeviceWidth = initialResponse.deviceWidth,
-          initialDeviceHeight = initialResponse.deviceHeight,
-        )
-        val toolFactory = MaestroInteractionToolFactory(
-          deviceWidth = stream.deviceWidth,
-          deviceHeight = stream.deviceHeight,
-        )
-        ConnectionState.Connected(
-          RecordingDeviceConnection(
-            stream = stream,
-            toolFactory = toolFactory,
-            deviceLabel = formatDeviceLabel(device),
-            trailblazeDeviceId = device.trailblazeDeviceId,
-            trailblazeDriverType = device.trailblazeDriverType,
-          ),
-        )
-      }
-      TrailblazeDevicePlatform.IOS -> {
-        val connectedDevice = withContext(Dispatchers.IO) {
-          TrailblazeDeviceService.getConnectedDevice(device.trailblazeDeviceId, device.trailblazeDriverType)
-        } ?: return ConnectionState.Error("Device not found: ${device.instanceId}")
-
-        val maestroDevice = connectedDevice as? MaestroConnectedDevice
-          ?: return ConnectionState.Error("Recording currently requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
-        val driver = maestroDevice.getMaestroDriver()
-        val stream = MaestroDeviceScreenStream(driver)
-        val toolFactory = MaestroInteractionToolFactory(
-          deviceWidth = stream.deviceWidth,
-          deviceHeight = stream.deviceHeight,
-        )
-        ConnectionState.Connected(
-          RecordingDeviceConnection(
-            stream = stream,
-            toolFactory = toolFactory,
-            deviceLabel = formatDeviceLabel(device),
-            trailblazeDeviceId = device.trailblazeDeviceId,
-            trailblazeDriverType = device.trailblazeDriverType,
-          )
-        )
-      }
-      TrailblazeDevicePlatform.DESKTOP -> {
-        // The Recording tab streams device frames + records interactions for trail
-        // playback. Compose desktop has no equivalent recording flow today — the
-        // Compose RPC server exposes screen-state and tool execution for ad hoc
-        // demo use, not a continuous frame stream. Surface a clear "not yet
-        // wired" error rather than crashing or recording a partial signal.
-        return ConnectionState.Error(
-          "Recording is not wired up for the Compose desktop driver yet. " +
-            "Use the hidden `trailblaze desktop snapshot` command for one-shot captures.",
-        )
-      }
-    }
-  } catch (e: Exception) {
-    // Include the exception class so typed-but-message-less exceptions (e.g. Maestro's
-    // AndroidInstrumentationSetupFailure / AndroidDriverTimeoutException, gRPC
-    // StatusRuntimeException with empty descriptions) surface useful detail in the UI
-    // instead of "null" or a generic "Connection failed".
-    val msg = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-    ConnectionState.Error("Connection failed: $msg")
-  }
-}

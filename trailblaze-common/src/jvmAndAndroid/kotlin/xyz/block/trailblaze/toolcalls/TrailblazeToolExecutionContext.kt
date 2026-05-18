@@ -85,7 +85,7 @@ class TrailblazeToolExecutionContext(
   /**
    * Mirrors `TrailblazeConfig.captureNetworkTraffic`. Tools that need to do capture-aware setup
    * that the host bridge can't reach into — most notably Android launch tools that have to flip
-   * a target app's debug SharedPref gates between `clearAppData` and the first network call —
+   * a target app's debug SharedPref gates between `mobile_clearAppData` and the first network call —
    * read this flag to decide whether to flip those gates.
    *
    * ### Producer contract — host runners MUST populate this from the request
@@ -111,9 +111,9 @@ class TrailblazeToolExecutionContext(
    * start so per-tool-call envelope-building doesn't re-resolve on every dispatch.
    *
    * Consumers (notably `QuickJsTrailblazeTool.buildCtxEnvelope`) read both this and
-   * [resolvedAppId] to surface `ctx.target.{id, appIds, resolvedAppId}` to scripted tools.
+   * [appId] to surface `ctx.target.{id, appIds, appId}` to scripted tools.
    * The two fields are intentionally separate: [resolvedTarget] holds the raw declared
-   * candidates (`appIds` getter returns the unfiltered list), while [resolvedAppId] holds
+   * candidates (`appIds` getter returns the unfiltered list), while [appId] holds
    * the device-resolved one. Both can be informative.
    */
   val resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget? = null,
@@ -128,7 +128,7 @@ class TrailblazeToolExecutionContext(
    * per session, not per tool) via `MobileDeviceUtils.findInstalledAppIdForTarget` or its
    * non-throwing equivalent. Tests leave this null.
    */
-  val resolvedAppId: String? = null,
+  val appId: String? = null,
 ) {
   /**
    * Set by a tool during [ExecutableTrailblazeTool.execute] to replace the invoked tool

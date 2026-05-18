@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/selected_account_disc$"
+          resourceIdRegex: "com\\.google\\.android\\.calendar:id/selected_account_disc"

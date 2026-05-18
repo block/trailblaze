@@ -4,17 +4,17 @@ required:
   - description: "Search-box input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_search_box$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_search_box"
   - description: "Search results list container (only present in active search)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_search_results_list$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_search_results_list"
   - description: "'Clear text' action button on the search input"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Clear text$"
+        contentDescriptionRegex: "Clear text"
 forbidden:
   - description: "Help-article content (would mean we're inside an article, not searching)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_answer$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_answer"

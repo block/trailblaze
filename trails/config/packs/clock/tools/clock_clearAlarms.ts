@@ -15,7 +15,7 @@
 // its state files on its next lifecycle event. Following with `am force-stop` makes
 // sure the next launch comes up against the cleared state.
 //
-// Composition over `adbShell` (dual-mode primitive) means this tool works both when
+// Composition over `android_adbShell` (dual-mode primitive) means this tool works both when
 // the daemon dispatches it on host (today) and on-device (when cell 3 of the matrix
 // lights up). No `requiresHost: true` needed on the descriptor.
 
@@ -37,14 +37,14 @@ export async function clock_clearAlarms(args, ctx, client) {
   }
 
   // `pm clear` returns "Success" on stdout for a successful wipe and a non-zero exit
-  // for a failure (e.g. unknown package). Thanks to `adbShell`'s exit-code sentinel
+  // for a failure (e.g. unknown package). Thanks to `android_adbShell`'s exit-code sentinel
   // detection, a `pm clear` failure surfaces as an Error envelope and our `await`
   // throws — there's no silent "everything looks fine" path on a real failure.
-  await client.callTool("adbShell", {
-    command: `pm clear ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["pm", "clear", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
 
   return `Cleared alarms/timers/stopwatch state for ${appId} (pm clear + force-stop).`;

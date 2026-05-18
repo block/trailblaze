@@ -7,17 +7,17 @@ required:
   - description: "mobile row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^mobile$"
+        accessibilityTextRegex: "mobile"
 forbidden:
   - description: "main row — would mean multiple phones available"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^main$"
+        accessibilityTextRegex: "main"
   - description: "work label rendered as phone — would mean multiple phones"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^work$"
+        accessibilityTextRegex: "work"
   - description: "Lists header — would mean we're on Add to List picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"

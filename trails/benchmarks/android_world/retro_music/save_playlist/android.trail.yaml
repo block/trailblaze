@@ -27,8 +27,8 @@
     - androidworldbenchmarks_runAdbShell:
         adbShellCommands:
           - "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Music/"
-    - clearAppData:
-        packageName: "code.name.monkey.retromusic"
+    - mobile_clearAppData:
+        appId: "code.name.monkey.retromusic"
 
 - prompts:
     - step: "Create a playlist in Retro Music called \"Evening Chill\" with songs: Ocean Waves, Forest Rain"

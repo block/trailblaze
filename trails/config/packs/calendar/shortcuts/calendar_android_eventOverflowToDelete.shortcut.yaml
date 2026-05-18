@@ -9,5 +9,5 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Delete$"
-          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+          textRegex: "Delete"
+          resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"

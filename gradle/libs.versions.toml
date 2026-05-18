@@ -146,6 +146,8 @@ kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", vers
 ktor-utils = { module = "io.ktor:ktor-utils", version.ref = "ktor" }
 ktor-utils-jvm = { module = "io.ktor:ktor-utils-jvm", version.ref = "ktor" }
 ktor-websockets = { module = "io.ktor:ktor-websockets", version.ref = "ktor" }
+ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
+ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 maestro-client = { module = "dev.mobile:maestro-client", version.ref = "maestro" }
 maestro-cli = { module = "dev.mobile:maestro-cli", version.ref = "maestro" }

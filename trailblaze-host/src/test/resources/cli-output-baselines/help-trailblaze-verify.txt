@@ -14,11 +14,14 @@ Check a condition on screen and pass/fail (exit code 0/1, ideal for CI)
                               platform/id. Required.
   -h, --help                Show this help message and exit.
       --headless=<headless> For --device web/...: launch the Playwright browser
-                              headless. When omitted, falls back to the
-                              persisted `web-headless` config (see `trailblaze
-                              config web-headless`). Pass --headless=false to
-                              force a visible browser, --headless=true to force
-                              headless. Ignored for non-web devices.
+                              headless. When omitted, auto-detects: headless on
+                              machines with no display (remote workstations,
+                              CI), headed otherwise. Falls back to the
+                              persisted `web-headless` config when a display is
+                              present (see `trailblaze config web-headless`).
+                              Pass --headless=false to force a visible browser,
+                              --headless=true to force headless. Ignored for
+                              non-web devices.
       --text-only, --no-screenshots
                             Skip screenshots — the LLM only sees the textual
                               view hierarchy, no vision tokens, and disk

@@ -11,13 +11,13 @@ required:
   - description: "Clear-text affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Clear text$"
+        accessibilityTextRegex: "Clear text"
 forbidden:
   - description: "Search results panel — would mean results are rendered"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"
   - description: "Dictate — would mean query is empty"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Dictate$"
+        accessibilityTextRegex: "Dictate"

@@ -72,6 +72,14 @@ object VideoSpriteExtractor {
     webpQuality: Int = CaptureOptions.DEFAULT_SPRITE_QUALITY,
     isLandscape: Boolean = false,
   ): File? {
+    // Treat `fps <= 0` as "caller doesn't want sprites." Without this guard, the ffmpeg
+    // frame-extraction below runs with `-vf fps=0`, fails noisily, and the caller has to
+    // sift through misleading "ffmpeg frame extraction failed" output. Used by
+    // `trailblaze report --video`, which only needs the underlying MP4.
+    if (fps <= 0) {
+      Console.log("Sprite extraction skipped (fps=$fps)")
+      return null
+    }
     val dir = videoFile.parentFile ?: return null
     try {
       val originalKB = videoFile.length() / 1024

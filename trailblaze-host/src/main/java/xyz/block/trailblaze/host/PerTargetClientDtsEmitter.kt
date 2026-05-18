@@ -28,7 +28,7 @@ import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
  * **Why the workspace-wide Kotlin set instead of a per-target filter.** Filtering Kotlin
  * tools by `target.platforms.<platform>.tool_sets:` membership would shrink each per-target
  * binding, but at author-time we want autocomplete on every framework primitive a tool
- * could compose with — `adbShell`, `tapOnElementBySelector`, `inputText`, etc. — even ones
+ * could compose with — `android_adbShell`, `tapOnElementBySelector`, `inputText`, etc. — even ones
  * the LLM-side gate wouldn't expose to a session running on a specific platform. Same
  * reasoning the previous lead-dev review settled: "tools commonly contain platform/target
  * compatibility in the name; we want all of those accessible because a tool can be used

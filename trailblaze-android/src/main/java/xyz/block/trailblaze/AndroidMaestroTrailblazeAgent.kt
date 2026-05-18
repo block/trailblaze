@@ -7,6 +7,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.maestro.MaestroUiAutomatorRunner
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
@@ -20,6 +21,8 @@ class AndroidMaestroTrailblazeAgent(
   nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
   memory: AgentMemory = AgentMemory(),
   captureNetworkTraffic: Boolean = false,
+  resolvedTarget: ResolvedTarget? = null,
+  appId: String? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -27,6 +30,8 @@ class AndroidMaestroTrailblazeAgent(
   nodeSelectorMode = nodeSelectorMode,
   memory = memory,
   captureNetworkTraffic = captureNetworkTraffic,
+  resolvedTarget = resolvedTarget,
+  appId = appId,
 ) {
   override suspend fun executeMaestroCommands(commands: List<Command>, traceId: TraceId?): TrailblazeToolResult = MaestroUiAutomatorRunner.runCommands(
     commands = commands,

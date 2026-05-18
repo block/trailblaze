@@ -9,7 +9,7 @@ required:
   - description: "Popover dismiss region (the scrim that cancels on tap-outside)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PopoverDismissRegion$"
+        resourceIdRegex: "PopoverDismissRegion"
   - description: "Block-Contact warning text"
     selector:
       iosMaestro:
@@ -18,7 +18,7 @@ forbidden:
   - description: "Cancel button — this confirm uses tap-outside, not an explicit Cancel"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
   - description: "Delete-card warning — the delete confirm is a sibling popover"
     selector:
       iosMaestro:

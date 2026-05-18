@@ -404,7 +404,43 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { loggingRule.setSession(it) },
+      screenStateProvider = { hostRunner.screenStateProvider() },
+      waypointResolver = resolveWaypointsForTrail(),
+      target = trailblazeAgent.resolvedTarget?.let {
+        xyz.block.trailblaze.api.TargetTemplateContext(
+          appId = trailblazeAgent.appId,
+          appIds = it.appIds,
+        )
+      },
     )
+  }
+
+  /**
+   * Loads the classpath-bundled waypoint registry and returns a id->definition lookup
+   * for step-postcondition evaluation. Mirrors the helper of the same name in
+   * `TrailblazeHostYamlRunner` — both ride the same `TrailblazeProjectConfigLoader.resolveRuntime`
+   * path so a YAML waypoint that resolves in the daemon's V3 path also resolves here on
+   * the IOS_HOST / Maestro-host trail driver path.
+   *
+   * Returns null (postconditions become a silent no-op) on any loader error so a malformed
+   * pack manifest cannot block trail execution.
+   */
+  private fun resolveWaypointsForTrail(): ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? {
+    return try {
+      val resolved = xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader.resolveRuntime(
+        loaded = xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig(
+          raw = xyz.block.trailblaze.config.project.TrailblazeProjectConfig(),
+          sourceFile = java.io.File(".").absoluteFile,
+        ),
+        includeClasspathPacks = true,
+      )
+      val byId: Map<String, xyz.block.trailblaze.api.waypoint.WaypointDefinition> =
+        resolved.waypoints.associateBy { it.id }
+      val resolver: (String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition? = { id -> byId[id] }
+      resolver
+    } catch (e: Exception) {
+      null
+    }
   }
 
   /**

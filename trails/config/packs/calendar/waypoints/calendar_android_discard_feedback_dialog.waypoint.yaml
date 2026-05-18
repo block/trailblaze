@@ -4,7 +4,7 @@ required:
   - description: "Dialog title"
     selector:
       androidAccessibility:
-        textRegex: "^Discard your feedback\\?$"
+        textRegex: "Discard your feedback\\?"
   - description: "Body text confirming discard"
     selector:
       androidAccessibility:
@@ -12,15 +12,15 @@ required:
   - description: "Discard button"
     selector:
       androidAccessibility:
-        textRegex: "^Discard$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Discard"
+        classNameRegex: "android.widget.Button"
   - description: "Continue writing button"
     selector:
       androidAccessibility:
-        textRegex: "^Continue writing$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Continue writing"
+        classNameRegex: "android.widget.Button"
 forbidden:
   - description: "Calendar's discard-event dialog has a different prompt"
     selector:
       androidAccessibility:
-        textRegex: "^Discard this event\\?$"
+        textRegex: "Discard this event\\?"

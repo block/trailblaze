@@ -10,17 +10,17 @@ required:
   - description: "Anniversary row label"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^anniversary$"
+        accessibilityTextRegex: "anniversary"
   - description: "Remove anniversary affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Remove anniversary$"
+        accessibilityTextRegex: "Remove anniversary"
   - description: "Edit form's close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
 forbidden:
   - description: "New Contact title — would mean we're on the new-contact draft"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"

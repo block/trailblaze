@@ -199,6 +199,12 @@ object MaestroCommandConverter {
     return AccessibilityAction.TapOnElement(
       nodeSelector = convertElementSelectorToNodeSelector(elementSelector),
       longPress = command.longPress == true,
+      // Preserve Maestro `optional: true` semantics so legacy recordings that gate on
+      // transient runtime permission dialogs (e.g. "Allow BLUETOOTH_CONNECT" on cold
+      // launch) become no-ops on warm devices where the dialog isn't present, instead of
+      // failing the trail. Without this the optional flag was silently dropped during the
+      // Maestro→accessibility lowering.
+      optional = command.optional,
     )
   }
 

@@ -4,6 +4,7 @@ import maestro.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
@@ -13,6 +14,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
@@ -28,13 +30,26 @@ class HostMaestroTrailblazeAgent(
   sessionProvider: TrailblazeSessionProvider,
   nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
   trailblazeToolRepo: TrailblazeToolRepo? = null,
+  resolvedTarget: ResolvedTarget? = null,
+  appId: String? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   nodeSelectorMode = nodeSelectorMode,
   trailblazeToolRepo = trailblazeToolRepo,
+  resolvedTarget = resolvedTarget,
+  appId = appId,
 ) {
+
+  /**
+   * Template context surfaced to every internal [TrailblazeNodeSelectorResolver.resolve]
+   * call so selectors carrying `{{target.appId}}` placeholders expand correctly. Null when
+   * the agent wasn't constructed with a target (target-agnostic tests / ad-hoc runs).
+   */
+  private val templateContext: TargetTemplateContext? = resolvedTarget?.let {
+    TargetTemplateContext(appId = appId, appIds = it.appIds)
+  }
 
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     (maestroHostRunner as MaestroHostRunnerImpl).connectedDevice
@@ -78,7 +93,7 @@ class HostMaestroTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null
-    return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector)) {
+    return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
       is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch,
       is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> TrailblazeToolResult.Success()
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null // fall back to Maestro (has retry/timeout)
@@ -96,7 +111,7 @@ class HostMaestroTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null
-    return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector)) {
+    return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> TrailblazeToolResult.Success()
       else -> null // fall back to Maestro (has timeout to wait for disappearance)
     }
@@ -124,7 +139,7 @@ class HostMaestroTrailblazeAgent(
   private fun resolveSingleMatch(
     tree: TrailblazeNode,
     selector: TrailblazeNodeSelector,
-  ): TrailblazeNode? = when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector)) {
+  ): TrailblazeNode? = when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector, templateContext)) {
     is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
     else -> null
   }

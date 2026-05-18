@@ -47,8 +47,17 @@ class VideoPlaybackState internal constructor() {
   internal var isVideoPlaying: Boolean by mutableStateOf(false)
   internal var videoDurationMs: Long by mutableStateOf(0L)
 
-  /** Playback speed multiplier. Cycles through 0.25x, 0.5x, 1x, 1.5x, 2x, 3x. */
-  internal var playbackSpeed: Float by mutableStateOf(1f)
+  /**
+   * Playback speed multiplier. Cycles through 0.25x, 0.5x, 1x, 1.5x, 2x, 4x.
+   *
+   * Default is 2x — fast enough for a punchy timeline walkthrough but slow enough that
+   * the Compose canvas still has time to paint each scrub tick. 4x was briefly the
+   * default (#3064) but produced visibly torn frames where the screenshot area didn't
+   * finish drawing before the scrubber moved on, especially noticeable in
+   * `trailblaze report --video` exports where the headless browser pipeline gives the
+   * renderer no slack.
+   */
+  internal var playbackSpeed: Float by mutableStateOf(2f)
 
   /**
    * Seek request for the video player (ms from video start). Set when the user scrubs/taps the

@@ -241,23 +241,16 @@ class TrailblazeYaml(
   fun hasActionableSteps(trailItems: List<TrailYamlItem>): Boolean =
     trailItems.any { item ->
       when (item) {
-        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.any(::isActionablePromptStep)
+        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.isNotEmpty()
         is TrailYamlItem.ToolTrailItem -> item.tools.isNotEmpty()
         is TrailYamlItem.ConfigTrailItem -> false
       }
     }
 
-  private fun isActionablePromptStep(step: PromptStep): Boolean {
-    val recording = step.recording
-    return recording == null || recording.tools.isNotEmpty()
-  }
-
   fun hasRecordedSteps(trailItems: List<TrailYamlItem>): Boolean = trailItems.any { item ->
     when (item) {
       is TrailYamlItem.PromptsTrailItem -> {
-        item.promptSteps.any { promptStep ->
-          promptStep.recording?.tools?.isNotEmpty() ?: false
-        }
+        item.promptSteps.any { promptStep -> promptStep.recording != null }
       }
       is TrailYamlItem.ConfigTrailItem,
       is TrailYamlItem.ToolTrailItem -> false

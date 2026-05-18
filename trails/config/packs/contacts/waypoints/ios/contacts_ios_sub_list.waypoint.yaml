@@ -10,22 +10,22 @@ required:
   - description: "BackButton labeled 'Lists' — only when inside a sub-list"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
-        resourceIdRegex: "^BackButton$"
+        accessibilityTextRegex: "Lists"
+        resourceIdRegex: "BackButton"
   - description: "Toolbar with Search affordance (same as top-level list)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^Toolbar$"
+        resourceIdRegex: "Toolbar"
   - description: "Add (+) button in the toolbar"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add$"
+        accessibilityTextRegex: "Add"
 forbidden:
   - description: "Lists header title — would mean we're on the Lists view itself"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
   - description: "InlineActionsHStack — only when a contact is selected"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

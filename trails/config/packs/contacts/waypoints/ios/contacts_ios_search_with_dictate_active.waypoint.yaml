@@ -7,14 +7,14 @@ required:
   - description: "Active search field"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search$"
+        accessibilityTextRegex: "Search"
   - description: "Dictate affordance focused"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Dictate$"
+        accessibilityTextRegex: "Dictate"
         focused: true
 forbidden:
   - description: "Search results panel"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"

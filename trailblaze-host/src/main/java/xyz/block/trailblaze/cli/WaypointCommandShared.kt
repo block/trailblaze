@@ -1,6 +1,11 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
+import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.WaypointLoader
@@ -131,6 +136,91 @@ internal fun maybeWarnNoTarget(
       "explicit override if you expected to find waypoints here.",
   )
 }
+
+/**
+ * Three-way outcome for [resolveTargetTemplateContext]. The pack manifest is the single
+ * source of truth for a target's declared `app_ids:`; the CLI must either find them and
+ * supply a template context to the matcher, or fail loudly with a clear message — there
+ * is no override flag, because every legitimate use case ("validate this waypoint against
+ * a captured log") already has the target named, and the manifest is what the runtime
+ * itself reads at session start.
+ */
+internal sealed class TargetContextResolution {
+  /** No `--target` supplied. The matcher gets null and templated selectors won't expand. */
+  data object NoTarget : TargetContextResolution()
+
+  /** `--target` resolved to a pack with declared appIds. */
+  data class Resolved(val context: TargetTemplateContext) : TargetContextResolution()
+
+  /**
+   * `--target` was supplied but the pack couldn't be resolved or declared no `app_ids:`.
+   * Callers should print [message] and exit non-zero — silently no-matching templated
+   * selectors would just confuse the author.
+   */
+  data class Error(val message: String) : TargetContextResolution()
+}
+
+/**
+ * Resolves the [TargetTemplateContext] for waypoint matching from `--target <id>` alone.
+ *
+ * The pack manifest's `target.platforms.<platform>.app_ids:` is the single source of truth.
+ * Returns:
+ *  - [TargetContextResolution.NoTarget] when no `--target` was supplied — the matcher
+ *    receives a null context. Templated selectors won't expand; literal selectors work fine.
+ *  - [TargetContextResolution.Resolved] when the pack was found and declares appIds.
+ *  - [TargetContextResolution.Error] when `--target` named a pack that can't be loaded or
+ *    declares no `app_ids:` for any platform. Callers exit non-zero with the message.
+ *
+ * No override flag — the pack-authoring side is the right place to fix a missing app id,
+ * not a CLI argument that drifts from the runtime's actual session-start lookup.
+ */
+internal fun resolveTargetTemplateContext(
+  targetId: String?,
+  fromPath: java.nio.file.Path = CliCallerContext.callerCwd(),
+): TargetContextResolution {
+  if (targetId == null) return TargetContextResolution.NoTarget
+  val resolved = try {
+    loadResolvedConfig(fromPath)
+  } catch (e: TrailblazeProjectConfigException) {
+    return TargetContextResolution.Error(
+      "--target $targetId: failed to load pack manifest: ${e.message}",
+    )
+  }
+  val targetCfg = resolved?.targets?.firstOrNull { it.id == targetId }
+    ?: return TargetContextResolution.Error(
+      "--target $targetId: no such target in the resolved workspace + classpath packs. " +
+        "Check the spelling, or that the pack is on the workspace's `packs:` list / framework classpath.",
+    )
+  val packAppIds = targetCfg.platforms?.values
+    ?.flatMap { it.appIds.orEmpty() }
+    ?.distinct()
+    .orEmpty()
+  if (packAppIds.isEmpty()) {
+    return TargetContextResolution.Error(
+      "--target $targetId: pack manifest declares no `app_ids:` for any platform. " +
+        "Templated waypoint selectors (`{{target.appId}}`) can't be expanded without at " +
+        "least one declared candidate. Add `app_ids:` under `target.platforms.<platform>:` " +
+        "in the pack's manifest.",
+    )
+  }
+  return TargetContextResolution.Resolved(
+    TargetTemplateContext(appId = null, appIds = packAppIds),
+  )
+}
+
+private fun loadResolvedConfig(fromPath: java.nio.file.Path) =
+  TrailblazeWorkspaceConfigResolver.resolve(fromPath).configFile?.let { configFile ->
+    TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      configFile = configFile,
+      includeClasspathPacks = true,
+    )
+  } ?: TrailblazeProjectConfigLoader.resolveRuntime(
+    loaded = LoadedTrailblazeProjectConfig(
+      raw = TrailblazeProjectConfig(),
+      sourceFile = File(".").absoluteFile,
+    ),
+    includeClasspathPacks = true,
+  )
 
 /** Renders a [WaypointMatchResult] into a multi-line, human-friendly string. */
 internal fun formatResult(r: WaypointMatchResult): String = buildString {

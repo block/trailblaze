@@ -8,6 +8,7 @@ import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionId
@@ -376,8 +377,14 @@ class LogsRepo(
    * Ensures a file watcher is running for the given session so its flow gets reactive updates.
    * Creates the flow if it doesn't exist yet. No-op if a watcher is already active or if
    * file system watching is disabled.
+   *
+   * Public so callers (e.g. the frame-producer activity listener in `DeviceApiEndpoint`) can
+   * explicitly request a watcher before subscribing to [getSessionLogsFlow]. Without this
+   * guarantee, [getSessionLogsFlow] returns a cached, never-updated empty flow for any
+   * session that hasn't had a watcher started another way — newly-created recording sessions
+   * fall into this category. Review feedback on PR #3018 caught the cache-vs-watcher race.
    */
-  private fun ensureWatchingSession(sessionId: SessionId) {
+  fun ensureWatchingSession(sessionId: SessionId) {
     val flow = _sessionLogsFlows.getOrPut(sessionId) {
       MutableStateFlow(getLogsForSession(sessionId))
     }
@@ -692,7 +699,11 @@ class LogsRepo(
     val sessionDir = getSessionDir(sessionId)
     val timestamp = Clock.System.now().toEpochMilliseconds()
     val fileExtension = ImageFormatDetector.detectFormat(bytes).fileExtension
-    val filename = "${sessionId.value}_${timestamp}.$fileExtension"
+    val filename = TrailblazeLogger.buildScreenshotFileName(
+      sessionId = sessionId.value,
+      epochMs = timestamp,
+      ext = fileExtension,
+    )
     val screenshotFile = File(sessionDir, filename)
     Console.log("Writing Screenshot to ${screenshotFile.absolutePath}")
     screenshotFile.writeBytes(bytes)

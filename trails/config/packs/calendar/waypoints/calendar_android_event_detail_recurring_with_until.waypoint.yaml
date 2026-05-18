@@ -4,14 +4,14 @@ required:
   - description: "View-screen coordinator"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout"
   - description: "Recurrence row with 'Repeats … until …' summary"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recurrence$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/recurrence"
         textRegex: "^Repeats .+; until .+$"
 forbidden:
   - description: "Quick-create handle"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"

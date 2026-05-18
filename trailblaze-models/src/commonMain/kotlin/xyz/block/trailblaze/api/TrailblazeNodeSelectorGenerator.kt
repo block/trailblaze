@@ -42,8 +42,22 @@ package xyz.block.trailblaze.api
  * The caller provides the full tree and the target node. The generator returns the
  * simplest [TrailblazeNodeSelector] that resolves to exactly one match (the target).
  *
+ * ## Post-generation minimization
+ * Every selector returned by [findBestSelector], [findBestStructuralSelector], and
+ * [findAllValidSelectors] is run through [TrailblazeNodeSelectorMinimizer] before it
+ * leaves the generator. Strategies in the cascade are written to emit kitchen-sink
+ * driver matches (every non-null property on the node), and hierarchy helpers like
+ * `containsChild` reuse those same kitchen-sink builders for their inner selectors.
+ * The minimizer prunes any field that isn't load-bearing for uniqueness — so a
+ * recorded selector that today reads
+ * `textRegex="Estimates", classNameRegex="android.widget.TextView"` is reduced to
+ * `textRegex="Estimates"` whenever the class is just along for the ride. That makes
+ * recorded selectors less fragile under widget-implementation changes (e.g. View →
+ * Compose) without weakening any case where the class is actually disambiguating.
+ *
  * @see TrailblazeNodeSelectorResolver for matching selectors against trees
  * @see TrailblazeNodeSelector for the selector model
+ * @see TrailblazeNodeSelectorMinimizer for the post-generation pruning pass
  */
 object TrailblazeNodeSelectorGenerator {
 
@@ -77,11 +91,17 @@ object TrailblazeNodeSelectorGenerator {
     val namedStrategies = strategiesForDetail(root, target, target.driverDetail, parentMap)
 
     val results = mutableListOf<NamedSelector>()
+    // Track already-emitted minimized selectors so two strategies that converge to the
+    // same shape after pruning don't both show up in the list.
+    val seen = mutableSetOf<TrailblazeNodeSelector>()
     for ((name, strategy) in namedStrategies) {
       if (results.size >= maxResults) break
-      strategy()?.let { selector ->
-        if (isUniqueMatch(root, target, selector)) {
-          results.add(NamedSelector(selector, name, isBest = results.isEmpty()))
+      strategy()?.let { raw ->
+        if (isUniqueMatch(root, target, raw)) {
+          val selector = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+          if (seen.add(selector)) {
+            results.add(NamedSelector(selector, name, isBest = results.isEmpty()))
+          }
         }
       }
     }
@@ -134,8 +154,9 @@ object TrailblazeNodeSelectorGenerator {
     }
 
     for ((name, strategy) in namedStrategies) {
-      strategy()?.let { selector ->
-        if (isUniqueMatch(root, target, selector)) {
+      strategy()?.let { raw ->
+        if (isUniqueMatch(root, target, raw)) {
+          val selector = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
           return NamedSelector(selector, name, isBest = true)
         }
       }
@@ -167,8 +188,10 @@ object TrailblazeNodeSelectorGenerator {
     val strategies = strategiesForDetail(root, target, target.driverDetail, parentMap)
 
     for ((_, strategy) in strategies) {
-      strategy()?.let { selector ->
-        if (isUniqueMatch(root, target, selector)) return selector
+      strategy()?.let { raw ->
+        if (isUniqueMatch(root, target, raw)) {
+          return TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+        }
       }
     }
 

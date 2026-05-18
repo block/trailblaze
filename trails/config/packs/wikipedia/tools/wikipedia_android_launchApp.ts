@@ -1,6 +1,6 @@
 // Custom scripted tool: launch the Wikipedia (en) app via Android shell commands.
 // See sibling clock_android_launchApp.ts for the full rationale on the choice of
-// `adbShell` over the Maestro-shaped `launchApp`, and `am start` over `monkey`.
+// `android_adbShell` over the Maestro-shaped `launchApp`, and `am start` over `monkey`.
 //
 // App-id resolution: `ctx.target.resolveAppId({ defaultAppId })` — a framework-
 // provided method that consults `ctx.target.resolvedAppId` (framework-resolved
@@ -25,11 +25,16 @@ export async function wikipedia_android_launchApp(args, ctx, client) {
     throw new Error("wikipedia_android_launchApp could not resolve an Android app id from ctx.target.");
   }
 
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: [
+      "am", "start",
+      "-a", "android.intent.action.MAIN",
+      "-c", "android.intent.category.LAUNCHER",
+      "-p", appId,
+    ],
   });
 
   return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;

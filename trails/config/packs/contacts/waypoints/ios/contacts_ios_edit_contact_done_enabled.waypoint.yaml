@@ -7,17 +7,17 @@ required:
   - description: "close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
   - description: "Add Photo affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add Photo$"
+        accessibilityTextRegex: "Add Photo"
   - description: "Done button (enabled)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
 forbidden:
   - description: "New Contact title — would mean we're on the new-contact draft"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"

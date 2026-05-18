@@ -9,25 +9,25 @@ required:
   - description: "Preview block (contact photo + job-title sub-line)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Preview$"
+        accessibilityTextRegex: "Preview"
   - description: "Make This My Card row — unique to the contact context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Make This My Card$"
+        accessibilityTextRegex: "Make This My Card"
   - description: "Delete Contact row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"
   - description: "Copy row — unique to the contact context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Copy$"
+        accessibilityTextRegex: "Copy"
 forbidden:
   - description: "Email All — only on the list context menu, not the contact one"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Email All$"
+        accessibilityTextRegex: "Email All"
   - description: "Rename row — only on the list context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Rename$"
+        accessibilityTextRegex: "Rename"

@@ -45,6 +45,14 @@ class AndroidOnDeviceUiAutomatorScreenState(
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  /**
+   * When `false`, skip the `dumpViewHierarchy()` XML capture and stabilization loop. The
+   * resulting [viewHierarchy] is an empty placeholder and [trailblazeNodeTree] is `null`,
+   * but [screenshotBytes] is still captured. Mirror-only callers (live `/devices` viewer
+   * frame loop) pass `false`; every other caller takes the default `true` and gets the
+   * atomic (screenshot, tree) pair the recording flow depends on.
+   */
+  includeTree: Boolean = true,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -90,6 +98,21 @@ class AndroidOnDeviceUiAutomatorScreenState(
     deviceHeight = displayHeight
     foregroundAppId = currentPackage
     currentActivity = AdbCommandUtil.getForegroundActivity()
+
+    // Mirror-only fast path: skip both `dumpViewHierarchy()` XML captures (each carries a
+    // 30s IPC timeout) and the stabilization comparison loop. Just grab a screenshot. Drops
+    // per-frame on-device cost from ~150-400 ms to ~30-80 ms. Kotlin doesn't allow early
+    // `return` from init blocks, so we structure as if/else with all field assignments inside.
+    if (!includeTree) {
+      viewHierarchy = ViewHierarchyTreeNode()
+      _screenshotBytes = if (includeScreenshot) {
+        getScreenshot(viewHierarchy = null, screenshotScalingConfig) ?: ByteArray(0)
+      } else {
+        ByteArray(0)
+      }
+      _trailblazeNodeTree = null
+      refsApplied = true
+    } else {
 
     var matched = false
     var attempts = 0
@@ -164,6 +187,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
     // (see MigrationTreeCapture) and rides along the wire response without
     // mutating the primary tree shape that runtime tools and reports rely on.
     _trailblazeNodeTree = lastMaestroTree?.toTrailblazeNodeAndroidMaestro()
+    } // end else (full tree path)
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID

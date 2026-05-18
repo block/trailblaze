@@ -161,6 +161,7 @@ Toolsets are declared in `toolsets/*.yaml`. They are pure YAML groupings: `id`, 
 
 | Toolset | Always Enabled | Compatible Drivers | Tool Count |
 | --- | --- | --- | ---: |
+| `android_framework` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 3 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 2 |
 | `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 15 |
@@ -171,7 +172,7 @@ Toolsets are declared in `toolsets/*.yaml`. They are pure YAML groupings: `id`, 
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
 | `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 2 |
-| `web_core` | No | `playwright-electron`, `playwright-native` | 10 |
+| `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
 | `web_verification` | No | `playwright-electron`, `playwright-native` | 5 |
 
 ## Authoring Tools

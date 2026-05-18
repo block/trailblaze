@@ -49,8 +49,32 @@ interface DeviceScreenStream {
    */
   suspend fun getTrailblazeNodeTree(): TrailblazeNode? = null
 
-  /** Capture a screenshot (for recording, separate from the display stream). */
+  /**
+   * Capture a screenshot **atomically with the view hierarchy** — the resulting bytes are
+   * paired with whatever `getViewHierarchy()` / `getTrailblazeNodeTree()` return on the very
+   * next call. Used by the recorder at tap-time so selector generation operates on a tree
+   * that's truly synchronous with the screenshot the user saw. Don't call this from
+   * mirror-only paths — use [getMirrorScreenshot] instead, it's typically 3-5× faster.
+   */
   suspend fun getScreenshot(): ByteArray
+
+  /**
+   * Capture a screenshot for **display only** — the caller promises it never reads
+   * `getViewHierarchy()` / `getTrailblazeNodeTree()` paired with this image. Implementations
+   * are free to skip any tree-building work that's normally bundled with the screenshot
+   * capture, dropping per-call cost dramatically on platforms (Android, in particular) where
+   * the hierarchy fetch dominates capture time.
+   *
+   * Default implementation falls back to [getScreenshot] so platforms that don't have a
+   * cheaper mirror-only path (iOS Maestro, Playwright web) just keep their existing behavior
+   * — no perf regression, no perf win. Android's on-device path overrides this to skip the
+   * accessibility-tree walk + JSON serialize that the live `/devices` viewer never uses,
+   * which is where ~3 fps was coming from.
+   *
+   * **Must not be used during recording.** Tap-time captures need the atomic pair guarantee
+   * that only [getScreenshot] provides.
+   */
+  suspend fun getMirrorScreenshot(): ByteArray = getScreenshot()
 
   /** Device screen width in device pixels. */
   val deviceWidth: Int

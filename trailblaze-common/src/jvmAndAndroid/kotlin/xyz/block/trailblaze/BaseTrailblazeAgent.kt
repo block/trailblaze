@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ScreenState
@@ -11,7 +12,6 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.RecordableHostLocalTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -110,19 +110,42 @@ abstract class BaseTrailblazeAgent(
             // — they round-trip through host-side transport and don't belong to any device /
             // browser / cloud driver. Done in the base so every agent picks it up uniformly.
             //
-            // Per-tool session-log entries (`logToolExecution`) are deliberately NOT emitted
-            // here: `TrailblazeLog.TrailblazeToolLog` serializes the full tool instance, and
-            // dynamically-built host-local tools (like `SubprocessTrailblazeTool`) aren't
-            // `@Serializable` — their state (session closures, arg JsonObjects) doesn't fit
-            // the static polymorphic registry. Session start/end logs still capture the
-            // trail YAML + outcomes; richer per-call telemetry is tracked as follow-up.
+            // Every host-local dispatch emits a `TrailblazeToolLog`. The advertised tool
+            // name flows through the `HostLocalExecutableTrailblazeTool` marker and the raw
+            // args through `RawArgumentTrailblazeTool` — both already handled by
+            // `toLogPayload()` / `getToolNameFromAnnotation()`, so the log identifies the
+            // tool by its dynamic name without needing a class-level `@TrailblazeToolClass`.
+            // Recording, reports, and downstream debuggers all depend on this entry being
+            // present — gating on a marker interface (the prior shape) left scripted /
+            // subprocess MCP dispatches invisible to recordings and let the recording's
+            // auto-save silently swap them for unrelated fallbacks.
             is HostLocalExecutableTrailblazeTool -> {
               toolsExecuted.add(resolved)
               val timeBeforeExecution = Clock.System.now()
-              val hostResult = runBlocking { resolved.execute(context) }
-              if (resolved is RecordableHostLocalTool) {
-                logToolExecution(resolved, timeBeforeExecution, context, hostResult)
+              // Catch throws so the log emit still fires on the exception path. The contract
+              // is "every dispatch logs" — if `execute` lets an exception escape (custom
+              // HostLocal author, transport bug, etc.), the prior shape would skip the log
+              // and re-open #2924. Convert to a `TrailblazeToolResult.Error.ExceptionThrown`,
+              // log it, then surface it as a result so the early-exit branch downstream
+              // treats it the same as a returned error. `CancellationException` re-throws so
+              // structured concurrency for session teardown / agent abort stays intact.
+              val hostResult: TrailblazeToolResult = try {
+                runBlocking { resolved.execute(context) }
+              } catch (e: CancellationException) {
+                throw e
+              } catch (e: Throwable) {
+                TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, resolved)
               }
+              logToolExecution(
+                tool = resolved,
+                timeBeforeExecution = timeBeforeExecution,
+                context = context,
+                result = hostResult,
+                // Flag this dispatch as host-side so session viewers / reports can badge it as
+                // such, since the log payload is otherwise indistinguishable from an RPC-routed
+                // tool's device-emitted log.
+                dispatchedHostSide = true,
+              )
               hostResult
             }
             else -> executeTool(resolved, context, toolsExecuted)

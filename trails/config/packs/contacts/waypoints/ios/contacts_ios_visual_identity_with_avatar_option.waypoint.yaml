@@ -9,18 +9,18 @@ required:
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "'Avatar Option' suggestion row — only after a photo is picked"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Avatar Option$"
-        resourceIdRegex: "^SuggestionListItemButton$"
+        accessibilityTextRegex: "Avatar Option"
+        resourceIdRegex: "SuggestionListItemButton"
   - description: "Crop editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Crop$"
+        accessibilityTextRegex: "Crop"
 forbidden:
   - description: "Done button — would mean we're on the post-Choose composition picker"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityDoneButton$"
+        resourceIdRegex: "VisualIdentityDoneButton"

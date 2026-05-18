@@ -10,25 +10,25 @@ required:
   - description: "Cancel button (modal nav)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
   - description: "Toolbar present (the standard list toolbar)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search$"
+        accessibilityTextRegex: "Search"
 forbidden:
   - description: "Edit nav button — would mean we're on contact-detail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "Sheet Grabber — would mean we're on a sheet, not a push picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "Add List — would mean we're on the Lists view"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
   - description: "InlineActionsHStack — only on contact-detail"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

@@ -15,3 +15,17 @@ tools:
   - web_wait
   - web_snapshot
   - web_request_details
+  # Read-only / wait primitives — safe for LLM use.
+  - web_currentUrl
+  - web_waitForUrl
+  # Storage-state + secret-injection primitives. Intended primarily for scripted-tool
+  # composition (e.g. session-cache replay), but listed in this toolset because the
+  # session toolRepo is built from member toolsets — a tool that isn't in any toolset can't
+  # be `client.callTool`'d from a scripted tool either. The LLM-facing concern (LLM picks
+  # `web_fillSecret` with a guessed value, etc.) is bounded: `web_fillSecret` requires a
+  # known value to fill, and `web_evaluate` is no broader a surface than `web_type` +
+  # `web_click` give to the LLM today.
+  - web_applyCookies
+  - web_getStorageState
+  - web_fillSecret
+  - web_evaluate

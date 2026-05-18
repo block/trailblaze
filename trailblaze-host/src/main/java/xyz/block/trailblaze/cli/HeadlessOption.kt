@@ -2,6 +2,7 @@ package xyz.block.trailblaze.cli
 
 import picocli.CommandLine
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.hasDisplay
 
 /**
  * Picocli mixin for the `--headless` flag shared by every CLI command that may
@@ -22,7 +23,9 @@ class HeadlessOption {
     names = ["--headless"],
     description = [
       "For --device web/...: launch the Playwright browser headless. " +
-        "When omitted, falls back to the persisted `web-headless` config " +
+        "When omitted, auto-detects: headless on machines with no display " +
+        "(remote workstations, CI), headed otherwise. " +
+        "Falls back to the persisted `web-headless` config when a display is present " +
         "(see `trailblaze config web-headless`). " +
         "Pass --headless=false to force a visible browser, --headless=true to force headless. " +
         "Ignored for non-web devices.",
@@ -34,18 +37,27 @@ class HeadlessOption {
   /**
    * Returns the effective headless value: the explicit `--headless` if the user
    * passed one, otherwise the inverse of the persisted `showWebBrowser` config
-   * (so `showWebBrowser=true` → `headless=false`).
+   * (so `showWebBrowser=true` → `headless=false`), with auto-detection for
+   * environments without a display.
    *
-   * If the config can't be read for any reason (corrupt file, brand-new
-   * install), defaults to `false` — matches `SavedTrailblazeAppConfig.showWebBrowser`'s
-   * default of `true` (visible browser) so behavior stays consistent with the
-   * desktop-app default.
+   * When the config (or its default) resolves to headed but no graphical
+   * display is available (e.g. a remote workstation or headless CI runner),
+   * automatically flips to headless so Chromium doesn't silently hang. An
+   * explicit `--headless=false` always wins — the user may have a virtual
+   * framebuffer or know what they're doing.
+   *
+   * Tests pin display state via the `trailblaze.test.hasDisplay` system property
+   * (see [hasDisplay]); there is no production override.
    */
   fun resolve(): Boolean {
     headless?.let { return it }
     val showBrowser = runCatching { CliConfigHelper.readConfig()?.showWebBrowser }
       .onFailure { Console.log("HeadlessOption.resolve: config read failed, using default — ${it.message}") }
       .getOrNull() ?: true
+    if (showBrowser && !hasDisplay()) {
+      Console.log("HeadlessOption.resolve: no display detected — defaulting to headless")
+      return true
+    }
     return !showBrowser
   }
 }

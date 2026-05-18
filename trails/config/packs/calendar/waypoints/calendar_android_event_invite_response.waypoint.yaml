@@ -4,21 +4,21 @@ required:
   - description: "View-screen coordinator"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout"
   - description: "RSVP question"
     selector:
       androidAccessibility:
-        textRegex: "^Going\\?$"
+        textRegex: "Going\\?"
   - description: "Yes RSVP option"
     selector:
       androidAccessibility:
-        textRegex: "^Yes$"
+        textRegex: "Yes"
   - description: "Maybe RSVP option"
     selector:
       androidAccessibility:
-        textRegex: "^Maybe$"
+        textRegex: "Maybe"
 forbidden:
   - description: "Editor handle (would mean we're in the editor)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"

@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Quick responses$"
+          textRegex: "Quick responses"

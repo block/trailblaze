@@ -4,7 +4,7 @@ required:
   - description: "Permission grant dialog container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/grant_dialog$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/grant_dialog"
   - description: "Photos-permission message"
     selector:
       androidAccessibility:
@@ -12,13 +12,13 @@ required:
   - description: "Allow button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_allow_button"
   - description: "Deny button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_deny_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_deny_button"
 forbidden:
   - description: "Location permission dialog has its own foreground/one-time button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button$"
+        resourceIdRegex: "com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button"

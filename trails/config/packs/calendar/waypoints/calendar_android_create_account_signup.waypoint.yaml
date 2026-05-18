@@ -4,7 +4,7 @@ required:
   - description: "GMS minute-maid container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/minute_maid"
   - description: "Page title indicates create-flow"
     selector:
       androidAccessibility:
@@ -12,9 +12,9 @@ required:
   - description: "Next button"
     selector:
       androidAccessibility:
-        textRegex: "^Next$"
+        textRegex: "Next"
 forbidden:
   - description: "Sign-in page (would mean we're not on create form)"
     selector:
       androidAccessibility:
-        textRegex: "^Forgot email\\?$"
+        textRegex: "Forgot email\\?"

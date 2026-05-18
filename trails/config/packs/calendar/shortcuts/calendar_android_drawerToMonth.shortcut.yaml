@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^Month view$"
+          contentDescriptionRegex: "Month view"

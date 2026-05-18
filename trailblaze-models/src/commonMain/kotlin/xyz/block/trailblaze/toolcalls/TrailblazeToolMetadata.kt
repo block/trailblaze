@@ -28,4 +28,5 @@ data class TrailblazeToolMetadata(
   val isRecordable: Boolean? = null,
   val requiresHost: Boolean? = null,
   val isVerification: Boolean? = null,
+  val prefersHostSideForCallback: Boolean? = null,
 )

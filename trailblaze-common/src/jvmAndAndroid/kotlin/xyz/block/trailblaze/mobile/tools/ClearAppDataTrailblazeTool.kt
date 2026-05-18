@@ -19,13 +19,13 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  */
 @Serializable
 @TrailblazeToolClass(
-  name = "clearAppData",
+  name = "mobile_clearAppData",
   isForLlm = false,
 )
-@LLMDescription("Clears all data for the specified app package, resetting it to a fresh state.")
+@LLMDescription("Clears all data for the specified app, resetting it to a fresh state.")
 data class ClearAppDataTrailblazeTool(
-  @param:LLMDescription("The package name of the app to clear (e.g., 'com.android.deskclock').")
-  val packageName: String,
+  @param:LLMDescription("The app id to clear (Android package id or iOS bundle id, e.g. 'com.android.deskclock').")
+  val appId: String,
 ) : ExecutableTrailblazeTool {
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val deviceInfo = toolExecutionContext.trailblazeDeviceInfo
@@ -36,32 +36,32 @@ data class ClearAppDataTrailblazeTool(
             ?: return TrailblazeToolResult.Error.ExceptionThrown(
               errorMessage = "AndroidDeviceCommandExecutor is not provided",
             )
-          executor.clearAppData(packageName)
+          executor.clearAppData(appId)
         }
 
         TrailblazeDevicePlatform.IOS -> {
           IosHostSimctlUtils.clearAppDataContainer(
             deviceId = deviceInfo.trailblazeDeviceId.instanceId,
-            appId = packageName,
+            appId = appId,
           )
         }
 
         TrailblazeDevicePlatform.WEB ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "clearAppData is not supported for web devices.",
+            errorMessage = "mobile_clearAppData is not supported for web devices.",
           )
 
         TrailblazeDevicePlatform.DESKTOP ->
           return TrailblazeToolResult.Error.ExceptionThrown(
-            errorMessage = "clearAppData is not supported for the Compose desktop driver.",
+            errorMessage = "mobile_clearAppData is not supported for the Compose desktop driver.",
           )
       }
       TrailblazeToolResult.Success(
-        message = "Cleared app data for package '$packageName'.",
+        message = "Cleared app data for '$appId'.",
       )
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Failed to clear app data for '$packageName': ${e.message}",
+        errorMessage = "Failed to clear app data for '$appId': ${e.message}",
         command = this@ClearAppDataTrailblazeTool,
         stackTrace = e.stackTraceToString(),
       )

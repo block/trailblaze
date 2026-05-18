@@ -23,6 +23,10 @@ import xyz.block.trailblaze.agent.MultiAgentV3Runner
 import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
 import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -65,6 +69,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
+import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -217,35 +222,38 @@ object TrailblazeHostYamlRunner {
   ): LaunchedScriptingRuntime? {
     val sessionDir = logsRepo.getSessionDir(sessionId)
 
-    // 1. Inline scripted tools (target.tools: in pack manifests) — the #2749 path,
-    // split by **script file extension**:
+    // 1. Inline scripted tools (target.tools: in pack manifests) — the #2749 path. Each
+    // tool routes to one of two runtimes:
     //
-    //  - `script: foo.js` — Node/Bun-runtime tool. Author imports `node:fs/promises`,
-    //    `node:child_process`, etc. directly. Route through the legacy
-    //    [InlineScriptToolServerSynthesizer] → MCP subprocess path so the handler runs
-    //    inside Node/Bun where those APIs exist. `host_writeArtifact.js` is the
-    //    canonical example.
-    //  - `script: foo.ts` (or anything else) — QuickJS-runtime tool. Author writes
-    //    ECMAScript with JSDoc-only types and composes via `client.callTool(...)`. Bundle
-    //    via [DaemonScriptedToolBundler] (esbuild) and register as an in-process
-    //    QuickJS-backed dynamic tool. No subprocess fork; the LLM-shape
-    //    `isForLlm`/`requiresHost` filter that previously hid `runCommand`/`clearAppData`
-    //    from scripted-tool composition is bypassed via [SessionScopedHostBinding].
+    //  - **Subprocess (bun / tsx)** — full Node API surface (`node:fs`, `node:child_process`,
+    //    etc.). Route through [InlineScriptToolServerSynthesizer] → MCP subprocess path so
+    //    the handler runs inside Node/Bun where those APIs exist. `host_writeArtifact.js`
+    //    is the canonical example.
+    //  - **QuickJS in-process** — no Node APIs, but composes via `client.callTool(...)`,
+    //    avoids subprocess fork overhead, and is the only path that works inside the
+    //    on-device `:trailblaze-scripting-bundle`. Bundle via [DaemonScriptedToolBundler]
+    //    (esbuild) and register as an in-process QuickJS-backed dynamic tool. The
+    //    LLM-shape `isForLlm`/`requiresHost` filter that previously hid
+    //    `runCommand`/`mobile_clearAppData` from scripted-tool composition is bypassed via
+    //    [SessionScopedHostBinding].
     //
-    // **Why the extension and not `requiresHost: true`?** `_meta.trailblaze/requiresHost`
-    // is the LLM-visibility hint ("hide this from on-device") — it's set on tools whose
+    // **Routing rule**: explicit `runtime:` on the descriptor wins; otherwise fall back to
+    // the legacy extension-based heuristic (`.js`/`.mjs`/`.cjs` → subprocess, everything
+    // else → QuickJS). The explicit field is what lets a `.ts` author opt into the
+    // subprocess runtime — bun and tsx run `.ts` natively, but without the override the
+    // extension would push them at QuickJS where `node:fs` is unavailable.
+    //
+    // **Why not `requiresHost: true`?** `_meta.trailblaze/requiresHost` is the
+    // LLM-visibility hint ("hide this from on-device") — it's set on tools whose
     // semantics make them inappropriate for the on-device LLM, regardless of their
-    // runtime. Many `.ts` tools that compose host-only Kotlin tools via `client.callTool`
-    // are correctly tagged `requiresHost: true` for visibility but DON'T need a Node
-    // runtime. Routing on `requiresHost` would push those .ts tools through MCP where
-    // their `client.callTool` composition can't find the host tools the LLM-noise filter
-    // hides — exactly the bug #2749 set out to fix. The extension reflects the author's
-    // actual runtime intent.
+    // runtime. Many tools that compose host-only Kotlin tools via `client.callTool` are
+    // correctly tagged `requiresHost: true` for visibility but DON'T need a Node runtime.
+    // Routing on `requiresHost` would push those tools through MCP where their
+    // `client.callTool` composition can't find the host tools the LLM-noise filter hides
+    // — exactly the bug #2749 set out to fix. Runtime selection is a separate concern.
     val inlineToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
     val (nodeApiInlineTools, quickJsInlineTools) = inlineToolConfigs.partition { tool ->
-      tool.script.lowercase().endsWith(".js") ||
-        tool.script.lowercase().endsWith(".mjs") ||
-        tool.script.lowercase().endsWith(".cjs")
+      ScriptedToolRuntime.resolve(tool.script, tool.runtime) == ScriptedToolRuntime.SUBPROCESS
     }
     val inlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
       val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
@@ -513,6 +521,10 @@ object TrailblazeHostYamlRunner {
       trailblazeDeviceId = trailblazeDeviceId,
       existingBrowserManager = staleBrowserToReuse,
       maxLlmCalls = runYamlRequest.maxLlmCalls,
+      // Capture publishes its per-session video-record dir under the un-suffixed request
+      // device id; the manager must look it up under the same key (not the per-trail
+      // suffixed `trailblazeDeviceId.instanceId` we use for session-cache identity).
+      webBrowserRecordingKey = requestDeviceId.instanceId,
     )
 
     // Reset the browser session only when starting a new Trailblaze session.
@@ -1514,18 +1526,20 @@ object TrailblazeHostYamlRunner {
     // sharing is safe even if tool execution is ever parallelized.
     val sharedAgentMemory = AgentMemory()
     // Pre-resolve the session's target once (#2699 — closes the deferred wiring note on
-    // ResolvedTarget and surfaces ctx.target.{id, appIds, resolvedAppId} to scripted tools).
+    // ResolvedTarget and surfaces ctx.target.{id, appIds, appId} to scripted tools).
     // `by lazy` keeps the cost off sessions that never invoke a target-aware tool, and means
     // a multi-tool session pays the device query (`pm list packages` / `simctl listapps`)
-    // exactly once instead of per-dispatch.
+    // exactly once instead of per-dispatch. The V1 site at
+    // `runHostTrailblazeRunnerWithOnDeviceRpc` resolves eagerly because its agent ctor takes
+    // a plain `String?`, not a thunk — see the comment there for the divergence.
     val resolvedTargetForSession: xyz.block.trailblaze.model.ResolvedTarget? =
       targetTestApp?.let { target ->
         xyz.block.trailblaze.model.ResolvedTarget(target = target, deviceId = trailblazeDeviceId)
       }
-    val resolvedAppIdForSessionLazy = lazy {
+    val appIdForSessionLazy = lazy {
       val resolved = resolvedTargetForSession ?: return@lazy null
       // Compose the non-throwing primitives directly so a target with zero installed
-      // candidates surfaces as `resolvedAppId = null` rather than a thrown
+      // candidates surfaces as `appId = null` rather than a thrown
       // IllegalStateException at envelope-build time. The throwing wrapper
       // `MobileDeviceUtils.findInstalledAppIdForTarget` is for production launch flows that
       // need a hard error; here we want a soft signal so authors can fall back to
@@ -1549,7 +1563,7 @@ object TrailblazeHostYamlRunner {
           trailblazeLogger = loggingRule.logger,
           memory = sharedAgentMemory,
           resolvedTarget = resolvedTargetForSession,
-          resolvedAppId = resolvedAppIdForSessionLazy.value,
+          appId = appIdForSessionLazy.value,
         )
       },
       memory = sharedAgentMemory,
@@ -1665,6 +1679,7 @@ object TrailblazeHostYamlRunner {
         progressReporter = progressReporter,
         deviceId = trailblazeDeviceId,
         availableToolsProvider = availableToolsProvider,
+        waypointResolver = resolveWaypointsForRun(),
       )
 
       onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
@@ -1832,6 +1847,66 @@ object TrailblazeHostYamlRunner {
       driverType = driverType,
     )
 
+    // Pre-resolve the session's target once — mirrors the V3 wiring in
+    // `runHostV3WithAccessibilityYaml`. Surfaces `ctx.target.{id, appIds,
+    // appId}` to in-process scripted-tool handlers (e.g. Square card-reader
+    // broadcast tools) via the envelope writer. The agent threads these through
+    // `MaestroTrailblazeAgent.buildExecutionContext`, which sets
+    // `TrailblazeToolExecutionContext.resolvedTarget` / `.appId`, which
+    // `TrailblazeContextEnvelope.buildMetaTrailblaze` reads into `_meta.trailblaze.target`.
+    // Without this wiring the in-process handlers see `ctx.target` as undefined and the
+    // first `ctx.target.resolveAppId()` call throws.
+    //
+    // The app-id resolution is computed eagerly (not `by lazy` as in the V3 site at
+    // `runHostV3WithAccessibilityYaml`) because this path constructs a single
+    // session-scoped `HostOnDeviceRpcTrailblazeAgent` whose constructor takes a plain
+    // `String?` — there is no per-tool `toolExecutionContextProvider` lambda where a
+    // `Lazy<String?>` could defer the device query. Threading a `() -> String?` through
+    // the agent and into `MaestroTrailblazeAgent.buildExecutionContext` would gain only
+    // the ~50ms `pm list packages` shell-out on sessions that don't touch a target-aware
+    // tool, which isn't worth the surface-area change. The V3 site can be lazy because
+    // its `HostAccessibilityRpcClient` builds the execution context per tool dispatch.
+    // A target with zero installed candidates surfaces as `appId = null` rather
+    // than a thrown IllegalStateException so handlers can fall back to
+    // `ctx.target?.appIds[0]` and let the launch fail downstream with a clearer message.
+    val resolvedTargetForSession: xyz.block.trailblaze.model.ResolvedTarget? =
+      targetTestApp?.let { target ->
+        xyz.block.trailblaze.model.ResolvedTarget(target = target, deviceId = trailblazeDeviceId)
+      }
+    val appIdForSession: String? = resolvedTargetForSession?.let { resolved ->
+      runCatching {
+        val installed = xyz.block.trailblaze.host.ios.MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
+        // The .onFailure log below catches throws from `getAppIdIfInstalled` (and from
+        // `getInstalledAppIds` itself on iOS), but Android's `AndroidHostAdbUtils.listInstalledPackages`
+        // catches Exception and returns `emptyList()` — so an adb timeout, dead device, or any other
+        // shell-out failure on Android surfaces here as "0 packages installed" with no throw to log.
+        // Detect that distinguishable case (empty installed set despite the target declaring app-id
+        // candidates) and log it explicitly so operators debugging "ctx.target.resolveAppId returned
+        // undefined" on Android get the same signal that a throw would have produced.
+        val candidates = resolved.target.getPossibleAppIdsForPlatform(resolved.platform).orEmpty()
+        if (installed.isEmpty() && candidates.isNotEmpty()) {
+          Console.log(
+            "[TrailblazeHostYamlRunner] getInstalledAppIds returned 0 packages for " +
+              "${resolved.deviceId} despite target declaring ${candidates.size} candidate(s) " +
+              "[${candidates.joinToString()}] — likely a silent adb failure swallowed by " +
+              "AndroidHostAdbUtils.listInstalledPackages. appId will be null.",
+          )
+        }
+        resolved.target.getAppIdIfInstalled(resolved.platform, installed)
+      }.onFailure { e ->
+        // Soft-fail (caller falls back to `ctx.target?.appIds[0]`) but log the underlying
+        // reason — otherwise operators debugging "ctx.target.resolveAppId returned undefined"
+        // have no signal whether the cause is a missing target or a device disconnect
+        // mid-call. NOTE: this branch does NOT fire for Android adb errors because
+        // `listInstalledPackages` swallows them upstream — see the empty-list check above
+        // for the Android coverage.
+        Console.log(
+          "[TrailblazeHostYamlRunner] getInstalledAppIds resolution failed for " +
+            "${resolved.deviceId}: ${e::class.simpleName}: ${e.message}",
+        )
+      }.getOrNull()
+    }
+
     val agent = HostOnDeviceRpcTrailblazeAgent(
       rpcClient = onDeviceRpc,
       runYamlRequestTemplate = runYamlRequest,
@@ -1842,6 +1917,8 @@ object TrailblazeHostYamlRunner {
       requireAndroidAccessibilityServiceOnRewarm =
         runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       trailblazeToolRepo = toolRepo,
+      resolvedTarget = resolvedTargetForSession,
+      appId = appIdForSession,
     )
 
     val runner = TrailblazeRunner(
@@ -1951,6 +2028,12 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
       onAfterRecordedTool = onAfterRecordedTool,
+      // Pre-wired even though this constructor doesn't pass screenStateProvider/waypointResolver
+      // today (postcondition assertion is dormant on this path). Threading it now means turning
+      // the asserter on later doesn't have to hunt for every TrailblazeRunnerUtil call site.
+      target = resolvedTargetForSession?.let {
+        xyz.block.trailblaze.api.TargetTemplateContext(appId = appIdForSession, appIds = it.appIds)
+      },
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
@@ -2238,6 +2321,39 @@ object TrailblazeHostYamlRunner {
     } catch (e: Exception) {
       Console.log("Failed to generate recording: ${e.message}")
       return null
+    }
+  }
+
+  /**
+   * Loads the waypoint registry for the current trail run and returns a id->definition
+   * resolver, used by `DeterministicTrailExecutor` to evaluate step postconditions.
+   *
+   * Resolves classpath-bundled waypoint packs only (workspace `packs:` entries would need
+   * a configured `trailblaze.yaml` anchor that the daemon does not currently track).
+   * Bundled packs are sufficient for the in-tree waypoint coverage shipped with the
+   * compiled CLI; user-authored workspace waypoints can land in a follow-up.
+   *
+   * Returns `null` (resolver disabled, postconditions silently no-op) when pack loading
+   * raises — so a malformed pack manifest cannot block trail execution. A failure here is
+   * logged via [Console.log] for the operator and otherwise swallowed.
+   */
+  private fun resolveWaypointsForRun(): ((String) -> WaypointDefinition?)? {
+    return try {
+      val resolved = TrailblazeProjectConfigLoader.resolveRuntime(
+        loaded = LoadedTrailblazeProjectConfig(
+          raw = TrailblazeProjectConfig(),
+          sourceFile = File(".").absoluteFile,
+        ),
+        includeClasspathPacks = true,
+      )
+      val byId: Map<String, WaypointDefinition> = resolved.waypoints.associateBy { it.id }
+      // Closure over the id->definition map. Returns null for unknown ids — the asserter
+      // surfaces those as `Result.WaypointNotFound` with a "check the waypoint id" hint.
+      val resolver: (String) -> WaypointDefinition? = { id -> byId[id] }
+      resolver
+    } catch (e: Exception) {
+      Console.log("Waypoint registry unavailable for this run; step postconditions will be skipped: ${e.message}")
+      null
     }
   }
 }

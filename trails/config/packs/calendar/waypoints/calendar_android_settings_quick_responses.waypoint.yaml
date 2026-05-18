@@ -4,21 +4,21 @@ required:
   - description: "Toolbar reads 'Quick responses'"
     selector:
       androidAccessibility:
-        textRegex: "^Quick responses$"
-        classNameRegex: "\\Qandroid.widget.TextView\\E"
+        textRegex: "Quick responses"
+        classNameRegex: "android.widget.TextView"
   - description: "Default canned response 1"
     selector:
       androidAccessibility:
-        textRegex: "^Be there in about 10 minutes\\.$"
+        textRegex: "Be there in about 10 minutes\\."
   - description: "Default canned response 2"
     selector:
       androidAccessibility:
-        textRegex: "^Running just a couple of minutes late\\.$"
+        textRegex: "Running just a couple of minutes late\\."
   - description: "Default canned response 3"
     selector:
       androidAccessibility:
-        textRegex: "^Go ahead and start without me\\.$"
+        textRegex: "Go ahead and start without me\\."
   - description: "Settings recycler view"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recycler_view$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/recycler_view"

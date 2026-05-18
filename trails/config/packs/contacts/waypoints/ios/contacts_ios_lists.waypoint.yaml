@@ -10,15 +10,15 @@ required:
   - description: "Lists header title"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Edit button (toggles into list-editing mode)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "Add List button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
   - description: "All Contacts entry — always shown on the Lists view"
     selector:
       iosMaestro:
@@ -27,12 +27,12 @@ forbidden:
   - description: "Done button — would mean we're in list-editing mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "List Name input — would mean Add List is open"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^List Name$"
+        accessibilityTextRegex: "List Name"
   - description: "InlineActionsHStack — only when a contact is selected (detail showing)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

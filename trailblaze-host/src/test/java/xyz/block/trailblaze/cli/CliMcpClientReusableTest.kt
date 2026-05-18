@@ -226,6 +226,153 @@ class CliMcpClientReusableTest {
     }
   }
 
+  /**
+   * Regression test for the `tool` → `blaze` handoff bug: when a prior CLI invocation
+   * (e.g. `trailblaze tool tap …`) leaves the daemon's per-session device association
+   * silently out of sync with what `device(INFO)` reports, the next `blaze` call would
+   * see "No device connected" inside the daemon. ensureDevice must therefore always
+   * issue a `device(action=PLATFORM, deviceId=ID)` call to re-register the device on
+   * session reuse — even when the spec matches what INFO returns.
+   */
+  @Test
+  fun `ensureDevice re-registers device on session reuse even when spec matches`() {
+    val deviceConnectCalls = AtomicInteger(0)
+    val deviceListCalls = AtomicInteger(0)
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "should-not-be-used")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"device\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Platform: iOS\nInstance ID: SIM-UUID-1234"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"device\"" in body && "\"LIST\"" in body -> {
+          deviceListCalls.incrementAndGet()
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Available devices:\n  - SIM-UUID-1234 (iOS) - iPhone 17 Pro"}],"isError":false}}"""
+        }
+        "\"tools/call\"" in body && "\"device\"" in body && "\"IOS\"" in body -> {
+          deviceConnectCalls.incrementAndGet()
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Connected to SIM-UUID-1234 (iOS). Session recording - save anytime with trail(action=SAVE, name='...')"}],"isError":false}}"""
+        }
+        // session(INFO) is fired by connectToDevice for menu output — but the lightweight
+        // rebind path on session reuse should NOT need it. Return success so an accidental
+        // call still completes; the assertion below catches the regression.
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"trailblaze-session-1\"}"}],"isError":false}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port, sessionScope = "cli-ios/sim-uuid-1234")
+      .also { createdFiles += it }
+    // Simulate the state left by a prior `tool` invocation: persisted session id +
+    // matching target.
+    sessionFile.writeText("persisted-session\nsampleapp")
+
+    try {
+      runBlocking {
+        CliMcpClient.connectReusable(
+          port = port,
+          targetAppId = "sampleapp",
+          sessionScope = "cli-ios/sim-uuid-1234",
+        ).use { client ->
+          assertEquals("persisted-session", client.sessionId)
+          assertTrue(client.hasExistingDevice, "INFO reported a bound device → hasExistingDevice")
+          val error = client.ensureDevice("ios/SIM-UUID-1234")
+          assertNull(error, "ensureDevice should succeed when the spec matches the bound device")
+        }
+      }
+
+      assertEquals(
+        1,
+        deviceConnectCalls.get(),
+        "ensureDevice must re-issue device(action=IOS) on session reuse so the daemon-side " +
+          "per-session device association is refreshed (otherwise a subsequent blaze() call " +
+          "inside the same session sees 'No device connected')",
+      )
+      // The rebind path must NOT issue device(action=LIST) — that's a cold-start concern
+      // (validating instance IDs, picking a default when multiple are present). On a reused
+      // session, we already know which device we're bound to. Re-listing would also force
+      // the connectToDevice "Connecting to …" + "Connected: …" + session-menu banner to
+      // print on every reused-session invocation, drowning the quiet "Reusing session …"
+      // line.
+      assertEquals(
+        0,
+        deviceListCalls.get(),
+        "lightweight rebind on session reuse should not issue device(action=LIST) — the " +
+          "extra roundtrip is unnecessary and pulling in the full connectToDevice banner " +
+          "regresses the reused-session UX",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  /**
+   * Sibling regression test pinning the WEB-specific rebind contract: when reusing a
+   * session bound to a WEB device, the rebind must include the `headless` flag so the
+   * daemon's recorded per-browser headless preference stays in sync with the CLI's
+   * `--headless` choice. Mobile rebinds (covered by the iOS test above) must NOT
+   * include `headless`.
+   */
+  @Test
+  fun `ensureDevice rebind passes headless flag for WEB but omits it for mobile`() {
+    val webRebindBodies = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "should-not-be-used")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"device\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Platform: Web Browser\nInstance ID: playwright-native"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"device\"" in body && "\"WEB\"" in body -> {
+          webRebindBodies += body
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Connected to playwright-native (Web)"}],"isError":false}}"""
+        }
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port, sessionScope = "cli-web/playwright-native")
+      .also { createdFiles += it }
+    sessionFile.writeText("persisted-session\nsampleapp")
+
+    try {
+      runBlocking {
+        CliMcpClient.connectReusable(
+          port = port,
+          targetAppId = "sampleapp",
+          sessionScope = "cli-web/playwright-native",
+        ).use { client ->
+          val error = client.ensureDevice("web/playwright-native", webHeadless = false)
+          assertNull(error)
+        }
+      }
+
+      assertEquals(1, webRebindBodies.size, "exactly one device(action=WEB) call on reuse")
+      val rebindBody = webRebindBodies.single()
+      assertTrue(
+        "\"headless\":false" in rebindBody,
+        "WEB rebind must forward the caller's --headless choice; got body: $rebindBody",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────────
 
   private fun stubServer(initialSessionId: String): HttpServer {

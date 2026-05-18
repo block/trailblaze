@@ -25,6 +25,17 @@ package xyz.block.trailblaze.toolcalls
  *   metadata can also live in a sibling `*.trailhead.yaml` file pairing the class with a `to:`
  *   block — discovery merges both sources, so a class can self-declare here without a
  *   companion YAML, or the YAML can stay authoritative if the trailhead is YAML-only.
+ * @property prefersHostSideForCallback Dual-mode composition primitive whose `Success.message`
+ *   payload is the contract for scripted-tool authors that compose this tool via
+ *   `client.callTool(...)`. The on-device-RPC return path (`RunYamlResponse`) doesn't carry
+ *   per-tool `Success.message`, so routing through RPC would silently discard the message a
+ *   TS author's handler reads several frames down (`JSON.parse(undefined)` failure mode).
+ *   When this is `true`, `HostOnDeviceRpcTrailblazeAgent` short-circuits the dispatch to the
+ *   host-side actual (e.g. dadb-backed `AndroidDeviceCommandExecutor`) instead of routing
+ *   over RPC. Mutually independent from [requiresHost]: a tool can have an on-device actual
+ *   AND a host-side actual, and this flag picks the host one for callback paths only.
+ *   Replaces the prior hard-coded allowlist in `HostOnDeviceRpcTrailblazeAgent` so adding a
+ *   new dual-mode primitive only requires the annotation, not a parallel edit to the agent.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -35,4 +46,5 @@ annotation class TrailblazeToolClass(
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,
   val trailheadTo: String = "",
+  val prefersHostSideForCallback: Boolean = false,
 )

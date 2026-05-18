@@ -9,17 +9,17 @@ required:
   - description: "Edit form's close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
   - description: "Twitter row label"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Twitter$"
+        accessibilityTextRegex: "Twitter"
   - description: "Remove Twitter affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Remove Twitter$"
+        accessibilityTextRegex: "Remove Twitter"
 forbidden:
   - description: "New Contact title — would mean we're on the new-contact draft"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"

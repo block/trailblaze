@@ -4,29 +4,29 @@ required:
   - description: "Picker dialog list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/select_dialog_listview"
   - description: "5 minutes before option"
     selector:
       androidAccessibility:
-        textRegex: "^5 minutes before$"
+        textRegex: "5 minutes before"
   - description: "10 minutes before option"
     selector:
       androidAccessibility:
-        textRegex: "^10 minutes before$"
+        textRegex: "10 minutes before"
   - description: "30 minutes before option"
     selector:
       androidAccessibility:
-        textRegex: "^30 minutes before$"
+        textRegex: "30 minutes before"
   - description: "1 hour before option"
     selector:
       androidAccessibility:
-        textRegex: "^1 hour before$"
+        textRegex: "1 hour before"
   - description: "Custom… option"
     selector:
       androidAccessibility:
-        textRegex: "^Custom…$"
+        textRegex: "Custom…"
 forbidden:
   - description: "Repeat picker option (sibling dialog)"
     selector:
       androidAccessibility:
-        textRegex: "^Every week$"
+        textRegex: "Every week"

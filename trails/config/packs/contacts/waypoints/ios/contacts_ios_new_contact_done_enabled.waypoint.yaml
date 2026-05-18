@@ -9,18 +9,18 @@ required:
   - description: "Sheet Grabber"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "New Contact title"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"
   - description: "close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
 forbidden:
   - description: "Done [disabled] — would mean form is empty"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
         focused: false

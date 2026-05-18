@@ -4,8 +4,8 @@ required:
   - description: "Toolbar text reads 'Adding invitations'"
     selector:
       androidAccessibility:
-        textRegex: "^Adding invitations$"
-        classNameRegex: "\\Qandroid.widget.TextView\\E"
+        textRegex: "Adding invitations"
+        classNameRegex: "android.widget.TextView"
   - description: "Explanatory summary describing invitation behavior"
     selector:
       androidAccessibility:
@@ -13,4 +13,4 @@ required:
   - description: "Back button"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Back$"
+        contentDescriptionRegex: "Back"

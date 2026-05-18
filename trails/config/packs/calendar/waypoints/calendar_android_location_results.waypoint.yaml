@@ -4,21 +4,21 @@ required:
   - description: "Locations toolbar a11y label"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Locations$"
+        contentDescriptionRegex: "Locations"
   - description: "Suggestions list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/suggestions$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/suggestions"
   - description: "Clear-search action — only present once query is non-empty"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Clear search$"
+        contentDescriptionRegex: "Clear search"
   - description: "Suggestion-row tile-icon"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/tile_icon$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/tile_icon"
 forbidden:
   - description: "'Add location' header text — only on pristine state with no query"
     selector:
       androidAccessibility:
-        textRegex: "^Add location$"
+        textRegex: "Add location"

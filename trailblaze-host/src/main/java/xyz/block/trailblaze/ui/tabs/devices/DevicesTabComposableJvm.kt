@@ -52,7 +52,7 @@ import xyz.block.trailblaze.ui.composables.WebBrowserControlPanel
 import xyz.block.trailblaze.ui.model.LocalNavController
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.model.navigateToRoute
-import xyz.block.trailblaze.ui.tabs.recording.InteractiveDeviceComposable
+import xyz.block.trailblaze.ui.recording.InteractiveDeviceComposable
 
 @Composable
 fun DevicesTabComposable(

@@ -7,7 +7,10 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -16,6 +19,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.waypoint.StepPostconditionAsserter
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -62,6 +66,27 @@ class TrailblazeRunnerUtil(
    * exceptions are caught by the runner; they must not abort the recording.
    */
   private val onAfterRecordedTool: (suspend (TrailblazeTool) -> Unit)? = null,
+  /**
+   * Live screen-state source for evaluating step postconditions. When null, postconditions
+   * declared on YAML steps are silently skipped — preserves existing-callsite behavior
+   * for runners that haven't been wired through yet.
+   */
+  private val screenStateProvider: (suspend () -> ScreenState?)? = null,
+  /**
+   * Waypoint id -> definition lookup, typically backed by the classpath-bundled pack
+   * registry. Like [screenStateProvider], omitting it makes postconditions a no-op.
+   */
+  private val waypointResolver: ((String) -> WaypointDefinition?)? = null,
+  /**
+   * Optional session-scoped template context forwarded to [StepPostconditionAsserter]
+   * so postcondition waypoints whose selectors carry `{{target.appId}}` placeholders
+   * expand correctly. Defaults to null — the matcher then short-circuits any templated
+   * waypoint to a `UNRESOLVED_TARGET_TEMPLATE` skip (fail-closed; a placeholder appearing
+   * only in a `forbidden` selector would otherwise silently let the waypoint pass).
+   * Constructed by the rule / host runner from the session's resolved target
+   * (`appId` + declared `appIds`).
+   */
+  private val target: TargetTemplateContext? = null,
 ) {
   fun runPrompt(
     prompts: List<PromptStep>,
@@ -93,6 +118,37 @@ class TrailblazeRunnerUtil(
         runRecordedPrompt(prompt, selfHeal)
       } else {
         runAiPrompt(prompt)
+      }
+      // Evaluate the step's YAML postcondition (if declared) against the live screen
+      // immediately after the step completes — same pattern the deterministic executor
+      // and V3 runner use. Reaching this line means the recorded-or-AI step did not
+      // throw, so we're in the success path; a mismatch surfaces here as a thrown
+      // TrailblazeException with the missing-required/present-forbidden diff baked in,
+      // mirroring the way runRecordedPrompt reports recording-tool failures.
+      val pc = prompt.postcondition
+      val resolver = waypointResolver
+      val stateProvider = screenStateProvider
+      if (pc != null && resolver != null && stateProvider != null) {
+        val assertion = StepPostconditionAsserter.assert(
+          postcondition = pc,
+          screenStateProvider = stateProvider,
+          waypointResolver = resolver,
+          target = target,
+        )
+        val pcFailure: String? = when (assertion) {
+          is StepPostconditionAsserter.Result.Matched -> null
+          is StepPostconditionAsserter.Result.NotMatched ->
+            "Step $index: " + StepPostconditionAsserter.describeMismatch(assertion)
+          is StepPostconditionAsserter.Result.WaypointNotFound ->
+            "Step $index: postcondition references unknown waypoint " +
+              "'${assertion.requestedId}'. Check the waypoint id against the loaded packs."
+          is StepPostconditionAsserter.Result.NoScreenState ->
+            "Step $index: postcondition '${assertion.definitionId}' could not be evaluated — " +
+              "the screen state provider returned no state within ${assertion.timeoutMs}ms."
+        }
+        if (pcFailure != null) {
+          throw TrailblazeException(pcFailure)
+        }
       }
     }
     return TrailblazeToolResult.Success()
@@ -250,14 +306,7 @@ class TrailblazeRunnerUtil(
     )
   }
 
-  private fun PromptStep.canPromptStepUseRecording(): Boolean {
-    if (!recordable) return false
-    val r = recording ?: return false
-    // An auto-satisfied recording is a valid recorded step — `runRecordedTools` with an empty
-    // tools list returns Success and the step completes deterministically. A normal recording
-    // has non-empty tools.
-    return r.autoSatisfied || r.tools.isNotEmpty()
-  }
+  private fun PromptStep.canPromptStepUseRecording(): Boolean = recordable && recording != null
 
   private fun TrailblazeToolResult.errorMessageOrToString(): String =
     (this as? TrailblazeToolResult.Error)?.errorMessage ?: toString()

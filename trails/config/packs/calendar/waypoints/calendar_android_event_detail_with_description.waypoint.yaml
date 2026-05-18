@@ -4,21 +4,21 @@ required:
   - description: "View-screen coordinator"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout"
   - description: "Segment container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/segment_container$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/segment_container"
   - description: "Notes (description) segment row"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Notes$"
+        contentDescriptionRegex: "Notes"
   - description: "Edit action (only present on event detail, not on quick editor)"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Edit$"
+        contentDescriptionRegex: "Edit"
 forbidden:
   - description: "Quick-create handle (would mean editor)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"

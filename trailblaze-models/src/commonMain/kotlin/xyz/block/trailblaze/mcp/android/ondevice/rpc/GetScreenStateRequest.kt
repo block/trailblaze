@@ -50,6 +50,24 @@ data class GetScreenStateRequest(
    * for normal screen-state queries that can use either backend.
    */
   val requireAndroidAccessibilityService: Boolean = false,
+  /**
+   * Whether the on-device handler should build and return the view hierarchy / TrailblazeNode
+   * tree. **Default `true` preserves the atomic (screenshot, tree) pair guarantee that the
+   * recording flow depends on** — every existing caller gets a full state response with no
+   * change. Set to `false` ONLY when the caller knows it never needs the tree.
+   *
+   * The mirror-only path (live `/devices` viewer's frame loop in
+   * [xyz.block.trailblaze.host.recording.OnDeviceRpcDeviceScreenStream.captureFrame]) is the
+   * one current caller that opts out. Skipping the tree work there cuts per-frame on-device
+   * cost from ~100-300 ms (full Accessibility tree walk + JSON serialize) to ~30-60 ms
+   * (just `UiAutomation.takeScreenshot`), letting live FPS climb from ~3 to ~15-25.
+   *
+   * Tap-time captures during recording still pass `includeTree=true` (the default) so the
+   * recorder's selector generation gets a tree captured atomically with the same screenshot
+   * the user saw. The mirror frame loop's tree-skip never affects what gets persisted into
+   * a trail — only what we ship over the wire for live preview.
+   */
+  val includeTree: Boolean = true,
 ) : RpcRequest<GetScreenStateResponse>
 
 /**

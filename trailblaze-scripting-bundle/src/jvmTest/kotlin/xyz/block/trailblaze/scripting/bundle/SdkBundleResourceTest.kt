@@ -25,12 +25,14 @@ class SdkBundleResourceTest {
     // The bundle is ~1.2MB; assert non-trivial size to catch a "wrote 0 bytes" regression
     // without pinning an exact length that drifts every time the SDK source is rebundled.
     assertThat(file.length()).isGreaterThan(100_000L)
-    val firstLine = file.bufferedReader().use { it.readLine() }
-    // esbuild emits `"use strict";` as the first line of the IIFE bundle, then declares the
-    // global name. Pinning this line catches "wrote the wrong resource" / "wrote a corrupt
-    // file" regressions. If the bundler config changes the prologue, update this assertion
-    // alongside the bundle config in `:trailblaze-scripting-bundle`'s `build.gradle.kts`.
-    assertThat(firstLine).isEqualTo("\"use strict\";")
+    val (firstLine, secondLine) = file.bufferedReader().use { Pair(it.readLine(), it.readLine()) }
+    // Line 1 = `/* GENERATED FILE … */` banner from `bundleTrailblazeSdk`'s `--banner:js=`;
+    // catches "wrote the wrong resource" / banner-stripped regressions.
+    assertThat(firstLine).contains("GENERATED FILE")
+    assertThat(firstLine).contains("bundleTrailblazeSdk")
+    // Line 2 = esbuild's strict-mode IIFE prologue; catches "esbuild config broke and
+    // emitted a non-IIFE / non-strict bundle" regressions.
+    assertThat(secondLine).isEqualTo("\"use strict\";")
   }
 
   @Test fun `extractToFile returns the same path on repeated calls`() {

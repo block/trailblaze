@@ -9,13 +9,13 @@ required:
   - description: "Share Contact header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Share Contact$"
+        accessibilityTextRegex: "Share Contact"
   - description: "Deselect All Fields toggle (only present when everything is selected)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Deselect All Fields$"
+        accessibilityTextRegex: "Deselect All Fields"
 forbidden:
   - description: "Select All Fields — would mean not all are selected"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Select All Fields$"
+        accessibilityTextRegex: "Select All Fields"

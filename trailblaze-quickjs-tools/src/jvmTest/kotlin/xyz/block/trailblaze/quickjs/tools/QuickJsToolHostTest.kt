@@ -16,7 +16,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -42,8 +44,12 @@ class QuickJsToolHostTest {
     hosts.clear()
   }
 
-  private suspend fun connect(bundleJs: String, hostBinding: HostBinding? = null): QuickJsToolHost {
-    val host = QuickJsToolHost.connect(bundleJs, hostBinding = hostBinding)
+  private suspend fun connect(
+    bundleJs: String,
+    hostBinding: HostBinding? = null,
+    bundleFilename: String = "tools.bundle.js",
+  ): QuickJsToolHost {
+    val host = QuickJsToolHost.connect(bundleJs, bundleFilename = bundleFilename, hostBinding = hostBinding)
     hosts.add(host)
     return host
   }
@@ -198,15 +204,15 @@ class QuickJsToolHostTest {
   // Methods can't survive JSON round-trips (host → QuickJS engine), so the
   // dispatch script in QuickJsToolHost attaches them to ctx.target after
   // deserialization. These tests pin every branch of the resolution priority
-  // (resolvedAppId → appIds[0] → defaultAppId → undefined) for both methods,
+  // (appId → appIds[0] → defaultAppId → undefined) for both methods,
   // plus the no-target case.
 
   @Test
-  fun `ctx target resolveAppId returns resolvedAppId when framework resolved one`() = runBlocking {
+  fun `ctx target resolveAppId returns appId when framework resolved one`() = runBlocking {
     val host = connectGetAppIdHost("appId")
     val ctx = buildJsonObject {
       put("target", buildJsonObject {
-        put("resolvedAppId", "com.framework.resolved")
+        put("appId", "com.framework.resolved")
         put("appIds", buildJsonArray { add("com.first.declared"); add("com.second.declared") })
       })
     }
@@ -237,7 +243,7 @@ class QuickJsToolHostTest {
   @Test
   fun `ctx target resolveAppId returns undefined when nothing is reachable and no default given`() = runBlocking {
     // Author calls `ctx.target.resolveAppId()` with no options. Target has empty appIds
-    // and no resolvedAppId. Method must return undefined (not throw) — author handles
+    // and no appId. Method must return undefined (not throw) — author handles
     // the missing case in their tool body.
     val host = connectGetAppIdHost("missing")
     val ctx = buildJsonObject { put("target", buildJsonObject { put("appIds", buildJsonArray { }) }) }
@@ -363,7 +369,13 @@ class QuickJsToolHostTest {
   }
 
   @Test
-  fun `callTool propagates handler exceptions to the caller`() = runBlocking {
+  fun `callTool surfaces handler throws as isError envelope with name message and JS stack`() = runBlocking {
+    // Pin the JS stack-preservation contract. A handler throw is caught on the JS side and
+    // surfaced through the same `isError: true` envelope as a handler-returned error, but
+    // now carries the JS-side stack so downstream `TrailblazeToolLog.exceptionMessage`
+    // includes the bundle filename + line/col. Pre-fix, the throw escaped QuickJS as a
+    // Kotlin throwable whose `.message` was just "boom from handler" with no source
+    // breadcrumb — the bug this test pins is the loss of `Error.stack`.
     val host = connect(
       """
       const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
@@ -373,13 +385,212 @@ class QuickJsToolHostTest {
         handler: async () => { throw new Error("boom from handler"); },
       };
       """.trimIndent(),
+      bundleFilename = "throwing-bundle.js",
     )
-    val err = runCatching {
-      host.callTool("boom", JsonObject(emptyMap()))
-    }.exceptionOrNull()
-    assertNotNull(err, "expected callTool to throw when the handler throws")
-    assertTrue("expected handler error message in: ${err.message}") {
-      err.message.orEmpty().contains("boom from handler")
+    val result = host.callTool("boom", JsonObject(emptyMap()))
+    // Envelope shape: `{ isError: true, content: [{ type: "text", text: "..." }] }`.
+    assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+    val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+      .first().jsonObject["text"]!!.jsonPrimitive.content
+    // Error name prefix, message, and JS stack frame all present.
+    assertTrue("expected 'Error: ' prefix in: $text") { text.startsWith("Error: ") }
+    assertTrue("expected handler message in: $text") { text.contains("boom from handler") }
+    // QuickJS-NG fills in a stack frame referencing the bundle filename — the whole point
+    // of this change. Without the JS-side catch, this assertion would fail because the
+    // Kotlin throwable's message doesn't include the JS stack.
+    assertTrue("expected bundle filename in JS stack in: $text") { text.contains("throwing-bundle.js") }
+  }
+
+  @Test
+  fun `callTool surfaces non-Error throws via String fallback`() = runBlocking {
+    // `throw "literal"` and `throw 42` don't carry `.message` or `.stack`. The catch
+    // recipient must still produce a structured `isError` envelope rather than crashing
+    // the Kotlin parse step.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["primitive_throw"] = {
+        name: "primitive_throw",
+        spec: {},
+        handler: async () => { throw "raw string"; },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("primitive_throw", JsonObject(emptyMap()))
+    assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+    val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+      .first().jsonObject["text"]!!.jsonPrimitive.content
+    assertTrue("expected stringified primitive in: $text") { text.contains("raw string") }
+  }
+
+  @Test
+  fun `callTool surfaces FALSY throws as isError envelope - not silent success`() = runBlocking {
+    // Regression pin from automated review feedback: a truthiness check
+    // `if (__dispatchError)` misclassifies `throw 0` / `throw false` / `throw ''` /
+    // `throw null` / `throw undefined` as success because the captured value is falsy. The
+    // dispatch falls through, returns `{}`, and silently swallows a real failure. This test
+    // is the regression net for that — the dispatcher MUST surface every caught throw as an
+    // `isError: true` envelope regardless of the thrown value's truthiness.
+    //
+    // Loops the well-known falsy values rather than parameterizing — bun:test-style table
+    // tests aren't worth pulling in for five cases, and the inline list makes the
+    // explicit-truthiness pin obvious to a reviewer.
+    val falsyThrows = listOf(
+      """throw 0;""" to "0",
+      """throw false;""" to "false",
+      """throw "";""" to "",
+      """throw null;""" to "null",
+      """throw undefined;""" to "undefined",
+    )
+    falsyThrows.forEach { (throwStmt, expectedSubstring) ->
+      val host = connect(
+        """
+        const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+        tools["falsyThrow"] = {
+          name: "falsyThrow",
+          spec: {},
+          handler: async () => { $throwStmt },
+        };
+        """.trimIndent(),
+      )
+      val result = host.callTool("falsyThrow", JsonObject(emptyMap()))
+      val isError = result["isError"]?.jsonPrimitive?.boolean
+      assertEquals(true, isError, "falsy throw `$throwStmt` must surface as isError=true, got: $result")
+      val text = (result["content"] as? kotlinx.serialization.json.JsonArray)
+        ?.firstOrNull()?.jsonObject?.get("text")?.jsonPrimitive?.content
+        ?: fail("expected content[0].text for falsy throw `$throwStmt`, got: $result")
+      // Empty-string throw stringifies to "", so the substring check is vacuous — but the
+      // `isError=true` assertion above is the load-bearing one for that case. For everything
+      // else, the stringified thrown value should appear in the message.
+      if (expectedSubstring.isNotEmpty()) {
+        assertTrue("expected '$expectedSubstring' in falsy-throw envelope text: $text") {
+          text.contains(expectedSubstring)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun `callTool preserves Error subtype names like TypeError and RangeError`() = runBlocking {
+    // The dispatcher reads `__e.name` and falls back to literal `'Error'`. The existing
+    // `Error` test passes either way (the fallback also produces `'Error: '`), so this
+    // test pins that the subtype name actually flows through — guards against a regression
+    // that accidentally hard-codes the prefix.
+    val subtypes = listOf("TypeError", "RangeError", "SyntaxError")
+    subtypes.forEach { subtypeName ->
+      val host = connect(
+        """
+        const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+        tools["subtypeThrow"] = {
+          name: "subtypeThrow",
+          spec: {},
+          handler: async () => { throw new $subtypeName("subtype failure"); },
+        };
+        """.trimIndent(),
+      )
+      val result = host.callTool("subtypeThrow", JsonObject(emptyMap()))
+      assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+      val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+        .first().jsonObject["text"]!!.jsonPrimitive.content
+      assertTrue("expected '$subtypeName: ' prefix in: $text") {
+        text.startsWith("$subtypeName: ")
+      }
+      assertTrue("expected message in: $text") { text.contains("subtype failure") }
+    }
+  }
+
+  @Test
+  fun `callTool surfaces async-rejected promises as isError envelopes`() = runBlocking {
+    // All other throw tests use synchronous `throw` syntax. The dispatcher `await`s the
+    // handler, so async rejections should ride the same path — but pin that explicitly,
+    // since async-reject is the most common real-world failure mode (a `fetch` that fails,
+    // a `JSON.parse` on bad input, an awaited inner `callTool`).
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["asyncRejecter"] = {
+        name: "asyncRejecter",
+        spec: {},
+        handler: async () => {
+          await Promise.resolve(); // suspend so the rejection lands in the next microtask
+          throw new Error("async boom");
+        },
+      };
+      tools["explicitReject"] = {
+        name: "explicitReject",
+        spec: {},
+        // Returning a rejected promise directly (non-async function) — different shape from
+        // the `async () => { throw }` path. Both must produce the same envelope.
+        handler: () => Promise.reject(new Error("explicit boom")),
+      };
+      """.trimIndent(),
+    )
+    listOf("asyncRejecter" to "async boom", "explicitReject" to "explicit boom").forEach { (name, expectedMsg) ->
+      val result = host.callTool(name, JsonObject(emptyMap()))
+      assertEquals(true, result["isError"]?.jsonPrimitive?.boolean, "expected isError for $name")
+      val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+        .first().jsonObject["text"]!!.jsonPrimitive.content
+      assertTrue("expected '$expectedMsg' in async-reject envelope text for $name: $text") {
+        text.contains(expectedMsg)
+      }
+    }
+  }
+
+  @Test
+  fun `callTool with a handler returning undefined produces empty success not an error envelope`() = runBlocking {
+    // Void-shaped tools — handlers that don't return a value — should produce a success
+    // result, not an error. `__dispatchResult == null ? {} : __dispatchResult` is the path
+    // that handles this; pin it so a future refactor that removes the null-coalesce can't
+    // silently turn no-op tools into Error.ExceptionThrown downstream.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["voidTool"] = {
+        name: "voidTool",
+        spec: {},
+        handler: async () => { /* no return */ },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("voidTool", JsonObject(emptyMap()))
+    assertEquals(null, result["isError"], "void handler must NOT produce isError envelope: $result")
+    // Empty `{}` is the spec — no `content` key means downstream `toTrailblazeToolResult`
+    // surfaces it as a structural error (covered separately in QuickJsTrailblazeToolTest);
+    // here we just pin the host's behavior of returning `{}`.
+    assertEquals(0, result.size, "expected empty object, got: $result")
+  }
+
+  @Test
+  fun `callTool handles thrown objects whose String() itself throws`() = runBlocking {
+    // Regression pin from automated review feedback: `String(__e)` inside the catch block can itself throw for
+    // objects with a throwing `toString` / `valueOf` or a null prototype lacking both.
+    // If the catch handler's defensive-stringify itself throws, we lose the envelope and
+    // re-introduce the original "Kotlin throwable, no JS stack" failure mode the JS-side
+    // catch exists to prevent. The dispatcher wraps the stringify in its own try/catch and
+    // falls back to a static placeholder; this test pins that.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["hostile_throw"] = {
+        name: "hostile_throw",
+        spec: {},
+        handler: async () => {
+          // Object whose toString throws — String() on this would propagate the inner throw.
+          // No .message or .stack either, so the `__isErrorObj` branch is skipped and the
+          // fallback `String(__e)` path is what we exercise.
+          throw { toString() { throw new Error("toString sabotage"); } };
+        },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("hostile_throw", JsonObject(emptyMap()))
+    assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+    val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+      .first().jsonObject["text"]!!.jsonPrimitive.content
+    // The defensive-stringify fallback uses a static placeholder so the envelope still ships
+    // even when no string representation is available.
+    assertTrue("expected static fallback in envelope text: $text") {
+      text.contains("unstringifiable thrown value")
     }
   }
 

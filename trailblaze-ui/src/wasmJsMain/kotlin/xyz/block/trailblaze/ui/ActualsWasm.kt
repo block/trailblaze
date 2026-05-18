@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import getTrailblazeReportJsonFromBrowser
 import kotlinx.browser.window
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
@@ -64,6 +65,23 @@ actual suspend fun loadDeviceLogs(sessionId: String): String? {
     return decodeWrappedStringOrPassThrough(json)
 }
 
+actual fun isExportAutoplayRequested(): Boolean {
+    // window.location.search starts with "?" when params are present. We split on "&"
+    // and look for any `autoplay=...` (or bare `autoplay`) — being lenient because both
+    // `?autoplay` and `?autoplay=1` should trigger.
+    val search = window.location.search.removePrefix("?")
+    if (search.isEmpty()) return false
+    return search.split("&").any { it == "autoplay" || it.startsWith("autoplay=") }
+}
+
+actual fun signalExportPlaybackEnded() {
+    // The exporter polls for `globalThis.__tbPlaybackEnded === true` via
+    // `page.waitForFunction(...)`. Writing `globalThis` (vs `window`) keeps the flag
+    // reachable from any same-realm context — equivalent in a normal browser tab but
+    // strictly the right global to assign to.
+    js("globalThis.__tbPlaybackEnded = true;")
+}
+
 actual suspend fun loadNetworkLogs(sessionId: String): String? {
     // TODO(https://github.com/block/trailblaze/issues/125): WasmReport.kt does not yet
     // embed a `network_logs/<sessionId>` entry into the hosted-report bundle, so this
@@ -113,10 +131,52 @@ private fun decodeWrappedStringOrPassThrough(json: String): String =
         json
     }
 
+/**
+ * Bounded cache of the final Coil3 model (the base64-decoded `ByteArray` for embedded
+ * data URLs) keyed by `(sessionId, screenshotFile)`. Without this, every recomposition
+ * base64-decodes a fresh `ByteArray` instance and Coil3's memory cache — which uses
+ * reference identity for byte-array models — misses, forcing a re-decode even when the
+ * image is already in cache. Stable instances let the hidden preloader's decode result
+ * be reused by the later visible render.
+ *
+ * Keying by `(sessionId, screenshotFile)` keeps two sessions whose embedded payloads
+ * happen to share a relative key (e.g. `screenshot_0.png`) from colliding. Capacity is
+ * bounded via FIFO eviction so navigating between many sessions on a long-lived report
+ * page doesn't grow the cache unboundedly.
+ */
+private const val IMAGE_MODEL_CACHE_CAP = 500
+private val imageModelCache: LinkedHashMap<Pair<String, String>, Any> = LinkedHashMap()
+
+private fun putModel(sessionId: String, screenshotFile: String, model: Any) {
+    val key = sessionId to screenshotFile
+    if (imageModelCache.size >= IMAGE_MODEL_CACHE_CAP && !imageModelCache.containsKey(key)) {
+        // Evict the oldest insertion (FIFO). Strict LRU would re-order on read but the
+        // slideshow walks screenshots roughly in playback order, so FIFO ≈ LRU here.
+        val firstKey = imageModelCache.keys.firstOrNull()
+        if (firstKey != null) imageModelCache.remove(firstKey)
+    }
+    imageModelCache[key] = model
+}
+
+@Composable
+actual fun preloadedScreenshotKeys(): Set<String> = observePreloadedScreenshotKeys()
+
 @Composable
 actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any? {
-    // Lazy resolution: If screenshotFile is an image key (not a data URL), resolve it on-demand
-    var resolvedImage by remember(screenshotFile) { mutableStateOf<String?>(screenshotFile) }
+    // Lazy resolution: If screenshotFile is an image key (not a data URL), resolve it on-demand.
+    // Seed from the synchronous decompressed-image cache when available so a slideshow advance
+    // doesn't render a blank frame while the LaunchedEffect resolves the data URL.
+    var resolvedImage by remember(screenshotFile) {
+        val seed = if (screenshotFile != null &&
+            !screenshotFile.startsWith("data:") &&
+            !screenshotFile.startsWith("http")
+        ) {
+            getCachedDataUrl(screenshotFile) ?: screenshotFile
+        } else {
+            screenshotFile
+        }
+        mutableStateOf<String?>(seed)
+    }
 
     LaunchedEffect(screenshotFile) {
         // Check if screenshot needs resolution (relative paths for embedded images or Buildkite artifacts)
@@ -134,6 +194,9 @@ actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
                 // with useRelativeImageUrls=true where images aren't embedded — the ref will
                 // be resolved to a /static/ URL by NetworkImageLoader.getImageModel instead)
                 resolvedImage = dataUrl ?: resolvedImage
+            } catch (e: CancellationException) {
+                // Don't swallow cancellation — let the LaunchedEffect tear down cleanly.
+                throw e
             } catch (e: Exception) {
                 Console.log("❌ Failed to resolve screenshot: $screenshotFile - ${e.message}")
                 // If resolution fails, keep the original path as fallback
@@ -145,7 +208,28 @@ actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
         }
     }
 
+    // Fast path: same (sessionId, screenshotFile) reuses the cached model instance so
+    // Coil3's reference-identity memory-cache lookup hits across composables. Checked
+    // here — after `resolvedImage` is seeded but before we invoke `getImageModel` —
+    // so we never short-circuit before the caller-provided `imageLoader` has had a
+    // chance to run for a brand-new ref. Once a model is memoized, subsequent calls
+    // for the same `(sessionId, screenshotFile)` are assumed to come from a
+    // functionally-equivalent `imageLoader`; passing a different loader for the same
+    // key would silently reuse the first model.
+    if (screenshotFile != null) {
+        imageModelCache[sessionId to screenshotFile]?.let { return it }
+    }
+
     // Return the resolved image model
     // If still resolving, imageLoader will handle the image key gracefully (may show placeholder)
-    return imageLoader.getImageModel(sessionId, resolvedImage)
+    val currentResolved = resolvedImage
+    val model = imageLoader.getImageModel(sessionId, currentResolved)
+    // Memoize once we have a fully resolved model (data URL or HTTP URL) so subsequent
+    // recompositions return the same instance and Coil3's memory cache hits.
+    if (model != null && screenshotFile != null && currentResolved != null &&
+        (currentResolved.startsWith("data:") || currentResolved.startsWith("http"))
+    ) {
+        putModel(sessionId, screenshotFile, model)
+    }
+    return model
 }

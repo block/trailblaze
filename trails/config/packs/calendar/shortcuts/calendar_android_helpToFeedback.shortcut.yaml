@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_feedback_option$"
+          resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_feedback_option"

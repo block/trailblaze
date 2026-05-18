@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.JsonObjectYamlSerializer
+import xyz.block.trailblaze.config.ScriptedToolRuntime
 
 /**
  * Author-friendly per-file shape for scripted MCP tools owned by a pack.
@@ -61,7 +62,8 @@ import xyz.block.trailblaze.config.JsonObjectYamlSerializer
 @Serializable
 data class PackScriptedToolFile(
   /**
-   * Absolute or relative path to the JS/TS module backing this tool.
+   * Absolute or relative path to the JS/TS module backing this tool (or multi-tool descriptor
+   * — see [tools]).
    *
    * **Resolution rule**: relative `script:` paths resolve against the **directory containing
    * the descriptor YAML file** — i.e. pack-relative. This means a tool whose descriptor lives
@@ -75,7 +77,12 @@ data class PackScriptedToolFile(
    * directory that can be zipped or published as-is.
    */
   val script: String,
-  val name: String,
+  /**
+   * Tool name (single-tool shape). **Required iff [tools] is null.** When [tools] is set,
+   * the descriptor declares multiple tools — each entry's `name:` lives under [tools], and
+   * this top-level field MUST be absent.
+   */
+  val name: String? = null,
   val description: String? = null,
   /**
    * Top-level shortcut for `_meta: { trailblaze/requiresHost: true }`. Setting this to `true`
@@ -102,6 +109,20 @@ data class PackScriptedToolFile(
    */
   val supportedPlatforms: List<String>? = null,
   /**
+   * Explicit runtime override (`subprocess` or `inProcess`) — see [ScriptedToolRuntime].
+   *
+   * When set, this overrides the default extension-based routing in
+   * `TrailblazeHostYamlRunner`: `.js` / `.mjs` / `.cjs` → subprocess, everything else
+   * (notably `.ts`) → in-process QuickJS. Set this to `subprocess` if you author a `.ts`
+   * file but need Node APIs (`node:fs`, `node:child_process`, file locks, etc.) — bun and
+   * tsx both run `.ts` natively, so the subprocess path is the right runtime; the extension
+   * just doesn't tell the framework that.
+   *
+   * `null` (default) preserves the legacy extension-based behaviour so existing descriptors
+   * keep working without modification.
+   */
+  val runtime: ScriptedToolRuntime? = null,
+  /**
    * Escape hatch for arbitrary `_meta:` keys that don't have a top-level shortcut yet
    * (e.g., custom MCP-spec extensions, future framework hints). Most authors should
    * never need to set this — prefer the top-level fields ([requiresHost],
@@ -119,8 +140,100 @@ data class PackScriptedToolFile(
    *
    * Defaults to empty when omitted from the YAML — tools that take no arguments don't
    * need to write `inputSchema: {}` explicitly.
+   *
+   * **Single-tool shape only.** When [tools] is set this MUST be empty — each entry
+   * carries its own `inputSchema:` under [tools].
    */
   @SerialName("inputSchema") val inputSchema: Map<String, ScriptedToolProperty> = emptyMap(),
+  /**
+   * **Multi-tool shape.** When set, this one descriptor declares N tools, all backed by the
+   * same [script] (one author module exporting N named functions). The framework's MCP wrapper
+   * synthesizer (subprocess path) and QuickJS bundler (in-process path) dedup by [script] so
+   * the file is loaded into one process / one engine regardless of how many tools it exposes.
+   *
+   * Authors get the ergonomic "one related-tools file, plain `export function name(args, ctx,
+   * client)` per tool" surface without dropping down to `mcp_servers:` + `trailblaze.run()`
+   * plumbing. The framework wraps each script in an MCP server underneath as an
+   * implementation detail; the developer surface stays plain Trailblaze scripted tools.
+   *
+   * Mutual exclusion with the top-level [name] / [description] / [inputSchema] fields:
+   *
+   *  - `tools == null` (today's default) → single-tool shape: [name] is required and the
+   *    top-level [description] / [inputSchema] are the single tool's metadata.
+   *  - `tools != null` → multi-tool shape: [name] / [description] / [inputSchema] MUST be
+   *    absent at top level (each entry declares them under [tools]). The top-level
+   *    [requiresHost] / [supportedPlatforms] / [meta] fields, when set, act as **file-wide
+   *    defaults** that apply to every entry unless the entry overrides them — convenient for
+   *    the common case where every tool in the descriptor shares the same platform / host
+   *    gating.
+   *
+   * Example multi-tool shape:
+   * ```yaml
+   * # packs/myapp/tools/myapp_sign_in.yaml
+   * script: ./myapp_sign_in.ts
+   * runtime: subprocess
+   * supportedPlatforms: [web]   # applies to both entries
+   * tools:
+   *   - name: myapp_signIn
+   *     description: Resolves an account by key and delegates to the worker.
+   *     inputSchema:
+   *       key: { type: string, required: false }
+   *       account: { type: string, required: false }
+   *   - name: myapp_signInWithCredentials
+   *     description: Explicit email+password worker, owns the cache + lock.
+   *     inputSchema:
+   *       email: { type: string }
+   *       password: { type: string }
+   *       cacheKey: { type: string, required: false }
+   * ```
+   *
+   * Author module shape:
+   * ```ts
+   * // myapp_sign_in.ts
+   * export async function myapp_signIn(args, ctx, client) { ... }
+   * export async function myapp_signInWithCredentials(args, ctx, client) { ... }
+   * ```
+   *
+   * Empty lists are rejected (`require(tools.isNotEmpty())`) — an empty `tools: []` is
+   * almost certainly an author mistake and silently passing it would register zero tools for
+   * the descriptor, confusing every downstream "tool not found" debugging session.
+   */
+  val tools: List<PackScriptedToolEntry>? = null,
+)
+
+/**
+ * One entry in a [PackScriptedToolFile.tools] list. Mirrors the per-tool subset of
+ * [PackScriptedToolFile]'s fields (no `script:` / `runtime:` / nested `tools:` — those live
+ * once at the file level).
+ *
+ * **Inheritance semantics.** [requiresHost] / [supportedPlatforms] / [meta] are optional on
+ * each entry and inherit from the file-wide defaults when absent:
+ *
+ *  - `requiresHost` — `null` (default) inherits the file-wide value. Set to `true` / `false`
+ *    explicitly to override.
+ *  - `supportedPlatforms` — `null` (default) inherits the file-wide list. An explicit empty
+ *    list `[]` is treated as "no override" (same as null) since an empty supported-platforms
+ *    set would gate the tool out of every session and is almost never authored intentionally.
+ *  - `meta` — merged with the file-wide `_meta` map; per-entry keys win on conflict so an
+ *    entry can override a single file-wide meta key without restating the rest.
+ */
+@Serializable
+data class PackScriptedToolEntry(
+  val name: String,
+  val description: String? = null,
+  /** `null` (default) = inherit file-wide [PackScriptedToolFile.requiresHost]. */
+  val requiresHost: Boolean? = null,
+  /** `null` or empty (default) = inherit file-wide [PackScriptedToolFile.supportedPlatforms]. */
+  val supportedPlatforms: List<String>? = null,
+  /**
+   * Per-entry `_meta` keys. Merged with the file-wide [PackScriptedToolFile.meta] — keys
+   * present on both win on the entry side.
+   */
+  @SerialName("_meta")
+  @Serializable(with = JsonObjectYamlSerializer::class)
+  val meta: JsonObject? = null,
+  @SerialName("inputSchema")
+  val inputSchema: Map<String, ScriptedToolProperty> = emptyMap(),
 )
 
 /**
@@ -149,21 +262,32 @@ data class ScriptedToolProperty(
  * Also validates per-property invariants that the YAML schema can't catch on its own —
  * notably that any author-declared `enum` has at least one value, since JSON Schema's
  * `enum` keyword requires a non-empty array.
+ *
+ * **Single-tool shape only.** Throws if the descriptor uses the multi-tool shape (`tools:`
+ * is set). Use [toInlineScriptToolConfigs] for callers that want to accept either shape.
  */
 fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
+  require(tools == null) {
+    "PackScriptedToolFile.toInlineScriptToolConfig() called on a multi-tool descriptor (script '$script'); " +
+      "callers that handle multi-tool descriptors must use toInlineScriptToolConfigs() instead."
+  }
+  val resolvedName = requireNotNull(name) {
+    "Single-tool descriptor for script '$script' is missing the required top-level `name:` field. " +
+      "Either set `name:` (single-tool shape) or use the multi-tool shape with `tools:`."
+  }
   // Validate the tool name with a YAML-author-facing error message before we hand off to
   // `InlineScriptToolConfig`'s init block — same regex (the source of truth lives on
   // `InlineScriptToolConfig.TOOL_NAME_PATTERN`), but this site has the `<pack>/tools/<id>.yaml`
   // file shape in mind and produces a more actionable message that names the descriptor.
-  require(InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(name)) {
-    "Invalid scripted-tool name '$name' in per-file descriptor for script '$script': must match " +
+  require(InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(resolvedName)) {
+    "Invalid scripted-tool name '$resolvedName' in per-file descriptor for script '$script': must match " +
       "${InlineScriptToolConfig.TOOL_NAME_PATTERN} (letters, digits, _, -, ., starting with a " +
       "letter or _). Update the descriptor YAML's `name:` field to use a supported character set."
   }
   inputSchema.forEach { (propName, prop) ->
     prop.enum?.let { values ->
       require(values.isNotEmpty()) {
-        "Tool '$name' property '$propName': `enum` must declare at least one value (JSON Schema " +
+        "Tool '$resolvedName' property '$propName': `enum` must declare at least one value (JSON Schema " +
           "rejects an empty enum array). Either remove the `enum` field or list the allowed values."
       }
     }
@@ -173,7 +297,7 @@ fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
   // silently slip through — the conflicting top-level shortcut would overwrite it before any
   // consumer noticed, masking the author error. We'd rather fail loudly with a `<pack>/tools/<id>.yaml`-aware
   // message at parse time.
-  validateKnownMetaShapes(name, meta)
+  validateKnownMetaShapes(resolvedName, meta)
   // Merge the top-level shortcut fields [supportedPlatforms] and [requiresHost] into the
   // [_meta] JsonObject so downstream consumers that read namespaced keys directly
   // (`TrailblazeToolMeta`, toolset filtering, the on-device QuickJS bundler's host-vs-device
@@ -196,12 +320,111 @@ fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
   )
   return InlineScriptToolConfig(
     script = script,
-    name = name,
+    name = resolvedName,
     description = description,
     requiresHost = requiresHost,
+    runtime = runtime,
     meta = mergedMeta,
     inputSchema = buildInputSchemaObject(inputSchema),
   )
+}
+
+/**
+ * Shape-agnostic entry point. Returns:
+ *
+ *  - **Single-tool descriptor** (`tools == null`): a singleton list — one
+ *    [InlineScriptToolConfig] equivalent to [toInlineScriptToolConfig].
+ *  - **Multi-tool descriptor** (`tools != null`): one [InlineScriptToolConfig] per
+ *    [PackScriptedToolEntry], all sharing the descriptor's `script:` / `runtime:`. The
+ *    framework's MCP wrapper synthesizer and QuickJS bundler dedup by `script:` so the same
+ *    author module loads exactly once regardless of how many entries the descriptor declares.
+ *
+ * Multi-tool validation, performed before any expansion:
+ *
+ *  - `tools` must be non-empty.
+ *  - Top-level `name` / `description` / `inputSchema` must NOT be set when `tools` is —
+ *    each entry declares those under its own [PackScriptedToolEntry].
+ *  - Top-level `requiresHost` / `supportedPlatforms` / `_meta` are file-wide defaults that
+ *    each entry inherits unless it overrides. Keeps the common case (every tool in the
+ *    descriptor shares the same platform / host gating) terse.
+ *
+ * Production pack loaders that don't care about the shape (`TrailblazeProjectConfigLoader`)
+ * call this and `flatMap` the result so they get a flat `List<InlineScriptToolConfig>`
+ * regardless of how authors structured the descriptors.
+ */
+fun PackScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolConfig> {
+  if (tools == null) return listOf(toInlineScriptToolConfig())
+
+  // Multi-tool shape — enforce mutual exclusion before expanding.
+  require(tools.isNotEmpty()) {
+    "Multi-tool descriptor for script '$script' has an empty `tools:` list. Either remove " +
+      "`tools:` and use the single-tool shape, or list at least one entry."
+  }
+  require(name == null) {
+    "Multi-tool descriptor for script '$script' must not set a top-level `name:` — each " +
+      "entry declares its own name under `tools:`. Got top-level name '$name'."
+  }
+  require(description == null) {
+    "Multi-tool descriptor for script '$script' must not set a top-level `description:` — each " +
+      "entry declares its own description under `tools:`."
+  }
+  require(inputSchema.isEmpty()) {
+    "Multi-tool descriptor for script '$script' must not set a top-level `inputSchema:` — each " +
+      "entry declares its own inputSchema under `tools:`."
+  }
+
+  // File-wide _meta validation runs once against the defaults so a typo in the shared
+  // _meta surface fails loudly at descriptor parse time rather than once per entry.
+  validateKnownMetaShapes("(file-wide defaults for script '$script')", meta)
+
+  return tools.map { entry ->
+    // Validate per-entry name + enum shapes (same checks the single-tool path runs).
+    require(InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(entry.name)) {
+      "Invalid scripted-tool name '${entry.name}' in multi-tool descriptor for script '$script': " +
+        "must match ${InlineScriptToolConfig.TOOL_NAME_PATTERN} (letters, digits, _, -, ., " +
+        "starting with a letter or _). Update the entry's `name:` field."
+    }
+    entry.inputSchema.forEach { (propName, prop) ->
+      prop.enum?.let { values ->
+        require(values.isNotEmpty()) {
+          "Entry '${entry.name}' property '$propName': `enum` must declare at least " +
+            "one value (JSON Schema rejects an empty enum array)."
+        }
+      }
+    }
+    validateKnownMetaShapes(entry.name, entry.meta)
+
+    // Inheritance: per-entry overrides win, file-wide defaults fill in. An empty
+    // `supportedPlatforms` list on the entry is treated as "inherit" since gating a tool
+    // out of every platform is almost never the intent.
+    val effectiveRequiresHost = entry.requiresHost ?: requiresHost
+    val effectiveSupportedPlatforms =
+      entry.supportedPlatforms?.takeIf { it.isNotEmpty() } ?: supportedPlatforms
+    // Merge file-wide defaults under per-entry overrides — per-entry keys win.
+    val mergedExplicitMeta = when {
+      meta == null && entry.meta == null -> null
+      meta == null -> entry.meta
+      entry.meta == null -> meta
+      else -> buildJsonObject {
+        meta.forEach { (k, v) -> put(k, v) }
+        entry.meta.forEach { (k, v) -> put(k, v) }
+      }
+    }
+    val mergedMeta = mergeMetaShortcuts(
+      explicitMeta = mergedExplicitMeta,
+      supportedPlatforms = effectiveSupportedPlatforms,
+      requiresHost = effectiveRequiresHost,
+    )
+    InlineScriptToolConfig(
+      script = script,
+      name = entry.name,
+      description = entry.description,
+      requiresHost = effectiveRequiresHost,
+      runtime = runtime,
+      meta = mergedMeta,
+      inputSchema = buildInputSchemaObject(entry.inputSchema),
+    )
+  }
 }
 
 /**

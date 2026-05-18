@@ -9,14 +9,14 @@ required:
   - description: "Choose an Avatar header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose an Avatar$"
+        accessibilityTextRegex: "Choose an Avatar"
   - description: "New Emoji affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Emoji$"
-        resourceIdRegex: "^OnboardingMainVStack$"
+        accessibilityTextRegex: "New Emoji"
+        resourceIdRegex: "OnboardingMainVStack"
 forbidden:
   - description: "Visual identity Choose — would mean we're in the editor"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"

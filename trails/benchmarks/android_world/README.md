@@ -52,7 +52,7 @@ For each task class, extract:
 
 Create YAML with: config (id: android-world-benchmarks/{app}/{task}), setup tools, prompts (the goal), validation tools.
 
-Setup tools: clearAppData, clearDirectory, createFileOnDevice, pushAssetToDevice, setClipboard, sendSmsToDevice, addContactToDevice, executeSqliteOnDevice (db paths below), runAdbShell.
+Setup tools: mobile_clearAppData, clearDirectory, createFileOnDevice, pushAssetToDevice, mobile_setClipboard, sendSmsToDevice, addContactToDevice, executeSqliteOnDevice (db paths below), runAdbShell.
 
 Validation tools: assertAdbShellOutput, assertSqliteQuery, assertFileExistsOnDevice, assertFileContent.
 

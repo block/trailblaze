@@ -4,19 +4,19 @@ required:
   - description: "Dialog message text"
     selector:
       androidAccessibility:
-        textRegex: "^Discard this event\\?$"
+        textRegex: "Discard this event\\?"
   - description: "'Discard' button"
     selector:
       androidAccessibility:
-        textRegex: "^Discard$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Discard"
+        classNameRegex: "android.widget.Button"
   - description: "'Keep editing' button"
     selector:
       androidAccessibility:
-        textRegex: "^Keep editing$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Keep editing"
+        classNameRegex: "android.widget.Button"
 forbidden:
   - description: "Quick-create sheet drag handle would mean we're not in the discard dialog"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"

@@ -8,24 +8,24 @@ required:
   - description: "Visual identity Cancel button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityCancelButton$"
+        resourceIdRegex: "VisualIdentityCancelButton"
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Crop editor tab — only on the photo-avatar editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Crop$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Crop"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
 forbidden:
   - description: "Text editor tab — only on the monogram editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Text"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Emoji editor tab — only on the emoji editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Emoji$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Emoji"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

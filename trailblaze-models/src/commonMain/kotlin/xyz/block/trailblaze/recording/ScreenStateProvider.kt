@@ -32,7 +32,16 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
  * doesn't pay screenshot encoding cost on calls that only need the tree. Annotated
  * (set-of-mark) screenshots are intentionally not part of this interface — they're an
  * LLM-oriented presentation concern, separate from the raw frame stream this contract feeds.
+ *
+ * **`includeTree` flag.** Defaults to true to preserve the atomic (screenshot, tree) pair
+ * the recording flow depends on. Mirror-only callers (live `/devices` viewer's frame loop)
+ * pass `false` to skip the on-device tree walk + JSON serialization, which drops per-frame
+ * cost from ~100-300 ms to ~30-60 ms. Tap-time captures during recording stay at default
+ * `true` so selector generation gets an atomic pair captured at the same instant.
  */
 interface ScreenStateProvider {
-  suspend fun getScreenState(includeScreenshot: Boolean = true): GetScreenStateResponse?
+  suspend fun getScreenState(
+    includeScreenshot: Boolean = true,
+    includeTree: Boolean = true,
+  ): GetScreenStateResponse?
 }

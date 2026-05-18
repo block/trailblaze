@@ -20,6 +20,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @TrailblazeToolClass(
   name = "android_sendBroadcast",
   isForLlm = false,
+  // Dual-mode primitive: scripted-tool composition relies on the `Success.message` payload
+  // (broadcast result data) which the on-device-RPC return path silently discards. Host-side
+  // actual is the contract surface for callback paths.
+  prefersHostSideForCallback = true,
 )
 @LLMDescription("Sends a broadcast intent to the connected Android device.")
 data class AndroidSendBroadcastTrailblazeTool(

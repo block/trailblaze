@@ -4,19 +4,19 @@ required:
   - description: "Recurrence picker view container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recurrence_picker_view$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/recurrence_picker_view"
   - description: "Frequency dropdown"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/frequency$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/frequency"
   - description: "Weekday button group"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/week_buttons$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/week_buttons"
   - description: "End-recurrence layout"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/end_recurrence_layout$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/end_recurrence_layout"
   - description: "'Repeat every 1 week' summary"
     selector:
       androidAccessibility:
@@ -24,9 +24,9 @@ required:
   - description: "Back button"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Back$"
+        contentDescriptionRegex: "Back"
 forbidden:
   - description: "Repeat picker dialog list (we should be on the editor, not the picker)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/select_dialog_listview"

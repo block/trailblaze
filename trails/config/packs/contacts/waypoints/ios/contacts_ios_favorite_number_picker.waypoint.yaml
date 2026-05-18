@@ -8,25 +8,25 @@ required:
   - description: "mobile phone label row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^mobile$"
+        accessibilityTextRegex: "mobile"
   - description: "work label row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^work$"
+        accessibilityTextRegex: "work"
   - description: "main phone label row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^main$"
+        accessibilityTextRegex: "main"
 forbidden:
   - description: "Edit button — only on contact-detail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "Lists header — would mean we're on Add to List picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "InlineActionsHStack — only on contact-detail"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"

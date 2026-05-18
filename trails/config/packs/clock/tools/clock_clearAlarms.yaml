@@ -8,7 +8,7 @@ description: |
 
   No arguments — the framework resolves the app id from the `clock` pack manifest's
   `app_ids:` list against installed apps on the connected device. Composes only the
-  dual-mode `adbShell` primitive, so this tool works on both host- and on-device-
+  dual-mode `android_adbShell` primitive, so this tool works on both host- and on-device-
   dispatched sessions.
 supportedPlatforms:
   - android

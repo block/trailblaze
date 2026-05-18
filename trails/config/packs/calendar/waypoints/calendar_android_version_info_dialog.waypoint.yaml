@@ -4,21 +4,21 @@ required:
   - description: "Application title 'Calendar'"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_application_title$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_application_title"
   - description: "Application version row"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_application_version$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_application_version"
   - description: "Application logo image"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_application_logo$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_application_logo"
   - description: "Application copyright"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_application_copyright$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_application_copyright"
 forbidden:
   - description: "Help app bar (would mean we're on a help screen, not the version dialog)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_app_bar"

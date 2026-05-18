@@ -163,7 +163,18 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     InstrumentationRegistry.getInstrumentation().runOnMainSync {
       clipboard.setPrimaryClip(clip)
     }
+    lastSetClipboard = text
   }
+
+  actual fun getClipboard(): String = lastSetClipboard ?: ""
+
+  // In-process cache of the last `setClipboard` text. Read by `getClipboard`
+  // because Android 10+ restricts `ClipboardManager.getPrimaryClip` to the
+  // currently-focused app (instrumentation runs in its own process, so a
+  // direct read after a setPrimaryClip from the test would return null/empty).
+  // The OS clipboard write still happens above for any other observers; this
+  // cache is just for our own `mobile_pasteClipboard` round-trip path.
+  @Volatile private var lastSetClipboard: String? = null
 
   actual fun waitUntilAppInForeground(
     appId: String,

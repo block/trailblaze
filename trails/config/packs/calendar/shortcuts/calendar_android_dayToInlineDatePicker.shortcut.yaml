@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+          resourceIdRegex: "com\\.google\\.android\\.calendar:id/date_picker_button"

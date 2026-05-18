@@ -166,6 +166,11 @@ class TrailblazeMcpBridgeImpl(
   /** Per-device locks to prevent two threads from simultaneously opening Maestro connections. */
   private val persistentDeviceLocks = ConcurrentHashMap<String, Any>()
 
+  // Per-session target overrides live on `TrailblazeDeviceManager` keyed by
+  // SessionId — see `TrailblazeDeviceManager._sessionTargetOverrides`. The
+  // bridge delegates set/clear/read through the manager so the lifetime is
+  // tied to the recording session (auto-cleared on session end / cancel).
+
   /**
    * Per-device latches for callers waiting on in-progress driver creation.
    * When a driver is being created in the background, callers (e.g., getDirectScreenStateProvider)
@@ -804,6 +809,8 @@ class TrailblazeMcpBridgeImpl(
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
     driverCreationFailures.remove(deviceId.instanceId)
+    // Per-session target overrides clean up on session end / cancel via
+    // TrailblazeDeviceManager, so no extra cleanup needed here.
     closePersistentDevice(deviceId)
     Console.log("[MCP Bridge] Released persistent connection for device ${deviceId.instanceId}")
   }
@@ -1556,6 +1563,11 @@ class TrailblazeMcpBridgeImpl(
       val captureNetworkTraffic =
         trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic
       val resolvedLogsRepoForAndroid = logsRepo
+      // Resolve the effective target once for this dispatch so the network-capture
+      // activator and the RunYamlRequest see the same value — eliminates a tiny
+      // race window where a parallel setSessionTargetForBoundDevice could land
+      // between the two reads and the two callers would see different targets.
+      val resolvedTargetAppId = resolveTargetAppIdForDevice(trailblazeDeviceId)
       if (
         captureNetworkTraffic &&
           trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
@@ -1568,7 +1580,7 @@ class TrailblazeMcpBridgeImpl(
               sessionId = sessionResolution.sessionId.value,
               sessionDir = resolvedLogsRepoForAndroid.getSessionDir(sessionResolution.sessionId),
               deviceId = trailblazeDeviceId,
-              targetAppId = getCurrentAppTargetId(),
+              targetAppId = resolvedTargetAppId,
             )
           }
             .onFailure {
@@ -1580,7 +1592,7 @@ class TrailblazeMcpBridgeImpl(
         yaml = yaml,
         testName = "tool_${tool::class.simpleName}",
         trailFilePath = null,
-        targetAppName = getCurrentAppTargetId(),
+        targetAppName = resolvedTargetAppId,
         useRecordedSteps = false,
         trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
@@ -1664,6 +1676,16 @@ class TrailblazeMcpBridgeImpl(
     // Clear cached screen state, persistent device, and on-device agent status for this device
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
+    if (deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+      // Clear stale error so the next device(WEB) call starts clean.
+      // Intentionally do NOT touch webInitJobs here: removing it while the init
+      // thread is still running would let a follow-up selectDevice() win
+      // putIfAbsent and spawn a second init thread for the same instanceId,
+      // and the two threads' setActivePlaywrightNativeTest() calls would
+      // overwrite each other and leak the loser's browser. The init thread's
+      // own `finally` block is the single owner of that entry.
+      webInitErrors.remove(deviceId.instanceId)
+    }
     closePersistentDevice(deviceId)
     val activeSessionId = trailblazeDeviceManager.getCurrentSessionIdForDevice(deviceId)
     val endedSessionId = trailblazeDeviceManager.endSessionForDevice(deviceId)
@@ -1866,9 +1888,66 @@ class TrailblazeMcpBridgeImpl(
     return matchingTarget.displayName
   }
 
+  /**
+   * Returns the **daemon-wide** target app id only —
+   * [TrailblazeServerState.SavedTrailblazeAppConfig.selectedTargetAppId]. Does
+   * NOT consult per-device target overrides.
+   *
+   * Returns the daemon-wide default. Per-device overrides set via
+   * `setSessionTargetForBoundDevice` (the MCP tool) win over this value at
+   * tool-dispatch time — but the resolver that consults them is private to
+   * the bridge implementation. External callers (config and tool-discovery
+   * surfaces in `DeviceManagerToolSet`/`ConfigToolSet`/`TrailblazeMcpResources`/
+   * `TrailblazeMcpServer`) intentionally read this daemon-wide view because
+   * they don't have a device-bound context to scope to.
+   */
   override fun getCurrentAppTargetId(): String? {
     return trailblazeDeviceManager.settingsRepo.getCurrentSelectedTargetApp()?.id
   }
+
+  /**
+   * Set/clear the target on the device's currently-active Trailblaze session.
+   * If no session is active, [TrailblazeDeviceManager.setTargetForActiveSession]
+   * creates one — setting a target implicitly starts a recording, matching
+   * the action-command flow.
+   *
+   * Pass `null` or blank to clear the override.
+   *
+   * Return contract:
+   *  - non-null target, known id → returns the resolved display name.
+   *  - non-null target, unknown id → returns `null` (no mutation, caller
+   *    treats as failure).
+   *  - null/blank target → returns `null` after clearing the entry.
+   */
+  override fun setSessionTargetForDevice(
+    deviceId: TrailblazeDeviceId,
+    appTargetId: String?,
+  ): String? {
+    if (appTargetId.isNullOrBlank()) {
+      trailblazeDeviceManager.setTargetForActiveSession(deviceId, appTargetId = null)
+      return null
+    }
+    val resolved = trailblazeDeviceManager.availableAppTargets.findById(appTargetId)
+      ?: return null
+    trailblazeDeviceManager.setTargetForActiveSession(deviceId, appTargetId = resolved.id)
+    return resolved.displayName
+  }
+
+  override fun getTargetForSession(sessionId: SessionId): String? =
+    trailblazeDeviceManager.getTargetForSession(sessionId)
+
+  /**
+   * Resolver used by tool dispatch paths that know which device they're about
+   * to drive. Resolution chain: the device's active Trailblaze session's
+   * target override (see [TrailblazeDeviceManager.getTargetForActiveSession])
+   * → daemon-wide [getCurrentAppTargetId].
+   *
+   * Override is tied to the recording session — dies on `session stop` /
+   * cancel / daemon restart. Per-session lifetime matches how `.trail.yaml`
+   * targets are read per run.
+   */
+  private fun resolveTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =
+    trailblazeDeviceManager.getTargetForActiveSession(deviceId) ?: getCurrentAppTargetId()
 
   override fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? {
     // WEB always maps to PLAYWRIGHT_NATIVE for MCP purposes. Even when WEB is stored in

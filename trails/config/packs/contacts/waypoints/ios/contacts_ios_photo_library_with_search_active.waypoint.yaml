@@ -7,17 +7,17 @@ required:
   - description: "Photo grid container"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PXGGridLayout-Group$"
+        resourceIdRegex: "PXGGridLayout-Group"
   - description: "Toolbar"
     selector:
       iosMaestro:
-        resourceIdRegex: "^Toolbar$"
+        resourceIdRegex: "Toolbar"
   - description: "Active keyboard accessory: AutoFill"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^AutoFill$"
+        accessibilityTextRegex: "AutoFill"
 forbidden:
   - description: "Camera button — would mean we're on the source picker"
     selector:
       iosMaestro:
-        resourceIdRegex: "^CameraButton$"
+        resourceIdRegex: "CameraButton"

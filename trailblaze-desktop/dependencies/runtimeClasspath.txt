@@ -215,6 +215,8 @@ io.ktor:ktor-client-logging-jvm:3.3.3
 io.ktor:ktor-client-logging:3.3.3
 io.ktor:ktor-client-okhttp-jvm:3.3.3
 io.ktor:ktor-client-okhttp:3.3.3
+io.ktor:ktor-client-websockets-jvm:3.3.3
+io.ktor:ktor-client-websockets:3.3.3
 io.ktor:ktor-events-jvm:3.3.3
 io.ktor:ktor-events:3.3.3
 io.ktor:ktor-http-cio-jvm:3.3.3

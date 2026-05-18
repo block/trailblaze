@@ -19,6 +19,11 @@ class AxeDeviceManager(
   private val udid: String,
   private val deviceWidth: Int,
   private val deviceHeight: Int,
+  // Per-session template context surfaced to every internal resolve() call so selectors
+  // carrying `{{target.appId}}` placeholders expand correctly. Null when the bridge wasn't
+  // constructed with a target (target-agnostic ad-hoc paths); selectors authored without
+  // templates work either way.
+  private val templateContext: xyz.block.trailblaze.api.TargetTemplateContext? = null,
 ) {
 
   companion object {
@@ -156,7 +161,7 @@ class AxeDeviceManager(
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
       val tree = captureTree()
       if (tree != null) {
-        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector)
+        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector, templateContext)
         val matched: TrailblazeNode? = when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
@@ -194,7 +199,7 @@ class AxeDeviceManager(
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
       val tree = captureTree()
       if (tree != null) {
-        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector)
+        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector, templateContext)
         val matched: TrailblazeNode? = when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
@@ -221,7 +226,7 @@ class AxeDeviceManager(
     while (System.currentTimeMillis() - startTime < action.timeoutMs) {
       val tree = captureTree()
       if (tree != null) {
-        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector)
+        val result = TrailblazeNodeSelectorResolver.resolve(tree, action.nodeSelector, templateContext)
         if (result is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
           return ExecutionResult(deviceWidth / 2, deviceHeight / 2)
         }

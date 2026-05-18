@@ -26,4 +26,14 @@ sealed interface WasmRoute {
    */
   @Serializable
   data class SessionDetail(val sessionId: String) : WasmRoute
+
+  /**
+   * Live device viewer route for the `/devices` page.
+   *
+   * Renders a picker of connected devices and a polling screenshot view backed by the
+   * daemon's HTTP RPC device API. Intended for developer use at
+   * `http://localhost:52525/devices`.
+   */
+  @Serializable
+  data object Devices : WasmRoute
 }

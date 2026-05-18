@@ -48,8 +48,16 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
+import coil3.size.Size
+import xyz.block.trailblaze.ui.preloadedScreenshotKeys
+import xyz.block.trailblaze.ui.resolveImageModel
 import kotlin.time.TimeSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -279,6 +287,17 @@ internal fun SessionTimelineView(
         }
       },
   ) {
+    // Off-screen Coil-backed preload strip: as the background decompression preloader
+    // populates the data-URL cache in timeline order, this mounts a hidden AsyncImage
+    // for each ready screenshot at Size.ORIGINAL so Coil's memory cache is warm before
+    // the slideshow asks for the same model. Without this, Coil only decodes lazily
+    // when the visible image first composes — exactly the moment the user notices.
+    ScreenshotPreloadStrip(
+      sessionId = sessionId,
+      screenshotItems = screenshotItems,
+      imageLoader = imageLoader,
+    )
+
     // Horizontal timeline scrubber at the top
     SessionTimelineBar(
       timelineState = timelineState,
@@ -578,6 +597,79 @@ internal fun SessionTimelineView(
             TimelineLogEntry(log = log, sessionStartMs = sessionStartMs, currentTimestamp = currentTimestamp)
           }
         }
+      }
+    }
+  }
+}
+
+/**
+ * Off-screen strip of Coil-backed AsyncImages that pre-populates Coil's memory cache.
+ *
+ * Why this exists: the Kotlin-side data-URL cache only stores decompressed bytes;
+ * Coil's own memory cache only fills when an AsyncImage actually composes and decodes
+ * bytes via Skia. Without this strip, the slideshow's first advance to each screenshot
+ * pays Coil's decode cost on the spot — visible as a blank frame.
+ *
+ * How it stays in timeline order: items are only mounted once their data URL is in the
+ * background preloader's cache (membership in [preloadedScreenshotKeys]), and the
+ * preloader fills that cache in timeline order. So mount order follows preload order
+ * follows timeline order. The set is read inside Compose, so recomposition is driven
+ * by snapshot mutations of the underlying `SnapshotStateMap` — no polling.
+ *
+ * Why [Size.ORIGINAL]: Coil's memory cache key includes the requested decode size. A
+ * 1px AsyncImage caches a 1px bitmap, which won't satisfy the slideshow's fit-size
+ * lookup. Requesting `Size.ORIGINAL` caches at native resolution, and Coil's default
+ * `Precision.INEXACT` lets the slideshow's later fit-size request reuse that entry by
+ * downscaling on the fly.
+ *
+ * JVM no-op: [preloadedScreenshotKeys] is empty on JVM, so the filter excludes every
+ * relative-path screenshot and the strip mounts nothing. File-system reads are already
+ * fast on desktop and full-res Coil decodes for every session screenshot would balloon
+ * heap.
+ *
+ * Memory cost (WASM): one decoded full-res bitmap per screenshot lives in Coil's LRU.
+ * For long sessions (~hundreds of screenshots) the LRU may evict the head before the
+ * user plays it; if that becomes a problem we'd switch to a sliding-window strategy.
+ */
+@Composable
+private fun ScreenshotPreloadStrip(
+  sessionId: String,
+  screenshotItems: List<ScreenshotTimelineItem>,
+  imageLoader: ImageLoader,
+) {
+  if (screenshotItems.isEmpty()) return
+  val context = LocalPlatformContext.current
+
+  // Reactive: reading this set inside Compose subscribes to mutations of the underlying
+  // SnapshotStateMap, so the filter below re-runs automatically as new refs are
+  // decompressed by the background preloader.
+  val preloadedKeys = preloadedScreenshotKeys()
+  val readyItems = screenshotItems.filter { item ->
+    val ref = item.screenshotFile ?: return@filter false
+    ref.startsWith("data:") || ref.startsWith("http") || ref in preloadedKeys
+  }
+  if (readyItems.isEmpty()) return
+
+  Box(
+    modifier = Modifier
+      .size(1.dp)
+      .alpha(0f)
+      .clipToBounds(),
+  ) {
+    readyItems.forEach { item ->
+      val model = resolveImageModel(sessionId, item.screenshotFile, imageLoader)
+      if (model != null) {
+        val request = remember(model) {
+          ImageRequest.Builder(context)
+            .data(model)
+            .size(Size.ORIGINAL)
+            .build()
+        }
+        AsyncImage(
+          model = request,
+          contentDescription = null,
+          modifier = Modifier.size(1.dp),
+        )
       }
     }
   }

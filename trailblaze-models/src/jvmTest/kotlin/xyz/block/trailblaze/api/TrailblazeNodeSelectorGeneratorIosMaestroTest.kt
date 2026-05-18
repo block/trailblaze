@@ -86,14 +86,24 @@ class TrailblazeNodeSelectorGeneratorIosMaestroTest : TrailblazeNodeSelectorGene
 
   @Test
   fun `iOS - text plus className disambiguation`() {
+    // Three siblings keep both text AND className load-bearing post-minimization:
+    //   target      : text=Done,   class=UIButton
+    //   sharesText  : text=Done,   class=UIBarButtonItem  (kills text-only)
+    //   sharesClass : text=Cancel, class=UIButton          (kills className-only)
     nextId = 1L
     val target = nodeOf(
       detail = DriverNodeDetail.IosMaestro(text = "Done", className = "UIButton"),
     )
-    val other = nodeOf(
+    val sharesText = nodeOf(
       detail = DriverNodeDetail.IosMaestro(text = "Done", className = "UIBarButtonItem"),
     )
-    val root = nodeOf(detail = DriverNodeDetail.IosMaestro(), children = listOf(target, other))
+    val sharesClass = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "Cancel", className = "UIButton"),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      children = listOf(target, sharesText, sharesClass),
+    )
 
     val selector = assertUniqueMatch(root, target)
     val match = selector.driverMatch as DriverNodeMatch.IosMaestro

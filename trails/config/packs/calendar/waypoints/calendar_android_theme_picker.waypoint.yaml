@@ -4,21 +4,21 @@ required:
   - description: "Dialog title 'Choose theme'"
     selector:
       androidAccessibility:
-        textRegex: "^Choose theme$"
+        textRegex: "Choose theme"
   - description: "System default option"
     selector:
       androidAccessibility:
-        textRegex: "^System default$"
+        textRegex: "System default"
   - description: "Light option"
     selector:
       androidAccessibility:
-        textRegex: "^Light$"
+        textRegex: "Light"
   - description: "Dark option"
     selector:
       androidAccessibility:
-        textRegex: "^Dark$"
+        textRegex: "Dark"
   - description: "Cancel button"
     selector:
       androidAccessibility:
-        textRegex: "^Cancel$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Cancel"
+        classNameRegex: "android.widget.Button"

@@ -68,8 +68,16 @@ class WaypointLocateCommand : Callable<Int> {
       maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
       return CommandLine.ExitCode.USAGE
     }
+    val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
+      is TargetContextResolution.Error -> {
+        Console.error(r.message)
+        return CommandLine.ExitCode.USAGE
+      }
+      is TargetContextResolution.Resolved -> r.context
+      is TargetContextResolution.NoTarget -> null
+    }
     Console.log("Locating against ${defs.size} waypoint(s); screen state: ${logFile.name}")
-    val results = defs.map { WaypointMatcher.match(it, screen) }
+    val results = defs.map { WaypointMatcher.match(it, screen, target) }
     val matched = results.filter { it.matched }
     if (matched.isEmpty()) {
       Console.log("  no waypoints match this screen.")

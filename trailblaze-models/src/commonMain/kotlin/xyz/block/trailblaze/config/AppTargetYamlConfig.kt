@@ -148,6 +148,17 @@ data class InlineScriptToolConfig(
    * explicitly still flows through unchanged.
    */
   val requiresHost: Boolean = false,
+  /**
+   * Explicit runtime override (`subprocess` / `inProcess`). When non-null, overrides the
+   * default extension-based routing performed by `TrailblazeHostYamlRunner` so authors who
+   * want `.ts` syntax with Node APIs (or `.js` syntax with the in-process QuickJS runtime)
+   * can declare their intent rather than relying on the file extension as a runtime hint.
+   *
+   * See [ScriptedToolRuntime] for the full discussion of the two runtimes and when each
+   * applies. `null` (the default) preserves the pre-existing extension-based routing so
+   * descriptors that don't set this field keep working unchanged.
+   */
+  val runtime: ScriptedToolRuntime? = null,
   @SerialName("_meta")
   @Serializable(with = JsonObjectYamlSerializer::class)
   val meta: JsonObject? = null,

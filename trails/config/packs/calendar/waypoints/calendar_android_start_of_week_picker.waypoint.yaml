@@ -4,25 +4,25 @@ required:
   - description: "Dialog title 'Start of the week'"
     selector:
       androidAccessibility:
-        textRegex: "^Start of the week$"
+        textRegex: "Start of the week"
   - description: "Sunday option"
     selector:
       androidAccessibility:
-        textRegex: "^Sunday$"
+        textRegex: "Sunday"
   - description: "Monday option"
     selector:
       androidAccessibility:
-        textRegex: "^Monday$"
+        textRegex: "Monday"
   - description: "Saturday option"
     selector:
       androidAccessibility:
-        textRegex: "^Saturday$"
+        textRegex: "Saturday"
   - description: "Picker dialog list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/select_dialog_listview"
 forbidden:
   - description: "Theme picker's options would not coexist"
     selector:
       androidAccessibility:
-        textRegex: "^Choose theme$"
+        textRegex: "Choose theme"

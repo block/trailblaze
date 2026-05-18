@@ -4,25 +4,25 @@ required:
   - description: "Hour text field"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/input_hour$"
+        resourceIdRegex: "android:id/input_hour"
   - description: "Minute text field"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/input_minute$"
+        resourceIdRegex: "android:id/input_minute"
   - description: "Hour/minute separator"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/input_separator$"
+        resourceIdRegex: "android:id/input_separator"
   - description: "AM/PM spinner"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/am_pm_spinner$"
+        resourceIdRegex: "android:id/am_pm_spinner"
   - description: "OK button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/button1$"
+        resourceIdRegex: "android:id/button1"
 forbidden:
   - description: "Radial picker would mean we're in clock-face mode"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^android:id/radial_picker$"
+        resourceIdRegex: "android:id/radial_picker"

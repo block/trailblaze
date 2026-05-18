@@ -5,7 +5,7 @@
 - tools:
     - androidworldbenchmarks_clearDirectory:
         directoryPath: /storage/emulated/0/Documents/Markor
-    - setClipboard:
+    - mobile_setClipboard:
         text: "Pasted from clipboard: important data"
 - prompts:
     - step: Create a note in Markor named clipboard_note.md. Perform a paste operation in the note and save the note.

@@ -12,11 +12,11 @@ required:
   - description: "Make-This-My-Card confirm button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Make This My Card$"
+        accessibilityTextRegex: "Make This My Card"
   - description: "Cancel button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
 forbidden:
   - description: "Delete-card warning — sibling popover variant"
     selector:

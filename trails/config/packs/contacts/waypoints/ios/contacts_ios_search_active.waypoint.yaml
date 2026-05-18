@@ -10,23 +10,23 @@ required:
   - description: "Activate-to-dismiss overlay (keyboard scrim)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Activate to dismiss$"
+        accessibilityTextRegex: "Activate to dismiss"
   - description: "Search-field close (X) button — cancels the active search"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
         childOf:
           iosMaestro:
-            resourceIdRegex: "^Toolbar$"
+            resourceIdRegex: "Toolbar"
 forbidden:
   - description: "Search results container — would mean a query has been entered"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"
   - description: "Add (+) toolbar button — only present when search is NOT active"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add$"
+        accessibilityTextRegex: "Add"
         childOf:
           iosMaestro:
-            resourceIdRegex: "^Toolbar$"
+            resourceIdRegex: "Toolbar"

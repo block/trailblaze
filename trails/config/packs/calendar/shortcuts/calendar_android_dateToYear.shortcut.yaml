@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^android:id/date_picker_header_year$"
+          resourceIdRegex: "android:id/date_picker_header_year"

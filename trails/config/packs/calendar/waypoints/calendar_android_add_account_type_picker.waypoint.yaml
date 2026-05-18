@@ -4,30 +4,30 @@ required:
   - description: "Settings system app bar"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.android\\.settings:id/app_bar$"
+        resourceIdRegex: "com\\.android\\.settings:id/app_bar"
   - description: "'Add an account' content-desc"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Add an account$"
+        contentDescriptionRegex: "Add an account"
   - description: "Google account type"
     selector:
       androidAccessibility:
-        textRegex: "^Google$"
-        resourceIdRegex: "^android:id/title$"
+        textRegex: "Google"
+        resourceIdRegex: "android:id/title"
   - description: "Exchange account type"
     selector:
       androidAccessibility:
-        textRegex: "^Exchange$"
+        textRegex: "Exchange"
   - description: "Personal IMAP option"
     selector:
       androidAccessibility:
-        textRegex: "^Personal \\(IMAP\\)$"
+        textRegex: "Personal \\(IMAP\\)"
   - description: "Personal POP3 option"
     selector:
       androidAccessibility:
-        textRegex: "^Personal \\(POP3\\)$"
+        textRegex: "Personal \\(POP3\\)"
 forbidden:
   - description: "Accounts-for-Owner header (would mean we're on the parent screen)"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Accounts for Owner$"
+        contentDescriptionRegex: "Accounts for Owner"

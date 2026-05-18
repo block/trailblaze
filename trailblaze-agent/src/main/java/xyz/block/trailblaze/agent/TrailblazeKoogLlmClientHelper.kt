@@ -255,6 +255,36 @@ class TrailblazeKoogLlmClientHelper(
       commandResult = toolExecutionResult.result,
       toolCall = originalToolCall,
     )
+
+    // Auto-termination for verify steps: feed every executed tool through the ledger; when
+    // the LLM has successfully asserted all required targets, mark the step complete without
+    // waiting for an explicit `objectiveStatus(COMPLETED)`. Prevents the rotating-assertion
+    // loop where every assertion succeeds but the LLM never emits objectiveStatus(COMPLETED),
+    // burning the full LLM-call budget until MAX_CALLS_REACHED.
+    val ledger = step.verifyAssertionLedger
+    if (ledger != null && !step.isFinished()) {
+      val resultIsSuccess = toolExecutionResult.result is TrailblazeToolResult.Success
+      for ((executedToolName, executedArgs) in executedToolsWithArgs) {
+        if (executedArgs is JsonObject) {
+          ledger.recordSuccessfulAssertion(
+            toolName = executedToolName,
+            toolArgs = executedArgs,
+            isSuccess = resultIsSuccess,
+          )
+        }
+      }
+      if (ledger.shouldAutoTerminate()) {
+        val mode = when {
+          ledger.allSatisfied() -> "all ${ledger.requiredTargets.size} required assertions satisfied"
+          else -> "rotating-loop pattern detected (${ledger.seenSnapshot.size} unique " +
+            "targets, ${ledger.repeatCount} repeat${if (ledger.repeatCount == 1) "" else "s"})"
+        }
+        Console.log("[VERIFY_AUTO_COMPLETE] $mode — short-circuiting without LLM objectiveStatus call.")
+        step.markAsComplete(
+          llmExplanation = "Auto-completed: $mode (structural termination, no objectiveStatus needed).",
+        )
+      }
+    }
   }
 
   suspend fun callLlm(

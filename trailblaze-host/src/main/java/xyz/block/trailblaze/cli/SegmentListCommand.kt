@@ -32,6 +32,17 @@ class SegmentListCommand : Callable<Int> {
   )
   var root: File = File(DEFAULT_WAYPOINT_ROOT)
 
+  @Option(
+    names = ["--target"],
+    paramLabel = "<id>",
+    description = [
+      "Pack id whose declared `app_ids:` expand `{{target.appId}}` placeholders in " +
+        "waypoint selectors during matching. Match `--target` on `waypoint locate/validate` " +
+        "if the session was captured against that target's app.",
+    ],
+  )
+  var targetId: String? = null
+
   override fun call(): Int {
     val validatedSession = validateSessionDir(session) ?: return CommandLine.ExitCode.USAGE
 
@@ -47,8 +58,17 @@ class SegmentListCommand : Callable<Int> {
       return CommandLine.ExitCode.USAGE
     }
 
+    val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
+      is TargetContextResolution.Error -> {
+        Console.error(r.message)
+        return CommandLine.ExitCode.USAGE
+      }
+      is TargetContextResolution.Resolved -> r.context
+      is TargetContextResolution.NoTarget -> null
+    }
+
     val analysis = try {
-      SessionSegmentExtractor.analyze(validatedSession, discovery.definitions)
+      SessionSegmentExtractor.analyze(validatedSession, discovery.definitions, target)
     } catch (e: IOException) {
       // Permission denied / disappeared mid-walk / similar. Surface it as a CLI error
       // rather than letting picocli print a stack trace, so the user sees the actionable

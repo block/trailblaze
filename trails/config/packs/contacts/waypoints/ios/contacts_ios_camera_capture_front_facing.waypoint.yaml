@@ -8,14 +8,14 @@ required:
   - description: "Take Picture"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoCapture$"
+        resourceIdRegex: "PhotoCapture"
   - description: "Front-facing camera flip indicator"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Camera Chooser: Front Facing$"
-        resourceIdRegex: "^FlipButton$"
+        accessibilityTextRegex: "Camera Chooser: Front Facing"
+        resourceIdRegex: "FlipButton"
 forbidden:
   - description: "Camera Chooser: Back Facing — sibling waypoint"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Camera Chooser: Back Facing$"
+        accessibilityTextRegex: "Camera Chooser: Back Facing"

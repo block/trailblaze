@@ -19,10 +19,10 @@ tools:
   - launchApp
   - networkConnection
   - openUrl
-  - pasteClipboard
+  - mobile_pasteClipboard
   - pressKey
   - scrollUntilTextIsVisible
-  - setClipboard
+  - mobile_setClipboard
   - swipe
   - takeSnapshot
   - tap

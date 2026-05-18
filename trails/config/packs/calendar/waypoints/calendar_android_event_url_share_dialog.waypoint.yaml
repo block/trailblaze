@@ -13,4 +13,4 @@ forbidden:
   - description: "Event-detail header (would mean we never left detail)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/header_action_bar$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/header_action_bar"

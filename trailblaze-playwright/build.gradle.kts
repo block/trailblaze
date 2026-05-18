@@ -7,6 +7,10 @@ dependencies {
   api(project(":trailblaze-common"))
   api(project(":trailblaze-agent"))
   implementation(project(":trailblaze-tracing"))
+  // PlaywrightVideoRecordDir lives in trailblaze-capture so the BrowserContext setup
+  // can hand off the video output dir and finalize callback to the capture stream
+  // without that module having to depend on Playwright APIs.
+  implementation(project(":trailblaze-capture"))
   api(libs.playwright)
 
   implementation(libs.kotlinx.serialization.json)

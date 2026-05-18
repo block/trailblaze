@@ -7,7 +7,7 @@
   - androidworldbenchmarks_runAdbShell:
       adbShellCommands:
         - "content delete --uri content://sms"
-  - setClipboard:
+  - mobile_setClipboard:
       text: "Meeting moved to 3pm tomorrow"
 
 - prompts:

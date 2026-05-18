@@ -29,6 +29,17 @@ data class PromptStepStatus(
   private var latestObjectiveStatus: String? = null
   private var pendingCycleWarning: String? = null
 
+  // Optional auto-termination ledger for verify steps. The runner attaches one via
+  // [attachVerifyAssertionLedger] when its `autoTerminateVerifySteps` flag is on and the
+  // current [PromptStep] is a [VerificationStep]; otherwise it stays null and the helper's
+  // wiring point is a no-op. See `fix/agent-verify-step-auto-terminate` for context.
+  var verifyAssertionLedger: VerifyAssertionLedger? = null
+    private set
+
+  fun attachVerifyAssertionLedger(ledger: VerifyAssertionLedger) {
+    verifyAssertionLedger = ledger
+  }
+
   init {
     require(maxHistorySize > 0) { "maxHistorySize must be positive, but was $maxHistorySize" }
     // If constructed with a pre-populated history (e.g. recovery path), trim it

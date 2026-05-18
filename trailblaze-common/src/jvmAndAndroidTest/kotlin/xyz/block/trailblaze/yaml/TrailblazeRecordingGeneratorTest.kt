@@ -138,27 +138,20 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun emptyObjectiveWindowGeneratesAutoSatisfiedRecording() {
-    // The recording author observed: this objective was already complete from the prior step's
-    // actions, so zero recordable tools fired during the window. The generator must emit an
-    // explicit `autoSatisfied: true` marker so replay skips the step deterministically instead
-    // of falling through to AI.
+  fun emptyObjectiveWindowGeneratesStepWithoutRecording() {
+    // Zero recordable tools fired during this window. The generator emits no `recording:` block
+    // so replay falls through to AI rather than ghost-passing on an empty recording.
     val step = DirectionStep(step = "Confirm closing the dialog")
     val logs = listOf(
       objectiveStart(step),
-      // No tool logs in this window — the prior step's actions already satisfied the objective.
       objectiveComplete(step),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    // YamlConfiguration has encodeDefaults=false, so the default `tools: []` is omitted.
-    // Only the non-default `autoSatisfied: true` flag appears in the encoded YAML.
     val expected = """
       |- prompts:
       |  - step: Confirm closing the dialog
-      |    recording:
-      |      autoSatisfied: true
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -194,7 +187,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       objectiveComplete(step1),
       objectiveStart(step2),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
       objectiveComplete(step2),
     )
 
@@ -210,7 +203,7 @@ class TrailblazeRecordingGeneratorTest {
       |  - step: Press back
       |    recording:
       |      tools:
-      |      - pasteClipboard: {}
+      |      - mobile_pasteClipboard: {}
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -367,7 +360,7 @@ class TrailblazeRecordingGeneratorTest {
     // ToolTrailItem (e.g., launchApp before any objectives)
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -376,7 +369,7 @@ class TrailblazeRecordingGeneratorTest {
       |- tools:
       |  - inputText:
       |      text: hello
-      |  - pasteClipboard: {}
+      |  - mobile_pasteClipboard: {}
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -420,7 +413,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       objectiveStart(step2),
       objectiveComplete(step2),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -430,7 +423,7 @@ class TrailblazeRecordingGeneratorTest {
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps.size).isEqualTo(2)
     assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("inputText")
-    assertThat(prompts.promptSteps[1].recording!!.tools[0].name).isEqualTo("pasteClipboard")
+    assertThat(prompts.promptSteps[1].recording!!.tools[0].name).isEqualTo("mobile_pasteClipboard")
   }
 
   @Test
@@ -456,11 +449,11 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun emptyObjectiveWindowProducesAutoSatisfiedRecording() {
+  fun emptyObjectiveWindowProducesStepWithoutRecording() {
     val step = DirectionStep(step = "Wait for screen")
     val logs = listOf(
       objectiveStart(step),
-      // No tool logs within the window — the prior step's actions already satisfied this objective.
+      // No tool logs within the window.
       objectiveComplete(step),
     )
 
@@ -470,12 +463,9 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].prompt).isEqualTo("Wait for screen")
-    // After the auto_satisfied marker change, an empty window emits an explicit
-    // `recording: { autoSatisfied: true }` rather than `null`. Replay skips this step
-    // deterministically — see ToolRecording KDoc for the contract.
-    assertThat(prompts.promptSteps[0].recording).isEqualTo(
-      ToolRecording(tools = emptyList(), autoSatisfied = true),
-    )
+    // Empty windows now emit no `recording:` block, so replay falls through to AI rather than
+    // ghost-passing on an empty recorded step.
+    assertThat(prompts.promptSteps[0].recording).isEqualTo(null)
   }
 
   /**
@@ -495,7 +485,7 @@ class TrailblazeRecordingGeneratorTest {
       |  - step: Press back
       |    recording:
       |      tools:
-      |      - pasteClipboard: {}
+      |      - mobile_pasteClipboard: {}
       |  - verify: Login button visible
       |    recording:
       |      tools:
@@ -661,7 +651,7 @@ class TrailblazeRecordingGeneratorTest {
       |      tools:
       |      - inputText:
       |          text: testuser
-      |      - pasteClipboard: {}
+      |      - mobile_pasteClipboard: {}
       |      - inputText:
       |          text: password123
     """.trimMargin()
@@ -838,7 +828,7 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       toolLog(InputTextTrailblazeTool(text = "ignored"), "takeSnapshot", isRecordable = false),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -847,7 +837,7 @@ class TrailblazeRecordingGeneratorTest {
     val tools = decoded[0] as TrailYamlItem.ToolTrailItem
     assertThat(tools.tools.size).isEqualTo(2)
     assertThat(tools.tools[0].name).isEqualTo("inputText")
-    assertThat(tools.tools[1].name).isEqualTo("pasteClipboard")
+    assertThat(tools.tools[1].name).isEqualTo("mobile_pasteClipboard")
   }
 
   @Test
@@ -973,7 +963,7 @@ class TrailblazeRecordingGeneratorTest {
       maestroCommandLog(),
       maestroCommandLog(),
       objectiveStart(step2),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
       objectiveComplete(step2),
     )
 
@@ -1083,7 +1073,7 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step),
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
-      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
       toolLog(WaitForIdleSyncTrailblazeTool(timeToWaitInSeconds = 3), "wait"),
       toolLog(
         SwipeTrailblazeTool(direction = maestro.SwipeDirection.UP),
@@ -1114,7 +1104,7 @@ class TrailblazeRecordingGeneratorTest {
     val tools = prompts.promptSteps[0].recording!!.tools
     assertThat(tools.size).isEqualTo(6)
     assertThat(tools.map { it.name }).isEqualTo(
-      listOf("inputText", "pasteClipboard", "wait", "swipe", "tapOnElementBySelector", "assertVisibleBySelector"),
+      listOf("inputText", "mobile_pasteClipboard", "wait", "swipe", "tapOnElementBySelector", "assertVisibleBySelector"),
     )
 
     // Verify round-trip stability

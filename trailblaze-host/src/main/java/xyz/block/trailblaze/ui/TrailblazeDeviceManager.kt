@@ -100,6 +100,12 @@ class TrailblazeDeviceManager(
   val webBrowserManager = WebBrowserManager()
 
   /**
+   * Shared connection service for both the desktop recording tab and the HTTP recording
+   * API. Centralizes the platform-specific connect logic so both surfaces stay in sync.
+   */
+  val connectionService = xyz.block.trailblaze.host.recording.DeviceConnectionService(this)
+
+  /**
    * Exposes the web browser state for UI observation.
    */
   val webBrowserStateFlow: StateFlow<WebBrowserState> = webBrowserManager.browserStateFlow
@@ -155,6 +161,29 @@ class TrailblazeDeviceManager(
    */
   private val _activeDeviceSessionsFlow = MutableStateFlow<Map<TrailblazeDeviceId, SessionId>>(emptyMap())
   val activeDeviceSessionsFlow: StateFlow<Map<TrailblazeDeviceId, SessionId>> = _activeDeviceSessionsFlow.asStateFlow()
+
+  /**
+   * Per-Trailblaze-session target overrides, keyed by [SessionId]. Populated
+   * by [setTargetForActiveSession] when the CLI passes `--target X` on an
+   * action command (`tool`, `blaze`, `snapshot`, `ask`, `verify`, `session
+   * start`). Cleared automatically when the session ends — see
+   * [endSessionForDevice], [cancelSessionForDevice], and the
+   * [clearEndedSessionFromDevice] hook.
+   *
+   * Tied to the recording session's lifetime, not to the device — `session
+   * stop` followed by a fresh `tool` call on the same device starts a new
+   * session that has no target override unless the user passes `--target`
+   * again. This matches how `.trail.yaml` targets are read per run.
+   *
+   * Resolution chain on tool dispatch (see
+   * `TrailblazeMcpBridgeImpl.resolveTargetAppIdForDevice`): per-session
+   * override → daemon-wide `selectedTargetAppId`.
+   *
+   * State lives on a small dedicated [SessionTargetRegistry] so the
+   * mutation semantics can be unit-tested in isolation — `TrailblazeDeviceManager`
+   * itself has too many constructor dependencies to mock cheaply.
+   */
+  private val sessionTargetRegistry = SessionTargetRegistry()
 
   /** Guards [getOrCreateSessionResolution] against concurrent session creation for the same device. */
   private val sessionCreationLock = Any()
@@ -308,6 +337,85 @@ class TrailblazeDeviceManager(
   }
 
   /**
+   * Result of assigning a per-session target via [setTargetForActiveSession].
+   * Surfaces the resolved session id so callers (the MCP tool, the CLI) can
+   * report it back to the user — and the `isNewSession` flag for "we just
+   * started a session as a side effect of setting a target."
+   */
+  data class SessionTargetAssignment(
+    /**
+     * The session the override was applied to, or `null` when the caller
+     * requested a clear (`appTargetId` null/blank) on a device that had no
+     * active session — in that case the operation is a true no-op and no
+     * session id was synthesized.
+     */
+    val sessionId: SessionId?,
+    val appTargetId: String?,
+    val isNewSession: Boolean,
+  )
+
+  /**
+   * Set or clear the target for the device's currently-active Trailblaze
+   * session. If no session is active for the device, creates one — setting a
+   * target implicitly starts a recording. Pass `null` or blank for
+   * [appTargetId] to clear the override (falling back to daemon-wide on next
+   * tool dispatch).
+   *
+   * The target lives on the session, not the device — `session stop` on this
+   * device wipes the override automatically.
+   */
+  fun setTargetForActiveSession(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    appTargetId: String?,
+    sessionIdPrefix: String = "session",
+    deviceSummary: TrailblazeConnectedDeviceSummary? = null,
+  ): SessionTargetAssignment {
+    // Fast path: clearing a target on a device that has no active session
+    // must be a true no-op. Without this guard, `getOrCreateSessionResolution`
+    // below would implicitly start a fresh recording just to immediately not
+    // store anything on it — a surprising side effect for callers that just
+    // wanted to ensure no override is set.
+    val existingSessionId = getCurrentSessionIdForDevice(trailblazeDeviceId)
+    if (appTargetId.isNullOrBlank() && existingSessionId == null) {
+      return SessionTargetAssignment(
+        sessionId = null,
+        appTargetId = null,
+        isNewSession = false,
+      )
+    }
+    val resolution = getOrCreateSessionResolution(
+      trailblazeDeviceId = trailblazeDeviceId,
+      forceNewSession = false,
+      sessionIdPrefix = sessionIdPrefix,
+      deviceSummary = deviceSummary,
+    )
+    sessionTargetRegistry.set(resolution.sessionId, appTargetId)
+    return SessionTargetAssignment(
+      sessionId = resolution.sessionId,
+      appTargetId = appTargetId?.takeIf { it.isNotBlank() },
+      isNewSession = resolution.isNewSession,
+    )
+  }
+
+  /**
+   * Returns the target override for the device's currently-active session,
+   * or `null` if the device has no active session or no override set on it.
+   * Tool dispatch falls back to [settingsRepo]'s daemon-wide
+   * `selectedTargetAppId` when this returns null.
+   */
+  fun getTargetForActiveSession(trailblazeDeviceId: TrailblazeDeviceId): String? {
+    val sessionId = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
+    return sessionTargetRegistry.get(sessionId)
+  }
+
+  /**
+   * Returns the target override for a specific session id, or `null` if
+   * unset. Used by `session info` to render the target for any queried
+   * session, not just the active one.
+   */
+  fun getTargetForSession(sessionId: SessionId): String? = sessionTargetRegistry.get(sessionId)
+
+  /**
    * Ends the current session for a device.
    * Clears the session ID from activeDeviceSessionsFlow and writes a session end log.
    * Use [cancelSessionForDevice] if you need to forcefully stop a running test.
@@ -316,12 +424,27 @@ class TrailblazeDeviceManager(
    * @return The session ID that was ended, or null if no session was active
    */
   fun endSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId): SessionId? {
-    val sessionId = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
-
-    // Clear the session from the sessions flow
-    _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+    // Read sessionId, drop from active map, AND clear the registry under
+    // [sessionCreationLock] — the same lock [getOrCreateSessionResolution]
+    // takes. Otherwise a concurrent `setTargetForActiveSession` between the
+    // read and the clear could synthesize a new session for the device
+    // (under the lock) and write its override to the registry, leaving us to
+    // clear the OLD session id while the NEW session's override sits
+    // orphaned (the device's active id has moved on but our clear targets
+    // the wrong id).
+    val sessionId = synchronized(sessionCreationLock) {
+      val current = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
+      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+      sessionTargetRegistry.clear(current)
+      current
+    }
     closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
     closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
+    // Web browser intentionally NOT closed here. The browser is the "device" — durable
+    // across sessions just like an Android emulator or iOS simulator. Per-session state
+    // isolation (cookies, localStorage, IndexedDB, tabs) is the job of
+    // PlaywrightBrowserManager.resetSession(), which is called by TrailblazeHostYamlRunner
+    // at session start and recreates the BrowserContext for true newContext-level isolation.
 
     Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
@@ -812,6 +935,11 @@ class TrailblazeDeviceManager(
     if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] == endedSessionId) {
       _activeDeviceSessionsFlow.value -= trailblazeDeviceId
     }
+    // Always drop the per-session target override for the ended session id —
+    // even if a newer session has already taken over for the device, the
+    // override on the old session id is unreachable and must be reclaimed to
+    // avoid a slow leak in long-running daemons.
+    sessionTargetRegistry.clear(endedSessionId)
   }
 
   fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
@@ -859,8 +987,15 @@ class TrailblazeDeviceManager(
     // Step 2: Cancel the coroutine job (stop any remaining work)
     cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
 
-    // Clear the session from the sessions flow
-    _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
+    // Clear the session from the sessions flow + per-session target override
+    // under [sessionCreationLock] so a concurrent setTargetForActiveSession
+    // can't synthesize a new session between the read and the clear (same
+    // race condition addressed in [endSessionForDevice]).
+    synchronized(sessionCreationLock) {
+      val cancelledSessionId = _activeDeviceSessionsFlow.value[trailblazeDeviceId]
+      _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
+      cancelledSessionId?.let { sessionTargetRegistry.clear(it) }
+    }
   }
 
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {

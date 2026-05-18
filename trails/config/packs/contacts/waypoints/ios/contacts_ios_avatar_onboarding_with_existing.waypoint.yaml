@@ -8,18 +8,18 @@ required:
   - description: "Onboarding cancel button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^OnboardingCancelButton$"
+        resourceIdRegex: "OnboardingCancelButton"
   - description: "Choose an Avatar header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose an Avatar$"
+        accessibilityTextRegex: "Choose an Avatar"
   - description: "Initial-based suggestion (e.g. 'KB,Sans-serif')"
     selector:
       iosMaestro:
         textRegex: "^[A-Z]{1,3},(Sans-serif|Serif|Condensed|Rounded)$"
-        resourceIdRegex: "^SuggestionListItemButton$"
+        resourceIdRegex: "SuggestionListItemButton"
 forbidden:
   - description: "Visual identity Choose — would mean we're in the editor"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"

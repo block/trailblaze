@@ -11,7 +11,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -47,6 +50,18 @@ class ToolDiscoveryToolSet(
   private val allTargetAppsProvider: () -> Set<TrailblazeHostAppTarget> = { emptySet() },
   private val currentTargetProvider: () -> TrailblazeHostAppTarget? = { null },
   private val currentDriverTypeProvider: () -> TrailblazeDriverType? = { null },
+  /**
+   * Resource source used to discover `*.trailhead.yaml` / `*.shortcut.yaml` configs for role
+   * enrichment. Injected by the host bootstrap when a workspace config dir is in play (so a
+   * workspace-authored trailhead can appear in `trailheadTools`); falls back to the platform's
+   * classpath scan otherwise — same default as [ToolYamlLoader.discoverShortcutsAndTrailheads].
+   *
+   * This provider exists purely so the host can layer in the same workspace `ConfigResourceSource`
+   * it already uses for target / toolset discovery. When the host doesn't thread one through, the
+   * server still resolves all classpath-bundled role tools correctly — the gap is only for
+   * workspace-authored role YAMLs that aren't on the classpath.
+   */
+  private val resourceSourceProvider: () -> ConfigResourceSource = { platformConfigResourceSource() },
 ) : ToolSet {
 
   @LLMDescription(
@@ -65,16 +80,38 @@ class ToolDiscoveryToolSet(
   suspend fun toolbox(
     @LLMDescription("Filter to a single tool by name") name: String? = null,
     @LLMDescription("Filter to a specific target app's tools") target: String? = null,
-    @LLMDescription("Search tools by keyword (matches names and descriptions)") search: String? = null,
-    @LLMDescription("Filter by platform: android, ios, web") platform: String? = null,
+    @LLMDescription("Substring search on tool name and description.") search: String? = null,
+    @LLMDescription("Target device (e.g. android, android/emulator-5554).") platform: String? = null,
     @LLMDescription("Expand tools with full parameter descriptions") detail: Boolean? = null,
   ): String {
     val platformFilter = platform?.let { TrailblazeDevicePlatform.fromString(it) }
     // "default" in index mode means "show only platform tools, no target tools"
     val isDefaultTarget = target?.equals(DefaultTrailblazeHostAppTarget.id, ignoreCase = true) == true
+    // Distinguish "no --platform" from "invalid --platform" so a typo (`--device=androd`) doesn't
+    // silently degrade to the daemon's current driver — that's the exact failure mode the
+    // `--device` override was added to prevent. The error is returned in the SAME mode-specific
+    // envelope the call would have produced on success, so the CLI's per-mode formatter (and any
+    // MCP client doing structural typing) sees a result shape that matches the query type rather
+    // than a generic IndexResult-as-fallback.
+    if (platform != null && platformFilter == null) {
+      // Use `visibleEntries` so the hidden DESKTOP platform doesn't leak into the user-facing
+      // error message — keeps the surface aligned with `device list` and target dropdowns.
+      val accepted = TrailblazeDevicePlatform.visibleEntries.joinToString(", ") { it.name.lowercase() }
+      val msg = "Unknown platform '$platform'. Accepted values: $accepted."
+      return when {
+        name != null -> jsonFormat.encodeToString(ToolDiscoveryNameResult(error = msg))
+        search != null -> jsonFormat.encodeToString(ToolDiscoverySearchResult(error = msg))
+        target != null && !isDefaultTarget -> jsonFormat.encodeToString(ToolDiscoveryTargetResult(error = msg))
+        else -> jsonFormat.encodeToString(ToolDiscoveryIndexResult(error = msg))
+      }
+    }
     return when {
+      // NAME mode intentionally spans all platforms — looking up a tool by exact name is "find me
+      // this tool wherever it's defined" rather than "what's runnable on the current device." The
+      // result's `foundInCategories` / `foundInTargets` already tell the caller which platforms
+      // the tool lives on. If `platform` was passed here it's accepted but ignored on purpose.
       name != null -> handleNameMode(name)
-      search != null -> handleSearchMode(search, target)
+      search != null -> handleSearchMode(search, target, platformFilter)
       target != null && !isDefaultTarget -> handleTargetMode(target, detail ?: false, platformFilter)
       else -> handleIndexMode(detail ?: false, platformFilter, suppressTargetTools = isDefaultTarget)
     }
@@ -91,10 +128,16 @@ class ToolDiscoveryToolSet(
   ): String {
     val currentTarget = currentTargetProvider()
     val currentDriverType = currentDriverTypeProvider()
-    // Platform filter from CLI --device overrides the connected device's platform
+    // Header platform: CLI flag wins over the connected device's platform.
     val effectivePlatform = platformFilter ?: currentDriverType?.platform
-    // Resolve a driver type for filtering: use connected driver, or default for the requested platform
-    val effectiveDriverType = currentDriverType ?: platformFilter?.let { resolveDefaultDriverType(it) }
+    // Resolve a driver type for filtering. When the user explicitly passes `--device=<platform>`
+    // and it disagrees with the daemon's currently-connected driver (e.g. a web playwright session
+    // is live but the user asked about android), the CLI flag wins — otherwise the listing would
+    // contradict the header (`(Android)` over a list of web tools). When the platforms agree, keep
+    // the specific connected driver so on-device instrumentation vs accessibility distinctions are
+    // preserved.
+    val effectiveDriverType = resolveEffectiveDriverType(currentDriverType, platformFilter)
+    logIfDriverWasOverridden(currentDriverType, platformFilter, effectiveDriverType)
     val allTargets = allTargetAppsProvider()
 
     val excludedToolNames = getExcludedToolNames(currentTarget, effectiveDriverType)
@@ -102,6 +145,13 @@ class ToolDiscoveryToolSet(
     val targetToolsets = if (suppressTargetTools) null else buildTargetToolsets(currentTarget, effectiveDriverType, detail)
     // Only show "other targets" hint when no device is connected (target tools not listed)
     val otherTargets = if (targetToolsets == null) buildOtherTargets(currentTarget, allTargets) else null
+
+    // Enrich the response with role-grouped slim views (trailheads / shortcuts). These are
+    // computed from the YAML-side metadata — every class-backed trailhead in this codebase has
+    // a sidecar `*.trailhead.yaml`, so `discoverShortcutsAndTrailheads()` is a complete index.
+    // Filtered to tool names actually surfaced in the current platform / target toolsets so the
+    // role lists never reference tools the CLI can't show details for.
+    val (trailheadToolNames, shortcutToolNames) = computeRoleNames(platformToolsets, targetToolsets)
 
     val result = ToolDiscoveryIndexResult(
       currentTarget = currentTarget?.id,
@@ -113,8 +163,49 @@ class ToolDiscoveryToolSet(
       usage = "These tools are used automatically by blaze(objective=\"...\"). " +
         "For direct execution: blaze(objective=\"description\", tools=\"- toolName:\\n    param: value\"). " +
         "For tool details: toolbox(name=\"toolName\").",
+      trailheadTools = trailheadToolNames,
+      shortcutTools = shortcutToolNames,
     )
     return jsonFormat.encodeToString(result)
+  }
+
+  /**
+   * Returns `(trailheadNames, shortcutNames)` filtered to tool names that appear in the in-scope
+   * toolsets. The intersection guard means the CLI's "render trailheads grouped" pass never
+   * names a tool the user can't drill into via `toolbox --name <id>`.
+   *
+   * Accepts a heterogeneous list of toolset sources so both [handleIndexMode] (platform +
+   * target toolsets) and [handleTargetMode] (toolGroups, or flat toolsByPlatform) can share the
+   * intersection logic. Each source contributes its in-scope tool ids via either the compact
+   * `tools` list or the detailed `toolDetails` list — the helper accepts whichever shape the
+   * caller has on hand.
+   */
+  private fun computeRoleNames(
+    vararg toolsetSources: List<ToolDiscoveryToolsetInfo>?,
+    extraInScopeNames: Collection<String> = emptyList(),
+  ): Pair<List<String>, List<String>> {
+    val inScopeNames: Set<String> = buildSet {
+      toolsetSources.forEach { sets ->
+        sets?.forEach { ts ->
+          ts.tools?.let { addAll(it) }
+          ts.toolDetails?.forEach { add(it.name) }
+        }
+      }
+      addAll(extraInScopeNames)
+    }
+    // Use the injected resource source so a workspace-authored *.trailhead.yaml / *.shortcut.yaml
+    // is also visible — otherwise we'd silently drop workspace role tools that ARE present in
+    // the in-scope toolsets (because the host's target/toolset discovery uses a layered source).
+    val allRoles = ToolYamlLoader.discoverShortcutsAndTrailheads(resourceSourceProvider())
+    val trailheads = allRoles.values
+      .filter { it.trailhead != null && it.id in inScopeNames }
+      .map { it.id }
+      .sorted()
+    val shortcuts = allRoles.values
+      .filter { it.shortcut != null && it.id in inScopeNames }
+      .map { it.id }
+      .sorted()
+    return trailheads to shortcuts
   }
 
   private fun handleNameMode(name: String): String {
@@ -193,8 +284,13 @@ class ToolDiscoveryToolSet(
     }
 
     val currentDriverType = currentDriverTypeProvider()
-    // Platform filter from CLI --device overrides when no device is connected
-    val effectiveDriverType = currentDriverType ?: platformFilter?.let { resolveDefaultDriverType(it) }
+    // Platform filter from CLI --device overrides the daemon's connected-device driver when the
+    // platforms disagree — otherwise `toolbox --device=android --target=myapp` would silently
+    // return web tools just because the daemon happens to have a playwright session live. When
+    // the platforms agree, keep the specific connected driver so on-device instrumentation vs
+    // accessibility distinctions are preserved.
+    val effectiveDriverType = resolveEffectiveDriverType(currentDriverType, platformFilter)
+    logIfDriverWasOverridden(currentDriverType, platformFilter, effectiveDriverType)
 
     val supportedPlatforms = TrailblazeDevicePlatform.entries.filter { platform ->
       !targetApp.getPossibleAppIdsForPlatform(platform).isNullOrEmpty()
@@ -221,6 +317,13 @@ class ToolDiscoveryToolSet(
       }
       val toolGroups = classGroups + buildInlineScriptToolsetsForDriver(targetApp, effectiveDriverType, detail)
 
+      // Mirror the index-mode role enrichment so `toolbox trailheads --target=<non-default>`
+      // gets the role lists it needs — otherwise the CLI's role-filter view always reports
+      // "No trailheads available" for any non-default target. Scope the intersection guard to
+      // this target's own toolGroups so we never surface a tool that won't appear when the
+      // user drills in via `--name <id>`.
+      val (trailheadToolNames, shortcutToolNames) = computeRoleNames(toolGroups)
+
       return jsonFormat.encodeToString(
         ToolDiscoveryTargetResult(
           target = targetApp.id,
@@ -228,6 +331,8 @@ class ToolDiscoveryToolSet(
           currentPlatform = effectiveDriverType.platform.displayName,
           supportedPlatforms = supportedPlatforms,
           toolGroups = toolGroups.ifEmpty { null },
+          trailheadTools = trailheadToolNames,
+          shortcutTools = shortcutToolNames,
         )
       )
     }
@@ -249,17 +354,29 @@ class ToolDiscoveryToolSet(
       )
     }
 
+    // Flat-by-platform also gets role enrichment so role filtering works even when no device is
+    // connected. Tool ids here come from the per-platform [TrailblazeToolDescriptor] lists rather
+    // than a toolset shape, so feed them via the extraInScopeNames hook.
+    val flatInScopeNames = platformTools.flatMap { it.tools.map { d -> d.name } }
+    val (trailheadToolNames, shortcutToolNames) = computeRoleNames(extraInScopeNames = flatInScopeNames)
+
     return jsonFormat.encodeToString(
       ToolDiscoveryTargetResult(
         target = targetApp.id,
         displayName = targetApp.displayName,
         supportedPlatforms = supportedPlatforms,
         toolsByPlatform = platformTools.ifEmpty { null },
+        trailheadTools = trailheadToolNames,
+        shortcutTools = shortcutToolNames,
       )
     )
   }
 
-  private fun handleSearchMode(query: String, targetFilter: String?): String {
+  private fun handleSearchMode(
+    query: String,
+    targetFilter: String?,
+    platformFilter: TrailblazeDevicePlatform? = null,
+  ): String {
     val terms = query.lowercase().split("\\s+".toRegex()).filter { it.isNotBlank() }
     if (terms.isEmpty()) {
       return jsonFormat.encodeToString(
@@ -273,15 +390,22 @@ class ToolDiscoveryToolSet(
     }
 
     val currentDriverType = currentDriverTypeProvider()
+    // Same precedence as INDEX/TARGET modes: an explicit `--device=<platform>` wins over the
+    // daemon's currently-connected driver when the platforms disagree. Without this, a user
+    // running `toolbox --search=… --device=android` while the daemon held a web playwright
+    // session would silently see web-only results — the same bug the override was designed
+    // to prevent for the listing modes.
+    val effectiveDriverType = resolveEffectiveDriverType(currentDriverType, platformFilter)
+    logIfDriverWasOverridden(currentDriverType, platformFilter, effectiveDriverType)
     val currentTarget = currentTargetProvider()
     val results = mutableListOf<ToolDiscoverySearchMatch>()
 
     // Search platform tools — use platform-filtered toolsets (same as index mode)
     // so tools inapplicable to the current device don't appear in results
     // (e.g., openUrl won't show for web since the default.yaml only includes web_core).
-    val excludedToolNames = getExcludedToolNames(currentTarget, currentDriverType)
+    val excludedToolNames = getExcludedToolNames(currentTarget, effectiveDriverType)
     val platformToolsets = buildPlatformToolsets(
-      detail = true, excludedToolNames = excludedToolNames, driverType = currentDriverType,
+      detail = true, excludedToolNames = excludedToolNames, driverType = effectiveDriverType,
     )
     for (toolset in platformToolsets) {
       toolset.toolDetails?.filter { matches(it) }?.forEach { descriptor ->
@@ -305,14 +429,14 @@ class ToolDiscoveryToolSet(
     }
 
     for (target in targetsToSearch) {
-      if (currentDriverType != null) {
-        getCustomToolDescriptors(target, currentDriverType)
+      if (effectiveDriverType != null) {
+        getCustomToolDescriptors(target, effectiveDriverType)
           .filter { matches(it) }
           .forEach { descriptor ->
             results.add(
               ToolDiscoverySearchMatch(
                 tool = descriptor,
-                source = "${target.displayName} (${currentDriverType.platform.displayName})",
+                source = "${target.displayName} (${effectiveDriverType.platform.displayName})",
               )
             )
           }
@@ -348,7 +472,58 @@ class ToolDiscoveryToolSet(
   // ─────────────────────────────────────────────────────────────────────────────
 
   /**
+   * Resolves the driver type used to filter discovery output, reconciling the daemon's currently
+   * connected driver against an explicit `--device=<platform>` CLI flag.
+   *
+   * Precedence:
+   * - If [platformFilter] is provided and its platform differs from [currentDriverType]'s platform,
+   *   the CLI flag wins. Returns the platform's default driver type. This is the load-bearing case:
+   *   without it, `toolbox --device=android --target=myapp` silently returns web tools whenever the
+   *   daemon has any non-Android driver active (e.g. a leftover playwright session).
+   * - Otherwise (platforms agree, or no [platformFilter]), keep [currentDriverType] so the specific
+   *   on-device driver (instrumentation vs accessibility, axe vs host on iOS, etc.) is preserved.
+   * - If neither is set, returns null.
+   */
+  private fun resolveEffectiveDriverType(
+    currentDriverType: TrailblazeDriverType?,
+    platformFilter: TrailblazeDevicePlatform?,
+  ): TrailblazeDriverType? = when {
+    platformFilter != null && currentDriverType?.platform != platformFilter ->
+      resolveDefaultDriverType(platformFilter)
+    else -> currentDriverType
+  }
+
+  /**
+   * Emits a `daemon.log` breadcrumb when the platform filter forced an override of the daemon's
+   * currently-connected driver, so a confused user can trace why their `--device=<X>` invocation
+   * filtered by a different driver than the daemon's "current" one. Called from each mode handler
+   * (INDEX/TARGET/SEARCH) alongside [resolveEffectiveDriverType] — extracted so the resolver stays
+   * a pure function that's unit-testable in isolation, and the logging side effect lives where it
+   * can be silenced or extended without touching resolution semantics.
+   */
+  private fun logIfDriverWasOverridden(
+    currentDriverType: TrailblazeDriverType?,
+    platformFilter: TrailblazeDevicePlatform?,
+    effectiveDriverType: TrailblazeDriverType?,
+  ) {
+    if (platformFilter == null || effectiveDriverType == null) return
+    if (currentDriverType?.platform == platformFilter) return
+    Console.log(
+      "[ToolDiscoveryToolSet] --device=${platformFilter.name.lowercase()} overrides connected " +
+        "driver ${currentDriverType?.yamlKey ?: "(none)"} — filtering with ${effectiveDriverType.yamlKey}",
+    )
+  }
+
+  /**
    * Resolves a default driver type for a platform, used for filtering when no device is connected.
+   *
+   * Distinct from [TrailblazeDriverType.Companion.defaultForPlatform]: that companion returns
+   * `null` for platforms without a user-togglable per-platform default (WEB, DESKTOP) — its
+   * contract is "what does `trailblaze config <p>-driver` toggle?" Discovery filtering, by
+   * contrast, needs *some* driver for every platform so listings can be filtered consistently;
+   * this local helper picks the canonical filtering driver (`PLAYWRIGHT_NATIVE` for WEB,
+   * `COMPOSE` for DESKTOP) where the companion would have returned null. Don't merge the two
+   * without preserving that distinction.
    */
   private fun resolveDefaultDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType {
     return when (platform) {
@@ -758,6 +933,27 @@ data class ToolDiscoveryIndexResult(
   val targetToolsets: List<ToolDiscoveryToolsetInfo>? = null,
   val otherTargets: List<ToolDiscoveryOtherTarget>? = null,
   val usage: String? = null,
+  /**
+   * Tool names whose YAML config carries a non-null `trailhead:` metadata block — i.e. tools
+   * that bring the device to a known starting state (sign-in, launch, deep-link). Parallel slim
+   * view alongside [platformToolsets] / [targetToolsets]: callers that want to render trailheads
+   * as their own section (or accept a `trailheads` positional filter) read this list and
+   * cross-reference into the toolset entries for descriptions. Not a property of the per-tool
+   * [TrailblazeToolDescriptor] by design — see the kdoc on that data class for why capability
+   * flags don't ride on the shared descriptor; this is a response-level enrichment.
+   */
+  val trailheadTools: List<String> = emptyList(),
+  /**
+   * Tool names whose YAML config carries a non-null `shortcut:` metadata block — i.e. tools
+   * that jump from one named waypoint to another. Same shape and rationale as [trailheadTools].
+   */
+  val shortcutTools: List<String> = emptyList(),
+  // `error` is the contract the CLI formatter (`ToolboxCommand.formatToolsResult`) keys off to
+  // short-circuit to `Console.error(...)` regardless of which mode-specific formatter would
+  // otherwise run. Toolbox-level validation failures (e.g. unknown `--device` platform) set this
+  // so a `--target=foo --device=typo` call doesn't get misrouted through `formatTargetResult` and
+  // emit a misleading "Target not found" line.
+  val error: String? = null,
 )
 
 @Serializable
@@ -795,6 +991,15 @@ data class ToolDiscoveryTargetResult(
   val toolGroups: List<ToolDiscoveryToolsetInfo>? = null,
   /** Flat tools by platform (fallback when no device is connected). */
   val toolsByPlatform: List<ToolDiscoveryTargetPlatformTools>? = null,
+  /**
+   * Tool names with trailhead role metadata, scoped to this target. Same shape and rationale
+   * as [ToolDiscoveryIndexResult.trailheadTools]; populated here so `toolbox trailheads
+   * --target=<non-default>` doesn't silently report an empty list (the CLI receives a
+   * target-mode envelope, not index-mode, when a non-default target is requested).
+   */
+  val trailheadTools: List<String> = emptyList(),
+  /** Tool names with shortcut role metadata, scoped to this target. */
+  val shortcutTools: List<String> = emptyList(),
   val error: String? = null,
 )
 

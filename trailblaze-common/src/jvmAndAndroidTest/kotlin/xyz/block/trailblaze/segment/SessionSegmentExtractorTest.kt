@@ -13,6 +13,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -644,6 +645,66 @@ class SessionSegmentExtractorTest {
       traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
     )
 
+  /**
+   * Builds a waypoint whose required selector is `^{{target.appId}}:id/<suffix>$`. The
+   * matcher expands the placeholder against the caller's [TargetTemplateContext]; null
+   * context leaves it literal so the regex never matches a real resourceId.
+   */
+  private fun templatedResourceIdWaypoint(id: String, suffix: String): WaypointDefinition =
+    WaypointDefinition(
+      id = id,
+      required = listOf(
+        WaypointSelectorEntry(
+          selector = TrailblazeNodeSelector(
+            androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+              resourceIdRegex = "^{{target.appId}}:id/$suffix$",
+            ),
+          ),
+        ),
+      ),
+    )
+
+  /** Same shape as [requestLog] but the leaf nodes carry resourceIds instead of texts. */
+  private fun requestLogWithResourceIds(
+    resourceIds: List<String>,
+    offsetMs: Long,
+  ): TrailblazeLog.TrailblazeLlmRequestLog =
+    TrailblazeLog.TrailblazeLlmRequestLog(
+      agentTaskStatus = AgentTaskStatus.InProgress(
+        statusData = AgentTaskStatusData(
+          taskId = TaskId.generate(),
+          prompt = "test",
+          callCount = 0,
+          taskStartTime = baseTime,
+          totalDurationMs = 0,
+        ),
+      ),
+      viewHierarchy = ViewHierarchyTreeNode(),
+      trailblazeNodeTree = TrailblazeNode(
+        nodeId = 1,
+        children = resourceIds.mapIndexed { i, rid ->
+          TrailblazeNode(
+            nodeId = (i + 2).toLong(),
+            driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = rid),
+          )
+        },
+        driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      ),
+      instructions = "",
+      trailblazeLlmModel = TrailblazeLlmModels.GPT_4O_MINI,
+      llmMessages = emptyList(),
+      llmResponse = emptyList(),
+      actions = emptyList(),
+      toolOptions = emptyList(),
+      screenshotFile = null,
+      durationMs = 0,
+      session = testSession,
+      timestamp = baseTime.plusMs(offsetMs),
+      traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
+      deviceHeight = 0,
+      deviceWidth = 0,
+    )
+
   /** Convenience: build a single-required-textRegex waypoint definition. */
   private fun waypoint(id: String, text: String): WaypointDefinition = WaypointDefinition(
     id = id,
@@ -655,6 +716,44 @@ class SessionSegmentExtractorTest {
       ),
     ),
   )
+
+  // ---- TargetTemplateContext forwarding ----
+
+  @Test
+  fun `analyze expands templated waypoint when target is supplied`() {
+    val def = templatedResourceIdWaypoint(id = "templated/foo", suffix = "foo")
+    val logs = listOf(
+      requestLogWithResourceIds(listOf("com.example.test:id/foo"), offsetMs = 0),
+      requestLogWithResourceIds(listOf("com.example.test:id/bar"), offsetMs = 10),
+    )
+
+    val analysis = SessionSegmentExtractor.analyze(
+      logs = logs,
+      sessionPath = "/tmp/templated",
+      waypoints = listOf(def),
+      target = TargetTemplateContext(appId = "com.example.test"),
+    )
+
+    assertEquals(2, analysis.totalRequestLogs)
+    assertEquals(1, analysis.stepsWithMatchedWaypoint, "first log matches; second has the wrong suffix")
+    assertEquals(listOf(1), analysis.matchedStepsByWaypoint[def.id])
+  }
+
+  @Test
+  fun `analyze does not expand templated waypoint when target is null`() {
+    val def = templatedResourceIdWaypoint(id = "templated/null-target", suffix = "foo")
+    val logs = listOf(requestLogWithResourceIds(listOf("com.example.test:id/foo"), offsetMs = 0))
+
+    // No target supplied → placeholder stays literal → never matches a real resourceId.
+    val analysis = SessionSegmentExtractor.analyze(
+      logs = logs,
+      sessionPath = "/tmp/null-target",
+      waypoints = listOf(def),
+    )
+
+    assertEquals(1, analysis.totalRequestLogs)
+    assertEquals(0, analysis.stepsWithMatchedWaypoint)
+  }
 
   /** Convenience to invoke the internal formatter with a hand-built sampling log. */
   private fun samplingTrigger(completionJson: String): String =

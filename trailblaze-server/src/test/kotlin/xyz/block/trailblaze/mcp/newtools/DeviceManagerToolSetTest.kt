@@ -663,6 +663,113 @@ class DeviceManagerToolSetTest {
     assertContains(result, "Platform: Android")
     kotlin.test.assertFalse(result.contains("Driver status:"), "No status expected when driver is ready")
   }
+
+  // ── setSessionTargetForBoundDevice ──────────────────────────────────────
+  //
+  // Per-device target override flow:
+  //  - happy path: bound device + known target id → bridge call, success message.
+  //  - clear path: 'clear' or empty input → bridge called with null, no failure.
+  //  - no device bound → IllegalStateException (MCP framework → isError=true).
+  //  - unknown target id → IllegalArgumentException (→ isError=true).
+
+  @Test
+  fun `setSessionTargetForBoundDevice sets per-device target when bound and id is known`() = runTest {
+    val target = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      availableAppTargets = setOf(target),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    // Bind a device first — bound-device lookup uses sessionContext.associatedDeviceId.
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.setSessionTargetForBoundDevice(target.id)
+
+    assertContains(result, "Set session target")
+    assertContains(result, target.displayName)
+    assertEquals(1, bridge.sessionTargetSetCalls.size)
+    val (deviceId, appTargetId) = bridge.sessionTargetSetCalls.single()
+    assertEquals("emulator-5554", deviceId.instanceId)
+    assertEquals(target.id, appTargetId)
+  }
+
+  @Test
+  fun `setSessionTargetForBoundDevice clears override on 'clear' keyword`() = runTest {
+    val target = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      availableAppTargets = setOf(target),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.setSessionTargetForBoundDevice("clear")
+
+    assertContains(result, "Cleared session target override")
+    assertEquals(1, bridge.sessionTargetSetCalls.size)
+    val (_, appTargetId) = bridge.sessionTargetSetCalls.single()
+    assertEquals(null, appTargetId, "'clear' must propagate to the bridge as a null payload")
+  }
+
+  @Test
+  fun `setSessionTargetForBoundDevice clears override on empty string`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      availableAppTargets = setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.setSessionTargetForBoundDevice("")
+
+    assertContains(result, "Cleared session target override")
+    assertEquals(null, bridge.sessionTargetSetCalls.single().second)
+  }
+
+  @Test
+  fun `setSessionTargetForBoundDevice throws when no device is bound`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    // Don't bind a device first.
+
+    val ex = kotlin.test.assertFailsWith<IllegalStateException> {
+      toolSet.setSessionTargetForBoundDevice("any")
+    }
+    assertContains(ex.message ?: "", "No device is bound")
+    assertEquals(0, bridge.sessionTargetSetCalls.size, "bridge must not be called when no device is bound")
+  }
+
+  @Test
+  fun `setSessionTargetForBoundDevice throws on unknown target id`() = runTest {
+    val knownTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      availableAppTargets = setOf(knownTarget),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val ex = kotlin.test.assertFailsWith<IllegalArgumentException> {
+      toolSet.setSessionTargetForBoundDevice("not-a-real-target")
+    }
+    assertContains(ex.message ?: "", "not-a-real-target")
+    assertContains(ex.message ?: "", "not a known target id")
+  }
 }
 
 /**
@@ -741,4 +848,18 @@ class DeviceTestBridge(
   override fun cancelAutomation(deviceId: TrailblazeDeviceId) {}
   override fun selectAppTarget(appTargetId: String): String? = null
   override fun getCurrentAppTargetId(): String? = currentAppTargetId
+
+  // Records every setSessionTargetForDevice call so tests can assert wiring.
+  val sessionTargetSetCalls = mutableListOf<Pair<TrailblazeDeviceId, String?>>()
+
+  override fun setSessionTargetForDevice(
+    deviceId: TrailblazeDeviceId,
+    appTargetId: String?,
+  ): String? {
+    sessionTargetSetCalls += deviceId to appTargetId
+    if (appTargetId.isNullOrBlank()) return null
+    val resolved = availableAppTargets.firstOrNull { it.id == appTargetId }
+      ?: return null
+    return resolved.displayName
+  }
 }

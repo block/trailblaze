@@ -8,15 +8,15 @@ required:
   - description: "Popover dismiss region"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PopoverDismissRegion$"
+        resourceIdRegex: "PopoverDismissRegion"
   - description: "Discard-changes warning text"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Are you sure you want to discard your changes\\?$"
+        accessibilityTextRegex: "Are you sure you want to discard your changes\\?"
   - description: "Discard Changes confirm button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Discard Changes$"
+        accessibilityTextRegex: "Discard Changes"
 forbidden:
   - description: "Delete-card warning — sibling popover variant"
     selector:

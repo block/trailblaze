@@ -4,21 +4,21 @@ required:
   - description: "Picker dialog list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/list$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/list"
   - description: "All-day-specific 'On the day at 9 AM' option"
     selector:
       androidAccessibility:
-        textRegex: "^On the day at 9 AM$"
+        textRegex: "On the day at 9 AM"
   - description: "All-day-specific 'The day before at 9 AM' option"
     selector:
       androidAccessibility:
-        textRegex: "^The day before at 9 AM$"
+        textRegex: "The day before at 9 AM"
   - description: "Custom… option"
     selector:
       androidAccessibility:
-        textRegex: "^Custom…$"
+        textRegex: "Custom…"
 forbidden:
   - description: "'5 minutes before' is timed-event only"
     selector:
       androidAccessibility:
-        textRegex: "^5 minutes before$"
+        textRegex: "5 minutes before"

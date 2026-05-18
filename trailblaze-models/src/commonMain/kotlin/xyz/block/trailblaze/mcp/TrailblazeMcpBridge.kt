@@ -211,8 +211,35 @@ interface TrailblazeMcpBridge {
 
   /**
    * Returns the ID of the currently selected target app, or null if none is selected.
+   *
+   * Daemon-wide — does NOT consult per-device session targets. Callers with a
+   * device context should prefer [getSessionTargetAppIdForDevice] (or whatever
+   * the impl exposes via the device-scoped resolver) so they pick up `--target
+   * --device=Y` writes.
    */
   fun getCurrentAppTargetId(): String?
+
+  /**
+   * Sets the per-Trailblaze-session target app for [deviceId]'s currently-
+   * active session, creating one implicitly if none is active. Lives on the
+   * recording session — dies on `session stop`, cancel, or daemon restart.
+   * Pass `null` to clear.
+   *
+   * Returns the display name of the resolved target (so callers can confirm
+   * the id matched a known target) or `null` if the target id is unknown.
+   *
+   * Default impl is a no-op so test stubs don't need to override.
+   */
+  fun setSessionTargetForDevice(deviceId: TrailblazeDeviceId, appTargetId: String?): String? = null
+
+  /**
+   * Returns the per-session target override stored against [sessionId], or
+   * null if none is set. Used by session-info surfaces to report the
+   * effective target alongside other session metadata.
+   *
+   * Default impl returns null for test stubs.
+   */
+  fun getTargetForSession(sessionId: SessionId): String? = null
 
   /**
    * Returns the configured driver type for the given platform from the app settings.

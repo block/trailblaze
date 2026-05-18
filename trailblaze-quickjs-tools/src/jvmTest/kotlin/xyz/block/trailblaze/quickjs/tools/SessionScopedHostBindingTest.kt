@@ -153,7 +153,7 @@ class SessionScopedHostBindingTest {
   @Test
   fun `callFromBundle reaches a tool with isForLlm=false and requiresHost=true`() = runBlocking {
     // This is the load-bearing claim of Sub-PR-A2: tools annotated `isForLlm = false`
-    // (e.g. `runCommand`, `clearAppData`) must remain reachable through scripted-tool
+    // (e.g. `runCommand`, `mobile_clearAppData`) must remain reachable through scripted-tool
     // composition even though they're hidden from the LLM. The repo's
     // `toolCallToTrailblazeTool` already handles this for class-backed tools — pin the
     // contract so a future change that re-introduces the filter at the binding layer is

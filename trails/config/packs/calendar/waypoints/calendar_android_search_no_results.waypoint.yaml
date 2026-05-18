@@ -4,10 +4,10 @@ required:
   - description: "Clear-search action"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Clear search$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/clear$"
+        contentDescriptionRegex: "Clear search"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/clear"
   - description: "Empty-state label for no search results"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/no_result_label$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/no_result_label"
         textRegex: "^No entries found.*$"

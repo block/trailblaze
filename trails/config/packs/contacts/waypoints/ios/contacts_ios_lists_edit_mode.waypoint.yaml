@@ -9,21 +9,21 @@ required:
   - description: "Done button (commits list edits)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "Lists header title"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Add List button (still present in edit mode)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
 forbidden:
   - description: "Edit button — would mean we're NOT in editing mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "Sheet Grabber — would mean we're in the Add List modal"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"

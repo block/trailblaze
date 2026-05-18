@@ -4,21 +4,21 @@ required:
   - description: "'Add people' header"
     selector:
       androidAccessibility:
-        textRegex: "^Add people$"
+        textRegex: "Add people"
   - description: "People list recycler"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recycler$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/recycler"
   - description: "Search input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/search_text"
   - description: "Done action button"
     selector:
       androidAccessibility:
-        textRegex: "^Done$"
+        textRegex: "Done"
 forbidden:
   - description: "Locations 'suggestions' container is for add-location, not add-people"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/suggestions$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/suggestions"

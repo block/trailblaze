@@ -354,7 +354,6 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     val recording = step.recording ?: return step
     val migrated = ToolRecording(
       tools = recording.tools.map { migrateWrapper(it, migrations, cursor) },
-      autoSatisfied = recording.autoSatisfied,
     )
     return when (step) {
       is DirectionStep -> step.copy(recording = migrated)

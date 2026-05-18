@@ -4,11 +4,11 @@ required:
   - description: "Day picker button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/date_picker_button"
   - description: "FAB visible"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/floating_action_button"
   - description: "At least 28 day-cells in the month grid (date-named like 'Sunday 26 April' or numeric Julian id)"
     minCount: 28
     selector:

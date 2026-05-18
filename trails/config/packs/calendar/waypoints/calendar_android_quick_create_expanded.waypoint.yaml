@@ -4,25 +4,25 @@ required:
   - description: "Drag handle for the bottom sheet"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"
   - description: "Collapse action — present only while expanded"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Collapse event sheet$"
+        contentDescriptionRegex: "Collapse event sheet"
   - description: "All-day toggle row"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/all_day_tile$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/all_day_tile"
   - description: "Save button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/save"
   - description: "Add-people accessibility action"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Add people$"
+        contentDescriptionRegex: "Add people"
 forbidden:
   - description: "'Expand event sheet' is replaced by 'Collapse' in this state"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Expand event sheet$"
+        contentDescriptionRegex: "Expand event sheet"

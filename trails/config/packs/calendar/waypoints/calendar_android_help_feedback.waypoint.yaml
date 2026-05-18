@@ -4,20 +4,20 @@ required:
   - description: "Help app bar (gms namespace)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_app_bar"
   - description: "Help console / search container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_console$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_console"
   - description: "Feedback option container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_feedback_option$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_feedback_option"
   - description: "'Help' header content-desc"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Help$"
+        contentDescriptionRegex: "Help"
   - description: "Search-help action"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Search help$"
+        contentDescriptionRegex: "Search help"

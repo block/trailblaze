@@ -9,11 +9,11 @@ required:
   - description: "Search results container header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"
   - description: "Top-matches sub-header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^top name matches$"
+        accessibilityTextRegex: "top name matches"
   - description: "Active search field with query (matches 'Search: <anything>')"
     selector:
       iosMaestro:
@@ -22,4 +22,4 @@ forbidden:
   - description: "Empty Search/Dictate prompt — would mean we haven't typed yet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Dictate$"
+        accessibilityTextRegex: "Dictate"

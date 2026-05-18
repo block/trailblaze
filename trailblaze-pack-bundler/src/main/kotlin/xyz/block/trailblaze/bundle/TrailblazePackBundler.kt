@@ -355,36 +355,60 @@ class TrailblazePackBundler(
         )
       }
       val tool = decodeToolFile(yaml, toolFile)
-      if (tool.name.isBlank()) {
-        throw TrailblazePackBundleException.BlankToolName(
-          "Scripted tool ${toolFile.absolutePath} has a blank 'name' field. Tool names must " +
-            "be non-empty and contain at least one non-whitespace character.",
-        )
-      }
-      if (!seenNames.add(tool.name)) {
-        throw TrailblazePackBundleException.DuplicateToolName(
-          "Duplicate scripted tool name '${tool.name}' encountered in pack $packLabel. " +
-            "Tool names must be unique within a pack.",
-        )
-      }
-      val params = tool.inputSchema.map { (key, prop) ->
-        ScriptedToolParam(
-          name = key,
-          tsType = jsonSchemaToTsType(
-            type = prop.type,
-            enumValues = prop.enum,
-            propertyContext = "Scripted tool ${tool.name} property '$key'",
-          ),
-          description = prop.description,
-          optional = !prop.required,
-        )
-      }
-      entries += ScriptedToolEntry(
-        name = tool.name,
-        description = tool.description,
-        params = params,
-        sourcePath = toolFile.relativeTo(packsDir).invariantSeparatorsPath,
+      // Each descriptor produces 1..N entries (each gets its own typed `client.tools.<name>`
+      // surface). Multi-tool descriptors with `tools: [...]` fan out into one entry per
+      // entry; single-tool descriptors yield one entry. The script source is shared across a
+      // multi-tool file and is recorded once per entry via [sourcePath] — that's fine; the
+      // downstream typed surface is per-tool-name, not per-file.
+      data class ScriptedToolMember(
+        val toolName: String,
+        val toolDescription: String?,
+        val toolInputSchema: Map<String, BundlerScriptedToolProperty>,
       )
+      val members: List<ScriptedToolMember> = when {
+        tool.tools != null -> tool.tools.map { entry ->
+          ScriptedToolMember(entry.name, entry.description, entry.inputSchema)
+        }
+        tool.name != null -> listOf(
+          ScriptedToolMember(tool.name, tool.description, tool.inputSchema),
+        )
+        else -> throw TrailblazePackBundleException.BlankToolName(
+          "Scripted tool ${toolFile.absolutePath} must declare either a top-level `name:` " +
+            "(single-tool shape) or `tools:` (multi-tool shape).",
+        )
+      }
+      members.forEach { member ->
+        if (member.toolName.isBlank()) {
+          throw TrailblazePackBundleException.BlankToolName(
+            "Scripted tool ${toolFile.absolutePath} has a blank 'name' field. Tool names must " +
+              "be non-empty and contain at least one non-whitespace character.",
+          )
+        }
+        if (!seenNames.add(member.toolName)) {
+          throw TrailblazePackBundleException.DuplicateToolName(
+            "Duplicate scripted tool name '${member.toolName}' encountered in pack $packLabel. " +
+              "Tool names must be unique within a pack (including across entries under `tools:`).",
+          )
+        }
+        val params = member.toolInputSchema.map { (key, prop) ->
+          ScriptedToolParam(
+            name = key,
+            tsType = jsonSchemaToTsType(
+              type = prop.type,
+              enumValues = prop.enum,
+              propertyContext = "Scripted tool ${member.toolName} property '$key'",
+            ),
+            description = prop.description,
+            optional = !prop.required,
+          )
+        }
+        entries += ScriptedToolEntry(
+          name = member.toolName,
+          description = member.toolDescription,
+          params = params,
+          sourcePath = toolFile.relativeTo(packsDir).invariantSeparatorsPath,
+        )
+      }
     }
     return entries.sortedBy { it.name }
   }

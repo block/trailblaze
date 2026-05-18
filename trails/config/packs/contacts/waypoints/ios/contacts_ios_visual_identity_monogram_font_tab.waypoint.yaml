@@ -8,20 +8,20 @@ required:
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Font editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Font$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Font"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Font suggestion row (Sans-serif/Serif/Condensed/Rounded)"
     selector:
       iosMaestro:
         textRegex: ",(Sans-serif|Serif|Condensed|Rounded)$"
-        resourceIdRegex: "^SuggestionListItemButton$"
+        resourceIdRegex: "SuggestionListItemButton"
 forbidden:
   - description: "Crop tab — only on the photo editor variant"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Crop$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Crop"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

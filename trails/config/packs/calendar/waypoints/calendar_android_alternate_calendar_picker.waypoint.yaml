@@ -4,11 +4,11 @@ required:
   - description: "Dialog title 'Alternate calendar'"
     selector:
       androidAccessibility:
-        textRegex: "^Alternate calendar$"
+        textRegex: "Alternate calendar"
   - description: "Hebrew calendar option"
     selector:
       androidAccessibility:
-        textRegex: "^Hebrew calendar$"
+        textRegex: "Hebrew calendar"
   - description: "Hijri calendar (one of the variants — anchored regex would be too strict for variant suffix)"
     selector:
       androidAccessibility:
@@ -20,5 +20,5 @@ required:
   - description: "Cancel button"
     selector:
       androidAccessibility:
-        textRegex: "^Cancel$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Cancel"
+        classNameRegex: "android.widget.Button"

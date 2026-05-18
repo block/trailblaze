@@ -212,7 +212,16 @@ fun main(args: Array<String>) {
 }
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {
-  val jsonFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+  val jsonFilesInLogsDir = logsDir.listFiles()
+    ?.filter { it.extension == "json" }
+    // `trailblaze_test_report*.json` is the aggregate test-results document produced by
+    // `GenerateTestResultsCliCommand`, not a per-event TrailblazeLog. Older CI paths left
+    // it alongside the raw log events in `logsDir`, and the polymorphic decode below would
+    // fail on it with `Class discriminator was missing` — surfaced in CI build analyzers
+    // as a noisy `RUNTIME_ERROR` even though the report generation itself succeeded.
+    // Filter it at the source so the inner decode never sees it.
+    ?.filterNot { it.name.startsWith("trailblaze_test_report") }
+    ?: emptyList()
   jsonFilesInLogsDir.forEach { downloadedJsonFile ->
     try {
       val log: TrailblazeLog = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
@@ -266,13 +275,23 @@ private val IMAGE_EXTENSIONS = TrailblazeImageFormat.entries.map { it.fileExtens
 
 fun moveScreenshotsToSessionDirs(logsDir: File) {
   val imageFiles = logsDir.listFiles()?.filter { it.extension in IMAGE_EXTENSIONS } ?: emptyList()
+  if (imageFiles.isEmpty()) return
+
+  // The natural filename format is `{sessionId}_{timestamp}.{ext}`, but when the session id
+  // would push the filename past NAME_MAX (255 bytes), TrailblazeLogger falls back to
+  // `{sha8(sessionId)}_{timestamp}.{ext}`. In that fallback the leading token is the hash,
+  // not the real session id, so filename-based inference via substringBeforeLast("_") routes
+  // the file into a `<sha8>/` dir that LogsRepo never looks under. Build a screenshot →
+  // session map from the JSONs already organized by moveJsonFilesToSessionDirs so we route
+  // by what the log says, falling back to filename parsing only for orphaned files.
+  val sessionByScreenshotName = buildSessionByScreenshotNameMap(logsDir)
+
   imageFiles.forEach { imageFile ->
     try {
-      // Filename format is: {sessionId}_{timestamp}.{ext}
-      // We need to extract everything before the last underscore (which is the timestamp)
-      val sessionId = imageFile.nameWithoutExtension.substringBeforeLast("_")
+      val sessionId = sessionByScreenshotName[imageFile.name]
+        ?: imageFile.nameWithoutExtension.substringBeforeLast("_").takeIf { it.isNotEmpty() }
 
-      if (sessionId.isNotEmpty()) {
+      if (sessionId != null) {
         val sessionDir = File(logsDir, sessionId)
         sessionDir.mkdirs()
 
@@ -287,6 +306,29 @@ fun moveScreenshotsToSessionDirs(logsDir: File) {
       Console.log("Error processing image file ${imageFile.absolutePath}: ${e.message}")
     }
   }
+}
+
+private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, String> {
+  val sessionDirs = logsDir.listFiles()?.filter { it.isDirectory } ?: return emptyMap()
+  val result = mutableMapOf<String, String>()
+  sessionDirs.forEach { sessionDir ->
+    val jsonFiles = sessionDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+    jsonFiles.forEach { jsonFile ->
+      try {
+        val log = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(jsonFile.readText())
+        if (log is HasScreenshot) {
+          log.screenshotFile?.let { screenshotFile ->
+            // Strip the `<sessionId>/` prefix that moveJsonFilesToSessionDirs may have rewritten in.
+            val justName = screenshotFile.substringAfterLast('/')
+            result[justName] = log.session.value
+          }
+        }
+      } catch (_: Exception) {
+        // Malformed/unrelated JSON — not authoritative, skip.
+      }
+    }
+  }
+  return result
 }
 
 fun renderSummary(logsRepo: LogsRepo, isStandaloneFileReport: Boolean): LogsSummary {

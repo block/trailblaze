@@ -6,19 +6,19 @@ required:
   - description: "Inline action bar HStack"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"
   - description: "Edit nav button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "Mail action button (only field present)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Mail$"
-        resourceIdRegex: "^InlineActionsHStack$"
+        accessibilityTextRegex: "Mail"
+        resourceIdRegex: "InlineActionsHStack"
 forbidden:
   - description: "Call action — would mean phone present"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Call$"
-        resourceIdRegex: "^InlineActionsHStack$"
+        accessibilityTextRegex: "Call"
+        resourceIdRegex: "InlineActionsHStack"

@@ -1,5 +1,8 @@
 # Trailblaze Tools
 
+## android_framework
+
+
 ## compose_core
 - [compose_click](functions/custom/compose_click.md)
 - [compose_request_details](functions/custom/compose_request_details.md)
@@ -17,12 +20,12 @@
 - [hideKeyboard](functions/custom/hideKeyboard.md)
 - [inputText](functions/custom/inputText.md)
 - [launchApp](functions/custom/launchApp.md)
+- [mobile_pasteClipboard](functions/custom/mobile_pasteClipboard.md)
+- [mobile_setClipboard](functions/custom/mobile_setClipboard.md)
 - [networkConnection](functions/custom/networkConnection.md)
 - [openUrl](functions/custom/openUrl.md)
-- [pasteClipboard](functions/custom/pasteClipboard.md)
 - [pressKey](functions/custom/pressKey.md)
 - [scrollUntilTextIsVisible](functions/custom/scrollUntilTextIsVisible.md)
-- [setClipboard](functions/custom/setClipboard.md)
 - [swipe](functions/custom/swipe.md)
 - [takeSnapshot](functions/custom/takeSnapshot.md)
 - [tap](functions/custom/tap.md)
@@ -69,7 +72,12 @@
 - [assertVisible](functions/custom/assertVisible.md)
 
 ## web_core
+- [web_applyCookies](functions/custom/web_applyCookies.md)
 - [web_click](functions/custom/web_click.md)
+- [web_currentUrl](functions/custom/web_currentUrl.md)
+- [web_evaluate](functions/custom/web_evaluate.md)
+- [web_fillSecret](functions/custom/web_fillSecret.md)
+- [web_getStorageState](functions/custom/web_getStorageState.md)
 - [web_hover](functions/custom/web_hover.md)
 - [web_navigate](functions/custom/web_navigate.md)
 - [web_press_key](functions/custom/web_press_key.md)
@@ -79,6 +87,7 @@
 - [web_snapshot](functions/custom/web_snapshot.md)
 - [web_type](functions/custom/web_type.md)
 - [web_wait](functions/custom/web_wait.md)
+- [web_waitForUrl](functions/custom/web_waitForUrl.md)
 
 ## web_verification
 - [web_assert_network_event](functions/custom/web_assert_network_event.md)

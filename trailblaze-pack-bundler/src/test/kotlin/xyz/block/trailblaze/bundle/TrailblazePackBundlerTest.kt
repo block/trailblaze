@@ -996,12 +996,17 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         description: Forgot to declare a name.
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException.MalformedScriptedTool> {
+    // `name:` is now nullable on `BundlerToolFile` because the multi-tool shape (`tools:`)
+    // also satisfies the descriptor — kaml no longer rejects a missing top-level `name:` at
+    // decode time. The validation moves into `collectScriptedToolEntries`, which throws
+    // `BlankToolName` when neither `name:` nor `tools:` is present. The new error message
+    // names both shapes so authors know how to fix it.
+    val ex = assertFailsWith<TrailblazePackBundleException.BlankToolName> {
       runGenerator(packsDir)
     }
-    // kaml rejects the missing required `name` field on BundlerToolFile.
     assertTrue("message: ${ex.message}") {
-      ex.message?.contains("is not a valid YAML") == true && ex.message?.contains("name") == true
+      ex.message?.contains("must declare either a top-level `name:`") == true &&
+        ex.message?.contains("`tools:`") == true
     }
   }
 

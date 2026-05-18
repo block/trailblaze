@@ -7,13 +7,13 @@ required:
   - description: "Inline action bar HStack"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"
   - description: "Edit nav button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
 forbidden:
   - description: "Get Mail action button — only when contact has email"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Get Mail$"
+        accessibilityTextRegex: "Get Mail"

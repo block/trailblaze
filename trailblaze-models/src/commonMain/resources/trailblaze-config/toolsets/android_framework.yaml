@@ -1,0 +1,32 @@
+# Framework-level Android composition primitives. Scripted tools (`.ts` via
+# `@trailblaze/scripting`, future Python / etc.) build higher-level operations by composing
+# these via `client.callTool(...)` over the callback channel — e.g. the Square card-reader
+# TS handlers call `mobile_listInstalledApps` to resolve the installed Square app id, then
+# `android_sendBroadcast` to fire the actual intent.
+#
+# Each tool in here is declared `isForLlm = false` at the class level, so this toolset does
+# NOT pollute the LLM's tool catalog. The point of being a toolset (rather than discoverable
+# only via `ToolYamlLoader`) is to land these tools in the runtime `TrailblazeToolRepo` so
+# the daemon's `/scripting/callback` dispatcher can resolve them by name. Without this
+# toolset, the callback handler throws "Could not find Trailblaze tool for name: …" the
+# moment a scripted tool composes one of them.
+#
+# `always_enabled: true` is load-bearing — the LLM never calls `setActiveToolSets` for these
+# (it doesn't see them in the first place), so they have to be active from session start or
+# the very first callback fails.
+#
+# Driver scope matches where these primitives have working on-device actuals today (host-
+# driven Android sessions reach the device through these same on-device drivers via RPC, so
+# no separate `android-host` entry is needed). iOS isn't listed: the current iOS path for
+# each tool throws a "not yet supported on iOS" error, so registering them there would only
+# surface as confusing runtime failures rather than catalog-time filtering.
+id: android_framework
+description: "Framework-level Android composition primitives used by scripted tools via `client.callTool(...)`. Not LLM-facing — registered so callback dispatch can resolve them by name."
+always_enabled: true
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+tools:
+  - mobile_listInstalledApps
+  - android_sendBroadcast
+  - android_adbShell

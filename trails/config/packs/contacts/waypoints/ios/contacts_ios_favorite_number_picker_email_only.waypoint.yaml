@@ -7,13 +7,13 @@ required:
   - description: "Mail header (or chosen action context)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Mail$"
+        accessibilityTextRegex: "Mail"
   - description: "work email row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^work$"
+        accessibilityTextRegex: "work"
 forbidden:
   - description: "mobile phone row — would mean Message/Call action chosen, not Mail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^mobile$"
+        accessibilityTextRegex: "mobile"

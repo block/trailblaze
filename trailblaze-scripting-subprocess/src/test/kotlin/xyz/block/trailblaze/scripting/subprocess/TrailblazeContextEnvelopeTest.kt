@@ -2,7 +2,10 @@ package xyz.block.trailblaze.scripting.subprocess
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.containsExactly
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
@@ -94,5 +97,85 @@ class TrailblazeContextEnvelopeTest {
     // Locks the top-level `_meta` bucket name — subprocess authors read `_meta.trailblaze`,
     // so renaming this breaks every SDK consumer silently.
     assertThat(TrailblazeContextEnvelope.META_KEY).isEqualTo("trailblaze")
+  }
+
+  @Test fun `meta envelope omits target block when no TargetSnapshot supplied`() {
+    // Backward-compat shape — sessions without a target (web-only, scratch tools, test
+    // fixtures) emit the envelope minus `target`, and the TS SDK's `fromMeta` reads that as
+    // `ctx.target === undefined` (same path that older daemons take).
+    val envelope = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+    )
+    assertThat(envelope.keys).doesNotContain("target")
+  }
+
+  @Test fun `meta envelope emits target block when TargetSnapshot supplied`() {
+    val envelope = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+      target = TrailblazeContextEnvelope.TargetSnapshot(
+        id = "example",
+        appIds = listOf("com.example.dev", "com.example.staging", "com.example"),
+        appId = "com.example.dev",
+      ),
+    )
+    val target = envelope["target"]!!.jsonObject
+    assertThat(target["id"]!!.jsonPrimitive.content).isEqualTo("example")
+    assertThat(target["appId"]!!.jsonPrimitive.content).isEqualTo("com.example.dev")
+    val appIds = (target["appIds"] as JsonArray).map { it.jsonPrimitive.content }
+    assertThat(appIds).containsExactly("com.example.dev", "com.example.staging", "com.example")
+  }
+
+  @Test fun `meta envelope target omits appId when null`() {
+    // No declared candidate installed → appId is absent (vs. JSON null) so the TS SDK's
+    // optional-chained reads on `ctx.target.appId` see `undefined` and authors fall
+    // through to `appIds[0]` as documented.
+    val envelope = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+      target = TrailblazeContextEnvelope.TargetSnapshot(
+        id = "example",
+        appIds = listOf("com.example.dev"),
+        appId = null,
+      ),
+    )
+    val target = envelope["target"]!!.jsonObject
+    assertThat(target.keys).doesNotContain("appId")
+    assertThat(target["id"]!!.jsonPrimitive.content).isEqualTo("example")
+    assertThat((target["appIds"] as JsonArray).single().jsonPrimitive.content)
+      .isEqualTo("com.example.dev")
+  }
+
+  @Test fun `meta envelope target omits optional displayName and baseUrls when unset`() {
+    // The wire shape is "absent = unset"; emitting JSON nulls would force every consumer to
+    // distinguish "no value" from "value is null", which the TS interface treats identically
+    // anyway. Locking the omission semantics so a future writer change doesn't accidentally
+    // start emitting nulls and break consumers that check `"displayName" in target`.
+    val envelope = TrailblazeContextEnvelope.buildMetaTrailblaze(
+      memory = AgentMemory(),
+      device = deviceInfo,
+      baseUrl = "http://localhost:52525",
+      sessionId = SessionId("session-abc"),
+      invocationId = "inv-123",
+      target = TrailblazeContextEnvelope.TargetSnapshot(
+        id = "example",
+        appIds = listOf("com.example"),
+        appId = "com.example",
+      ),
+    )
+    val target = envelope["target"]!!.jsonObject
+    assertThat(target.keys).doesNotContain("displayName")
+    assertThat(target.keys).doesNotContain("baseUrls")
+    assertThat(target.keys).doesNotContain("resolvedBaseUrl")
   }
 }

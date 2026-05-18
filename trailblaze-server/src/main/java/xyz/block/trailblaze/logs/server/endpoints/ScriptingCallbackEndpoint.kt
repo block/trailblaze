@@ -62,7 +62,15 @@ object ScriptingCallbackEndpoint {
   // as `TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS` so the daemon-side dispatch timeout and the
   // client-side fetch timeout stay synchronized. Changing this default without updating the
   // spawner's default breaks the "override both together" invariant.
-  const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 30_000L
+  //
+  // 120s accommodates the realistic worst-case nested-dispatch scenario: a scripted tool
+  // that calls a worker scripted tool that performs a real UI login. The inner UI login
+  // alone (e.g. waiting for staging's post-login redirect) can legitimately take up to 60s
+  // when the underlying app is slow. With a 30s default, the outer caller's wait timed out
+  // before the inner worker could complete, surfacing as
+  // `trailblaze.client.callTool("X") aborted after 32000ms`. Callers that want a tighter
+  // window can still set `-Dtrailblaze.callback.timeoutMs` explicitly.
+  const val DEFAULT_CALLBACK_TIMEOUT_MS: Long = 120_000L
 
   /**
    * Default maximum `JsScriptingCallbackRequest` body size accepted by the endpoint, in bytes. A callback

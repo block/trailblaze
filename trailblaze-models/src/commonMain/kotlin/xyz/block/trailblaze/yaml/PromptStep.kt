@@ -7,6 +7,7 @@ sealed interface PromptStep {
   val prompt: String
   val recordable: Boolean
   val recording: ToolRecording?
+  val postcondition: StepPostcondition?
 }
 
 fun PromptStep.toDetailedString() {
@@ -15,6 +16,7 @@ fun PromptStep.toDetailedString() {
     appendLine("Prompt: $prompt")
     appendLine("Recordable: $recordable")
     appendLine("Recording: $recording")
+    appendLine("Postcondition: $postcondition")
   }
 }
 
@@ -23,6 +25,7 @@ data class DirectionStep(
   val step: String,
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
+  override val postcondition: StepPostcondition? = null,
 ) : PromptStep {
   override val prompt: String = step
 }
@@ -32,6 +35,7 @@ data class VerificationStep(
   val verify: String,
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
+  override val postcondition: StepPostcondition? = null,
 ) : PromptStep {
   override val prompt: String = verify
 }

@@ -10,8 +10,8 @@
     description: "Create a timer with 2 hours, 30 minutes, and 45 seconds. Do not start the timer."
 
 - tools:
-    - clearAppData:
-        packageName: com.google.android.deskclock
+    - mobile_clearAppData:
+        appId: com.google.android.deskclock
     # Android World starts every task from the home screen (using adb for reliable setup execution)
     - androidworldbenchmarks_runAdbShell:
         adbShellCommands:

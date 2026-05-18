@@ -4,20 +4,20 @@ required:
   - description: "Delete menu item"
     selector:
       androidAccessibility:
-        textRegex: "^Delete$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "Delete"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
   - description: "Duplicate menu item"
     selector:
       androidAccessibility:
-        textRegex: "^Duplicate$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "Duplicate"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
   - description: "Help & feedback menu item"
     selector:
       androidAccessibility:
-        textRegex: "^Help & feedback$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "Help & feedback"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
 forbidden:
   - description: "Settings overflow has only Help & feedback (no Delete/Duplicate)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/settings_content$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/settings_content"

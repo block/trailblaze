@@ -40,12 +40,36 @@ object TrailblazeNodeSelectorResolver {
   /**
    * Resolves a [TrailblazeNodeSelector] against the tree rooted at [root].
    *
+   * When [target] is supplied, the selector is expanded once via
+   * [SelectorTemplating.expand] before resolution — every `{{target.appId}}` placeholder
+   * inside the selector tree (including nested spatial/hierarchy sub-selectors) is
+   * substituted before any regex compile happens. Callers that hold session context
+   * (agent / matcher / executor) thread it through here so the resolver is the single
+   * site that knows about templating; callers without context (inspector UI, ad-hoc
+   * selector evaluation, unit-test fixtures with literal selectors) pass null.
+   *
    * @param root The root of the [TrailblazeNode] tree
    * @param selector The selector to match
+   * @param target Optional template context for `{{target.appId}}` substitution
    * @return [ResolveResult] indicating zero, one, or multiple matches
    */
+  fun resolve(
+    root: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+    target: TargetTemplateContext?,
+  ): ResolveResult {
+    val expanded = if (target != null) SelectorTemplating.expand(selector, target) else selector
+    return resolve(root, expanded, depth = 0)
+  }
+
+  /**
+   * 2-arg overload preserving the wire/binary signature of the previously-published
+   * `resolve(root, selector)` method. `@JvmOverloads` would be the idiomatic JVM-only
+   * answer, but this object lives in `commonMain` and `kotlin.jvm.JvmOverloads` isn't
+   * available on the wasmJs target — the explicit overload is multiplatform-safe.
+   */
   fun resolve(root: TrailblazeNode, selector: TrailblazeNodeSelector): ResolveResult =
-    resolve(root, selector, depth = 0)
+    resolve(root, selector, target = null)
 
   private fun resolve(
     root: TrailblazeNode,
@@ -88,15 +112,24 @@ object TrailblazeNodeSelectorResolver {
   /**
    * Convenience: resolves and returns the center point for tapping, or null.
    * Uses the first match if multiple are found.
+   *
+   * See [resolve] for the [target] parameter semantics.
    */
   fun resolveToCenter(
     root: TrailblazeNode,
     selector: TrailblazeNodeSelector,
-  ): Pair<Int, Int>? = when (val result = resolve(root, selector)) {
+    target: TargetTemplateContext?,
+  ): Pair<Int, Int>? = when (val result = resolve(root, selector, target)) {
     is ResolveResult.SingleMatch -> result.node.centerPoint()
     is ResolveResult.MultipleMatches -> result.nodes.first().centerPoint()
     is ResolveResult.NoMatch -> null
   }
+
+  /** See [resolve] — same multiplatform-safe explicit-overload rationale. */
+  fun resolveToCenter(
+    root: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+  ): Pair<Int, Int>? = resolveToCenter(root, selector, target = null)
 
   // --- Private matching logic ---
 

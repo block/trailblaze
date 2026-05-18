@@ -3,8 +3,10 @@ package xyz.block.trailblaze.scripting.mcp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -46,6 +48,14 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *     widthPixels: number;
  *     heightPixels: number;
  *     driverType: string;
+ *   };
+ *   target?: {
+ *     id: string;
+ *     displayName?: string;
+ *     appIds: string[];
+ *     appId?: string;
+ *     baseUrls?: string[];
+ *     resolvedBaseUrl?: string;
  *   };
  *   memory: Record<string, unknown>;
  * };
@@ -116,6 +126,13 @@ object TrailblazeContextEnvelope {
     sessionId = sessionId,
     invocationId = invocationId,
     runtime = runtime,
+    target = context.resolvedTarget?.let { resolved ->
+      TargetSnapshot(
+        id = resolved.id,
+        appIds = resolved.appIds,
+        appId = context.appId,
+      )
+    },
   )
 
   /** Lower-level entry point so tests can assemble the envelope from parts. */
@@ -126,6 +143,7 @@ object TrailblazeContextEnvelope {
     sessionId: SessionId,
     invocationId: String,
     runtime: String? = null,
+    target: TargetSnapshot? = null,
   ): JsonObject {
     require(baseUrl != null || runtime != null) {
       "TrailblazeContextEnvelope.buildMetaTrailblaze: at least one of baseUrl / runtime must be " +
@@ -141,11 +159,58 @@ object TrailblazeContextEnvelope {
       put("sessionId", sessionId.value)
       put("invocationId", invocationId)
       putDeviceObject(device)
+      if (target != null) putTargetObject(target)
       putJsonObject("memory") {
         memory.variables.forEach { (k, v) ->
           if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
         }
       }
+    }
+  }
+
+  /**
+   * Wire shape of the session's resolved target, projected into the `_meta.trailblaze.target`
+   * block. Mirrors the TS SDK's `TrailblazeTarget` data-field surface — kept in lockstep with
+   * `TrailblazeContext.target` in the TS SDK's `context.ts` (see the SDK module under
+   * `sdks/typescript/src/`).
+   *
+   * Constructed from a [ResolvedTarget] + the device-resolved app id at envelope build time
+   * — the framework already pre-computes both at session start
+   * ([TrailblazeToolExecutionContext.resolvedTarget] / [TrailblazeToolExecutionContext.appId]),
+   * so per-call envelope emission is a cheap projection rather than a fresh device probe.
+   *
+   * Optional / not-yet-wired fields ([displayName], [baseUrls], [resolvedBaseUrl]) default to
+   * null and are omitted from the JSON when unset — the TS SDK treats absence and explicit
+   * null identically. Adding a manifest-driven displayName / web base-url surface is a
+   * forward-compat extension that won't disturb existing consumers.
+   */
+  data class TargetSnapshot(
+    val id: String,
+    val appIds: List<String>,
+    val appId: String?,
+    val displayName: String? = null,
+    val baseUrls: List<String>? = null,
+    val resolvedBaseUrl: String? = null,
+  )
+
+  /**
+   * Writes the `target` block. Mirrors the device-block convention: a private writer keyed off
+   * the typed snapshot so the JSON shape lives in one place and producer call sites don't drift.
+   */
+  private fun JsonObjectBuilder.putTargetObject(target: TargetSnapshot) {
+    putJsonObject("target") {
+      put("id", target.id)
+      if (target.displayName != null) put("displayName", target.displayName)
+      putJsonArray("appIds") {
+        target.appIds.forEach { add(it) }
+      }
+      if (target.appId != null) put("appId", target.appId)
+      if (target.baseUrls != null) {
+        putJsonArray("baseUrls") {
+          target.baseUrls.forEach { add(it) }
+        }
+      }
+      if (target.resolvedBaseUrl != null) put("resolvedBaseUrl", target.resolvedBaseUrl)
     }
   }
 

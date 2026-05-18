@@ -9,5 +9,5 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Clear help history$"
-          resourceIdRegex: "^com\\.google\\.android\\.gms:id/title$"
+          textRegex: "Clear help history"
+          resourceIdRegex: "com\\.google\\.android\\.gms:id/title"

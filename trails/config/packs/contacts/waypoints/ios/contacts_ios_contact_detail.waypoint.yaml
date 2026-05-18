@@ -10,21 +10,21 @@ required:
   - description: "Inline action bar HStack (Message/Call/Video/Mail buttons)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"
   - description: "Contact card details rows (phone/email/URL)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^ContactCardDetailsView$"
+        resourceIdRegex: "ContactCardDetailsView"
   - description: "Edit button on the right-pane navigation"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
 forbidden:
   - description: "First-name field — would mean we're in the edit-contact form"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^First name$"
+        accessibilityTextRegex: "First name"
   - description: "Done button — only present in edit/new-contact forms"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"

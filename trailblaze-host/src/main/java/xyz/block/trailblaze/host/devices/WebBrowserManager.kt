@@ -18,6 +18,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.hasDisplay
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -175,14 +176,14 @@ class WebBrowserManager {
    *
    * @param instanceId Identifier for the browser slot. Defaults to the singleton
    *   [PLAYWRIGHT_NATIVE_INSTANCE_ID] (the desktop UI's "Launch Browser" target).
-   * @param headless Whether to launch the browser headless. Defaults to `false`
-   *   for the singleton (visible window for desktop debugging) and `true` for any
-   *   other named instance, but callers may override for either case.
+   * @param headless Whether to launch the browser headless. Named instances default
+   *   to headless. The singleton defaults to headed when a display is available and
+   *   headless otherwise (e.g. on remote workstations or headless servers).
    * @param onComplete optional callback invoked after the browser is ready.
    */
   fun launchBrowser(
     instanceId: String = PLAYWRIGHT_NATIVE_INSTANCE_ID,
-    headless: Boolean = (instanceId != PLAYWRIGHT_NATIVE_INSTANCE_ID),
+    headless: Boolean = (instanceId != PLAYWRIGHT_NATIVE_INSTANCE_ID) || !hasDisplay(),
     onComplete: (() -> Unit)? = null,
   ) {
     val slot = slotFor(instanceId)
@@ -202,6 +203,11 @@ class WebBrowserManager {
             onBrowserInstallProgress = { percent, message ->
               playwrightInstaller.reportInstallProgress(percent, message)
             },
+            // Same key the rest of the capture pipeline uses for this browser slot —
+            // lets PlaywrightVideoCapture publish a recordVideoDir under
+            // `PlaywrightVideoRecordDir[instanceId]` and have this manager pick it up
+            // at context-creation / `syncRecordingWithRegistry` time.
+            deviceId = slot.instanceId,
           )
           slot.manager = newBrowserManager
           slot.headlessPreference = headless

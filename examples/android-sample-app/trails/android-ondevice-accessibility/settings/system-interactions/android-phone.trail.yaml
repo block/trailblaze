@@ -14,7 +14,7 @@
           reason: The 'Settings' tab is represented by the clickable view with nodeId 53 and contains the text 'Settings'. Tapping this should navigate to the Settings tab.
           nodeSelector:
             androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
+              classNameRegex: android.view.View
               collectionItemRowIndex: 0
               collectionItemColumnIndex: 5
   - step: Enable the "Enable Notifications" switch and verify it is checked
@@ -24,7 +24,7 @@
           reason: The toggle for 'Enable Notifications' is part of the clickable view with nodeId 10, which is visually associated with the label and switch.
           nodeSelector:
             androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
+              classNameRegex: android.view.View
             index: 2
   - step: Verify the network status shows "Online" or "Offline" and an app version starting with "Version" is visible
     recording:

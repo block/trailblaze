@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -29,9 +30,16 @@ class QuickJsTrailblazeTool(
   internal val advertisedName: ToolName,
   /** LLM-supplied args, decoded from the tool-call's `arguments` JSON. */
   internal val args: JsonObject,
-) : HostLocalExecutableTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
 
   override val advertisedToolName: String get() = advertisedName.toolName
+
+  // Surface the LLM-supplied args as `rawToolArguments` so `toLogPayload()` writes them
+  // into the `TrailblazeToolLog.raw` field verbatim — otherwise this class-backed (but
+  // not `@Serializable`) tool falls through `encodeAsRawJsonOrEmpty()` and emits an empty
+  // `raw`, corrupting recording reconstruction. Same shape `SubprocessTrailblazeTool` and
+  // `BundleTrailblazeTool` use for the same reason.
+  override val rawToolArguments: JsonObject get() = args
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val ctx = buildCtxEnvelope(toolExecutionContext)
@@ -59,7 +67,7 @@ class QuickJsTrailblazeTool(
       QuickJsTargetContext(
         id = resolved.id,
         appIds = resolved.appIds,
-        resolvedAppId = toolExecutionContext.resolvedAppId,
+        appId = toolExecutionContext.appId,
       )
     }
     val ctx = QuickJsToolCtxEnvelope(

@@ -14,7 +14,7 @@
           reason: The 'Lists' tab is identified by the TextView labeled 'Lists' and the clickable parent View node 45. Tapping this View should navigate to the 'Lists' tab.
           nodeSelector:
             androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
+              classNameRegex: android.view.View
               collectionItemRowIndex: 0
               collectionItemColumnIndex: 2
   - step: Scroll down to "Item 25" and tap it

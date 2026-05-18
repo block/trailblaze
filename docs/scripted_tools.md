@@ -72,14 +72,19 @@ export async function myapp_login(args, ctx, client) {
   const appId = args.appId || DEFAULT_APP_ID;
 
   // Compose with framework tools via `client.callTool(name, args)`. Anything in
-  // the global tool registry is reachable — `adbShell`, `tapOnElementBySelector`,
+  // the global tool registry is reachable — `android_adbShell`, `tapOnElementBySelector`,
   // `inputText`, etc. The shim throws on `{isError:true}` envelopes so failures
   // bubble out via try/catch; you don't have to inspect every result.
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: [
+      "am", "start",
+      "-a", "android.intent.action.MAIN",
+      "-c", "android.intent.category.LAUNCHER",
+      "-p", appId,
+    ],
   });
 
   await client.callTool("inputText", { text: args.email });
@@ -197,7 +202,7 @@ trails/config/tools/.trailblaze/
 
 Each file declares typed overloads for:
 
-- **Every framework tool** on the JVM classpath (`adbShell`, `tapOnElementBySelector`,
+- **Every framework tool** on the JVM classpath (`android_adbShell`, `tapOnElementBySelector`,
   `inputText`, `assertVisible`, etc.) — the same set across all targets, since these are
   the primitives any scripted tool can compose with.
 - **The target's own scripted tools**, transitively resolved through the pack's
@@ -375,7 +380,7 @@ shell-/process-/device-shell primitives you compose from scripted tools. Three t
 
 | Tool | Where it runs | When to use |
 |---|---|---|
-| **`adbShell`** | **Both — host *and* on-device** | The dual-mode device-shell primitive. Reaches `pm`, `am`, `setprop`, `dumpsys`, `input`, `getprop` — anything you'd type as `adb shell <cmd>`. On host the call routes through ADB; on-device it runs natively inside the instrumentation process. **Default choice** for Android shell composition. |
+| **`android_adbShell`** | **Both — host *and* on-device** | The dual-mode device-shell primitive. Reaches `pm`, `am`, `setprop`, `dumpsys`, `input`, `getprop` — anything you'd type as `adb shell <cmd>`. On host the call routes through ADB; on-device it runs natively inside the instrumentation process. **Default choice** for Android shell composition. |
 | **`android_sendBroadcast`** | **Both — host *and* on-device** | Structured `am broadcast` — argv-safe by construction (action / componentPackage / componentClass / extras as fields, no shell escaping). Use when the underlying intent is the load-bearing semantic, e.g. card-reader broadcasts, fake-data injection. |
 | **`exec`** | **Host only** | Run a process in the host JVM environment via argv (no shell). Use for host-side scripts that talk to peripherals (card readers, USB devices), build-step invocation, host filesystem access. **Requires** `requiresHost: true` on your scripted tool's descriptor. |
 
@@ -384,7 +389,7 @@ shell-/process-/device-shell primitives you compose from scripted tools. Three t
 A scripted tool's descriptor inherits the most restrictive deployment scope of the
 framework primitives it composes:
 
-- Composes only `adbShell`, `android_sendBroadcast`, UI tools, etc. → **on-device-safe**
+- Composes only `android_adbShell`, `android_sendBroadcast`, UI tools, etc. → **on-device-safe**
   (no `requiresHost:` field needed; the on-device runner can dispatch your tool when the
   on-device QuickJS path lands).
 - Composes `exec` (or any other tool with `@TrailblazeToolClass(requiresHost = true)`) →
@@ -396,18 +401,18 @@ If you forget the flag and try to run on-device, the inner `client.callTool(...)
 with `Tool not registered: <name> (registered tools: ...)`. The error lists what *is*
 available on-device — the host-only tool will be conspicuously missing.
 
-### Picking between `adbShell` and `exec`
+### Picking between `android_adbShell` and `exec`
 
 Both can run shell commands. The difference is *whose* shell:
 
-- `adbShell` runs in the **device's** shell. It can clear the app's data, send intents,
+- `android_adbShell` runs in the **device's** shell. It can clear the app's data, send intents,
   dump system services, query packages — anything the device's `pm` / `am` / `dumpsys`
   binaries can do.
 - `exec` runs in the **host's** shell environment. It can talk to your Mac's filesystem,
   invoke local CLI tools you've installed (`./scripts/activate-card-reader.sh`), kick off
   a host-side build step.
 
-If your script runs against device state, use `adbShell`. If it runs against your dev
+If your script runs against device state, use `android_adbShell`. If it runs against your dev
 machine, use `exec`.
 
 ### "Want full Node APIs / a different language / your own deps?"
@@ -428,7 +433,7 @@ own the runtime, we own the wire.
 | `Scripted tool myapp_login must export a function with that exact name. Found: undefined.` | Your `.ts` doesn't export a function under that name. Either rename the export or update the descriptor's `name:` to match. |
 | `Tool not registered: foo (registered tools: alpha, beta)` | The tool you tried to `client.callTool(...)` doesn't exist in the runtime registry. The error lists what *is* registered — almost always you've got a typo. |
 | `Tool not registered: foo (no tools are registered on this host …)` | The bundle loaded but didn't populate the registry. Verify your `.ts` exports the function under the same name as the descriptor. |
-| `client.callTool('adbShell') failed: …` | The inner tool ran but failed (non-zero exit code, missing arg, etc.). The message after `failed:` is the inner tool's error. |
+| `client.callTool('android_adbShell') failed: …` | The inner tool ran but failed (non-zero exit code, missing arg, etc.). The message after `failed:` is the inner tool's error. |
 | `esbuild failed (exit 1) bundling scripted-tool source /path/to/myapp_login.ts` | Your `.ts` source has a syntax error or unresolved import. The full esbuild stderr follows in the same exception message. |
 | `myapp_login requires a live Trailblaze session context.` | Your handler asserted `if (!ctx)` and `ctx` was undefined. This usually means the tool was invoked outside a session (a unit test that doesn't supply context, or a CLI invocation against a non-running session). |
 
@@ -457,7 +462,7 @@ function-shaped composition over framework primitives, MCP server for everything
 The `clock` pack ships a worked example that uses every concept in this guide:
 
 - [`trails/config/packs/clock/tools/clock_android_launchApp.ts`](https://github.com/block/trailblaze/blob/main/trails/config/packs/clock/tools/clock_android_launchApp.ts) —
-  the implementation, including JSDoc-only types, args resolution, and `adbShell`
+  the implementation, including JSDoc-only types, args resolution, and `android_adbShell`
   composition (the dual-mode primitive — works on host today and on-device when the
   on-device QuickJS path lights up).
 - [`trails/config/packs/clock/tools/clock_android_launchApp.yaml`](https://github.com/block/trailblaze/blob/main/trails/config/packs/clock/tools/clock_android_launchApp.yaml) —
@@ -473,5 +478,5 @@ Run the trail end-to-end on a connected emulator:
 ./trailblaze trail run trails/clock/set-alarm-730am/android.trail.yaml -d android
 ```
 
-Watch the daemon log — you'll see the QuickJS dispatch fire, the inner `adbShell` calls
+Watch the daemon log — you'll see the QuickJS dispatch fire, the inner `android_adbShell` calls
 issue, and the trail proceed against the launched app.

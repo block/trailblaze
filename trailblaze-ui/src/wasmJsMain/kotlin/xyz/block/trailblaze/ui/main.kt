@@ -39,6 +39,7 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
+import xyz.block.trailblaze.ui.devices.WebDevicesPage
 import xyz.block.trailblaze.ui.navigation.WasmRoute
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
@@ -55,7 +56,12 @@ private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
   ComposeViewport(document.body!!) {
-    TrailblazeApp()
+    // The `/devices` path serves the live device viewer rather than the session report.
+    if (window.location.pathname.startsWith("/devices")) {
+      WebDevicesPage()
+    } else {
+      TrailblazeApp()
+    }
   }
 }
 
@@ -66,6 +72,11 @@ fun TrailblazeApp() {
   val toMaestroYaml: (JsonObject) -> String = { TrailblazeYaml.jsonToYaml(it) }
 
   Console.log("Using data provider: $dataProvider")
+
+  // Capture the original hash before any LaunchedEffect rewrites it. Used by the
+  // single-session auto-advance below: only redirect on a "fresh" landing (no
+  // explicit route), so that clicking Back to the overview is sticky.
+  val initialHashWasEmpty = remember { parseRoute().isEmpty() }
 
   // Parse initial route from URL hash for backward compatibility with existing bookmarks
   val initialRoute = remember {
@@ -82,16 +93,47 @@ fun TrailblazeApp() {
   // Track current route explicitly to avoid serialization issues with toRoute()
   var currentRoute by remember { mutableStateOf<WasmRoute>(initialRoute) }
 
-  // Update browser URL hash when route changes
+  // Update browser URL hash when route changes. Home is mapped to `#all` (an
+  // explicit "show the overview" marker) rather than the empty hash, so that
+  // when a user on a single-session report clicks Back, the URL records the
+  // intent and a reload won't re-trigger the auto-advance.
   LaunchedEffect(currentRoute) {
     val newHash = when (currentRoute) {
-      is WasmRoute.Home -> ""
+      is WasmRoute.Home -> "all"
       is WasmRoute.SessionDetail -> "session/${(currentRoute as WasmRoute.SessionDetail).sessionId}"
+      is WasmRoute.Devices -> "devices"
     }
 
     val currentHash = window.location.hash.removePrefix("#")
     if (currentHash != newHash) {
       window.location.hash = newHash
+    }
+  }
+
+  // Single-session auto-advance: if the report bundle contains exactly one
+  // session and the user landed on the app without an explicit route, jump
+  // straight to that session's detail page. The overview remains reachable
+  // via the detail page's Back button.
+  LaunchedEffect(Unit) {
+    if (!initialHashWasEmpty) return@LaunchedEffect
+    if (currentRoute !is WasmRoute.Home) return@LaunchedEffect
+    try {
+      val sessionIds = dataProvider.getSessionIdsAsync()
+      if (sessionIds.size == 1 && currentRoute is WasmRoute.Home) {
+        val onlySessionId = sessionIds.first().value
+        val newRoute = WasmRoute.SessionDetail(onlySessionId)
+        currentRoute = newRoute
+        navController.navigate(newRoute) {
+          launchSingleTop = true
+        }
+      }
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+      // Re-raise so the LaunchedEffect cancels cleanly when this composable
+      // leaves composition. Swallowing it here would keep work running after
+      // teardown and break structured concurrency.
+      throw e
+    } catch (e: Exception) {
+      Console.log("Single-session auto-advance skipped: ${e.message}")
     }
   }
 
@@ -344,13 +386,17 @@ fun WasmSessionDetailView(
     }
   }
 
-  // Proactively preload all screenshots in the background so they're
-  // already cached when the user scrolls through the timeline.
+  // Proactively preload all screenshots in the background so they're already cached
+  // when the user scrolls through the timeline. Order by log timestamp so screenshots
+  // earlier in the session are decompressed first — slideshow playback starts at the
+  // beginning, so we want the head of the timeline ready before the tail.
   LaunchedEffect(logs) {
     if (logs.isEmpty()) return@LaunchedEffect
-    val screenshotRefs = logs.mapNotNull { log ->
-      (log as? HasScreenshot)?.screenshotFile
-    }.distinct()
+    val screenshotRefs = logs.asSequence()
+      .sortedBy { it.timestamp }
+      .mapNotNull { log -> (log as? HasScreenshot)?.screenshotFile }
+      .distinct()
+      .toList()
     if (screenshotRefs.isNotEmpty()) {
       preloadScreenshots(screenshotRefs)
     }

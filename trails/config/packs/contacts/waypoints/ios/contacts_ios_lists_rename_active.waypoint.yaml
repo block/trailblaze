@@ -10,11 +10,11 @@ required:
   - description: "Done button (still in edit mode)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "Lists header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Active rename row labeled 'Name: <something>'"
     selector:
       iosMaestro:
@@ -23,4 +23,4 @@ forbidden:
   - description: "Edit nav button — would mean we're not in edit mode anymore"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

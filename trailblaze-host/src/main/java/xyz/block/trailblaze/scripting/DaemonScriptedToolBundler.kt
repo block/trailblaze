@@ -101,36 +101,57 @@ class DaemonScriptedToolBundler(
         // Absolute paths bypass by design — authors who write an absolute path opt into pointing
         // outside the pack. Symlinks are canonicalized away on both sides so a textually-contained
         // path can't disguise an out-of-pack target.
+        // Resolve the names this descriptor advertises. Single-tool descriptors expose one
+        // name (top-level `name:`); multi-tool descriptors expose one name per `tools:` entry.
+        // Both shapes funnel through the same bundling path — the .ts source is identical
+        // regardless of how many tools the file exposes, so a multi-tool descriptor of N tools
+        // costs ONE esbuild invocation and ONE on-disk cache entry, not N.
+        val toolNames: List<String> = descriptor.tools?.map { it.name }
+          ?: listOfNotNull(descriptor.name)
+        if (toolNames.isEmpty()) {
+          throw IOException(
+            "Pack '${pack.id}': scripted-tool descriptor '$toolYamlRelPath' must declare " +
+              "either a top-level `name:` (single-tool shape) or `tools:` (multi-tool shape).",
+          )
+        }
+        val descriptorIdentity = toolNames.first()
         requirePathInsidePack(
           packId = pack.id,
           baseDir = baseDir,
           path = scriptFile,
           rawPath = descriptor.script,
-          kind = "tool '${descriptor.name}' script",
+          kind = "tool '$descriptorIdentity' script",
           rawIsAbsolute = File(descriptor.script).isAbsolute,
         )
         if (!scriptFile.isFile) {
           throw IOException(
-            "Pack '${pack.id}': tool '${descriptor.name}' references script '${descriptor.script}' " +
+            "Pack '${pack.id}': tool '$descriptorIdentity' references script '${descriptor.script}' " +
               "(resolved to ${scriptFile.absolutePath}), but no such file exists.",
           )
         }
-        // Fail loudly on duplicate tool names across packs. A LinkedHashMap put would
-        // silently overwrite the earlier entry, and the per-tool dispatch downstream
-        // would route to whichever bundle won the race — confusing at best, broken at
-        // worst when the two tools have different schemas. TrailblazePackBundler enforces
-        // the same uniqueness guarantee, so this just keeps the runtime in sync with the
-        // build-time invariant.
-        val existing = result[descriptor.name]
-        if (existing != null) {
-          throw IOException(
-            "Duplicate scripted-tool name '${descriptor.name}' across packs. " +
-              "Each pack manifest's `target.tools:` entry must declare a globally unique " +
-              "name. Previously bundled at ${existing.absolutePath}; conflicting source " +
-              "is ${scriptFile.absolutePath}.",
-          )
+        // Bundle once per descriptor (== once per script file in the multi-tool shape). The
+        // cache key downstream is content-addressed on the script bytes, so two descriptors
+        // pointing at the same file would dedupe naturally; we still call `bundleOneInternal`
+        // only once here to avoid the redundant cache lookup. Use the descriptor's first
+        // declared tool name as the bundle's identity — purely a cache-file-naming concern.
+        val bundledFile = bundleOneInternal(scriptFile, descriptorIdentity)
+        for (toolName in toolNames) {
+          // Fail loudly on duplicate tool names across packs (and across entries within a
+          // single multi-tool descriptor). A LinkedHashMap put would silently overwrite the
+          // earlier entry, and the per-tool dispatch downstream would route to whichever
+          // bundle won the race — confusing at best, broken at worst when the two tools have
+          // different schemas. TrailblazePackBundler enforces the same uniqueness guarantee.
+          val existing = result[toolName]
+          if (existing != null) {
+            throw IOException(
+              "Duplicate scripted-tool name '$toolName' across packs. " +
+                "Each pack manifest's `target.tools:` entry (and each entry under " +
+                "`tools:`) must declare a globally unique name. Previously bundled at " +
+                "${existing.absolutePath}; conflicting source is ${scriptFile.absolutePath}.",
+            )
+          }
+          result[toolName] = bundledFile
         }
-        result[descriptor.name] = bundleOneInternal(scriptFile, descriptor.name)
       }
     }
     result

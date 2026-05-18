@@ -4,21 +4,23 @@ description: >
   FAB is visible. Distinct from clock/android/alarm_time_picker (no clock face / OK
   button) and from the other bottom-nav tabs (FAB only appears on the alarm tab).
 
-  Resource IDs use a regex alternation to match both the Google variant
-  (com.google.android.deskclock) and the AOSP variant (com.android.deskclock),
-  matching the two app_ids declared in the clock target.
+  Resource IDs use the `{{target.appId}}` template variable. In-session it expands
+  to the single resolved app id (the Google variant `com.google.android.deskclock`
+  or the AOSP variant `com.android.deskclock`, whichever is installed); at
+  log-replay time it falls back to an alternation over both app_ids declared in
+  the clock target.
 required:
   - description: "ALARM tab in selected state"
     selector:
       androidAccessibility:
-        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/tab_menu_alarm"
+        resourceIdRegex: "{{target.appId}}:id/tab_menu_alarm"
         isSelected: true
   - description: "Add-alarm FAB"
     selector:
       androidAccessibility:
-        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/fab"
+        resourceIdRegex: "{{target.appId}}:id/fab"
 forbidden:
   - description: "Time picker OK button (would mean the time picker dialog is open over the tab)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/material_timepicker_ok_button"
+        resourceIdRegex: "{{target.appId}}:id/material_timepicker_ok_button"

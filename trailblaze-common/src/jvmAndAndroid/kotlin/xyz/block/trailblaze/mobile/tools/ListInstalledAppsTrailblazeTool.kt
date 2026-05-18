@@ -35,6 +35,10 @@ data class ListInstalledAppsResult(val appIds: List<String>)
 @TrailblazeToolClass(
   name = "mobile_listInstalledApps",
   isForLlm = false,
+  // Dual-mode primitive: scripted-tool authors compose this via `client.callTool(...)` to read
+  // the installed-app id list off `Success.message`; on-device-RPC strips that payload, so the
+  // host-side actual is the contract surface for callback paths.
+  prefersHostSideForCallback = true,
 )
 @LLMDescription("Returns a JSON object with the list of installed app ids on the current mobile device.")
 data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool {

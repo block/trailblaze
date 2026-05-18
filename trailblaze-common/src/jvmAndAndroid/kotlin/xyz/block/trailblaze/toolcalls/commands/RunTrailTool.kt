@@ -55,7 +55,7 @@ data class RunTrailTool(
       items
         .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
         .flatMap { it.promptSteps }
-        .filter { it.recording != null && it.recording!!.tools.isNotEmpty() }
+        .filter { it.recording != null }
 
     if (recordedSteps.isEmpty()) {
       return TrailblazeToolResult.Success()

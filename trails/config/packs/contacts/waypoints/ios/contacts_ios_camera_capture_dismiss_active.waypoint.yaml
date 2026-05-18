@@ -7,9 +7,9 @@ required:
   - description: "Dismiss button (still in DOM during fade-out)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^DismissImagePickerButton$"
+        resourceIdRegex: "DismissImagePickerButton"
 forbidden:
   - description: "Take Picture — should not be tappable mid-dismiss"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoCapture$"
+        resourceIdRegex: "PhotoCapture"

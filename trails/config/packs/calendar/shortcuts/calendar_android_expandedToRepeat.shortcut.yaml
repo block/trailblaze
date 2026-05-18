@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Does not repeat$"
+          textRegex: "Does not repeat"

@@ -12,11 +12,11 @@ required:
   - description: "Delete Contact confirm button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"
   - description: "Cancel button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
 forbidden:
   - description: "Block-Contact warning — sibling popover variant"
     selector:

@@ -22,6 +22,8 @@ import io.ktor.server.routing.routing
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import io.modelcontextprotocol.kotlin.sdk.server.Server
@@ -115,6 +117,7 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import kotlin.reflect.KClass
@@ -174,6 +177,22 @@ class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
   val mcpBridge: TrailblazeMcpBridge,
   val trailsDirProvider: () -> File,
+  /**
+   * Resolves the active workspace `trails/config/` directory the daemon should layer over the
+   * classpath when discovering YAMLs (targets / toolsets / role tools). MUST honor the same
+   * resolution policy that `AppTargetDiscovery` uses — i.e. the workspace resolver that
+   * checks `TRAILBLAZE_CONFIG_DIR`, walks up from cwd looking for `trailblaze.yaml`, and
+   * returns `null` when there's no workspace. Wire from
+   * `TrailblazeSettingsRepo.getCurrentTrailblazeConfigDir()` (or equivalent).
+   *
+   * Returning `null` is fine — the daemon falls back to classpath-only discovery. Returning
+   * something different from what target discovery sees is the actual bug: workspace
+   * `*.trailhead.yaml` would appear in `targets` but not in `toolbox trailheads`.
+   *
+   * Defaults to `{ null }` so existing callers (and tests that don't care about workspace
+   * layering) keep compiling — the classpath fallback matches the pre-existing behavior.
+   */
+  val trailblazeConfigDirProvider: () -> File? = { null },
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
@@ -1026,6 +1045,15 @@ class TrailblazeMcpServer(
       // Install SSE plugin for the legacy SSE transport (supports notifications!)
       install(SSE)
 
+      // Install WebSockets plugin so the host module can expose the multiplexed `/rpc-ws`
+      // endpoint alongside the HTTP `/rpc/...` POST routes (see
+      // xyz.block.trailblaze.compose.driver.rpc.registerRpcWebSocket). The web `/devices`
+      // viewer prefers WS to eliminate the 200 ms `GetHostDeviceScreenRequest` poll cadence,
+      // but the HTTP routes remain registered so MCP / CLI / curl smoke-tests keep working.
+      install(WebSockets) {
+        pingPeriod = 15.seconds
+      }
+
       logsServerKtorEndpoints(
         logsRepo = logsRepo,
         homeCallbackHandler = homeCallbackHandler,
@@ -1348,6 +1376,18 @@ class TrailblazeMcpServer(
           },
           currentDriverTypeProvider = {
             mcpBridge.getDriverType()
+          },
+          // Layer the classpath under the workspace's already-resolved `trails/config/` (and
+          // its `dist/` output) so `*.trailhead.yaml` / `*.shortcut.yaml` files authored in
+          // workspace packs surface in the role lists. Crucially, this uses the SAME workspace
+          // resolver `AppTargetDiscovery` consumes — checking `TRAILBLAZE_CONFIG_DIR`, walking
+          // up for `trailblaze.yaml` — rather than the saved trails-file directory, which can
+          // be `.` or the app-data folder and won't match where workspace packs actually live.
+          resourceSourceProvider = {
+            workspaceLayeredConfigResourceSource(
+              configDir = trailblazeConfigDirProvider(),
+              logPrefix = "[ToolDiscoveryToolSet]",
+            )
           },
         ).asTools(),
       )

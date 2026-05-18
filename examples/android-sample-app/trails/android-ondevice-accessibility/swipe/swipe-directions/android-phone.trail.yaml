@@ -14,7 +14,7 @@
           reason: To navigate to the 'Swipe' tab, I need to tap on the tab labeled 'Swipe'. The corresponding nodeId is 49.
           nodeSelector:
             androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
+              classNameRegex: android.view.View
               collectionItemRowIndex: 0
               collectionItemColumnIndex: 3
   - step: Swipe forward to page 3, then swipe back to page 2

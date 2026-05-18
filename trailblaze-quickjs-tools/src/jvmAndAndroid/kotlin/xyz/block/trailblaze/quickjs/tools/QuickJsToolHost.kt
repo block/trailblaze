@@ -130,7 +130,7 @@ class QuickJsToolHost internal constructor(
         // Inject framework-provided resolver methods on `ctx.target`. Methods can't
         // survive the JSON-serialization round-trip (host → JS engine), so we attach
         // them here on the JS side after deserialization. The methods read from the
-        // same `target` data the framework already populates (resolvedAppId, appIds[],
+        // same `target` data the framework already populates (appId, appIds[],
         // and the future resolvedBaseUrl / baseUrls[] fields when the manifest schema
         // for `target.platforms.web.base_urls:` lands). Forward-compatible: when the
         // framework starts emitting baseUrls data, `resolveBaseUrl` automatically
@@ -138,7 +138,7 @@ class QuickJsToolHost internal constructor(
         if (__ctx && __ctx.target) {
           __ctx.target.resolveAppId = function(options) {
             const opts = options || {};
-            const fromTarget = this.resolvedAppId || (this.appIds && this.appIds[0]);
+            const fromTarget = this.appId || (this.appIds && this.appIds[0]);
             if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
             if (typeof opts.defaultAppId === 'string') {
               const trimmed = opts.defaultAppId.trim();
@@ -157,14 +157,98 @@ class QuickJsToolHost internal constructor(
             return undefined;
           };
         }
-        const result = await tool.handler(__args, __ctx);
+        // Wrap the handler call in a JS-side try/catch so a JS-side throw surfaces through
+        // the same `isError: true` envelope path that `toTrailblazeToolResult` already maps
+        // to `ExceptionThrown.errorMessage`. Without this catch, the throw escapes QuickJS as
+        // a Kotlin throwable whose `.message` carries the JS error message but loses
+        // `Error.stack` (the bundle filename + line/col QuickJS-NG fills in) — the author
+        // debugging from session logs sees "boom" with no breadcrumb to the source line.
+        // Surfacing the stack here keeps the existing Kotlin-side catch a fallback for
+        // anything QuickJS still routes through the throwable path (engine crashes,
+        // unhandled rejections that escape this scope, etc.).
+        let __dispatchResult;
+        let __dispatchError;
+        // Track caught-ness with an explicit boolean rather than `if (__dispatchError)`.
+        // Falsy throws (`throw 0`, `throw ''`, `throw false`, `throw null`, `throw undefined`)
+        // are legal in JS and must still surface as `isError: true` envelopes — a truthiness
+        // check would misclassify them as successes and silently swallow the failure.
+        let __dispatchCaught = false;
         try {
-          globalThis.__trailblazeLastResult = JSON.stringify(result == null ? {} : result);
+          __dispatchResult = await tool.handler(__args, __ctx);
         } catch (e) {
+          __dispatchError = e;
+          __dispatchCaught = true;
+        }
+        if (__dispatchCaught) {
+          // `e.name` ('Error', 'TypeError', 'RangeError', …) prefixes the message so the
+          // class of failure is visible at a glance. `e.stack` is QuickJS-NG's filled-in
+          // stack with the bundle filename and line/col of every frame; missing on
+          // primitive throws (`throw "string"`, `throw 42`) which don't carry stack info,
+          // in which case we just fall back to the stringified value.
+          const __e = __dispatchError;
+          // `__isErrorObj` and `__name` both read properties off the thrown value. Each access
+          // can independently throw — `Object.defineProperty(o, 'name', { get() { throw … } })`
+          // and proxy `has` traps are both legal — so a hostile throw could re-introduce the
+          // lost-envelope failure mode this catch exists to prevent. The defensive wrappers
+          // around `String(__e)` and `__e.stack` aren't enough on their own; the property
+          // accesses ahead of them need the same treatment. `hasOwnProperty.call(...)` is used
+          // instead of `'message' in __e` so a proxy `has` trap can't intercept the check.
+          let __isErrorObj = false;
+          try {
+            __isErrorObj = __e !== null && __e !== undefined && typeof __e === 'object' &&
+              Object.prototype.hasOwnProperty.call(__e, 'message');
+          } catch (__hasOwnError) {
+            // Even `hasOwnProperty` can be tripped up by a poisoned prototype — fall back to
+            // the safer object-presence check and treat the throw as a primitive.
+            __isErrorObj = false;
+          }
+          let __name = 'Error';
+          if (__isErrorObj) {
+            try {
+              const __n = __e.name;
+              if (typeof __n === 'string' && __n.length > 0) __name = __n;
+            } catch (__nameError) {
+              // Accessor-defined `name` that throws — keep the default `'Error'` prefix.
+            }
+          }
+          // Defensive stringify: `String(obj)` itself can throw for some objects (null prototype
+          // + missing toString/valueOf, throwing accessor on toString, etc.). If it does, we'd
+          // re-introduce the very Kotlin-side-throw + lost-envelope failure mode this catch
+          // exists to prevent — flagged by automated review. Fall back to a static placeholder
+          // so the error envelope still ships rather than crashing the dispatch.
+          let __msg;
+          try {
+            __msg = __isErrorObj ? __e.message : String(__e);
+          } catch (__stringifyError) {
+            __msg = '<unstringifiable thrown value>';
+          }
+          if (__msg === undefined || __msg === null) {
+            __msg = String(__msg);
+          }
+          let __stack = '';
+          if (__isErrorObj) {
+            try {
+              if (typeof __e.stack === 'string' && __e.stack.length > 0) {
+                __stack = '\n' + __e.stack;
+              }
+            } catch (__stackError) {
+              // Accessor-defined `stack` that throws — same defense as above. Drop the stack
+              // rather than crashing; the message is still informative on its own.
+            }
+          }
           globalThis.__trailblazeLastResult = JSON.stringify({
             isError: true,
-            content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
+            content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
           });
+        } else {
+          try {
+            globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);
+          } catch (e) {
+            globalThis.__trailblazeLastResult = JSON.stringify({
+              isError: true,
+              content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
+            });
+          }
         }
       """.trimIndent()
       quickJs.evaluate<Any?>(dispatchExpr, "call-tool-$name.js", true)

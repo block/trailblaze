@@ -309,12 +309,18 @@ class ConfigShowCommand : Callable<Int> {
 }
 
 /**
- * List available target apps, or set the active target.
+ * List available target apps, or set the daemon-wide default target.
  *
  * Examples:
  *   trailblaze config target             - List available targets
  *   trailblaze config target myapp       - Set target to "myapp"
  *   trailblaze config target default     - Use the default (no-app) target
+ *
+ * The `--target X --device Y` flag on action commands (`tool`, `blaze`, etc.)
+ * is **session-scoped** — it doesn't write to this persistent config, it sets
+ * the target on the daemon's per-device session only. Use this subcommand to
+ * change the persistent fallback that takes effect when no per-device session
+ * target is set.
  */
 @Command(
   name = "target",
@@ -383,6 +389,11 @@ class ConfigTargetCommand : Callable<Int> {
 
     Console.info("")
     Console.info("Set with: trailblaze config target <id>")
+    Console.info(
+      "(`--target` on action commands sets the target for the device's current " +
+        "Trailblaze session only. Use `trailblaze session info --device=<...>` to see what " +
+        "target a live session is running under.)"
+    )
     Console.log("")
 
     // Force exit to terminate background services started by configProvider.

@@ -8,7 +8,7 @@ required:
   - description: "Done nav button (still in edit mode)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "Active rename row 'Name: <something>'"
     selector:
       iosMaestro:
@@ -16,9 +16,9 @@ required:
   - description: "Keyboard accessory: AutoFill"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^AutoFill$"
+        accessibilityTextRegex: "AutoFill"
 forbidden:
   - description: "Edit nav button — would mean we're not in edit mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

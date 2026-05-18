@@ -229,6 +229,19 @@ expect class AndroidDeviceCommandExecutor(
   fun setClipboard(text: String)
 
   /**
+   * Returns the last text that was passed to [setClipboard] from this executor,
+   * or an empty string if [setClipboard] has not been called.
+   *
+   * Used by `mobile_pasteClipboard` to drive the paste-into-focused-field flow on
+   * Android. We deliberately don't read `ClipboardManager.getPrimaryClip` directly:
+   * Android 10+ restricts that to the currently-focused app, and instrumentation
+   * runs in a separate process from the app under test — so a direct read after
+   * our own [setClipboard] would return null/empty. Caching the value here keeps
+   * the round trip deterministic regardless of who has focus.
+   */
+  fun getClipboard(): String
+
+  /**
    * Copies a test resource (from the test APK assets on Android, or classpath on JVM)
    * to a specified path on the device.
    *

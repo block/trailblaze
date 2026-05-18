@@ -7,13 +7,13 @@ required:
   - description: "Done nav button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "Remove (red row-removal) button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Remove$"
+        accessibilityTextRegex: "Remove"
 forbidden:
   - description: "Edit button — would mean we're not in edit mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

@@ -1,5 +1,5 @@
 // Custom scripted tool: launch Google Calendar via Android shell commands —
-// uses the dual-mode `adbShell` primitive so the same body works on host-
+// uses the dual-mode `android_adbShell` primitive so the same body works on host-
 // dispatched and (future) on-device QuickJS scripted-tool execution.
 //
 // App-id resolution: `ctx.target.resolveAppId({ defaultAppId })` consults
@@ -26,15 +26,20 @@ export async function calendar_android_launchApp(args, ctx, client) {
     throw new Error("calendar_android_launchApp could not resolve an Android app id from ctx.target.");
   }
 
-  // `adbShell` (dual-mode, `requiresHost: false`) over `runCommand` with a
+  // `android_adbShell` (dual-mode, `requiresHost: false`) over `runCommand` with a
   // raw `adb shell` host invocation: avoids the host `adb` PATH dependency
   // and works on dadb / remote-server wiring too. Matches the same launch
   // pattern used by clock / contacts after the adbShell migration in #2777.
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: [
+      "am", "start",
+      "-a", "android.intent.action.MAIN",
+      "-c", "android.intent.category.LAUNCHER",
+      "-p", appId,
+    ],
   });
 
   return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;

@@ -5,21 +5,21 @@ required:
   - description: "Preview block"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Preview$"
+        accessibilityTextRegex: "Preview"
   - description: "Rename row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Rename$"
+        accessibilityTextRegex: "Rename"
   - description: "Delete row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete$"
+        accessibilityTextRegex: "Delete"
 forbidden:
   - description: "Email All — only on non-empty list context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Email All$"
+        accessibilityTextRegex: "Email All"
   - description: "Message All — only on non-empty list context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Message All$"
+        accessibilityTextRegex: "Message All"

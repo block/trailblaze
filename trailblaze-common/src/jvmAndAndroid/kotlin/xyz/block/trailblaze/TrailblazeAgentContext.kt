@@ -39,6 +39,7 @@ fun TrailblazeAgentContext.logToolExecution(
   timeBeforeExecution: Instant,
   context: TrailblazeToolExecutionContext,
   result: TrailblazeToolResult,
+  dispatchedHostSide: Boolean = false,
 ) {
   // If the tool stamped an override (e.g. TapOnPointTrailblazeTool upgrading to
   // TapOnTrailblazeTool), record EVERYTHING from the override — instance, toolName, and
@@ -57,6 +58,7 @@ fun TrailblazeAgentContext.logToolExecution(
       traceId = context.traceId,
       session = sessionProvider.invoke().sessionId,
       isRecordable = recordedTool.getIsRecordableFromAnnotation(),
+      dispatchedHostSide = dispatchedHostSide,
     )
   // Clear the override after consuming it. The execution context is reused across every
   // tool in a single runTrailblazeTools(...) batch, so a stale override would bleed into
@@ -100,6 +102,7 @@ fun TrailblazeAgentContext.logToolExecution(
   timeBeforeExecution: Instant,
   traceId: TraceId,
   result: TrailblazeToolResult,
+  dispatchedHostSide: Boolean = false,
 ) {
   val session = sessionProvider.invoke()
   val toolLog = TrailblazeLog.TrailblazeToolLog(
@@ -113,6 +116,7 @@ fun TrailblazeAgentContext.logToolExecution(
     traceId = traceId,
     session = session.sessionId,
     isRecordable = tool.getIsRecordableFromAnnotation(),
+    dispatchedHostSide = dispatchedHostSide,
   )
   trailblazeLogger.log(session, toolLog)
 }

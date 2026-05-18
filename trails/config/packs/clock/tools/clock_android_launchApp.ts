@@ -1,6 +1,6 @@
 // Custom scripted tool: launch the Google Clock app via Android shell commands —
 // demonstrates the per-file scripted-tool authoring path on Trailblaze's Scriptine
-// runtime, and the dual-mode `adbShell` framework primitive.
+// runtime, and the dual-mode `android_adbShell` framework primitive.
 //
 // App-id resolution: `ctx.target.resolveAppId({ defaultAppId })` — a framework-
 // provided method that consults `ctx.target.resolvedAppId` (framework-resolved
@@ -32,14 +32,14 @@ export async function clock_android_launchApp(args, ctx, client) {
     throw new Error("clock_android_launchApp could not resolve an Android app id from ctx.target.");
   }
 
-  // Use `adbShell` (the dual-mode device-shell primitive) rather than `launchApp`
+  // Use `android_adbShell` (the dual-mode device-shell primitive) rather than `launchApp`
   // (Maestro-shaped). The host-side `launchApp` requires a `MaestroTrailblazeAgent` on
   // the execution context, which V3-accessibility sessions don't have — they dispatch
   // via the accessibility RPC, not Maestro. The `am` invocation below performs the same
   // user-visible effect (launches the app's default launcher activity) and works on
   // every Android driver path, with no agent dependency.
   //
-  // `adbShell` is `requiresHost: false` (dual-mode) so this scripted tool composes
+  // `android_adbShell` is `requiresHost: false` (dual-mode) so this scripted tool composes
   // cleanly on both deployment paths: when the daemon dispatches it on host the call
   // routes through dadb to the device; when (in the future) the on-device QuickJS
   // bundle path lights up, the same call runs natively inside the instrumentation
@@ -52,11 +52,16 @@ export async function clock_android_launchApp(args, ctx, client) {
   // emulators (returns non-zero even on successful launches), and the host shell command
   // path strictly checks exit-code-zero for success — it would otherwise surface the
   // launch as a failure even when the app opened correctly.
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: [
+      "am", "start",
+      "-a", "android.intent.action.MAIN",
+      "-c", "android.intent.category.LAUNCHER",
+      "-p", appId,
+    ],
   });
 
   return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;

@@ -12,13 +12,13 @@ required:
   - description: "Clear-text affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Clear text$"
+        accessibilityTextRegex: "Clear text"
 forbidden:
   - description: "Search results panel — would mean there are matches"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"
   - description: "top name matches sub-header"
     selector:
       iosMaestro:
-        textRegex: "^top name matches$"
+        textRegex: "top name matches"

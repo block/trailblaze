@@ -15,11 +15,8 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
-import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
-import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
-import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
-import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
@@ -166,32 +163,15 @@ object AppTargetDiscovery {
    * Filesystem sources come after classpath so user-contributed entries override framework
    * defaults on filename collisions.
    *
-   * Two filesystem layers stack here:
-   * 1. The workspace `trails/config/` itself, picking up hand-authored target / toolset /
-   *    tool YAMLs that users edit directly.
-   * 2. The compile-output directory `trails/config/dist/`, which holds materialized
-   *    target YAMLs emitted by `trailblaze compile` (and by the daemon-init
-   *    [WorkspaceCompileBootstrap] before this discovery runs). The dist layer comes
-   *    LAST so generated targets win when both exist for the same id — packs are the
-   *    authoritative source for any pack-backed target, and a stale hand-authored copy
-   *    from before the pack migration shouldn't shadow the freshly-compiled output.
+   * Delegates to the shared [workspaceLayeredConfigResourceSource] in `trailblaze-models`
+   * so the layering shape stays consistent with other call sites (notably
+   * `ToolDiscoveryToolSet` in `trailblaze-server`). Keep the [logPrefix] pass-through so
+   * the layering log line shows up under `[AppTargetDiscovery]` for grepping.
    */
   private fun buildResourceSource(
     trailblazeConfigDir: File?,
     logPrefix: String,
-  ): ConfigResourceSource {
-    if (trailblazeConfigDir == null) return ClasspathConfigResourceSource
-    Console.log("$logPrefix Layering user config from: ${trailblazeConfigDir.absolutePath}")
-    return CompositeConfigResourceSource(
-      sources = listOf(
-        ClasspathConfigResourceSource,
-        FilesystemConfigResourceSource(rootDir = trailblazeConfigDir),
-        FilesystemConfigResourceSource(
-          rootDir = File(trailblazeConfigDir, TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR),
-        ),
-      ),
-    )
-  }
+  ): ConfigResourceSource = workspaceLayeredConfigResourceSource(trailblazeConfigDir, logPrefix)
 
   private fun loadCustomToolClasses(
     resourceSource: ConfigResourceSource,

@@ -30,6 +30,7 @@ import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
 import xyz.block.trailblaze.mcp.RecordedToolCall
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.KoogToolExt
@@ -607,8 +608,16 @@ class StepToolSet(
     } else {
       val notValidForDevice = resolvedToolWrappers.map { it.name }.filter { it !in availableNames }
       if (notValidForDevice.isNotEmpty()) {
+        // "web_navigate" remains a string literal because trailblaze-server cannot depend on
+        // trailblaze-playwright (where PlaywrightNativeNavigateTool is declared); introduce a
+        // shared constant if a second cross-platform hint is added.
+        val hints = buildString {
+          if (CoreTools.OPEN_URL in notValidForDevice && "web_navigate" in availableNames) {
+            append(" On web devices, use `web_navigate url=<url>` instead of `${CoreTools.OPEN_URL}`.")
+          }
+        }
         val msg = "Tool${if (notValidForDevice.size > 1) "s" else ""} not valid for the current device/target: " +
-          "${notValidForDevice.joinToString(", ")}. Use toolbox() to see available tools."
+          "${notValidForDevice.joinToString(", ")}.$hints Use toolbox() to see available tools."
         emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
         return StepResult(executed = false, error = msg).toMarkdown()
       }

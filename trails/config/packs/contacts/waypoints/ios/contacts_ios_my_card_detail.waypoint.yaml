@@ -8,22 +8,22 @@ required:
   - description: "Inline action bar HStack"
     selector:
       iosMaestro:
-        resourceIdRegex: "^InlineActionsHStack$"
+        resourceIdRegex: "InlineActionsHStack"
   - description: "Contact card details rows"
     selector:
       iosMaestro:
-        resourceIdRegex: "^ContactCardDetailsView$"
+        resourceIdRegex: "ContactCardDetailsView"
   - description: "Edit nav button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "BackButton to Lists (My Card is reached from Lists)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
-        resourceIdRegex: "^BackButton$"
+        accessibilityTextRegex: "Lists"
+        resourceIdRegex: "BackButton"
 forbidden:
   - description: "Add (+) — would mean we're on a contacts list view"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add$"
+        accessibilityTextRegex: "Add"

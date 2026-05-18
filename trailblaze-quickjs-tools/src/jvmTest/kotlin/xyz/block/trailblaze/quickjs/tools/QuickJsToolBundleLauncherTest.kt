@@ -188,7 +188,7 @@ class QuickJsToolBundleLauncherTest {
     // bundle. Launcher must skip the first and register the second's tool.
     val runtime = QuickJsToolBundleLauncher.launchAll(
       bundles = listOf(
-        McpServerConfig(command = "/bin/true"),
+        McpServerConfig(command = listOf("/bin/true")),
         McpServerConfig(script = "ignored.js"),
       ),
       deviceInfo = deviceInfo,

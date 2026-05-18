@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host
 
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
@@ -14,6 +15,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
+import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.prefersHostSideForCallbackInstance
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -71,11 +74,29 @@ class HostOnDeviceRpcTrailblazeAgent(
    * instead of hitting "Unsupported tool type for RPC execution".
    */
   trailblazeToolRepo: TrailblazeToolRepo? = null,
+  /**
+   * Pre-resolved session target — threaded into every [TrailblazeToolExecutionContext] this
+   * agent builds so in-process scripted-tool handlers can read `ctx.target.{id, appIds,
+   * appId}` without per-call device probes. Mirrors the V3 wiring in
+   * `HostAccessibilityRpcClient`: the host-side caller resolves the target once at session
+   * start and passes it in here. Defaults to null to preserve back-compat with callers that
+   * don't yet wire it (their in-process scripted tools will see `ctx.target` as undefined,
+   * which is the pre-#2904 behaviour).
+   */
+  resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget? = null,
+  /**
+   * Device-filtered app id for [resolvedTarget]. Null when no declared candidate is installed
+   * (scripted tools should fall back to `ctx.target?.appIds[0]` and let the launch fail
+   * downstream with a clearer message). Threaded identically to [resolvedTarget].
+   */
+  appId: String? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   trailblazeToolRepo = trailblazeToolRepo,
+  resolvedTarget = resolvedTarget,
+  appId = appId,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
@@ -204,11 +225,29 @@ class HostOnDeviceRpcTrailblazeAgent(
         // Cast is safe: interpolation only mutates string scalars, not the concrete tool type.
         val resolvedTool = interpolateMemoryInTool(tool, memory) as ExecutableTrailblazeTool
         if (resolvedTool is HostLocalExecutableTrailblazeTool) {
-          runBlocking { resolvedTool.execute(context) }
+          executeHostLocalWithLogging(resolvedTool, context)
         } else if (resolvedTool.requiresHostInstance()) {
           // Host-only tools (cbot, dip-slot) run locally — they need ADB/USB on the Mac.
           // Instance-level so YAML-defined tools can opt in via `requires_host: true`.
-          runBlocking { resolvedTool.execute(context) }
+          executeHostLocalWithLogging(resolvedTool, context)
+        } else if (prefersHostSideForCallback(resolvedTool)) {
+          // Dual-mode composition primitives (`mobile_listInstalledApps`, `android_sendBroadcast`,
+          // `android_adbShell`) have both host-side and on-device actuals, but the on-device-RPC return
+          // path (`RunYamlResponse`) only carries `success`/`errorMessage` — it doesn't carry a
+          // per-tool `Success.message` payload. That's fine for action-style tools (tap, swipe)
+          // where the message is just informational, but for these primitives the message IS
+          // the contract: scripted-tool handlers running in a host-side bun subprocess compose
+          // them via `client.callTool(...)` specifically to read the returned data (installed
+          // app ids, command stdout, etc.). Routing through RPC would silently discard that
+          // data and surface as `JSON.parse(undefined)` in the TS handler several frames down.
+          //
+          // Host-side dispatch uses the dadb-backed `AndroidDeviceCommandExecutor` actual, which
+          // produces identical output to the on-device actual for these tools. The on-device
+          // QuickJS bundle path is unaffected because it doesn't go through this agent at all.
+          // Remove this branch once the on-device-RPC contract is extended to carry per-tool
+          // result payloads (tracked separately — needs `RunYamlResponse`, the on-device tool
+          // dispatch loop, and the host-side `toToolResult` mapping all to grow the field).
+          executeHostLocalWithLogging(resolvedTool, context)
         } else {
           executeToolViaRpc(resolvedTool, context.traceId)
         }
@@ -222,7 +261,17 @@ class HostOnDeviceRpcTrailblazeAgent(
           if (resolvedExpanded is HostLocalExecutableTrailblazeTool) {
             // Host-local subtools must not be RPCed to the device — they read/write
             // host-side files and credentials that have no meaning on the device JVM.
-            runBlocking { resolvedExpanded.execute(context) }
+            executeHostLocalWithLogging(resolvedExpanded, context)
+          } else if (prefersHostSideForCallback(resolvedExpanded)) {
+            // Same on-device-RPC-strips-Success.message rationale as the top-level dispatch
+            // branch above — a delegating tool that expands to one of the dual-mode
+            // composition primitives (e.g. an alias delegating to `android_adbShell`) must still
+            // route host-side, otherwise the `Success.message` payload scripted-tool
+            // composers depend on gets silently discarded by the RPC return path.
+            // Cast safe: `resolvedExpanded` was an `ExecutableTrailblazeTool` before
+            // `interpolateMemoryInTool` (which only mutates string scalars, not the type) —
+            // same reasoning as the top-level executeTool cast on line 208.
+            executeHostLocalWithLogging(resolvedExpanded as ExecutableTrailblazeTool, context)
           } else {
             executeToolViaRpc(resolvedExpanded, context.traceId)
           }
@@ -277,10 +326,6 @@ class HostOnDeviceRpcTrailblazeAgent(
       return executeToolViaRpc(
         tool = TapOnByElementSelector(
           nodeSelector = nodeSelector,
-          // Best-effort placeholder — the data class' non-null `selector` field requires
-          // some value. The accessibility dispatch path uses [nodeSelector]; this field
-          // is never consulted on the on-device side for accessibility recordings.
-          selector = nodeSelector.toTrailblazeElementSelector(),
           longPress = longPress,
         ),
         traceId = traceId,
@@ -290,6 +335,44 @@ class HostOnDeviceRpcTrailblazeAgent(
     // through to [executeMaestroCommands] via [super.execute]. Same behavior as before
     // for the instrumentation/Maestro flows.
     return null
+  }
+
+  /**
+   * Dispatch a host-local tool (subprocess MCP, `requires_host: true`, etc.) and emit a
+   * session-log entry for it (#2924). The base class's short-circuit covers the top-level
+   * dispatch path uniformly, but this agent's [executeTool] also reaches host-local tools
+   * via the `requiresHostInstance` annotation branch and the [DelegatingTrailblazeTool]
+   * sub-tool expansion — both need their own log emit so every dispatch is visible to
+   * recording and reports regardless of how it routed through the dispatcher.
+   */
+  private fun executeHostLocalWithLogging(
+    tool: ExecutableTrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val timeBeforeExecution = Clock.System.now()
+    // Same exception-bypass guard as the base agent's host-local branch (#2924 review):
+    // a thrown exception would otherwise skip `logToolExecution` and leave the dispatch
+    // invisible. Convert non-cancellation throws into a `TrailblazeToolResult.Error` and
+    // log it; re-throw `CancellationException` so coroutine cancellation still unwinds.
+    val result: TrailblazeToolResult = try {
+      runBlocking { tool.execute(context) }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, tool)
+    }
+    logToolExecution(
+      tool = tool,
+      timeBeforeExecution = timeBeforeExecution,
+      context = context,
+      result = result,
+      // Same rationale as the `BaseTrailblazeAgent` host-local branch — flag for badging /
+      // filtering so a developer reading the session log can tell at a glance whether the
+      // dispatch ran on the host JVM (subprocess MCP, `requires_host`, host-preferred
+      // composition primitive) or got routed to the device over RPC.
+      dispatchedHostSide = true,
+    )
+    return result
   }
 
   private fun executeToolViaRpc(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult {
@@ -407,6 +490,19 @@ class HostOnDeviceRpcTrailblazeAgent(
       )
     }
   }
+
+  /**
+   * Thin alias for [prefersHostSideForCallbackInstance] kept on the agent for two reasons:
+   *   1. Discoverability — the call site in [executeTool] reads `prefersHostSideForCallback`
+   *      adjacent to `requiresHostInstance`, matching the local naming.
+   *   2. `internal` visibility — `HostOnDeviceRpcTrailblazeAgentTest` invokes this directly
+   *      to pin the predicate without exercising the full RPC machinery; promoting it to
+   *      `internal` here keeps the test's call shape unchanged after the migration to a
+   *      shared helper. The actual reflection + metadata-override logic lives in
+   *      `TrailblazeTools.kt` so all five sibling predicates stay co-located.
+   */
+  internal fun prefersHostSideForCallback(tool: TrailblazeTool): Boolean =
+    tool.prefersHostSideForCallbackInstance()
 
   /** Replaces this agent's [memory] with the device's post-execution snapshot. */
   private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>) {

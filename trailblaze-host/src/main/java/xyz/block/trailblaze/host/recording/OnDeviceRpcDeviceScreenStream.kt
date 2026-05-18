@@ -64,7 +64,7 @@ class OnDeviceRpcDeviceScreenStream(
   initialDeviceWidth: Int,
   initialDeviceHeight: Int,
   private val frameIntervalMs: Long = 200,
-) : DeviceScreenStream {
+) : DeviceScreenStream, AutoCloseable {
 
   override val deviceWidth: Int = initialDeviceWidth
   override val deviceHeight: Int = initialDeviceHeight
@@ -82,14 +82,44 @@ class OnDeviceRpcDeviceScreenStream(
 
   override fun frames(): Flow<ByteArray> = flow {
     while (currentCoroutineContext().isActive) {
-      val bytes = captureFrame()
+      val bytes = captureMirrorFrame()
       if (bytes != null) emit(bytes)
       delay(frameIntervalMs)
     }
   }
 
-  private suspend fun captureFrame(): ByteArray? {
-    val response = provider.getScreenState(includeScreenshot = true) ?: return null
+  /**
+   * Mirror-only fast path used by the live `/devices` viewer's frame loop. Asks the on-device
+   * handler to skip the accessibility-tree walk and JSON-serialize, dropping per-frame cost
+   * from ~100-300 ms to ~30-60 ms (the gap that limited live FPS to ~3).
+   *
+   * **Critical: does NOT update [lastResponse].** The recorder reads `lastResponse.trailblazeNodeTree`
+   * at tap-time and requires the (screenshot, tree) pair to come from the same on-device call.
+   * If we cached a tree-less response here, a subsequent tap might pair a fresh screenshot with
+   * a stale tree, breaking the atomicity guarantee that selector generation depends on. Use
+   * [captureAtomicFrame] for any path that needs to populate the cache.
+   */
+  private suspend fun captureMirrorFrame(): ByteArray? {
+    val response = provider.getScreenState(
+      includeScreenshot = true,
+      includeTree = false,
+    ) ?: return null
+    return response.screenshotBase64?.decodeBase64Bytes()
+  }
+
+  /**
+   * Atomic full-state capture: screenshot + tree from a single on-device call. Updates
+   * [lastResponse] so subsequent `getViewHierarchy()` / `getTrailblazeNodeTree()` calls from
+   * the recorder return the tree captured at the same instant as this screenshot.
+   *
+   * Used by [getScreenshot] which is exactly what the recording tap-handler invokes — so a
+   * recorded tap commits a (screenshot, tree) pair that was produced atomically on-device.
+   */
+  private suspend fun captureAtomicFrame(): ByteArray? {
+    val response = provider.getScreenState(
+      includeScreenshot = true,
+      includeTree = true,
+    ) ?: return null
     lastResponse = response
     return response.screenshotBase64?.decodeBase64Bytes()
   }
@@ -118,14 +148,28 @@ class OnDeviceRpcDeviceScreenStream(
   }
 
   override suspend fun inputText(text: String) {
-    dispatchTool(InputTextTrailblazeTool(text = text))
+    // `hideKeyboardAfter = false` — this stream's `inputText` serves the wasm `/devices`
+    // viewer's *live typing* path. The default tool behavior (hide the soft keyboard after
+    // typing) is correct for batch trail runs but wrong here: with the soft keyboard
+    // suppressed by [AndroidSoftKeyboardSuppressor], `HideKeyboardCommand` on Android falls
+    // through to a `BACK` keycode that navigates the current activity away. Sam's repro on
+    // PR #3021: typing "sam" navigated the device back. Recorded trail YAMLs continue to
+    // omit the flag, so replay still dismisses the keyboard between steps as expected.
+    dispatchTool(InputTextTrailblazeTool(text = text, hideKeyboardAfter = false))
   }
 
   override suspend fun pressKey(key: String) {
+    // Maps the live device viewer's keyboard handler key names onto the typed
+    // [PressKeyTrailblazeTool.PressKeyCode] surface the on-device runner understands.
+    // Backspace / Tab / Escape used to fall through to `else -> return` and silently no-op,
+    // which is what was making Delete on the wasm `/devices` viewer feel broken.
     val keyCode = when (key) {
       "Back" -> PressKeyTrailblazeTool.PressKeyCode.BACK
       "Enter" -> PressKeyTrailblazeTool.PressKeyCode.ENTER
       "Home" -> PressKeyTrailblazeTool.PressKeyCode.HOME
+      "Backspace", "Delete" -> PressKeyTrailblazeTool.PressKeyCode.BACKSPACE
+      "Tab" -> PressKeyTrailblazeTool.PressKeyCode.TAB
+      "Escape" -> PressKeyTrailblazeTool.PressKeyCode.ESCAPE
       else -> return
     }
     dispatchTool(PressKeyTrailblazeTool(keyCode = keyCode))
@@ -143,7 +187,18 @@ class OnDeviceRpcDeviceScreenStream(
     return refreshScreenState()?.trailblazeNodeTree
   }
 
-  override suspend fun getScreenshot(): ByteArray = captureFrame() ?: ByteArray(0)
+  override suspend fun getScreenshot(): ByteArray = captureAtomicFrame() ?: ByteArray(0)
+
+  /**
+   * Skips the accessibility-tree walk + JSON serialize that `getScreenState` normally bundles
+   * with every screenshot. Drops per-call cost from ~100-300 ms to ~30-60 ms — the source of
+   * ~3 fps on the live `/devices` viewer.
+   *
+   * Does NOT update [lastResponse]; the recorder's atomicity guarantee (see kdoc on
+   * [captureMirrorFrame]) requires that only [captureAtomicFrame]-sourced data lands in the
+   * cache. Mirror callers don't care.
+   */
+  override suspend fun getMirrorScreenshot(): ByteArray = captureMirrorFrame() ?: ByteArray(0)
 
   private suspend fun refreshScreenState(): GetScreenStateResponse? {
     return provider.getScreenState(includeScreenshot = false)?.also { lastResponse = it }
@@ -171,6 +226,10 @@ class OnDeviceRpcDeviceScreenStream(
         )
       }
     }
+  }
+
+  override fun close() {
+    rpc.close()
   }
 
   private suspend fun dispatchTool(tool: TrailblazeTool) {

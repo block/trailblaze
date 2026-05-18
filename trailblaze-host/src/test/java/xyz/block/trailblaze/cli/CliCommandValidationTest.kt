@@ -618,6 +618,17 @@ class CliCommandValidationTest {
     }
   }
 
+  @Test
+  fun `picocli rejects --device on config target now that it's session-scoped`() {
+    // `--target X --device Y` is session-scoped via the daemon's MCP tool and
+    // does NOT flow through `config target`, so the subcommand intentionally
+    // does not accept `--device`.
+    val cmd = ConfigCommand()
+    assertFailsWith<CommandLine.UnmatchedArgumentException> {
+      CommandLine(cmd).parseArgs("target", "myapp", "--device=web")
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // parseStepRange
   // ---------------------------------------------------------------------------

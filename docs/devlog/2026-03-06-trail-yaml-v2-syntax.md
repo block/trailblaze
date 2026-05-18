@@ -306,3 +306,155 @@ BLAZE_FAST=1 blaze "Enter login credentials"
 - External tools/scripts that parse trail files need updating
 - Two parsers coexist temporarily during migration
 - Authors who previously used bare `tools` blocks must now provide an objective — a small tax that produces repairable trails
+
+---
+
+## Revision — 2026-05-17
+
+After working through real authoring scenarios, this revision narrows the v2-original design and drops several speculative pieces. Three things change from v2-original; the broader principles (NL as source of truth, no bare tool blocks, ephemeral-tools-cache) all hold.
+
+### Refinement 1 — `config:` stays, `trailhead:` is a NEW sibling key, not a rename of `config:`
+
+The original v2 proposed renaming `config:` → `trailhead:` with everything (identity, target, platform, metadata, memory, context, setup) nested inside. That collapsed too many concepts under one name and forced a top-level rename on every existing trail.
+
+The refined model keeps `config:` as identity (same job as v1 — `id`, `target`, `platform`, `metadata`, `memory`, `context`) and introduces `trailhead:` as a sibling key whose sole job is to describe the deterministic starting state of the trail.
+
+```yaml
+config:                                 # identity, unchanged in spirit from v1
+  id: ...
+  target: myapp
+  platform: android
+
+trailhead:                              # NEW — the bootstrap (singleton)
+  step: Sign in as standard merchant on Square
+  tools:
+    - myapp_launchAppSignedInWithAccount:
+        key: defaults/standard-account
+
+trail:                                  # list of steps (the test)
+  - step: Go to More Menu
+    tools:
+      - tapOnElementBySelector: { ... }
+```
+
+Three sibling top-level keys: `config / trailhead / trail`. Each does one thing.
+
+### Refinement 2 — `trailhead` is a singleton with `{ step, tools }` shape, not a `setup:` list
+
+The original v2 had `trailhead.setup:` as a list of objectives, each with optional nested tools. The refined model: `trailhead:` is one entry, structurally identical to a `trail:` entry — `{ step, tools }`. One NL step describing the starting state, plus one or more tools to reach it. The asymmetry between `trailhead:` (singleton) and `trail:` (list) reflects the real semantic difference: one start, many test steps.
+
+| Key | Outer container | Inner shape |
+|---|---|---|
+| `trailhead` | singleton | `{ step, tools }` |
+| `trail` | list | `[{ step, tools }, …]` |
+
+The `tools:` list under `trailhead` can hold multiple trailhead-tagged tools (e.g. an API-call trailhead followed by an app-launch trailhead), but each must be a tool tagged via `@TrailblazeToolClass(trailheadTo = …)` or a `*.trailhead.yaml` file.
+
+### Refinement 3 — `step:` (v1 keyword) stays; `objective:` lives only in code; `trailhead:` is OPTIONAL
+
+- The original v2 renamed `step:` → `objective:` to nudge authors toward intent over mechanics. In practice `objective` reads as scale-ambiguous (the trail's objective, or this entry's?); `step:` is scope-locked and already understood. The intent-over-mechanics discipline lives as a lint hint and a skill principle, not a keyword. The abstract concept stays in Kotlin code.
+- `trailhead:` is **optional** in the parser, same status as `config:`. Trails without a `trailhead:` block parse and run. Zero migration tax for existing trails. The discipline ("every reproducible trail has a trailhead") is established through the authoring surface, not parser rejection.
+
+| v1 → v2 (original) | v1 → v2 (refined) |
+|---|---|
+| `step` → `objective` | `step` stays `step` |
+| Rename `config` → `trailhead` | Keep `config:`; add `trailhead:` as sibling |
+| `trailhead.setup:` as a list | `trailhead:` is one `{ step, tools }` entry |
+| (implicit) trailhead-required | trailhead optional; absence is silent |
+
+### How authors will be funneled to use trailheads — design TBD
+
+This part of the original v2 design (CLI flows that walk authors through picking a trailhead) is still open. The current commitments:
+
+- The data needed for an author or agent to choose a trailhead is already on `@TrailblazeToolClass` (the `trailheadTo` field) and `@LLMDescription` (the description text on class and params). No new metadata fields like `when_to_use` / `do_not_use_for` / `composes_with` should be invented; the existing `@LLMDescription` text is the right place for "when to use this." If a particular tool's description isn't decision-grade, the fix is to improve that `@LLMDescription` — not to introduce a parallel metadata channel.
+- Discovery happens via the existing `./trailblaze toolbox` command, extended with section grouping and positional role filters:
+  - `./trailblaze toolbox` — everything, grouped by section (TRAILHEADS / SHORTCUTS / TOOLS) with one-line role descriptions.
+  - `./trailblaze toolbox trailheads` — just trailhead-tagged.
+  - `./trailblaze toolbox shortcuts` — just shortcut-tagged.
+  - `./trailblaze toolbox tools` — just the residual (no trailhead/shortcut metadata).
+  - Optional `--target=<T> --platform=<P>` to narrow.
+- The implementation noun stays `tool` everywhere: `TrailblazeTool` (Kotlin class), `./trailblaze toolbox` (CLI), `./trailblaze tool <name>` (invocation), `tools:` (YAML key). The TOOLS section in the listing is the same word as the implementation type — the overload is harmless because section descriptions disambiguate the role.
+- Plain-text output for now; structured output (YAML / JSON) deferred until a concrete need surfaces.
+- Specific funnel surfaces (interactive flows in `./trailblaze blaze`, scaffolding defaults, the on-demand pipeline's TestRail → trail generator) are NOT settled here. They will be designed against a working discovery surface first.
+
+The principle the funnel work will hold to: **make it easy to do things the right way.** Discovery comes first so authors can SEE what's available; funneling them through workflows is a follow-on once discovery is solid.
+
+### Constraint on the trailhead's `tools:` list
+
+When `trailhead:` IS present, every tool listed should resolve to a trailhead-tagged tool. The check is a soft lint warning (a teaching message pointing at `./trailblaze toolbox trailheads`), not a parser rejection. Absence of `trailhead:` is permitted; mis-tagged contents inside `trailhead:` get a warning.
+
+### Migration
+
+No script for the trailhead concept itself — it's additive, not a rename. Existing trails parse and run. The original v2 keyword renames (`prompts:` → `trail:`, removal of bare `- tools:` blocks, etc.) remain a separate workstream with their own migrator when that work happens.
+
+### Examples
+
+**Single-step bootstrap (90% case):**
+```yaml
+trailhead:
+  step: Sign in as standard merchant on Square
+  tools:
+    - myapp_launchAppSignedInWithAccount:
+        key: defaults/standard-account
+```
+
+**Multi-step bootstrap (API call + launch):**
+```yaml
+trailhead:
+  step: Create a test merchant via API, then launch Square signed in
+  tools:
+    - myapp_apiSetup:
+        template: standard-account
+    - myapp_launchAppSignedInWithAccount:
+        key: defaults/standard-account
+```
+
+**NL-only `blaze.yaml` (recorder materializes `tools:` on first run):**
+```yaml
+config:
+  id: testrail/suite_71172/section_946176/case_5552497
+  target: myapp
+  platform: android
+trailhead:
+  step: Sign in as standard merchant on Square
+trail:
+  - step: Go to More Menu
+  - step: Tap Add-ons
+  - step: Select "Square Appointments"
+```
+
+**Trail without a trailhead (legacy or intentional fragment):**
+```yaml
+config:
+  id: my-debug-trail
+  target: myapp
+  platform: android
+
+trail:
+  - step: ...
+    tools: [...]
+```
+
+Parses and runs. Soft warning at lint time; no failure.
+
+### Open questions for follow-up devlogs
+
+1. **Funnel design** — how the authoring surfaces (`./trailblaze blaze`, scaffolding, the TestRail generator) walk authors through trailhead selection. Discovery via `./trailblaze toolbox trailheads` is the foundation; the workflow design happens after that lands.
+2. **Default trailhead per target** — each registered target needs a designated default trailhead tool (e.g. `myapp` defaults to `myapp_launchAppSignedInWithAccount(key: defaults/standard-account)`). Lives in a registry of some kind; format TBD.
+3. **`@LLMDescription` audit** — for the existing trailhead-tagged tool classes, ensure each description is decision-grade. Some are; others need a pass.
+4. **Validation lint behavior** — `./trailblaze toolbox trailheads`-based lint warnings vs CI-gating. Default warn-only; opt-in `--strict` for teams that want PR-blocking.
+
+### What changed (added to original "What changed" section above)
+
+**Positive:**
+- Keep `config:` as identity — zero churn on existing trail headers.
+- `trailhead:` is a new sibling key with a single shape `{ step, tools }`, structurally identical to a trail entry. The asymmetry (singleton vs list) teaches the semantic difference.
+- `step:` keyword preserved — no rename tax.
+- Optional schema means zero migration cost for existing trails.
+- Discovery surface is the existing `./trailblaze toolbox` with positional role filters (`trailheads` / `shortcuts` / `tools`) and section grouping. Small additive change; no new top-level commands, no rename of `tool` / `toolbox` / `TrailblazeTool` / `tools:` YAML key.
+- No invented catalogue metadata. The agent decision-signal (`@LLMDescription` text on class + params, `trailheadTo` on the annotation) already exists; the CLI surfaces what's there.
+
+**Negative:**
+- Discipline depends on authoring-surface quality, which is not yet designed.
+- Existing trails without trailheads will silently work, creating a long tail of non-bootstrap trails until they're touched.
+- The funnel design is deferred. Discovery exists; getting authors to actually USE trailheads at the right moments is the harder problem and isn't settled here.

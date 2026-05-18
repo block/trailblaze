@@ -369,4 +369,243 @@ class TrailblazeNodeMapperTest {
     val result = root.filterImportantForAccessibility()
     assertEquals(0, result.children.size, "All non-important nodes should be dropped regardless of interactive signals")
   }
+
+  // --- WebView exception ---
+  // WebView descendants are HTML nodes whose `isImportantForAccessibility` is not set by
+  // Chromium, and the WebView container itself is typically not marked important either.
+  // Without the exception, the default snapshot loses every scrap of page content
+  // Chromium does expose (page title, ARIA-labeled landmarks, etc.).
+
+  @Test
+  fun `filterImportantForAccessibility preserves WebView even when not-important`() {
+    val webChild = nodeWithDetail(
+      20,
+      DriverNodeDetail.AndroidAccessibility(
+        isImportantForAccessibility = false,
+        text = "Example Domain",
+      ),
+    )
+    val webView = nodeWithDetail(
+      10,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(webChild),
+    )
+    val root = node(1, true, listOf(webView))
+    val result = root.filterImportantForAccessibility()
+
+    // WebView itself survives despite isImportantForAccessibility=false
+    assertEquals(1, result.children.size)
+    assertEquals(10L, result.children[0].nodeId)
+    // ...and so does its subtree (which would otherwise be dropped by the heuristic).
+    assertEquals(1, result.children[0].children.size)
+    assertEquals(20L, result.children[0].children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility preserves entire subtree when root is a WebView`() {
+    // Receiver-side guard: a tree rooted at a WebView must be returned untouched. The
+    // recursive child-filter would otherwise still trim non-important descendants of
+    // the root WebView, contradicting the kdoc promise that the entire WebView subtree
+    // is preserved as-is.
+    val notImportantLeaf = nodeWithDetail(
+      30,
+      DriverNodeDetail.AndroidAccessibility(
+        isImportantForAccessibility = false,
+        text = "Some web text",
+      ),
+    )
+    val notImportantInner = nodeWithDetail(
+      20,
+      DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false),
+      children = listOf(notImportantLeaf),
+    )
+    val webViewRoot = nodeWithDetail(
+      10,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(notImportantInner),
+    )
+
+    val result = webViewRoot.filterImportantForAccessibility()
+
+    // Root identity preserved.
+    assertEquals(10L, result.nodeId)
+    // Full subtree preserved exactly — none of the non-important descendants are dropped.
+    assertEquals(1, result.children.size)
+    assertEquals(20L, result.children[0].nodeId)
+    assertEquals(1, result.children[0].children.size)
+    assertEquals(30L, result.children[0].children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility WebView exception only matches exact webkit class`() {
+    // Don't accidentally preserve subclasses or unrelated views whose className contains "WebView".
+    // The match is exact `android.webkit.WebView` only.
+    val pretender = nodeWithDetail(
+      10,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "com.example.MyWebViewWrapper",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(
+        nodeWithDetail(20, DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false)),
+      ),
+    )
+    val root = node(1, true, listOf(pretender))
+    val result = root.filterImportantForAccessibility()
+
+    // Pretender + its child should both be dropped via normal importance filtering.
+    assertEquals(0, result.children.size)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility promotes WebView out of non-important parent`() {
+    // The interesting combination: a WebView nested under a parent that gets filtered out
+    // (isImportantForAccessibility = false). The non-important parent must be dropped per
+    // the standard heuristic, but the WebView and its subtree must survive and be promoted
+    // up to take the parent's place. Without this guarantee, sites that wrap their WebView
+    // in a non-semantic container (FrameLayout, etc.) would lose all web content even
+    // though the WebView exception is in place.
+    val webChild = nodeWithDetail(
+      30,
+      DriverNodeDetail.AndroidAccessibility(
+        isImportantForAccessibility = false,
+        text = "Example Domain",
+      ),
+    )
+    val webView = nodeWithDetail(
+      20,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(webChild),
+    )
+    val nonImportantWrapper = nodeWithDetail(
+      10,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.FrameLayout",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(webView),
+    )
+    val root = node(1, true, listOf(nonImportantWrapper))
+
+    val result = root.filterImportantForAccessibility()
+
+    // Wrapper is dropped; WebView is promoted directly under the root.
+    assertEquals(1, result.children.size)
+    assertEquals(20L, result.children[0].nodeId)
+    // WebView's subtree survives intact despite the wrapper being filtered.
+    assertEquals(1, result.children[0].children.size)
+    assertEquals(30L, result.children[0].children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility tolerates non-AndroidAccessibility driver details`() {
+    // The `isWebView()` predicate guards on `driverDetail is DriverNodeDetail.AndroidAccessibility`
+    // before reaching for `className`. Other driver-detail types (Web, IosAxe, etc.) should
+    // therefore route through the `else -> true` branch and be kept as-is. The function is
+    // `internal` and currently only called from the Android accessibility path, but this is
+    // a cheap guarantee against a future caller passing a heterogeneous tree.
+    val webNode = TrailblazeNode(
+      nodeId = 10,
+      driverDetail = DriverNodeDetail.Web(),
+      children = emptyList(),
+    )
+    val root = node(1, true, listOf(webNode))
+
+    val result = root.filterImportantForAccessibility()
+
+    // Non-Android nodes pass through unchanged.
+    assertEquals(1, result.children.size)
+    assertEquals(10L, result.children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility preserves nested WebViews as a single unit`() {
+    // A WebView inside a WebView (iframe / ad container). The child-side guard returns
+    // the outer WebView without recursing, so the inner WebView never re-enters the
+    // receiver-side guard — but the kdoc promises the entire subtree is preserved as-is,
+    // so every node beneath must survive even if marked isImportantForAccessibility=false.
+    val deeplyNestedLeaf = nodeWithDetail(
+      40,
+      DriverNodeDetail.AndroidAccessibility(
+        isImportantForAccessibility = false,
+        text = "Ad inside iframe inside WebView",
+      ),
+    )
+    val innerWebView = nodeWithDetail(
+      30,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(deeplyNestedLeaf),
+    )
+    val outerWebView = nodeWithDetail(
+      20,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(innerWebView),
+    )
+    val root = node(1, true, listOf(outerWebView))
+
+    val result = root.filterImportantForAccessibility()
+
+    // Outer WebView present.
+    assertEquals(1, result.children.size)
+    assertEquals(20L, result.children[0].nodeId)
+    // Inner WebView present (not filtered despite isImportantForAccessibility=false).
+    assertEquals(1, result.children[0].children.size)
+    assertEquals(30L, result.children[0].children[0].nodeId)
+    // Deepest leaf survives all the way down.
+    assertEquals(1, result.children[0].children[0].children.size)
+    assertEquals(40L, result.children[0].children[0].children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility keeps mixed-importance children under a WebView`() {
+    // The kdoc promises the WebView subtree is preserved as-is. That has to mean ALL
+    // children survive — including the non-important sibling between two important
+    // siblings. If someone refactored the child-side guard to e.g. drop non-important
+    // descendants while preserving the WebView itself, this test catches it.
+    val importantA = nodeWithDetail(
+      20,
+      DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = true, text = "A"),
+    )
+    val notImportant = nodeWithDetail(
+      21,
+      DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false, text = "B"),
+    )
+    val importantC = nodeWithDetail(
+      22,
+      DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = true, text = "C"),
+    )
+    val webView = nodeWithDetail(
+      10,
+      DriverNodeDetail.AndroidAccessibility(
+        className = "android.webkit.WebView",
+        isImportantForAccessibility = false,
+      ),
+      children = listOf(importantA, notImportant, importantC),
+    )
+    val root = node(1, true, listOf(webView))
+
+    val result = root.filterImportantForAccessibility()
+
+    // WebView kept, all three children survive in order.
+    assertEquals(1, result.children.size)
+    assertEquals(10L, result.children[0].nodeId)
+    val webChildren = result.children[0].children
+    assertEquals(3, webChildren.size)
+    assertEquals(listOf(20L, 21L, 22L), webChildren.map { it.nodeId })
+  }
 }

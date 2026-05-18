@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^Expand event sheet$"
+          contentDescriptionRegex: "Expand event sheet"

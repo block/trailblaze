@@ -9,5 +9,5 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^Edit$"
-          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/info_action_edit_hit$"
+          contentDescriptionRegex: "Edit"
+          resourceIdRegex: "com\\.google\\.android\\.calendar:id/info_action_edit_hit"

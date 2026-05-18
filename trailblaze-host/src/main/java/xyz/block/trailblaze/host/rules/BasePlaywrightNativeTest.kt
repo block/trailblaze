@@ -4,6 +4,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.capture.CaptureOptions
+import xyz.block.trailblaze.capture.CaptureSession
+import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -78,6 +81,14 @@ open class BasePlaywrightNativeTest(
    * cap at construction time and silently ignore later flag changes.
    */
   val maxLlmCalls: Int? = null,
+  /**
+   * Stable, un-suffixed Playwright browser identity used as the registry key for video
+   * recording. Differs from [trailblazeDeviceId] because the runner appends a per-trail
+   * UUID suffix to the latter for session-cache identity, whereas capture (in
+   * `DesktopYamlRunner`) publishes the per-session video-record dir under the original
+   * request id. Default mirrors that request id when callers don't override it.
+   */
+  val webBrowserRecordingKey: String = trailblazeDeviceId.instanceId,
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -88,6 +99,8 @@ open class BasePlaywrightNativeTest(
     headless = config.browserHeadless,
     idlingConfig = idlingConfig,
     analyticsUrlPatterns = analyticsUrlPatterns,
+    // Same key the capture stream publishes under in `PlaywrightVideoRecordDir`.
+    deviceId = webBrowserRecordingKey,
   )
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo
@@ -215,6 +228,20 @@ open class BasePlaywrightNativeTest(
     // in tools (e.g., navigate) resolve from the trail file's location.
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
+    // Self-instrument the video capture when nothing else has — the CLI/daemon path
+    // (DesktopYamlRunner) publishes its own record dir before this rule's browser is
+    // constructed, but the JUnit eval path drives this class directly and would
+    // otherwise leave the WEB platform branch of `CaptureSession.fromOptions` cold.
+    // No-op when capture is already registered for this device by an outer runner.
+    ensurePlaywrightVideoCaptureStarted()
+
+    // Capture publishes its per-session video dir before this rule's browser manager
+    // is constructed, but the daemon's cache-reuse path keeps a long-lived manager
+    // around across trails — its already-created BrowserContext won't have picked up
+    // the freshly published recordVideoDir. Reconciling once at trail start picks
+    // up the new dir (or drops recording on the next trail if capture is disabled).
+    (browserManager as? PlaywrightBrowserManager)?.syncRecordingWithRegistry()
+
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
@@ -279,6 +306,58 @@ open class BasePlaywrightNativeTest(
    * `WebNetworkCapture.start(...)` call against its synthetic session
    * directly — see `TrailblazeMcpBridgeImpl.executeHostLocalPlaywrightTool`.
    */
+  /**
+   * Owned-by-this-rule `CaptureSession` for the WEB platform — drives `video.mp4` +
+   * `video_sprites.webp` generation when nothing upstream has already started capture
+   * for this device id. The CLI/daemon path (`DesktopYamlRunner`) registers the record
+   * dir before this rule's browser is constructed, so [PlaywrightVideoRecordDir] already
+   * has an entry by the time we get here — that path leaves this field null and stops
+   * capture itself. The JUnit eval path drives this class directly and would otherwise
+   * skip the capture stream entirely; we self-instrument so both paths produce the same
+   * artifacts.
+   */
+  private var ownedCaptureSession: CaptureSession? = null
+
+  /**
+   * Starts a [CaptureSession] writing directly into the per-trail session log dir when
+   * no outer runner has already published a record dir for [webBrowserRecordingKey].
+   * Idempotent — subsequent calls within the same session are no-ops.
+   */
+  private fun ensurePlaywrightVideoCaptureStarted() {
+    if (ownedCaptureSession != null) return
+    // Outer runner (DesktopYamlRunner via CLI/daemon) already wired capture for this
+    // device. Don't double-instrument — they'll move artifacts at their own teardown.
+    if (PlaywrightVideoRecordDir.getRecordDir(webBrowserRecordingKey) != null) return
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    val captureSession = CaptureSession.fromOptions(
+      CaptureOptions(captureVideo = true),
+      xyz.block.trailblaze.devices.TrailblazeDevicePlatform.WEB,
+    ) ?: return
+    try {
+      captureSession.startAll(sessionDir, webBrowserRecordingKey, appId = null)
+      ownedCaptureSession = captureSession
+    } catch (e: Exception) {
+      Console.log("Auto-start of Playwright video capture failed: ${e.message}")
+    }
+  }
+
+  /**
+   * Idempotently stops the owned [CaptureSession] (if any) and clears the registry
+   * entry. Safe to call multiple times — the second call sees a null session and
+   * returns immediately. Must run **before** the browser context is torn down so the
+   * stream's finalizer can flush the in-progress `.webm`.
+   */
+  private fun stopOwnedPlaywrightVideoCapture() {
+    val captureSession = ownedCaptureSession ?: return
+    ownedCaptureSession = null
+    try {
+      captureSession.stopAll()
+    } catch (e: Exception) {
+      Console.log("Stop of Playwright video capture failed: ${e.message}")
+    }
+  }
+
   private fun ensureWebNetworkCaptureStarted() {
     if (!config.captureNetworkTraffic) return
     val session = loggingRule.session ?: return
@@ -301,6 +380,11 @@ open class BasePlaywrightNativeTest(
     // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
     // capture was never started.
     runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
+    // Stop the owned video capture (if any) BEFORE tearing the browser down — the
+    // stream's registered finalizer needs the manager alive to close the BrowserContext
+    // and flush the in-progress `.webm` to disk. No-op when an outer runner owns the
+    // capture lifecycle (CLI/daemon path).
+    stopOwnedPlaywrightVideoCapture()
     if (ownsTheBrowser) {
       browserManager.close()
     }

@@ -8,21 +8,21 @@ required:
   - description: "close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
   - description: "birthday row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^birthday$"
+        accessibilityTextRegex: "birthday"
   - description: "add date row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add date$"
+        accessibilityTextRegex: "add date"
   - description: "add related name row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add related name$"
+        accessibilityTextRegex: "add related name"
 forbidden:
   - description: "New Contact title — would mean we're on the new-contact draft"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"

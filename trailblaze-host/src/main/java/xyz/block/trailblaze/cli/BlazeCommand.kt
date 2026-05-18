@@ -77,8 +77,11 @@ class BlazeCommand : Callable<Int> {
   @Option(
     names = ["--target"],
     description = [
-      "Target app ID, saved as the default for future commands. " +
-        "List available targets with `trailblaze toolbox` (no args)."
+      "Target app ID for this command's bound device. Scoped to the device " +
+        "as a daemon-process override (dies on daemon restart or device " +
+        "release). Pass `--target=clear` to remove a previously-set override " +
+        "for this device. To set a persistent default, use `trailblaze config " +
+        "target`. List available targets with `trailblaze toolbox` (no args).",
     ]
   )
   var target: String? = null
@@ -128,11 +131,6 @@ class BlazeCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    // Save --target to sticky config if provided
-    if (target != null) {
-      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = target!!.lowercase()) }
-    }
-
     // Validate --setup and --no-setup require --save
     if ((setup != null || noSetup) && savePath == null) {
       Console.error("Error: --setup and --no-setup require --save.")
@@ -169,6 +167,7 @@ class BlazeCommand : Callable<Int> {
       device = device,
       sessionScope = sessionScope,
       webHeadless = headlessOption.resolve(),
+      target = target,
     ) { client ->
       // Execute blaze action
       val arguments = mutableMapOf<String, Any?>("objective" to goal)

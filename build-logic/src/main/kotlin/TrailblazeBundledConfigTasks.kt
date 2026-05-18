@@ -45,9 +45,34 @@ private data class PackManifestPromptShape(
   )
 }
 
+// Subset of `PackScriptedToolFile` (in :trailblaze-models) sufficient for the generator to
+// resolve pack-relative `target.tools:` path refs into the full `InlineScriptToolConfig`
+// shape that `AppTargetYamlConfig.tools` expects at runtime. Mirrors the same fields the
+// canonical `PackScriptedToolFile.toInlineScriptToolConfig()` reads — keep aligned with
+// `:trailblaze-models`'s shape when fields move (same drift contract as the
+// `mergeInheritedDefaults` ↔ `PackDependencyResolver` parity note above).
+//
+// Build-logic intentionally doesn't depend on `:trailblaze-models`, so the descriptor is
+// parsed via kaml's tree API rather than typed decode — kaml's typed-decode path doesn't
+// bridge to `kotlinx.serialization.json.JsonObject` (the type the runtime `_meta` uses),
+// and rolling a kaml-specific @Contextual serializer just to capture `_meta` is more
+// invasive than walking the YamlMap directly.
+
 abstract class TrailblazeBundledConfigExtension @Inject constructor(objects: ObjectFactory) {
   val packsDir: DirectoryProperty = objects.directoryProperty()
   val targetsDir: DirectoryProperty = objects.directoryProperty()
+  /**
+   * Anchor that scripted-tool `script:` paths in the generated target.yaml are emitted relative
+   * to. The runtime `InlineScriptToolServerSynthesizer` resolves these paths against JVM CWD via
+   * `McpSubprocessSpawner.resolveScriptPath`, so this anchor should be the directory the user
+   * invokes `./trailblaze` from — typically the repo root. Set via
+   * `bundledTrailblazeConfig { scriptRootDir.set(rootProject.layout.projectDirectory) }`.
+   *
+   * When unset, the generator falls through to emitting the descriptor's own `script:` value
+   * unchanged — preserving the legacy behavior for callers that don't yet have classpath-bundled
+   * scripted tools to worry about.
+   */
+  val scriptRootDir: DirectoryProperty = objects.directoryProperty()
   val regenerateCommand: Property<String> = objects.property(String::class.java)
 }
 
@@ -59,6 +84,17 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
   @get:OutputDirectory
   abstract val targetsDir: DirectoryProperty
 
+  /**
+   * Marked `@Internal` rather than `@InputDirectory`: this is a path-computation anchor
+   * (typically `rootProject.layout.projectDirectory`), NOT a content input. Treating it as
+   * an input would have Gradle hash every file under the repo root for up-to-date checks,
+   * and the resulting task graph would require explicit dependencies on every sibling-module
+   * compilation. The script content itself IS tracked — via [packsDir], where the .js files
+   * live and where any author edit invalidates this task.
+   */
+  @get:org.gradle.api.tasks.Internal
+  abstract val scriptRootDir: DirectoryProperty
+
   @get:Input
   abstract val regenerateCommand: Property<String>
 
@@ -67,6 +103,7 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
     val generator = PackTargetGenerator(
       packsDir = packsDir.asFile.get(),
       targetsDir = targetsDir.asFile.get(),
+      scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
     )
     val expected = generator.buildExpectedTargets()
@@ -89,6 +126,17 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val targetsDir: DirectoryProperty
 
+  /**
+   * Marked `@Internal` rather than `@InputDirectory`: this is a path-computation anchor
+   * (typically `rootProject.layout.projectDirectory`), NOT a content input. Treating it as
+   * an input would have Gradle hash every file under the repo root for up-to-date checks,
+   * and the resulting task graph would require explicit dependencies on every sibling-module
+   * compilation. The script content itself IS tracked — via [packsDir], where the .js files
+   * live and where any author edit invalidates this task.
+   */
+  @get:org.gradle.api.tasks.Internal
+  abstract val scriptRootDir: DirectoryProperty
+
   @get:Input
   abstract val regenerateCommand: Property<String>
 
@@ -97,6 +145,7 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
     val generator = PackTargetGenerator(
       packsDir = packsDir.asFile.get(),
       targetsDir = targetsDir.asFile.get(),
+      scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
     )
     val expected = generator.buildExpectedTargets()
@@ -150,6 +199,7 @@ internal class PackTargetGenerator(
   private val packsDir: File,
   private val targetsDir: File,
   private val regenerateCommand: String,
+  private val scriptRootDir: File? = null,
 ) {
   /** Used for parsing pack manifests — strict mode off so unknown keys flow through. */
   private val yaml = Yaml(
@@ -215,7 +265,22 @@ internal class PackTargetGenerator(
 
       val orderedTarget = linkedMapOf<String, Any?>("id" to targetId)
       resolvedTarget.forEach { (key, value) ->
-        if (key != "id") orderedTarget[key] = value
+        if (key == "id") return@forEach
+        // `tools:` in pack manifests holds path refs (e.g. `tools/myTool.yaml`) pointing at
+        // `PackScriptedToolFile` descriptors with flat `inputSchema`. `AppTargetYamlConfig.tools`
+        // expects `List<InlineScriptToolConfig>` (with JSON-Schema `inputSchema`), so we have
+        // to resolve each path ref here at build time — mirrors what `TrailblazeProjectConfigLoader.
+        // resolvePackSiblings` + `PackScriptedToolFile.toInlineScriptToolConfig` do at runtime
+        // when loading pack.yaml. The runtime daemon discovers targets from the generated
+        // target.yaml (via `AppTargetYamlLoader.discoverAndLoadAll`), so without resolution
+        // here `targetTestApp.getInlineScriptTools()` would return empty and scripted-tool
+        // dispatch would fall through to `OtherTrailblazeTool` at trail-run time.
+        if (key == "tools") {
+          val resolved = resolveScriptedToolList(value, packFile)
+          if (resolved.isNotEmpty()) orderedTarget["tools"] = resolved
+          return@forEach
+        }
+        orderedTarget[key] = value
       }
 
       val sourceRoot = packsDir.parentFile?.parentFile ?: packsDir.parentFile ?: packsDir
@@ -463,5 +528,375 @@ internal class PackTargetGenerator(
     // `AppTargetYamlConfig.system_prompt` `@SerialName`s).
     const val SYSTEM_PROMPT_FILE_KEY = "system_prompt_file"
     const val SYSTEM_PROMPT_KEY = "system_prompt"
+  }
+
+  /**
+   * Resolves a pack manifest's `target.tools:` value (a list of pack-relative path refs into
+   * `PackScriptedToolFile` descriptors) into the full inline `InlineScriptToolConfig` shape
+   * that `AppTargetYamlConfig.tools` expects at runtime. Empty/null input → empty list.
+   *
+   * Mirrors `PackScriptedToolFile.toInlineScriptToolConfig()` from `:trailblaze-models`:
+   *  - flat `inputSchema` is rewritten into a JSON-Schema `object` with `properties` and
+   *    `required` arrays, dropping the per-property `required` flag the flat shape uses.
+   *  - `supportedPlatforms` and `requiresHost` shortcuts fold into `_meta` under the
+   *    `trailblaze/` namespace, with top-level shortcuts winning over conflicting `_meta`.
+   *
+   * Path refs ending in `.tool.yaml` are rejected with the same error message the runtime
+   * resolver emits, so author mistakes surface at build time with file/line context.
+   */
+  private fun resolveScriptedToolList(
+    rawTools: Any?,
+    packFile: File,
+  ): List<Map<String, Any?>> {
+    val list = rawTools as? List<*> ?: return emptyList()
+    val packDir = packFile.parentFile
+      ?: throw GradleException("Pack manifest ${packFile.absolutePath} has no parent directory")
+    // Each descriptor expands to 1..N inline tool maps:
+    //   - Single-tool shape (`script: + name:`)                 → 1 map
+    //   - Multi-tool shape    (`script: + tools: [...]`)        → N maps (one per entry)
+    // The runtime synthesizer (`InlineScriptToolServerSynthesizer`) and QuickJS bundler
+    // both group by `script:` path, so a group of 8 tools costs one subprocess / one bundle
+    // regardless of how the descriptor is structured. `flatMap` here keeps the generated
+    // `target.yaml` flat (`tools:` is a list of fully-resolved inline-tool maps) — the
+    // multi-tool shape is pure authoring sugar that doesn't leak into the on-disk runtime config.
+    return list.flatMap { entry ->
+      val path = entry as? String ?: throw GradleException(
+        "Pack manifest ${packFile.absolutePath} has non-string entry in `target.tools:`: $entry",
+      )
+      if (path.endsWith(".tool.yaml")) {
+        throw GradleException(
+          "Pack '${packFile.parentFile?.name}' (${packFile.absolutePath}): `target.tools:` " +
+            "listed `$path`, but `.tool.yaml` files are pure-YAML composed tools that " +
+            "auto-discover from `<pack>/tools/` — they don't belong in the manifest. Remove this " +
+            "entry. Only scripted tool descriptors (the `.yaml` half of a `.yaml` + `.js`/`.ts` " +
+            "pair, with top-level `script:` and either `name:` or `tools:` fields) go in " +
+            "`target.tools:`.",
+        )
+      }
+      val toolFile = packDir.resolve(path)
+      if (!toolFile.isFile) {
+        throw GradleException(
+          "Pack scripted tool not found: $toolFile (referenced by `target.tools:` in ${packFile.absolutePath})",
+        )
+      }
+      val descriptorNode = yaml.parseToYamlNode(toolFile.readText()) as? YamlMap
+        ?: throw GradleException("Pack scripted tool descriptor must be a YAML map: $toolFile")
+      packScriptedToolToInlineMaps(descriptorNode, toolFile)
+    }
+  }
+
+  /**
+   * Builds the runtime-shaped inline `InlineScriptToolConfig` map(s) from a `YamlMap` descriptor.
+   *
+   *  - **Single-tool shape** (`script: + name: + inputSchema:` at top level) → one inline map.
+   *  - **Multi-tool shape** (`script: + tools: [...]`) → one inline map per entry, each carrying
+   *    the descriptor's `script:` / `runtime:` and the entry's own name / description / inputSchema.
+   *    File-wide `requiresHost` / `supportedPlatforms` / `_meta` apply to every entry unless
+   *    the entry overrides them.
+   *
+   * The emitted YAML decodes cleanly against `AppTargetYamlConfig.tools`'s element type at
+   * runtime — that's the contract `YamlConfigValidationTest` pins. The multi-tool shape is
+   * purely an authoring sugar at this layer; the runtime never sees it, only the flattened
+   * list of inline maps. Downstream dedup (one subprocess / one bundle per `script:`) happens
+   * in the synthesizer + bundler, not here.
+   */
+  private fun packScriptedToolToInlineMaps(
+    descriptor: YamlMap,
+    toolFile: File,
+  ): List<Map<String, Any?>> {
+    val rawScript = descriptor.requireScalarString("script", toolFile)
+    // Descriptor `script:` is descriptor-relative (`./foo.js`) per the pack-author convention.
+    // At runtime the synthesizer resolves it against JVM CWD (which is the repo root when the
+    // user invokes `./trailblaze` from there). To make the generated target.yaml carry a path
+    // that round-trips correctly, rewrite to the script file's path relative to [scriptRootDir]
+    // — the consuming module sets this to `rootProject.layout.projectDirectory`.
+    //
+    // Falls back to the raw descriptor value when no `scriptRootDir` is configured: workspace
+    // packs that author scripted tools authored a path relative to where they invoke trailblaze
+    // and don't need the rewrite.
+    val script = if (scriptRootDir != null) {
+      val scriptFile = toolFile.parentFile.resolve(rawScript).canonicalFile
+      try {
+        // Slash-normalise for portability — the generated YAML is committed and read on macOS
+        // / Linux CI agents and Windows dev machines alike, so a single canonical form keeps the
+        // file byte-identical across platforms.
+        scriptFile.relativeTo(scriptRootDir.canonicalFile).invariantSeparatorsPath
+      } catch (_: IllegalArgumentException) {
+        // Script file outside the configured root — fall through to the raw value rather than
+        // emit an absolute path that would fail on the next machine. The runtime will error
+        // with the original ambiguous path so authors notice.
+        rawScript
+      }
+    } else {
+      rawScript
+    }
+    // `runtime:` override (subprocess|inProcess) — flows through to the generated target.yaml
+    // verbatim. The runtime side ([TrailblazeHostYamlRunner]) reads it to override the legacy
+    // extension-based routing; we validate the spelling here so a typo fails at build time
+    // with a descriptor-aware message rather than silently falling through to the extension
+    // heuristic at runtime.
+    val runtime = descriptor.optionalScalarString("runtime")
+    if (runtime != null) {
+      require(runtime == "subprocess" || runtime == "inProcess") {
+        "Tool descriptor $toolFile: `runtime:` must be `subprocess` or `inProcess` (got '$runtime')."
+      }
+    }
+
+    // File-wide defaults (apply to every entry when the entry doesn't override).
+    val fileWideRequiresHost = descriptor.optionalScalarBoolean("requiresHost") ?: false
+    val fileWideSupportedPlatforms = descriptor.optionalStringList("supportedPlatforms", toolFile)
+    val fileWideExplicitMeta = descriptor.optionalMap("_meta", toolFile).toExplicitMetaMap()
+
+    // Multi-tool shape: presence of `tools:` toggles the multi-tool path. File-wide shortcuts
+    // (`requiresHost` / `supportedPlatforms` / `_meta`) apply as defaults; per-entry overrides
+    // take precedence. The top-level `name:` / `description:` / `inputSchema:` fields MUST NOT
+    // appear at the file-wide level — each entry declares its own.
+    val toolsNode = descriptor.entries.entries.firstOrNull { it.key.content == "tools" }?.value
+    if (toolsNode != null) {
+      val toolsList = toolsNode as? com.charleskorn.kaml.YamlList
+        ?: throw GradleException(
+          "Tool descriptor $toolFile: `tools:` must be a list of maps, each declaring one " +
+            "tool entry's `name:` / `description:` / `inputSchema:`.",
+        )
+      require(toolsList.items.isNotEmpty()) {
+        "Tool descriptor $toolFile: `tools:` is empty. Either remove `tools:` and use the " +
+          "single-tool shape, or list at least one entry."
+      }
+      require(descriptor.entries.entries.none { it.key.content == "name" }) {
+        "Tool descriptor $toolFile: multi-tool shape (`tools:` is set) must NOT also declare a " +
+          "top-level `name:` — each entry's name lives under `tools:`."
+      }
+      require(descriptor.entries.entries.none { it.key.content == "description" }) {
+        "Tool descriptor $toolFile: multi-tool shape (`tools:` is set) must NOT also declare a " +
+          "top-level `description:` — each entry's description lives under `tools:`."
+      }
+      require(descriptor.entries.entries.none { it.key.content == "inputSchema" }) {
+        "Tool descriptor $toolFile: multi-tool shape (`tools:` is set) must NOT also declare a " +
+          "top-level `inputSchema:` — each entry's schema lives under `tools:`."
+      }
+      return toolsList.items.map { entryNode ->
+        val entryMap = entryNode as? YamlMap
+          ?: throw GradleException(
+            "Tool descriptor $toolFile: every entry under `tools:` must be a map.",
+          )
+        val entryRequiresHostOverride = entryMap.optionalScalarBoolean("requiresHost")
+        val entrySupportedPlatformsOverride =
+          entryMap.optionalStringList("supportedPlatforms", toolFile)?.takeIf { it.isNotEmpty() }
+        val entryExplicitMeta = entryMap.optionalMap("_meta", toolFile).toExplicitMetaMap()
+        // Per-entry `_meta` keys win over file-wide defaults on conflict.
+        val mergedExplicitMeta = linkedMapOf<String, Any?>().apply {
+          putAll(fileWideExplicitMeta)
+          putAll(entryExplicitMeta)
+        }
+        buildToolInlineMap(
+          script = script,
+          runtime = runtime,
+          name = entryMap.requireScalarString("name", toolFile),
+          description = entryMap.optionalScalarString("description"),
+          requiresHost = entryRequiresHostOverride ?: fileWideRequiresHost,
+          supportedPlatforms = entrySupportedPlatformsOverride ?: fileWideSupportedPlatforms,
+          explicitMeta = mergedExplicitMeta,
+          inputSchemaSource = entryMap.optionalMap("inputSchema", toolFile),
+          toolFile = toolFile,
+        )
+      }
+    }
+
+    // Single-tool shape — the field placement that pre-dates the multi-tool shape, kept for
+    // backwards compat. `name:` and `inputSchema:` live at the top level alongside `script:`.
+    val name = descriptor.requireScalarString("name", toolFile)
+    val description = descriptor.optionalScalarString("description")
+    val inputSchemaSource = descriptor.optionalMap("inputSchema", toolFile)
+    return listOf(
+      buildToolInlineMap(
+        script = script,
+        runtime = runtime,
+        name = name,
+        description = description,
+        requiresHost = fileWideRequiresHost,
+        supportedPlatforms = fileWideSupportedPlatforms,
+        explicitMeta = fileWideExplicitMeta,
+        inputSchemaSource = inputSchemaSource,
+        toolFile = toolFile,
+      ),
+    )
+  }
+
+  /**
+   * Common per-tool builder shared by the single-tool path and the multi-tool entry path.
+   * Returns one inline-tool map ready to embed under `target.tools:` in the generated YAML.
+   */
+  private fun buildToolInlineMap(
+    script: String,
+    runtime: String?,
+    name: String,
+    description: String?,
+    requiresHost: Boolean,
+    supportedPlatforms: List<String>?,
+    explicitMeta: Map<String, Any?>,
+    inputSchemaSource: YamlMap?,
+    toolFile: File,
+  ): Map<String, Any?> {
+    val out = linkedMapOf<String, Any?>()
+    out["script"] = script
+    out["name"] = name
+    if (description != null) out["description"] = description
+    if (requiresHost) out["requiresHost"] = true
+    if (runtime != null) out["runtime"] = runtime
+
+    val mergedMeta = mergeMetaShortcuts(
+      explicitMeta = explicitMeta,
+      supportedPlatforms = supportedPlatforms,
+      requiresHost = requiresHost,
+    )
+    if (mergedMeta.isNotEmpty()) out["_meta"] = mergedMeta
+
+    out["inputSchema"] = buildJsonSchemaObject(inputSchemaSource, toolFile)
+    return out
+  }
+
+  /** Convert an optional `_meta:` YamlMap into the plain-Kotlin explicit-meta map shape. */
+  private fun YamlMap?.toExplicitMetaMap(): Map<String, Any?> =
+    this
+      ?.let { yamlNodeToPlain(it) as? Map<*, *> }
+      ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+      ?.toMap()
+      ?: emptyMap()
+
+  /**
+   * Translates the flat `inputSchema: { propName: { type, description?, enum?, required? } }`
+   * shape from `PackScriptedToolFile` into the JSON-Schema `{ type: object, properties: ...,
+   * required: [...] }` shape `InlineScriptToolConfig.inputSchema` expects. Matches the runtime
+   * conversion in `:trailblaze-models`'s `buildInputSchemaObject`.
+   */
+  private fun buildJsonSchemaObject(
+    inputSchema: YamlMap?,
+    toolFile: File,
+  ): Map<String, Any?> {
+    val properties = linkedMapOf<String, Any?>()
+    val required = mutableListOf<String>()
+    inputSchema?.entries?.forEach { (keyNode, propNode) ->
+      val propName = keyNode.content
+      val propMap = propNode as? YamlMap ?: throw GradleException(
+        "inputSchema property '$propName' in $toolFile must be a map",
+      )
+      val p = linkedMapOf<String, Any?>()
+      val type = propMap.requireScalarString("type", toolFile)
+      p["type"] = type
+      propMap.optionalScalarString("description")?.let { p["description"] = it }
+      propMap.optionalStringList("enum", toolFile)?.let { values ->
+        require(values.isNotEmpty()) {
+          "Tool inputSchema property '$propName' in $toolFile: `enum` must declare at least " +
+            "one value (JSON Schema rejects an empty enum array)."
+        }
+        p["enum"] = values
+      }
+      properties[propName] = p
+      // Default `required: true` mirrors `ScriptedToolProperty.required = true` on the runtime side.
+      if (propMap.optionalScalarBoolean("required") ?: true) required += propName
+    }
+    val out = linkedMapOf<String, Any?>()
+    out["type"] = "object"
+    // Emit `properties` ONLY when non-empty. SnakeYAML serializes an empty
+    // `linkedMapOf<String, Any?>()` as `properties:` (no value), which kaml then
+    // decodes to `JsonNull`, and the runtime descriptor builder
+    // (`LazyYamlScriptedToolRegistration.buildDescriptor`) crashes with
+    // `Element class kotlinx.serialization.json.JsonNull is not a JsonArray` on
+    // the first downstream `.jsonObject` / `.jsonArray` access. Tools that take
+    // no arguments simply have no `properties` key at all in the emitted
+    // `target.yaml`; the runtime path handles the missing key cleanly via the
+    // existing `schema["properties"]?.jsonObject ?: JsonObject(emptyMap())` fallback.
+    if (properties.isNotEmpty()) {
+      out["properties"] = properties
+    }
+    // Same reasoning for `required` — empty list emits as `required:` (null) and
+    // explodes on `.jsonArray`. Only emit when at least one required field exists.
+    // This also matches the runtime-side `buildInputSchemaObject` in
+    // `:trailblaze-models` which has always been conditional on `requiredNames.isNotEmpty()`.
+    if (required.isNotEmpty()) {
+      out["required"] = required
+    }
+    return out
+  }
+
+  /**
+   * Folds the top-level shortcut fields `supportedPlatforms` and `requiresHost` into the
+   * explicit `_meta` map under their namespaced keys. Top-level wins on conflict — same rule
+   * as the runtime `mergeMetaShortcuts` in `:trailblaze-models`.
+   */
+  private fun mergeMetaShortcuts(
+    explicitMeta: Map<String, Any?>,
+    supportedPlatforms: List<String>?,
+    requiresHost: Boolean,
+  ): Map<String, Any?> {
+    val out = linkedMapOf<String, Any?>()
+    out.putAll(explicitMeta)
+    if (!supportedPlatforms.isNullOrEmpty()) {
+      out["trailblaze/supportedPlatforms"] = supportedPlatforms
+    }
+    if (requiresHost) {
+      out["trailblaze/requiresHost"] = true
+    }
+    return out
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // kaml YamlNode helpers — local, untyped accessors that surface a `toolFile`-aware GradleException
+  // when an author types the wrong shape. Equivalent to typed decode but with build-time error
+  // context (kaml's default messages don't name the file path).
+  // ---------------------------------------------------------------------------------------------
+
+  private fun YamlMap.requireScalarString(key: String, source: File): String {
+    val node = entries.entries.firstOrNull { it.key.content == key }?.value
+      ?: throw GradleException("Required field '$key' missing in $source")
+    return (node as? com.charleskorn.kaml.YamlScalar)?.content
+      ?: throw GradleException("Field '$key' in $source must be a scalar string")
+  }
+
+  private fun YamlMap.optionalScalarString(key: String): String? {
+    val node = entries.entries.firstOrNull { it.key.content == key }?.value ?: return null
+    return (node as? com.charleskorn.kaml.YamlScalar)?.content
+  }
+
+  private fun YamlMap.optionalScalarBoolean(key: String): Boolean? {
+    val node = entries.entries.firstOrNull { it.key.content == key }?.value ?: return null
+    return (node as? com.charleskorn.kaml.YamlScalar)?.toBoolean()
+  }
+
+  private fun YamlMap.optionalStringList(key: String, source: File): List<String>? {
+    val node = entries.entries.firstOrNull { it.key.content == key }?.value ?: return null
+    val list = node as? com.charleskorn.kaml.YamlList
+      ?: throw GradleException("Field '$key' in $source must be a list")
+    return list.items.map { (it as? com.charleskorn.kaml.YamlScalar)?.content
+      ?: throw GradleException("Entries of '$key' in $source must be scalar strings") }
+  }
+
+  private fun YamlMap.optionalMap(key: String, source: File): YamlMap? {
+    val node = entries.entries.firstOrNull { it.key.content == key }?.value ?: return null
+    return node as? YamlMap
+      ?: throw GradleException("Field '$key' in $source must be a map")
+  }
+
+  /**
+   * Best-effort `YamlNode` → plain-Kotlin conversion so the emitted YAML structure can
+   * carry author-declared `_meta` content. Strings/booleans/numbers unwrap to native types;
+   * lists + maps recurse. Falls back to `content` (string form) when the scalar can't be
+   * coerced cleanly.
+   */
+  private fun yamlNodeToPlain(node: com.charleskorn.kaml.YamlNode): Any? = when (node) {
+    is com.charleskorn.kaml.YamlNull -> null
+    is com.charleskorn.kaml.YamlScalar -> {
+      val text = node.content
+      when {
+        text == "true" -> true
+        text == "false" -> false
+        text.toLongOrNull() != null -> text.toLong()
+        text.toDoubleOrNull() != null -> text.toDouble()
+        else -> text
+      }
+    }
+    is com.charleskorn.kaml.YamlList -> node.items.map { yamlNodeToPlain(it) }
+    is YamlMap -> node.entries.entries.associate { (k, v) -> k.content to yamlNodeToPlain(v) }
+    else -> node.toString()
   }
 }

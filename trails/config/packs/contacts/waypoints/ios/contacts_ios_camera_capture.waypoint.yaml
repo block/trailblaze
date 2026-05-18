@@ -9,21 +9,21 @@ required:
   - description: "Take Picture (shutter)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoCapture$"
+        resourceIdRegex: "PhotoCapture"
   - description: "Flash button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^FlashButton$"
+        resourceIdRegex: "FlashButton"
   - description: "Front/back camera flip"
     selector:
       iosMaestro:
-        resourceIdRegex: "^FlipButton$"
+        resourceIdRegex: "FlipButton"
   - description: "Dismiss the image picker"
     selector:
       iosMaestro:
-        resourceIdRegex: "^DismissImagePickerButton$"
+        resourceIdRegex: "DismissImagePickerButton"
 forbidden:
   - description: "Photo grid — would mean we're in the library picker"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PXGGridLayout-Group$"
+        resourceIdRegex: "PXGGridLayout-Group"

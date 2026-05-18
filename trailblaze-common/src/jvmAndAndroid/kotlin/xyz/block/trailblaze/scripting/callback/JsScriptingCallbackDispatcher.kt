@@ -119,10 +119,13 @@ object JsScriptingCallbackDispatcher {
 
   /**
    * Default per-dispatch timeout. Overridable via the [CALLBACK_TIMEOUT_MS_PROPERTY] system
-   * property. 30s matches
-   * [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS].
+   * property. 120s matches
+   * [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint.DEFAULT_CALLBACK_TIMEOUT_MS]
+   * and the spawner-side `McpSubprocessSpawner.DEFAULT_CALLBACK_TIMEOUT_MS`. 30s was too tight
+   * for the realistic worst-case nested-dispatch (a scripted tool that delegates to a worker
+   * scripted tool which performs a real UI login can easily run 60+ seconds end-to-end).
    */
-  const val DEFAULT_DISPATCH_TIMEOUT_MS: Long = 30_000L
+  const val DEFAULT_DISPATCH_TIMEOUT_MS: Long = 120_000L
 
   /**
    * System property (`-Dtrailblaze.callback.timeoutMs=...`) overriding

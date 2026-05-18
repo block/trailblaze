@@ -4,19 +4,19 @@ required:
   - description: "Dialog title"
     selector:
       androidAccessibility:
-        textRegex: "^Delete this event\\?$"
+        textRegex: "Delete this event\\?"
   - description: "Delete button"
     selector:
       androidAccessibility:
-        textRegex: "^Delete$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Delete"
+        classNameRegex: "android.widget.Button"
   - description: "Cancel button"
     selector:
       androidAccessibility:
-        textRegex: "^Cancel$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Cancel"
+        classNameRegex: "android.widget.Button"
 forbidden:
   - description: "Discard event dialog is a sibling-shape dialog with different copy"
     selector:
       androidAccessibility:
-        textRegex: "^Discard this event\\?$"
+        textRegex: "Discard this event\\?"

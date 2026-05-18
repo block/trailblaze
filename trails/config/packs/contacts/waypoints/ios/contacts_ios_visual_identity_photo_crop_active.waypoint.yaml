@@ -7,20 +7,20 @@ required:
   - description: "Crop editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Crop$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Crop"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Avatar option suggestion (the picked photo)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Avatar Option$"
-        resourceIdRegex: "^SuggestionListItemButton$"
+        accessibilityTextRegex: "Avatar Option"
+        resourceIdRegex: "SuggestionListItemButton"
 forbidden:
   - description: "Text tab — would mean we're on the monogram editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Text"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

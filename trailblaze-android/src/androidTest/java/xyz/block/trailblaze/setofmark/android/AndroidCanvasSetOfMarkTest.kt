@@ -66,4 +66,5 @@ class AndroidCanvasSetOfMarkTest {
       file.writeBytes(byteArrayOutputStream.toByteArray())
     }
   }
+
 }

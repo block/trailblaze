@@ -6,6 +6,7 @@ import picocli.CommandLine.Option
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import java.io.File
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 
@@ -18,6 +19,11 @@ import kotlin.system.exitProcess
  *   trailblaze report --open              - Generate and open in browser
  *   trailblaze report --format json       - Emit a CI-style JSON test-results artifact
  *   trailblaze report --format json --id abc123
+ *   trailblaze report --id abc123 --video out.mp4
+ *                                         - Render the timeline autoplay as an MP4 via a
+ *                                           headless Playwright browser (no extra log
+ *                                           noise — the HTML report's own playbackSpeed
+ *                                           default of 2x decides the export length).
  */
 @Command(
   name = "report",
@@ -47,7 +53,58 @@ class ReportCommand : Callable<Int> {
   )
   var format: ReportFormat = ReportFormat.HTML
 
-  override fun call(): Int = generateSessionReport(parent.appProvider(), id, open, format)
+  @Option(
+    names = ["--video"],
+    description = [
+      "Export the HTML report's timeline autoplay as an MP4 to the given path. " +
+        "Drives a headless Playwright browser internally; playback speed comes from the " +
+        "report's own UI default (2x today). Implies --format=html and requires --id.",
+    ],
+  )
+  var videoOutput: File? = null
+
+  @Option(
+    names = ["--video-show-browser"],
+    description = [
+      "When exporting via --video, show the Playwright browser window instead of running " +
+        "it headless. Useful for debugging the export.",
+    ],
+  )
+  var videoShowBrowser: Boolean = false
+
+  override fun call(): Int {
+    val video = videoOutput
+    if (video != null) {
+      if (format != ReportFormat.HTML) {
+        Console.error("--video only works with --format html (JSON has no timeline to record).")
+        return CommandLine.ExitCode.USAGE
+      }
+      if (id == null) {
+        Console.error(
+          "--video requires --id <session-id>. Multi-session reports don't auto-advance to a " +
+            "timeline view, so the autoplay trigger would never fire.",
+        )
+        return CommandLine.ExitCode.USAGE
+      }
+    } else if (videoShowBrowser) {
+      // --video-show-browser only does anything when an export run is happening; failing
+      // loudly here beats silently ignoring it and leaving the user wondering why they
+      // didn't see the browser window they asked for.
+      Console.error(
+        "--video-show-browser only applies when --video is also set " +
+          "(it controls headlessness of the export run).",
+      )
+      return CommandLine.ExitCode.USAGE
+    }
+    return generateSessionReport(
+      parent.appProvider(),
+      id,
+      open,
+      format,
+      videoOutput = video,
+      videoShowBrowser = videoShowBrowser,
+    )
+  }
 }
 
 /**
@@ -71,6 +128,8 @@ internal fun generateSessionReport(
   sessionId: String?,
   open: Boolean,
   format: ReportFormat = ReportFormat.HTML,
+  videoOutput: File? = null,
+  videoShowBrowser: Boolean = false,
 ): Int {
   val logsRepo = app.deviceManager.logsRepo
   val allIds = logsRepo.getSessionIds()
@@ -115,6 +174,21 @@ internal fun generateSessionReport(
   }
 
   Console.info("\nReport: file://${reportFile.absolutePath}")
+
+  if (videoOutput != null) {
+    try {
+      Console.log("Exporting timeline autoplay to ${videoOutput.absolutePath} ...")
+      ReportVideoExporter.export(
+        reportHtml = reportFile,
+        outputMp4 = videoOutput,
+        headless = !videoShowBrowser,
+      )
+      Console.info("Video: ${videoOutput.absolutePath}")
+    } catch (e: Exception) {
+      Console.error("Failed to export report video: ${e.message}")
+      return CommandLine.ExitCode.SOFTWARE
+    }
+  }
 
   if (open) {
     if (format == ReportFormat.HTML) {

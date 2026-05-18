@@ -43,7 +43,13 @@ class MaestroScreenStateProvider(
   /** Cached at construction — Maestro's deviceInfo is stable for the driver's lifetime. */
   internal val deviceInfo = driver.deviceInfo()
 
-  override suspend fun getScreenState(includeScreenshot: Boolean): GetScreenStateResponse? {
+  override suspend fun getScreenState(
+    includeScreenshot: Boolean,
+    @Suppress("UNUSED_PARAMETER") includeTree: Boolean,
+  ): GetScreenStateResponse? {
+    // Maestro's `driver.contentDescriptor(false)` IS the cheap path; skipping it on
+    // iOS doesn't materially help. Honor includeTree=false at the interface level but
+    // don't bother optimizing the iOS branch separately.
     return try {
       driverMutex.withLock {
         val rawTree = driver.contentDescriptor(false)

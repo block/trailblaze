@@ -76,6 +76,8 @@ import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.createVideoFrameCache
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.isExportAutoplayRequested
+import xyz.block.trailblaze.ui.signalExportPlaybackEnded
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.loadDeviceLogs
@@ -191,6 +193,36 @@ internal fun SessionCombinedView(
       // live sessions start at the beginning and auto-follow takes over.
       val isLiveSession = overallStatus?.isInProgress == true
       timelineState.scrubTimestampMs = if (isLiveSession) effectiveStartMs else effectiveEndMs
+    }
+  }
+
+  // Export autoplay: when this WASM instance is loaded with `?autoplay=...` in the URL
+  // (the path `trailblaze report --video` drives), seek to the start of the session and
+  // kick off timeline playback once data is loaded. Watch `isVideoPlaying` for the
+  // transition back to false (set by the playback loop in [PlaybackDriverEffect] when
+  // the scrubber reaches `effectiveEndMs`) and signal the external recorder. The signal
+  // also fires for empty sessions (sessionEnd == sessionStart) so the exporter doesn't
+  // hang waiting on playback that never starts.
+  LaunchedEffect(effectiveStartMs, effectiveEndMs) {
+    if (!isExportAutoplayRequested()) return@LaunchedEffect
+    if (effectiveEndMs <= effectiveStartMs) {
+      // No timeline to play — fire the end signal immediately so the exporter can finish.
+      signalExportPlaybackEnded()
+      return@LaunchedEffect
+    }
+    timelineState.scrubTimestampMs = effectiveStartMs
+    timelineState.isVideoPlaying = true
+  }
+  // Signal playback-complete back to the exporter when the auto-play loops drop
+  // `isVideoPlaying` after running. Gated on the autoplay flag so an interactive user
+  // pausing playback in a normally-opened report doesn't accidentally trip the signal.
+  var hasAutoplayStarted by remember { mutableStateOf(false) }
+  LaunchedEffect(timelineState.isVideoPlaying) {
+    if (!isExportAutoplayRequested()) return@LaunchedEffect
+    if (timelineState.isVideoPlaying) {
+      hasAutoplayStarted = true
+    } else if (hasAutoplayStarted) {
+      signalExportPlaybackEnded()
     }
   }
 

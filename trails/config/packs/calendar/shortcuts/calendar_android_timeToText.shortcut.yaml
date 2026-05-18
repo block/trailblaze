@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^android:id/toggle_mode$"
+          resourceIdRegex: "android:id/toggle_mode"

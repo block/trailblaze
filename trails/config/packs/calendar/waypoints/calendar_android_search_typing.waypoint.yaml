@@ -4,22 +4,22 @@ required:
   - description: "Search-results list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_list$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/search_list"
   - description: "Clear-search action — only present once query is non-empty"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Clear search$"
+        contentDescriptionRegex: "Clear search"
   - description: "Clear button id"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/clear$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/clear"
   - description: "Search text input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/search_text"
 forbidden:
   - description: "Empty 'Search' header text — only present in pristine search state"
     selector:
       androidAccessibility:
-        textRegex: "^Search$"
-        classNameRegex: "\\Qandroid.widget.TextView\\E"
+        textRegex: "Search"
+        classNameRegex: "android.widget.TextView"

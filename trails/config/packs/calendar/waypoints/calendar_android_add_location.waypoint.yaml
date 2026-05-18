@@ -4,20 +4,20 @@ required:
   - description: "Toolbar accessibility label 'Locations'"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Locations$"
+        contentDescriptionRegex: "Locations"
   - description: "'Add location' header text"
     selector:
       androidAccessibility:
-        textRegex: "^Add location$"
+        textRegex: "Add location"
   - description: "Location search input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/search_text"
   - description: "Suggestions list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/suggestions$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/suggestions"
   - description: "Back button"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Back$"
+        contentDescriptionRegex: "Back"

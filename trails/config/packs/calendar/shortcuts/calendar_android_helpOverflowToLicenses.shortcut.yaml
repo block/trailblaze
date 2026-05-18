@@ -9,5 +9,5 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Open source licenses$"
-          resourceIdRegex: "^com\\.google\\.android\\.gms:id/title$"
+          textRegex: "Open source licenses"
+          resourceIdRegex: "com\\.google\\.android\\.gms:id/title"

@@ -5,12 +5,21 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hV] [--open] [--format=<format>] [--id=<id>]
+Usage: trailblaze report [-hV] [--open] [--video-show-browser]
+                         [--format=<format>] [--id=<id>] [--video=<videoOutput>]
 Generate an HTML or JSON report from session recordings
-      --format=<format>   Output format: html (default) or json — JSON emits a
-                            CiSummaryReport artifact
-  -h, --help              Show this help message and exit.
-      --id=<id>           Session ID to report on (defaults to all sessions)
-      --open              Open the report in the default browser after
-                            generation (HTML only)
-  -V, --version           Print version information and exit.
+      --format=<format>      Output format: html (default) or json — JSON emits
+                               a CiSummaryReport artifact
+  -h, --help                 Show this help message and exit.
+      --id=<id>              Session ID to report on (defaults to all sessions)
+      --open                 Open the report in the default browser after
+                               generation (HTML only)
+  -V, --version              Print version information and exit.
+      --video=<videoOutput>  Export the HTML report's timeline autoplay as an
+                               MP4 to the given path. Drives a headless
+                               Playwright browser internally; playback speed
+                               comes from the report's own UI default (2x
+                               today). Implies --format=html and requires --id.
+      --video-show-browser   When exporting via --video, show the Playwright
+                               browser window instead of running it headless.
+                               Useful for debugging the export.

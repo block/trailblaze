@@ -75,7 +75,7 @@ It does not reap device-scoped `blaze` sessions; use `app --stop` for those.
 | `snapshot` | Capture the current screen's UI tree (fast, no AI, no actions) |
 | `tool` | Run a Trailblaze tool by name (e.g., tap, inputText) |
 | `toolbox` | Browse available tools by target app and platform |
-| `trail` | Run a trail file (.trail.yaml) — execute a scripted test on a device |
+| `trail` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
 | `session` | Every blaze records a session — save it as a replayable trail |
 | `report` | Generate an HTML or JSON report from session recordings |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
@@ -111,13 +111,13 @@ trailblaze blaze [OPTIONS] [<<objectiveWords>>]
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required for interactive blaze/verify execution. | - |
 | `--context` | Context from previous steps for situational awareness | - |
 | `-v`, `--verbose` | Enable verbose output (show daemon logs, MCP calls) | - |
-| `--target` | Target app ID, saved as the default for future commands. List available targets with `trailblaze toolbox` (no args). | - |
+| `--target` | Target app ID for this command's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
 | `--snapshot-details` | Comma-separated snapshot detail levels passed through to the daemon's blaze tool: BOUNDS, OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses the on-device accessibility-importance filter so RecyclerView children land in the captured trailblazeNodeTree. OCCLUDED is web-only and surfaces elements hidden under popups/modals so the captured tree includes what's actually behind the overlay. | - |
 | `--save` | Save current session as a trail file. Shows steps if --setup not specified. | - |
 | `--setup` | Step range for setup/trailhead (e.g., '1-3'). Use with --save. | - |
 | `--no-setup` | Save without setup steps. Use with --save. | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -145,7 +145,7 @@ trailblaze ask [OPTIONS] <<questionWords>>
 |--------|-------------|---------|
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required. | - |
 | `-v`, `--verbose` | Enable verbose output (show daemon logs, MCP calls) | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -174,7 +174,7 @@ trailblaze verify [OPTIONS] <<assertionWords>>
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Required. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -200,7 +200,7 @@ trailblaze snapshot [OPTIONS]
 | `--offscreen` | Include offscreen elements marked (offscreen) | - |
 | `--screenshot` | Save a screenshot to disk and print the file path | - |
 | `--all` | Show all visible elements, including those normally filtered as non-interactive | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -232,8 +232,8 @@ trailblaze tool [OPTIONS] [<<toolName>>] [<<argPairs>>]
 | `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Required. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
-| `--target` | Target app ID, saved as the default for future commands. List available targets with `trailblaze toolbox` (no args). | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--target` | Target app ID for this command's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -246,8 +246,14 @@ Browse available tools by target app and platform
 **Synopsis:**
 
 ```
-trailblaze toolbox [OPTIONS]
+trailblaze toolbox [OPTIONS] [<ROLE>]
 ```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<ROLE>` | Optional role filter — show only tools tagged with this role. Valid values: trailheads, shortcuts.   trailheads — tools that bring the device to a known starting state (launch + sign-in, deep-link, etc.). Use one at the start of every trail.   shortcuts  — tools that jump between named waypoints during a trail. Omit to show everything; trailheads and shortcuts will be called out as headline sections above the toolset listing. | No |
 
 **Options:**
 
@@ -255,8 +261,8 @@ trailblaze toolbox [OPTIONS]
 |--------|-------------|---------|
 | `--name`, `-n` | Show details for a single tool by name | - |
 | `--target`, `-t` | Show tools for a specific target app | - |
-| `--search`, `-s` | Search tools by keyword (matches names and descriptions) | - |
-| `-d`, `--device` | Filter by platform: android, ios, web | - |
+| `--search`, `-s` | Substring search on tool name and description. | - |
+| `-d`, `--device` | Target device (e.g. android, android/emulator-5554). | - |
 | `--detail` | Show full parameter descriptions for all tools | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -266,24 +272,25 @@ trailblaze toolbox [OPTIONS]
 
 ### `trailblaze trail`
 
-Run a trail file (.trail.yaml) — execute a scripted test on a device
+Run a trail file (.trail.yaml) — execute a scripted test on a device.  Accepts files, shell globs, or directories. Directory arguments expand recursively to every `.trail.yaml` / `blaze.yaml` under them.  Trail-level metadata honored by the runner:   - `tags:` (list of strings) — filtered via --tags.   - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the `N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:` line.
 
 **Synopsis:**
 
 ```
-trailblaze trail [OPTIONS] <<trailFile>>
+trailblaze trail [OPTIONS] [<<trailFile>>]
 ```
 
 **Arguments:**
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailFile>>` | One or more trail files (.trail.yaml or blaze.yaml). Use your shell's glob to run a batch (e.g., flows/**/*.trail.yaml). | Yes |
+| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to every contained trail file. If omitted, defaults to the `trails/` directory at the workspace root (resolved by walking up from the current directory). | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
 | `-d`, `--device` | Device: platform (android, ios, web), platform/instance-id, or instance ID | - |
 | `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
@@ -296,7 +303,7 @@ trailblaze trail [OPTIONS] <<trailFile>>
 | `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
 | `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 50 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
-| `--no-record` | Skip saving the recording back to the trail source directory | - |
+| `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR no <deviceClassifiers>.trail.yaml exists yet next to the source — deterministic re-runs no-op the write so they can't clobber a hand-edited source. | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
@@ -353,14 +360,14 @@ trailblaze session start [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--target` | Target app ID. Saved to config for future commands. | - |
+| `--target` | Target app ID for this session's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Pass `--target=clear` to remove a previously-set override. To set a persistent default, use `trailblaze config target`. | - |
 | `--mode` | Working mode: trail or blaze. Saved to config for future commands. | - |
 | `-d`, `--device` | Device to bind the session to: platform (android, ios, web) or platform/id (e.g., ios/DEVICE-UUID). Required — the CLI doesn't durably track an "active" session across single-shot MCP calls, so every device-acting command takes the device explicitly. Examples: --device android, --device ios/DEVICE-UUID, --device web. | - |
 | `--title` | Title for the session (used as trail name when saving) | - |
 | `--no-video` | Disable video capture | - |
 | `--no-logs` | Disable device log capture | - |
 | `-v`, `--verbose` | Enable verbose output | - |
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -570,6 +577,8 @@ trailblaze report [OPTIONS]
 | `--id` | Session ID to report on (defaults to all sessions) | - |
 | `--open` | Open the report in the default browser after generation (HTML only) | - |
 | `--format` | Output format: html (default) or json — JSON emits a CiSummaryReport artifact | - |
+| `--video` | Export the HTML report's timeline autoplay as an MP4 to the given path. Drives a headless Playwright browser internally; playback speed comes from the report's own UI default (2x today). Implies --format=html and requires --id. | - |
+| `--video-show-browser` | When exporting via --video, show the Playwright browser window instead of running it headless. Useful for debugging the export. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -702,7 +711,7 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 | `--id` | Waypoint id to capture an example for (matches the YAML's top-level `id:` field). Required. | - |
 | `--session` | Session id (the directory name under --logs-dir, e.g. `2026_05_07_22_26_48_yaml_6258`). Restricts the auto-search to that session. Combine with --step to pin a specific step. | - |
 | `--step` | 1-based step within --session. Skips auto-search; uses this step verbatim. Requires --session. | - |
-| `--target` | Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/ — the canonical workspace-pack location. Warns if no such pack exists. Mutually exclusive with --root (--root wins if both given). | - |
+| `--target` | Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/ — the canonical workspace-pack location. Warns if no such pack exists. Mutually exclusive with --root (--root wins if both given). Also supplies the pack's declared `app_ids:` to expand `{{target.appId}}` placeholders during matching; exits with a usage error if the named pack can't be resolved or declares no `app_ids:`. | - |
 | `--root` | Explicit root directory to scan for *.waypoint.yaml files. Overrides --target. (Convention: ./trails) | - |
 | `--logs-dir` | Override the directory containing per-session log dirs. Defaults to the running daemon's resolved logsDir. | - |
 | `--force` | Overwrite an existing example pair without prompting. | - |
@@ -806,6 +815,7 @@ trailblaze waypoint segment list [OPTIONS]
 |--------|-------------|---------|
 | `--session` | Session log directory (containing *.json log files) | - |
 | `--root` | Additional directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Pack waypoints are always included regardless of --root. | - |
+| `--target` | Pack id whose declared `app_ids:` expand `{{target.appId}}` placeholders in waypoint selectors during matching. Match `--target` on `waypoint locate/validate` if the session was captured against that target's app. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1039,7 +1049,7 @@ trailblaze device connect [OPTIONS] <<platform>>
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, falls back to the persisted `web-headless` config (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
+| `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

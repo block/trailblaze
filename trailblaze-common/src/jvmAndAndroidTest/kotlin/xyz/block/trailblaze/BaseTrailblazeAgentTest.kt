@@ -9,6 +9,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -25,7 +26,6 @@ import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.RecordableHostLocalTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -415,7 +415,7 @@ class BaseTrailblazeAgentTest {
     assertThat(ToolExecutionContextThreadLocal.get()).isNull()
   }
 
-  // ── RecordableHostLocalTool: opt-in logging for host-local provisioning tools ──
+  // ── Host-local tool logging (every dispatch emits a TrailblazeToolLog — #2924) ──
 
   private fun capturingAgent(captured: MutableList<TrailblazeLog>): TestAgent =
     object : TestAgent() {
@@ -425,44 +425,152 @@ class BaseTrailblazeAgentTest {
       )
     }
 
+  // Host-local tool that overrides what gets recorded by setting `recordedToolOverride`. The
+  // recording shape (with the produced output captured for replay) is what ships in the log
+  // payload, not the original input-shape instance.
   @Serializable
-  @TrailblazeToolClass("recordable_stub")
-  private class RecordableStubTool(
+  @TrailblazeToolClass("override_emitting_stub")
+  private class OverrideEmittingStubTool(
     val outputValue: String? = null,
-  ) : RecordableHostLocalTool {
-    override val advertisedToolName: String = "recordable_stub"
+  ) : HostLocalExecutableTrailblazeTool {
+    override val advertisedToolName: String = "override_emitting_stub"
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult {
       toolExecutionContext.recordedToolOverride =
-        RecordableStubTool(outputValue = "produced-value")
+        OverrideEmittingStubTool(outputValue = "produced-value")
       return TrailblazeToolResult.Success()
     }
   }
 
   @Test
-  fun `RecordableHostLocalTool emits a TrailblazeToolLog with the override applied`() {
+  fun `host-local tool's recordedToolOverride is applied to the emitted TrailblazeToolLog`() {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = capturingAgent(captured)
 
-    val result = run(agent, RecordableStubTool())
+    val result = run(agent, OverrideEmittingStubTool())
 
     assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
     val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
     assertThat(toolLogs).hasSize(1)
-    assertThat(toolLogs[0].toolName).isEqualTo("recordable_stub")
+    assertThat(toolLogs[0].toolName).isEqualTo("override_emitting_stub")
     assertThat(toolLogs[0].trailblazeTool.toString().contains("produced-value")).isEqualTo(true)
   }
 
   @Test
-  fun `plain HostLocalExecutableTrailblazeTool stays log-suppressed`() {
+  fun `plain HostLocalExecutableTrailblazeTool emits a TrailblazeToolLog naming the advertised tool`() {
+    // Regression: a marker-interface gate (the prior shape) left plain HostLocal tools
+    // (the shape `SubprocessTrailblazeTool` and scripted MCP tools take) invisible to
+    // session logs, recordings, and reports. Every host-local dispatch
+    // must produce a log entry — otherwise recording auto-save silently swaps the missing
+    // step for an unrelated fallback.
     val captured = mutableListOf<TrailblazeLog>()
     val agent = capturingAgent(captured)
 
-    val result = run(agent, StubHostLocalTool())
+    val result = run(agent, StubHostLocalTool(advertisedToolName = "stub_plain_host_local"))
 
     assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
     val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
-    assertThat(toolLogs).hasSize(0)
+    assertThat(toolLogs).hasSize(1)
+    assertThat(toolLogs[0].toolName).isEqualTo("stub_plain_host_local")
+    assertThat(toolLogs[0].successful).isEqualTo(true)
+  }
+
+  // Stand-in for SubprocessTrailblazeTool — same interface shape (HostLocal + RawArgument, no
+  // class-level @TrailblazeToolClass, args as a JsonObject). The base agent must log this
+  // dispatch even though the concrete class isn't `@Serializable`.
+  private class DynamicSubprocessLikeTool(
+    override val advertisedToolName: String,
+    override val rawToolArguments: JsonObject,
+    val result: TrailblazeToolResult = TrailblazeToolResult.Success(),
+  ) : HostLocalExecutableTrailblazeTool, xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool {
+    override val instanceToolName: String get() = advertisedToolName
+
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = result
+  }
+
+  @Test
+  fun `subprocess-shaped dynamic tool emits a TrailblazeToolLog with toolName args and durationMs`() {
+    // End-to-end shape check: a spawn-style dynamic tool dispatched through the agent must
+    // produce a numbered TrailblazeToolLog entry with non-empty args, durationMs, and a
+    // successful flag — the same surface session-log readers and recording reconstruction
+    // rely on. Mirrors what `SubprocessTrailblazeTool` looks like at runtime without needing
+    // a real spawned MCP server in unit tests.
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+    val args = kotlinx.serialization.json.buildJsonObject {
+      put("cardId", kotlinx.serialization.json.JsonPrimitive("card_abc123"))
+    }
+    val tool = DynamicSubprocessLikeTool(
+      advertisedToolName = "subprocess_removeCard",
+      rawToolArguments = args,
+    )
+
+    val result = run(agent, tool)
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs).hasSize(1)
+    val log = toolLogs[0]
+    assertThat(log.toolName).isEqualTo("subprocess_removeCard")
+    assertThat(log.successful).isEqualTo(true)
+    assertThat(log.durationMs >= 0L).isEqualTo(true)
+    // Raw args are preserved on the persisted payload so recording reconstruction has
+    // everything it needs to rebuild the original tool call.
+    assertThat(log.trailblazeTool.raw).isEqualTo(args)
+    // Host-local dispatches set `dispatchedHostSide` so session viewers / reports can badge
+    // them as such — the discoverability fix from the #2935 follow-up review.
+    assertThat(log.dispatchedHostSide).isEqualTo(true)
+  }
+
+  @Test
+  fun `host-local dispatch that THROWS still emits a TrailblazeToolLog with successful=false`() {
+    // Regression for the PR #2935 review's High—Correctness finding. The contract is
+    // "every dispatch logs" — that has to hold even when the tool's `execute` throws
+    // rather than returning a `TrailblazeToolResult.Error`. Custom HostLocal authors and
+    // future regressions in `SubprocessTrailblazeTool` could both let an exception escape;
+    // the captured log must still be there.
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+
+    class ThrowingHostLocal : HostLocalExecutableTrailblazeTool {
+      override val advertisedToolName: String = "throwing_subprocess_tool"
+      override suspend fun execute(
+        toolExecutionContext: TrailblazeToolExecutionContext,
+      ): TrailblazeToolResult = throw RuntimeException("subprocess transport died")
+    }
+
+    val result = run(agent, ThrowingHostLocal())
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Error::class)
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs).hasSize(1)
+    assertThat(toolLogs[0].toolName).isEqualTo("throwing_subprocess_tool")
+    assertThat(toolLogs[0].successful).isEqualTo(false)
+    assertThat(toolLogs[0].exceptionMessage).isEqualTo("subprocess transport died")
+  }
+
+  @Test
+  fun `failed host-local dispatch still emits a TrailblazeToolLog with successful=false`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = capturingAgent(captured)
+    val failing = DynamicSubprocessLikeTool(
+      advertisedToolName = "subprocess_brokenTool",
+      rawToolArguments = kotlinx.serialization.json.buildJsonObject {},
+      result = TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "subprocess crashed",
+        command = StubTool(),
+        stackTrace = "",
+      ),
+    )
+
+    run(agent, failing)
+
+    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertThat(toolLogs).hasSize(1)
+    assertThat(toolLogs[0].successful).isEqualTo(false)
+    assertThat(toolLogs[0].exceptionMessage).isEqualTo("subprocess crashed")
   }
 }

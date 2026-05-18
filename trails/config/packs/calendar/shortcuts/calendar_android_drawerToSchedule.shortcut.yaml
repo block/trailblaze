@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^Schedule view$"
+          contentDescriptionRegex: "Schedule view"

@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -56,6 +57,42 @@ abstract class MaestroTrailblazeAgent(
    * and tests stay unchanged.
    */
   val captureNetworkTraffic: Boolean = false,
+  /**
+   * The session's active target (pack manifest + device pair). Propagated to every
+   * [TrailblazeToolExecutionContext] this agent builds so the `_meta.trailblaze.target`
+   * envelope block populates, which is what makes `ctx.target?.resolveAppId()` work for
+   * scripted tools dispatched through this agent.
+   *
+   * Null when the rule wasn't constructed from a
+   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget] — e.g. unit-test fixtures or a
+   * target-agnostic rule. Scripted tools that need to handle both shapes should
+   * optional-chain (`ctx.target?.resolveAppId(...)`).
+   *
+   * **Why this exists.** Scripted tools that run in-process on-device (via the QuickJS
+   * bundle path, no host fallback) have no other way to learn which app to act on — they
+   * can't probe the device themselves, and a hardcoded app-id list both duplicates pack.yaml
+   * and turns into a per-call `mobile_listInstalledApps` round-trip. Surfacing the resolved
+   * target on every context replaces that pattern with a data field the framework
+   * populates once at session start. Square card-reader broadcast tools are the canonical
+   * consumer today.
+   */
+  val resolvedTarget: ResolvedTarget? = null,
+  /**
+   * The session's resolved Android app id — already device-filtered (intersected against
+   * installed packages) by whoever built this agent. Null when [resolvedTarget] is null OR
+   * when no declared candidate is installed.
+   *
+   * Mirrors the host runner's pre-resolved string surfaced through
+   * `TrailblazeToolExecutionContext.appId`. Threaded into the execution context
+   * exactly like [resolvedTarget].
+   *
+   * **Naming note.** This is the *device-resolved* id and is nullable. The unrelated
+   * `xyz.block.trailblaze.model.ResolvedTarget.appId` getter is the *declared-first*
+   * id from the pack manifest and is non-null (throws if none declared). Don't confuse
+   * `agent.appId` (this) with `resolvedTarget.appId` (declared-first) — they answer
+   * different questions.
+   */
+  val appId: String? = null,
 ) : BaseTrailblazeAgent(memory = memory) {
 
   override val trailblazeToolRepo: TrailblazeToolRepo? = trailblazeToolRepo
@@ -185,6 +222,8 @@ abstract class MaestroTrailblazeAgent(
       },
       nodeSelectorMode = nodeSelectorMode,
       captureNetworkTraffic = captureNetworkTraffic,
+      resolvedTarget = resolvedTarget,
+      appId = appId,
     )
     return context
   }

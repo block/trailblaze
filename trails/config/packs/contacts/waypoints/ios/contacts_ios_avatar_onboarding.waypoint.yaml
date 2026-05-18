@@ -11,22 +11,22 @@ required:
   - description: "Onboarding cancel button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^OnboardingCancelButton$"
+        resourceIdRegex: "OnboardingCancelButton"
   - description: "Avatar/Poster segmented control: Avatar selected"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Avatar$"
+        accessibilityTextRegex: "Avatar"
         selected: true
   - description: "Choose-an-Avatar header (locale-bound but stable in en-US)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose an Avatar$"
+        accessibilityTextRegex: "Choose an Avatar"
 forbidden:
   - description: "Visual-identity Choose button — only on the editor (after picking a type)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Choose-a-Poster header — would mean Poster is selected"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose a Poster$"
+        accessibilityTextRegex: "Choose a Poster"

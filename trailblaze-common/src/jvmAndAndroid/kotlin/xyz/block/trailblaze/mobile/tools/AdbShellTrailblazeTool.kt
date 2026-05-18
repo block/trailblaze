@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mobile.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -29,7 +30,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * tool is dispatched on the daemon JVM or on the device's QuickJS bundle path.
  *
  * Marked `requiresHost = false` so the on-device runner registers it alongside the host
- * one. A scripted tool that composes only `adbShell` and other dual-mode tools (e.g.
+ * one. A scripted tool that composes only `android_adbShell` and other dual-mode tools (e.g.
  * [AndroidSendBroadcastTrailblazeTool]) does **not** need `requiresHost: true` on its
  * descriptor — both ends of the matrix can serve the call.
  *
@@ -37,10 +38,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * The underlying [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.executeShellCommand]
  * returns only the combined stdout — no exit-code channel. To make scripted-tool composition
- * fail-loud on non-zero exits (so `client.callTool("adbShell", { command: "am force-stop
- * bogus.pkg" })` raises `isError` instead of silently succeeding with `Error: package
+ * fail-loud on non-zero exits (so `client.callTool("android_adbShell", { command: ["am", "force-stop",
+ * "bogus.pkg"] })` raises `isError` instead of silently succeeding with `Error: package
  * 'bogus.pkg' not installed` in stdout), the implementation appends `; echo
- * __TBZ_ADBSHELL_EXIT__$?` to the user's command, runs the wrapped command via the
+ * __TBZ_ADBSHELL_EXIT__$?` to the joined command, runs the wrapped command via the
  * executor, and parses the sentinel line out of the trailing output.
  *
  * Trade-offs documented for future maintainers:
@@ -62,39 +63,61 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * `exec` runs a process in the *host JVM* environment — fundamentally host-bound, useful
  * for host-side scripts (peripheral activation, build steps, anything in the dev
- * machine's PATH). `adbShell` runs in the *device's shell* — `pm`, `am`, `setprop`,
+ * machine's PATH). `android_adbShell` runs in the *device's shell* — `pm`, `am`, `setprop`,
  * `dumpsys`, `input keyevent`, `getprop`. The two solve different problems and live on
  * different sides of the host/device boundary.
  *
- * ### Argv form
+ * ### Command shape: `List<String>` (argv-shaped, injection-safe)
  *
  * The underlying `executeShellCommand` contract is a single shell string evaluated by
- * the device's shell (`sh -c <cmd>` semantically). We expose [command] as a plain string
- * to match. Authors who need argv safety against templated parameters should construct
- * the command with appropriate escaping themselves, or run the broadcast equivalent via
- * [AndroidSendBroadcastTrailblazeTool] which is structurally argv-safe.
+ * the device's shell (`sh -c <cmd>` semantically) — there is no argv-form at the device
+ * boundary. We expose [command] as `List<String>` (argv-shaped) and shell-quote-escape
+ * each element via the shared [xyz.block.trailblaze.android.tools.shellEscape] helper
+ * before joining with spaces and handing to the device shell. Inside the resulting
+ * single-quote wrappers every shell metacharacter (`$`, `` ` ``, `;`, `&&`, newlines,
+ * `*`, `~`) is literal, so callers can safely interpolate untrusted parameters as
+ * separate list elements without writing their own escape logic.
  *
- * If a future need lands for argv-form `adbShell`, add an `argv: List<String>?` field
- * mutually exclusive with [command] and join with shell-quote escapes at the boundary.
+ * Element 0 is the program (or builtin like `am`, `pm`, `setprop`); subsequent elements
+ * are its arguments. Mirrors the shape of `java.lang.ProcessBuilder.command(List<String>)`
+ * and the recently-migrated `McpServerConfig.command: List<String>` (see PR #2344) —
+ * one mental model across all tool configs in the framework: anywhere you see
+ * `command:` it's a `List<String>`.
+ *
+ * Note: this is argv-*shaped*, not argv-*native* — the device shell has no argv entry
+ * point. The join-and-quote happens at the boundary, then `sh -c <joined>` runs as
+ * usual. Safety lives in the shell-escape, not in the field type.
  */
 @Serializable
 @TrailblazeToolClass(
-  name = "adbShell",
+  name = "android_adbShell",
   isForLlm = false,
   isRecordable = false,
+  // Dual-mode primitive: on-device-RPC strips `Success.message`, so scripted-tool authors that
+  // compose `android_adbShell` via `client.callTool(...)` rely on host-side dispatch to receive the
+  // stdout/stderr payload they read several frames down. See `TrailblazeToolClass`'s kdoc.
+  prefersHostSideForCallback = true,
 )
 @LLMDescription("Executes a shell command in the Android device's shell environment. Returns combined stdout/stderr.")
 data class AdbShellTrailblazeTool(
   /**
-   * Shell command to evaluate in the device's shell. Standard shell semantics — pipes,
-   * redirects, globs, multi-statement, all work as they would at an `adb shell` prompt.
-   * Authors interpolating untrusted input must sanitize/quote it before placing it here;
-   * the underlying transport does no escaping.
+   * Argv-shaped command. Element 0 is the program (or shell builtin like `am`, `pm`,
+   * `setprop`, `dumpsys`); subsequent elements are its arguments. Each element is
+   * single-quote-wrapped via the shared [xyz.block.trailblaze.android.tools.shellEscape]
+   * helper (POSIX `'\''` escape for embedded single quotes) and joined with spaces
+   * before handing to the device shell. Inside the wrapping quotes every shell
+   * metacharacter (`$`, `` ` ``, `;`, `&&`, newlines, `*`, `~`) is literal, so callers
+   * can safely interpolate untrusted parameters as separate list elements without
+   * writing their own escape logic.
    *
-   * Empty / blank commands are rejected at execute time (the device's `sh -c ""` would
-   * succeed silently, which is rarely what the author intended).
+   * Must be non-empty (enforced by the `init` block). The empty case is rejected at
+   * construction time — the device's `sh -c ""` would succeed silently, which is
+   * rarely what the author intended.
+   *
+   * Naming and shape match `java.lang.ProcessBuilder.command(List<String>)` and
+   * `McpServerConfig.command: List<String>` — one mental model across the framework.
    */
-  val command: String,
+  val command: List<String>,
   /**
    * Optional Android package id to run the command as via `run-as <appId>`. When set,
    * the command runs with the target app's UID — useful for reading/writing files in
@@ -112,25 +135,36 @@ data class AdbShellTrailblazeTool(
   val runAs: String? = null,
 ) : ExecutableTrailblazeTool {
 
+  init {
+    // Argv-form is structurally injection-safe but a zero-element list is still
+    // degenerate (would produce an empty `sh -c ""` that succeeds silently — almost
+    // certainly an authoring slip rather than intent). Reject at construction so the
+    // failure is visible at the call site, not at execute-time.
+    require(command.isNotEmpty()) {
+      "AdbShellTrailblazeTool requires a non-empty `command:` list (got 0 elements)"
+    }
+  }
+
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     if (toolExecutionContext.trailblazeDeviceInfo.platform != TrailblazeDevicePlatform.ANDROID) {
       return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "adbShell is only supported on Android devices " +
+        errorMessage = "android_adbShell is only supported on Android devices " +
           "(got platform: ${toolExecutionContext.trailblazeDeviceInfo.platform}).",
       )
     }
-    if (command.isBlank()) {
-      return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "adbShell requires a non-blank command.",
-        command = this,
-      )
-    }
+    val effectiveCommand = joinCommandAsShellString(command)
     val executor = toolExecutionContext.androidDeviceCommandExecutor
       ?: return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "AndroidDeviceCommandExecutor is not provided",
+        // Include `effectiveCommand` so the missing-executor error explains *what*
+        // would have run — important for debugging mis-wired test contexts, and also
+        // pins via test that `execute()` is using the argv-derived string and not
+        // some other code path.
+        errorMessage = "AndroidDeviceCommandExecutor is not provided " +
+          "(would have run: '${effectiveCommand.take(200)}')",
+        command = this,
       )
     return try {
-      val wrapped = wrapWithExitSentinel(command)
+      val wrapped = wrapWithExitSentinel(effectiveCommand)
       val rawOutput = if (runAs != null) {
         executor.executeShellCommandAs(runAs, wrapped)
       } else {
@@ -141,7 +175,7 @@ data class AdbShellTrailblazeTool(
         parsed.exitCode == 0 -> TrailblazeToolResult.Success(message = parsed.output)
         parsed.exitCode == EXIT_CODE_SENTINEL_MISSING -> TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = buildString {
-            append("adbShell could not detect the exit code for command '${command.take(200)}' ")
+            append("android_adbShell could not detect the exit code for command '${effectiveCommand.take(200)}' ")
             append("— sentinel line was missing from the output. The command may have invoked ")
             append("`exec`, terminated the shell, or produced output that displaced the trailing ")
             append("sentinel. Treating as failure to avoid silently reporting Success.")
@@ -154,7 +188,7 @@ data class AdbShellTrailblazeTool(
         )
         else -> TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = buildString {
-            append("adbShell command exited with ${parsed.exitCode}: ${command.take(200)}")
+            append("android_adbShell command exited with ${parsed.exitCode}: ${effectiveCommand.take(200)}")
             if (parsed.output.isNotEmpty()) {
               append('\n')
               append(parsed.output)
@@ -170,7 +204,7 @@ data class AdbShellTrailblazeTool(
       throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Failed to run adbShell command '${command.take(200)}': ${e.message}",
+        errorMessage = "Failed to run android_adbShell command '${effectiveCommand.take(200)}': ${e.message}",
         command = this,
         stackTrace = e.stackTraceToString(),
       )
@@ -216,6 +250,17 @@ data class AdbShellTrailblazeTool(
      */
     internal fun wrapWithExitSentinel(command: String): String =
       "$command; echo $EXIT_SENTINEL_TOKEN\$?"
+
+    /**
+     * Joins [command] into a single shell string by single-quote-wrapping each element via
+     * the shared [shellEscape] helper and separating with spaces. The wrapping makes
+     * every shell metacharacter inside an element literal (no `$` expansion, no backtick
+     * eval, no glob) — this is the load-bearing safety property of the argv-shaped API.
+     *
+     * `internal` for companion-object test access only; not part of the public API.
+     */
+    internal fun joinCommandAsShellString(command: List<String>): String =
+      command.joinToString(separator = " ") { it.shellEscape() }
 
     /**
      * Splits [rawOutput] into the user-facing command output and the captured exit code.

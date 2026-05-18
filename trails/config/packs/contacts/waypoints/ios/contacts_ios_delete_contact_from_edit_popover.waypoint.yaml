@@ -10,11 +10,11 @@ required:
   - description: "Popover dismiss region"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PopoverDismissRegion$"
+        resourceIdRegex: "PopoverDismissRegion"
   - description: "Delete Contact red button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"
 forbidden:
   - description: "Verbose 'Are you sure...' warning — that's the full delete confirm"
     selector:
@@ -27,4 +27,4 @@ forbidden:
   - description: "Discard-Changes warning"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Are you sure you want to discard your changes\\?$"
+        accessibilityTextRegex: "Are you sure you want to discard your changes\\?"

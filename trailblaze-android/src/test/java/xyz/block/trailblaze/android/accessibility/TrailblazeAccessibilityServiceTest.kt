@@ -135,4 +135,90 @@ class TrailblazeAccessibilityServiceTest {
     assertFalse(TrailblazeAccessibilityService.isImeClassName("com.example.softinputwindow"))
     assertFalse(TrailblazeAccessibilityService.isImeClassName("com.example.SOFTINPUTWINDOW"))
   }
+
+  // --- parseDumpsysInputMethodShown ---
+  //
+  // Pure-function parser pulled out of `isImeShownViaDumpsys()` so the matching rules can
+  // be pinned without the shell wrapper. This is the authoritative signal that gates
+  // `waitForImeDismissed`, so false negatives here cause real stuck-keyboard failures to
+  // silently pass the post-check, and false positives cause hideKeyboard to throw on a
+  // keyboard that's already gone.
+
+  @Test
+  fun `parseDumpsysInputMethodShown returns false for empty output`() {
+    assertFalse(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(""))
+  }
+
+  @Test
+  fun `parseDumpsysInputMethodShown returns true when mInputShown=true is on its own indented line`() {
+    // The common dumpsys layout: `mInputShown` appears as a field on its own line,
+    // indented under the InputMethodManagerService section header.
+    val fixture =
+      """
+      Current Input Method Manager state:
+        mCurMethodId=com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME
+        mShowExplicitlyRequested=false mShowForced=false
+        mInputShown=true
+        mInQuickSwitch=false
+      """
+        .trimIndent()
+    assertTrue(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
+
+  @Test
+  fun `parseDumpsysInputMethodShown returns false when mInputShown=false is on its own indented line`() {
+    val fixture =
+      """
+      Current Input Method Manager state:
+        mCurMethodId=com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME
+        mShowExplicitlyRequested=false mShowForced=false
+        mInputShown=false
+        mInQuickSwitch=false
+      """
+        .trimIndent()
+    assertFalse(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
+
+  @Test
+  fun `parseDumpsysInputMethodShown returns false when mInputShown is absent entirely`() {
+    // Older Android versions or partial dumpsys outputs sometimes omit the flag — we
+    // must NOT default to "shown" in that case (would convert every hideKeyboard into a
+    // false-positive failure).
+    val fixture =
+      """
+      Current Input Method Manager state:
+        mShowExplicitlyRequested=false mShowForced=false
+        mInQuickSwitch=false
+      """
+        .trimIndent()
+    assertFalse(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
+
+  @Test
+  fun `parseDumpsysInputMethodShown ignores mInputShown=true that appears mid-line`() {
+    // The startsWith(trim) anchor exists so a field name appearing as a substring of an
+    // unrelated diagnostic line (e.g. a comment, a serialized state dump) doesn't
+    // false-positive. Pin that behavior intentionally.
+    val fixture =
+      """
+        diagnostics: previous mInputShown=true at boot
+        mInputShown=false
+      """
+        .trimIndent()
+    assertFalse(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
+
+  @Test
+  fun `parseDumpsysInputMethodShown returns true when any of multiple lines match`() {
+    // Defensive against future Android versions printing the flag in multiple sections.
+    // The function short-circuits on the first match — semantics: "IME is shown if any
+    // dumpsys line says so".
+    val fixture =
+      """
+        mInputShown=false
+        mInputShown=true
+      """
+        .trimIndent()
+    assertTrue(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
 }

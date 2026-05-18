@@ -4,11 +4,11 @@ required:
   - description: "Day picker button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/date_picker_button"
   - description: "FAB visible (still on a calendar view)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/floating_action_button"
   - description: "At least 3 multi-day cells with 'Open Day View' contentDescription"
     minCount: 3
     selector:

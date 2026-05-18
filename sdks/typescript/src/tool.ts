@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { createClient, type TrailblazeClient } from "./client.js";
 import { fromMeta, type TrailblazeContext } from "./context.js";
+import { createLogger } from "./logger.js";
 
 /**
  * Spec for a Trailblaze-authored tool. Intentionally a shallow wrapper over the raw MCP SDK's
@@ -95,6 +96,16 @@ export interface PendingToolRegistration {
 const pendingTools: PendingToolRegistration[] = [];
 
 /**
+ * Upper bound on the `Error.stack` text included in an error envelope. Deep async chains in
+ * Node/bun can produce stack traces of tens or hundreds of KB; the envelope rides through
+ * `*ToolLog.json` session logs and CI report artifacts where unbounded growth is a real
+ * operational concern. 16 KB keeps the head-of-stack frames (where the actual failing line
+ * lives) intact while truncating runaway tails. Authors with a longer reproducer can attach
+ * the full stack from local `bun run` output if needed.
+ */
+const MAX_STACK_LENGTH = 16_384;
+
+/**
  * Declare a Trailblaze tool. Buffers the registration until [run] connects the MCP server,
  * so authors can call this at module top-level in any order.
  */
@@ -133,16 +144,132 @@ export function registerPendingTools(server: McpServer): void {
       pending.name,
       preparedSpec,
       (async (args: Record<string, unknown>, extra: unknown) => {
-        // The raw MCP SDK threads the request's `_meta` through as part of `extra` (the
-        // CallToolRequest extra object, which mirrors `RequestHandlerExtra` in the SDK). Exact
-        // access path: `extra.request.params._meta`. If any link is missing (older SDK, test
-        // harness skipping the envelope), `fromMeta` returns undefined and the handler branches.
-        const meta = extractMeta(extra);
-        const ctx = fromMeta(meta);
-        // Fresh per-invocation client so each handler call captures its own envelope — concurrent
-        // `tools/call` requests within the same MCP session would otherwise race on a shared one.
-        const client = createClient(ctx);
-        return pending.handler(args, ctx, client);
+        // Build a server-backed logger so `ctx.logger.info(...)` emits MCP
+        // `notifications/message` (host-routable structured logs) AND mirrors to stderr for
+        // immediate CI visibility. See `./logger.ts` for the dual-path rationale. The logger
+        // construction itself can't throw (it just captures references), so it lives outside
+        // the try/catch — but the envelope/ctx parsing and the handler invocation are all
+        // inside the catch so any throw from `extractMeta` / `fromMeta` / the handler itself
+        // still surfaces through the same `isError` envelope shape with name + message + stack.
+        const logger = createLogger(server, pending.name);
+        // Catch handler throws (sync or async-reject) and surface them through an `isError`
+        // envelope that includes `error.name`, `error.message`, AND `error.stack`. Without this
+        // catch, the throw escapes the MCP SDK boundary, which wraps it into a result envelope
+        // whose text content is just `error.message` — the JS stack is lost, and an author
+        // debugging from session logs alone has no breadcrumb to the failing line. Surfacing
+        // the stack through `content: [{ type: "text", text: ... }]` rides the same wire path
+        // that `toTrailblazeToolResult` (Kotlin side) already maps to
+        // `ExceptionThrown.errorMessage`, so the change is purely additive — no SDK or host
+        // API change. Matches the in-process QuickJS host's parallel fix in
+        // `QuickJsToolHost.callTool` (PR #2941).
+        //
+        // ## Stack-trace PII assumption
+        //
+        // `Error.stack` includes absolute file paths (e.g. `/Users/$USER/...` locally,
+        // `/home/runner/...` in CI). Session logs are assumed to stay within the dev/CI trust
+        // boundary; this code does not redact paths. If session logs ever start shipping to
+        // external dashboards or shared analytics, add a redaction step here.
+        try {
+          // The raw MCP SDK threads the request's `_meta` through as part of `extra` (the
+          // CallToolRequest extra object, which mirrors `RequestHandlerExtra` in the SDK).
+          // Exact access path: `extra.request.params._meta`. If any link is missing (older
+          // SDK, test harness skipping the envelope), `fromMeta` returns undefined and the
+          // handler branches. Inside the try/catch so a malformed envelope produces an
+          // `isError` result instead of an uncaught throw at the MCP SDK boundary.
+          const meta = extractMeta(extra);
+          const ctx = fromMeta(meta, logger);
+          // Fresh per-invocation client so each handler call captures its own envelope —
+          // concurrent `tools/call` requests within the same MCP session would otherwise
+          // race on a shared one.
+          const client = createClient(ctx);
+          return await Promise.resolve(pending.handler(args, ctx, client));
+        } catch (e: unknown) {
+          // Build the error envelope defensively. Every property access on `e` could itself
+          // throw if the caller supplied a hostile object (throwing getter on `name`,
+          // `message`, `stack`, a `toString` that throws, a proxy `has` trap). Each access
+          // is wrapped in its own try/catch so a hostile throw can't re-introduce the
+          // lost-envelope failure mode this catch exists to prevent — mirrors the defenses
+          // QuickJsToolHost.callTool added during its review (#2941). Non-Error throws
+          // (`throw "string"`, `throw 42`, `throw 0`, `throw null`, `throw undefined`, …)
+          // all reach here too — `instanceof Error` is false → the fallback path produces a
+          // valid envelope for each.
+          const isErrorObj = e instanceof Error;
+          let errName = "Error";
+          if (isErrorObj) {
+            try {
+              const n = (e as Error).name;
+              if (typeof n === "string" && n.length > 0) errName = n;
+            } catch {
+              // Throwing `name` getter — keep the default prefix.
+            }
+          }
+          let errMessage: string;
+          try {
+            errMessage = isErrorObj ? (e as Error).message : String(e);
+          } catch {
+            errMessage = "<unstringifiable thrown value>";
+          }
+          if (errMessage === undefined || errMessage === null) {
+            errMessage = String(errMessage);
+          }
+          // Build the envelope text from the constructed prefix + the JS stack. The two
+          // engines we run in produce different `Error.stack` shapes:
+          //
+          //  - **V8 (Node/bun, host-subprocess path)**: `stack` already begins with
+          //    `${name}: ${message}\n  at ...`. Using it verbatim would duplicate the header
+          //    if we always prepend.
+          //  - **QuickJS (on-device bundle path)**: `stack` is frames-only — just
+          //    `  at fn (file:line:col)\n  at ...` with no header. Using `stack` verbatim
+          //    would drop the error's name and message from the envelope, breaking the
+          //    "session-log reader sees what went wrong" contract documented in the
+          //    README's "Error handling" section.
+          //
+          // Strategy: always start from the constructed `${name}: ${message}` header, then
+          // append the stack — minus its own header if it begins with one (V8) — so the
+          // result is exactly one header line followed by frames on either engine. Cap the
+          // included stack at MAX_STACK_LENGTH so a deep async chain (which can easily
+          // exceed 50 KB) doesn't bloat session logs.
+          let envelopeText = `${errName}: ${errMessage}`;
+          if (isErrorObj) {
+            try {
+              const stack = (e as Error).stack;
+              if (typeof stack === "string" && stack.length > 0) {
+                // Strip a leading header line if the engine already produced one (V8) so
+                // we don't double-print it. Two shapes the engine may emit:
+                //
+                //  - `${name}: ${message}\n  at ...`  — the normal case.
+                //  - `${name}\n  at ...`              — V8 omits the `: ` when `message`
+                //    is the empty string (`new Error("")`).
+                //
+                // Match against both; partial matches (e.g. `Error:` without our exact
+                // message) fall through to "stack appended as-is", which is the safer
+                // default.
+                const headerWithMessage = `${errName}: ${errMessage}`;
+                const headerBareName = errName;
+                let framesOnly = stack;
+                if (stack.startsWith(headerWithMessage)) {
+                  framesOnly = stack.slice(headerWithMessage.length).replace(/^\r?\n/, "");
+                } else if (errMessage.length === 0 && stack.startsWith(headerBareName + "\n")) {
+                  // Empty-message form. Slice past the bare name AND its trailing newline
+                  // so the frames append directly under our constructed `${name}: ` line.
+                  framesOnly = stack.slice(headerBareName.length).replace(/^\r?\n/, "");
+                }
+                const combined = framesOnly.length > 0
+                  ? `${envelopeText}\n${framesOnly}`
+                  : envelopeText;
+                envelopeText = combined.length > MAX_STACK_LENGTH
+                  ? `${combined.slice(0, MAX_STACK_LENGTH)}\n...[stack truncated]`
+                  : combined;
+              }
+            } catch {
+              // Throwing `stack` getter — fall through with the prefix-only text.
+            }
+          }
+          return {
+            isError: true,
+            content: [{ type: "text", text: envelopeText }],
+          };
+        }
         // Positional cast (`Parameters<...>[2]`) rather than the SDK's named `ToolCallback`
         // alias because `registerTool` is generic over `InputArgs` — naming the callback
         // type forces a specific `InputArgs` binding (e.g. `ZodRawShapeCompat`) that the

@@ -10,25 +10,25 @@ required:
   - description: "Add Field header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add Field$"
+        accessibilityTextRegex: "Add Field"
   - description: "Cancel button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
   - description: "Prefix row (always present in the field type list)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Prefix$"
+        accessibilityTextRegex: "Prefix"
   - description: "Maiden name row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Maiden name$"
+        accessibilityTextRegex: "Maiden name"
 forbidden:
   - description: "Done button — would mean we're in the Edit form, not the field picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "Add Photo — only on the contact form, not the field picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add Photo$"
+        accessibilityTextRegex: "Add Photo"

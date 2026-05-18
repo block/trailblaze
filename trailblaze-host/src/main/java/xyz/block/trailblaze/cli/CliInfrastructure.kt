@@ -129,6 +129,14 @@ fun cliReusableWithDevice(
   device: String?,
   sessionScope: String,
   webHeadless: Boolean = true,
+  /**
+   * Optional `--target` value from the action command's CLI flag. When set,
+   * the wrapper tells the daemon (after `ensureDevice` binds the device) to
+   * scope the target to the bound device's MCP session — does NOT persist to
+   * disk. For persistent target changes the user invokes `config target`
+   * explicitly. See [CliMcpClient.setSessionTargetForBoundDevice].
+   */
+  target: String? = null,
   action: suspend (CliMcpClient) -> Int,
 ): Int {
   if (!verbose) Console.enableQuietMode()
@@ -138,12 +146,27 @@ fun cliReusableWithDevice(
   }
   val config = CliConfigHelper.getOrCreateConfig()
   val port = CliConfigHelper.resolveEffectiveHttpPort()
-  val targetAppId = config.selectedTargetAppId
+  // Normalize once: lowercase + drop blank. Treat the literal "clear" as the
+  // explicit "remove the per-device override" signal so the user can revert
+  // without restarting the daemon. The CLI passes the same normalized value
+  // to both the session-file invalidation check (connectReusable) and the
+  // daemon-side MCP call below — drift would mean the daemon-side findById
+  // gets a case the file write doesn't expect.
+  val normalizedTarget = target?.lowercase()?.takeIf { it.isNotBlank() }
+  val isClearRequest = normalizedTarget == "clear"
+  // For the session-file invalidation check, anchor on the explicit flag if
+  // passed (the session must register the right toolset). For a clear request,
+  // anchor on the daemon-wide default since the user is reverting.
+  val effectiveTarget = when {
+    isClearRequest -> config.selectedTargetAppId
+    normalizedTarget != null -> normalizedTarget
+    else -> config.selectedTargetAppId
+  }
 
   return runBlocking {
     val mcpClient = connectOrStartDaemonReusable(
       port,
-      targetAppId = targetAppId,
+      targetAppId = effectiveTarget,
       sessionScope = sessionScope,
     ) ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
 
@@ -152,6 +175,20 @@ fun cliReusableWithDevice(
       if (deviceError != null) {
         Console.error(deviceError)
         return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+      // Tell the daemon to scope the target (or clear it) for this bound
+      // device — only when the user passed `--target` explicitly. Bare-
+      // platform writes don't disturb other device sessions because the daemon
+      // stores it keyed by the bound device id. No-op when target is null
+      // (reuse whatever the daemon's existing override is, or fall back to
+      // the daemon-wide default).
+      if (normalizedTarget != null) {
+        val payload = if (isClearRequest) "" else normalizedTarget
+        val setError = client.setSessionTargetForBoundDevice(payload)
+        if (setError != null) {
+          Console.error(setError)
+          return@runBlocking CommandLine.ExitCode.SOFTWARE
+        }
       }
       // Track the last CLI scope used against this port so `blaze --save`
       // can locate the recording even when called without `--device`. We
@@ -566,11 +603,9 @@ fun shutdownDaemonAndWait(port: Int): Int {
 // Target helper
 // ---------------------------------------------------------------------------
 
-/**
- * Apply --target to sticky config if provided.
- */
-internal fun applyBlazeTarget(target: String?) {
-  if (target != null) {
-    CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = target.lowercase()) }
-  }
-}
+// Persistent --target writes go through `trailblaze config target` only — the
+// CLI flag on action commands (`tool`, `blaze`, `snapshot`, ...) is now
+// session-scoped via [CliMcpClient.setSessionTargetForBoundDevice], so this
+// file no longer needs an `applyBlazeTarget` helper. The previous version
+// wrote to disk via [CliConfigHelper.updateConfig]; that path caused the
+// multi-device contamination this PR fixes.

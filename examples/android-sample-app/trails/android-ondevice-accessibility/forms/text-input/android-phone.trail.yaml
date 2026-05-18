@@ -14,7 +14,7 @@
           reason: The 'Forms' tab is identified by the node containing the 'Forms' text. Tapping this node should navigate to the 'Forms' tab as requested by the objective.
           nodeSelector:
             androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
+              classNameRegex: android.view.View
               collectionItemRowIndex: 0
               collectionItemColumnIndex: 1
   - step: Tap the "Name" field and type "Jane Doe"

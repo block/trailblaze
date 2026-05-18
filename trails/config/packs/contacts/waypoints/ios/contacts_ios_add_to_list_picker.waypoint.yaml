@@ -9,24 +9,24 @@ required:
   - description: "Cancel button (modal)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Cancel$"
+        accessibilityTextRegex: "Cancel"
   - description: "Lists header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "iPhone account section header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^iPhone$"
+        accessibilityTextRegex: "iPhone"
 forbidden:
   - description: "Add List button — only on the Lists manager, not the picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
   - description: "Edit button — only on the Lists manager"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "All Contacts row — picker hides All Contacts (you can't add a contact to it)"
     selector:
       iosMaestro:

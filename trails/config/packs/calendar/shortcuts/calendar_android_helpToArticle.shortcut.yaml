@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_content_line_item$"
+          resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_content_line_item"

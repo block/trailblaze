@@ -10,6 +10,7 @@ import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -51,13 +52,24 @@ import kotlin.system.exitProcess
 
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
- * Takes either explicit file arguments or a shell glob that expands to file paths;
- * does not accept directory arguments.
+ * Accepts explicit file arguments, shell globs, and directory arguments (directories are
+ * expanded recursively to all contained trail files).
  */
 @Command(
   name = "trail",
   mixinStandardHelpOptions = true,
-  description = ["Run a trail file (.trail.yaml) — execute a scripted test on a device"],
+  description = [
+    "Run a trail file (.trail.yaml) — execute a scripted test on a device.",
+    "",
+    "Accepts files, shell globs, or directories. Directory arguments expand recursively to " +
+      "every `.trail.yaml` / `blaze.yaml` under them.",
+    "",
+    "Trail-level metadata honored by the runner:",
+    "  - `tags:` (list of strings) — filtered via --tags.",
+    "  - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the " +
+      "`N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` " +
+      "is ignored. To run a skipped trail, remove its `skip:` line.",
+  ],
 )
 open class TrailCommand : Callable<Int> {
 
@@ -69,11 +81,28 @@ open class TrailCommand : Callable<Int> {
 
   @Parameters(
     index = "0..*",
-    arity = "1..*",
+    arity = "0..*",
     paramLabel = "<trailFile>",
-    description = ["One or more trail files (.trail.yaml or blaze.yaml). Use your shell's glob to run a batch (e.g., flows/**/*.trail.yaml)."]
+    description = [
+      "Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories " +
+        "expand recursively to every contained trail file. If omitted, defaults to the " +
+        "`trails/` directory at the workspace root (resolved by walking up from the current " +
+        "directory).",
+    ],
   )
-  lateinit var trailFiles: List<File>
+  var trailFiles: List<File> = emptyList()
+
+  @Option(
+    names = ["--tags"],
+    paramLabel = "<name>",
+    split = ",",
+    description = [
+      "Only run trails whose `config.tags:` list contains at least one of the given names. " +
+        "Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). " +
+        "Match is OR across tags. Untagged trails are excluded when --tags is specified.",
+    ],
+  )
+  var includeTags: List<String> = emptyList()
 
   @Option(
     names = ["-d", "--device"],
@@ -178,11 +207,49 @@ open class TrailCommand : Callable<Int> {
   )
   var noReport: Boolean = false
 
+  // Nullable + negatable matches the precedent of `--use-recorded-steps` above: three
+  // tri-state values (positive flag → true, negative flag → false, no flag → null) let us
+  // distinguish "user explicitly opted in/out" from "user didn't say". With a non-nullable
+  // Boolean + `negatable = true` + a default of `true`, picocli 4.7.7 inverts the option
+  // semantics (passing `--save-recording` ends up setting the field to false) — the
+  // nullable form avoids that footgun. The default-on behaviour lives in
+  // [resolveEffectiveSaveRecording] instead of the field default.
+  @Option(
+    names = ["--save-recording"],
+    description = [
+      "Save the recording back to the trail source directory after a successful run. " +
+        "Default: on. Use --no-save-recording to skip. " +
+        "Even when on, the recording is only saved when --self-heal was enabled OR no " +
+        "<deviceClassifiers>.trail.yaml exists yet next to the source — deterministic " +
+        "re-runs no-op the write so they can't clobber a hand-edited source."
+    ],
+    negatable = true,
+  )
+  var saveRecording: Boolean? = null
+
+  // Deprecated alias. Kept for one cycle so existing scripts that pass --no-record
+  // keep working — but with a one-time stderr warning so users notice during the
+  // deprecation window. Removal targets the next minor release after callers
+  // (cli_smoke_tests_common.sh, skill docs) migrate to --no-save-recording.
   @Option(
     names = ["--no-record"],
-    description = ["Skip saving the recording back to the trail source directory"]
+    description = ["[Deprecated] Alias for --no-save-recording."],
+    hidden = true,
   )
-  var noRecord: Boolean = false
+  @Suppress("unused")
+  fun setNoRecordDeprecated(value: Boolean) {
+    // Picocli invokes this setter with `true` when the bare flag is present, and with
+    // whatever the user passed when it's written as `--no-record=<value>`. Only flip the
+    // toggle when the user actually asked to disable saves — `--no-record=false` shouldn't
+    // implicitly re-enable saves, so we just no-op.
+    if (value) {
+      saveRecording = false
+      Console.error(
+        "[Deprecated] --no-record is replaced by --no-save-recording; the old name " +
+          "will be removed in a future release.",
+      )
+    }
+  }
 
   @Option(
     names = ["--no-logging"],
@@ -310,22 +377,33 @@ open class TrailCommand : Callable<Int> {
       device = CliConfigHelper.readConfig()?.cliDevicePlatform
     }
 
-    // Validate every trail file: must exist, be a regular file, and be a known trail name.
-    // Directory arguments are not accepted — use your shell's glob to expand to a list
-    // (e.g., `trailblaze trail flows/**/*.trail.yaml`) or pass files explicitly. The
-    // recognized trail names are `*.trail.yaml` (platform-specific recordings) and
-    // `blaze.yaml` (NL-only definitions).
+    // Default the trail argument when omitted: walk up from the *caller's* CWD to find the
+    // workspace root (the directory containing `trails/config/trailblaze.yaml`) and use its
+    // `trails/` dir. Convention-based defaulting matches pytest / cargo-test / Playwright /
+    // Jest — config tells the runner where tests live, the CLI just filters. Use
+    // [CliCallerContext.callerCwd] rather than `Paths.get("")` so daemon-forwarded invocations
+    // anchor on the caller's interactive cwd instead of the daemon process's cwd.
+    if (trailFiles.isEmpty()) {
+      val defaultDir = resolveDefaultTrailDir(CliCallerContext.callerCwd())
+      if (defaultDir == null) {
+        Console.error("Error: No trail file specified and no `trails/` directory found at the workspace root.")
+        Console.error("  Pass a trail file/directory explicitly, or run from a workspace containing a `trails/` directory.")
+        return CommandLine.ExitCode.USAGE
+      }
+      Console.info("No trail argument given; defaulting to ${defaultDir.absolutePath}")
+      trailFiles = listOf(defaultDir)
+    }
+
+    // Validate every argument: must exist and be either a recognized trail file
+    // (`*.trail.yaml` or `blaze.yaml`) or a directory (expanded recursively below).
     for (file in trailFiles) {
       if (!file.exists()) {
         Console.error("Error: Trail file does not exist: ${file.absolutePath}")
         return CommandLine.ExitCode.SOFTWARE
       }
-      if (file.isDirectory) {
-        Console.error("Error: '${file.absolutePath}' is a directory; pass trail files explicitly or via a shell glob (e.g., flows/**/*.trail.yaml).")
-        return CommandLine.ExitCode.USAGE
-      }
+      if (file.isDirectory) continue
       if (!file.isFile) {
-        Console.error("Error: Not a regular file: ${file.absolutePath}")
+        Console.error("Error: Not a regular file or directory: ${file.absolutePath}")
         return CommandLine.ExitCode.USAGE
       }
       if (!TrailRecordings.isTrailFile(file.name)) {
@@ -349,13 +427,24 @@ open class TrailCommand : Callable<Int> {
       daemon.shutdownBlocking()
     }
 
-    // In-process run. Single-file and multi-file callers share the same per-file loop
-    // so accounting, recording, and reporting are consistent at any N.
-    Console.info("Running ${trailFiles.size} trail file(s)")
+    // Build the execution plan up front: expand directories, parse each trail's config once,
+    // apply --tags, classify `skip:` markers. Doing this before the run lets the "Running
+    // N trail file(s)" header reflect the actual workload (post-filter) rather than the
+    // raw argument count.
+    val plan = planTrailExecution(trailFiles, includeTags)
+    if (plan.filteredOutByTag > 0) {
+      Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
+    }
+    if (plan.items.isEmpty()) {
+      Console.info("No trail files to run after filtering. Exiting.")
+      return CommandLine.ExitCode.OK
+    }
+    Console.info("Running ${plan.items.size} trail file(s)")
     Console.info(SECTION_DIVIDER)
 
     var passed = 0
     var failed = 0
+    var skipped = 0
     val allNewSessionIds = mutableListOf<SessionId>()
 
     // Initialize the app once for all files
@@ -373,31 +462,49 @@ open class TrailCommand : Callable<Int> {
       Console.info("\n\nExecution stopped by user.")
     })
 
-    for ((index, file) in trailFiles.withIndex()) {
+    for ((index, item) in plan.items.withIndex()) {
       if (cancelled) break
-      Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.name}")
-      Console.info(ITEM_DIVIDER)
-      val (exitCode, sessionIds) = runSingleTrailFile(file, app)
-      allNewSessionIds.addAll(sessionIds)
-      if (exitCode == CommandLine.ExitCode.OK) {
-        passed++
-        // Save recording to trail source directory on success
-        if (!noRecord && sessionIds.isNotEmpty()) {
-          val logsRepo = app.deviceManager.logsRepo
-          for (sessionId in sessionIds) {
-            val classifiers = logsRepo.getSessionInfo(sessionId)
-              ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-            saveRecordingToTrailDirectory(file, sessionId, classifiers)
+      val total = plan.items.size
+      when (item) {
+        is TrailExecutionItem.Skip -> {
+          Console.info("\n[${index + 1}/$total] Skipping: ${item.file.name}")
+          Console.info(ITEM_DIVIDER)
+          Console.info("Skipped: ${item.reason}")
+          skipped++
+        }
+        is TrailExecutionItem.Run -> {
+          Console.info("\n[${index + 1}/$total] Running: ${item.file.name}")
+          Console.info(ITEM_DIVIDER)
+          val (exitCode, sessionIds) = runSingleTrailFile(item.file, app)
+          allNewSessionIds.addAll(sessionIds)
+          if (exitCode == CommandLine.ExitCode.OK) {
+            passed++
+            // Save recording to trail source directory on success — gating delegated to
+            // shouldSaveRecording so all three call sites (this one, the daemon delegate
+            // below, and the in-process generation inside runSingleTrailFile) share one
+            // heuristic and can't drift.
+            if (sessionIds.isNotEmpty()) {
+              val logsRepo = app.deviceManager.logsRepo
+              for (sessionId in sessionIds) {
+                val classifiers = logsRepo.getSessionInfo(sessionId)
+                  ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
+                if (shouldSaveRecording(item.file, classifiers)) {
+                  saveRecordingToTrailDirectory(item.file, sessionId, classifiers)
+                } else {
+                  logSkippedRecording(item.file, classifiers)
+                }
+              }
+            }
+          } else {
+            failed++
           }
         }
-      } else {
-        failed++
       }
     }
 
     // Print summary
     Console.info("\n" + SECTION_DIVIDER)
-    Console.info("Results: $passed passed, $failed failed out of ${trailFiles.size} total")
+    Console.info("Results: $passed passed, $failed failed, $skipped skipped out of ${plan.items.size} total")
 
     // Generate combined report
     if (!noReport && allNewSessionIds.isNotEmpty()) {
@@ -438,11 +545,22 @@ open class TrailCommand : Callable<Int> {
    * discovery, LLM config, and the trail runner ready to go.
    */
   private fun delegateToDaemon(daemon: DaemonClient): Int {
-    Console.info("Delegating ${trailFiles.size} trail file(s) to running Trailblaze daemon...")
+    // Same plan-then-iterate shape as the in-process path so the daemon-delegated and
+    // in-process flows produce identical headers, filter counts, and summaries.
+    val plan = planTrailExecution(trailFiles, includeTags)
+    if (plan.filteredOutByTag > 0) {
+      Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
+    }
+    if (plan.items.isEmpty()) {
+      Console.info("No trail files to run after filtering. Exiting.")
+      return CommandLine.ExitCode.OK
+    }
+    Console.info("Delegating ${plan.items.size} trail file(s) to running Trailblaze daemon...")
     Console.info(SECTION_DIVIDER)
 
     var passed = 0
     var failed = 0
+    var skipped = 0
 
     // Register Ctrl+C handler to cancel the in-flight daemon run
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -455,63 +573,83 @@ open class TrailCommand : Callable<Int> {
 
     // Capture is handled by the daemon's DesktopYamlRunner — running two screenrecord/simctl
     // processes on the same device causes conflicts, so we skip capture in the CLI delegate path.
-    for ((index, file) in trailFiles.withIndex()) {
-      Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.name}")
-      Console.info(ITEM_DIVIDER)
-
-      val rawYaml = file.readText()
-      val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
-      val testName = deriveTestName(file)
-
-      val request = CliRunRequest(
-        yamlContent = yamlContent,
-        trailFilePath = file.absolutePath,
-        testName = testName,
-        driverType = driverType,
-        deviceId = device,
-        llmProvider = llmProvider,
-        llmModel = llmModel,
-        useRecordedSteps = resolveUseRecordedSteps(yamlContent),
-        // --show-browser is the legacy flag; --headless is the new spelling. Either
-        // produces a visible browser when explicitly requested. Both are off by default.
-        showBrowser = showBrowser || !headless,
-        noLogging = noLogging,
-        agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
-        selfHeal = selfHeal,
-        captureVideo = captureVideo || captureAll,
-        captureLogcat = captureLogcat || captureAll,
-        captureNetworkTraffic = captureNetwork || captureAll,
-        maxLlmCalls = resolveEffectiveMaxLlmCalls(),
-      )
-
-      val response = daemon.runSync(request) { progress ->
-        Console.info(progress)
-      }
-
-      if (response.success) {
-        Console.info("✅ PASSED")
-        passed++
-        // Generate recording from session logs, then save to trail source directory.
-        val sid = response.sessionId
-        if (!noRecord && sid != null) {
-          val sessionId = SessionId(sid)
-          generateRecordingForSession(sessionId)
-          saveRecordingToTrailDirectory(
-            file, sessionId, response.deviceClassifiers,
-          )
+    for ((index, item) in plan.items.withIndex()) {
+      val total = plan.items.size
+      when (item) {
+        is TrailExecutionItem.Skip -> {
+          Console.info("\n[${index + 1}/$total] Skipping: ${item.file.name}")
+          Console.info(ITEM_DIVIDER)
+          Console.info("Skipped: ${item.reason}")
+          skipped++
         }
-      } else {
-        Console.error("❌ FAILED: ${response.error ?: "Unknown error"}")
-        failed++
+        is TrailExecutionItem.Run -> {
+          val file = item.file
+          Console.info("\n[${index + 1}/$total] Running: ${file.name}")
+          Console.info(ITEM_DIVIDER)
+
+          val rawYaml = file.readText()
+          val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+          val testName = deriveTestName(file)
+
+          val request = CliRunRequest(
+            yamlContent = yamlContent,
+            trailFilePath = file.absolutePath,
+            testName = testName,
+            driverType = driverType,
+            deviceId = device,
+            llmProvider = llmProvider,
+            llmModel = llmModel,
+            useRecordedSteps = resolveUseRecordedSteps(yamlContent),
+            // --show-browser is the legacy flag; --headless is the new spelling. Either
+            // produces a visible browser when explicitly requested. Both are off by default.
+            showBrowser = showBrowser || !headless,
+            noLogging = noLogging,
+            agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
+            selfHeal = selfHeal,
+            captureVideo = captureVideo || captureAll,
+            captureLogcat = captureLogcat || captureAll,
+            captureNetworkTraffic = captureNetwork || captureAll,
+            maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+          )
+
+          val response = daemon.runSync(request) { progress ->
+            Console.info(progress)
+          }
+
+          if (response.success) {
+            Console.info("✅ PASSED")
+            passed++
+            // Generate recording from session logs, then save to trail source directory —
+            // gating delegated to shouldSaveRecording. See the in-process loop above and
+            // the mirror site inside runSingleTrailFile below for the full heuristic.
+            val sid = response.sessionId
+            if (sid != null) {
+              if (shouldSaveRecording(file, response.deviceClassifiers)) {
+                val sessionId = SessionId(sid)
+                generateRecordingForSession(sessionId)
+                saveRecordingToTrailDirectory(
+                  file, sessionId, response.deviceClassifiers,
+                )
+              } else {
+                logSkippedRecording(file, response.deviceClassifiers)
+              }
+            }
+          } else {
+            Console.error("❌ FAILED: ${response.error ?: "Unknown error"}")
+            failed++
+          }
+        }
       }
     }
 
     Console.info("\n" + SECTION_DIVIDER)
-    Console.info("Results: $passed passed, $failed failed out of ${trailFiles.size} total")
+    Console.info("Results: $passed passed, $failed failed, $skipped skipped out of ${plan.items.size} total")
     // Match the success marker emitted by the in-process path at the per-file `onComplete`
     // site, so `./trailblaze trail <file>` prints the same phrase regardless of whether it
-    // runs in-process or via the daemon.
-    if (failed == 0) {
+    // runs in-process or via the daemon. Suppress the marker when nothing actually ran
+    // (e.g., every trail was skipped) — exit-code 0 is still correct but the phrase would
+    // mis-imply work was done.
+    if (failed == 0 && passed > 0) {
       Console.info("\n✅ Trail completed successfully!")
     }
 
@@ -947,8 +1085,12 @@ open class TrailCommand : Callable<Int> {
     // instrumentation runs, the recording is not generated during execution, so we generate
     // it here from the session logs. Same parallel-safety reasoning as the status check
     // above — only generate for THIS trail's pinned session, not sibling sessions that
-    // happen to be in the repo.
-    if (!noRecord) {
+    // happen to be in the repo. Skip generation when shouldSaveRecording would no-op the
+    // eventual copy anyway — no point burning the log-stability wait when the result
+    // will be discarded.
+    val classifiers = app.deviceManager.logsRepo.getSessionInfo(pinnedSessionId)
+      ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
+    if (shouldSaveRecording(file, classifiers)) {
       generateRecordingForSession(pinnedSessionId)
     }
 
@@ -1160,22 +1302,90 @@ open class TrailCommand : Callable<Int> {
         return
       }
 
-      // Determine target directory: same directory as the trail file (or the directory itself)
-      val targetDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return
-
-      // Compute the recording filename from device classifiers
-      val recordingFileName = if (deviceClassifiers.isNotEmpty()) {
-        deviceClassifiers.joinToString("-") + TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX
-      } else {
-        "recording${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}"
-      }
-
-      val targetFile = File(targetDir, recordingFileName)
+      val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
       recordingFile.copyTo(targetFile, overwrite = true)
       Console.info("Recording saved to: ${targetFile.absolutePath}")
     } catch (e: Exception) {
       Console.error("Failed to save recording to trail directory: ${e.message}")
     }
+  }
+
+  /**
+   * Computes the target path where a recording would land for the given trail + classifiers,
+   * mirroring the path logic inside [saveRecordingToTrailDirectory]. Returns `null` when the
+   * trail file has no parent directory (e.g. the root) — same early-return behaviour as the
+   * save path, so the two stay in lockstep.
+   *
+   * Used by the save-decision logic to test "does a recording already exist next to the
+   * source?" before clobbering it.
+   *
+   * `internal` so unit tests can exercise its branches (empty vs. non-empty classifiers,
+   * directory vs. file, no parent) directly instead of through the whole save pipeline.
+   */
+  internal fun computeRecordingTargetFile(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+  ): File? {
+    val targetDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return null
+    val recordingFileName = if (deviceClassifiers.isNotEmpty()) {
+      deviceClassifiers.joinToString("-") + TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX
+    } else {
+      "recording${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}"
+    }
+    return File(targetDir, recordingFileName)
+  }
+
+  /**
+   * Single source of truth for "should this run write a recording back to the trail source
+   * directory?" — used by all three call sites (in-process loop, daemon delegate, and the
+   * in-process generation inside [runSingleTrailFile]) so the heuristic can't drift between
+   * paths. Returns `true` when:
+   *
+   *  - the user hasn't opted out via `--no-save-recording`, AND
+   *  - either `--self-heal` was enabled (the AI may have changed the recorded tool sequence
+   *    so the new recording is genuinely different from what's on disk) OR no recording
+   *    exists yet next to the source (first-time authoring).
+   *
+   * Deterministic re-runs where a recording already exists return `false` so the source
+   * isn't silently clobbered. To forcibly regenerate, delete the file first.
+   *
+   * When the existence check is skipped because [trailFile] has no parent (returns
+   * `null` from [computeRecordingTargetFile]), only the self-heal arm of the OR can fire.
+   *
+   * No side effects — callers (the outer save sites) are responsible for any logging.
+   * The internal generation site uses this purely to short-circuit work, so it should not
+   * emit user-visible output that the outer save site will repeat one moment later.
+   */
+  internal fun shouldSaveRecording(trailFile: File, deviceClassifiers: List<String>): Boolean {
+    if (!resolveEffectiveSaveRecording()) return false
+    if (resolveEffectiveSelfHeal()) return true
+    val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
+    return !targetFile.exists()
+  }
+
+  /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
+   * Defaults to `true` (save by default) when the user didn't specify either form. */
+  internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
+
+  /**
+   * Companion of [shouldSaveRecording]. Emits a single user-visible info line when a save
+   * was skipped *because* the target already exists — the only non-explicit skip reason
+   * worth surfacing. The explicit opt-out (`--no-save-recording`) is silent because the
+   * user already knows they asked for it.
+   *
+   * Called only from the outer save sites (in-process loop, daemon delegate). The inner
+   * generation site inside [runSingleTrailFile] deliberately omits the call so a single
+   * skipped trail produces at most one log line per session.
+   */
+  private fun logSkippedRecording(trailFile: File, deviceClassifiers: List<String>) {
+    if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
+    if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
+    val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
+    if (!targetFile.exists()) return // not the "existing target" skip reason
+    Console.info(
+      "Recording not overwritten (target exists; pass --self-heal to regenerate): " +
+        targetFile.absolutePath,
+    )
   }
 
   /**
@@ -1314,5 +1524,157 @@ open class TrailCommand : Callable<Int> {
         baseName
       }
     }
+
+    /**
+     * Reads [file], resolves `{{var}}` template placeholders via [TrailYamlTemplateResolver],
+     * and returns the parsed [TrailConfig] — or null if the file can't be read, the templates
+     * can't be resolved, or the resolved YAML can't be decoded. Use this anywhere a pre-pass
+     * needs to inspect config metadata before the runner takes over: the runner itself parses
+     * the same resolved YAML, so pre-pass decisions stay consistent with what actually executes.
+     *
+     * Without template resolution, a placeholder that breaks raw-YAML syntax (e.g., an unquoted
+     * `{{VAR}}` that the parser reads as a flow mapping) would fail to decode here while
+     * succeeding at run time — silently bypassing any pre-pass gate (skip detection, tag filter)
+     * the caller depends on.
+     */
+    fun readResolvedTrailConfig(file: File): TrailConfig? = try {
+      val rawYaml = file.readText()
+      val resolvedYaml = TrailYamlTemplateResolver.resolve(rawYaml, file)
+      createTrailblazeYaml().extractTrailConfig(resolvedYaml)
+    } catch (_: Exception) {
+      null
+    }
+
+    /**
+     * Returns the trimmed `skip:` reason from the trail's `config:` block, or null if the trail
+     * is not marked skipped. A blank reason (`skip: ""`) is treated as not-skipped so an empty
+     * value doesn't silently disable a trail. Read-or-parse failures return null and defer error
+     * reporting to the runner, which produces a clearer "failed to decode" message in context.
+     */
+    fun readSkipReason(file: File): String? =
+      readResolvedTrailConfig(file)?.skip?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * Resolves the default trail-search directory used when `trailblaze trail` is invoked with
+     * no path argument. Walks up from [fromPath] to find the workspace root via
+     * [TrailblazeWorkspaceConfigResolver], then returns `<workspace-root>/trails/` if it
+     * exists. Returns null when no workspace can be resolved or the `trails/` directory is
+     * absent — callers should surface a clear error in that case.
+     *
+     * Both [WorkspaceRoot.Configured] (a real workspace with `trails/config/trailblaze.yaml`)
+     * and [WorkspaceRoot.Scratch] (a fallback workspace without a config file) are honored —
+     * the only thing this helper cares about is that some root resolves and contains a
+     * `trails/` directory next to it.
+     */
+    fun resolveDefaultTrailDir(fromPath: java.nio.file.Path): File? {
+      val resolved = try {
+        TrailblazeWorkspaceConfigResolver.resolve(fromPath)
+      } catch (_: Exception) {
+        return null
+      }
+      // [WorkspaceRoot.Configured.dir] is the `trails/` directory itself (the resolver anchors
+      // on `trails/config/trailblaze.yaml`); for [Scratch] there is no config, so we look for a
+      // `trails/` sibling under the start directory. Both branches return a candidate path —
+      // the final isDirectory check ensures we return null when the dir doesn't actually exist.
+      val trailsDir = when (val root = resolved.workspaceRoot) {
+        is WorkspaceRoot.Configured -> root.dir.toFile()
+        is WorkspaceRoot.Scratch -> root.dir.resolve("trails").toFile()
+      }
+      return trailsDir.takeIf { it.isDirectory }
+    }
+
+    /**
+     * Expands directory arguments to their contained trail files (`*.trail.yaml` + `blaze.yaml`)
+     * recursively. Plain file arguments pass through unchanged. Within each directory, results
+     * are sorted by absolute path for stable run order. The combined output is de-duplicated so
+     * passing both a directory and a file under it (or two overlapping globs) doesn't run the
+     * same trail twice.
+     */
+    fun expandTrailFiles(files: List<File>): List<File> {
+      val expanded = mutableListOf<File>()
+      for (arg in files) {
+        if (arg.isDirectory) {
+          arg.walkTopDown()
+            .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
+            // `TrailRecordings.isTrailFile` matches `trailblaze.yaml` because that name is
+            // also used as an alias for `blaze.yaml` in the NL-definition list. When walking
+            // a workspace `trails/` directory the convention puts the workspace *config* at
+            // `trails/config/trailblaze.yaml` — picking that up as a runnable trail would
+            // mis-execute the config file. Exclude the canonical workspace-config path
+            // specifically; other `trailblaze.yaml` files (e.g. NL definitions outside a
+            // `config/` directory) pass through unchanged.
+            .filterNot { it.parentFile?.name == "config" && it.name == "trailblaze.yaml" }
+            .sortedBy { it.absolutePath }
+            .forEach { expanded += it }
+        } else {
+          expanded += arg
+        }
+      }
+      return expanded.distinctBy { it.absoluteFile }
+    }
+
+    /**
+     * Builds the per-run [TrailExecutionPlan] from raw CLI arguments. Each input path is expanded
+     * (directories → recursive trail-file walk), then parsed once to extract `tags:` and `skip:`.
+     * `--tags` (OR include across the supplied names) is applied first, then `skip:` markers are
+     * classified as [TrailExecutionItem.Skip]. Skip is intentionally not overridable from the
+     * CLI — to run a skipped trail, remove its `skip:` field. This matches the JUnit / pytest /
+     * JS convention where re-enabling a disabled test is a source edit.
+     *
+     * Parse failures are surfaced to the runner downstream, not here. A trail whose config can't
+     * be decoded is treated as having no tags and no skip marker, so it flows into the `Run`
+     * bucket; the actual decode error then surfaces with full context when the runner attempts
+     * to execute it. This keeps the planner from masking the runner's clearer error message.
+     */
+    internal fun planTrailExecution(
+      files: List<File>,
+      includeTags: List<String>,
+    ): TrailExecutionPlan {
+      val expanded = expandTrailFiles(files)
+      val items = mutableListOf<TrailExecutionItem>()
+      var filteredOutByTag = 0
+      for (file in expanded) {
+        // Resolve templates before reading metadata so a `{{var}}` in the `config:` block
+        // doesn't trip up the planner while the runtime would have substituted it cleanly.
+        // See [readResolvedTrailConfig] for the consistency rationale.
+        val config = readResolvedTrailConfig(file)
+        val tags = config?.tags.orEmpty()
+
+        if (includeTags.isNotEmpty() && tags.none { it in includeTags }) {
+          filteredOutByTag++
+          continue
+        }
+
+        val skipReason = config?.skip?.trim()?.takeIf { it.isNotEmpty() }
+        items += if (skipReason != null) {
+          TrailExecutionItem.Skip(file, skipReason)
+        } else {
+          TrailExecutionItem.Run(file)
+        }
+      }
+      return TrailExecutionPlan(items = items, filteredOutByTag = filteredOutByTag)
+    }
   }
 }
+
+/**
+ * One entry in a planned trail run — either an executable trail or a deferred-skipped one with
+ * the reason ready to print. Built up front by [TrailCommand.planTrailExecution] so the per-file
+ * loop is a single iteration with no further parsing or filter checks.
+ */
+internal sealed class TrailExecutionItem {
+  abstract val file: File
+  data class Run(override val file: File) : TrailExecutionItem()
+  data class Skip(override val file: File, val reason: String) : TrailExecutionItem()
+}
+
+/**
+ * Result of [TrailCommand.planTrailExecution]. [items] is the in-order run plan (both runnables
+ * and skipped, since skipped trails still produce a per-line console entry). [filteredOutByTag]
+ * is the count of trails removed by `--tags` — surfaced as a one-line CI note
+ * so a missing trail in the summary is explained rather than mysterious.
+ */
+internal data class TrailExecutionPlan(
+  val items: List<TrailExecutionItem>,
+  val filteredOutByTag: Int,
+)

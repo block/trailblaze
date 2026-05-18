@@ -8,21 +8,21 @@ required:
   - description: "'This event' radio option"
     selector:
       androidAccessibility:
-        textRegex: "^This event$"
+        textRegex: "This event"
   - description: "'This and following events' radio option"
     selector:
       androidAccessibility:
-        textRegex: "^This and following events$"
+        textRegex: "This and following events"
   - description: "'All events' radio option"
     selector:
       androidAccessibility:
-        textRegex: "^All events$"
+        textRegex: "All events"
   - description: "Picker dialog list"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/select_dialog_listview"
 forbidden:
   - description: "Delete-recurring dialog has its own title"
     selector:
       androidAccessibility:
-        textRegex: "^Delete recurring event$"
+        textRegex: "Delete recurring event"

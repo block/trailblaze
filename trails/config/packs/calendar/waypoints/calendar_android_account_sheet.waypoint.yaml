@@ -4,26 +4,26 @@ required:
   - description: "OneGoogle account card root"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/og_card$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/og_card"
   - description: "Selected-account header"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/selected_account_view$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/selected_account_view"
   - description: "Manage-accounts entry"
     selector:
       androidAccessibility:
-        textRegex: "^Manage accounts on this device$"
+        textRegex: "Manage accounts on this device"
   - description: "Privacy Policy footer button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/og_privacy_policy_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/og_privacy_policy_button"
   - description: "Close (X) header button"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Close$"
+        contentDescriptionRegex: "Close"
 forbidden:
   - description: "Calendar FAB is hidden behind the OneGoogle sheet"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/floating_action_button"
         isClickable: true

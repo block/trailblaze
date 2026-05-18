@@ -404,7 +404,12 @@ class DeviceManagerToolSet(
     return mcpBridge.getCurrentAppTargetId() ?: "No target app selected."
   }
 
-  @LLMDescription("Switch the current target app. Read the trailblaze://devices/connected resource to see valid app target IDs.")
+  @LLMDescription(
+    "Switch the **daemon-wide** target app. Per-device overrides set via " +
+      "$TOOL_SET_SESSION_TARGET take precedence on their device — use this for " +
+      "fresh sessions, use $TOOL_SET_SESSION_TARGET to scope one device. Read " +
+      "the trailblaze://devices/connected resource to see valid app target IDs."
+  )
   @Tool(TOOL_SWITCH_TARGET)
   suspend fun switchTargetApp(
     @LLMDescription("The ID of the app target to switch to (e.g., 'myApp', 'otherApp'). Must match one of the available app target IDs.")
@@ -420,6 +425,52 @@ class DeviceManagerToolSet(
       val availableIds = mcpBridge.getAvailableAppTargets().map { it.id }
       "Failed to switch target app. '$appTargetId' not found. Available targets: $availableIds"
     }
+  }
+
+  /**
+   * Set or clear the **per-device** target override for the MCP session's
+   * currently-bound device. Unlike [switchTargetApp] (daemon-wide), this
+   * writes to the daemon's in-memory per-device map and dies with the daemon
+   * — used by the CLI to scope `--target X --device Y` to a single device
+   * without contaminating commands run against a different device.
+   *
+   * Pass an empty string (or the literal `"clear"`) for [appTargetId] to
+   * remove the override, falling back to the daemon-wide target.
+   *
+   * Throws on failure (no device bound; unknown target id). The MCP framework
+   * converts the exception into a tool-call response with `isError=true`, so
+   * CLI callers can use `result.isError` to detect failure rather than parsing
+   * the message text.
+   */
+  @LLMDescription(
+    "Set the target app for this session's bound device only. " +
+      "Does NOT change the daemon-wide default. Pass '' or 'clear' to remove the override. " +
+      "Read the trailblaze://devices/connected resource for valid target IDs."
+  )
+  @Tool(TOOL_SET_SESSION_TARGET)
+  suspend fun setSessionTargetForBoundDevice(
+    @LLMDescription("Target app ID, or '' / 'clear' to remove the per-device override.")
+    appTargetId: String,
+  ): String {
+    val deviceId = sessionContext?.associatedDeviceId
+      ?: throw IllegalStateException(
+        "No device is bound to this session. Connect a device first via $TOOL_CONNECT_DEVICE."
+      )
+    val cleared = appTargetId.isBlank() || appTargetId.equals("clear", ignoreCase = true)
+    if (cleared) {
+      mcpBridge.setSessionTargetForDevice(deviceId = deviceId, appTargetId = null)
+      return "Cleared session target override for ${deviceId.toFullyQualifiedDeviceId()}."
+    }
+    val resolvedDisplayName = mcpBridge.setSessionTargetForDevice(
+      deviceId = deviceId,
+      appTargetId = appTargetId,
+    ) ?: run {
+      val availableIds = mcpBridge.getAvailableAppTargets().map { it.id }
+      throw IllegalArgumentException(
+        "'$appTargetId' is not a known target id. Available: $availableIds"
+      )
+    }
+    return "Set session target to $resolvedDisplayName ($appTargetId) for ${deviceId.toFullyQualifiedDeviceId()}."
   }
 
   @LLMDescription(
@@ -605,6 +656,7 @@ Call with an empty list to reset to only the core tools.""",
     const val TOOL_GET_APP_TARGETS = "getAvailableAppTargets"
     const val TOOL_GET_CURRENT_TARGET = "getCurrentTargetApp"
     const val TOOL_SWITCH_TARGET = "switchTargetApp"
+    const val TOOL_SET_SESSION_TARGET = "setSessionTargetForBoundDevice"
     const val TOOL_RUN_PROMPT = "runPrompt"
     const val TOOL_END_SESSION = "endSession"
     const val TOOL_SET_ACTIVE_TOOLSETS = "setActiveToolSets"

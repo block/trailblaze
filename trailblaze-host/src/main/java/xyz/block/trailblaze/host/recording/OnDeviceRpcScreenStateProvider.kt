@@ -26,12 +26,16 @@ class OnDeviceRpcScreenStateProvider(
   private val requireAccessibilityService: Boolean,
 ) : ScreenStateProvider {
 
-  override suspend fun getScreenState(includeScreenshot: Boolean): GetScreenStateResponse? {
+  override suspend fun getScreenState(
+    includeScreenshot: Boolean,
+    includeTree: Boolean,
+  ): GetScreenStateResponse? {
     val result = rpc.rpcCall(
       GetScreenStateRequest(
         includeScreenshot = includeScreenshot,
         includeAnnotatedScreenshot = false,
         requireAndroidAccessibilityService = requireAccessibilityService,
+        includeTree = includeTree,
       ),
     )
     return when (result) {

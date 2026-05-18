@@ -43,7 +43,13 @@ class PlaywrightScreenStateProvider(
   private val pageManager: PlaywrightPageManager,
 ) : ScreenStateProvider {
 
-  override suspend fun getScreenState(includeScreenshot: Boolean): GetScreenStateResponse? {
+  override suspend fun getScreenState(
+    includeScreenshot: Boolean,
+    @Suppress("UNUSED_PARAMETER") includeTree: Boolean,
+  ): GetScreenStateResponse? {
+    // Playwright's aria snapshot is the cheap part — building the view hierarchy from it is
+    // negligible compared to the screenshot itself. We honor includeTree=false for interface
+    // contract but don't bother skipping the snapshot; no perf delta to chase here.
     return withContext(pageManager.playwrightDispatcher) {
       try {
         val page = pageManager.currentPage

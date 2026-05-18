@@ -9,17 +9,17 @@ required:
   - description: "Share Contact header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Share Contact$"
+        accessibilityTextRegex: "Share Contact"
   - description: "Select All Fields toggle"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Select All Fields$"
+        accessibilityTextRegex: "Select All Fields"
   - description: "Done button (commits selection / triggers share sheet)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
 forbidden:
   - description: "Edit button — would mean we're on the read-only contact detail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

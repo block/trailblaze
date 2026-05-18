@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          textRegex: "^Add a notification$"
+          textRegex: "Add a notification"

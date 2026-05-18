@@ -9,14 +9,14 @@ required:
     selector:
       androidAccessibility:
         textRegex: "^(OK|Clear)$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        classNameRegex: "android.widget.Button"
   - description: "Cancel button"
     selector:
       androidAccessibility:
-        textRegex: "^Cancel$"
-        classNameRegex: "\\Qandroid.widget.Button\\E"
+        textRegex: "Cancel"
+        classNameRegex: "android.widget.Button"
 forbidden:
   - description: "Help app bar (would mean we're back on the help root)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_app_bar"

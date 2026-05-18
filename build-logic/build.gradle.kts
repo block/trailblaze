@@ -36,6 +36,16 @@ gradlePlugin {
       id = "trailblaze.quickjs-bundle-assets"
       implementationClass = "TrailblazeQuickjsBundleAssetsPlugin"
     }
+    // Owns the `bundleTrailblazeSdk` / `verifyTrailblazeSdkBundle` task pair so the verify
+    // logic can be exercised by GradleTestKit (see TrailblazeSdkBundlePluginFunctionalTest).
+    // Inlining these tasks in `:trailblaze-scripting-bundle/build.gradle.kts` (where they
+    // originally lived) made them unreachable from any fixture project without copy-pasting
+    // the task body — and a forked copy would silently miss regressions in the production
+    // path. The plugin centralizes the bytes and the test runs that exact plugin code.
+    create("sdk-bundle") {
+      id = "trailblaze.sdk-bundle"
+      implementationClass = "TrailblazeSdkBundlePlugin"
+    }
   }
 }
 
@@ -78,4 +88,9 @@ dependencies {
 
 tasks.named<Test>("test") {
   useJUnit()
+  // Expose the real TS SDK dir to the functional test JVM. The test reads this property
+  // (via `System.getProperty`) to locate `node_modules/.bin/esbuild` and the SDK sources —
+  // re-bundling against the real SDK is the only way the byte-comparison verify behavior
+  // can be exercised without shipping a separate fixture esbuild + SDK in this repo.
+  systemProperty("trailblaze.sdkDir", file("../sdks/typescript").absolutePath)
 }

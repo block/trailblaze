@@ -6,19 +6,19 @@ required:
   - description: "Visual identity Done button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityDoneButton$"
+        resourceIdRegex: "VisualIdentityDoneButton"
   - description: "Memoji StickyHeader"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Memoji$"
-        resourceIdRegex: "^StickyHeaderContent$"
+        accessibilityTextRegex: "Memoji"
+        resourceIdRegex: "StickyHeaderContent"
   - description: "New Memoji create-suggestion button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Memoji$"
-        resourceIdRegex: "^CreateSuggestionButton$"
+        accessibilityTextRegex: "New Memoji"
+        resourceIdRegex: "CreateSuggestionButton"
 forbidden:
   - description: "Choose button — only on the editor, not composition"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"

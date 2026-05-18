@@ -339,7 +339,11 @@ object AndroidCompactElementList {
     node: TrailblazeNode,
     props: AndroidNodeProps,
   ): String? {
-    if (!props.isClickable && !props.isCheckable) return null
+    // Also absorb when the parent surfaces meaningful state (selected) but is not clickable —
+    // Material 3's Compose NavigationBar drops the click action from the currently-selected
+    // tab and moves `isSelected=true` to the parent View; without this absorption the
+    // `[selected]` marker would appear on a labelless ref like `[c596]  [selected]`.
+    if (!props.isClickable && !props.isCheckable && !props.isSelected) return null
     for (child in node.children) {
       val childProps = AndroidNodeProps.of(child) ?: continue
       val childLabel = resolveLabel(childProps)
@@ -417,6 +421,13 @@ object AndroidCompactElementList {
     if (props.error != null) return true
     // Focused element is meaningful
     if (props.isFocused) return true
+    // Selected element is meaningful even without a click action. Material 3's
+    // Compose NavigationBar moves `isSelected=true` onto a parent View and drops
+    // the click action from that node while it's the current tab. Without this,
+    // the parent collapses as transparent and the child TextView is emitted
+    // standalone with no `[selected]` marker — and the agent can't tell which
+    // bottom-nav tab is currently active.
+    if (props.isSelected) return true
     // Named content (text or contentDescription) that is important for accessibility
     if (label != null && props.isImportantForAccessibility) return true
     return false

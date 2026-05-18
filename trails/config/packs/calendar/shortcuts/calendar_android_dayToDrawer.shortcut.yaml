@@ -9,4 +9,4 @@ tools:
       reason: ""
       nodeSelector:
         androidAccessibility:
-          contentDescriptionRegex: "^Show Calendar List and Settings drawer$"
+          contentDescriptionRegex: "Show Calendar List and Settings drawer"

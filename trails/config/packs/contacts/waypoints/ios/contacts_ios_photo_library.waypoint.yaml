@@ -9,21 +9,21 @@ required:
   - description: "Photo grid container (PHPickerViewController-style)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PXGGridLayout-Group$"
+        resourceIdRegex: "PXGGridLayout-Group"
   - description: "Photos header (top-of-grid title)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Photos$"
+        accessibilityTextRegex: "Photos"
   - description: "Cancel button to dismiss the picker"
     selector:
       iosMaestro:
-        resourceIdRegex: "^Cancel$"
+        resourceIdRegex: "Cancel"
 forbidden:
   - description: "Camera button — only on the photos-picker (Camera+Library buttons)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^CameraButton$"
+        resourceIdRegex: "CameraButton"
   - description: "Take Picture — would mean we're in camera-capture mode"
     selector:
       iosMaestro:
-        resourceIdRegex: "^PhotoCapture$"
+        resourceIdRegex: "PhotoCapture"

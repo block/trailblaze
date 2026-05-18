@@ -6,10 +6,10 @@
 
 - tools:
     # Match Android World: clear the contacts provider data before the run.
-    - clearAppData:
-        packageName: com.android.providers.contacts
-    - clearAppData:
-        packageName: com.google.android.contacts
+    - mobile_clearAppData:
+        appId: com.android.providers.contacts
+    - mobile_clearAppData:
+        appId: com.google.android.contacts
     # Android World starts every task from the home screen (using adb for reliable setup execution)
     - androidworldbenchmarks_runAdbShell:
         adbShellCommands:

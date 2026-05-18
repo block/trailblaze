@@ -74,9 +74,20 @@ object SessionSegmentExtractor {
    * sessions is the caller's job. Use [analyze] when you also need step-level stats
    * (how many request logs, how many had a node tree, how many matched a waypoint) to
    * surface in CLI output or diagnose "no segments" outcomes.
+   *
+   * [target] is forwarded to [WaypointMatcher.match] so waypoints with `{{target.appId}}`
+   * placeholders expand correctly. Null is fine when the caller has no target context —
+   * the matcher fail-closes any templated waypoint with a `UNRESOLVED_TARGET_TEMPLATE`
+   * skip (literal selectors keep working).
    */
-  fun extract(sessionDir: File, waypoints: List<WaypointDefinition>): List<TrailSegment> =
-    analyze(sessionDir, waypoints).segments
+  // See [@JvmOverloads] rationale on `assert` in StepPostconditionAsserter — same
+  // published-artifact binary-compat concern.
+  @JvmOverloads
+  fun extract(
+    sessionDir: File,
+    waypoints: List<WaypointDefinition>,
+    target: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  ): List<TrailSegment> = analyze(sessionDir, waypoints, target).segments
 
   /** Detailed extraction result for CLI diagnostics — see [extract] for the trimmed form. */
   data class Analysis(
@@ -119,7 +130,12 @@ object SessionSegmentExtractor {
   )
 
   /** Disk-backed convenience: read [sessionDir], then run the in-memory [analyze]. */
-  fun analyze(sessionDir: File, waypoints: List<WaypointDefinition>): Analysis {
+  @JvmOverloads
+  fun analyze(
+    sessionDir: File,
+    waypoints: List<WaypointDefinition>,
+    target: xyz.block.trailblaze.api.TargetTemplateContext? = null,
+  ): Analysis {
     require(sessionDir.isDirectory) { "Not a session directory: $sessionDir" }
     val read = readSessionLogs(sessionDir)
     return analyze(
@@ -127,6 +143,7 @@ object SessionSegmentExtractor {
       sessionPath = sessionDir.absolutePath,
       waypoints = waypoints,
       parseFailures = read.parseFailures,
+      target = target,
     )
   }
 
@@ -145,11 +162,13 @@ object SessionSegmentExtractor {
    * [parseFailures] is forwarded into the resulting [Analysis] unchanged. Pass `0` if you
    * don't have a separate file-read step that produced skipped files.
    */
+  @JvmOverloads
   fun analyze(
     logs: List<TrailblazeLog>,
     sessionPath: String,
     waypoints: List<WaypointDefinition>,
     parseFailures: Int = 0,
+    target: xyz.block.trailblaze.api.TargetTemplateContext? = null,
   ): Analysis {
     if (logs.isEmpty()) {
       return Analysis(
@@ -162,7 +181,7 @@ object SessionSegmentExtractor {
       )
     }
     val sorted = logs.sortedBy { it.timestamp }
-    val collection = collectMatchedSteps(sorted, waypoints)
+    val collection = collectMatchedSteps(sorted, waypoints, target)
     val segments = buildSegments(collection.matched, sorted, sessionPath)
     val matchedStepsByWaypoint = groupMatchedSteps(collection.matched)
     // Single observation line per analyze() — turns "no badges in the UI despite a known
@@ -302,6 +321,7 @@ object SessionSegmentExtractor {
   private fun collectMatchedSteps(
     logs: List<TrailblazeLog>,
     waypoints: List<WaypointDefinition>,
+    target: xyz.block.trailblaze.api.TargetTemplateContext?,
   ): MatchedStepCollection {
     val out = mutableListOf<MatchedStep>()
     var requestStepIndex = 0
@@ -324,7 +344,7 @@ object SessionSegmentExtractor {
       var firstMatchedId: String? = null
       var ambiguous = false
       for (waypoint in waypoints) {
-        val result = WaypointMatcher.match(waypoint, tree)
+        val result = WaypointMatcher.match(waypoint, tree, target)
         if (!result.matched) continue
         if (firstMatchedId != null) {
           ambiguous = true

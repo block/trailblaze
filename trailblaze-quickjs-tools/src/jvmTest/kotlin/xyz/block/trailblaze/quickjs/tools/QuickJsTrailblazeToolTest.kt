@@ -70,6 +70,44 @@ class QuickJsTrailblazeToolTest {
   }
 
   @Test
+  fun `execute end-to-end maps a handler THROW through to Error ExceptionThrown with JS stack`() = runBlocking {
+    // End-to-end contract a session-log debugger actually relies on: handler throws → host's
+    // JS-side catch builds an `isError: true` envelope with `name + message + stack` →
+    // `QuickJsTrailblazeTool.execute`'s `toTrailblazeToolResult` maps the envelope to
+    // `Error.ExceptionThrown` → downstream `TrailblazeToolLog.exceptionMessage` carries the
+    // stack. Each hop is covered by a sibling unit test, but the full pipeline isn't —
+    // pinning it here guards against either side drifting in a way that drops the stack.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["thrower"] = {
+        name: "thrower",
+        spec: {},
+        handler: async () => { throw new Error("end-to-end boom"); },
+      };
+      """.trimIndent(),
+      bundleFilename = "e2e-thrower-bundle.js",
+    )
+    val tool = QuickJsTrailblazeTool(host, ToolName("thrower"), buildJsonObject {})
+    val result = tool.execute(buildContext())
+
+    assertTrue("expected Error.ExceptionThrown, got $result") {
+      result is TrailblazeToolResult.Error.ExceptionThrown
+    }
+    val message = (result as TrailblazeToolResult.Error.ExceptionThrown).errorMessage
+    // The JS-side `Error.name + ': ' + message` prefix is preserved through the Kotlin mapping.
+    assertTrue("expected 'Error: ' prefix in: $message") { message.startsWith("Error: ") }
+    assertTrue("expected handler message in: $message") { message.contains("end-to-end boom") }
+    // The whole point of the QuickJS-side catch — a bundle filename + line/col stack frame
+    // must reach the Kotlin-side error message intact. Without the catch, the JS stack would
+    // be lost at the QuickJS → quickjs-kt → Kotlin throwable boundary, and a session-log
+    // reader would see "boom" with no breadcrumb to the failing line.
+    assertTrue("expected bundle filename in JS stack in: $message") {
+      message.contains("e2e-thrower-bundle.js")
+    }
+  }
+
+  @Test
   fun `execute treats a missing content array as a structural error`() = runBlocking {
     // A bundle author who returns `{}` or `{ result: 42 }` would otherwise get
     // `Success(message=null)`, hiding the bug behind a no-op pass. Structural errors
@@ -190,8 +228,11 @@ class QuickJsTrailblazeToolTest {
       assertTrue("expected CancellationException to be thrown") { caught }
     }
 
-  private suspend fun connect(bundleJs: String): QuickJsToolHost {
-    val host = QuickJsToolHost.connect(bundleJs)
+  private suspend fun connect(
+    bundleJs: String,
+    bundleFilename: String = "tools.bundle.js",
+  ): QuickJsToolHost {
+    val host = QuickJsToolHost.connect(bundleJs, bundleFilename = bundleFilename)
     hosts.add(host)
     return host
   }

@@ -4,7 +4,7 @@ required:
   - description: "Drawer list container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drawer_list$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drawer_list"
   - description: "Calendar item row in unchecked state"
     selector:
       androidAccessibility:

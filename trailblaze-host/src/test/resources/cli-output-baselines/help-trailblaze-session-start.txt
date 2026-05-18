@@ -19,16 +19,24 @@ Start a new session with automatic video and log capture
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser
-                            headless. When omitted, falls back to the persisted
-                            `web-headless` config (see `trailblaze config
-                            web-headless`). Pass --headless=false to force a
-                            visible browser, --headless=true to force headless.
-                            Ignored for non-web devices.
+                            headless. When omitted, auto-detects: headless on
+                            machines with no display (remote workstations, CI),
+                            headed otherwise. Falls back to the persisted
+                            `web-headless` config when a display is present
+                            (see `trailblaze config web-headless`). Pass
+                            --headless=false to force a visible browser,
+                            --headless=true to force headless. Ignored for
+                            non-web devices.
       --mode=<mode>       Working mode: trail or blaze. Saved to config for
                             future commands.
       --no-logs           Disable device log capture
       --no-video          Disable video capture
-      --target=<target>   Target app ID. Saved to config for future commands.
+      --target=<target>   Target app ID for this session's bound device. Scoped
+                            to the device as a daemon-process override (dies on
+                            daemon restart or device release). Pass
+                            `--target=clear` to remove a previously-set
+                            override. To set a persistent default, use
+                            `trailblaze config target`.
       --title=<title>     Title for the session (used as trail name when saving)
   -v, --verbose           Enable verbose output
   -V, --version           Print version information and exit.

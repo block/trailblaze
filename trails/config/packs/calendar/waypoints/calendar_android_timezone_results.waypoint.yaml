@@ -4,17 +4,17 @@ required:
   - description: "Search input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/search_text"
   - description: "Clear-search action"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Clear search$"
+        contentDescriptionRegex: "Clear search"
   - description: "Results main container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/main_container$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/main_container"
   - description: "Result row tile icon"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/tile_icon$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/tile_icon"
 forbidden: []

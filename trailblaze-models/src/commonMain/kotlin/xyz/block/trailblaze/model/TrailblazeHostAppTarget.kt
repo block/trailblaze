@@ -252,6 +252,51 @@ abstract class TrailblazeHostAppTarget(
   }
 
   /**
+   * Strict variant of [getAppIdIfInstalled]: returns the first declared app id for [platform]
+   * that's present in [installedAppIds]. When none match, behavior depends on
+   * [allowsAppNotInstalled]:
+   *
+   * - `false` (the default; real product targets) — throws [IllegalStateException] naming the
+   *   target id, the platform, the declared candidates, and the device's installed-apps set, so
+   *   the oncaller can either install the right build or update the target's declared list.
+   * - `true` (stand-in targets like `default`) — returns the first declared id as a fallback so
+   *   downstream launch tools can still proceed; missing-install is expected for these targets.
+   *
+   * Also throws [IllegalStateException] when the target declares no app ids for the platform.
+   *
+   * **What this consolidates.** Two sites previously rolled the same "intersect declared
+   * candidates, throw with a descriptive message on miss" pattern around different probes:
+   * `MobileDeviceUtils.findInstalledAppIdForTarget` (host iOS / generic, JVM `simctl listapps`)
+   * and downstream on-device Android rules using `AdbCommandUtil.listInstalledApps()`. The
+   * platform-specific probe stays at each call site (different runtimes have different ways to
+   * enumerate installed packages); the priority picking + miss-handling is shared here so the
+   * two paths can't silently diverge on which declared id wins when multiple are installed.
+   *
+   * Callers that want a soft-fail (`null` on miss) should keep using [getAppIdIfInstalled].
+   */
+  fun requireInstalledAppIdForDevice(
+    platform: TrailblazeDevicePlatform,
+    installedAppIds: Set<String>,
+  ): String {
+    val declared = getPossibleAppIdsForPlatform(platform)
+    if (declared.isNullOrEmpty()) {
+      error("Target '$id' ($displayName) has no $platform app ids configured.")
+    }
+    // Delegate to the canonical non-throwing primitive so the priority/tie-break semantics
+    // can't drift between the two helpers — the entire point of this consolidation is one
+    // source of truth for "which declared id wins."
+    val installedAppId = getAppIdIfInstalled(platform, installedAppIds)
+    if (installedAppId != null) return installedAppId
+    if (allowsAppNotInstalled) return declared.first()
+    error(
+      "Could not find $displayName (id=$id). Target declares $platform app ids $declared but " +
+        "none are installed on the device. Currently installed: $installedAppIds. Either " +
+        "install one of the declared ids on the device, or add the actually-installed id to " +
+        "the target's declared list.",
+    )
+  }
+
+  /**
    * Returns the primary app id for [platform] — the first entry in [getPossibleAppIdsForPlatform].
    * Throws [IllegalStateException] when the target declares no app ids for the platform; the
    * error message names the target id, the platform, the YAML path the oncaller should check,

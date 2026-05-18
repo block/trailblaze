@@ -8,11 +8,11 @@ required:
   - description: "Lists header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Add List affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add List$"
+        accessibilityTextRegex: "Add List"
   - description: "An empty-list row (zero contacts)"
     selector:
       iosMaestro:
@@ -21,4 +21,4 @@ forbidden:
   - description: "Done button — would mean we're in edit mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"

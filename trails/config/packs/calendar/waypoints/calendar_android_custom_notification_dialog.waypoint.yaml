@@ -4,29 +4,29 @@ required:
   - description: "Dialog title 'Custom notification'"
     selector:
       androidAccessibility:
-        textRegex: "^Custom notification$"
+        textRegex: "Custom notification"
   - description: "Notification methods radio container"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/notification_methods_layout$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/notification_methods_layout"
   - description: "'As notification' delivery method radio"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/as_notification$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/as_notification"
   - description: "'As email' delivery method radio"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/as_email$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/as_email"
   - description: "Interval input"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/interval$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/interval"
   - description: "Done button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/done$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/done"
 forbidden:
   - description: "Plain notification picker list (would mean Custom dialog has not been opened)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/select_dialog_listview"

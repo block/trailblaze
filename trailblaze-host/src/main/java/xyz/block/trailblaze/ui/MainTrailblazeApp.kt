@@ -117,6 +117,12 @@ class MainTrailblazeApp(
     // Get the MCP server instance (we'll set the callback after Compose state is ready)
     val trailblazeMcpServer = trailblazeMcpServerProvider()
 
+    // Shared session state for the HTTP device API — tracks live DeviceScreenStream instances
+    // established via ConnectToDeviceRequest so screen-poll and interaction handlers can reach
+    // them. One instance per daemon lifetime; the map is thread-safe internally.
+    val hostDeviceSessionManager =
+      xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager()
+
     if (!canRunDesktopGui()) {
       // No display available (non-macOS or headless environment): start only the
       // MCP server without any Compose Desktop UI.
@@ -124,11 +130,19 @@ class MainTrailblazeApp(
       // available — the `headless` flag just controls initial window visibility.
       Console.log("Starting Trailblaze in headless mode (server only, no GUI)...")
       val portManager = trailblazeSavedSettingsRepo.portManager
+      // Advertise the live daemon URL to subprocess MCP plumbing BEFORE the server starts
+      // (in `wait = true` mode the call below blocks forever — anything after it never runs).
+      // Without this, `JsScriptingCallbackBaseUrl.get()` returns null in the headless path,
+      // `McpSubprocessRuntimeLauncher` skips the callback-context wiring, and scripted tools
+      // see `_meta.trailblaze`-less envelopes → `ctx === undefined` in handlers. The
+      // `applyPortOverrides`/`ensureServerRunning` paths in `TrailblazeDesktopApp.kt` already
+      // do this for the GUI app; mirroring here closes the gap for `trailblaze app --headless`.
+      xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
       trailblazeMcpServer.startStreamableHttpMcpServer(
         port = portManager.httpPort,
         httpsPort = portManager.httpsPort,
         wait = true,
-        additionalRouteRegistration = waypointGraphRouteRegistration(trailblazeSavedSettingsRepo),
+        additionalRouteRegistration = allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager),
       )
       return
     }
@@ -139,11 +153,15 @@ class MainTrailblazeApp(
       val portManager = trailblazeSavedSettingsRepo.portManager
       val daemon = DaemonClient(port = portManager.httpPort)
       if (!daemon.isRunning()) {
+        // Same callback-URL wiring as the headless branch above — without this, the GUI
+        // path's first-launch case (no prior daemon) drops `_meta.trailblaze` envelopes
+        // on every subprocess scripted-tool dispatch.
+        xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
         trailblazeMcpServer.startStreamableHttpMcpServer(
           port = portManager.httpPort,
           httpsPort = portManager.httpsPort,
           wait = false,
-          additionalRouteRegistration = waypointGraphRouteRegistration(trailblazeSavedSettingsRepo),
+          additionalRouteRegistration = allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager),
         )
       }
 
@@ -548,16 +566,14 @@ private fun rememberTrayIcon(): Painter {
 }
 
 /**
- * Builds the Ktor route-registration callback that wires the waypoint graph endpoints
- * (`/waypoints/graph` and `/waypoints/graph.json`) onto the daemon's HTTP server.
- *
- * The callback is fired once per server start, but the lambda it installs reads the
- * trails directory **per request** so a settings change reflects without a restart.
- * `getEffectiveTrailsDirectory` honors any in-app override of the default `./trails`
- * path, so the browser view shows the same waypoints the desktop tab does.
+ * Combines all additional Ktor route registrations for the daemon:
+ *  - Waypoint graph endpoints (`/waypoints/graph`, `/waypoints/graph.json`)
+ *  - Device API RPC endpoints (`/rpc/GetConnectedDevicesRequest`, etc.)
  */
-private fun waypointGraphRouteRegistration(
+private fun allRouteRegistrations(
   settingsRepo: TrailblazeSettingsRepo,
+  deviceManager: TrailblazeDeviceManager,
+  sessionManager: xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager,
 ): (io.ktor.server.routing.Routing.() -> Unit) = {
   xyz.block.trailblaze.graph.WaypointGraphEndpoint.register(
     routing = this,
@@ -566,4 +582,10 @@ private fun waypointGraphRouteRegistration(
       java.io.File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
     },
   )
+  xyz.block.trailblaze.host.recording.rpc.DeviceApiEndpoint.register(
+    routing = this,
+    deviceManager = deviceManager,
+    sessionManager = sessionManager,
+  )
+  xyz.block.trailblaze.host.recording.rpc.DevicesPageEndpoint.register(routing = this)
 }

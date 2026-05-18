@@ -8,17 +8,17 @@ required:
   - description: "Ringtone header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Ringtone$"
+        accessibilityTextRegex: "Ringtone"
   - description: "Done button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"
   - description: "checkmark icon (a tone is selected)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^checkmark$"
+        accessibilityTextRegex: "checkmark"
 forbidden:
   - description: "Text Tone header — sibling picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text Tone$"
+        accessibilityTextRegex: "Text Tone"

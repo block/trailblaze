@@ -11,21 +11,21 @@ required:
   - description: "New Contact title (sheet still active)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^New Contact$"
+        accessibilityTextRegex: "New Contact"
   - description: "Sheet Grabber"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "Keyboard accessory: AutoFill shortcut (only present when keyboard up)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^AutoFill$"
+        accessibilityTextRegex: "AutoFill"
   - description: "Keyboard accessory: Paste action"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Paste$"
+        accessibilityTextRegex: "Paste"
 forbidden:
   - description: "Edit button — only on the read-only contact-detail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

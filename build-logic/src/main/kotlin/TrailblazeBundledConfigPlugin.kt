@@ -16,6 +16,7 @@ class TrailblazeBundledConfigPlugin : Plugin<Project> {
       task.description = "Generates checked-in flat target YAMLs from authored pack manifests."
       task.packsDir.set(extension.packsDir)
       task.targetsDir.set(extension.targetsDir)
+      task.scriptRootDir.set(extension.scriptRootDir)
       task.regenerateCommand.set(extension.regenerateCommand)
     }
 
@@ -27,6 +28,7 @@ class TrailblazeBundledConfigPlugin : Plugin<Project> {
       task.description = "Verifies checked-in generated target YAMLs are up to date with pack manifests."
       task.packsDir.set(extension.packsDir)
       task.targetsDir.set(extension.targetsDir)
+      task.scriptRootDir.set(extension.scriptRootDir)
       task.regenerateCommand.set(extension.regenerateCommand)
     }
     verify.configure { it.mustRunAfter(generate) }

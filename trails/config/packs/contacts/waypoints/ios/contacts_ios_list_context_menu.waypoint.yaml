@@ -9,29 +9,29 @@ required:
   - description: "Preview block"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Preview$"
+        accessibilityTextRegex: "Preview"
   - description: "Email All row — unique to the list context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Email All$"
+        accessibilityTextRegex: "Email All"
   - description: "Message All row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Message All$"
+        accessibilityTextRegex: "Message All"
   - description: "Rename row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Rename$"
+        accessibilityTextRegex: "Rename"
   - description: "Export row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Export$"
+        accessibilityTextRegex: "Export"
 forbidden:
   - description: "Make This My Card — only on the contact context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Make This My Card$"
+        accessibilityTextRegex: "Make This My Card"
   - description: "Delete Contact — only on the contact context menu"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"

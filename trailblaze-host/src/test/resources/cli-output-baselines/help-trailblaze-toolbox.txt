@@ -6,14 +6,24 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze toolbox [-hvV] [--detail] [-d=<device>] [-n=<name>]
-                          [-s=<search>] [-t=<target>]
+                          [-s=<search>] [-t=<target>] [ROLE]
 Browse available tools by target app and platform
-  -d, --device=<device>   Filter by platform: android, ios, web
+      [ROLE]              Optional role filter — show only tools tagged with
+                            this role.
+                          Valid values: trailheads, shortcuts.
+                            trailheads — tools that bring the device to a known
+                            starting state (launch + sign-in, deep-link, etc.).
+                            Use one at the start of every trail.
+                            shortcuts  — tools that jump between named
+                            waypoints during a trail.
+                          Omit to show everything; trailheads and shortcuts
+                            will be called out as headline sections above the
+                            toolset listing.
+  -d, --device=<device>   Target device (e.g. android, android/emulator-5554).
       --detail            Show full parameter descriptions for all tools
   -h, --help              Show this help message and exit.
   -n, --name=<name>       Show details for a single tool by name
-  -s, --search=<search>   Search tools by keyword (matches names and
-                            descriptions)
+  -s, --search=<search>   Substring search on tool name and description.
   -t, --target=<target>   Show tools for a specific target app
   -v, --verbose           Enable verbose output
   -V, --version           Print version information and exit.

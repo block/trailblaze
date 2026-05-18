@@ -9,18 +9,18 @@ required:
   - description: "Onboarding cancel button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^OnboardingCancelButton$"
+        resourceIdRegex: "OnboardingCancelButton"
   - description: "Avatar/Poster segmented control: Poster selected"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Poster$"
+        accessibilityTextRegex: "Poster"
         selected: true
   - description: "Choose-a-Poster header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose a Poster$"
+        accessibilityTextRegex: "Choose a Poster"
 forbidden:
   - description: "Choose-an-Avatar header — would mean Avatar tab is selected"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose an Avatar$"
+        accessibilityTextRegex: "Choose an Avatar"

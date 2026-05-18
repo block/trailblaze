@@ -38,6 +38,21 @@ val stageTrailAssets =
     dependsOn(installSampleAppMcpSdkTools)
   }
 
+// Stage the repo-root `trails/eval/android/sample-app/` directory under the same
+// asset root used by [stageTrailAssets]. Mirrors the [trails/eval/README.md]
+// platform-only layout for agent evals, but slotted under a `sample-app/` subdir
+// so the sample-app-targeted clipboard-round-trip eval doesn't get scooped up by
+// the Square-POS-targeted `pr_eval_android.sh` runner (its `find -maxdepth 1` in
+// `trails/eval/android/` deliberately ignores subdirectories). The auto-generated
+// `GeneratedSampleAppTests` below scans this directory too so each `.trail.yaml`
+// here becomes a JUnit test on the existing sample-app device-farm step.
+val sampleAppEvalTrailsDir = file("../../../trails/eval/android/sample-app")
+val stageSampleAppEvalTrails =
+  tasks.register<Copy>("stageSampleAppEvalTrailAssetsForAndroidTest") {
+    from(sampleAppEvalTrailsDir)
+    into("${stagedTrailAssets.get().asFile}/eval/android/sample-app")
+  }
+
 // Stage the typed `@trailblaze/tools` bundle at a stable test-APK asset path so
 // `QuickJsToolBundleOnDeviceTest` can load it via `AndroidAssetBundleSource`. Sourced
 // from the bundling plugin's output so the build is the single source of truth — no
@@ -114,6 +129,7 @@ tasks
   }
   .configureEach {
     dependsOn(stageTrailAssets)
+    dependsOn(stageSampleAppEvalTrails)
     // Each registered QuickJS bundle has its own `stage<Name>QuickjsBundleAsset` task;
     // the plugin exposes them as a list so this AGP-task wiring stays a single line as
     // bundles get added.
@@ -154,32 +170,56 @@ tasks.register("generateSampleAppTests") {
   group = "trailblaze"
 
   val trailsDir = file("../android-sample-app/trails/android-ondevice-instrumentation")
+  // Also pick up sample-app-targeted eval trails that live under the repo-root
+  // `trails/eval/android/sample-app/` per the [trails/eval/README.md] platform-only
+  // layout. Asset-staging for this dir is wired in [stageSampleAppEvalTrails] above —
+  // files land in the test APK at `eval/android/sample-app/<name>.trail.yaml`.
+  val evalSampleAppTrailsDir = sampleAppEvalTrailsDir
   val outputFile =
     file(
       "src/androidTest/generated/xyz/block/trailblaze/examples/sampleapp/generated/GeneratedSampleAppTests.kt"
     )
 
   inputs.dir(trailsDir)
+  inputs.dir(evalSampleAppTrailsDir)
   outputs.file(outputFile)
 
   doLast {
     outputFile.parentFile.mkdirs()
 
-    val testMethods =
+    // Convert a dash-or-trail-file-prefix-style name to a camelCase JUnit test method.
+    fun toMethodName(raw: String) =
+      raw
+        .split("-")
+        .mapIndexed { i, s -> if (i == 0) s else s.replaceFirstChar { c -> c.uppercase() } }
+        .joinToString("")
+
+    val instrumentationTests =
       fileTree(trailsDir)
         .filter { it.name.endsWith(".trail.yaml") }
         .map { trailFile ->
           val relPath = trailFile.relativeTo(trailsDir).path
           val testDirName = relPath.split("/").let { it[it.size - 2] }
-          val methodName =
-            testDirName
-              .split("-")
-              .mapIndexed { i, s -> if (i == 0) s else s.replaceFirstChar { c -> c.uppercase() } }
-              .joinToString("")
+          val methodName = toMethodName(testDirName)
           val assetPath = "android-ondevice-instrumentation/$relPath"
           Pair(methodName, assetPath)
         }
-        .sortedBy { it.first }
+
+    // Eval-sample-app trails live one file per scenario directly under
+    // `trails/eval/android/sample-app/` (e.g. `clipboard-round-trip.trail.yaml`).
+    // The JUnit method name is derived from the filename (sans `.trail.yaml`).
+    val evalSampleAppTests =
+      fileTree(evalSampleAppTrailsDir)
+        .filter { it.name.endsWith(".trail.yaml") }
+        .map { trailFile ->
+          val relPath = trailFile.relativeTo(evalSampleAppTrailsDir).path
+          val baseName = trailFile.name.removeSuffix(".trail.yaml")
+          val methodName = toMethodName(baseName)
+          val assetPath = "eval/android/sample-app/$relPath"
+          Pair(methodName, assetPath)
+        }
+
+    val testMethods = (instrumentationTests + evalSampleAppTests).sortedBy { it.first }
 
     outputFile.writeText(
       buildString {

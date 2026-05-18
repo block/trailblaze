@@ -171,6 +171,26 @@ class CliMcpClient(
   }
 
   /**
+   * Tell the daemon to scope the target app to this MCP session's bound
+   * device. Wraps the `setSessionTargetForBoundDevice` MCP tool — per-device
+   * override on the daemon, no on-disk write. Returns `null` on success or a
+   * user-facing error message on failure (e.g. unknown target id, no device
+   * bound).
+   *
+   * Errors are detected via the MCP protocol's `isError` flag, which the
+   * daemon-side tool sets by throwing an exception (the framework converts
+   * the exception into an isError=true response). No text-marker parsing.
+   */
+  suspend fun setSessionTargetForBoundDevice(appTargetId: String): String? {
+    val result = callTool(
+      "setSessionTargetForBoundDevice",
+      mapOf("appTargetId" to appTargetId),
+    )
+    if (result.isError) return "Error setting session target: ${result.content}"
+    return null
+  }
+
+  /**
    * Calls an MCP tool by name with JSON arguments.
    */
   suspend fun callTool(name: String, arguments: JsonObject): ToolResult {
@@ -344,9 +364,15 @@ class CliMcpClient(
     deviceSpec: String? = null,
     webHeadless: Boolean = true,
   ): String? {
-    // When reusing a session that already has a device, skip the expensive driver reconnect.
-    // The daemon's Maestro driver persists across CLI invocations within the same MCP session,
-    // so force-reconnecting on every call just adds latency (~2-5s on iOS).
+    // When reusing a session that already has a device, we still issue a lightweight
+    // device(action=PLATFORM, deviceId=ID) call via [rebindDeviceQuiet] to refresh the
+    // daemon's per-session `associatedDeviceId`. A previous CLI invocation in the same
+    // MCP session (e.g. `tool` before `blaze`) leaves `selectedDeviceId` set on the
+    // bridge, but the per-session `associatedDeviceId` — which the screen-state provider
+    // reads — can drift out of sync. When that happens, the next `blaze` call sees
+    // "No device connected" from inside the daemon even though INFO still reports the
+    // device as bound. The rebind is a single MCP roundtrip (no LIST, no banners) and
+    // is cheap on the daemon side when a persistent driver already exists.
     if (hasExistingDevice) {
       val infoResult = callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
       val currentPlatform = if (!infoResult.isError) parseDevicePlatform(infoResult) else null
@@ -356,18 +382,24 @@ class CliMcpClient(
       }
 
       if (deviceSpec == null) {
-        logSessionReuse(currentSpec)
-        return null // same session, same device — ready to go
+        if (currentPlatform != null) {
+          logSessionReuse(currentSpec)
+          return rebindDeviceQuiet(currentPlatform, currentInstanceId, webHeadless = webHeadless)
+        }
+        // Reused session reports `hasExistingDevice` yet INFO returned no platform —
+        // an inconsistent daemon state. Return a clear error instead of silently
+        // falling through to LIST/auto-select, which could bind to an unrelated device.
+        return "Session reports an existing device but device(INFO) returned no platform. " +
+          "Reconnect explicitly with --device <platform>[/<instance>]."
       }
-
-      // Explicit device spec — check if it matches what's already connected
       if (currentPlatform != null) {
+        // Explicit device spec — check if it matches what's already connected
         val platformName = currentPlatform.name.lowercase()
         val specMatchesFull = currentInstanceId != null && deviceSpec.equals(currentSpec, ignoreCase = true)
         val specMatchesPlatformOnly = deviceSpec.equals(platformName, ignoreCase = true)
         if (specMatchesFull || specMatchesPlatformOnly) {
           logSessionReuse(currentSpec)
-          return null // same device
+          return rebindDeviceQuiet(currentPlatform, currentInstanceId, webHeadless = webHeadless)
         }
       }
       Console.info("Switching device — starting new session.")
@@ -434,6 +466,42 @@ class CliMcpClient(
     val platform = parseDevicePlatform(infoResult) ?: return null
     val instance = parseConnectedInstanceId(infoResult) ?: return null
     return TrailblazeDeviceId(instanceId = instance, trailblazeDevicePlatform = platform)
+  }
+
+  /**
+   * Lightweight re-select used on session reuse: issues `device(action=PLATFORM, deviceId=…)`
+   * and nothing else — no LIST/validation roundtrip, no "Connecting to…" / "Connected:…"
+   * banners, no session-command menu. The full [connectToDevice] would re-spam the
+   * connection banner on every reused-session invocation; this path keeps the user-visible
+   * output to the single `Reusing session …` line that [logSessionReuse] just emitted.
+   *
+   * Refreshing the daemon-side per-session `associatedDeviceId` is the only behavioral
+   * goal here — the device list, validation, busy-error block, Playwright install waiter,
+   * and session-id printout are all relevant only on cold-start `connectToDevice`.
+   *
+   * Idempotency: `device(action=PLATFORM, deviceId=…)` on the daemon side calls
+   * (a) `DeviceClaimRegistry.claim` — for a same-session re-claim this just refreshes
+   * the timestamp and returns null (no displacement, no on-device teardown),
+   * (b) `mcpBridge.selectDevice` — for an already-selected device the persistent driver
+   * is reused (no new driver creation), and
+   * (c) `sessionContext.startImplicitRecording` — guarded by `if (!isRecording)` so it's
+   * a no-op when recording is already in progress.
+   * All three are safe to re-run on every reused-session invocation.
+   */
+  private suspend fun rebindDeviceQuiet(
+    platform: TrailblazeDevicePlatform,
+    instanceId: String?,
+    webHeadless: Boolean,
+  ): String? {
+    val args = mutableMapOf<String, Any?>("action" to platform.name)
+    if (instanceId != null) args[DeviceManagerToolSet.PARAM_DEVICE_ID] = instanceId
+    if (platform == TrailblazeDevicePlatform.WEB) {
+      args[DeviceManagerToolSet.PARAM_HEADLESS] = webHeadless
+    }
+    val result = callTool("device", args)
+    if (result.isError) return "Error rebinding device on session reuse: ${result.content}"
+    hasConnectedDevice = true
+    return null
   }
 
   private suspend fun connectToDevice(

@@ -18,7 +18,8 @@ Trailblaze - AI-powered device automation
   snapshot  Capture the current screen's UI tree (fast, no AI, no actions)
   tool      Run a Trailblaze tool by name (e.g., tap, inputText)
   toolbox   Browse available tools by target app and platform
-  trail     Run a trail file (.trail.yaml) — execute a scripted test on a device
+  trail     Run a trail file (.trail.yaml) — execute a scripted test on a
+              device.
   session   Every blaze records a session — save it as a replayable trail
   report    Generate an HTML or JSON report from session recordings
   waypoint  Match named app locations (waypoints) against captured screen state.

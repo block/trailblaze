@@ -8,13 +8,13 @@ required:
   - description: "Search results panel"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Search results$"
+        accessibilityTextRegex: "Search results"
   - description: "Clear-text affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Clear text$"
+        accessibilityTextRegex: "Clear text"
 forbidden:
   - description: "Dictate — only when query is empty"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Dictate$"
+        accessibilityTextRegex: "Dictate"

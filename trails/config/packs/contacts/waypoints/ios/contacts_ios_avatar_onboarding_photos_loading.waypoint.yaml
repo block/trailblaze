@@ -7,13 +7,13 @@ required:
   - description: "Onboarding cancel button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^OnboardingCancelButton$"
+        resourceIdRegex: "OnboardingCancelButton"
   - description: "Camera button (loading in)"
     selector:
       iosMaestro:
-        resourceIdRegex: "^CameraButton$"
+        resourceIdRegex: "CameraButton"
 forbidden:
   - description: "Choose an Avatar header — would mean we're back on the picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Choose an Avatar$"
+        accessibilityTextRegex: "Choose an Avatar"

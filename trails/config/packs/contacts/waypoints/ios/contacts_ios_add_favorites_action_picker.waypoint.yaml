@@ -9,20 +9,20 @@ required:
   - description: "Message action row (id=message)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Message$"
-        resourceIdRegex: "^message$"
+        accessibilityTextRegex: "Message"
+        resourceIdRegex: "message"
   - description: "Call action row (id=phone)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Call$"
-        resourceIdRegex: "^phone$"
+        accessibilityTextRegex: "Call"
+        resourceIdRegex: "phone"
   - description: "Mail action row (id=envelope)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Mail$"
-        resourceIdRegex: "^envelope$"
+        accessibilityTextRegex: "Mail"
+        resourceIdRegex: "envelope"
 forbidden:
   - description: "Edit button — only on the contact detail, not the action picker"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"

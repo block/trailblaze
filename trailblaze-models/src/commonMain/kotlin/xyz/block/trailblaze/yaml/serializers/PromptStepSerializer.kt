@@ -14,6 +14,7 @@ import kotlinx.serialization.encoding.encodeStructure
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.StepPostcondition
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.VerificationStep
 
@@ -24,6 +25,7 @@ class PromptStepSerializer : KSerializer<PromptStep> {
     element<String>("verify", isOptional = true)
     element<Boolean>("recordable", isOptional = true)
     element<ToolRecording>("recording", isOptional = true)
+    element<StepPostcondition>("postcondition", isOptional = true)
   }
 
   override fun serialize(encoder: Encoder, value: PromptStep) {
@@ -33,11 +35,13 @@ class PromptStepSerializer : KSerializer<PromptStep> {
           encodeStringElement(descriptor, 0, value.step)
           encodeOptionalBooleanElement(this, descriptor, 2, value.recordable)
           encodeOptionalRecording(this, descriptor, 3, value.recording)
+          encodeOptionalPostcondition(this, descriptor, 4, value.postcondition)
         }
         is VerificationStep -> {
           encodeStringElement(descriptor, 1, value.verify)
           encodeOptionalBooleanElement(this, descriptor, 2, value.recordable)
           encodeOptionalRecording(this, descriptor, 3, value.recording)
+          encodeOptionalPostcondition(this, descriptor, 4, value.postcondition)
         }
       }
     }
@@ -62,6 +66,17 @@ class PromptStepSerializer : KSerializer<PromptStep> {
   ) {
     value?.let { recording ->
       encoder.encodeSerializableElement(descriptor, index, ToolRecording.serializer(), recording)
+    }
+  }
+
+  private fun encodeOptionalPostcondition(
+    encoder: CompositeEncoder,
+    descriptor: SerialDescriptor,
+    index: Int,
+    value: StepPostcondition?,
+  ) {
+    value?.let { pc ->
+      encoder.encodeSerializableElement(descriptor, index, StepPostcondition.serializer(), pc)
     }
   }
 

@@ -881,4 +881,90 @@ class TrailblazeNodeSelectorResolverTest {
     val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
   }
+
+  // --- TargetTemplateContext expansion at the resolver entry ---
+  //
+  // The 3-arg `resolve(root, selector, target)` overload expands `{{target.appId}}`
+  // placeholders before matching. These tests pin the resolver-level integration —
+  // SelectorTemplating's own tests pin the substitution rules in isolation; these pin
+  // that the new chokepoint actually invokes them on the way in.
+
+  @Test
+  fun `resolver expands target appId placeholder in resourceIdRegex`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.test:id/foo"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.other:id/foo"))
+    val root = node(children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "^{{target.appId}}:id/foo$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root = root,
+      selector = selector,
+      target = TargetTemplateContext(appId = "com.example.test"),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `resolver falls back to appIds alternation when appId is null`() {
+    nextId = 1L
+    val dev = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.dev:id/foo"))
+    val prod = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example:id/foo"))
+    val miss = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.other:id/foo"))
+    val root = node(children = listOf(dev, prod, miss))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "^{{target.appId}}:id/foo$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root = root,
+      selector = selector,
+      target = TargetTemplateContext(appId = null, appIds = listOf("com.example.dev", "com.example")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(result)
+    assertEquals(setOf(dev.nodeId, prod.nodeId), result.nodes.map { it.nodeId }.toSet())
+  }
+
+  @Test
+  fun `resolver expands placeholder inside nested containsChild selector`() {
+    nextId = 1L
+    val child = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.test:id/inner"))
+    val parent = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "outer"),
+      children = listOf(child),
+    )
+    val root = node(children = listOf(parent))
+
+    val selector = TrailblazeNodeSelector(
+      androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "outer"),
+      containsChild = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+          resourceIdRegex = "^{{target.appId}}:id/inner$",
+        ),
+      ),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root = root,
+      selector = selector,
+      target = TargetTemplateContext(appId = "com.example.test"),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(parent.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `resolver with null target leaves placeholder un-substituted and matches nothing`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(resourceId = "com.example.test:id/foo"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "^{{target.appId}}:id/foo$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root = root, selector = selector, target = null)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
 }

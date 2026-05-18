@@ -7,17 +7,17 @@ required:
   - description: "Add Field header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add Field$"
+        accessibilityTextRegex: "Add Field"
   - description: "Phonetic company name row (second-page field)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Phonetic company name$"
+        accessibilityTextRegex: "Phonetic company name"
   - description: "Department row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Department$"
+        accessibilityTextRegex: "Department"
 forbidden:
   - description: "Done button — would mean we're on the edit form"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"

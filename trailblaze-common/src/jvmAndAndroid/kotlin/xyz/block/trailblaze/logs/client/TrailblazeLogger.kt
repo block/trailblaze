@@ -27,6 +27,7 @@ import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.PromptStep
+import java.security.MessageDigest
 
 /**
  * Stateless logger that emits log events for a specific session.
@@ -82,7 +83,11 @@ class TrailblazeLogger(
 
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
     val timestamp = Clock.System.now()
-    val screenshotFileName = "${session.sessionId.value}_${timestamp.toEpochMilliseconds()}.${imageFormat.fileExtension}"
+    val screenshotFileName = buildScreenshotFileName(
+      sessionId = session.sessionId.value,
+      epochMs = timestamp.toEpochMilliseconds(),
+      ext = imageFormat.fileExtension,
+    )
 
     val screenStateLog = TrailblazeScreenStateLog(
       fileName = screenshotFileName,
@@ -107,7 +112,11 @@ class TrailblazeLogger(
 
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
     val timestamp = Clock.System.now()
-    val screenshotFileName = "${session.sessionId.value}_${timestamp.toEpochMilliseconds()}.${imageFormat.fileExtension}"
+    val screenshotFileName = buildScreenshotFileName(
+      sessionId = session.sessionId.value,
+      epochMs = timestamp.toEpochMilliseconds(),
+      ext = imageFormat.fileExtension,
+    )
 
     // Create a wrapper that exposes the annotated screenshot as the primary screenshot
     val annotatedScreenStateWrapper = object : ScreenState by screenState {
@@ -684,6 +693,43 @@ class TrailblazeLogger(
   // endregion
 
   companion object {
+    /**
+     * `NAME_MAX` per POSIX / APFS / ext4 — the per-component filename byte limit.
+     * Screenshot filenames at or below this length round-trip cleanly on host (macOS/Linux)
+     * and on Android external storage; longer names fail with ENAMETOOLONG on host
+     * filesystems, and on Android the MediaStore layer silently renames the on-disk file
+     * (breaking the 1:1 mapping between the `screenshotFile` field in the log JSON and
+     * the actual file on disk).
+     */
+    private const val FILENAME_NAME_MAX = 255
+
+    /**
+     * Builds the screenshot filename for a session at a given timestamp.
+     *
+     * Default form is `<sessionId>_<epochMs>.<ext>` — preserves all session context in
+     * the filename. If that would exceed [FILENAME_NAME_MAX], fall back to
+     * `<sessionHash8>_<epochMs>.<ext>`, which is bounded well under the limit. The full
+     * session id stays untruncated in the log JSON's `session` field, so consumers that
+     * key off the session id are unaffected — only the on-disk filename shortens.
+     *
+     * Shared with [xyz.block.trailblaze.report.utils.LogsRepo.saveScreenshotBytes] (and
+     * its MCP/LLM-sampling callers) so every code path that materializes a screenshot
+     * filename uses the same bounded builder.
+     */
+    fun buildScreenshotFileName(
+      sessionId: String,
+      epochMs: Long,
+      ext: String,
+    ): String {
+      val candidate = "${sessionId}_$epochMs.$ext"
+      if (candidate.toByteArray(Charsets.UTF_8).size <= FILENAME_NAME_MAX) return candidate
+      val hash = MessageDigest.getInstance("SHA-256")
+        .digest(sessionId.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+        .take(8)
+      return "${hash}_$epochMs.$ext"
+    }
+
     /**
      * Creates a logger with no-op emitter (for testing).
      *

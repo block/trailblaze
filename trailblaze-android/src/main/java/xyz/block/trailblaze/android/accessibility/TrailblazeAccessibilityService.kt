@@ -28,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.datetime.Clock
 import maestro.TreeNode
+import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.android.AndroidSdkVersion
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
@@ -35,6 +36,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.PollingUtils
 
 /**
  * Accessibility service for Trailblaze.
@@ -253,7 +255,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * Bounded by [MAX_REFRESH_DEPTH] to guard against StackOverflowError on pathological
      * Compose semantics trees — typical Android UIs stay well under this depth.
      */
-    internal fun refreshTreeInPlace(root: AccessibilityNodeInfo, depth: Int = 0) {
+    private fun refreshTreeInPlace(root: AccessibilityNodeInfo, depth: Int = 0) {
       if (depth >= MAX_REFRESH_DEPTH) {
         Console.log(
           "refreshTreeInPlace: stopped descending at depth $depth (>= MAX_REFRESH_DEPTH); " +
@@ -410,55 +412,84 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Returns true only when an IME window is *confirmed* present via [getServiceWindows].
-     * Distinct from [isKeyboardVisible], which falls back to a less reliable
-     * focused-editable heuristic when window enumeration is unavailable. Use this when an
-     * action would have a side effect on a false positive — e.g., GLOBAL_ACTION_BACK
-     * navigating back when the keyboard isn't actually showing.
-     */
-    private fun isImeWindowConfirmed(): Boolean {
-      val windows = getServiceWindows() ?: return false
-      return windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-    }
-
-    /**
      * One-time guard for the `service.windows unavailable` breadcrumb in [getServiceWindows].
      * Reset in [onServiceConnected] so each service bind gets its own warning if applicable;
      * the gate prevents log spam on devices where window enumeration genuinely doesn't work.
      */
     private val windowsFallbackLogged = AtomicBoolean(false)
 
-    fun hideKeyboard(): Boolean {
-      // Two-tier strategy because the cost of a false positive matters:
-      //
-      // 1. If we have *high confidence* an IME is up — confirmed via the windows list —
-      //    use GLOBAL_ACTION_BACK. That's the documented way to dismiss the IME from an
-      //    accessibility service; the old ACTION_CLEAR_FOCUS approach was a no-op against
-      //    most modern soft keyboards (focus loss doesn't retract the IME), which is what
-      //    made the V3 trail loop on hideKeyboard.
-      //
-      // 2. If we don't have window enumeration (older OEMs, pre-init), [isKeyboardVisible]
-      //    falls back to a focused-editable heuristic that can return true after the IME
-      //    has already been dismissed (focus lingers). Pressing BACK in that state would
-      //    navigate out of the app instead of dismissing a keyboard that isn't there.
-      //    Drop to ACTION_CLEAR_FOCUS as a low-risk best-effort: harmless if redundant,
-      //    never navigates.
-      if (isImeWindowConfirmed()) {
-        return requireService().performGlobalAction(GLOBAL_ACTION_BACK)
-      }
-      // Best-effort fallback: clear focus on the editable that has it, if any. Returns
-      // true when there's no focused editable (treating "no keyboard to hide" as success
-      // to match the historical contract).
-      val root = getApplicationWindowRoot() ?: return true
-      return try {
-        val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        focusedNode?.performAction(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS)
-        focusedNode?.recycle()
-        true
-      } finally {
-        root.recycle()
-      }
+    /**
+     * Strict IME-window detection: only returns true when [getServiceWindows] enumerates an
+     * actual `TYPE_INPUT_METHOD` window. Unlike [isKeyboardVisible], does **not** fall back
+     * to the focused-editable heuristic — that heuristic produces false positives when focus
+     * lingers on an editable after the IME has been dismissed. Use this when the cost of a
+     * false positive matters (e.g., asserting that a hideKeyboard call actually dismissed
+     * the IME).
+     */
+    fun isImeWindowVisible(): Boolean {
+      val windows = getServiceWindows() ?: return false
+      return windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
     }
+
+    fun hideKeyboard(): Boolean {
+      // Gate GLOBAL_ACTION_BACK on an authoritative IME-up check. Two signals, in order:
+      //   1. [isImeWindowVisible] — strict windows-only, in-process and cheap.
+      //   2. `dumpsys input_method` — authoritative shell fallback for environments where
+      //      [getServiceWindows] is degraded (empty / SecurityException) under
+      //      FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES.
+      // Intentionally does NOT consider the focused-editable signal: that lingers on the
+      // editable after the IME is dismissed and would cause back-to-back hideKeyboard
+      // calls to navigate back out of the current screen.
+      if (!isImeWindowVisible() && !isImeShownViaDumpsys()) return true
+      return requireService().performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    /**
+     * Polls [isImeWindowVisible] for fast-fail, then always confirms with the authoritative
+     * [isImeShownViaDumpsys] signal before returning. Returns true once the IME is confirmed
+     * dismissed, false otherwise.
+     *
+     * Why this is needed: the IME dismissal animation can outlast the accessibility-event
+     * settle wait. On Compose `EditText` + emulator runs, `onFinishInputView` fires ~20ms
+     * after `dispatchAndAwaitSettleBlocking` returns from a GLOBAL_ACTION_BACK, so the
+     * TYPE_INPUT_METHOD window is still enumerated when the post-check first runs. Polling
+     * the cheap in-process check absorbs that transition; the final dumpsys gate closes
+     * two gaps that the windows-only check leaves open:
+     *   1. Timeout-but-actually-dismissed — enumeration stale at deadline, dumpsys confirms.
+     *   2. Windows-null bypass — [isImeWindowVisible] returns false whenever
+     *      `getServiceWindows()` is null (degraded under FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES),
+     *      so without this gate the loop could exit "successfully" without ever observing
+     *      the IME leave on a genuinely-stuck keyboard.
+     */
+    fun waitForImeDismissed(timeoutMs: Long): Boolean {
+      PollingUtils.tryUntilSuccessOrTimeout(
+        maxWaitMs = timeoutMs,
+        intervalMs = 50,
+        conditionDescription = "IME window absent from enumeration",
+        condition = { !isImeWindowVisible() },
+      )
+      // Authoritative gate — one shell call per hideKeyboard regardless of poll outcome.
+      return !isImeShownViaDumpsys()
+    }
+
+    private fun isImeShownViaDumpsys(): Boolean = try {
+      parseDumpsysInputMethodShown(AdbCommandUtil.execShellCommand("dumpsys input_method"))
+    } catch (e: Exception) {
+      Console.log("[hideKeyboard] dumpsys input_method failed: ${e.message}")
+      false
+    }
+
+    /**
+     * Parses `dumpsys input_method` output and returns true when the WindowManager-recorded
+     * IME visibility flag (`mInputShown=true`) is set on any line. Extracted from
+     * [isImeShownViaDumpsys] so the parser can be exercised with captured fixture output
+     * in unit tests without standing up the shell wrapper.
+     *
+     * Matching is line-anchored after trimming so we don't accidentally hit a substring
+     * occurrence inside an unrelated diagnostic line.
+     */
+    internal fun parseDumpsysInputMethodShown(rawOutput: String): Boolean =
+      rawOutput.lineSequence().any { it.trim().startsWith("mInputShown=true") }
 
     fun getCurrentLocale(): Locale = appContext.resources.configuration.getLocales().get(0)
 

@@ -12,25 +12,25 @@ required:
   - description: "Send Message action row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Send Message$"
-        resourceIdRegex: "^ContactCardActionsAfterProperties$"
+        accessibilityTextRegex: "Send Message"
+        resourceIdRegex: "ContactCardActionsAfterProperties"
   - description: "Share Contact action row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Share Contact$"
-        resourceIdRegex: "^ContactCardActionsAfterProperties$"
+        accessibilityTextRegex: "Share Contact"
+        resourceIdRegex: "ContactCardActionsAfterProperties"
   - description: "Add to Favorites action row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Add to Favorites$"
-        resourceIdRegex: "^ContactCardActionsAfterProperties$"
+        accessibilityTextRegex: "Add to Favorites"
+        resourceIdRegex: "ContactCardActionsAfterProperties"
   - description: "Block Contact footer row"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Block Contact$"
-        resourceIdRegex: "^ContactCardActionsFooter$"
+        accessibilityTextRegex: "Block Contact"
+        resourceIdRegex: "ContactCardActionsFooter"
 forbidden:
   - description: "close button — would mean we're in the edit form, not detail"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"

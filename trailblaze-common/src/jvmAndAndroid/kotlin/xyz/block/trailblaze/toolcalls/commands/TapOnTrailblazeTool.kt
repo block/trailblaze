@@ -64,15 +64,21 @@ data class TapOnTrailblazeTool(
         tool = this,
       )
 
-    val target = when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector)) {
+    val templateContext = toolExecutionContext.resolvedTarget?.let { resolved ->
+      xyz.block.trailblaze.api.TargetTemplateContext(
+        appId = toolExecutionContext.appId,
+        appIds = resolved.appIds,
+      )
+    }
+    val target = when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector, templateContext)) {
       is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> throw TrailblazeToolExecutionException(
-        message = "tapOn: selector matched no element — ${selector.description()}",
+        message = "tapOn: selector matched no element — ${describeSelector(selector, templateContext)}",
         tool = this,
       )
       is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> throw TrailblazeToolExecutionException(
         message = "tapOn: selector is ambiguous (${result.nodes.size} matches) — " +
-          "add spatial, hierarchy, or index disambiguation. Selector: ${selector.description()}",
+          "add spatial, hierarchy, or index disambiguation. Selector: ${describeSelector(selector, templateContext)}",
         tool = this,
       )
     }
@@ -103,6 +109,25 @@ data class TapOnTrailblazeTool(
   }
 
   companion object {
+
+    /**
+     * Renders a selector for error messages — prints the expanded form, with the original
+     * appended when expansion actually changed it. Without this an author debugging a no-match
+     * can't tell whether `{{target.appId}}` was substituted or leaked through literally.
+     *
+     * The resolver expands internally; this helper re-runs the expansion against the same
+     * context so error rendering matches what the resolver actually evaluated. Cheap — only
+     * hit on the error path.
+     */
+    private fun describeSelector(
+      original: TrailblazeNodeSelector,
+      templateContext: xyz.block.trailblaze.api.TargetTemplateContext?,
+    ): String {
+      val expanded = xyz.block.trailblaze.api.SelectorTemplating.expand(original, templateContext)
+      val expandedStr = expanded.description()
+      val originalStr = original.description()
+      return if (expandedStr == originalStr) expandedStr else "$expandedStr (template original: $originalStr)"
+    }
 
     /**
      * Computes the tap point inside [bounds] given an optional `"x%,y%"` relative point.

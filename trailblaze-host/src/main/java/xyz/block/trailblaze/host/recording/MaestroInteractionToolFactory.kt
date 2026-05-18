@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.recording
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.hasSemanticIdentifier
 import xyz.block.trailblaze.recording.InteractionToolFactory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -51,9 +52,17 @@ class MaestroInteractionToolFactory(
 
   /**
    * Round-trip validation matters: the generator can produce a selector that resolves to a
-   * different node when a parent intercepts the tap. Falling through to [TapOnPointTrailblazeTool]
-   * keeps the recording faithful to the actual tap target instead of silently substituting
-   * a parent the user never meant to tap.
+   * different node when a parent intercepts the tap. Falling through to
+   * [TapOnPointTrailblazeTool] keeps the recording faithful to the actual tap target instead
+   * of silently substituting a parent the user never meant to tap.
+   *
+   * The [hasSemanticIdentifier] gate raises the quality bar to match the wasm `/devices`
+   * recorder: a class-only selector (`class~"android.widget.ScrollView"` with no
+   * disambiguating text/id/test-tag) can still round-trip-validate on a sparse tree, but it
+   * won't reliably re-find the user's actual target at replay time when the tree is
+   * different (e.g. another `ScrollView` exists). Previously the desktop accepted those
+   * silently while the web rejected them — same gesture produced two different recordings.
+   * Sharing the check here aligns both recorders behind the same policy.
    */
   private fun createSelectorTapOrPoint(
     trailblazeNodeTree: TrailblazeNode?,
@@ -63,7 +72,7 @@ class MaestroInteractionToolFactory(
   ): Pair<TrailblazeTool, String> {
     val tree = trailblazeNodeTree
     val resolution = tree?.let { TrailblazeNodeSelectorGenerator.resolveFromTap(it, x, y) }
-    return if (resolution != null && resolution.roundTripValid) {
+    return if (resolution != null && resolution.roundTripValid && resolution.selector.hasSemanticIdentifier()) {
       TapOnByElementSelector(
         nodeSelector = resolution.selector,
         longPress = longPress,

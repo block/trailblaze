@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 
 /**
@@ -538,5 +539,303 @@ class PackScriptedToolFileTest {
     // Sanity check: the well-formed name still constructs cleanly.
     val ok = InlineScriptToolConfig(script = "./x.ts", name = "clock_android-launchApp.v2")
     assertEquals("clock_android-launchApp.v2", ok.name)
+  }
+
+  /**
+   * The new `runtime:` override is the load-bearing escape hatch that lets a `.ts` author
+   * opt into the bun/tsx subprocess path where `node:fs` is available. If decoding regresses
+   * (e.g. wrong `@SerialName` casing), the partition in `TrailblazeHostYamlRunner` silently
+   * falls back to extension-based routing and the tool runs under QuickJS where it crashes
+   * with "fs is not defined" the moment the handler touches the filesystem. Pin both
+   * variants + the default-null case.
+   */
+  @Test
+  fun `runtime field decodes both variants and propagates to InlineScriptToolConfig`() {
+    val subprocess = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        name: foo_tool
+        runtime: subprocess
+      """.trimIndent(),
+    )
+    assertEquals(ScriptedToolRuntime.SUBPROCESS, subprocess.runtime)
+    assertEquals(ScriptedToolRuntime.SUBPROCESS, subprocess.toInlineScriptToolConfig().runtime)
+
+    val inProcess = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.js
+        name: foo_tool
+        runtime: inProcess
+      """.trimIndent(),
+    )
+    assertEquals(ScriptedToolRuntime.IN_PROCESS, inProcess.runtime)
+    assertEquals(ScriptedToolRuntime.IN_PROCESS, inProcess.toInlineScriptToolConfig().runtime)
+
+    val default = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        name: foo_tool
+      """.trimIndent(),
+    )
+    assertNull(default.runtime, "runtime: should default to null so extension routing applies")
+    assertNull(default.toInlineScriptToolConfig().runtime)
+  }
+
+  // --------------------------------------------------------------------------------------------
+  // Multi-tool shape — one descriptor with `tools: [...]` declaring N tools, all sharing the
+  // same author script. From a developer's perspective these are TRAILBLAZE SCRIPTED TOOLS, NOT
+  // an MCP server — the framework's wrapper synthesis hides the MCP framing entirely. These
+  // tests pin the load-time fan-out (`toInlineScriptToolConfigs`) that the production loader
+  // uses to turn one multi-tool descriptor into N `InlineScriptToolConfig` entries.
+  // --------------------------------------------------------------------------------------------
+
+  @Test
+  fun `multi-tool shape expands tools into one InlineScriptToolConfig per entry`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        runtime: subprocess
+        supportedPlatforms: [web]
+        _meta:
+          trailblaze/custom: shared
+        tools:
+          - name: foo_alpha
+            description: Alpha tool.
+            inputSchema:
+              x:
+                type: string
+          - name: foo_beta
+            description: Beta tool.
+            inputSchema:
+              y:
+                type: integer
+                required: false
+      """.trimIndent(),
+    )
+    val configs = parsed.toInlineScriptToolConfigs()
+    assertEquals(2, configs.size, "multi-tool should expand to one InlineScriptToolConfig per entry")
+    val alpha = configs[0]
+    val beta = configs[1]
+
+    // Both inherit the descriptor's `script:` and `runtime:`.
+    assertEquals("./tools/foo.ts", alpha.script)
+    assertEquals("./tools/foo.ts", beta.script)
+    assertEquals(ScriptedToolRuntime.SUBPROCESS, alpha.runtime)
+    assertEquals(ScriptedToolRuntime.SUBPROCESS, beta.runtime)
+
+    // Per-entry name + description + schema flow through.
+    assertEquals("foo_alpha", alpha.name)
+    assertEquals("foo_beta", beta.name)
+    assertEquals("Alpha tool.", alpha.description)
+    assertEquals("Beta tool.", beta.description)
+
+    // File-wide `_meta` + `supportedPlatforms` defaults apply to every entry.
+    val alphaMeta = assertNotNull(alpha.meta, "alpha should have inherited file-wide _meta")
+    assertEquals(JsonPrimitive("shared"), alphaMeta["trailblaze/custom"])
+    val betaMeta = assertNotNull(beta.meta, "beta should have inherited file-wide _meta")
+    assertEquals(JsonPrimitive("shared"), betaMeta["trailblaze/custom"])
+    // supportedPlatforms fold into _meta under the namespaced key.
+    val alphaPlatforms = alphaMeta["trailblaze/supportedPlatforms"] as JsonArray
+    assertEquals(JsonPrimitive("web"), alphaPlatforms.single())
+  }
+
+  @Test
+  fun `multi-tool per-entry _meta overrides file-wide _meta on key conflict`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        _meta:
+          trailblaze/custom: file_wide_default
+        tools:
+          - name: foo_inherits
+          - name: foo_overrides
+            _meta:
+              trailblaze/custom: per_entry
+      """.trimIndent(),
+    )
+    val configs = parsed.toInlineScriptToolConfigs()
+    val inherits = configs.single { it.name == "foo_inherits" }
+    val overrides = configs.single { it.name == "foo_overrides" }
+    assertEquals(JsonPrimitive("file_wide_default"), inherits.meta?.get("trailblaze/custom"))
+    assertEquals(
+      JsonPrimitive("per_entry"),
+      overrides.meta?.get("trailblaze/custom"),
+      "per-entry _meta should win on conflict",
+    )
+  }
+
+  @Test
+  fun `multi-tool per-entry requiresHost overrides file-wide default`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        requiresHost: true
+        tools:
+          - name: foo_inherits
+          - name: foo_overrides
+            requiresHost: false
+      """.trimIndent(),
+    )
+    val configs = parsed.toInlineScriptToolConfigs()
+    val inherits = configs.single { it.name == "foo_inherits" }
+    val overrides = configs.single { it.name == "foo_overrides" }
+    assertEquals(true, inherits.requiresHost, "file-wide default should apply when entry omits the field")
+    assertEquals(false, overrides.requiresHost, "per-entry false should override file-wide true")
+  }
+
+  @Test
+  fun `multi-tool per-entry supportedPlatforms overrides file-wide default`() {
+    // Pins the `entry.supportedPlatforms?.takeIf { it.isNotEmpty() } ?: supportedPlatforms`
+    // resolution in `toInlineScriptToolConfigs`. Three entries exercise the three branches:
+    //  - foo_inherits     omits the field             → inherits file-wide [android, web]
+    //  - foo_overrides    declares [android]          → entry value wins
+    //  - foo_empty_inherits declares an empty list    → treated as "inherit" (empty list would
+    //                                                  otherwise gate the tool out of every
+    //                                                  platform, which is almost never intentional)
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        supportedPlatforms: [android, web]
+        tools:
+          - name: foo_inherits
+          - name: foo_overrides
+            supportedPlatforms: [android]
+          - name: foo_empty_inherits
+            supportedPlatforms: []
+      """.trimIndent(),
+    )
+    val configs = parsed.toInlineScriptToolConfigs()
+    val inherits = configs.single { it.name == "foo_inherits" }
+    val overrides = configs.single { it.name == "foo_overrides" }
+    val emptyInherits = configs.single { it.name == "foo_empty_inherits" }
+
+    // supportedPlatforms folds into _meta under the namespaced key — read it back from there
+    // (matches how downstream consumers `TrailblazeToolMeta` resolve the gate at runtime).
+    fun platformsOf(name: String, cfg: InlineScriptToolConfig): List<String> {
+      val meta = assertNotNull(cfg.meta, "$name should have inherited or overridden supportedPlatforms")
+      val arr = meta["trailblaze/supportedPlatforms"] as JsonArray
+      return arr.map { (it as JsonPrimitive).content }
+    }
+
+    assertEquals(
+      listOf("android", "web"),
+      platformsOf("foo_inherits", inherits),
+      "entry omitting supportedPlatforms should inherit the file-wide list",
+    )
+    assertEquals(
+      listOf("android"),
+      platformsOf("foo_overrides", overrides),
+      "per-entry non-empty list should override the file-wide list",
+    )
+    assertEquals(
+      listOf("android", "web"),
+      platformsOf("foo_empty_inherits", emptyInherits),
+      "per-entry empty list should be treated as inherit (not 'gate out of every platform')",
+    )
+  }
+
+  @Test
+  fun `multi-tool shape rejects top-level name`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        name: should_not_be_here
+        tools:
+          - name: foo_alpha
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { parsed.toInlineScriptToolConfigs() }
+    assertTrue(ex.message!!.contains("must not set a top-level `name:`"), ex.message)
+  }
+
+  @Test
+  fun `multi-tool shape rejects top-level inputSchema`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        inputSchema:
+          x:
+            type: string
+        tools:
+          - name: foo_alpha
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { parsed.toInlineScriptToolConfigs() }
+    assertTrue(ex.message!!.contains("must not set a top-level `inputSchema:`"), ex.message)
+  }
+
+  @Test
+  fun `multi-tool shape rejects an empty tools list`() {
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        tools: []
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { parsed.toInlineScriptToolConfigs() }
+    assertTrue(ex.message!!.contains("empty `tools:`"), ex.message)
+  }
+
+  @Test
+  fun `single-tool descriptor expands to a singleton list under toInlineScriptToolConfigs`() {
+    // The plural function MUST accept single-tool descriptors too — that's what makes it the
+    // shape-agnostic entry point production loaders call via `flatMap`. Today's authors
+    // shouldn't have to migrate any existing descriptor for the new shape to land.
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        name: foo_tool
+        description: Single tool, no multi-tool list.
+        inputSchema:
+          x:
+            type: string
+      """.trimIndent(),
+    )
+    val configs = parsed.toInlineScriptToolConfigs()
+    assertEquals(1, configs.size)
+    assertEquals("foo_tool", configs.single().name)
+  }
+
+  @Test
+  fun `single-tool toInlineScriptToolConfig refuses a multi-tool descriptor with a clear error`() {
+    // Single-tool callers that pre-date the multi-tool shape get an actionable error pointing
+    // at the plural function, not a confusing "name required" failure downstream.
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+        tools:
+          - name: foo_alpha
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { parsed.toInlineScriptToolConfig() }
+    assertTrue(ex.message!!.contains("multi-tool descriptor"), ex.message)
+    assertTrue(ex.message!!.contains("toInlineScriptToolConfigs"), ex.message)
+  }
+
+  @Test
+  fun `single-tool descriptor missing name fails with descriptor-aware message`() {
+    // When `tools:` is absent, top-level `name:` is required. The error message has to
+    // mention the script path so the author knows which descriptor to fix.
+    val parsed = yaml.decodeFromString(
+      PackScriptedToolFile.serializer(),
+      """
+        script: ./tools/foo.ts
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { parsed.toInlineScriptToolConfigs() }
+    assertTrue(ex.message!!.contains("./tools/foo.ts"), ex.message)
+    assertTrue(ex.message!!.contains("name:"), ex.message)
   }
 }

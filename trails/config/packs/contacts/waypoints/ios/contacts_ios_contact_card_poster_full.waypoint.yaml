@@ -8,9 +8,9 @@ required:
   - description: "SharedProfileChevronImage row resourceId on detail"
     selector:
       iosMaestro:
-        resourceIdRegex: "^SharedProfileAvatarView-SharedProfileTitleText-SharedProfileChevronImage$"
+        resourceIdRegex: "SharedProfileAvatarView-SharedProfileTitleText-SharedProfileChevronImage"
 forbidden:
   - description: "OnboardingMainVStack — would mean we're on avatar-onboarding"
     selector:
       iosMaestro:
-        resourceIdRegex: "^OnboardingMainVStack$"
+        resourceIdRegex: "OnboardingMainVStack"

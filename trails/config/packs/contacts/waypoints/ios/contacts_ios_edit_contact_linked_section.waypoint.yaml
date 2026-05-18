@@ -8,21 +8,21 @@ required:
   - description: "close button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^close$"
+        accessibilityTextRegex: "close"
   - description: "Linked Contacts section header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Linked Contacts$"
+        accessibilityTextRegex: "Linked Contacts"
   - description: "link contacts… affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^link contacts…$"
+        accessibilityTextRegex: "link contacts…"
   - description: "Delete Contact footer button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"
 forbidden:
   - description: "Sheet Grabber — would mean we're on the new-contact sheet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"

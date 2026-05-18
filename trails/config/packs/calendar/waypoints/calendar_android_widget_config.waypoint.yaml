@@ -13,4 +13,4 @@ forbidden:
   - description: "Calendar action_bar_root (would mean we're in the app)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/action_bar_root$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/action_bar_root"

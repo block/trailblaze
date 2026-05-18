@@ -75,6 +75,9 @@ kotlin {
       implementation(libs.ktor.client.core)
       implementation(libs.ktor.client.content.negotiation)
       implementation(libs.ktor.serialization.kotlinx.json)
+      // WebSocket client (shared core; engine-specific WS support comes from the
+      // ktor-client-js wasmJs target below — the browser's native WebSocket is used).
+      implementation(libs.ktor.client.websockets)
 
     }
     if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
@@ -94,6 +97,18 @@ kotlin {
     }
     jvmTest.dependencies {
       implementation(kotlin("test"))
+      // Compose UI test rig. Used by ActionYamlCardTest to assert which controls render
+      // under different descriptorResolver inputs (the null path matters for wasm callers
+      // that don't have JVM reflection — `RecordingScreenComposable` passes the real
+      // resolver on desktop, `WebDevicesPage` would pass `{ _ -> null }` on web).
+      //
+      // `compose.desktop.currentOs` is required alongside the JUnit4 rig — it brings in the
+      // platform-specific Skia native (libskiko-macos-arm64.dylib on Apple Silicon, …) that
+      // backs the test renderer. Without it the test class fails to initialize with
+      // `LibraryLoadException: Cannot find libskiko-…sha256`. Same pattern as
+      // examples/compose-desktop's test deps.
+      implementation(compose.desktop.currentOs)
+      implementation(libs.compose.ui.test.junit4)
     }
   }
 }

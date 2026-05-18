@@ -103,16 +103,21 @@ object MobileDeviceUtils {
   fun findInstalledAppIdForTarget(
     target: TrailblazeHostAppTarget,
     trailblazeDeviceId: TrailblazeDeviceId,
-  ): String {
-    val installed = getInstalledAppIds(trailblazeDeviceId)
-    val platform = trailblazeDeviceId.trailblazeDevicePlatform
-    return target.getAppIdIfInstalled(platform, installed)
-      ?: error(
-        "Target '${target.id}' declares ${platform.name} app ids " +
-          "${target.getPossibleAppIdsForPlatform(platform)} but none are installed on device " +
-          "'${trailblazeDeviceId.instanceId}'. Installed: $installed. Either install one of the " +
-          "declared ids on the device, or add the actually-installed id to the target's declared list."
-      )
+  ): String = try {
+    target.requireInstalledAppIdForDevice(
+      platform = trailblazeDeviceId.trailblazeDevicePlatform,
+      installedAppIds = getInstalledAppIds(trailblazeDeviceId),
+    )
+  } catch (e: IllegalStateException) {
+    // Re-throw with the concrete device id appended. Multi-device runs (parallel simulator
+    // / emulator shards) need to know *which* device's inventory was wrong to triage — the
+    // shared helper has no access to a [TrailblazeDeviceId], so each call site that has
+    // one adds its own device label here. Preserve the cause so the original diagnostic
+    // (declared ids, installed set) stays available in the stack trace.
+    throw IllegalStateException(
+      "${e.message} (device='${trailblazeDeviceId.instanceId}')",
+      e,
+    )
   }
 
   fun ensureAppsAreForceStopped(

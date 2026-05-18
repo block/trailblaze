@@ -4,11 +4,11 @@ required:
   - description: "Drag handle"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/drag_handle"
   - description: "Collapse action — sheet expanded"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Collapse event sheet$"
+        contentDescriptionRegex: "Collapse event sheet"
   - description: "Attendee chip text matches an email or contact name"
     selector:
       androidAccessibility:
@@ -17,9 +17,9 @@ required:
   - description: "Save button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/save"
 forbidden:
   - description: "'Add people' placeholder text — would mean none added"
     selector:
       androidAccessibility:
-        textRegex: "^Add people$"
+        textRegex: "Add people"

@@ -182,8 +182,8 @@ class SelectorEscapeTest {
   fun `escapeForIdentifier - Android resource IDs with dots are returned as-is`() {
     val ids = listOf(
       "com.example.app:id/my_view",
-      "com.squareup.development:id/checkout_button_title",
-      "com.squareup:id/cart_heading",
+      "com.example.checkout:id/checkout_button_title",
+      "com.example.cart:id/cart_heading",
     )
     for (id in ids) {
       val result = escapeForIdentifier(id)

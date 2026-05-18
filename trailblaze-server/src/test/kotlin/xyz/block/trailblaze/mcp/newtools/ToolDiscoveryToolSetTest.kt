@@ -16,6 +16,8 @@ import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import kotlin.reflect.KClass
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -826,6 +829,417 @@ class ToolDiscoveryToolSetTest {
     assertNull(obj["toolsByPlatform"], "Should use grouped output, not flat platform listing")
   }
 
+  /**
+   * Target with platform-specific tool sets: different custom classes register against Android vs
+   * iOS vs Web drivers. Used to verify that the CLI platform filter resolves to the
+   * platform-appropriate driver even when the daemon already holds a different driver type. Uses
+   * class-backed tools (not YAML names) to avoid coupling to the YAML name registry — what we
+   * care about is the (platform, driver) → tool routing.
+   */
+  private class PerPlatformTarget : TrailblazeHostAppTarget(
+    id = "perplatform",
+    displayName = "Per Platform App",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      when (platform) {
+        TrailblazeDevicePlatform.ANDROID -> listOf("com.perplatform.android")
+        TrailblazeDevicePlatform.IOS -> listOf("com.perplatform.ios")
+        TrailblazeDevicePlatform.WEB -> listOf("perplatform-web")
+        else -> null
+      }
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = when (driverType.platform) {
+      TrailblazeDevicePlatform.ANDROID ->
+        setOf(xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool::class)
+      TrailblazeDevicePlatform.IOS ->
+        setOf(xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool::class)
+      TrailblazeDevicePlatform.WEB ->
+        setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+      else -> emptySet()
+    }
+  }
+
+  // -- Regression: --device CLI flag overrides the daemon's currently-connected driver ---------
+  //
+  // Bug: when the daemon held any non-Android driver (e.g. a leftover playwright session),
+  // `toolbox(target=X, platform=android)` silently returned web tools and labeled the header
+  // `(Web Browser)` because `effectiveDriverType` defaulted to `currentDriverType` and only fell
+  // back to the platform filter when the daemon was idle. The CLI flag is the user's explicit
+  // intent — it must win over a stale daemon state.
+
+  @Test
+  fun `TARGET mode platform filter overrides daemon's connected web driver`() = runTest {
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(target = "perplatform", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    // Header must reflect the CLI flag, not the daemon's web driver.
+    assertEquals("Android", obj["currentPlatform"]?.jsonPrimitive?.content)
+
+    // Tool listing must contain the Android tool, not the web one. The class-backed default-target
+    // tool list isn't asserted here — only the target's per-platform tool ids matter for the bug.
+    val toolGroups = obj["toolGroups"]?.jsonArray ?: JsonArray(emptyList())
+    val allTools = toolGroups.flatMap {
+      it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
+    }
+    assertContains(allTools, "launchApp", "Android tool must appear. Got: $allTools")
+    assertTrue("openUrl" !in allTools, "Web-only tool must NOT appear. Got: $allTools")
+  }
+
+  @Test
+  fun `TARGET mode platform filter overrides daemon's connected android driver`() = runTest {
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(target = "perplatform", platform = "web")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Web Browser", obj["currentPlatform"]?.jsonPrimitive?.content)
+
+    val toolGroups = obj["toolGroups"]?.jsonArray ?: JsonArray(emptyList())
+    val allTools = toolGroups.flatMap {
+      it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
+    }
+    assertContains(allTools, "openUrl", "Web tool must appear. Got: $allTools")
+    assertTrue("launchApp" !in allTools, "Android-only tool must NOT appear. Got: $allTools")
+  }
+
+  @Test
+  fun `TARGET mode platform filter overrides daemon's connected ios driver to android`() = runTest {
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = TrailblazeDriverType.IOS_HOST,
+    )
+
+    val result = toolSet.toolbox(target = "perplatform", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Android", obj["currentPlatform"]?.jsonPrimitive?.content)
+
+    val toolGroups = obj["toolGroups"]?.jsonArray ?: JsonArray(emptyList())
+    val allTools = toolGroups.flatMap {
+      it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
+    }
+    assertContains(allTools, "launchApp")
+    assertTrue("tap" !in allTools, "iOS-only tool must NOT appear. Got: $allTools")
+  }
+
+  @Test
+  fun `TARGET mode preserves specific connected driver when platform agrees with CLI flag`() = runTest {
+    // Counterpart to the override tests: when --device matches the daemon's platform, the
+    // specific driver instance (instrumentation vs accessibility, axe vs host, ...) must be
+    // preserved — the override path's "default for platform" fallback must not kick in.
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(target = "perplatform", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Android", obj["currentPlatform"]?.jsonPrimitive?.content)
+    // Direct proof of driver-instance preservation: the response's `currentPlatform` is part of
+    // `ToolDiscoveryTargetResult` but the driver yaml key is what would diverge if the agree
+    // branch silently flattened `ANDROID_ONDEVICE_INSTRUMENTATION` → `DEFAULT_ANDROID`. Assert
+    // the specific instance survived. (The fixture's per-platform tool sets are the same across
+    // Android driver types, so listing-content alone wouldn't catch a regression.)
+    val toolGroups = obj["toolGroups"]?.jsonArray ?: JsonArray(emptyList())
+    val allTools = toolGroups.flatMap {
+      it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
+    }
+    assertContains(allTools, "launchApp")
+    // The TARGET-mode result type doesn't surface `currentDriverType`; the listing-content
+    // assertion plus the platform header are the contractually-observable handles. INDEX mode
+    // (which DOES surface `currentDriverType`) carries the driver-key assertion in its own
+    // mirror test below.
+  }
+
+  @Test
+  fun `INDEX mode preserves specific connected driver when platform agrees with CLI flag`() = runTest {
+    // Mirror of the TARGET preservation test for INDEX. INDEX returns `currentDriverType` in
+    // its result, so this is where we can assert the load-bearing claim end-to-end: the
+    // daemon-connected `ANDROID_ONDEVICE_INSTRUMENTATION` driver survives a matching
+    // `--device=android` rather than being flattened to `DEFAULT_ANDROID`.
+    val defaultTarget = MixedNoneTarget(
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      yamlNames = setOf(ToolName("pressBack")),
+    )
+    val toolSet = createToolSet(
+      allTargets = setOf(defaultTarget),
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Android", obj["currentPlatform"]?.jsonPrimitive?.content)
+    assertEquals(
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.yamlKey,
+      obj["currentDriverType"]?.jsonPrimitive?.content,
+      "Specific connected driver must be preserved, not flattened to DEFAULT_ANDROID.",
+    )
+  }
+
+  @Test
+  fun `INDEX mode override with desktop platform resolves to compose driver`() = runTest {
+    // The DESKTOP platform is `hidden = true` but the `--device=desktop` code path is
+    // nonetheless live: `resolveDefaultDriverType(DESKTOP)` returns `COMPOSE`. If a user (or
+    // an MCP client) reaches for it with an unrelated daemon driver active, the override
+    // branch must still resolve correctly.
+    val defaultTarget = MixedNoneTarget(
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      yamlNames = setOf(ToolName("pressBack")),
+    )
+    val toolSet = createToolSet(
+      allTargets = setOf(defaultTarget),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(platform = "desktop")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Compose Desktop", obj["currentPlatform"]?.jsonPrimitive?.content)
+    assertEquals(
+      TrailblazeDriverType.COMPOSE.yamlKey,
+      obj["currentDriverType"]?.jsonPrimitive?.content,
+    )
+  }
+
+  @Test
+  fun `toolbox rejects unknown --device platform with an actionable error message`() = runTest {
+    // Typos like `--device=androd` previously degraded to "no platform filter" silently, which
+    // re-triggered the very bug this PR fixes (daemon's stale driver wins). Distinguish "not
+    // provided" from "provided but invalid" so the user gets a clear hint. The message goes in
+    // the `error` field so the CLI's top-level error check renders it via `Console.error` for
+    // every mode — including `--target=X --device=typo` (which would otherwise misroute through
+    // `formatTargetResult` and emit a misleading "Target not found" line).
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(platform = "androd")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val error = obj["error"]?.jsonPrimitive?.content
+    assertNotNull(error, "Unknown platform must surface an `error` field. Got: $obj")
+    assertContains(error, "Unknown platform 'androd'")
+    assertContains(error, "android")
+    assertContains(error, "ios")
+    assertContains(error, "web")
+    // Hidden DESKTOP must NOT leak into the user-facing message — that's why this site uses
+    // `visibleEntries` and not `entries`.
+    assertTrue(
+      "desktop" !in error,
+      "Hidden DESKTOP platform must not appear in the user-facing accepted list. Got: $error",
+    )
+  }
+
+  @Test
+  fun `toolbox rejects unknown --device even when --target is set (no target-mode misroute)`() = runTest {
+    // Regression: when both `--target` and `--device=<typo>` are passed, the response must still
+    // surface the platform validation error in the SAME mode-specific envelope the call would
+    // have produced on success — so MCP clients doing structural typing get a `TargetResult`
+    // back, not an `IndexResult`-as-generic-error. Asserts the response is shaped as a
+    // [ToolDiscoveryTargetResult] by checking it can deserialize into that type.
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(target = "testapp", platform = "androd")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val error = obj["error"]?.jsonPrimitive?.content
+    assertNotNull(error, "Even with --target set, unknown platform must surface `error`. Got: $obj")
+    assertContains(error, "Unknown platform 'androd'")
+    // The response carries only the `error` field — `target`, `toolGroups`, `toolsByPlatform` and
+    // friends remain null so the CLI formatter's top-level error check fires and routes to
+    // `Console.error` rather than falling through to `formatTargetResult` / "Target not found".
+    assertNull(obj["target"], "Validation failure must not produce target-mode fields.")
+    // Round-trip through `ToolDiscoveryTargetResult` deserializer to lock in the response shape.
+    val typed = Json { ignoreUnknownKeys = false }.decodeFromString(
+      ToolDiscoveryTargetResult.serializer(), result,
+    )
+    assertEquals(error, typed.error)
+  }
+
+  @Test
+  fun `toolbox rejects unknown --device with --search and returns SearchResult shape`() = runTest {
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(search = "anything", platform = "androd")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val error = obj["error"]?.jsonPrimitive?.content
+    assertNotNull(error, "Unknown platform with --search must surface `error`. Got: $obj")
+    assertContains(error, "Unknown platform 'androd'")
+    assertNull(obj["matches"], "Validation failure must not produce search-mode fields.")
+    val typed = Json { ignoreUnknownKeys = false }.decodeFromString(
+      ToolDiscoverySearchResult.serializer(), result,
+    )
+    assertEquals(error, typed.error)
+  }
+
+  @Test
+  fun `toolbox rejects unknown --device with --name and returns NameResult shape`() = runTest {
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(name = "tap", platform = "androd")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val error = obj["error"]?.jsonPrimitive?.content
+    assertNotNull(error, "Unknown platform with --name must surface `error`. Got: $obj")
+    assertContains(error, "Unknown platform 'androd'")
+    assertNull(obj["tool"], "Validation failure must not produce name-mode fields.")
+    val typed = Json { ignoreUnknownKeys = false }.decodeFromString(
+      ToolDiscoveryNameResult.serializer(), result,
+    )
+    assertEquals(error, typed.error)
+  }
+
+  @Test
+  fun `NAME mode accepts a valid --device value but ignores it (documents intent)`() = runTest {
+    // NAME lookup is "find this tool wherever it's defined." Per the dispatch in `toolbox()`,
+    // `platform` is parsed and validated (typos still short-circuit — covered above) but the
+    // valid value is then dropped before reaching `handleNameMode`. This test locks in that
+    // intent so a future maintainer who "fixes" NAME to scope by platform notices the trade-off
+    // and either updates the test or makes a deliberate semantic change. Without this anchor the
+    // documented behavior is enforced by code comments alone.
+    val toolSet = createToolSet()
+
+    val withPlatform = toolSet.toolbox(name = "tap", platform = "android")
+    val withoutPlatform = toolSet.toolbox(name = "tap")
+
+    // Both responses are NAME-mode envelopes (same shape, same content for the same query).
+    assertEquals(
+      withoutPlatform, withPlatform,
+      "NAME mode currently spans all platforms — passing --device must not change the result.",
+    )
+  }
+
+  @Test
+  fun `SEARCH mode preserves specific connected driver when platform agrees with CLI flag`() = runTest {
+    // Mirror of the INDEX and TARGET preserve tests but for SEARCH. The fix routes SEARCH
+    // through `resolveEffectiveDriverType` too; this asserts that the agree-branch returns the
+    // exact connected driver (not flattened to the platform default) so a search emitted while
+    // an instrumentation device is active doesn't silently re-run as accessibility.
+    // SEARCH doesn't surface `currentDriverType` in its result, so we exercise this indirectly:
+    // a target whose tools are scoped to ANDROID_ONDEVICE_INSTRUMENTATION specifically should
+    // contribute results, proving the specific driver instance reached the filter logic.
+    val driverSpecificTarget = object : TrailblazeHostAppTarget(
+      id = "instronly",
+      displayName = "Instrumentation Only",
+    ) {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.instronly") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> =
+        if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
+          setOf(xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool::class)
+        } else {
+          emptySet()
+        }
+    }
+    val toolSet = createToolSet(
+      allTargets = setOf(driverSpecificTarget),
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(
+      toolNames, "launchApp",
+      "SEARCH must use the specific connected driver (ANDROID_ONDEVICE_INSTRUMENTATION), not " +
+        "flatten to the platform default (ANDROID_ONDEVICE_ACCESSIBILITY) which would yield no tools. Got: $toolNames",
+    )
+  }
+
+  @Test
+  fun `SEARCH mode with no device honors --device platform filter`() = runTest {
+    // The override-from-stale-daemon-driver case is covered above. This test exercises the OTHER
+    // branch of `resolveEffectiveDriverType` that SEARCH now flows through: when the daemon is
+    // idle (`currentDriverType == null`) and the user passes `--device=android`, the helper
+    // resolves the platform's default driver and the search filters by it. Previously SEARCH
+    // ignored `--device` entirely in this path too.
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = null,
+    )
+
+    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(
+      toolNames, "launchApp",
+      "SEARCH with idle daemon must honor --device=android. Got: $toolNames",
+    )
+  }
+
+  @Test
+  fun `SEARCH mode platform filter overrides daemon's connected web driver`() = runTest {
+    // SEARCH was the half of the toolbox surface not covered by the original fix. Same bug
+    // class: with the daemon holding a web driver, `--search` would return web-filtered
+    // results even when the user passed `--device=android`. Verify the override now applies.
+    val target = PerPlatformTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(search = "launchApp", platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(
+      toolNames, "launchApp",
+      "SEARCH must honor --device=android even when daemon holds a web driver. Got: $toolNames",
+    )
+  }
+
+  @Test
+  fun `INDEX mode platform filter overrides daemon's connected web driver`() = runTest {
+    // The same override applies to INDEX mode (`toolbox --device=android` with no --target, or
+    // with --target=default which routes through INDEX). Before the fix, the header read
+    // `(Android)` while the platform-toolset list contained web tools — a contradiction.
+    val defaultTarget = MixedNoneTarget(
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      yamlNames = setOf(ToolName("pressBack")),
+    )
+    val toolSet = createToolSet(
+      allTargets = setOf(defaultTarget),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(platform = "android")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals("Android", obj["currentPlatform"]?.jsonPrimitive?.content)
+    val driverKey = obj["currentDriverType"]?.jsonPrimitive?.content
+    assertEquals(
+      TrailblazeDriverType.DEFAULT_ANDROID.yamlKey, driverKey,
+      "INDEX mode must resolve to the Android default driver when --device=android overrides a web daemon. Got: $driverKey",
+    )
+  }
+
   @Test
   fun `TARGET mode includes inline scripted tools for matching driver`() = runTest {
     val toolSet = createToolSet(
@@ -1067,6 +1481,195 @@ class ToolDiscoveryToolSetTest {
     assertTrue(
       "pressBack" !in tools,
       "Excluded YAML tool must NOT appear in targetToolsets. Got: $tools",
+    )
+  }
+
+  // -- Role grouping (trailheadTools / shortcutTools) -------------------------
+
+  /**
+   * Stub source returning a flat map of `<key> -> <yaml-content>` for the `tools/` discovery
+   * call. Recursive (pack-bundled) discovery returns empty so the test only exercises the flat
+   * path. Keys here are the filename minus the `.yaml` suffix — `tap.trailhead` becomes the
+   * discovered name for a `tap.trailhead.yaml`. The YAML content's `id:` is the authoritative
+   * tool identifier used by the intersection guard.
+   */
+  private fun stubRoleYamlSource(entries: Map<String, String>): ConfigResourceSource =
+    object : ConfigResourceSource {
+      override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> {
+        if (directoryPath == TrailblazeConfigPaths.TOOLS_DIR && suffix == ".yaml") return entries
+        return emptyMap()
+      }
+
+      override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> = emptyMap()
+    }
+
+  @Test
+  fun `INDEX mode trailheadTools and shortcutTools intersect with in-scope toolset names`() = runTest {
+    // The intersection guard is the load-bearing invariant called out in computeRoleNames' kdoc:
+    // role lists must never surface a tool that won't resolve when the user drills in via
+    // `toolbox --name <id>`. Without this test, a refactor that drops the `it.id in inScopeNames`
+    // filter would silently break the CLI's role-grouped view (names listed that lead nowhere).
+    //
+    // Two stub YAML configs share the same shape; their `id:` fields differ:
+    //   - `tap` is a real platform tool (in scope of every toolbox response) → must appear.
+    //   - `ghostTool_NotInAnyToolset` doesn't exist anywhere → must be filtered out.
+    val stubSource = stubRoleYamlSource(
+      mapOf(
+        "tap.trailhead" to
+          """
+          id: tap
+          description: Tap a thing (role metadata applied for test only).
+          trailhead:
+            to: testapp/android/home
+          tools:
+            - tap: { selector: "ok" }
+          """.trimIndent(),
+        "ghostTool_NotInAnyToolset.trailhead" to
+          """
+          id: ghostTool_NotInAnyToolset
+          description: A trailhead pointing at a tool no toolset surfaces.
+          trailhead:
+            to: testapp/android/home
+          tools:
+            - tap: { selector: "ok" }
+          """.trimIndent(),
+        "tap.shortcut" to
+          """
+          id: tapShortcut_NotInAnyToolset
+          description: A shortcut whose id is not in any toolset.
+          shortcut:
+            from: testapp/android/a
+            to: testapp/android/b
+          tools:
+            - tap: { selector: "ok" }
+          """.trimIndent(),
+      ),
+    )
+
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(testTarget) },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+      resourceSourceProvider = { stubSource },
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    // Both fields default to emptyList() with encodeDefaults = false, so the JSON omits them when
+    // they're empty. Use safe-access defaults so the assertions read naturally either way.
+    val trailheadTools = obj["trailheadTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+    val shortcutTools = obj["shortcutTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+
+    assertContains(
+      trailheadTools, "tap",
+      "in-scope role tool must be surfaced — `tap` is a real platform tool and the stub gave it trailhead metadata",
+    )
+    assertFalse(
+      "ghostTool_NotInAnyToolset" in trailheadTools,
+      "out-of-scope trailhead must be filtered — intersection guard prevents the CLI from naming tools that won't resolve via `--name <id>`. Got: $trailheadTools",
+    )
+    assertFalse(
+      "tapShortcut_NotInAnyToolset" in shortcutTools,
+      "out-of-scope shortcut must be filtered for the same reason. Got: $shortcutTools",
+    )
+  }
+
+  @Test
+  fun `INDEX mode trailheadTools are returned in sorted order`() = runTest {
+    // Sort order matters for stable rendering — the CLI emits role lists verbatim in the order
+    // received, so a regression to discovery-order would produce flapping output across builds
+    // (resource-scan order is FS-dependent). Pin it explicitly.
+    val stubSource = stubRoleYamlSource(
+      mapOf(
+        // Note YAML ids deliberately out of alphabetical order; only tap and pressBack are in
+        // platform toolsets so only those two should appear, and they must be sorted.
+        "pressBack.trailhead" to
+          """
+          id: pressBack
+          description: Press back (stub trailhead).
+          trailhead:
+            to: testapp/android/back
+          tools:
+            - tap: { selector: "back" }
+          """.trimIndent(),
+        "tap.trailhead" to
+          """
+          id: tap
+          description: Tap (stub trailhead).
+          trailhead:
+            to: testapp/android/home
+          tools:
+            - tap: { selector: "ok" }
+          """.trimIndent(),
+      ),
+    )
+
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(testTarget) },
+      currentTargetProvider = { null },
+      currentDriverTypeProvider = { null },
+      resourceSourceProvider = { stubSource },
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+    val trailheadTools = obj["trailheadTools"]!!.jsonArray.map { it.jsonPrimitive.content }
+
+    assertEquals(
+      trailheadTools.sorted(),
+      trailheadTools,
+      "trailheadTools must be sorted — pinning the `.sorted()` contract from computeRoleNames",
+    )
+  }
+
+  @Test
+  fun `TARGET mode populates trailheadTools so role filter works for non-default targets`() = runTest {
+    // Bug fix regression test: before the fix, handleTargetMode returned a
+    // ToolDiscoveryTargetResult without the role fields, so the CLI's `toolbox trailheads
+    // --target <non-default>` flow would silently see an empty list and tell the user "no
+    // trailheads available" even when there were some. This test pins that target-mode responses
+    // now carry the role lists.
+    //
+    // The intersection guard in target mode scopes against the target's own toolGroups (not all
+    // platform tools), so the trailhead YAML must reference an id that the target actually owns.
+    // The shared `inlineToolTarget` fixture exposes `web_inline_script_tool` as a Web inline
+    // script tool — picking that one keeps the test self-contained.
+    val stubSource = stubRoleYamlSource(
+      mapOf(
+        "web_inline_script_tool.trailhead" to
+          """
+          id: web_inline_script_tool
+          description: Inline-script tool with trailhead role for the test.
+          trailhead:
+            to: inlineapp/web/home
+          tools:
+            - tap: { selector: "ok" }
+          """.trimIndent(),
+      ),
+    )
+
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(inlineToolTarget) },
+      currentTargetProvider = { inlineToolTarget },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+      resourceSourceProvider = { stubSource },
+    )
+
+    // Target-mode dispatch (target != null && target != default → handleTargetMode)
+    val result = toolSet.toolbox(target = "inlineapp")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    // Response is target-mode shape (not index-mode) — confirms we're exercising the right path.
+    assertNotNull(obj["target"], "target-mode response should carry a `target` field")
+    val trailheadTools = obj["trailheadTools"]?.jsonArray?.map { it.jsonPrimitive.content }
+      ?: emptyList()
+    assertContains(
+      trailheadTools, "web_inline_script_tool",
+      "TARGET mode must now populate trailheadTools so `toolbox trailheads --target <non-default>` returns a non-empty list when role tools exist. Got: $trailheadTools",
     )
   }
 }

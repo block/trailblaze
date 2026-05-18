@@ -69,7 +69,7 @@ class McpSubprocessRuntimeLauncherTest {
     // legitimately declare it expecting the follow-up landing, and the launcher should skip it
     // without failing the whole session.
     val commandOnly = listOf(
-      McpServerConfig(command = "python", args = listOf("-m", "mcp_example")),
+      McpServerConfig(command = listOf("python", "-m", "mcp_example")),
     )
 
     val runtime = runBlocking {

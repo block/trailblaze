@@ -101,20 +101,13 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           val toolWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
 
+          // Zero recordable tools in this objective window → emit no recording at all (null).
+          // At replay time the step will fall through to AI rather than ghost-passing. Empty
+          // `ToolRecording` instances are now rejected at construction (see ToolRecording).
           val recording = if (toolWrappers.isNotEmpty()) {
-            ToolRecording(
-              tools = toolWrappers,
-              autoSatisfied = false,
-            )
+            ToolRecording(tools = toolWrappers)
           } else {
-            // Author observed: zero recordable tools fired during this objective window —
-            // the prior step's actions already satisfied this prompt. Emit an explicit
-            // auto-satisfied marker so replay can skip deterministically instead of falling
-            // through to AI. See ToolRecording KDoc for replay semantics.
-            ToolRecording(
-              tools = emptyList(),
-              autoSatisfied = true,
-            )
+            null
           }
 
           val newStep = when (promptStep) {
@@ -156,9 +149,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             if (lastItem is TrailYamlItem.PromptsTrailItem && lastItem.promptSteps.isNotEmpty()) {
               val lastStep = lastItem.promptSteps.last()
               val existingTools = lastStep.recording?.tools ?: emptyList()
-              // Once a tool attaches to the step, it can no longer be auto-satisfied
-              // by definition — the prior auto-satisfied marker (if any) is replaced.
-              val updatedRecording = ToolRecording(tools = existingTools + wrapper, autoSatisfied = false)
+              val updatedRecording = ToolRecording(tools = existingTools + wrapper)
               val updatedStep = when (lastStep) {
                 is DirectionStep -> lastStep.copy(recording = updatedRecording)
                 is VerificationStep -> lastStep.copy(recording = updatedRecording)

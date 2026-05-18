@@ -152,7 +152,10 @@ class ComposeTrailblazeAgent(
     val result = tool.executeWithCompose(target, context)
     val executionTimeMs =
       Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
-    logToolExecution(tool, timeBeforeExecution, context, result)
+    // Compose tools run in-process on the host JVM (Compose Desktop / Compose Multiplatform
+    // test surface) — flag the dispatch as host-side so session viewers can distinguish it
+    // from RPC-routed-to-device dispatches.
+    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
 
     // Log AgentDriverLog with pre-action screenshot for visualization
     logAgentDriverAction(
@@ -168,7 +171,10 @@ class ComposeTrailblazeAgent(
   ): TrailblazeToolResult = runBlocking {
     val timeBeforeExecution = Clock.System.now()
     val result = tool.execute(context)
-    logToolExecution(tool, timeBeforeExecution, context, result)
+    // Compose tools run in-process on the host JVM (Compose Desktop / Compose Multiplatform
+    // test surface) — flag the dispatch as host-side so session viewers can distinguish it
+    // from RPC-routed-to-device dispatches.
+    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
     result
   }
 

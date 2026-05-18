@@ -34,6 +34,23 @@ internal data class BundlerTarget(
 
 @Serializable
 internal data class BundlerToolFile(
+  /** Required iff [tools] is null (single-tool shape). */
+  @SerialName("name") val name: String? = null,
+  @SerialName("description") val description: String? = null,
+  @SerialName("inputSchema") val inputSchema: Map<String, BundlerScriptedToolProperty> = emptyMap(),
+  /**
+   * Multi-tool shape — when set, this descriptor declares N tools each authored as a named
+   * export on the shared `script:` source. Mirrors `PackScriptedToolFile.tools` in
+   * `:trailblaze-models`; the bundler decodes only the fields it surfaces in the typed
+   * `.d.ts` augmentation (name / description / inputSchema). File-wide shortcuts
+   * (`requiresHost`, `supportedPlatforms`, `_meta`) aren't relevant to the typed surface
+   * and stay silently ignored by `strictMode = false`.
+   */
+  @SerialName("tools") val tools: List<BundlerToolEntry>? = null,
+)
+
+@Serializable
+internal data class BundlerToolEntry(
   @SerialName("name") val name: String,
   @SerialName("description") val description: String? = null,
   @SerialName("inputSchema") val inputSchema: Map<String, BundlerScriptedToolProperty> = emptyMap(),

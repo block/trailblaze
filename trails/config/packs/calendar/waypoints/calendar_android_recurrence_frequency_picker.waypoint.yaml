@@ -4,25 +4,25 @@ required:
   - description: "'day' option"
     selector:
       androidAccessibility:
-        textRegex: "^day$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "day"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
   - description: "'week' option"
     selector:
       androidAccessibility:
-        textRegex: "^week$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "week"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
   - description: "'month' option"
     selector:
       androidAccessibility:
-        textRegex: "^month$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "month"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
   - description: "'year' option"
     selector:
       androidAccessibility:
-        textRegex: "^year$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+        textRegex: "year"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/title"
 forbidden:
   - description: "Repeat-picker option ('Does not repeat') would mean a different dialog"
     selector:
       androidAccessibility:
-        textRegex: "^Does not repeat$"
+        textRegex: "Does not repeat"

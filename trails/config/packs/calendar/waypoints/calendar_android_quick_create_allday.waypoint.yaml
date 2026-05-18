@@ -4,7 +4,7 @@ required:
   - description: "All-day toggle row"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/all_day_tile$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/all_day_tile"
   - description: "Start date row (still present in all-day mode)"
     selector:
       androidAccessibility:
@@ -16,7 +16,7 @@ required:
   - description: "Save button"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/save"
 forbidden:
   - description: "Time-row content-desc absent in all-day mode"
     selector:

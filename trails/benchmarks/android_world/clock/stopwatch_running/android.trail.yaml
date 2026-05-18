@@ -10,8 +10,8 @@
     description: "Run the stopwatch."
 
 - tools:
-    - clearAppData:
-        packageName: com.google.android.deskclock
+    - mobile_clearAppData:
+        appId: com.google.android.deskclock
     # Android World starts every task from the home screen (using adb for reliable setup execution)
     - androidworldbenchmarks_runAdbShell:
         adbShellCommands:

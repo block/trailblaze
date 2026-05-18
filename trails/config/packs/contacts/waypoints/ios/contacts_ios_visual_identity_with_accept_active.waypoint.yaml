@@ -8,14 +8,14 @@ required:
   - description: "Visual identity Done button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityDoneButton$"
+        resourceIdRegex: "VisualIdentityDoneButton"
   - description: "Customize link"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Customize$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Customize"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
 forbidden:
   - description: "Choose button — only on the editor, not composition"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"

@@ -70,18 +70,18 @@ class McpSubprocessSpawnerTest {
     assertThat(env["TRAILBLAZE_DEVICE_HEIGHT_PX"]).isEqualTo("2400")
     assertThat(env["TRAILBLAZE_SESSION_ID"]).isEqualTo("session_test")
     assertThat(env["TRAILBLAZE_TOOLSET_FILE"]).isEqualTo(scriptFile.absolutePath)
-    // Default path: daemon uses 30s dispatch timeout, subprocess fetch timeout is 32s
-    // (30 + 2s buffer) so the daemon is normally the one that returns a structured error
+    // Default path: daemon uses 120s dispatch timeout, subprocess fetch timeout is 122s
+    // (120 + 2s buffer) so the daemon is normally the one that returns a structured error
     // rather than the client aborting first.
-    assertThat(env["TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS"]).isEqualTo("32000")
+    assertThat(env["TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS"]).isEqualTo("122000")
   }
 
-  @Test fun `resolveClientFetchTimeoutMs defaults to 32s and honors daemon override plus buffer`() {
+  @Test fun `resolveClientFetchTimeoutMs defaults to 122s and honors daemon override plus buffer`() {
     // The whole point of threading this through is to keep the client's abort above the
     // daemon's callback timeout. A regression that dropped the buffer or ignored the system
     // property would let the client abort first and swallow the daemon's structured error.
     System.clearProperty("trailblaze.callback.timeoutMs")
-    assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(32_000L)
+    assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
 
     try {
       System.setProperty("trailblaze.callback.timeoutMs", "60000")
@@ -90,10 +90,10 @@ class McpSubprocessSpawnerTest {
       // Non-positive / non-numeric overrides silently fall back to the default — same
       // "silently-default on typo" tradeoff as the daemon-side resolveTimeoutMs.
       System.setProperty("trailblaze.callback.timeoutMs", "-1")
-      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(32_000L)
+      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
 
       System.setProperty("trailblaze.callback.timeoutMs", "abc")
-      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(32_000L)
+      assertThat(McpSubprocessSpawner.resolveClientFetchTimeoutMs()).isEqualTo(122_000L)
     } finally {
       System.clearProperty("trailblaze.callback.timeoutMs")
     }
@@ -133,7 +133,7 @@ class McpSubprocessSpawnerTest {
   }
 
   @Test fun `configure rejects command-only entries`() {
-    val config = McpServerConfig(command = "python")
+    val config = McpServerConfig(command = listOf("python"))
     assertFailure {
       McpSubprocessSpawner.configure(config, context, bunRuntime)
     }.messageContains("command: entries not yet supported")

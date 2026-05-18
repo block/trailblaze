@@ -7,6 +7,7 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.telephony.TelephonyManager
 import android.util.Log
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.UiDeviceExt.clickExt
 import maestro.Capability
@@ -30,8 +31,10 @@ import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
+import xyz.block.trailblaze.util.Console
 import java.io.File
 
 /**
@@ -92,8 +95,60 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun hideKeyboard() {
-    if (isKeyboardVisible()) {
+    // Gate backPress() on the looser visibility predicate. The strict windows-only
+    // isKeyboardVisible() can miss the IME under FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES,
+    // producing silent no-ops (backPress never fires, Orchestra's post-check also reports
+    // "not visible", success is wrongly reported). isKeyboardVisible() is left strict
+    // because the post-check needs the conservative semantics.
+    if (isKeyboardLikelyVisible()) {
       backPress()
+    }
+  }
+
+  /**
+   * Stacked keyboard-visibility check used only by [hideKeyboard], from cheapest to most
+   * authoritative:
+   *   1. UiAutomation windows / focused-editable
+   *   2. [TrailblazeAccessibilityService.isKeyboardVisible] when the service is bound
+   *   3. `dumpsys input_method` (`mInputShown=true`) — authoritative shell fallback for
+   *      instrumentation runs under `FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES`, where
+   *      UiAutomation can return `windows=[]` / `root=null`.
+   *
+   * Not exposed as a driver override because the strict windows-only [isKeyboardVisible]
+   * is what Maestro's post-check at `Orchestra.hideKeyboardCommand` relies on — the
+   * looser signals (focused-editable, IME service state) linger after IME dismissal and
+   * would produce false-positive post-check failures there.
+   */
+  private fun isKeyboardLikelyVisible(): Boolean {
+    val viaUiAutomation = withUiAutomation {
+      val ws = windows
+      if (!ws.isNullOrEmpty() && ws.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }) {
+        return@withUiAutomation true
+      }
+      val root = rootInActiveWindow ?: return@withUiAutomation false
+      try {
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val editable = focused?.isEditable == true
+        focused?.recycle()
+        editable
+      } finally {
+        root.recycle()
+      }
+    }
+    if (viaUiAutomation) return true
+    try {
+      if (TrailblazeAccessibilityService.isKeyboardVisible()) return true
+    } catch (_: IllegalStateException) {
+      // Service not running — fall through to the shell fallback.
+    }
+    return try {
+      AdbCommandUtil
+        .execShellCommand("dumpsys input_method")
+        .lineSequence()
+        .any { it.trim().startsWith("mInputShown=true") }
+    } catch (e: Exception) {
+      Console.log("[hideKeyboard] dumpsys input_method failed: ${e.message}")
+      false
     }
   }
 

@@ -60,7 +60,12 @@ class GetScreenStateRequestHandler(
       // Wait for the UI to settle first so we capture a stable screen (e.g., after
       // navigation or data loading), not a mid-transition state.
       val screenState: ScreenState = if (useAccessibility) {
-        TrailblazeAccessibilityService.waitForSettled()
+        // Skip the accessibility-event settle wait on the mirror-only fast path — that wait
+        // exists to give the tree a stable window to read from, and we're not reading the
+        // tree. Saves ~200-500 ms per frame on top of the tree-skip itself.
+        if (request.includeTree) {
+          TrailblazeAccessibilityService.waitForSettled()
+        }
         AccessibilityServiceScreenState(
           screenshotScalingConfig = scalingConfig,
           includeScreenshot = request.includeScreenshot,
@@ -71,11 +76,13 @@ class GetScreenStateRequestHandler(
           // get the accessibility-shape projection even when the migration capture is
           // requested via instrumentation args, breaking 100% Maestro-fidelity migration.
           captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
+          includeTree = request.includeTree,
         )
       } else {
         AndroidOnDeviceUiAutomatorScreenState(
           screenshotScalingConfig = scalingConfig,
           includeScreenshot = request.includeScreenshot,
+          includeTree = request.includeTree,
         )
       }
 

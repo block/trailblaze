@@ -1024,6 +1024,181 @@ class PlaywrightScreenStateBoundsTest {
     )
   }
 
+  // ---- CSS-pattern coverage for the supplier's opacity predicate ----
+  //
+  // Real-world UI library popup cards rarely use a plain `background-color: <color>`;
+  // CSS-in-JS frameworks (Emotion / styled-components / Material UI / etc.) commonly
+  // build the visible card via `::before` pseudo-elements, `box-shadow`, or
+  // embedded `<iframe>`s. These three patterns defeated an earlier version of the
+  // predicate and produced the false-visible regression on real production
+  // dashboard popups. Pin each pattern so a future predicate tweak can't silently
+  // reintroduce the leak.
+
+  @Test
+  fun `popup using only box-shadow inset fill occludes underlying button`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="nav" style="position:absolute;left:50px;top:200px;width:160px;height:40px;background:white;">Nav</button>
+        <div aria-label="ShadowCard" style="position:absolute;left:30px;top:180px;width:400px;height:200px;box-shadow:inset 0 0 0 200px #222;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Nav\""),
+      "Box-shadow-only card should occlude the underlying nav button, but Nav is still listed:\n$text",
+    )
+    assertTrue(text.contains("occluded elements hidden"), "Expected occluded summary:\n$text")
+  }
+
+  @Test
+  fun `popup using only pseudo-element background occludes underlying button`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          .pseudo-card { position:relative; }
+          .pseudo-card::before {
+            content:''; position:absolute; inset:0;
+            background:#222; border-radius:12px;
+          }
+        </style>
+      </head>
+      <body style="margin:0; padding:0;">
+        <button id="nav" style="position:absolute;left:50px;top:200px;width:160px;height:40px;background:white;">Nav</button>
+        <div class="pseudo-card" aria-label="PseudoCard" style="position:absolute;left:30px;top:180px;width:400px;height:200px;"></div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Nav\""),
+      "Pseudo-element-bg card should occlude the underlying nav button, but Nav is still listed:\n$text",
+    )
+    assertTrue(text.contains("occluded elements hidden"), "Expected occluded summary:\n$text")
+  }
+
+  @Test
+  fun `shadow-DOM dialog does not falsely occlude its own shadow-DOM children`() {
+    // Real-world failure mode: when a Web Component dialog (e.g. `<market-dialog>`)
+    // hosts an interactive button (e.g. Save) inside its shadow root, the
+    // button's `parentElement` chain stops at the shadow root boundary. If the
+    // ancestor walk doesn't cross via the shadow host, the button doesn't
+    // "know" the dialog host is its ancestor — and when the dialog host's
+    // bounds are the topmost opaque element at the button's center, the
+    // algorithm misclassifies it as occluded by an unrelated container.
+    // Reproduces the Square Dashboard Create-Item-dialog regression where
+    // Save was filtered out and the LLM concluded it couldn't be clicked.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <my-dialog id="dialog-host" style="display:block;position:absolute;left:100px;top:100px;width:400px;height:300px;border:1px solid #ccc;background:white;"></my-dialog>
+        <script>
+          customElements.define('my-dialog', class extends HTMLElement {
+            connectedCallback() {
+              const sr = this.attachShadow({ mode: 'open' });
+              sr.innerHTML =
+                '<div style="position:absolute;inset:0;background:white;">' +
+                  '<h2>Dialog title</h2>' +
+                  '<button aria-label="Save" style="position:absolute;left:280px;top:240px;width:100px;height:40px;background:#0066ff;color:white;">Save</button>' +
+                '</div>';
+            }
+          });
+        </script>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertTrue(
+      text.contains("\"Save\""),
+      "Save button inside the dialog's shadow root must stay VISIBLE — without the shadow-host ancestor crossover, the algorithm falsely flags it as occluded by the dialog host. Got:\n$text",
+    )
+    assertFalse(
+      text.lines().any { it.contains("\"Save\"") && it.contains("(occluded)") },
+      "Save button must not be annotated occluded. Got:\n$text",
+    )
+  }
+
+  @Test
+  fun `shadow-DOM web-component popup occludes underlying shadow-DOM web-component button`() {
+    // Reproduces the real-world failure mode found on production dashboards
+    // built with Web Components (Market design system, Shoelace, etc.):
+    // both the candidate AND the popup card live inside shadow roots, so
+    // `document.querySelectorAll('*')` returns the shadow HOSTS but not the
+    // shadow children — and the role/name map built from the light DOM
+    // misses 80%+ of the ARIA-tree candidates that Playwright's
+    // `ariaSnapshot()` sees. Without the shadow-DOM walk fix, the buried
+    // candidates never reach `OcclusionDetector`.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <my-nav id="nav-host"></my-nav>
+        <my-popup id="popup-host"></my-popup>
+        <script>
+          customElements.define('my-nav', class extends HTMLElement {
+            connectedCallback() {
+              const sr = this.attachShadow({ mode: 'open' });
+              sr.innerHTML = '<button aria-label="Nav Inside Shadow" style="position:absolute;left:50px;top:200px;width:160px;height:40px;background:white;">Nav</button>';
+            }
+          });
+          customElements.define('my-popup', class extends HTMLElement {
+            connectedCallback() {
+              const sr = this.attachShadow({ mode: 'open' });
+              sr.innerHTML = '<div aria-label="Popup Inside Shadow" style="position:absolute;left:30px;top:180px;width:400px;height:200px;background:#222;">Popup</div>';
+            }
+          });
+        </script>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Nav Inside Shadow\""),
+      "Shadow-DOM nav button under a shadow-DOM popup should be filtered as occluded; without the shadow-root walk, the role/name lookup misses both elements and the LLM sees the buried button. Got:\n$text",
+    )
+    assertTrue(text.contains("occluded elements hidden"), "Expected occluded summary:\n$text")
+  }
+
+  @Test
+  fun `iframe popup occludes underlying button`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="nav" style="position:absolute;left:50px;top:200px;width:160px;height:40px;background:white;">Nav</button>
+        <iframe aria-label="IframePopup" srcdoc="<body style='background:#222;color:white;margin:0;'>Popup content</body>"
+                style="position:absolute;left:30px;top:180px;width:400px;height:200px;border:none;"></iframe>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("\"Nav\""),
+      "Iframe popup should occlude the underlying nav button, but Nav is still listed:\n$text",
+    )
+    assertTrue(text.contains("occluded elements hidden"), "Expected occluded summary:\n$text")
+  }
+
   /**
    * Same-page combination: one element offscreen and one element occluded.
    * By default both are filtered with their respective summary lines.

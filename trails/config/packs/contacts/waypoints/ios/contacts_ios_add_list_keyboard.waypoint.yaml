@@ -9,17 +9,17 @@ required:
   - description: "List Name input field"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^List Name$"
+        accessibilityTextRegex: "List Name"
   - description: "Lists header (the editor overlays Lists)"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Keyboard accessory: AutoFill"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^AutoFill$"
+        accessibilityTextRegex: "AutoFill"
 forbidden:
   - description: "Sheet Grabber — would mean we're on a different sheet"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"

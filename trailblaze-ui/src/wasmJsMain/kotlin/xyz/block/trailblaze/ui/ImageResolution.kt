@@ -1,10 +1,14 @@
 package xyz.block.trailblaze.ui
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.sync.Semaphore
 import kotlin.coroutines.resume
 import xyz.block.trailblaze.util.Console
 
@@ -25,9 +29,34 @@ external fun decompressImageCallback(imageKey: String, callback: (String?) -> Un
 external fun preloadImageInBrowser(url: String)
 
 /**
- * Cache for decompressed images - managed in Kotlin/WASM
+ * Cache for decompressed images — backed by a [SnapshotStateMap] so Compose code can
+ * observe new entries without polling. Mutations from non-Composable contexts (the
+ * `resolveScreenshot` callback below) propagate to any composable that reads from this
+ * map under the snapshot system; `ScreenshotPreloadStrip` relies on that to mount
+ * hidden `AsyncImage`s as soon as each ref is decompressed, no polling required.
  */
-private val imageCache = mutableMapOf<String, String>()
+private val imageCache: SnapshotStateMap<String, String> = mutableStateMapOf()
+
+/**
+ * Synchronous lookup into the decompressed-image cache. Returns the resolved
+ * `data:` URL for [screenshotRef] if it has already been decompressed (e.g. by
+ * [preloadScreenshots]), or `null` if it hasn't been seen yet. Callers can use
+ * this to skip the first-render unresolved-ref state and paint the resolved
+ * image immediately when it's already in cache.
+ */
+fun getCachedDataUrl(screenshotRef: String): String? = imageCache[screenshotRef]
+
+/**
+ * Composable observer of the decompressed-screenshot keys. Reading the result inside
+ * a `@Composable` subscribes to mutations of [imageCache] via the Compose snapshot
+ * system — any subsequent `preloadScreenshots` insertion triggers a recomposition of
+ * the calling composable.
+ *
+ * Internal to the WASM module so the public surface in [Expects.preloadedScreenshotKeys]
+ * stays platform-neutral.
+ */
+@Composable
+internal fun observePreloadedScreenshotKeys(): Set<String> = imageCache.keys.toSet()
 
 /**
  * Resolves a single screenshot reference to a usable format:
@@ -77,17 +106,26 @@ suspend fun resolveScreenshot(screenshotRef: String): String? {
 }
 
 /**
+ * Max screenshot decompressions in flight at once. Sized to stay comfortably ahead of
+ * slideshow playback (one image per ~hundreds-of-ms) without flooding the JS main thread
+ * with parallel gzip+base64 work that would starve foreground rendering.
+ */
+private const val PRELOAD_CONCURRENCY = 3
+
+/**
  * Proactively preloads all screenshots in the background.
  * - For embedded/compressed images: decompresses and caches as data URLs
  * - For remote HTTP images: also triggers browser-level download caching
  *
- * Prioritizes foreground images by:
- * 1. Waiting briefly so visible composables can start resolving first
- * 2. Processing in small batches with yields between them, letting
- *    foreground LaunchedEffect resolutions take priority on the main thread
+ * Refs are *dispatched* in caller-provided order (typically timeline-sorted), keeping a
+ * rolling window of [PRELOAD_CONCURRENCY] decompressions in flight via a [Semaphore]. That
+ * means an earlier ref always starts before any later ref, while still parallelizing a few
+ * at a time so the preloader stays ahead of slideshow playback. Completion order is not strictly
+ * ordered — a small ref can finish before an earlier large one — but the start order plus
+ * a tight window keeps the head of the slideshow ready well before the tail.
  *
- * The imageCache prevents duplicate work — if a visible image already
- * resolved via its composable, the preloader skips it instantly.
+ * The imageCache prevents duplicate work — if a visible image already resolved via its
+ * composable, the preloader skips it instantly.
  */
 suspend fun preloadScreenshots(screenshotRefs: List<String>) {
     val uniqueRefs = screenshotRefs.distinct()
@@ -97,35 +135,39 @@ suspend fun preloadScreenshots(screenshotRefs: List<String>) {
     // resolutions before we begin background preloading.
     delay(500)
 
-    Console.log("🔄 Preloading ${uniqueRefs.size} screenshots in background...")
+    Console.log(
+        "🔄 Preloading ${uniqueRefs.size} screenshots in background " +
+            "(timeline order, up to $PRELOAD_CONCURRENCY at a time)...",
+    )
 
-    // Process in small batches, yielding between them so foreground
-    // image resolutions (from visible composables) get priority.
-    val batchSize = 5
-    uniqueRefs.chunked(batchSize).forEach { batch ->
-        coroutineScope {
-            batch.forEach { ref ->
-                launch {
-                    try {
-                        val resolved = resolveScreenshot(ref)
-                        // For HTTP URLs, also trigger browser-level preloading so the
-                        // browser cache is warm when Coil3 AsyncImage requests the image.
-                        if (resolved != null &&
-                            (resolved.startsWith("http://") || resolved.startsWith("https://"))
-                        ) {
-                            try {
-                                preloadImageInBrowser(resolved)
-                            } catch (_: Exception) {}
-                        }
-                    } catch (e: Exception) {
-                        Console.log("⚠️ Preload failed for: $ref - ${e.message}")
+    val semaphore = Semaphore(PRELOAD_CONCURRENCY)
+    coroutineScope {
+        for (ref in uniqueRefs) {
+            // Acquire a permit before launching: this both bounds concurrency and forces
+            // dispatch to happen in input order (we can't start ref N+1 until one of the
+            // first N has freed a permit). `acquire` itself suspends and reschedules, so
+            // no extra `yield()` is needed between iterations.
+            semaphore.acquire()
+            launch {
+                try {
+                    val resolved = resolveScreenshot(ref)
+                    if (resolved != null &&
+                        (resolved.startsWith("http://") || resolved.startsWith("https://"))
+                    ) {
+                        try {
+                            preloadImageInBrowser(resolved)
+                        } catch (_: Exception) {}
                     }
+                } catch (e: CancellationException) {
+                    // Don't swallow cancellation — let structured concurrency tear down cleanly.
+                    throw e
+                } catch (e: Exception) {
+                    Console.log("⚠️ Preload failed for: $ref - ${e.message}")
+                } finally {
+                    semaphore.release()
                 }
             }
         }
-        // Yield between batches so foreground work (UI rendering,
-        // visible image resolutions) isn't starved.
-        yield()
     }
 
     Console.log("✅ Preloaded ${uniqueRefs.size} screenshots")

@@ -100,13 +100,12 @@ object TrailblazeCli {
 
     // Wrap appProvider so a workspace-pack rebundle runs before the first
     // TrailblazeDesktopApp instance is constructed. Constructor-time field initializers
-    // (notably the Block desktop's eager `desktopYamlRunner = DesktopYamlRunner(...)`)
+    // (notably the desktop app's eager `desktopYamlRunner = DesktopYamlRunner(...)`)
     // force the lazy `availableAppTargets`, which calls `AppTargetDiscovery.discover()`
     // — so any post-construction hook is too late to keep workspace pack edits visible
     // on the first discovery pass. The [bootstrapHasRun] guard memoizes the bootstrap
     // for the JVM lifetime so subsequent `appProvider()` calls (e.g. forwarded CLI
-    // subcommands hitting the daemon-IPC fast path) don't repeat the hash walk. See
-    // issue #2556.
+    // subcommands hitting the daemon-IPC fast path) don't repeat the hash walk.
     val bootstrappedAppProvider: () -> TrailblazeDesktopApp = {
       if (bootstrapHasRun.compareAndSet(false, true)) {
         WorkspaceCompileBootstrap.bootstrapOrExit()

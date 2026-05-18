@@ -8,16 +8,30 @@
 Usage: trailblaze trail [-hvV] [--capture-all] [--capture-logcat]
                         [--capture-network] [--[no-]capture-video] [--[no-]
                         headless] [--markdown] [--no-daemon] [--no-logging]
-                        [--no-record] [--no-report] [--self-heal] [--[no-]
-                        use-recorded-steps] [-a=<agent>]
+                        [--no-report] [--[no-]save-recording] [--self-heal] [--
+                        [no-]use-recorded-steps] [-a=<agent>]
                         [--compose-port=<composePort>] [-d=<device>]
                         [--driver=<driverType>] [--llm=<llm>]
                         [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
-                        [--max-llm-calls=<maxLlmCalls>] <trailFile>...
-Run a trail file (.trail.yaml) — execute a scripted test on a device
-      <trailFile>...         One or more trail files (.trail.yaml or blaze.
-                               yaml). Use your shell's glob to run a batch (e.
-                               g., flows/**/*.trail.yaml).
+                        [--max-llm-calls=<maxLlmCalls>] [--tags=<name>[,
+                        <name>...]]... [<trailFile>...]
+Run a trail file (.trail.yaml) — execute a scripted test on a device.
+
+Accepts files, shell globs, or directories. Directory arguments expand
+recursively to every `.trail.yaml` / `blaze.yaml` under them.
+
+Trail-level metadata honored by the runner:
+  - `tags:` (list of strings) — filtered via --tags.
+  - `skip:` (reason string)   — reported as skipped (reason printed,
+contributes to the `N skipped` summary tally) and exits 0 for that file's slot.
+Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:`
+line.
+      [<trailFile>...]       Trail files (.trail.yaml or blaze.yaml), shell
+                               globs, or directories. Directories expand
+                               recursively to every contained trail file. If
+                               omitted, defaults to the `trails/` directory at
+                               the workspace root (resolved by walking up from
+                               the current directory).
   -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
                                TRAILBLAZE_RUNNER
       --capture-all          Enable all capture streams: video, logcat, network
@@ -65,14 +79,27 @@ Run a trail file (.trail.yaml) — execute a scripted test on a device
                                the run completes.
       --no-logging           Disable session logging — no files written to
                                logs/, session does not appear in Sessions tab
-      --no-record            Skip saving the recording back to the trail source
-                               directory
       --no-report            Skip HTML report generation after execution
+      --[no-]save-recording  Save the recording back to the trail source
+                               directory after a successful run. Default: on.
+                               Use --no-save-recording to skip. Even when on,
+                               the recording is only saved when --self-heal was
+                               enabled OR no <deviceClassifiers>.trail.yaml
+                               exists yet next to the source — deterministic
+                               re-runs no-op the write so they can't clobber a
+                               hand-edited source.
       --self-heal            When a recorded step fails, let AI take over and
                                continue. Overrides the persisted 'trailblaze
                                config self-heal' setting for this run. Omit to
                                inherit the saved setting (opt-in, off by
                                default).
+      --tags=<name>[,<name>...]
+                             Only run trails whose `config.tags:` list contains
+                               at least one of the given names. Repeatable
+                               (`--tags smoke --tags login`) or comma-separated
+                               (`--tags smoke,login`). Match is OR across tags.
+                               Untagged trails are excluded when --tags is
+                               specified.
       --[no-]use-recorded-steps
                              Three-way switch for replay vs. AI-driven
                                execution:

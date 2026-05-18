@@ -4,26 +4,26 @@ required:
   - description: "Toolbar shows the calendar name (default 'Local')"
     selector:
       androidAccessibility:
-        textRegex: "^Local$"
-        classNameRegex: "\\Qandroid.widget.TextView\\E"
+        textRegex: "Local"
+        classNameRegex: "android.widget.TextView"
   - description: "Default-notifications header for timed events"
     selector:
       androidAccessibility:
-        textRegex: "^Default notifications$"
+        textRegex: "Default notifications"
   - description: "Default-notifications header for all-day events"
     selector:
       androidAccessibility:
-        textRegex: "^Default notifications for all-day events$"
+        textRegex: "Default notifications for all-day events"
   - description: "Add a notification entry"
     selector:
       androidAccessibility:
-        textRegex: "^Add a notification$"
+        textRegex: "Add a notification"
   - description: "Back button"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Back$"
+        contentDescriptionRegex: "Back"
 forbidden:
   - description: "Theme is only in Settings → General"
     selector:
       androidAccessibility:
-        textRegex: "^Theme$"
+        textRegex: "Theme"

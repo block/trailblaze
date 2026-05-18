@@ -7,17 +7,17 @@ required:
   - description: "Lists header"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Lists$"
+        accessibilityTextRegex: "Lists"
   - description: "Edit button"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Edit$"
+        accessibilityTextRegex: "Edit"
   - description: "My Card entry"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^My Card$"
+        accessibilityTextRegex: "My Card"
 forbidden:
   - description: "Done button — would mean we're in edit mode"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Done$"
+        accessibilityTextRegex: "Done"

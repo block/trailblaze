@@ -22,15 +22,20 @@ export async function contacts_android_launchApp(args, ctx, client) {
     throw new Error("contacts_android_launchApp could not resolve an Android app id from ctx.target.");
   }
 
-  // See sibling clock_android_launchApp.ts for the rationale on `adbShell` over the
-  // Maestro-shaped `launchApp` and on `am start` over `monkey`. `adbShell` is dual-mode
+  // See sibling clock_android_launchApp.ts for the rationale on `android_adbShell` over the
+  // Maestro-shaped `launchApp` and on `am start` over `monkey`. `android_adbShell` is dual-mode
   // (`requiresHost: false`), so this tool composes cleanly whether the daemon dispatches
   // it on host or, in the future, on-device.
-  await client.callTool("adbShell", {
-    command: `am force-stop ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: ["am", "force-stop", appId],
   });
-  await client.callTool("adbShell", {
-    command: `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${appId}`,
+  await client.callTool("android_adbShell", {
+    command: [
+      "am", "start",
+      "-a", "android.intent.action.MAIN",
+      "-c", "android.intent.category.LAUNCHER",
+      "-p", appId,
+    ],
   });
 
   return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;

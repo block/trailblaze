@@ -54,7 +54,7 @@ internal data class QuickJsToolCtxEnvelope(
   /**
    * The session's active app target — null when the session has no target (web-only,
    * scratch tools, unit-test fixtures). Authors typically read
-   * `ctx.target?.resolvedAppId ?? ctx.target?.appIds[0]` to get the app id their tool
+   * `ctx.target?.appId ?? ctx.target?.appIds[0]` to get the app id their tool
    * should act on. See [QuickJsTargetContext] for the field semantics.
    */
   val target: QuickJsTargetContext? = null,
@@ -71,7 +71,7 @@ internal data class QuickJsDeviceContext(
 )
 
 /**
- * Target info the bundle handler can read from `ctx.target.{id, appIds, resolvedAppId}`
+ * Target info the bundle handler can read from `ctx.target.{id, appIds, appId}`
  * to act on the session's active app without hardcoding ids.
  *
  * **Three fields, intentional separation:**
@@ -79,7 +79,7 @@ internal data class QuickJsDeviceContext(
  *  - [appIds] — the raw declared candidate app ids in priority order, exactly as the
  *    target's pack manifest declares them. Informational; useful when authors want to
  *    inspect "what builds are configured for this target" rather than just launch one.
- *  - [resolvedAppId] — the candidate that's actually installed on the device. Picked at
+ *  - [appId] — the candidate that's actually installed on the device. Picked at
  *    session start by intersecting [appIds] with the device's installed-apps list (one
  *    `pm list packages` / `simctl listapps` roundtrip per session, cached). Null if no
  *    declared candidate is installed — authors should fall back to `appIds[0]` and let
@@ -91,7 +91,7 @@ internal data class QuickJsDeviceContext(
 internal data class QuickJsTargetContext(
   val id: String,
   val appIds: List<String>,
-  val resolvedAppId: String?,
+  val appId: String?,
 )
 
 /**

@@ -1,3 +1,11 @@
+// The `selector` field on this tool is @Deprecated to focus the deprecation signal on
+// *external* construction sites that still pass legacy selectors. The class's own
+// internal logic (toMaestroCommands lowering, the desc fallback, dispatch in execute)
+// must continue to read `selector` until the migration completes — those internal
+// references are the legitimate handling for legacy recordings already on disk, not
+// new tech debt. Suppress at file scope so the warning signal stays focused.
+@file:Suppress("DEPRECATION")
+
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
@@ -29,17 +37,20 @@ import xyz.block.trailblaze.util.Console
 data class TapOnByElementSelector(
   val reason: String? = null,
   /**
-   * Legacy Maestro-shaped flat selector. Optional as of the Android 100% accessibility
-   * cutover — accessibility-only recordings (`nodeSelector.androidAccessibility != null`)
-   * skip the Maestro path entirely, so authoring those without a [selector] is the
-   * correct shape going forward. Existing trail recordings that carry both still load
-   * unchanged; the dispatch logic in [execute] picks the right path per recording.
+   * Legacy Maestro-shaped flat selector.
    *
-   * For the legacy Maestro-driver runtime path (no longer exercised on Android post-
-   * cutover but still used elsewhere), [selector] remains the source of truth. If both
-   * [selector] and [nodeSelector] are null the tool refuses to run with a clear error
-   * rather than silently no-op.
+   * **Deprecated** — new tool construction should use [nodeSelector] exclusively. This
+   * field remains nullable + serializable so older trail YAMLs (which carry a `selector:`
+   * block alongside `nodeSelector:` or solo) continue to load unchanged and the runtime
+   * dispatch logic in [execute] picks the right path per recording. The field will be
+   * removed once the remaining flat-selector inventory in committed trails reaches zero
+   * (tracked in the selector→nodeSelector migration workstream).
    */
+  @Deprecated(
+    message = "Prefer `nodeSelector` for new construction; this field exists only to load " +
+      "legacy YAML recordings until the migration completes.",
+    level = DeprecationLevel.WARNING,
+  )
   val selector: TrailblazeElementSelector? = null,
   val longPress: Boolean = false,
   /**

@@ -4,7 +4,7 @@ required:
   - description: "'Don't miss a thing' headline"
     selector:
       androidAccessibility:
-        textRegex: "^Don't miss a thing$"
+        textRegex: "Don't miss a thing"
   - description: "Body explaining the notifications request"
     selector:
       androidAccessibility:
@@ -12,15 +12,15 @@ required:
   - description: "'Allow notifications' button"
     selector:
       androidAccessibility:
-        textRegex: "^Allow notifications$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/allow_button$"
+        textRegex: "Allow notifications"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/allow_button"
   - description: "'Not right now' button"
     selector:
       androidAccessibility:
-        textRegex: "^Not right now$"
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/skip_button$"
+        textRegex: "Not right now"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/skip_button"
 forbidden:
   - description: "Day picker (would mean we're past the upsell)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/date_picker_button"

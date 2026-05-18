@@ -10,7 +10,7 @@
 // This file is hand-maintained, NOT generated. There is no codegen pipeline keeping it in sync
 // with the Kotlin side, so any change to either side must be reflected here manually:
 //
-//   * Data fields (e.g. `TrailblazeTarget.appIds`, `resolvedAppId`, etc.) come from the Kotlin
+//   * Data fields (e.g. `TrailblazeTarget.appIds`, `appId`, etc.) come from the Kotlin
 //     `TrailblazeContextEnvelope` writer — search for `buildMetaTrailblaze` /
 //     `QuickJsToolEnvelopes`.
 //   * Method members (e.g. `TrailblazeTarget.resolveAppId`, `resolveBaseUrl`) are NOT
@@ -24,6 +24,9 @@
 // `docs/scripted_tools.md` follow-up notes), this comment can be deleted and the
 // hand-sync requirement goes away.
 // ────────────────────────────────────────────────────────────────────────────────────────────
+
+import { noopLogger, type TrailblazeLogger } from "./logger.js";
+export type { TrailblazeLogger, TrailblazeLogLevel } from "./logger.js";
 
 export interface TrailblazeDevice {
   /**
@@ -44,16 +47,17 @@ export interface TrailblazeDevice {
  * data after the framework has consulted the connected device for which candidate
  * to actually use.
  *
- * **Only populated on the in-process QuickJS scripting path** (`:trailblaze-scripting-bundle`
- * on Kotlin side, surfaced via `QuickJsToolEnvelopes`). The MCP-subprocess path's
- * envelope doesn't carry target data — `ctx.target` will be `undefined` there.
- * Optional-chain (`ctx.target?.resolveAppId(...)`) so the same scripted tool body
- * works on both paths.
+ * Populated on both the in-process QuickJS scripting path (`:trailblaze-scripting-bundle`,
+ * via `QuickJsToolEnvelopes`) and the MCP-subprocess path (via `TrailblazeContextEnvelope`'s
+ * `target` block). Absent only when the host session has no target (web-only sessions,
+ * scratch tools, unit-test fixtures) or when the daemon predates the `target` field —
+ * optional-chain (`ctx.target?.resolveAppId(...)`) so the same scripted tool body works
+ * either way.
  *
  * `resolveAppId` and `resolveBaseUrl` are **methods**, not data — injected onto the
  * deserialized ctx object by `QuickJsToolHost` after JSON deserialization (since
  * methods can't survive JSON round-trips). They consult the target's data fields
- * (`resolvedAppId` / `appIds` / `resolvedBaseUrl` / `baseUrls`) and apply a fixed
+ * (`appId` / `appIds` / `resolvedBaseUrl` / `baseUrls`) and apply a fixed
  * priority order — see each method's kdoc.
  */
 export interface TrailblazeTarget {
@@ -77,7 +81,7 @@ export interface TrailblazeTarget {
    * Most well-configured packs running on a populated device will have this set
    * and authors should usually consume via [resolveAppId].
    */
-  resolvedAppId?: string;
+  appId?: string;
 
   /**
    * Future: all web base URL candidates declared in the manifest's
@@ -101,7 +105,7 @@ export interface TrailblazeTarget {
   /**
    * Resolves the Android/iOS app id to use, applying the priority:
    *
-   *  1. `this.resolvedAppId` (framework-resolved) — what callers will hit ~always
+   *  1. `this.appId` (framework-resolved) — what callers will hit ~always
    *     in well-configured packs running on a device with one of the candidates
    *     installed.
    *  2. `this.appIds[0]` (first declared candidate) — fallback when the framework
@@ -171,13 +175,17 @@ export interface TrailblazeContext {
   device: TrailblazeDevice;
 
   /**
-   * Resolved-target descriptor — only populated on the in-process QuickJS scripting
-   * path (the `:trailblaze-scripting-bundle` runtime). The MCP-subprocess path's
-   * envelope doesn't carry target data, so on that path this is `undefined`.
+   * Resolved-target descriptor. Populated whenever the host session has a target
+   * configured (the pack manifest's `target:` block resolved against the connected
+   * device's installed apps) — both the MCP-subprocess path and the in-process
+   * QuickJS scripting path emit it. Absent for sessions with no target (web-only
+   * scratch tools, unit-test fixtures) and for envelopes from older daemons that
+   * predate the field.
    *
-   * Authors writing scripted tools that should work on both paths should
-   * optional-chain (`ctx.target?.resolveAppId(...)`) and handle the undefined case.
-   * See [TrailblazeTarget] for the shape and the resolver methods.
+   * Optional-chain (`ctx.target?.resolveAppId(...)`) — authors writing scripted
+   * tools that should also work outside a target-aware session need to handle
+   * the undefined case. See [TrailblazeTarget] for the shape and the resolver
+   * methods.
    */
   target?: TrailblazeTarget;
 
@@ -186,6 +194,16 @@ export interface TrailblazeContext {
    * so an author-facing upgrade to richer memory types doesn't break the SDK surface.
    */
   memory: Record<string, unknown>;
+
+  /**
+   * Author-facing logger. Always present on the surface so scripted tools can write
+   * `ctx.logger.info("...")` without null-checking — `fromMeta` defaults to a no-op logger
+   * for paths that don't have a live MCP server (on-device QuickJS, unit tests). The
+   * subprocess tool-invocation handler in `registerPendingTools` replaces this with a
+   * server-backed logger that emits MCP `notifications/message` (routed by the host into
+   * `Console` — see `McpSubprocessSession.connect`) and mirrors to stderr as a fallback.
+   */
+  logger: TrailblazeLogger;
 }
 
 /** Platform values the host will emit — anything else means envelope drift. */
@@ -204,8 +222,12 @@ const VALID_PLATFORMS: ReadonlySet<TrailblazeDevice["platform"]> = new Set(["ios
  * missing" case — which is already a branch the caller must handle.
  *
  * The TS MCP SDK surfaces `_meta` as `request.params._meta`; pass that value in.
+ *
+ * The optional [logger] is attached as `ctx.logger`. Callers in a live tool-invocation
+ * handler should pass a server-backed logger (see `createLogger` in `./logger.js`); other
+ * callers (on-device QuickJS bridge, unit tests) can omit it and accept the no-op default.
  */
-export function fromMeta(meta: unknown): TrailblazeContext | undefined {
+export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeContext | undefined {
   if (typeof meta !== "object" || meta === null) return undefined;
   const bag = meta as Record<string, unknown>;
   const envelope = bag["trailblaze"];
@@ -253,6 +275,13 @@ export function fromMeta(meta: unknown): TrailblazeContext | undefined {
       ? (memoryBag as Record<string, unknown>)
       : {};
 
+  // Target block — absent on older daemons (and sessions with no target). Strictness mirrors
+  // the device block: a malformed `target` (wrong shape, missing required keys, non-string
+  // entries in appIds) is treated as "no target" rather than aborting the whole envelope.
+  // A bogus `target` is recoverable — the handler can still operate without target data —
+  // whereas a missing sessionId/invocationId would render callbacks unroutable.
+  const target = parseTarget(tb["target"]);
+
   return {
     baseUrl,
     runtime,
@@ -264,6 +293,75 @@ export function fromMeta(meta: unknown): TrailblazeContext | undefined {
       heightPixels,
       driverType,
     },
+    target,
     memory,
+    logger: logger ?? noopLogger,
   };
+}
+
+/**
+ * Parses the optional `target` block out of the `_meta.trailblaze` envelope. Returns
+ * `undefined` if the block is absent or structurally invalid — `id` and `appIds` are
+ * the only required fields; everything else is optional and silently dropped if its
+ * shape doesn't match.
+ *
+ * Attaches `resolveAppId` / `resolveBaseUrl` onto the returned object — implemented as
+ * closures over the parsed locals (not `this`-bound methods) so destructured access like
+ * `const { resolveAppId } = ctx.target` works without losing its data context. Mirrors the
+ * priority order documented on the `TrailblazeTarget` interface: appId → appIds[0]
+ * → caller-default. This is what makes the same `ctx.target?.resolveAppId(...)` site work
+ * on both runtimes — the QuickJS host's separate injection (in
+ * `QuickJsToolHost.connectInternal()`) covers the direct in-process dispatch path where
+ * `ctx` doesn't pass through `fromMeta`.
+ */
+function parseTarget(raw: unknown): TrailblazeTarget | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const bag = raw as Record<string, unknown>;
+  const id = bag["id"];
+  const appIdsRaw = bag["appIds"];
+  if (typeof id !== "string" || !Array.isArray(appIdsRaw)) return undefined;
+  // Reject the whole block if any candidate is non-string — partial filtering would mask a
+  // producer-side bug (a stray null leaking into the array) and let authors silently miss
+  // candidates. An empty appIds array is fine — a target may legitimately declare no
+  // candidates for the active platform.
+  if (!appIdsRaw.every((entry): entry is string => typeof entry === "string")) return undefined;
+  const appIds = appIdsRaw as string[];
+
+  const displayName = typeof bag["displayName"] === "string" ? (bag["displayName"] as string) : undefined;
+  const appId = typeof bag["appId"] === "string" ? (bag["appId"] as string) : undefined;
+  const resolvedBaseUrl = typeof bag["resolvedBaseUrl"] === "string" ? (bag["resolvedBaseUrl"] as string) : undefined;
+  const baseUrlsRaw = bag["baseUrls"];
+  const baseUrls = Array.isArray(baseUrlsRaw) && baseUrlsRaw.every((entry): entry is string => typeof entry === "string")
+    ? (baseUrlsRaw as string[])
+    : undefined;
+
+  // Closures over the parsed locals rather than `this`-bound methods. A `this.appId`
+  // read would lose its binding the moment an author writes
+  // `const { resolveAppId } = ctx.target` — an easy mistake and a quietly-broken resolver.
+  // Capturing the locals keeps the data reachable regardless of how the function value gets
+  // passed around.
+  const resolveAppId = (options?: { defaultAppId?: string }): string | undefined => {
+    const fromTarget = appId || appIds[0];
+    if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
+    const fallback = options?.defaultAppId?.trim();
+    return fallback && fallback.length > 0 ? fallback : undefined;
+  };
+  const resolveBaseUrl = (options?: { defaultBaseUrl?: string }): string | undefined => {
+    const fromTarget = resolvedBaseUrl || (baseUrls && baseUrls[0]);
+    if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
+    const fallback = options?.defaultBaseUrl?.trim();
+    return fallback && fallback.length > 0 ? fallback : undefined;
+  };
+
+  const target: TrailblazeTarget = {
+    id,
+    displayName,
+    appIds,
+    appId,
+    baseUrls,
+    resolvedBaseUrl,
+    resolveAppId,
+    resolveBaseUrl,
+  };
+  return target;
 }

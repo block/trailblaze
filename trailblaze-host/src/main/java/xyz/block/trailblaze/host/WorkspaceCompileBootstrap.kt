@@ -40,8 +40,6 @@ import java.security.MessageDigest
  * Out of scope here:
  * - Watching the workspace for live edits (full IDE-style hot reload).
  * - Sharing the bundle cache across workspaces — each workspace has its own `dist/`.
- *
- * Tracked: issue #2556.
  */
 object WorkspaceCompileBootstrap {
 

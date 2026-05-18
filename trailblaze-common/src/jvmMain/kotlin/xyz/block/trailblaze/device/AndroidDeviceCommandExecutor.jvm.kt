@@ -225,7 +225,17 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       "-a", "clipper.set",
       "--es", "text", text,
     )
+    lastSetClipboard = text
   }
+
+  actual fun getClipboard(): String = lastSetClipboard ?: ""
+
+  // In-process cache of the last `setClipboard` text. Mirrors the on-device
+  // actual's behaviour so `mobile_pasteClipboard` round-trips deterministically
+  // regardless of which Android driver is in use. The Clipper broadcast above
+  // still writes to the OS clipboard for any other observers (e.g. the
+  // foreground app's manual paste); this cache is just for our own paste path.
+  @Volatile private var lastSetClipboard: String? = null
 
   actual fun waitUntilAppInForeground(
     appId: String,

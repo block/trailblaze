@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.cli
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -104,6 +106,106 @@ internal object ToolboxFormatter {
    * or null if the target has no platforms declared.
    */
   data class TargetSummary(val name: String, val platforms: List<String>?)
+
+  /**
+   * Renders a role-grouped section — one of the headline blocks at the top of
+   * `toolbox`'s default index view, or the entire body of `toolbox <role>` filtered
+   * output. Pure: takes the role's tool ids + a name → description lookup and emits
+   * a list of lines.
+   *
+   * Shape:
+   * ```
+   * <header>
+   *   - <toolName>: <description-peek>     (peek built via compactToolPeekLine)
+   *   - <toolName2>: <description-peek>
+   * ```
+   * No leading or trailing blank line — the caller controls spacing relative to other
+   * sections. Empty `toolNames` returns an empty list (sections silently elide
+   * themselves when there's nothing to show).
+   *
+   * Tools without a description in [descriptionsByName] render as bare `- toolName`
+   * — same fallback as the compact toolset listing.
+   */
+  fun renderRoleSection(
+    header: String,
+    toolNames: List<String>,
+    descriptionsByName: Map<String, String>,
+  ): List<String> {
+    if (toolNames.isEmpty()) return emptyList()
+    val out = mutableListOf<String>()
+    out += header
+    for (n in toolNames) {
+      val desc = descriptionsByName[n] ?: ""
+      out += "  ${compactToolPeekLine(n, desc)}"
+    }
+    return out
+  }
+
+  /**
+   * Renders the empty-state message for `toolbox <role>` when the daemon's role list
+   * is empty for the current target/platform. Distinct from [renderRoleSection]
+   * returning `emptyList()` — the headline path silently elides, but the filtered-view
+   * path actively informs the user no such tools exist and points at the `waypoints`
+   * skill to author one.
+   *
+   * Returns a non-empty list of lines suitable for emission via `Console.info`. Caller
+   * supplies `target` / `platform` already-resolved (or `null` if unknown).
+   */
+  fun renderRoleEmptyMessage(
+    role: String,
+    target: String?,
+    platform: String?,
+    suffix: String,
+  ): List<String> {
+    val tgt = target ?: "this target"
+    val plat = platform ?: "this platform"
+    return listOf(
+      "No $role tools available for $tgt on $plat.",
+      "",
+      "If you need one, use the `waypoints` skill to author a new $suffix in the relevant pack.",
+    )
+  }
+
+  /**
+   * Walks one or more daemon-response toolset JSON arrays and collects every tool's
+   * name → description from `toolDetails` (or descriptor-shaped `tools`) entries present.
+   *
+   * Accepts a vararg of `JsonArray?` so callers can mix index-mode shapes
+   * (`platformToolsets`, `targetToolsets`) with target-mode shapes (`toolGroups`,
+   * `toolsByPlatform`) in one call — the role-filtered CLI view needs all of them because
+   * a non-default `--target` request gets a target-mode envelope rather than index-mode.
+   * Returns an empty map for the compact `tools: [name, ...]` (string-array) form — no
+   * descriptions carried.
+   *
+   * First write wins on collision — the toolset listed first is the authoritative
+   * description for the role view. Pass platform / index sources before target sources
+   * to preserve that precedence.
+   */
+  fun collectToolDescriptions(
+    vararg toolsetSources: JsonArray?,
+  ): Map<String, String> {
+    val byName = mutableMapOf<String, String>()
+    for (sources in toolsetSources) {
+      sources ?: continue
+      for (ts in sources) {
+        val tsObj = ts.jsonObject
+        // Two carrier shapes:
+        //   - Index/target-mode toolsets: `{name, toolDetails: [{name, description, ...}, ...]}`
+        //   - Target-mode flat-by-platform: `{platform, tools: [{name, description, ...}, ...]}`
+        // Both carry full descriptors at the same shape, so we accept either key for the inner
+        // array. (Index-mode compact `tools: [name, ...]` is a string array — `jsonArray.get(...)
+        // .jsonObject` will skip it via the catch below.)
+        val details = tsObj["toolDetails"]?.jsonArray ?: tsObj["tools"]?.jsonArray ?: continue
+        for (t in details) {
+          val obj = (t as? JsonObject) ?: continue
+          val n = obj["name"]?.jsonPrimitive?.contentOrNull ?: continue
+          val d = obj["description"]?.jsonPrimitive?.contentOrNull ?: ""
+          byName.putIfAbsent(n, d)
+        }
+      }
+    }
+    return byName
+  }
 
   /**
    * Parses a daemon-emitted JSON array of `{"name": "...", "platforms": ["..."]}` rows

@@ -17,6 +17,8 @@ export {
   fromMeta,
   type TrailblazeContext,
   type TrailblazeDevice,
+  type TrailblazeLogger,
+  type TrailblazeLogLevel,
   type TrailblazeTarget,
 } from "./context.js";
 export type { TrailblazeCallToolResult, TrailblazeClient, TrailblazeToolMap } from "./client.js";

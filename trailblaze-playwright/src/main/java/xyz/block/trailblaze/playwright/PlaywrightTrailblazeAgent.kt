@@ -223,7 +223,9 @@ class PlaywrightTrailblazeAgent(
       } else {
         tool
       }
-      logToolExecution(enrichedTool, timeBeforeExecution, context, result)
+      // Playwright tools drive a browser owned by the host JVM — flag the dispatch as
+      // host-side so session viewers can distinguish it from RPC-routed-to-device dispatches.
+      logToolExecution(enrichedTool, timeBeforeExecution, context, result, dispatchedHostSide = true)
 
       if (tool is PlaywrightNativeRequestDetailsTool && result.isSuccess()) {
         browserManager.requestDetails(tool.include.toSet())
@@ -293,7 +295,8 @@ class PlaywrightTrailblazeAgent(
   ): TrailblazeToolResult = runBlocking {
     val timeBeforeExecution = Clock.System.now()
     val result = tool.execute(context)
-    logToolExecution(tool, timeBeforeExecution, context, result)
+    // Same rationale as the executeWithPlaywright path — host JVM, in-process browser.
+    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
     result
   }
 

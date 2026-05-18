@@ -7,17 +7,17 @@ required:
   - description: "Sheet Grabber"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+        accessibilityTextRegex: "Sheet Grabber: Expanded"
   - description: "add field affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add field$"
+        accessibilityTextRegex: "add field"
   - description: "add to list affordance"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^add to list$"
+        accessibilityTextRegex: "add to list"
 forbidden:
   - description: "Delete Contact footer button — only on edit form"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Delete Contact$"
+        accessibilityTextRegex: "Delete Contact"

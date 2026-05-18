@@ -194,6 +194,14 @@ class TrailblazeMcpSessionContext(
    * The device ID associated with this MCP session.
    * Set when connectToDevice is called, cleared on endSession.
    * Used for cancellation propagation when the MCP client disconnects.
+   *
+   * Note: a CLI-side workaround in `CliMcpClient.ensureDevice` re-issues
+   * `device(action=PLATFORM, deviceId=…)` on every session reuse to defend
+   * against this field drifting out of sync with `mcpBridge.selectedDeviceId`.
+   * If the underlying drift is rooted in daemon-side bookkeeping rather than
+   * a CLI-only concern, fixing it here (e.g. repopulating from the bridge in
+   * the `addTool` handler when null but `selectedDeviceId` is non-null) would
+   * let the CLI drop the rebind.
    */
   var associatedDeviceId: TrailblazeDeviceId? = null,
 

@@ -4,25 +4,25 @@ required:
   - description: "Toolbar a11y label"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Send feedback to Google$"
+        contentDescriptionRegex: "Send feedback to Google"
   - description: "Feedback container layout"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/feedback_content$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/feedback_content"
   - description: "Onboarding-step rows"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/step_view$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/step_view"
   - description: "'Get Started' CTA"
     selector:
       androidAccessibility:
-        textRegex: "^Get Started$"
+        textRegex: "Get Started"
   - description: "Close-feedback action"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Close Feedback$"
+        contentDescriptionRegex: "Close Feedback"
 forbidden:
   - description: "Help app bar (would mean we're back on Help, not feedback)"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"
+        resourceIdRegex: "com\\.google\\.android\\.gms:id/gh_help_app_bar"

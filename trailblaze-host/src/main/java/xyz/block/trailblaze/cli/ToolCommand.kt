@@ -80,8 +80,11 @@ class ToolCommand : Callable<Int> {
   @Option(
     names = ["--target"],
     description = [
-      "Target app ID, saved as the default for future commands. " +
-        "List available targets with `trailblaze toolbox` (no args)."
+      "Target app ID for this command's bound device. Scoped to the device " +
+        "as a daemon-process override (dies on daemon restart or device " +
+        "release). Pass `--target=clear` to remove a previously-set override " +
+        "for this device. To set a persistent default, use `trailblaze config " +
+        "target`. List available targets with `trailblaze toolbox` (no args).",
     ],
   )
   var target: String? = null
@@ -90,7 +93,6 @@ class ToolCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    applyBlazeTarget(target)
     val deviceArg = device
     if (deviceArg.isNullOrBlank()) {
       Console.error("Error: --device is required for this command.")
@@ -101,6 +103,7 @@ class ToolCommand : Callable<Int> {
       device = deviceArg,
       sessionScope = cliDeviceSessionScope(deviceArg),
       webHeadless = headlessOption.resolve(),
+      target = target,
     ) { client ->
       val toolsYaml = if (yaml != null) {
         yaml!!

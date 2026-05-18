@@ -1,0 +1,32 @@
+# Build output from xcodebuild and Swift Package Manager.
+build/
+DerivedData/
+.build/
+
+# Archived / packaged builds and their debug symbol bundles.
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Per-user Xcode IDE state — breakpoints, recent files, window layout, simulator
+# selection. The sibling `xcshareddata/` directory (which IS committed) holds
+# the team-shared scheme. Only the per-user `xcuserdata/` should be ignored.
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager local cache. Created the moment anyone opens the
+# project in Xcode, even with zero SPM dependencies.
+.swiftpm/
+
+# Package-manager checkouts. We don't currently use CocoaPods or Carthage,
+# but if anyone wires them up, their downloaded sources should never land
+# in source control.
+Pods/
+Carthage/Build/
+Carthage/Checkouts/
+
+# Misc Xcode-generated cruft.
+*.hmap
+*.moved-aside

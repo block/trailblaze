@@ -322,7 +322,7 @@ class InlineScriptToolServerSynthesizerTest {
     }
   }
 
-  @Test fun `two tool entries can reference the same module when their names match named exports`() {
+  @Test fun `two tool entries sharing a module get one wrapper that advertises both tools`() {
     runBlocking {
       assumeTrue(
         "bun or tsx must be on PATH to exercise the synthesized inline tool host path",
@@ -357,15 +357,27 @@ class InlineScriptToolServerSynthesizerTest {
         outputDir = generatedDir,
       )
 
-      val responses = generated.map { config ->
-        val spawned = McpSubprocessSpawner.spawn(config = config, context = baseContext)
-        val stderrLog = File(tmpDir, "${config.script.hashCode()}.stderr.log")
-        val session = McpSubprocessSession.connect(
-          spawnedProcess = spawned,
-          stderrCapture = StderrCapture(stderrLog),
-        )
-        try {
-          val toolName = session.client.listTools(ListToolsRequest()).tools.single().name
+      // Dedup contract: both tools share `script:`, so the synthesizer emits exactly ONE
+      // wrapper subprocess that registers BOTH tools. Without this, every group of N tools
+      // sharing a module would fork N subprocesses each loading the same JS — the
+      // developer-facing "scripted tools, not MCP servers" promise leaks the multiplicity.
+      assertThat(generated.size).isEqualTo(1)
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      val stderrLog = File(tmpDir, "group.stderr.log")
+      val session = McpSubprocessSession.connect(
+        spawnedProcess = spawned,
+        stderrCapture = StderrCapture(stderrLog),
+      )
+      try {
+        val advertised = session.client.listTools(ListToolsRequest()).tools.map { it.name }
+        assertThat(advertised).containsExactlyInAnyOrder("firstInlineTool", "secondInlineTool")
+
+        // Call both tools through the same subprocess to confirm each named export routes
+        // through to the corresponding registered handler. If the synthesizer's per-tool
+        // dispatcher leaked across the two registrations (e.g. shared a `handler` reference
+        // that got overwritten in the loop), one of these would return the other's text.
+        val responses = advertised.map { toolName ->
           val response = session.client.callTool(
             CallToolRequest(
               params = CallToolRequestParams(
@@ -374,19 +386,19 @@ class InlineScriptToolServerSynthesizerTest {
               ),
             ),
           )
-          checkNotNull((response.content.firstOrNull() as? TextContent)?.text)
-        } finally {
-          session.shutdown()
-          val exited = spawned.process.waitFor(10, TimeUnit.SECONDS)
-          if (!exited) {
-            spawned.process.destroyForcibly()
-            spawned.process.waitFor(5, TimeUnit.SECONDS)
-          }
-          assertThat(exited).isEqualTo(true)
+          toolName to checkNotNull((response.content.firstOrNull() as? TextContent)?.text)
+        }.toMap()
+        assertThat(responses["firstInlineTool"]).isEqualTo("first")
+        assertThat(responses["secondInlineTool"]).isEqualTo("second")
+      } finally {
+        session.shutdown()
+        val exited = spawned.process.waitFor(10, TimeUnit.SECONDS)
+        if (!exited) {
+          spawned.process.destroyForcibly()
+          spawned.process.waitFor(5, TimeUnit.SECONDS)
         }
+        assertThat(exited).isEqualTo(true)
       }
-
-      assertThat(responses).containsExactlyInAnyOrder("first", "second")
     }
   }
 
@@ -603,4 +615,80 @@ class InlineScriptToolServerSynthesizerTest {
       }
     }
     """.trimIndent()
+
+  // --------------------------------------------------------------------------------------------
+  // Multi-tool shape — one author module, N tools, one synthesized wrapper.
+  // Pins the dedup contract that makes the developer-facing "scripted tool, not MCP server"
+  // promise hold: a group of 8 tools costs ONE wrapper file (and therefore one subprocess at
+  // runtime), not 8. Without dedup, every group of M tools sharing a script would spawn M
+  // subprocesses each loading the same module — surfacing as load-time waste and broken
+  // module-level state sharing if the author relied on it (e.g. a per-process cache).
+  // --------------------------------------------------------------------------------------------
+
+  @Test fun `synthesize groups configs sharing the same script into one wrapper`() {
+    authorFile.writeText(
+      """
+      export function group_alpha() { return "alpha"; }
+      export function group_beta() { return "beta"; }
+      """.trimIndent(),
+    )
+    val generated = InlineScriptToolServerSynthesizer.synthesize(
+      tools = listOf(
+        InlineScriptToolConfig(
+          script = authorFile.absolutePath,
+          name = "group_alpha",
+          description = "Alpha entry.",
+        ),
+        InlineScriptToolConfig(
+          script = authorFile.absolutePath,
+          name = "group_beta",
+          description = "Beta entry.",
+        ),
+      ),
+      outputDir = generatedDir,
+    )
+
+    assertThat(generated.size).isEqualTo(1)
+    val wrapper = File(generated.single().script).readText()
+    // Both tools register on the SAME wrapper. Confirm via `trailblaze.tool(` lookups: there
+    // should be exactly two — one per entry — even though the author module is imported only
+    // once (one `pathToFileURL($authorModulePath).href` line).
+    val toolRegistrations = Regex("trailblaze\\.tool\\(").findAll(wrapper).count()
+    assertThat(toolRegistrations).isEqualTo(2)
+    val authorImports = Regex("const authorModule = await import").findAll(wrapper).count()
+    assertThat(authorImports).isEqualTo(1)
+    assertThat(wrapper).contains("\"group_alpha\"")
+    assertThat(wrapper).contains("\"group_beta\"")
+  }
+
+  @Test fun `synthesize keeps separate wrappers for distinct script paths`() {
+    // Two unrelated tools backed by different author files — dedup must NOT collapse them.
+    // Regression guard against an over-eager grouping key (e.g. on tool name alone) that
+    // would silently merge unrelated groups and break tool resolution at registration time.
+    authorFile.writeText("export function tool_in_first_file() {}")
+    helperFile.writeText("export function tool_in_second_file() {}")
+    val generated = InlineScriptToolServerSynthesizer.synthesize(
+      tools = listOf(
+        InlineScriptToolConfig(script = authorFile.absolutePath, name = "tool_in_first_file"),
+        InlineScriptToolConfig(script = helperFile.absolutePath, name = "tool_in_second_file"),
+      ),
+      outputDir = generatedDir,
+    )
+    assertThat(generated.size).isEqualTo(2)
+  }
+
+  @Test fun `synthesize rejects a multi-tool group with duplicate tool names`() {
+    authorFile.writeText("export function dup_tool() {}")
+    val ex = kotlin.runCatching {
+      InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(script = authorFile.absolutePath, name = "dup_tool"),
+          InlineScriptToolConfig(script = authorFile.absolutePath, name = "dup_tool"),
+        ),
+        outputDir = generatedDir,
+      )
+    }.exceptionOrNull()
+    val message = (ex ?: error("expected an exception")).message ?: ""
+    assertThat(message).contains("duplicate tool name 'dup_tool'")
+  }
 }

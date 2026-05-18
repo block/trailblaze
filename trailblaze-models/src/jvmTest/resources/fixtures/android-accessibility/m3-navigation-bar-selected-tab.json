@@ -1,0 +1,57 @@
+{
+  "nodeId": 1,
+  "children": [
+    {
+      "nodeId": 51,
+      "children": [
+        {
+          "nodeId": 49,
+          "bounds": { "left": 622, "top": 1116, "right": 669, "bottom": 1152 },
+          "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.TextView",
+            "text": "More",
+            "packageName": "com.example.app",
+            "maxTextLength": -1,
+            "actions": ["ACTION_256", "ACTION_512", "ACTION_64", "ACTION_SET_SELECTION"]
+          }
+        },
+        {
+          "nodeId": 50,
+          "bounds": { "left": 578, "top": 1028, "right": 712, "bottom": 1176 },
+          "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.view.View",
+            "roleDescription": "Tab",
+            "packageName": "com.example.app",
+            "maxTextLength": -1,
+            "actions": ["ACTION_64"]
+          }
+        }
+      ],
+      "bounds": { "left": 578, "top": 1028, "right": 712, "bottom": 1176 },
+      "driverDetail": {
+        "class": "androidAccessibility",
+        "className": "android.view.View",
+        "isSelected": true,
+        "collectionItemInfo": {
+          "rowIndex": 0,
+          "rowSpan": 1,
+          "columnIndex": 4,
+          "columnSpan": 1,
+          "isHeading": false
+        },
+        "packageName": "com.example.app",
+        "isFocusable": true,
+        "maxTextLength": -1,
+        "actions": ["ACTION_FOCUS", "ACTION_64"]
+      }
+    }
+  ],
+  "bounds": { "left": 0, "top": 0, "right": 720, "bottom": 1280 },
+  "driverDetail": {
+    "class": "androidAccessibility",
+    "className": "android.widget.FrameLayout",
+    "packageName": "com.example.app"
+  }
+}

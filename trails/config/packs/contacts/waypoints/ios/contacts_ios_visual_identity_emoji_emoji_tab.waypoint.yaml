@@ -7,19 +7,19 @@ required:
   - description: "Emoji editor tab"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Emoji$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Emoji"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"
   - description: "Visual identity Choose button"
     selector:
       iosMaestro:
-        resourceIdRegex: "^VisualIdentityChooseButton$"
+        resourceIdRegex: "VisualIdentityChooseButton"
   - description: "Emoji glyph suggestion row"
     selector:
       iosMaestro:
-        resourceIdRegex: "^SuggestionListItemButton$"
+        resourceIdRegex: "SuggestionListItemButton"
 forbidden:
   - description: "Text tab — would mean we're on the monogram editor"
     selector:
       iosMaestro:
-        accessibilityTextRegex: "^Text$"
-        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+        accessibilityTextRegex: "Text"
+        resourceIdRegex: "VisualIdentityEditorContainerVStack"

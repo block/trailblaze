@@ -12,6 +12,10 @@ class GeneratedSampleAppTests {
   @get:Rule val rule = AndroidTrailblazeRule()
 
   @Test
+  fun clipboardRoundTrip() =
+    rule.runFromAsset("eval/android/sample-app/clipboard-round-trip.trail.yaml")
+
+  @Test
   fun conditionalItem() =
     rule.runFromAsset(
       "android-ondevice-instrumentation/catalog/conditional-item/android-phone.trail.yaml"

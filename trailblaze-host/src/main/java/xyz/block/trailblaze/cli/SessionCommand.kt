@@ -142,7 +142,12 @@ class SessionStartCommand : Callable<Int> {
 
   @Option(
     names = ["--target"],
-    description = ["Target app ID. Saved to config for future commands."],
+    description = [
+      "Target app ID for this session's bound device. Scoped to the device " +
+        "as a daemon-process override (dies on daemon restart or device " +
+        "release). Pass `--target=clear` to remove a previously-set override. " +
+        "To set a persistent default, use `trailblaze config target`.",
+    ],
   )
   var target: String? = null
 
@@ -193,32 +198,32 @@ class SessionStartCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    var currentConfig = CliConfigHelper.getOrCreateConfig()
-
-    // Apply --target and --mode to global config if provided.
-    if (target != null || mode != null) {
-      if (target != null) {
-        currentConfig = currentConfig.copy(selectedTargetAppId = target!!.lowercase())
-      }
-
-      if (mode != null) {
-        val normalizedMode = mode!!.lowercase()
-        if (normalizedMode !in setOf("trail", "blaze")) {
-          Console.error("Error: --mode must be 'trail' or 'blaze' (got '$mode').")
-          return CommandLine.ExitCode.USAGE
-        }
-        currentConfig = currentConfig.copy(cliMode = normalizedMode)
-      }
-
-      CliConfigHelper.writeConfig(currentConfig)
+    // Validate --mode early before touching config.
+    val normalizedMode = mode?.lowercase()
+    if (normalizedMode != null && normalizedMode !in setOf("trail", "blaze")) {
+      Console.error("Error: --mode must be 'trail' or 'blaze' (got '$mode').")
+      return CommandLine.ExitCode.USAGE
     }
+
+    if (normalizedMode != null) {
+      CliConfigHelper.updateConfig { it.copy(cliMode = normalizedMode) }
+    }
+    val currentConfig = CliConfigHelper.getOrCreateConfig()
 
     if (!verbose) Console.enableQuietMode()
     val port = CliConfigHelper.resolveEffectiveHttpPort()
-    // currentConfig was just refreshed above with the latest --target value, so its
-    // selectedTargetAppId is what should anchor the persisted reusable session — passing
-    // it in lets connectReusable invalidate the session if the target later changes.
-    val targetAppId = currentConfig.selectedTargetAppId
+    // Session-scoped target: pass the explicit flag if set, else anchor on the
+    // daemon-wide default so connectReusable can detect a toolset change and
+    // recreate the per-device session when needed. Per-device target overrides
+    // live in the daemon's in-memory map (set via setSessionTargetForBoundDevice
+    // below) — never written to disk. `--target=clear` is the explicit unset.
+    val normalizedTarget = target?.lowercase()?.takeIf { it.isNotBlank() }
+    val isClearRequest = normalizedTarget == "clear"
+    val targetAppId = when {
+      isClearRequest -> currentConfig.selectedTargetAppId
+      normalizedTarget != null -> normalizedTarget
+      else -> currentConfig.selectedTargetAppId
+    }
 
     return runBlocking {
       val client = connectOrStartDaemonReusable(port, targetAppId = targetAppId)
@@ -241,6 +246,17 @@ class SessionStartCommand : Callable<Int> {
         val platformStr = device.split("/", limit = 2)[0]
         if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
           CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
+        }
+        // Session-scope the target on the daemon for the bound device when the
+        // user passed --target explicitly. No-op when --target is omitted.
+        // `--target=clear` sends an empty string to clear the override.
+        if (normalizedTarget != null) {
+          val payload = if (isClearRequest) "" else normalizedTarget
+          val setError = it.setSessionTargetForBoundDevice(payload)
+          if (setError != null) {
+            Console.error(setError)
+            return@runBlocking CommandLine.ExitCode.SOFTWARE
+          }
         }
 
         val arguments = mutableMapOf<String, Any?>("action" to "START")

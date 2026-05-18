@@ -66,8 +66,12 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
   @Test
   fun `roleDescription plus className disambiguation`() {
-    // Two ImageButtons on the same screen, one is a "Toggle", one is a "Tab" — disambiguated by
-    // the developer-set role description override.
+    // Three siblings make BOTH roleDescription and className load-bearing:
+    //   target           : role=Toggle, class=ImageButton
+    //   sharesClass      : role=Tab,    class=ImageButton  (kills className-only)
+    //   sharesRoleDescr  : role=Toggle, class=ImageView    (kills role-only)
+    // After minimization neither field should drop — both are individually
+    // necessary to disambiguate the target.
     nextId = 1L
     val target = node(
       detail = DriverNodeDetail.AndroidAccessibility(
@@ -75,13 +79,19 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
         className = "android.widget.ImageButton",
       ),
     )
-    val other = node(
+    val sharesClass = node(
       detail = DriverNodeDetail.AndroidAccessibility(
         roleDescription = "Tab",
         className = "android.widget.ImageButton",
       ),
     )
-    val root = node(children = listOf(target, other))
+    val sharesRoleDescr = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        roleDescription = "Toggle",
+        className = "android.widget.ImageView",
+      ),
+    )
+    val root = node(children = listOf(target, sharesClass, sharesRoleDescr))
 
     val selector = assertUniqueMatch(root, target)
     val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
@@ -121,6 +131,10 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
   @Test
   fun `text plus className disambiguation`() {
+    // Three siblings keep both text AND className load-bearing post-minimization:
+    //   target      : text=Fries,    class=EditText
+    //   sharesText  : text=Fries,    class=TextView   (kills text-only)
+    //   sharesClass : text=Lemonade, class=EditText   (kills className-only)
     nextId = 1L
     val target = node(
       detail = DriverNodeDetail.AndroidAccessibility(
@@ -128,13 +142,19 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
         className = "android.widget.EditText",
       ),
     )
-    val other = node(
+    val sharesText = node(
       detail = DriverNodeDetail.AndroidAccessibility(
         text = "Fries",
         className = "android.widget.TextView",
       ),
     )
-    val root = node(children = listOf(target, other))
+    val sharesClass = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "Lemonade",
+        className = "android.widget.EditText",
+      ),
+    )
+    val root = node(children = listOf(target, sharesText, sharesClass))
 
     val selector = assertUniqueMatch(root, target)
     val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
@@ -281,6 +301,10 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
   @Test
   fun `className plus state flags`() {
+    // Three siblings make BOTH className and isPassword load-bearing:
+    //   target           : class=EditText, isPassword=true
+    //   sharesClass      : class=EditText, isPassword=false  (kills className-only)
+    //   sharesPassword   : class=TextView, isPassword=true   (kills isPassword-only)
     nextId = 1L
     val target = node(
       detail = DriverNodeDetail.AndroidAccessibility(
@@ -289,13 +313,19 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
         isEditable = true,
       ),
     )
-    val other = node(
+    val sharesClass = node(
       detail = DriverNodeDetail.AndroidAccessibility(
         className = "android.widget.EditText",
         isEditable = true,
       ),
     )
-    val root = node(children = listOf(target, other))
+    val sharesPassword = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        isPassword = true,
+      ),
+    )
+    val root = node(children = listOf(target, sharesClass, sharesPassword))
 
     val selector = assertUniqueMatch(root, target)
     val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility

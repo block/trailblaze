@@ -20,14 +20,14 @@ required:
   - description: "Settings shortcut at bottom of drawer"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Settings$"
+        contentDescriptionRegex: "Settings"
   - description: "Help & feedback shortcut"
     selector:
       androidAccessibility:
-        contentDescriptionRegex: "^Help & feedback$"
+        contentDescriptionRegex: "Help & feedback"
 forbidden:
   - description: "FAB hidden when drawer is open"
     selector:
       androidAccessibility:
-        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        resourceIdRegex: "com\\.google\\.android\\.calendar:id/floating_action_button"
         isClickable: true
