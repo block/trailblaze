@@ -18,6 +18,17 @@ _Platform-native drivers, an agent loop, deterministic replay, a desktop app, an
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
+**Required:** `curl`, `java 17+`.
+
+**Optional (Homebrew users: `brew install bun esbuild ffmpeg`):**
+- `bun` + `esbuild` — needed only when authoring or running pack-defined scripted tools
+  (TypeScript-backed tools under `trails/config/packs/<pack>/tools/*.ts`). Without these,
+  `./trailblaze trail …` will fail at dispatch with `Unsupported tool type for RPC execution`
+  for any trail that uses a `target:` pack with `.ts` tool descriptors.
+- `ffmpeg` — needed only for trail video capture / sprite extraction (visual playback
+  artifacts under `~/.trailblaze/logs/<session>/`). Trails still run without it; only the
+  rendered video and sprite-strip outputs are missing.
+
 ## Two Ways to Drive — Same CLI
 
 Trailblaze ships its own agent and also plays nicely with any AI coding agent:

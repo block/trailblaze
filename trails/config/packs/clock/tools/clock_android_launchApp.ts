@@ -52,6 +52,20 @@ export async function clock_android_launchApp(args, ctx, client) {
   // emulators (returns non-zero even on successful launches), and the host shell command
   // path strictly checks exit-code-zero for success — it would otherwise surface the
   // launch as a failure even when the app opened correctly.
+  // Pre-grant the runtime POST_NOTIFICATIONS permission. On API 33+ the alarm app
+  // prompts for this on first launch, and host-rpc trails (whose tool RPCs only see
+  // the foreground app) can't tap on the cross-process permissioncontroller dialog.
+  // Granting before `am start` keeps both CI paths (host-rpc and on-device) on the
+  // same screen flow. Wrapped in try/catch so platforms that pre-date the runtime
+  // permission (API < 33) — or builds where the permission isn't declared by the app —
+  // don't fail the launch.
+  try {
+    await client.callTool("android_adbShell", {
+      command: ["pm", "grant", appId, "android.permission.POST_NOTIFICATIONS"],
+    });
+  } catch (_) {
+    // Best-effort grant — fall through to launch.
+  }
   await client.callTool("android_adbShell", {
     command: ["am", "force-stop", appId],
   });
@@ -64,5 +78,5 @@ export async function clock_android_launchApp(args, ctx, client) {
     ],
   });
 
-  return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;
+  return `Launched ${appId} (grant POST_NOTIFICATIONS + force-stop + am start MAIN/LAUNCHER).`;
 }

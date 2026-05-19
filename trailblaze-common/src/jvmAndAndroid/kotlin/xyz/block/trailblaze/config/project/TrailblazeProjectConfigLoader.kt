@@ -610,8 +610,27 @@ object TrailblazeProjectConfigLoader {
           // running off one author module spawns one subprocess (or bundles one QuickJS engine),
           // not eight. `flatMap` is the right combinator here: each descriptor expands to 1..N
           // inline configs and the loader downstream sees a uniform list.
-          loadPackSibling(path, loadedManifest.source, PackScriptedToolFile.serializer(), "pack scripted tool")
+          val configs = loadPackSibling(path, loadedManifest.source, PackScriptedToolFile.serializer(), "pack scripted tool")
             .toInlineScriptToolConfigs()
+          // Resolve `script:` relative to the descriptor YAML file's parent directory so the
+          // downstream runtime bundler can read the source from a stable absolute path
+          // regardless of the daemon's cwd. Pure path math when the pack is filesystem-backed
+          // (the only variant the runtime bundler can read today); classpath-backed packs pass
+          // the value through unchanged so the existing TODO surface for on-classpath script
+          // bundling stays explicit at the bundler call site.
+          val source = loadedManifest.source
+          if (source is PackSource.Filesystem) {
+            val yamlDir = File(source.packDir, path).parentFile
+              ?: source.packDir
+            configs.map { cfg ->
+              val raw = File(cfg.script)
+              if (raw.isAbsolute) cfg else cfg.copy(
+                script = File(yamlDir, cfg.script).toPath().normalize().toFile().absolutePath,
+              )
+            }
+          } else {
+            configs
+          }
         }
     val resolvedSystemPrompt: String? =
       loadedManifest.manifest.target?.systemPromptFile?.let { path ->

@@ -16,14 +16,25 @@ echo "Starting Android Test Execution (host-rpc)"
 echo "Working directory: $(pwd)"
 echo "========================================="
 
+# Install the TypeScript SDK's devDependencies (notably esbuild). The daemon's
+# `LazyYamlScriptedToolRegistration.resolveEsbuildBinary()` walks up from CWD
+# looking for `sdks/typescript/node_modules/.bin/esbuild`; without this step it
+# finds no esbuild, silently drops every pack-defined scripted tool, and the
+# trail run fails at dispatch with `Unsupported tool type for RPC execution`.
+echo "Installing TypeScript SDK devDependencies (esbuild)..."
+(cd sdks/typescript && bun install --frozen-lockfile) \
+  || { echo "ERROR: bun install failed in sdks/typescript"; TEST_FAILED=true; }
+
 # Pre-compile the Trailblaze desktop module so the daemon starts within the
 # 110s port-ready window below. Without this, `./trailblaze app …` does a cold
 # Kotlin compile (4+ min on CI) inside the backgrounded process, the wait loop
 # times out, and the subsequent `trail` invocation triggers the launcher's
 # auto-start fallback — producing two concurrent `gradlew run` invocations
 # that have corrupted the Kotlin incremental cache on past runs.
-echo "Pre-building Trailblaze desktop classes..."
-./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze desktop"; TEST_FAILED=true; }
+if [ "$TEST_FAILED" != "true" ]; then
+  echo "Pre-building Trailblaze desktop classes..."
+  ./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze desktop"; TEST_FAILED=true; }
+fi
 
 if [ "$TEST_FAILED" != "true" ]; then
   # Start the Trailblaze daemon in the background. `app --foreground --headless`

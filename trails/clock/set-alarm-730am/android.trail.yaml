@@ -1,82 +1,92 @@
+# End-to-end accessibility-driver trail: create a 7:30 alarm and delete it.
+# Demonstrates the new authored-tool format (`clock_android_launchApp` defined in
+# the workspace `clock` pack at trails/config/packs/clock/tools/clock_android_launchApp.ts)
+# as the launch primitive, combined with the on-device accessibility driver for
+# all subsequent UI interactions.
 - config:
     id: "clock/set-alarm-730am"
-    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
     # Bind the trail to the workspace `clock` pack so its inline scripted tools
     # (clock_android_launchApp) get loaded into the session repo.
     target: clock
 
-# Host-side setup. Custom scripted tool defined by the workspace `clock` pack at
-# trails/config/packs/clock/tools/clock_android_launchApp.ts. Replaces the previous raw
-# `maestro: launchApp` block with a `client.callTool("launchApp", ...)`
-# composition that runs in-process on the host JVM via the Scriptine
-# (QuickJS-based) runtime. `launchMode: FORCE_RESTART` covers the
-# stop-and-relaunch behavior the original Maestro setup got from
-# `clearState: true, stopApp: true`.
+# Host-side setup. Custom scripted tool defined by the workspace `clock` pack.
+# Force-stops + relaunches the Google Clock app via the dual-mode `android_adbShell`
+# primitive (composed in `clock_android_launchApp.ts`) so each session starts from a
+# clean app state without needing a Maestro `launchApp` agent.
 - tools:
     - clock_android_launchApp: {}
 
 - prompts:
-    - step: Add a new alarm for 7:30 AM
+    - step: Navigate to the ALARM tab
       recording:
         tools:
           - tapOnElementBySelector:
               reason: Switch to the ALARM tab before adding a new alarm.
               nodeSelector:
-                androidMaestro:
+                androidAccessibility:
                   textRegex: ALARM
-                  resourceIdRegex: android:id/text1
+                  resourceIdRegex: "android:id/text1"
+    - step: Tap the add-alarm FAB
+      recording:
+        tools:
           - tapOnElementBySelector:
-              reason: To add a new alarm, I need to tap on the 'Add alarm' button, which is visually represented by the plus icon at the bottom center of the screen.
+              reason: Open the time-picker dialog by tapping the floating add-alarm button.
               nodeSelector:
-                androidMaestro:
-                  textRegex: Add alarm
-                  resourceIdRegex: com.android.deskclock:id/fab
+                androidAccessibility:
+                  contentDescriptionRegex: Add alarm
+                  resourceIdRegex: "com.android.deskclock:id/fab"
+                  isClickable: true
+    - step: Pick 7 as the hour, 30 as the minutes, and confirm
+      recording:
+        tools:
           - tapOnElementBySelector:
-              reason: Select 7 as the hour for the alarm on the radial time picker to set the alarm hour to 7.
+              reason: Select 7 as the hour on the radial picker.
               nodeSelector:
-                androidMaestro:
-                  textRegex: '7'
+                androidAccessibility:
+                  textRegex: "7"
           - tapOnElementBySelector:
-              reason: Choose 30 as the minute for the alarm, as required by the objective.
+              reason: Select 30 as the minutes on the radial picker.
               nodeSelector:
-                androidMaestro:
-                  textRegex: '30'
+                androidAccessibility:
+                  textRegex: "30"
           - tapOnElementBySelector:
-              reason: Confirm setting the alarm for 7:30 AM by tapping the 'AM' radio button (currently 'PM' is selected).
+              reason: Confirm the alarm time.
               nodeSelector:
-                androidMaestro:
-                  textRegex: AM
-                  resourceIdRegex: android:id/am_label
-          - tapOnElementBySelector:
-              reason: To finalize adding the new alarm for 7:30 AM, I need to confirm the selected time by tapping the 'OK' button.
-              nodeSelector:
-                androidMaestro:
+                androidAccessibility:
                   textRegex: OK
-                  resourceIdRegex: android:id/button1
-    - step: After it's been added, turn it off
+                  resourceIdRegex: "android:id/button1"
+                  isClickable: true
+    - verify: The new 7:30 alarm is visible in the alarm list
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: The newly created alarm should show 7:30 AM in the alarm list.
+              nodeSelector:
+                androidAccessibility:
+                  # AOSP Clock renders the time/period with a U+200A hair space, so
+                  # `.` is the smallest safe separator across emulator builds.
+                  textRegex: "7:30.AM"
+                  resourceIdRegex: "com.android.deskclock:id/digital_clock"
+    - step: Expand the alarm and delete it
       recording:
         tools:
           - tapOnElementBySelector:
-              reason: To turn off the alarm added for 7:30 AM as required by the objective.
+              reason: Expand the alarm to access the delete action.
               nodeSelector:
-                androidMaestro:
-                  resourceIdRegex: com.android.deskclock:id/onoff
-                  checked: true
-    - step: Delete the alarm
-      recording:
-        tools:
+                androidAccessibility:
+                  contentDescriptionRegex: Expand alarm
+                  resourceIdRegex: "com.android.deskclock:id/arrow"
+                  isClickable: true
           - tapOnElementBySelector:
-              reason: To expand the 7:30 AM alarm and access alarm management options such as delete.
+              reason: Delete the alarm.
               nodeSelector:
-                androidMaestro:
-                  textRegex: Expand alarm
-                  resourceIdRegex: com.android.deskclock:id/arrow
-                childOf:
-                  androidMaestro:
-                    textRegex: 7:30 AM Alarm
-          - tapOnElementBySelector:
-              reason: To delete the 7:30 AM alarm as instructed.
-              nodeSelector:
-                androidMaestro:
+                androidAccessibility:
                   textRegex: Delete
-                  resourceIdRegex: com.android.deskclock:id/delete
+                  resourceIdRegex: "com.android.deskclock:id/delete"
+                  isClickable: true
+    - verify: The 7:30 alarm is no longer visible
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: "7:30"

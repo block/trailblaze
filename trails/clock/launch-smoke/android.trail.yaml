@@ -1,0 +1,42 @@
+# Minimal Clock-app smoke trail: launches the AOSP Clock and verifies all four
+# bottom-nav tabs render. Used by `examples:connectedDebugAndroidTest`'s
+# `ClockTest` on-device gate, where the host-side scripted-tool runtime isn't
+# wired up — see `clock/set-alarm-730am/android.trail.yaml` for the host-rpc
+# trail that exercises the `clock_android_launchApp` pack-defined scripted tool
+# under the same accessibility driver.
+- config:
+    id: "clock/launch-smoke"
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- prompts:
+    - step: Launch the Clock app
+      recording:
+        tools:
+          - launchApp:
+              appId: com.android.deskclock
+    - verify: All four bottom-nav tabs are visible
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: Clock app's bottom-nav surfaces the ALARM tab on every default launch.
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: ALARM
+                  resourceIdRegex: "android:id/text1"
+          - assertVisibleBySelector:
+              reason: CLOCK tab anchor.
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: CLOCK
+                  resourceIdRegex: "android:id/text1"
+          - assertVisibleBySelector:
+              reason: TIMER tab anchor.
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: TIMER
+                  resourceIdRegex: "android:id/text1"
+          - assertVisibleBySelector:
+              reason: STOPWATCH tab anchor.
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: STOPWATCH
+                  resourceIdRegex: "android:id/text1"

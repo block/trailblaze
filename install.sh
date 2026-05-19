@@ -27,6 +27,18 @@ check_dependency() {
   command -v "$1" > /dev/null 2>&1 || error "'$1' is required but not found. Please install it first."
 }
 
+# Warn (don't error) when an optional binary that gates a specific runtime feature is missing.
+optional_dependency() {
+  local bin="$1"
+  local why="$2"
+  if ! command -v "$bin" > /dev/null 2>&1; then
+    echo "WARNING: '$bin' is not on PATH — $why" >&2
+    if command -v brew > /dev/null 2>&1; then
+      echo "         Install with: brew install $bin" >&2
+    fi
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -38,6 +50,15 @@ JAVA_VERSION=$(java -version 2>&1 | head -1 | sed 's/.*"\([0-9]*\).*/\1/')
 if [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
   error "Java 17+ is required (found Java $JAVA_VERSION)."
 fi
+
+# Optional runtime tools — surface a warning rather than aborting the install so users who
+# only run pre-recorded trails (no scripted tool authoring, no video capture) aren't blocked.
+optional_dependency esbuild \
+  "scripted-tool authoring (`.ts` pack tools) won't bundle. Required only if you run trails that exercise pack-defined scripted tools."
+optional_dependency ffmpeg \
+  "trail video capture / sprite extraction will be skipped. Trails still run; only the visual playback artifacts are unavailable."
+optional_dependency bun \
+  "the TypeScript SDK build path is unavailable. Required only when authoring scripted tools that compose via @trailblaze/scripting."
 
 # ---------------------------------------------------------------------------
 # Resolve version
