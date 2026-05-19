@@ -60,6 +60,20 @@ node_modules/
 # to the per-pack tools dir so an unrelated future `.trailblaze/` directory elsewhere
 # in the tree (e.g., a config dir) isn't silently ignored.
 **/trailblaze-config/tools/.trailblaze/
+# Same generator, workspace-anchor layout (`<workspace>/trails/config/tools/.trailblaze/`).
+# The `trailblaze-config/` pattern above only matches the classpath-resource path; the
+# workspace path lives under `trails/config/` and needs its own anchor.
+/trails/config/tools/.trailblaze/
+
+# Daemon-emitted compiled-target output (`trailblaze compile` writes per-target YAML
+# bundles here from the workspace's `packs/` definitions). Generated and lazy-rebundled
+# at daemon init, never edited by hand.
+/trails/config/dist/
+
+# Daemon local data — settings JSON, cache, in-progress logs. Created in the working
+# tree when the daemon's `appDataDirectory` points at the repo (developer convenience
+# for "run from source" setups), kept out of version control.
+/.trailblaze/
 
 # Python
 __pycache__/
