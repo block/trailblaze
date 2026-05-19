@@ -40,6 +40,13 @@ object VideoSpriteExtractor {
   const val SPRITE_FILENAME = "video_sprites.webp"
   const val SPRITE_META_FILENAME = "video_sprites.txt"
 
+  /**
+   * Filename used by [writeFailureMarker] when sprite extraction bails out. Exposed as
+   * a constant so the CI smoke test (`cli_smoke_tests_common.sh`) and any other
+   * consumer can reference the same string without hardcoding it.
+   */
+  const val FAILURE_MARKER_FILENAME = "video_sprites_failed.txt"
+
   /** Legacy JPEG sprite filename — checked by consumers for backwards compatibility. */
   const val LEGACY_SPRITE_FILENAME = "video_sprites.jpg"
 
@@ -108,10 +115,18 @@ object VideoSpriteExtractor {
           )
         )
         val extractProcess = ProcessBuilder(extractCmd).redirectErrorStream(true).start()
-        extractProcess.inputStream.bufferedReader().readText()
+        val extractOutput = extractProcess.inputStream.bufferedReader().readText()
         val extractFinished = extractProcess.waitFor(120, TimeUnit.SECONDS)
         if (!extractFinished || extractProcess.exitValue() != 0) {
           Console.log("ffmpeg frame extraction failed")
+          writeFailureMarker(
+            dir,
+            "ffmpeg frame extraction failed " +
+              "(finished=$extractFinished, exit=${if (extractFinished) extractProcess.exitValue() else "n/a"})\n" +
+              "cmd: ${extractCmd.joinToString(" ")}\n" +
+              "videoSize=${videoFile.length()}B fps=$fps frameHeight=$frameHeight isLandscape=$isLandscape\n" +
+              "stdout/stderr:\n$extractOutput",
+          )
           return null
         }
 
@@ -120,6 +135,13 @@ object VideoSpriteExtractor {
             ?.sortedBy { it.name } ?: emptyList()
         if (frameFiles.isEmpty()) {
           Console.log("No frames extracted from video")
+          writeFailureMarker(
+            dir,
+            "ffmpeg ran (exit=0) but produced 0 frames\n" +
+              "videoSize=${videoFile.length()}B fps=$fps frameHeight=$frameHeight isLandscape=$isLandscape\n" +
+              "Likely cause: video too short or unreadable at the requested fps.\n" +
+              "ffmpeg stdout/stderr:\n$extractOutput",
+          )
           return null
         }
 
@@ -166,6 +188,12 @@ object VideoSpriteExtractor {
         val firstFrame = ImageIO.read(uniqueFrameFiles.first())
           ?: run {
             Console.log("Failed to decode first video frame — sprite sheet extraction aborted")
+            writeFailureMarker(
+              dir,
+              "ImageIO.read returned null for the first extracted PNG frame " +
+                "(${uniqueFrameFiles.first().name}, ${uniqueFrameFiles.first().length()}B). " +
+                "Likely cause: JVM lacks PNG codec or the file is corrupt.",
+            )
             return null
           }
         val frameWidth = firstFrame.width
@@ -188,6 +216,12 @@ object VideoSpriteExtractor {
             "Sprite sheet would require $sheetCount sheets ($uniqueCount unique frames), " +
               "but consumers only support a single sheet — skipping sprite extraction. " +
               "Reduce session length, frame fps, or frame height to fit one sheet.",
+          )
+          writeFailureMarker(
+            dir,
+            "Sprite sheet would require $sheetCount sheets " +
+              "($uniqueCount unique frames, frameWidth=$frameWidth, frameHeight=$frameHeight, " +
+              "framesPerSheet=$framesPerSheet) — consumers only support 1.",
           )
           return null
         }
@@ -246,10 +280,18 @@ object VideoSpriteExtractor {
                 )
                 .redirectErrorStream(true)
                 .start()
-            tileProcess.inputStream.bufferedReader().readText()
+            val tileOutput = tileProcess.inputStream.bufferedReader().readText()
             val tileFinished = tileProcess.waitFor(120, TimeUnit.SECONDS)
             if (!tileFinished || tileProcess.exitValue() != 0 || !spriteFile.exists()) {
               Console.log("ffmpeg sprite sheet assembly failed for sheet $sheetIndex")
+              writeFailureMarker(
+                dir,
+                "ffmpeg sprite sheet assembly failed for sheet $sheetIndex " +
+                  "(finished=$tileFinished, exit=${if (tileFinished) tileProcess.exitValue() else "n/a"}, " +
+                  "spriteFileExists=${spriteFile.exists()})\n" +
+                  "grid=${sheetColumns}x${sheetRows} frames=$sheetFrameCount quality=$webpQuality\n" +
+                  "stdout/stderr:\n$tileOutput",
+              )
               spriteFile.delete()
               return null
             }
@@ -289,8 +331,41 @@ object VideoSpriteExtractor {
       }
     } catch (e: Exception) {
       Console.log("ffmpeg not available for sprite extraction: ${e.message}")
+      val parent = videoFile.parentFile
+      if (parent != null) {
+        writeFailureMarker(
+          parent,
+          "Exception during sprite extraction: ${e::class.simpleName}: ${e.message}\n" +
+            e.stackTraceToString(),
+        )
+      }
       return null
     }
+  }
+
+  /**
+   * Writes a `video_sprites_failed.txt` next to the video so the failure reason
+   * survives in CI artifact snapshots even when `Console.log` is silenced. The
+   * file is listed by `SessionCaptureCoordinator.stopForSession`'s
+   * `filesAfterStop=` diagnostic, so it's surfaced wherever the session dir is
+   * inspected post-mortem.
+   *
+   * Best-effort: a write failure here is swallowed because we're already on the
+   * failure path and don't want to mask the original cause.
+   */
+  private fun writeFailureMarker(dir: File, reason: String) {
+    runCatching { File(dir, FAILURE_MARKER_FILENAME).writeText(reason) }
+      .onFailure { e ->
+        // Best-effort: a write failure here is logged but not propagated — we're
+        // already on the failure path and don't want to mask the original cause.
+        // The Console.log line at least leaves a footprint when the test harness is
+        // capturing daemon output (CI typically silences Console.log, but local
+        // repros see it).
+        Console.log(
+          "[VideoSpriteExtractor] failed to write failure marker " +
+            "(${dir.absolutePath}/$FAILURE_MARKER_FILENAME): ${e::class.simpleName}: ${e.message}",
+        )
+      }
   }
 
   /**

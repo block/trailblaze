@@ -34,6 +34,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.capture.CaptureOptions
+import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -92,6 +94,13 @@ class TrailblazeDeviceManager(
   val onDeviceInstrumentationArgsProvider: () -> Map<String, String>,
   private val trailblazeAnalytics: TrailblazeAnalytics,
 ) {
+
+  /**
+   * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
+   * paths. See [SessionCaptureCoordinator] for why this exists at the device-manager
+   * level (where session lifecycle already lives) rather than scattered across runners.
+   */
+  val sessionCaptureCoordinator: SessionCaptureCoordinator = SessionCaptureCoordinator(logsRepo)
 
   /**
    * Manages the web browser lifecycle for web testing.
@@ -323,17 +332,60 @@ class TrailblazeDeviceManager(
     forceNewSession: Boolean = false,
     sessionIdPrefix: String = "session",
     deviceSummary: TrailblazeConnectedDeviceSummary? = null
-  ): DeviceSessionResolution = synchronized(sessionCreationLock) {
-    val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
-    val isNewSession = existingSessionId == null
-    val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
-
-    // Track the session ID immediately so subsequent calls can find it
-    if (isNewSession) {
-      trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
+  ): DeviceSessionResolution {
+    // Two-phase to keep `startForSession` (which can block on adb/ffmpeg/xcrun
+    // startup) OUTSIDE `sessionCreationLock` — otherwise every concurrent session
+    // creation, end, and cancel across every device queues behind whatever
+    // screenrecord is starting next. The lock only protects the
+    // session-id-generation + trackActiveSession step.
+    val resolution: DeviceSessionResolution
+    val startCaptureFor: SessionId?
+    val captureDeviceId: String
+    val captureAppId: String?
+    val captureOptions: CaptureOptions
+    synchronized(sessionCreationLock) {
+      val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
+      val isNewSession = existingSessionId == null
+      val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
+      if (isNewSession) {
+        trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
+      }
+      resolution = DeviceSessionResolution(sessionId, isNewSession)
+      startCaptureFor = if (isNewSession) sessionId else null
+      captureDeviceId = trailblazeDeviceId.instanceId
+      // Resolve appId outside the lock would race with target updates, so capture both
+      // the target-override + app-config-default here.
+      val appConfig = settingsRepo.serverStateFlow.value.appConfig
+      captureAppId = sessionTargetRegistry.get(sessionId) ?: appConfig.selectedTargetAppId
+      // Resolve capture options from the daemon's `appConfig` toggles. Per-run CLI
+      // flags (--no-capture-video / --capture-logcat) are layered on by
+      // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
+      // coordinator's reservation pattern makes that second call a no-op so the
+      // appConfig-derived options here are what win for MCP-only paths.
+      captureOptions = CaptureOptions(
+        captureVideo = true,
+        captureLogcat = appConfig.captureLogcat,
+        captureIosLogs = appConfig.captureIosLogs,
+        spriteFrameFps = 2,
+        spriteFrameHeight = 720,
+        spriteQuality = 80,
+      )
     }
 
-    DeviceSessionResolution(sessionId, isNewSession)
+    // Phase 2 (outside the lock): start capture for the new session. Idempotent — the
+    // CLI path's `DesktopYamlRunner.captureSessionStarted` callback may also fire
+    // `startForSession` later, but the coordinator's reserve-then-start protocol
+    // ensures only one wins.
+    if (startCaptureFor != null) {
+      sessionCaptureCoordinator.startForSession(
+        sessionId = startCaptureFor,
+        deviceId = captureDeviceId,
+        platform = trailblazeDeviceId.trailblazeDevicePlatform,
+        options = captureOptions,
+        appId = captureAppId,
+      )
+    }
+    return resolution
   }
 
   /**
@@ -445,6 +497,12 @@ class TrailblazeDeviceManager(
     // isolation (cookies, localStorage, IndexedDB, tabs) is the job of
     // PlaywrightBrowserManager.resetSession(), which is called by TrailblazeHostYamlRunner
     // at session start and recreates the BrowserContext for true newContext-level isolation.
+
+    // Stop the per-session capture stream (video / sprite / logcat) BEFORE writing the
+    // session-end log — capture's stopAll triggers the WebM finalize / sprite-extract
+    // ffmpeg passes which can take a few seconds, and we want any "session ended"
+    // observers reading the directory afterwards to see the final state.
+    sessionCaptureCoordinator.stopForSession(sessionId)
 
     Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
@@ -991,11 +1049,17 @@ class TrailblazeDeviceManager(
     // under [sessionCreationLock] so a concurrent setTargetForActiveSession
     // can't synthesize a new session between the read and the clear (same
     // race condition addressed in [endSessionForDevice]).
-    synchronized(sessionCreationLock) {
-      val cancelledSessionId = _activeDeviceSessionsFlow.value[trailblazeDeviceId]
+    val cancelledSessionId = synchronized(sessionCreationLock) {
+      val sid = _activeDeviceSessionsFlow.value[trailblazeDeviceId]
       _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
-      cancelledSessionId?.let { sessionTargetRegistry.clear(it) }
+      sid?.let { sessionTargetRegistry.clear(it) }
+      sid
     }
+    // Best-effort stop of capture for the cancelled session — running outside the
+    // sessionCreationLock so a slow ffmpeg sprite-extract pass on stopAll can't deadlock
+    // a concurrent device-management call (sprite gen is bound by `FFMPEG_TIMEOUT_SECONDS`
+    // but seconds is enough to be felt). Idempotent if endSessionForDevice already ran.
+    cancelledSessionId?.let { sessionCaptureCoordinator.stopForSession(it) }
   }
 
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {

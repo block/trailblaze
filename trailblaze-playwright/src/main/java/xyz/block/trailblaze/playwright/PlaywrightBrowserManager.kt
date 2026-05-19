@@ -687,7 +687,17 @@ class PlaywrightBrowserManager(
     Console.log(
       "[PlaywrightBrowserManager] reconciling recordVideoDir: current=$currentRecordingDir desired=$desired",
     )
-    runBlocking(playwrightDispatcher) {
+    // Callers reach this method from two places: the manager's own init() block
+    // (off the Playwright thread), and from inside `runTrailblazeYamlSuspend` which is
+    // already `withContext(playwrightDispatcher)`. The on-thread case must NOT use
+    // `runBlocking(playwrightDispatcher)` or it deadlocks (single-threaded dispatcher
+    // blocked waiting for a coroutine that wants to run on the blocked thread). The
+    // [PlaywrightThreadBridge] helper picks the right strategy.
+    PlaywrightThreadBridge.runOnPlaywrightThread(
+      currentThread = Thread.currentThread(),
+      playwrightThread = if (::playwrightThread.isInitialized) playwrightThread else null,
+      dispatcher = playwrightDispatcher,
+    ) {
       try {
         browserContext.close()
       } catch (_: Exception) {}
@@ -761,15 +771,14 @@ class PlaywrightBrowserManager(
         playwright.close()
       } catch (_: Exception) {}
     }
-    if (::playwrightThread.isInitialized && Thread.currentThread() === playwrightThread) {
-      closeResources()
-    } else {
-      try {
-        runBlocking(playwrightDispatcher) {
-          closeResources()
-        }
-      } catch (_: Exception) {}
-    }
+    try {
+      PlaywrightThreadBridge.runOnPlaywrightThread(
+        currentThread = Thread.currentThread(),
+        playwrightThread = if (::playwrightThread.isInitialized) playwrightThread else null,
+        dispatcher = playwrightDispatcher,
+        block = closeResources,
+      )
+    } catch (_: Exception) {}
     playwrightExecutor.shutdown()
     playwrightExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
     xdgTempDir?.let { dir ->

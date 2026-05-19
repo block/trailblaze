@@ -41,15 +41,19 @@
       recording:
         tools:
           - tapOnElementBySelector:
+              # Radial-picker labels are drawn on canvas and surface ONLY via
+              # contentDescription in the accessibility tree (no `text` attribute) —
+              # `textRegex` matched anyway on some local emulators but is empty on
+              # the CI runner. Use `contentDescriptionRegex` for the canonical match.
               reason: Select 7 as the hour on the radial picker.
               nodeSelector:
                 androidAccessibility:
-                  textRegex: "7"
+                  contentDescriptionRegex: "7"
           - tapOnElementBySelector:
               reason: Select 30 as the minutes on the radial picker.
               nodeSelector:
                 androidAccessibility:
-                  textRegex: "30"
+                  contentDescriptionRegex: "30"
           - tapOnElementBySelector:
               reason: |
                 Force the AM/PM toggle to AM. The picker's default tracks the device clock —

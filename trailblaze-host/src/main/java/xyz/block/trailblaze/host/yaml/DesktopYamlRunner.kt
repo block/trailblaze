@@ -5,8 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import xyz.block.trailblaze.capture.CaptureOptions
-import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -138,17 +136,33 @@ class DesktopYamlRunner(
         MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
       }
 
-      // Start capture streams if enabled in desktop settings
-      val appConfig = trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
-
       // Resolve driver type: request (CLI --driver / trail config) > app setting > connected device default.
+      val appConfig = trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
       val appSettingDriverType = appConfig.selectedTrailblazeDriverTypes[
         trailblazeDeviceId.trailblazeDevicePlatform
       ]
       val trailblazeDriverType = runYamlRequest.driverType
         ?: appSettingDriverType
         ?: connectedTrailblazeDevice.trailblazeDriverType
-      val captureOptions = CaptureOptions(
+
+      // Per-session video / sprite / logcat capture used to be started here against a
+      // temp dir and moved into the session log dir in the finally block. That worked
+      // for the CLI/daemon path but bypassed every MCP-driven session — the `blaze`,
+      // `ask`, `verify`, and individual-tool entry points create sessions through
+      // `TrailblazeDeviceManager.getOrCreateSessionResolution` and never go through
+      // this runner. Capture is now owned by [SessionCaptureCoordinator], which both
+      // paths route through (CLI's `onSessionStarted` callback below starts it; MCP
+      // starts it at session-resolution time). The coordinator writes artifacts
+      // directly into the session log dir — no temp-dir + move dance.
+      val appIdForCapture = targetTestApp
+        ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+        ?.firstOrNull()
+      // Resolve per-run capture toggles in the same order the pre-coordinator flow did:
+      // request-level overrides (CLI `--no-capture-video` / `--capture-logcat`) > daemon
+      // appConfig toggles > built-in defaults. Passed to `coordinator.startForSession`
+      // below so the user-visible CLI flag actually takes effect — without this, every
+      // CLI run would record video even when the user opted out.
+      val captureOptionsForRun = xyz.block.trailblaze.capture.CaptureOptions(
         captureVideo = desktopAppRunYamlParams.captureVideo ?: true,
         captureLogcat = desktopAppRunYamlParams.captureLogcat ?: appConfig.captureLogcat,
         captureIosLogs = desktopAppRunYamlParams.captureIosLogs ?: appConfig.captureIosLogs,
@@ -156,25 +170,6 @@ class DesktopYamlRunner(
         spriteFrameHeight = 720,
         spriteQuality = 80,
       )
-      val captureSession = CaptureSession.fromOptions(
-        captureOptions,
-        trailblazeDeviceId.trailblazeDevicePlatform,
-      )
-      val captureTempDir = if (captureSession != null) {
-        val appId = targetTestApp
-          ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-          ?.firstOrNull()
-        val tempDir = File(
-          System.getProperty("java.io.tmpdir"),
-          "trailblaze-capture-${trailblazeDeviceId.instanceId}-${System.currentTimeMillis()}",
-        )
-        tempDir.mkdirs()
-        captureSession.startAll(tempDir, trailblazeDeviceId.instanceId, appId)
-        prefixedProgressMessage(
-          "Capture started (video=${captureOptions.captureVideo}, logcat=${captureOptions.captureLogcat}, iosLogs=${captureOptions.captureIosLogs})",
-        )
-        tempDir
-      } else null
 
       var sessionId: SessionId? = null
       // Snapshot existing session IDs so we can find newly created ones on cancellation
@@ -201,15 +196,25 @@ class DesktopYamlRunner(
         // converge on the same activator wiring without duplicating the `runCatching` /
         // `maybeStartAndroidNetworkCapture` plumbing.
         val captureSessionStarted: (SessionId) -> Unit = { sid ->
+          // Idempotent — MCP path may have started this already via
+          // getOrCreateSessionResolution with appConfig-derived options. The
+          // coordinator's reserve-then-start makes the second call a no-op so we
+          // don't double-spawn screenrecord. For runs that originated from the CLI,
+          // `captureOptionsForRun` honors per-flag overrides (--no-capture-video,
+          // --capture-logcat, --capture-ios-logs).
+          trailblazeDeviceManager.sessionCaptureCoordinator.startForSession(
+            sessionId = sid,
+            deviceId = trailblazeDeviceId.instanceId,
+            platform = trailblazeDeviceId.trailblazeDevicePlatform,
+            options = captureOptionsForRun,
+            appId = appIdForCapture,
+          )
           capturedNetworkBridgeSessionId =
             maybeStartAndroidNetworkCapture(
               runYamlRequest = runYamlRequest,
               deviceId = trailblazeDeviceId,
               sessionIdOverride = sid,
-              targetAppId =
-                targetTestApp
-                  ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-                  ?.firstOrNull(),
+              targetAppId = appIdForCapture,
               onProgressMessage = prefixedProgressMessage,
             )
         }
@@ -377,23 +382,28 @@ class DesktopYamlRunner(
               .onFailure { Console.log("Android network capture stop failed for $sid: ${it.message}") }
           }
         }
-        if (captureSession != null) {
-          // On cancellation, sessionId may not have been set yet. Find the session
-          // that was created during this test run by matching the device ID in the
-          // session's first log file. This handles concurrent multi-device runs.
-          val resolvedSessionId = sessionId
-            ?: run {
-              val newSessions = trailblazeDeviceManager.logsRepo.getSessionIds()
-                .filter { it !in preExistingSessionIds }
-              val deviceInstanceId = trailblazeDeviceId.instanceId
-              // Match by checking the first log file for this device's instance ID
-              newSessions.firstOrNull { sid ->
-                val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sid)
-                val firstLog = File(sessionDir, "001_TrailblazeSessionStatusChangeLog.json")
-                firstLog.exists() && firstLog.readText().contains(deviceInstanceId)
-              } ?: newSessions.firstOrNull()
-            }
-          stopCaptureAndMoveArtifacts(captureSession, captureTempDir, resolvedSessionId, prefixedProgressMessage)
+        // On cancellation, sessionId may not have been set yet. Find the session
+        // that was created during this test run by matching the device ID in the
+        // session's first log file. This handles concurrent multi-device runs.
+        val resolvedSessionId = sessionId
+          ?: run {
+            val newSessions = trailblazeDeviceManager.logsRepo.getSessionIds()
+              .filter { it !in preExistingSessionIds }
+            val deviceInstanceId = trailblazeDeviceId.instanceId
+            // Match by checking the first log file for this device's instance ID
+            newSessions.firstOrNull { sid ->
+              val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sid)
+              val firstLog = File(sessionDir, "001_TrailblazeSessionStatusChangeLog.json")
+              firstLog.exists() && firstLog.readText().contains(deviceInstanceId)
+            } ?: newSessions.firstOrNull()
+          }
+        // Stop capture for the session if we own it (i.e. the runner's
+        // captureSessionStarted callback fired and started it). Idempotent — if the
+        // MCP path or another caller already stopped it via endSessionForDevice,
+        // the coordinator no-ops. Artifacts are already in the session log dir;
+        // no temp-dir move needed.
+        if (resolvedSessionId != null) {
+          trailblazeDeviceManager.sessionCaptureCoordinator.stopForSession(resolvedSessionId)
         }
         Console.log("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
         onComplete?.invoke(executionResult)
@@ -719,55 +729,7 @@ class DesktopYamlRunner(
       .getOrNull()
   }
 
-  /**
-   * Stops capture streams and moves artifacts (video, logcat, metadata) into the session log
-   * directory so the Timeline view can find them.
-   */
-  private fun stopCaptureAndMoveArtifacts(
-    captureSession: CaptureSession,
-    captureTempDir: File?,
-    sessionId: SessionId?,
-    onProgressMessage: (String) -> Unit,
-  ) {
-    val debugInfo = StringBuilder()
-    try {
-      debugInfo.appendLine("tempDir=${captureTempDir?.absolutePath}")
-      debugInfo.appendLine("tempDirExistsBefore=${captureTempDir?.exists()}")
-      debugInfo.appendLine("tempFilesBefore=${captureTempDir?.listFiles()?.map { it.name }}")
-      val artifacts = captureSession.stopAll()
-      debugInfo.appendLine("artifacts=${artifacts.size}")
-      debugInfo.appendLine("artifactTypes=${artifacts.map { "${it.type}:${it.file.name}:${it.file.exists()}:${it.file.length()}" }}")
-      debugInfo.appendLine("tempDirExistsAfterStop=${captureTempDir?.exists()}")
-      debugInfo.appendLine("tempFilesAfterStop=${captureTempDir?.listFiles()?.map { it.name }}")
-      val tempFiles = captureTempDir?.listFiles()?.map { it.name } ?: emptyList()
-      debugInfo.appendLine("sessionId=$sessionId")
-      Console.log("Capture stop: artifacts=${artifacts.size}, sessionId=$sessionId, tempFiles=$tempFiles")
-      if (sessionId != null && captureTempDir != null && tempFiles.isNotEmpty()) {
-        val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionId)
-        // Move all files from the capture temp dir (artifacts, metadata, sprite metadata, etc.)
-        // renameTo can fail across filesystems, so fall back to copy+delete.
-        captureTempDir.listFiles()?.forEach { file ->
-          val dest = File(sessionDir, file.name)
-          val moved = file.renameTo(dest)
-          if (!moved) {
-            file.copyTo(dest, overwrite = true)
-            file.delete()
-          }
-          onProgressMessage("Capture: ${file.name} -> ${dest.absolutePath}")
-        }
-      }
-    } catch (e: Exception) {
-      debugInfo.appendLine("EXCEPTION: ${e::class.simpleName}: ${e.message}")
-      Console.log("Failed to stop capture: ${e.message}")
-    } finally {
-      captureTempDir?.deleteRecursively()
-      // Write diagnostic info to session dir
-      if (sessionId != null) {
-        try {
-          val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionId)
-          File(sessionDir, "capture_debug.txt").writeText(debugInfo.toString())
-        } catch (_: Exception) {}
-      }
-    }
-  }
+  // `stopCaptureAndMoveArtifacts` lived here. Removed in favor of
+  // [SessionCaptureCoordinator.stopForSession], which writes artifacts directly into
+  // the session log dir from the start so the temp-dir + move step is no longer needed.
 }
