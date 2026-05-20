@@ -57,64 +57,15 @@ internal fun deviceArgMatches(userDeviceArg: String, boundDevice: TrailblazeDevi
     SessionArtifactsCommand::class,
     SessionDeleteCommand::class,
     SessionEndCommand::class,
-    SessionReportCommand::class,
   ],
 )
 class SessionCommand : Callable<Int> {
-  // Reach the root command so subcommands like `session report` can call
-  // `appProvider()` to access the same logs repo and report generator that
-  // `trailblaze report` uses.
   @CommandLine.ParentCommand
   internal lateinit var cliRoot: TrailblazeCliCommand
 
   override fun call(): Int {
     CommandLine(this).usage(System.out)
     return CommandLine.ExitCode.OK
-  }
-}
-
-@Command(
-  name = "report",
-  mixinStandardHelpOptions = true,
-  description = ["Generate an HTML or JSON report for this session"],
-)
-class SessionReportCommand : Callable<Int> {
-
-  @CommandLine.ParentCommand
-  private lateinit var parent: SessionCommand
-
-  @Option(
-    names = ["--id"],
-    description = ["Session ID to report on (defaults to current session, supports prefix matching)"],
-  )
-  var id: String? = null
-
-  @Option(
-    names = ["--open"],
-    description = ["Open the report in the default browser after generation (HTML only)"],
-  )
-  var open: Boolean = false
-
-  @Option(
-    names = ["--format"],
-    description = ["Output format: html (default) or json — JSON emits a CiSummaryReport artifact"],
-  )
-  var format: ReportFormat = ReportFormat.HTML
-
-  override fun call(): Int {
-    val effectiveId = id ?: runBlocking {
-      val port = CliConfigHelper.resolveEffectiveHttpPort()
-      try {
-        CliMcpClient.connectReusable(port).use { it.getTrailblazeSessionId() }
-      } catch (_: Exception) {
-        null
-      }
-    }
-    if (effectiveId == null) {
-      Console.error("Error: No active session. Pass --id to specify which session to report on.")
-      return CommandLine.ExitCode.SOFTWARE
-    }
-    return generateSessionReport(parent.cliRoot.appProvider(), effectiveId, open, format)
   }
 }
 

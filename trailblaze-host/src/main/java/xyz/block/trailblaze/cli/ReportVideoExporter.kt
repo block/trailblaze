@@ -25,11 +25,12 @@ import xyz.block.trailblaze.util.Console
  * drift. The result lands in the temp dir as `video.mp4`; we move it to the
  * caller-supplied [outputMp4].
  *
- * Wall-clock recording: the timeline's in-app `playbackSpeed` setting (default 2x in
+ * Wall-clock recording: the timeline's in-app `playbackSpeed` setting (default 4x in
  * the report UI) decides how fast the autoplay advances. The exporter just records
- * what the viewport shows in real time, so a 60s session at 2x autoplay lands as a
- * ~30s MP4. 4x was tried briefly but the Compose canvas couldn't paint screenshot
- * frames fast enough on the headless export path, producing torn output.
+ * what the viewport shows in real time, so a 60s session at 4x autoplay lands as a
+ * ~15s MP4. 4x can occasionally produce a torn frame when the Compose canvas hasn't
+ * finished painting before the scrubber moves on; users who care about export fidelity
+ * over length can drop to 2x via the timeline speed picker before re-running.
  *
  * No session log dir is created — the exporter doesn't go through `HostTrailblazeLoggingRule`
  * or `LogsRepo`. The only artifact is the MP4 at [outputMp4].
@@ -48,8 +49,11 @@ object ReportVideoExporter {
    *   as needed; overwrites if it already exists.
    * @param headless When true (default), the browser window is hidden. Set false locally
    *   to watch the playback happen in a real window — useful for debugging timing.
+   * @param maxBytes When non-null, the MP4 is iteratively re-encoded at smaller widths
+   *   until it fits under the cap. See [MaxArtifactSize]. If even the readability floor
+   *   can't satisfy the cap, this throws.
    */
-  fun export(reportHtml: File, outputMp4: File, headless: Boolean = true) {
+  fun export(reportHtml: File, outputMp4: File, headless: Boolean = true, maxBytes: Long? = null) {
     require(reportHtml.exists() && reportHtml.isFile) {
       "Report HTML not found: ${reportHtml.absolutePath}"
     }
@@ -85,17 +89,7 @@ object ReportVideoExporter {
         "as other Trailblaze web commands)",
     )
 
-    // Throttle install progress updates: ensureBrowserInstalled emits one callback per
-    // line of `playwright install chromium` output, which is too chatty for a CLI status
-    // line. Only forward updates that bump the visible percent by >=10, plus the very
-    // first non-zero update so the user sees the download actually started.
-    var lastEmittedPct = -1
-    val onInstallProgress: (Int, String) -> Unit = { pct, message ->
-      if (pct == 100 || pct >= lastEmittedPct + 10) {
-        Console.log("[ReportVideoExporter] Chromium install: ${pct}% — $message")
-        lastEmittedPct = pct
-      }
-    }
+    val onInstallProgress = PlaywrightReportCapture.makeInstallProgressLogger("ReportVideoExporter")
 
     // Single outer try/finally covers everything: a `navigate`/`waitForFunction` throw,
     // a crashed Playwright driver, or even an OOM during capture must still tear down
@@ -112,7 +106,7 @@ object ReportVideoExporter {
       val mgr = manager
       runBlocking(mgr.playwrightDispatcher) {
         val page = mgr.currentPage
-        val url = buildReportUrl(reportHtml)
+        val url = PlaywrightReportCapture.buildReportUrl(reportHtml)
         Console.log("[ReportVideoExporter] navigating to $url")
         page.navigate(url)
         // DOMCONTENTLOADED is enough — the WASM app boots on `window.onload`, but the
@@ -154,18 +148,105 @@ object ReportVideoExporter {
       }
       runCatching { tempDir.deleteRecursively() }
     }
+
+    if (maxBytes != null && outputMp4.exists()) {
+      // Re-encode the full-res MP4 down to successive widths until the file fits.
+      //
+      // We rescale from a copy of the *original* full-res encode each iteration rather
+      // than from the previous rescale's output — re-encoding an already-h.264 stream
+      // three times to walk 1280→1024→720 compounds compression artifacts (generational
+      // quality loss). One copy upfront, one libx264 pass per ladder rung from a stable
+      // source.
+      //
+      // The source copy lives in the system temp dir (not the user's chosen output dir)
+      // so it's invisible to them and gets cleaned up on JVM exit even if we crash
+      // mid-loop.
+      val rescaleSource = File(
+        System.getProperty("java.io.tmpdir"),
+        "trailblaze-report-video-source-${UUID.randomUUID().toString().take(8)}.mp4",
+      )
+      // SIGKILL safety: registered before any I/O so a JVM crash (CI timeout, OOM
+      // killer) doesn't leak a full-res MP4 into the system temp dir. Idempotent
+      // with the explicit delete in the finally below.
+      rescaleSource.deleteOnExit()
+      try {
+        outputMp4.copyTo(rescaleSource, overwrite = true)
+        val rescaleStartMs = System.currentTimeMillis()
+        val result = MaxArtifactSize.enforce(outputMp4, maxBytes) { w ->
+          Console.log("[ReportVideoExporter] over ${maxBytes}B — re-encoding at ${w}px width")
+          rescaleMp4(source = rescaleSource, dest = outputMp4, targetWidthPx = w)
+          Console.log(
+            "[ReportVideoExporter] after ${w}px: ${outputMp4.length() / 1024}KB " +
+              "(cap: ${maxBytes / 1024}KB)",
+          )
+        }
+        val rescaleElapsedMs = System.currentTimeMillis() - rescaleStartMs
+        if (!result.fits) {
+          error(
+            "MP4 still exceeds ${maxBytes}B at the ${MaxArtifactSize.READABILITY_FLOOR_PX}px " +
+              "readability floor (current size: ${outputMp4.length()}B). libx264 already " +
+              "compresses well, so this usually means the session is just long. Shorten the " +
+              "session — split the trail into smaller recordings, or remove intermediate " +
+              "verification steps.",
+          )
+        }
+        if (result.widthPx != null) {
+          // Each rescale rung re-encodes from the sidecar source with libx264 -preset
+          // veryfast. On a full-ladder walk on a long session that's still seconds per
+          // rung; total wall-clock helps distinguish "rescale was free" from "rescale
+          // dominated the export" when reading worker logs.
+          Console.log(
+            "[ReportVideoExporter] final size ${outputMp4.length() / 1024}KB at ${result.widthPx}px " +
+              "(rescale took ${rescaleElapsedMs}ms)",
+          )
+        }
+      } finally {
+        runCatching { if (rescaleSource.exists()) rescaleSource.delete() }
+      }
+    }
   }
 
   /**
-   * Turns an absolute filesystem path into a `file://` URL with the autoplay query
-   * parameter the WASM app reads at startup. We let `File.toURI().toASCIIString()` do
-   * the actual percent-encoding (generated report paths in `logs/reports/` don't
-   * realistically contain `?`, but the `if (base.contains("?"))` guard keeps the URL
-   * well-formed for the edge case where they do).
+   * Transcode [source] at [targetWidthPx] (height auto-computed via `-2` so libx264's
+   * even-dimension requirement is satisfied) and atomically replace [dest] with the
+   * result. Atomic temp-file-then-rename + cleanup is handled by
+   * [FfmpegRescaleSupport.runFfmpegToTemp] — same crash-safety pattern the GIF and
+   * WebP exporters use.
+   *
+   * Callers may pass an extension-less `dest` path (`--video out`); the helper writes
+   * to a `.mp4`-suffixed temp file regardless so ffmpeg's muxer detection always works.
    */
-  private fun buildReportUrl(reportHtml: File): String {
-    val base = reportHtml.toURI().toASCIIString()
-    val separator = if (base.contains("?")) "&" else "?"
-    return "$base${separator}autoplay=1"
+  private fun rescaleMp4(source: File, dest: File, targetWidthPx: Int) {
+    // libx264 requires even dimensions — LANCZOS_EVEN rounds height down to the
+    // nearest even pixel so the encoder never rejects the frame at run time.
+    // `scaleFilter` only returns null for a null width; this caller passes a non-null
+    // `Int` so the result is always non-null here.
+    val scale = FfmpegRescaleSupport
+      .scaleFilter(targetWidthPx, FfmpegRescaleSupport.EvenHeight.LANCZOS_EVEN)!!
+    FfmpegRescaleSupport.runFfmpegToTemp(
+      tag = "ReportVideoExporter",
+      dest = dest,
+      tempSuffix = ".mp4",
+      errorContext = "mp4 rescale to ${targetWidthPx}px",
+    ) { tempFile ->
+      listOf(
+        "ffmpeg",
+        "-y",
+        "-i",
+        source.absolutePath,
+        "-vf",
+        scale,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-an",
+        tempFile.absolutePath,
+      )
+    }
   }
 }

@@ -9,7 +9,13 @@ object WaypointLoader {
 
   private const val FILE_SUFFIX = ".waypoint.yaml"
 
-  internal val yaml = Yaml(
+  /**
+   * Shared Kaml instance used both for parsing on-disk waypoint YAML and for re-serializing
+   * mutated definitions (e.g. `waypoint tune` proposals). Promoted from `internal` so the
+   * tuner can reuse the loader's config — without sharing it, the tuner could drift to a
+   * different YAML shape than the loader expects and break round-trip on the next run.
+   */
+  val yaml = Yaml(
     configuration = YamlConfiguration(
       strictMode = false,
       encodeDefaults = false,

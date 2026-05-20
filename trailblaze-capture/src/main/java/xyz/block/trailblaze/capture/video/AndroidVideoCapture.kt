@@ -78,8 +78,14 @@ class AndroidVideoCapture : CaptureStream {
     val cons = consumer ?: return null
     consumer = null
 
-    val videoFile = cons.stop() ?: return null
+    // Capture the recording-end wall-clock BEFORE `cons.stop()` — that call drains the H264
+    // tee, ffmpeg-concats segments, and wraps the result into video.mp4, which can take
+    // multiple seconds. The user-perceived "recording stopped" moment is now, not after
+    // ffmpeg finalizes. The CaptureArtifact's endTimestampMs is what the report viewer uses
+    // as the timeline endpoint, so capturing it post-wrap inflates the apparent recording
+    // window and skews the wall-clock-vs-mp4 mismatch check in VideoSpriteExtractor.
     val endTimestampMs = DeviceClock.nowMs(dev)
+    val videoFile = cons.stop() ?: return null
 
     // Sprite-sheet generation: same downstream call as before. The video file is now an MP4
     // produced by our local ffmpeg concat, so all the existing decode paths still apply.
@@ -90,6 +96,11 @@ class AndroidVideoCapture : CaptureStream {
         frameHeight = options.spriteFrameHeight,
         webpQuality = options.spriteQuality,
         isLandscape = isLandscape,
+        // screenrecord emits a raw H.264 elementary stream with no timing info, so the
+        // ffmpeg `-c copy` wrap in MuxToMp4Consumer ends up synthesizing PTS at a default
+        // 25fps that doesn't match wall-clock — VideoSpriteExtractor uses this expected
+        // window to detect that mismatch and re-stamp before sprite extraction.
+        expectedDurationMs = endTimestampMs - startTimestampMs,
       )
     if (spriteSheet != null) {
       return CaptureArtifact(

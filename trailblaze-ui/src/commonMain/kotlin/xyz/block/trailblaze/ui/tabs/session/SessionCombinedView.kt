@@ -348,10 +348,15 @@ internal fun SessionCombinedView(
     listScrollState.animateScrollTo(listScrollState.maxValue)
   }
 
-  // Completed sessions: scroll to the bottom once so the user sees the final step
+  // Completed sessions: scroll to the bottom once so the user sees the final step.
+  // Skip when autoplay is requested — that path seeks the scrubber back to
+  // `effectiveStartMs`, so the list should also start at the top and play forward
+  // from the first item rather than starting visually at the end.
   var didInitialScroll by remember { mutableStateOf(false) }
   LaunchedEffect(isLive, logs.size) {
-    if (!isLive && logs.isNotEmpty() && !didInitialScroll && !userHasInteracted) {
+    if (!isLive && logs.isNotEmpty() && !didInitialScroll && !userHasInteracted &&
+      !isExportAutoplayRequested()
+    ) {
       delay(TimelineConstants.ANIMATION_SETTLE_DELAY_MS)
       listScrollState.scrollTo(listScrollState.maxValue)
       didInitialScroll = true
@@ -562,13 +567,18 @@ internal fun SessionCombinedView(
         ?: if (currentFrame != null) {
           currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
         } else DEFAULT_PHONE_ASPECT_RATIO
-      // Default to half the screen; the video/screenshot should be large and prominent
+      // Hug the phone's natural width at full available height — anything wider is grey
+      // margin that the step list can use instead. User can still drag wider via the handle.
       val aspectWidth = maxHeight * frameAspect
-      val halfOfScreen = maxWidth / 2
-      val defaultWidth = maxOf(aspectWidth, halfOfScreen).coerceIn(120.dp, maxWidth * 0.65f)
+      // Guard the upper bounds against a window narrower than the 120.dp floor — without
+      // this, `coerceIn` throws IllegalArgumentException when min > max in tiny viewports.
+      val minColumnWidth = 120.dp
+      val maxDefaultWidth = maxOf(maxWidth * 0.65f, minColumnWidth)
+      val maxAllowedWidth = maxOf(maxWidth, minColumnWidth)
+      val defaultWidth = aspectWidth.coerceIn(minColumnWidth, maxDefaultWidth)
       val userWidthDp = with(density) { videoPanelWidthPx.toDp() }
       val videoColumnWidth =
-        if (videoPanelWidthPx > 0f) userWidthDp.coerceIn(120.dp, maxWidth)
+        if (videoPanelWidthPx > 0f) userWidthDp.coerceIn(minColumnWidth, maxAllowedWidth)
         else defaultWidth
 
       val durationMs = if (videoMetadata != null) {
@@ -591,11 +601,9 @@ internal fun SessionCombinedView(
               MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
               RoundedCornerShape(8.dp),
             )
-            .padding(8.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
       ) {
-        // Push controls + image to vertical center
-        Spacer(modifier = Modifier.weight(0.1f))
         // Playback controls directly above the screenshot/video
         VideoPlaybackControls(
           isPlaying = timelineState.isVideoPlaying,
@@ -646,7 +654,6 @@ internal fun SessionCombinedView(
             onShowInspectUI = onShowInspectUI,
           )
         }
-        Spacer(modifier = Modifier.weight(0.1f))
       }
     }
 

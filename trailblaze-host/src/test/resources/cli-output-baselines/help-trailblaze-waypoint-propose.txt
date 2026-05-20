@@ -1,0 +1,40 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint propose [-hV] [--idempotence-check]
+                                   [--aggregate=<path>]
+                                   [--cluster=<jsonl-string>] [--out-dir=<dir>]
+                                   [--root=<path>] --sessions=<dir>
+                                   --target=<id> [--top-n=<n>]
+Synthesize draft waypoint YAMLs from unmatched-cluster fingerprints.
+Emits one proposal sidecar per surviving cluster to --out-dir; the
+`trailblaze-waypoints-propose` pipeline picks them up and opens one PR per
+proposal.
+      --aggregate=<path>    Path to unmatched-clusters.jsonl. Pipeline mode.
+                              Mutually exclusive with --cluster.
+      --cluster=<jsonl-string>
+                            Single JSONL cluster line. Mutually exclusive with
+                              --aggregate.
+  -h, --help                Show this help message and exit.
+      --idempotence-check   Re-run after applying the proposals in-memory; fail
+                              (exit 1) if the second pass emits any new
+                              proposal.
+      --out-dir=<dir>       Output directory for proposal sidecars. Default: ./.
+                              waypoints_propose/proposals/. Wiped at the start
+                              of each run.
+      --root=<path>         Override the waypoint-root dir for sibling-overlap
+                              checks. (Convention: ./trails)
+      --sessions=<dir>      Directory containing the session logs used by the
+                              source build. Each cluster's `example_log` path
+                              is resolved relative to this dir, and the
+                              cross-waypoint bleed guard walks the full session
+                              set.
+      --target=<id>         Pack id. Resolves --root + provides the proposal
+                              namespace (`<target>/auto-<slug>`).
+      --top-n=<n>           Maximum number of clusters to process in
+                              --aggregate mode (default: 10).
+  -V, --version             Print version information and exit.

@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.capture.video
 
 import java.io.File
-import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
@@ -77,6 +76,11 @@ class PlaywrightVideoCapture : CaptureStream {
       frameHeight = options.spriteFrameHeight,
       webpQuality = options.spriteQuality,
       isLandscape = true,
+      // Playwright's WebM has real timestamps and the libx264 transcode preserves them, so
+      // the duration sanity-check is normally a no-op here. Pass the wall-clock window so a
+      // future regression in the transcode (or a WebM containing only partial moov data
+      // because the BrowserContext was force-closed) self-corrects.
+      expectedDurationMs = endTimestampMs - startTimestampMs,
     )
     if (spriteSheet != null) {
       return CaptureArtifact(
@@ -107,45 +111,38 @@ class PlaywrightVideoCapture : CaptureStream {
 
   private fun transcodeWebmToMp4(input: File, output: File): File? {
     if (input.length() == 0L) return null
-    return try {
-      val pb = ProcessBuilder(
-        FFMPEG_BINARY,
-        "-y",
-        "-i", input.absolutePath,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        output.absolutePath,
-      ).redirectErrorStream(true)
-      val process = pb.start()
-      // Drain stdout on a background thread — `readText()` blocks until EOF, so doing
-      // it inline would deadlock a hung ffmpeg and make the `waitFor` timeout below
-      // unreachable. Daemon thread so a stuck reader never holds the JVM alive.
-      val drained = StringBuilder()
-      val drainThread = Thread {
-        process.inputStream.bufferedReader().use { reader ->
-          reader.forEachLine { drained.appendLine(it) }
-        }
-      }.apply { isDaemon = true; start() }
-      val finished = process.waitFor(FFMPEG_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-      if (!finished) {
-        process.destroyForcibly()
-        drainThread.join(1_000)
-        Console.log("[PlaywrightVideoCapture] ffmpeg transcode timed out after ${FFMPEG_TIMEOUT_SECONDS}s")
-        return null
-      }
-      drainThread.join(1_000)
-      if (process.exitValue() != 0 || output.length() == 0L) {
-        Console.log("[PlaywrightVideoCapture] ffmpeg transcode failed: exit=${process.exitValue()}\n$drained")
-        return null
-      }
-      output
-    } catch (e: Exception) {
-      Console.log("[PlaywrightVideoCapture] ffmpeg not available for transcode: ${e.message}")
-      null
+    // Routed through the shared subprocess helper so the daemon-drain + timeout +
+    // destroyForcibly pattern lives in exactly one place — the open-coded version here was
+    // the model for `VideoSpriteExtractor.probeDurationAndFrameCount`, and reviewer feedback
+    // on PR #3087 caught divergent variants of the same pattern slipping in.
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
+            FFMPEG_BINARY,
+            "-y",
+            "-i", input.absolutePath,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            output.absolutePath,
+          ),
+        timeoutSeconds = FFMPEG_TIMEOUT_SECONDS,
+      )
+    if (result == null) {
+      Console.log("[PlaywrightVideoCapture] ffmpeg transcode could not be run or timed out after ${FFMPEG_TIMEOUT_SECONDS}s")
+      return null
     }
+    if (result.exitCode != 0 || output.length() == 0L) {
+      Console.log(
+        "[PlaywrightVideoCapture] ffmpeg transcode failed: exit=${result.exitCode}\n" +
+          sanitizeSubprocessOutputForLog(result.output)
+      )
+      return null
+    }
+    return output
   }
 
   companion object {

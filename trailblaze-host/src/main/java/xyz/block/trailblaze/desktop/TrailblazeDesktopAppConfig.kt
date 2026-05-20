@@ -100,7 +100,7 @@ abstract class TrailblazeDesktopAppConfig(
 
   /**
    * LLM token provider used by the recording tab to authenticate LLM calls.
-   * Override in subclasses to provide custom auth (e.g., corporate SSO/OAuth).
+   * Override in subclasses to provide custom auth (e.g., OAuth/token providers).
    * Defaults to the open source provider which reads from environment variables.
    */
   open val llmTokenProvider: TrailblazeDynamicLlmTokenProvider

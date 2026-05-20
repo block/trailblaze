@@ -48,7 +48,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 | 2026-04-07 | [Workspace Config Resolution: .trailblaze/ and trailblaze-config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md) | Decision |
 | 2026-04-07 | [Unified trailblaze-config/ Classpath Layout](2026-04-07-trailblaze-config-classpath-layout.md) | Decision |
 | 2026-04-07 | [Support reasoning_effort in LLM Config](2026-04-07-reasoning-effort-config-support.md) | Devlog |
-| 2026-04-07 | [CLI-Based SSO/Auth and Dynamic On-Device Instrumentation Args](2026-04-07-cli-sso-auth-and-dynamic-instrumentation-args.md) | Devlog |
+| 2026-04-07 | [CLI-Based OAuth/Auth and Dynamic On-Device Instrumentation Args](2026-04-07-cli-oauth-auth-and-dynamic-instrumentation-args.md) | Devlog |
 | 2026-03-20 | [Screenshot Format Optimization (WebP Everywhere)](2026-03-20-on-device-screenshot-optimization.md) | Decision |
 | 2026-03-17 | [MCP API Redesign: verify→blaze, Mode Defaults, iOS launchApp Fix](2026-03-17-mcp-api-redesign-and-ios-fixes.md) | Devlog |
 | 2026-03-17 | [iOS TrailblazeNode Support via IosMaestro](2026-03-17-ios-trailblaze-node-detail.md) | Devlog |

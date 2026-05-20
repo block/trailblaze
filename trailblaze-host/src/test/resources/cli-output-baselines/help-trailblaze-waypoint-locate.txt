@@ -6,6 +6,7 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint locate [-hV] [--live] [--file=<file>]
+                                  [--log-suffix=<suffix>] [--rel-base=<path>]
                                   [--root=<path>] [--session=<session>]
                                   [--step=<step>] [--target=<id>]
 Given a captured screen state, report which waypoint(s) match.
@@ -14,13 +15,28 @@ Given a captured screen state, report which waypoint(s) match.
   -h, --help                Show this help message and exit.
       --live                Pull screen state from the connected device (not
                               yet implemented)
+      --log-suffix=<suffix> Batch mode only: restrict the walk to logs whose
+                              filename ends with this suffix (e.g.
+                              `_AgentDriverLog.json`). Default: every
+                              screen-state log type (`_AgentDriverLog.json`,
+                              `_TrailblazeSnapshotLog.json`,
+                              `_TrailblazeLlmRequestLog.json`). Use to pin row
+                              accounting against a specific log type when the
+                              session dir may carry multiple.
+      --rel-base=<path>     Batch mode only: emit log paths relative to this
+                              directory. Must be an existing directory.
+                              Default: relative to the session dir's parent
+                              (yielding <session-name>/<step-filename>).
       --root=<path>         Additional directory to scan for *.waypoint.yaml
                               files. Overrides --target. Pack waypoints are
                               always included regardless. (Convention: ./trails)
-      --session=<session>   Session log directory (containing
-                              *_TrailblazeLlmRequestLog.json files)
+      --session=<session>   Session log directory. With --step, locates a
+                              single step; without --step, batch-locates every
+                              screen-state log in the dir and emits one TSV row
+                              per step.
       --step=<step>         1-based index of the step within the session
-                              (default: last step)
+                              (single-step mode; selects from
+                              *_TrailblazeLlmRequestLog.json files)
       --target=<id>         Pack id to operate on. Resolves --root to
                               <workspace>/packs/<id>/waypoints/. Mutually
                               exclusive with --root (--root wins if both given).

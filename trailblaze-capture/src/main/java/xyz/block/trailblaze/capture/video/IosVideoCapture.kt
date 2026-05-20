@@ -162,6 +162,13 @@ class IosVideoCapture : CaptureStream {
     }
     val file = videoFile ?: return null
 
+    // Capture the recording-end wall-clock BEFORE the SIGINT + waitFor block — the simulator
+    // can take seconds to flush its moov atom after SIGINT, and the artifact's endTimestampMs
+    // should reflect "when the user stopped recording" not "when xcrun finalized the file"
+    // (parallel to the Android `cons.stop()` reordering — both fix wall-clock skew the report
+    // viewer would otherwise inherit through `expectedDurationMs`).
+    val endTimestampMs = System.currentTimeMillis()
+
     try {
       // xcrun simctl recordVideo stops cleanly on SIGINT
       val pid = proc.pid()
@@ -207,8 +214,6 @@ class IosVideoCapture : CaptureStream {
       return null
     }
 
-    val endTimestampMs = System.currentTimeMillis()
-
     // Generate a WebP sprite sheet from the video.
     // If ffmpeg is available, this replaces the full video with a compact sprite image.
     // If not, fall back to keeping the original video.
@@ -219,6 +224,11 @@ class IosVideoCapture : CaptureStream {
         frameHeight = options.spriteFrameHeight,
         webpQuality = options.spriteQuality,
         isLandscape = isLandscape,
+        // The simulator's recordVideo writes a properly-timestamped mp4, so the duration
+        // sanity-check inside the extractor is a no-op in the healthy case. Pass it anyway
+        // so a future regression (truncated mp4, force-kill leaving a bad moov atom, etc.)
+        // self-corrects to a wall-clock-indexed sprite sheet.
+        expectedDurationMs = endTimestampMs - startTimestampMs,
       )
     if (spriteSheet != null) {
       return CaptureArtifact(

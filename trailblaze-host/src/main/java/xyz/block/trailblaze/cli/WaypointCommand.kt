@@ -2,6 +2,8 @@ package xyz.block.trailblaze.cli
 
 import picocli.CommandLine
 import picocli.CommandLine.Command
+import xyz.block.trailblaze.cli.propose.WaypointProposeCommand
+import xyz.block.trailblaze.cli.tune.WaypointTuneCommand
 import java.util.concurrent.Callable
 
 @Command(
@@ -36,6 +38,14 @@ import java.util.concurrent.Callable
     // standalone HTML page suitable for emailing/Slacking. Same data that backs the
     // daemon's live `/waypoints/graph` browser view.
     WaypointGraphCommand::class,
+    // Refinement loop — analyze a session set for near-miss patterns and emit
+    // proposed YAML edits (one PR per proposal in the trailblaze-waypoints-tune
+    // pipeline). See docs/internal/devlog/2026-05-19-waypoint-pack-refinement.md.
+    WaypointTuneCommand::class,
+    // Detection loop — synthesize draft waypoint YAMLs from unmatched-cluster
+    // fingerprints (one PR per cluster in the trailblaze-waypoints-propose pipeline).
+    // See docs/internal/devlog/2026-05-19-waypoint-pack-detection.md.
+    WaypointProposeCommand::class,
   ],
 )
 class WaypointCommand : Callable<Int> {

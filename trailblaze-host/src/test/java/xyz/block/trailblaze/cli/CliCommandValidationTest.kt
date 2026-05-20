@@ -1339,4 +1339,75 @@ class CliCommandValidationTest {
     assertNotNull(result)
     assertEquals("emulator-5554", result.trailblazeDeviceId.instanceId)
   }
+
+  // ---------------------------------------------------------------------------
+  // ReportCommand validation
+  //
+  // Like the BlazeCommand tests above, these only cover validation paths that
+  // return USAGE *before* the command touches its uninitialized `parent` field.
+  // The `--current` daemon-resolution branch is intentionally not covered here
+  // — it would require mocking CliMcpClient, which the unit setup doesn't wire.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `report -- id and current together returns USAGE`() {
+    val cmd = ReportCommand()
+    cmd.id = "abc123"
+    cmd.current = true
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `report -- video without id or current returns USAGE`() {
+    val cmd = ReportCommand()
+    cmd.videoOutput = "out.mp4"
+    // id and current both left default (null / false) — the all-sessions index
+    // has no timeline to autoplay, so the export request is invalid.
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `report -- gif without id or current returns USAGE`() {
+    val cmd = ReportCommand()
+    cmd.gifOutput = ReportCommand.USE_DEFAULT_PATH
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `report picocli parses --gif with no value as USE_DEFAULT_PATH sentinel`() {
+    // arity = "0..1" + fallbackValue = USE_DEFAULT_PATH: passing the flag bare
+    // should leave the field at the sentinel string, which generateSessionReport
+    // converts to <report-dir>/<session-id>.gif at runtime.
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("--id", "abc", "--gif")
+
+    assertEquals(ReportCommand.USE_DEFAULT_PATH, cmd.gifOutput)
+  }
+
+  @Test
+  fun `report picocli parses --gif with explicit path`() {
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("--id", "abc", "--gif", "my.gif")
+
+    assertEquals("my.gif", cmd.gifOutput)
+  }
+
+  @Test
+  fun `report picocli parses --video and --gif together`() {
+    // The two flags are independently composable in a single invocation.
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("--id", "abc", "--video", "out.mp4", "--gif", "out.gif")
+
+    assertEquals("out.mp4", cmd.videoOutput)
+    assertEquals("out.gif", cmd.gifOutput)
+  }
 }

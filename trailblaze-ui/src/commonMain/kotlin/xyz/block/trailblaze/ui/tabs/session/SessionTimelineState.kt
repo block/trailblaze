@@ -50,14 +50,25 @@ class VideoPlaybackState internal constructor() {
   /**
    * Playback speed multiplier. Cycles through 0.25x, 0.5x, 1x, 1.5x, 2x, 4x.
    *
-   * Default is 2x — fast enough for a punchy timeline walkthrough but slow enough that
-   * the Compose canvas still has time to paint each scrub tick. 4x was briefly the
-   * default (#3064) but produced visibly torn frames where the screenshot area didn't
-   * finish drawing before the scrubber moved on, especially noticeable in
-   * `trailblaze report --video` exports where the headless browser pipeline gives the
-   * renderer no slack.
+   * Default is 4x — keeps walkthrough length tight enough to share inline (long sessions
+   * at 2x easily exceed GitHub's comment-attachment size limit). The Compose canvas can
+   * occasionally produce a torn screenshot frame at 4x where the scrubber moves on before
+   * the paint completes, more visible under the headless export pipeline than in the
+   * desktop viewer; users who care about export fidelity over length can drop to 2x via
+   * the speed picker. #3064 originally bumped to 4x, #3083 took it from 2x → 4x after
+   * dogfooding showed the size tradeoff dominates day-to-day.
+   *
+   * **Exporter contract**: this value is read by the autoplay loop in
+   * [xyz.block.trailblaze.ui.tabs.session.SessionCombinedView] and dictates how fast
+   * `?autoplay=1` advances the scrubber. The CLI exporters
+   * `xyz.block.trailblaze.cli.ReportGifExporter` and
+   * `xyz.block.trailblaze.cli.ReportVideoExporter` capture in wall-clock and wait on
+   * `globalThis.__tbPlaybackEnded` (see
+   * [xyz.block.trailblaze.ui.signalExportPlaybackEnded]) — changing this default
+   * directly affects capture wall-clock duration and per-frame visual delta. Coordinate
+   * with the exporter tests before flipping it again.
    */
-  internal var playbackSpeed: Float by mutableStateOf(2f)
+  internal var playbackSpeed: Float by mutableStateOf(4f)
 
   /**
    * Seek request for the video player (ms from video start). Set when the user scrubs/taps the

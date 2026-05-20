@@ -228,6 +228,163 @@ class YamlBackedHostAppTargetTest {
     assertTrue(target.getCustomToolsForDriver(TrailblazeDriverType.PLAYWRIGHT_ELECTRON).isEmpty())
   }
 
+  // --- allowsAppNotInstalled derivation ---
+  //
+  // Pins the per-target inference that keeps `default.yaml` (no app_ids declared anywhere)
+  // selectable as a generic stand-in while real product targets stay strict. Without this
+  // coverage, a future refactor of the `.all { isNullOrEmpty }` predicate could silently
+  // flip a product target to lenient-mode without anything failing. PR #3118 review feedback
+  // from Copilot called this gap out explicitly.
+
+  @Test
+  fun `allowsAppNotInstalled is true when no platforms section is declared`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: default
+      display_name: Default
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertTrue(target.allowsAppNotInstalled)
+  }
+
+  @Test
+  fun `allowsAppNotInstalled is true when every declared platform has no app_ids`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: default
+      display_name: Default
+      platforms:
+        android:
+          tool_sets: [core_interaction]
+        ios:
+          tool_sets: [core_interaction]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertTrue(target.allowsAppNotInstalled)
+  }
+
+  @Test
+  fun `allowsAppNotInstalled is false when at least one platform declares an app id`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: half-strict
+      display_name: Half Strict
+      platforms:
+        android:
+          app_ids:
+            - com.example.app
+        ios:
+          tool_sets: [core_interaction]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertFalse(target.allowsAppNotInstalled)
+  }
+
+  // --- getPossibleAppIdsForPlatform: null vs emptyList contract ---
+  //
+  // The base-class kdoc draws a load-bearing distinction: null = platform not supported,
+  // emptyList = supported but no specific id declared. The dialog's per-row enable gate
+  // (`acceptsDeviceForPlatform`) relies on this distinction to stop a web-only target from
+  // enabling Android/iOS rows. PR #3118 review feedback from Codex flagged the original
+  // implementation conflating both cases as null.
+
+  @Test
+  fun `getPossibleAppIdsForPlatform returns emptyList for declared platform with no app_ids`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: default
+      display_name: Default
+      platforms:
+        ios:
+          tool_sets: [core_interaction]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertEquals(emptyList(), target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS))
+  }
+
+  @Test
+  fun `getPossibleAppIdsForPlatform returns null for platform not declared at all`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: web-only
+      display_name: Web Only
+      platforms:
+        web:
+          drivers: [playwright-native]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertNull(target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID))
+    assertNull(target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS))
+  }
+
+  // --- acceptsDeviceForPlatform (cross-check) ---
+  //
+  // Sanity-checks that allowsAppNotInstalled does NOT bypass the platform-support gate.
+  // This is the codex P1 finding on PR #3118: a web-only target should not enable
+  // Android/iOS device rows just because it has no app_ids declared.
+
+  @Test
+  fun `acceptsDeviceForPlatform refuses unsupported platforms even when allowsAppNotInstalled`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: web-only
+      display_name: Web Only
+      platforms:
+        web:
+          drivers: [playwright-native]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    // The web-only target has no app_ids declared so allowsAppNotInstalled derives to true,
+    // but Android isn't a supported platform — the row must stay disabled.
+    assertTrue(target.allowsAppNotInstalled)
+    assertFalse(target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, installedAppId = null))
+    assertFalse(target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.IOS, installedAppId = null))
+  }
+
+  @Test
+  fun `acceptsDeviceForPlatform allows declared platform with no installed app for stand-in target`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: default
+      display_name: Default
+      platforms:
+        android:
+          tool_sets: [core_interaction]
+        ios:
+          tool_sets: [core_interaction]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertTrue(target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, installedAppId = null))
+    assertTrue(target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.IOS, installedAppId = null))
+  }
+
+  @Test
+  fun `acceptsDeviceForPlatform requires an installed app for strict product target`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: strict
+      display_name: Strict
+      platforms:
+        android:
+          app_ids:
+            - com.example.app
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertFalse(target.allowsAppNotInstalled)
+    assertFalse(target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, installedAppId = null))
+    assertTrue(
+      target.acceptsDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, installedAppId = "com.example.app"),
+    )
+  }
+
   @Test
   fun `root level inline script tools are exposed separately from platform tools`() {
     val target = AppTargetYamlLoader.loadFromYaml(

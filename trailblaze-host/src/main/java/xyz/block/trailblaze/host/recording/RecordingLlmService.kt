@@ -63,7 +63,7 @@ class RecordingLlmService(
       )
 
       val promptId = Uuid.random().toString()
-      // llmClient is lazy — first access may trigger auth (e.g., Databricks SSO browser flow).
+      // llmClient is lazy — first access may trigger auth (e.g., an OAuth browser flow).
       // Running on Dispatchers.IO ensures this doesn't block the UI thread.
       val responses: List<Message.Response> = llmClient.execute(
         prompt = Prompt(

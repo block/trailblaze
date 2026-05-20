@@ -4,7 +4,6 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
-import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -168,38 +167,38 @@ internal class MuxToMp4Consumer(
     }
     val listFile = File(sessionDir, "video.segments.txt")
     listFile.writeText(segments.joinToString("\n") { "file '${it.absolutePath}'" })
-    return try {
-      val pb = ProcessBuilder(
-        ffmpegBinary,
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", listFile.absolutePath,
-        "-c", "copy",
-        "-movflags", "+faststart+frag_keyframe",
-        output.absolutePath,
-      ).redirectErrorStream(true)
-      val process = pb.start()
-      // Drain stdout to avoid blocking.
-      val drained = process.inputStream.bufferedReader().readText()
-      val finished = process.waitFor(FFMPEG_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-      if (!finished) {
-        process.destroyForcibly()
-        Console.log("[MuxToMp4Consumer] ffmpeg concat timed out after ${FFMPEG_TIMEOUT_SECONDS}s")
-        return segments.firstOrNull()
-      }
-      if (process.exitValue() != 0 || output.length() == 0L) {
-        Console.log("[MuxToMp4Consumer] ffmpeg concat failed: exit=${process.exitValue()}\n$drained")
-        return segments.firstOrNull()
-      }
-      // Concat succeeded — clean up the per-segment files and the list.
-      segments.forEach { it.delete() }
-      listFile.delete()
-      output
-    } catch (e: Exception) {
-      Console.log("[MuxToMp4Consumer] ffmpeg not available for concat: ${e.message}")
-      segments.firstOrNull()
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
+            ffmpegBinary,
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", listFile.absolutePath,
+            "-c", "copy",
+            "-movflags", "+faststart+frag_keyframe",
+            output.absolutePath,
+          ),
+        timeoutSeconds = FFMPEG_TIMEOUT_SECONDS,
+      )
+    if (result == null) {
+      Console.log(
+        "[MuxToMp4Consumer] ffmpeg concat did not start or timed out after ${FFMPEG_TIMEOUT_SECONDS}s"
+      )
+      return segments.firstOrNull()
     }
+    if (result.exitCode != 0 || output.length() == 0L) {
+      Console.log(
+        "[MuxToMp4Consumer] ffmpeg concat failed: exit=${result.exitCode}\n" +
+          sanitizeSubprocessOutputForLog(result.output)
+      )
+      return segments.firstOrNull()
+    }
+    // Concat succeeded — clean up the per-segment files and the list.
+    segments.forEach { it.delete() }
+    listFile.delete()
+    return output
   }
 
   /**
@@ -208,33 +207,32 @@ internal class MuxToMp4Consumer(
    * how many segments produced it.
    */
   private fun wrapSingleSegment(segment: File, output: File): File? {
-    return try {
-      val pb = ProcessBuilder(
-        ffmpegBinary,
-        "-y",
-        "-i", segment.absolutePath,
-        "-c", "copy",
-        "-movflags", "+faststart+frag_keyframe",
-        output.absolutePath,
-      ).redirectErrorStream(true)
-      val process = pb.start()
-      val drained = process.inputStream.bufferedReader().readText()
-      val finished = process.waitFor(FFMPEG_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-      if (!finished) {
-        process.destroyForcibly()
-        Console.log("[MuxToMp4Consumer] ffmpeg wrap timed out")
-        return null
-      }
-      if (process.exitValue() != 0 || output.length() == 0L) {
-        Console.log("[MuxToMp4Consumer] ffmpeg wrap failed: exit=${process.exitValue()}\n$drained")
-        return null
-      }
-      segment.delete()
-      output
-    } catch (e: Exception) {
-      Console.log("[MuxToMp4Consumer] ffmpeg not available for wrap: ${e.message}")
-      null
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
+            ffmpegBinary,
+            "-y",
+            "-i", segment.absolutePath,
+            "-c", "copy",
+            "-movflags", "+faststart+frag_keyframe",
+            output.absolutePath,
+          ),
+        timeoutSeconds = FFMPEG_TIMEOUT_SECONDS,
+      )
+    if (result == null) {
+      Console.log("[MuxToMp4Consumer] ffmpeg wrap did not start or timed out")
+      return null
     }
+    if (result.exitCode != 0 || output.length() == 0L) {
+      Console.log(
+        "[MuxToMp4Consumer] ffmpeg wrap failed: exit=${result.exitCode}\n" +
+          sanitizeSubprocessOutputForLog(result.output)
+      )
+      return null
+    }
+    segment.delete()
+    return output
   }
 
   companion object {

@@ -21,7 +21,10 @@ Trailblaze - AI-powered device automation
   trail     Run a trail file (.trail.yaml) — execute a scripted test on a
               device.
   session   Every blaze records a session — save it as a replayable trail
-  report    Generate an HTML or JSON report from session recordings
+  report    Generate an HTML report for session recordings, plus a best-effort
+              JSON summary, and optionally MP4/GIF/WebP exports for a single
+              session. JSON-only failures log a warning and still exit 0 — HTML
+              is the primary artifact and is what gates the exit code.
   waypoint  Match named app locations (waypoints) against captured screen state.
   config    View and set configuration (target app, device defaults, AI
               provider)

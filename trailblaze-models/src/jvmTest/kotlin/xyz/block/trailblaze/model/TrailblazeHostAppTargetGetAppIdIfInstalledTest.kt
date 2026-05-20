@@ -165,6 +165,40 @@ class TrailblazeHostAppTargetGetAppIdIfInstalledTest {
     }
   }
 
+  // --- DefaultTrailblazeHostAppTarget singleton ---
+  //
+  // Pins the contract of the built-in stand-in target — every platform must report as
+  // supported (empty list, not null) and `allowsAppNotInstalled` must be true. Without
+  // these, the Run Configuration dialog's `acceptsDeviceForPlatform` gate disables every
+  // device row when discovery falls back to the singleton (clean checkout with no
+  // `default.yaml`). PR #3118 follow-up.
+
+  @Test
+  fun `DefaultTrailblazeHostAppTarget allows app not installed`() {
+    assertTrue(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.allowsAppNotInstalled)
+  }
+
+  @Test
+  fun `DefaultTrailblazeHostAppTarget reports every platform as supported with no specific id`() {
+    val default = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    for (platform in TrailblazeDevicePlatform.entries) {
+      assertEquals(
+        emptyList(),
+        default.getPossibleAppIdsForPlatform(platform),
+        "DefaultTrailblazeHostAppTarget must return emptyList (not null) for $platform — " +
+          "null would be misread as 'platform not supported' by acceptsDeviceForPlatform.",
+      )
+    }
+  }
+
+  @Test
+  fun `DefaultTrailblazeHostAppTarget accepts any device with no installed app`() {
+    val default = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    for (platform in TrailblazeDevicePlatform.entries) {
+      assertTrue(default.acceptsDeviceForPlatform(platform, installedAppId = null))
+    }
+  }
+
   @Test
   fun `requireInstalledAppIdForDevice falls back to first declared when allowsAppNotInstalled`() {
     // Stand-in targets (e.g. the generic `default` target) opt in via [allowsAppNotInstalled]

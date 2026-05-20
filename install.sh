@@ -54,7 +54,7 @@ fi
 # Optional runtime tools — surface a warning rather than aborting the install so users who
 # only run pre-recorded trails (no scripted tool authoring, no video capture) aren't blocked.
 optional_dependency esbuild \
-  "scripted-tool authoring (`.ts` pack tools) won't bundle. Required only if you run trails that exercise pack-defined scripted tools."
+  "scripted-tool authoring (\`.ts\` pack tools) won't bundle. Required only if you run trails that exercise pack-defined scripted tools."
 optional_dependency ffmpeg \
   "trail video capture / sprite extraction will be skipped. Trails still run; only the visual playback artifacts are unavailable."
 optional_dependency bun \

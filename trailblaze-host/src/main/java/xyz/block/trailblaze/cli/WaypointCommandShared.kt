@@ -2,12 +2,14 @@ package xyz.block.trailblaze.cli
 
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
+import xyz.block.trailblaze.cli.tune.WaypointSiblingCollisionGuard
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointLoader
 import java.io.File
 
@@ -23,6 +25,62 @@ import java.io.File
  * `--root <path>` explicitly.
  */
 internal const val DEFAULT_WAYPOINT_ROOT = "./trails"
+
+/**
+ * Screen-state log filename suffixes the matcher consumes. Shared by every CLI command
+ * that needs to walk a session set (`waypoint tune`, `waypoint propose`, future
+ * automation lifts). Mirrors the producer set inside
+ * [SessionLogScreenState.listScreenStateLogs] — keep both in lock-step or the
+ * walk-and-load handshake silently loses log types.
+ */
+internal val SCREEN_STATE_LOG_SUFFIXES = listOf(
+  "_AgentDriverLog.json",
+  "_TrailblazeSnapshotLog.json",
+  "_TrailblazeLlmRequestLog.json",
+)
+
+/**
+ * Walks [root] for every screen-state log under any session directory and returns one
+ * [WaypointSiblingCollisionGuard.SessionStep] per loadable step. Shared between
+ * `waypoint tune` and `waypoint propose` (both treat the session set identically: one
+ * matcher run per (waypoint × step), so the loader is single-source-of-truth).
+ *
+ * Sessions are discovered as the distinct parent directories of any screen-state log
+ * matched by [SCREEN_STATE_LOG_SUFFIXES]. Per-step enumeration delegates to
+ * [SessionLogScreenState.listScreenStateLogs] so each session's log set matches what
+ * the matcher itself sees. Unloadable sessions / steps are logged via [Console.error]
+ * and skipped — partial corpora are usable downstream, a single bad zip shouldn't take
+ * the whole run with it.
+ */
+internal fun loadSessions(root: File): List<WaypointSiblingCollisionGuard.SessionStep> {
+  val out = mutableListOf<WaypointSiblingCollisionGuard.SessionStep>()
+  val sessionDirs = root.walkTopDown()
+    .filter { it.isFile && SCREEN_STATE_LOG_SUFFIXES.any { sfx -> it.name.endsWith(sfx) } }
+    .mapNotNull { it.parentFile }
+    .distinct()
+    .toList()
+  if (sessionDirs.isEmpty()) return emptyList()
+  for (sessionDir in sessionDirs) {
+    val sessionId = sessionDir.name
+    val logs = try {
+      SessionLogScreenState.listScreenStateLogs(sessionDir)
+    } catch (e: Exception) {
+      Console.error("Skipping unreadable session ${sessionDir.absolutePath}: ${e.message}")
+      continue
+    }
+    for (logFile in logs) {
+      val stepId = logFile.relativeToOrSelf(root).path
+      val screen = try {
+        SessionLogScreenState.loadStep(logFile)
+      } catch (e: Exception) {
+        Console.error("Skipping unloadable step $stepId: ${e.message}")
+        continue
+      }
+      out += WaypointSiblingCollisionGuard.SessionStep(sessionId, stepId, screen)
+    }
+  }
+  return out
+}
 
 /** Surfaces any per-file parse failures from [WaypointLoader.loadAllResilient]. */
 internal fun reportLoadFailures(result: WaypointLoader.LoadResult) {

@@ -791,7 +791,7 @@ internal fun VideoPlaybackControls(
   onPlayPauseClick: () -> Unit,
   currentPositionMs: Long,
   durationMs: Long,
-  playbackSpeed: Float = 2f,
+  playbackSpeed: Float = 4f,
   onSpeedChange: ((Float) -> Unit)? = null,
 ) {
   Row(

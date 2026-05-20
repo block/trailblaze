@@ -77,7 +77,7 @@ It does not reap device-scoped `blaze` sessions; use `app --stop` for those.
 | `toolbox` | Browse available tools by target app and platform |
 | `trail` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
 | `session` | Every blaze records a session — save it as a replayable trail |
-| `report` | Generate an HTML or JSON report from session recordings |
+| `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
@@ -334,7 +334,6 @@ trailblaze session list
 trailblaze session artifacts
 trailblaze session delete
 trailblaze session end
-trailblaze session report
 ```
 
 **Options:**
@@ -538,31 +537,9 @@ trailblaze session end [OPTIONS]
 
 ---
 
-### `trailblaze session report`
-
-Generate an HTML or JSON report for this session
-
-**Synopsis:**
-
-```
-trailblaze session report [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--id` | Session ID to report on (defaults to current session, supports prefix matching) | - |
-| `--open` | Open the report in the default browser after generation (HTML only) | - |
-| `--format` | Output format: html (default) or json — JSON emits a CiSummaryReport artifact | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
 ### `trailblaze report`
 
-Generate an HTML or JSON report from session recordings
+Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code.
 
 **Synopsis:**
 
@@ -574,11 +551,16 @@ trailblaze report [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--id` | Session ID to report on (defaults to all sessions) | - |
-| `--open` | Open the report in the default browser after generation (HTML only) | - |
-| `--format` | Output format: html (default) or json — JSON emits a CiSummaryReport artifact | - |
-| `--video` | Export the HTML report's timeline autoplay as an MP4 to the given path. Drives a headless Playwright browser internally; playback speed comes from the report's own UI default (2x today). Implies --format=html and requires --id. | - |
-| `--video-show-browser` | When exporting via --video, show the Playwright browser window instead of running it headless. Useful for debugging the export. | - |
+| `--id` | Narrow to a single session (defaults to all sessions). Use `trailblaze session list` to find IDs. Prefix matching is supported. | - |
+| `--current` | Narrow to the currently active session (resolved via the running daemon). Mutually exclusive with --id. | - |
+| `--open` | Open the HTML report in the default browser after generation. | - |
+| `--output-dir` | Write all artifacts into this directory with canonical names (report.html, summary.json, timeline.mp4, timeline.gif, timeline.webp). Created if it doesn't exist. If omitted, artifacts land in the default `logs/reports/` location with timestamped names. | - |
+| `--video` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an MP4. NOT the raw device recording — that's a separate artifact in the session's logs dir. Path defaults to <report-dir>/<session-id>.mp4 (or <output-dir>/timeline.mp4 when --output-dir is set). Single-session only — pass --id or --current. | - |
+| `--gif` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated GIF. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.gif (or <output-dir>/timeline.gif when --output-dir is set). Smaller and easier to paste into a PR than --video, at the cost of a lower frame rate and 256-color palette. Single-session only — pass --id or --current. Frame capture is shared with --webp: passing this bare (no path) auto-emits a companion .webp at the default path for free — pass --no-webp to suppress. An explicit path here limits output to just that file. | - |
+| `--webp` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated WebP. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.webp (or <output-dir>/timeline.webp when --output-dir is set). Typically 25–50% smaller than the equivalent --gif (24-bit color, inter-frame deltas) — useful when the GIF would push past GitHub's 10MB inline attachment limit. GitHub renders animated WebP inline the same as GIF. Single-session only — pass --id or --current. Frame capture is shared with --gif: passing this bare (no path) auto-emits a companion .gif at the default path for free — pass --no-gif to suppress. An explicit path here limits output to just that file. | - |
+| `--no-gif` | Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. Use this on scripts and CI flows that only embed the .webp and want to skip the wasted GIF encode. Mutually exclusive with --gif. | - |
+| `--no-webp` | Suppress the auto-emitted .webp companion when --gif is requested with a bare flag. Mutually exclusive with --webp. | - |
+| `--max-size` | Cap each exported timeline artifact (--gif / --video / --webp) at the given byte size. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G). After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap, the export fails with an actionable error — drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The flag is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -600,6 +582,8 @@ trailblaze waypoint suggest-selector
 trailblaze waypoint migrate-trail
 trailblaze waypoint segment
 trailblaze waypoint graph
+trailblaze waypoint tune
+trailblaze waypoint propose
 ```
 
 **Options:**
@@ -646,11 +630,13 @@ trailblaze waypoint locate [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--session` | Session log directory (containing *_TrailblazeLlmRequestLog.json files) | - |
-| `--step` | 1-based index of the step within the session (default: last step) | - |
+| `--session` | Session log directory. With --step, locates a single step; without --step, batch-locates every screen-state log in the dir and emits one TSV row per step. | - |
+| `--step` | 1-based index of the step within the session (single-step mode; selects from *_TrailblazeLlmRequestLog.json files) | - |
 | `--file` | Direct path to a *_TrailblazeLlmRequestLog.json file (alternative to --session/--step) | - |
 | `--target` | Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/. Mutually exclusive with --root (--root wins if both given). | - |
 | `--root` | Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: ./trails) | - |
+| `--rel-base` | Batch mode only: emit log paths relative to this directory. Must be an existing directory. Default: relative to the session dir's parent (yielding <session-name>/<step-filename>). | - |
+| `--log-suffix` | Batch mode only: restrict the walk to logs whose filename ends with this suffix (e.g. `_AgentDriverLog.json`). Default: every screen-state log type (`_AgentDriverLog.json`, `_TrailblazeSnapshotLog.json`, `_TrailblazeLlmRequestLog.json`). Use to pin row accounting against a specific log type when the session dir may carry multiple. | - |
 | `--live` | Pull screen state from the connected device (not yet implemented) | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -839,6 +825,58 @@ trailblaze waypoint graph [OPTIONS]
 | `--platform` | Platform to scope the graph to (`android`, `ios`, or `web`). Filters waypoints whose source path is under `waypoints/<platform>/...` and drops shortcuts/trailheads that cross out of that scope. Combine with --target to produce a single (target, platform) map. | - |
 | `--root` | Filesystem directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Overrides --target's root resolution. Pack-bundled waypoints from the classpath are always included regardless of this flag. | - |
 | `--out`, `-o` | Output HTML file path (default: ./.trailblaze/reports/waypoint-graph.html, relative to the current directory). The default scopes the artifact to .trailblaze/reports/ — a stack-agnostic, generated-output-only subpath that consumers can gitignore without having to blanket-ignore the rest of .trailblaze/ (which may hold things they want to commit). Parent directories are created if missing; the file is overwritten if present. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze waypoint tune`
+
+Analyze a session set for near-miss patterns and propose YAML edits. Each surviving proposal lands as a JSON+YAML pair under --out-dir, ready for the pipeline's auto-PR step to materialize as one PR per proposal.
+
+**Synopsis:**
+
+```
+trailblaze waypoint tune [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--sessions` | Directory containing one or more session subdirectories. Each subdirectory is treated as a session; *_AgentDriverLog.json (or any screen-state log) inside is treated as a step. Required. | - |
+| `--target` | Pack id. Resolves --root to <workspace>/packs/<id>/waypoints/. Also supplies the pack's app_ids for templated selector expansion. | - |
+| `--root` | Directory containing *.waypoint.yaml files to consider for tuning. Overrides --target. (Convention: ./trails) | - |
+| `--min-support` | Minimum number of supporting sessions for a proposal to fire. Default: 5. | - |
+| `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_tune/proposals/. Wiped at the start of each run. | - |
+| `--idempotence-check` | After the first pass, re-run the analyzer on the same session set with the proposals applied in-memory and fail if the second pass emits any proposal. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze waypoint propose`
+
+Synthesize draft waypoint YAMLs from unmatched-cluster fingerprints. Emits one proposal sidecar per surviving cluster to --out-dir; the `trailblaze-waypoints-propose` pipeline picks them up and opens one PR per proposal.
+
+**Synopsis:**
+
+```
+trailblaze waypoint propose [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--cluster` | Single JSONL cluster line. Mutually exclusive with --aggregate. | - |
+| `--aggregate` | Path to unmatched-clusters.jsonl. Pipeline mode. Mutually exclusive with --cluster. | - |
+| `--sessions` | Directory containing the session logs used by the source build. Each cluster's `example_log` path is resolved relative to this dir, and the cross-waypoint bleed guard walks the full session set. | - |
+| `--target` | Pack id. Resolves --root + provides the proposal namespace (`<target>/auto-<slug>`). | - |
+| `--root` | Override the waypoint-root dir for sibling-overlap checks. (Convention: ./trails) | - |
+| `--top-n` | Maximum number of clusters to process in --aggregate mode (default: 10). | - |
+| `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_propose/proposals/. Wiped at the start of each run. | - |
+| `--idempotence-check` | Re-run after applying the proposals in-memory; fail (exit 1) if the second pass emits any new proposal. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

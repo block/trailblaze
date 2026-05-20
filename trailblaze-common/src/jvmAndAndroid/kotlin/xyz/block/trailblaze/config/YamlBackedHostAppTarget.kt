@@ -39,7 +39,24 @@ class YamlBackedHostAppTarget(
 
   override fun getPossibleAppIdsForPlatform(
     platform: TrailblazeDevicePlatform,
-  ): List<String>? = findPlatformConfig(platform)?.appIds
+  ): List<String>? {
+    // Honor the base-class contract: null = platform not supported by this target,
+    // emptyList = platform supported but no specific id declared. The previous version
+    // returned null in both cases, which the UI then couldn't tell apart — that broke
+    // the `acceptsDeviceForPlatform` gate for a web-only target on an iOS device row
+    // (PR #3118 follow-up).
+    val platformConfig = findPlatformConfig(platform) ?: return null
+    return platformConfig.appIds ?: emptyList()
+  }
+
+  // A target that declares no app_ids on any platform it does support is a
+  // platform-tools-only stand-in (mirrors DefaultTrailblazeHostAppTarget): any installed
+  // app is fine on the platforms it covers. Real product targets declare at least one
+  // app id and stay strict. Per-platform support is enforced separately in
+  // `acceptsDeviceForPlatform`, so a web-only target with this flag stays disabled on
+  // Android/iOS rows.
+  override val allowsAppNotInstalled: Boolean =
+    config.platforms?.values?.all { it.appIds.isNullOrEmpty() } ?: true
 
   // --- Custom tools per driver type ---
 

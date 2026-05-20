@@ -46,6 +46,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -53,6 +54,29 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.getVersionInfo
 import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
+
+/**
+ * Whether this device should be selectable for [target] in the Run Configuration dialog.
+ *
+ * Web rows are always enabled (no app to install). When no target is selected the row is
+ * also enabled — pre-existing behavior. For native rows with a selected target this delegates
+ * to [TrailblazeHostAppTarget.acceptsDeviceForPlatform], which both checks that the target
+ * supports the device platform AND applies the `allowsAppNotInstalled` bypass.
+ *
+ * Single source of truth for the predicate previously inlined at four sites in this file.
+ */
+private fun TrailblazeConnectedDeviceSummary.isEligibleFor(
+  target: TrailblazeHostAppTarget?,
+  installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>>,
+): Boolean {
+  if (platform == TrailblazeDevicePlatform.WEB) return true
+  if (target == null) return true
+  val installedAppId = target.getAppIdIfInstalled(
+    platform = platform,
+    installedAppIds = installedAppIdsByDevice[trailblazeDeviceId] ?: emptySet(),
+  )
+  return target.acceptsDeviceForPlatform(platform, installedAppId)
+}
 
 /**
  * Core device configuration content that can be reused in different contexts
@@ -92,13 +116,8 @@ fun DeviceConfigurationContent(
   ) {
     mutableStateOf(
       availableDevices.filter { device ->
-        val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
-        val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
-          platform = device.platform,
-          installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
-        )
         device.instanceId in lastSelectedDeviceInstanceIds &&
-            (isWebPlatform || selectedTargetApp == null || appIdIfInstalled != null)
+            device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
       }.toSet()
     )
   }
@@ -184,14 +203,11 @@ fun DeviceConfigurationContent(
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         availableDevices.forEach { device ->
-          val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
           val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
             platform = device.platform,
             installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
           )
-          val isAppInstalled = appIdIfInstalled != null
-          // Web browsers are always enabled (no app to install); other devices need app check
-          val isDeviceEnabled = isWebPlatform || selectedTargetApp == null || isAppInstalled
+          val isDeviceEnabled = device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
           val activeSessionId = activeDeviceSessions[device.trailblazeDeviceId]
           val hasActiveSession = activeSessionId != null
           // Get version info for the installed app
@@ -278,20 +294,8 @@ fun DeviceSelectionDialog(
   ) {
     mutableStateOf(
       availableDevices.filter { device ->
-        val isDeviceSelected = device.instanceId in lastSelectedDeviceInstanceIds
-        val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
-        if (isWebPlatform) {
-          // Web browsers are always selectable
-          isDeviceSelected
-        } else if (selectedTargetApp != null) {
-          val appIdIfInstalled = selectedTargetApp.getAppIdIfInstalled(
-            platform = device.platform,
-            installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
-          )
-          isDeviceSelected && (appIdIfInstalled != null)
-        } else {
-          isDeviceSelected
-        }
+        device.instanceId in lastSelectedDeviceInstanceIds &&
+            device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
       }.toSet()
     )
   }
@@ -454,8 +458,12 @@ fun SingleDeviceListItem(
   // Web browsers don't have apps to install - they're always ready to use
   val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
   val isAppInstalled = installedAppId != null
-  // Web devices are always enabled; other devices need app installation check
-  val isEnabled = isWebPlatform || appTarget == null || isAppInstalled
+  val isEnabled = isWebPlatform || appTarget == null ||
+      appTarget.acceptsDeviceForPlatform(device.platform, installedAppId)
+  // Gate the "any app supported" friendly message on the row actually being eligible — a
+  // target that opts into [allowsAppNotInstalled] on platforms it supports shouldn't claim
+  // "any app supported" on a platform it doesn't support at all.
+  val allowsAppNotInstalled = appTarget?.allowsAppNotInstalled == true && isEnabled
   // A device has an active session if there's a session ID
   val hasActiveSession = activeSessionId != null
 
@@ -603,6 +611,21 @@ fun SingleDeviceListItem(
                 }
                 Text(
                   text = versionText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.Medium
+                )
+              } else if (allowsAppNotInstalled) {
+                // Generic stand-in target (e.g. "Default") — no specific app id is required, so
+                // a missing install is expected and the device should still be usable.
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(16.dp)
+                )
+                Text(
+                  text = "${appTarget.displayName} target — any app supported",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.primary,
                   fontWeight = FontWeight.Medium

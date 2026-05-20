@@ -247,6 +247,48 @@ class WaypointCommandSharedTest {
   }
 
   // ==========================================================================
+  // loadSessions — shared session walker (used by both `waypoint tune` and
+  // `waypoint propose`). Before the PR #3121 extraction each command had its own
+  // copy; now a regression here breaks BOTH pipelines silently. Pin the contract.
+  // ==========================================================================
+
+  @Test
+  fun `loadSessions walks every session and recognizes all three screen-state log suffixes`() {
+    val root = newTempDir()
+    // Three sessions, each carrying a DIFFERENT log type. Pins the round-1 #7 fix that
+    // broadened the walk beyond `_AgentDriverLog.json`-only.
+    val sessA = File(root, "zip-a/session-1").apply { mkdirs() }
+    File(sessA, "step1_AgentDriverLog.json").writeText(STUB_LOG)
+    val sessB = File(root, "zip-b/session-2").apply { mkdirs() }
+    File(sessB, "step1_TrailblazeSnapshotLog.json").writeText(STUB_LOG)
+    val sessC = File(root, "zip-c/session-3").apply { mkdirs() }
+    File(sessC, "step1_TrailblazeLlmRequestLog.json").writeText(STUB_LOG)
+    // A non-session subdirectory must be ignored.
+    File(root, "zip-a/not-a-session/random.txt").apply {
+      parentFile.mkdirs(); writeText("ignore me")
+    }
+
+    val sessions = loadSessions(root)
+
+    val sessionIds = sessions.map { it.sessionId }.distinct().sorted()
+    assertEquals(listOf("session-1", "session-2", "session-3"), sessionIds)
+    assertEquals(
+      3,
+      sessions.size,
+      "expected one step per session (1×3); got ${sessions.size} (${sessions.map { it.stepId }})",
+    )
+  }
+
+  @Test
+  fun `loadSessions on a root with no screen-state logs returns empty`() {
+    val root = newTempDir()
+    File(root, "empty-zip/empty-session/random.txt").apply {
+      parentFile.mkdirs(); writeText("nothing screen-state-shaped")
+    }
+    assertTrue(loadSessions(root).isEmpty())
+  }
+
+  // ==========================================================================
   // Test infrastructure.
   // ==========================================================================
 
@@ -258,4 +300,13 @@ class WaypointCommandSharedTest {
 
   private fun <T> withCapture(block: () -> T): T =
     CliOutCapture.withCapture(capturedOut, capturedErr, block)
+
+  private companion object {
+    /**
+     * Minimal JSON payload that `SessionLogScreenState.loadStep` parses cleanly (empty
+     * viewHierarchy, no nodeTree). Just enough to traverse `listScreenStateLogs`
+     * enumeration + `loadStep` without throwing.
+     */
+    const val STUB_LOG = """{"deviceWidth":1080,"deviceHeight":1920,"trailblazeDevicePlatform":"ANDROID"}"""
+  }
 }

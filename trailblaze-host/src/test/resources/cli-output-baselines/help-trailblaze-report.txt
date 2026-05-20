@@ -5,21 +5,91 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hV] [--open] [--video-show-browser]
-                         [--format=<format>] [--id=<id>] [--video=<videoOutput>]
-Generate an HTML or JSON report from session recordings
-      --format=<format>      Output format: html (default) or json — JSON emits
-                               a CiSummaryReport artifact
+Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open]
+                         [--gif[=<gifOutput>]] [--video[=<videoOutput>]] [--webp
+                         [=<webpOutput>]] [--id=<id>] [--max-size=<maxSize>]
+                         [--output-dir=<outputDir>]
+Generate an HTML report for session recordings, plus a best-effort JSON
+summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only
+failures log a warning and still exit 0 — HTML is the primary artifact and is
+what gates the exit code.
+      --current              Narrow to the currently active session (resolved
+                               via the running daemon). Mutually exclusive with
+                               --id.
+      --gif[=<gifOutput>]    Export the HTML report's timeline autoplay (the
+                               scrubbing view with step labels and annotations)
+                               as an animated GIF. NOT the raw device
+                               recording. Path defaults to
+                               <report-dir>/<session-id>.gif (or
+                               <output-dir>/timeline.gif when --output-dir is
+                               set). Smaller and easier to paste into a PR than
+                               --video, at the cost of a lower frame rate and
+                               256-color palette. Single-session only — pass
+                               --id or --current. Frame capture is shared with
+                               --webp: passing this bare (no path) auto-emits a
+                               companion .webp at the default path for free —
+                               pass --no-webp to suppress. An explicit path
+                               here limits output to just that file.
   -h, --help                 Show this help message and exit.
-      --id=<id>              Session ID to report on (defaults to all sessions)
-      --open                 Open the report in the default browser after
-                               generation (HTML only)
+      --id=<id>              Narrow to a single session (defaults to all
+                               sessions). Use `trailblaze session list` to find
+                               IDs. Prefix matching is supported.
+      --max-size=<maxSize>   Cap each exported timeline artifact (--gif /
+                               --video / --webp) at the given byte size.
+                               Accepts plain bytes (1024000) or human-readable
+                               suffixes (10MB, 5M, 1.5G). After the initial
+                               encode, the exporter iteratively re-encodes at
+                               smaller viewport widths (1280→1024→720→640→480)
+                               until the artifact fits, then stops. If even the
+                               readability floor (480px) is still over the cap,
+                               the export fails with an actionable error — drop
+                               GIF for --webp or --video (both compress
+                               dramatically better), or shorten the recorded
+                               session (fewer trail steps, or split into
+                               multiple sessions). The flag is applied per
+                               artifact, so `--gif --webp --max-size=10MB` caps
+                               each one independently.
+      --no-gif               Suppress the auto-emitted .gif companion when
+                               --webp is requested with a bare flag. Use this
+                               on scripts and CI flows that only embed the .
+                               webp and want to skip the wasted GIF encode.
+                               Mutually exclusive with --gif.
+      --no-webp              Suppress the auto-emitted .webp companion when
+                               --gif is requested with a bare flag. Mutually
+                               exclusive with --webp.
+      --open                 Open the HTML report in the default browser after
+                               generation.
+      --output-dir=<outputDir>
+                             Write all artifacts into this directory with
+                               canonical names (report.html, summary.json,
+                               timeline.mp4, timeline.gif, timeline.webp).
+                               Created if it doesn't exist. If omitted,
+                               artifacts land in the default `logs/reports/`
+                               location with timestamped names.
   -V, --version              Print version information and exit.
-      --video=<videoOutput>  Export the HTML report's timeline autoplay as an
-                               MP4 to the given path. Drives a headless
-                               Playwright browser internally; playback speed
-                               comes from the report's own UI default (2x
-                               today). Implies --format=html and requires --id.
-      --video-show-browser   When exporting via --video, show the Playwright
-                               browser window instead of running it headless.
-                               Useful for debugging the export.
+      --video[=<videoOutput>]
+                             Export the HTML report's timeline autoplay (the
+                               scrubbing view with step labels and annotations)
+                               as an MP4. NOT the raw device recording — that's
+                               a separate artifact in the session's logs dir.
+                               Path defaults to <report-dir>/<session-id>.mp4
+                               (or <output-dir>/timeline.mp4 when --output-dir
+                               is set). Single-session only — pass --id or
+                               --current.
+      --webp[=<webpOutput>]  Export the HTML report's timeline autoplay (the
+                               scrubbing view with step labels and annotations)
+                               as an animated WebP. NOT the raw device
+                               recording. Path defaults to
+                               <report-dir>/<session-id>.webp (or
+                               <output-dir>/timeline.webp when --output-dir is
+                               set). Typically 25–50% smaller than the
+                               equivalent --gif (24-bit color, inter-frame
+                               deltas) — useful when the GIF would push past
+                               GitHub's 10MB inline attachment limit. GitHub
+                               renders animated WebP inline the same as GIF.
+                               Single-session only — pass --id or --current.
+                               Frame capture is shared with --gif: passing this
+                               bare (no path) auto-emits a companion .gif at
+                               the default path for free — pass --no-gif to
+                               suppress. An explicit path here limits output to
+                               just that file.

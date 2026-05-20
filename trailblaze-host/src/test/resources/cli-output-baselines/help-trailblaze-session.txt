@@ -21,4 +21,3 @@ Commands:
   delete     Delete a session's logs and artifacts
   end        End the CLI session and release the device (deprecated: use 'stop'
                instead)
-  report     Generate an HTML or JSON report for this session

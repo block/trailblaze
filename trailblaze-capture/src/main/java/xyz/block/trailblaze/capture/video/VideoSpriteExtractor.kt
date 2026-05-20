@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.capture.video
 
 import java.io.File
-import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.util.Console
@@ -44,6 +43,13 @@ object VideoSpriteExtractor {
    * Filename used by [writeFailureMarker] when sprite extraction bails out. Exposed as
    * a constant so the CI smoke test (`cli_smoke_tests_common.sh`) and any other
    * consumer can reference the same string without hardcoding it.
+   *
+   * **Overwrites on each failure.** [writeFailureMarker] uses `File.writeText`, so a session
+   * that hits more than one failure path before bailing keeps only the *last* reason. In
+   * practice the extractor short-circuits on first failure (every `writeFailureMarker` call
+   * is followed by `return null`), so there's exactly one writer per session — but CI
+   * operators should read the marker as "the failure that ended this session," not "every
+   * failure that happened."
    */
   const val FAILURE_MARKER_FILENAME = "video_sprites_failed.txt"
 
@@ -61,6 +67,52 @@ object VideoSpriteExtractor {
   private const val DEDUP_PIXEL_THRESHOLD = 1.0
 
   /**
+   * Fractional tolerance for the reported-vs-expected video duration check. Multiplied by
+   * the *expected* (recorder-observed wall-clock) duration to derive a tolerance window:
+   * if the container's reported duration is within `expectedS * FRAC` of expected, the
+   * re-stamp is skipped. Slightly looser than the obvious choice (5%) because
+   * variable-frame-rate captures and stop-latency jitter can legitimately move the
+   * container duration by a few percent from the wall-clock window even on healthy
+   * recordings.
+   */
+  private const val DURATION_MISMATCH_TOLERANCE_FRAC = 0.10
+
+  /**
+   * Lower-bound (in seconds) on the duration-mismatch tolerance. For short clips, 10% of the
+   * expected duration can be a fraction of a second; we don't want to trigger a re-stamp on
+   * sub-second timing wobble. Two seconds is well above start/stop latency for any of the
+   * three capture backends.
+   */
+  private const val DURATION_MISMATCH_TOLERANCE_FLOOR_S = 2.0
+
+  /**
+   * Sane bounds for the synthetic rate computed in `maybeRestamp`. 60 fps is the practical
+   * ceiling for any of the three capture backends today; doubling to 120 fps leaves headroom
+   * for future high-rate devices. The 0.1 fps lower bound is below any sensible capture rate.
+   * Outside this range, we treat the inputs as broken (e.g., near-zero `expectedDurationMs`
+   * combined with a non-trivial frame count) and skip the re-stamp rather than emit a filter
+   * chain that ffmpeg would render meaninglessly.
+   */
+  private const val SYNTHETIC_RATE_MIN = 0.1
+  private const val SYNTHETIC_RATE_MAX = 120.0
+
+  /**
+   * Timeout for the ffprobe-based duration probe. Header-only metadata (no `-count_frames`)
+   * should return in milliseconds; 10s is a generous bound that catches a wedged subprocess
+   * without making CI runs sit on a hang.
+   */
+  private const val FFPROBE_TIMEOUT_SECONDS: Long = 10L
+
+  /**
+   * Timeout for the heavier-weight ffmpeg invocations (frame extraction, sprite tile assembly).
+   * 120s mirrors what the open-coded versions used before they were migrated to
+   * `runSubprocessWithTimeout` — long enough for a multi-minute trail's worth of frames on a
+   * slow CI agent, short enough that a wedged ffmpeg doesn't pin the capture-stop path
+   * indefinitely.
+   */
+  private const val FFMPEG_LONG_TIMEOUT_SECONDS: Long = 120L
+
+  /**
    * Generates sprite sheet(s) from [videoFile]. Returns the first sprite sheet file, or null
    * if ffmpeg is unavailable or the extraction fails. Additional sheets (for long sessions)
    * are written alongside it with sequential suffixes.
@@ -71,6 +123,22 @@ object VideoSpriteExtractor {
    * @param isLandscape Whether the device was in landscape orientation during recording.
    *   When true and the video is in portrait orientation (common with iOS simulator's native
    *   pixel buffer), a transpose filter is applied to rotate frames to landscape.
+   * @param expectedDurationMs Wall-clock duration the recorder observed (typically
+   *   `endTimestampMs - startTimestampMs` from the capture stream). Strongly recommended for
+   *   all production callers — every in-tree capture site (Android, iOS, Playwright) passes
+   *   it, and omitting it (or passing `null`) silently restores the pre-fix under-sampling
+   *   behavior on broken-timing mp4s. The nullable default exists only so any external/legacy
+   *   caller that hasn't been updated doesn't break the build; it is not an endorsed mode.
+   *
+   *   When provided, the input mp4's self-reported duration is sanity-checked against this
+   *   value; if they disagree by more than the [DURATION_MISMATCH_TOLERANCE_FRAC] fractional
+   *   tolerance (with a floor at [DURATION_MISMATCH_TOLERANCE_FLOOR_S]), the captured frames
+   *   are re-stamped at a constant rate of `nb_frames / expectedDuration` so they spread
+   *   uniformly across the wall-clock window. This handles broken-timing mp4s — most
+   *   importantly the raw-H.264-wrapped output from the Android `screenrecord` chain, where
+   *   ffmpeg's `-c copy` wrap stamps PTS at a default 25fps that doesn't reflect real
+   *   wall-clock — and is a no-op for mp4s whose container timestamps already match
+   *   wall-clock (iOS sim, Playwright).
    */
   fun generateSpriteSheet(
     videoFile: File,
@@ -78,6 +146,7 @@ object VideoSpriteExtractor {
     frameHeight: Int = CaptureOptions.DEFAULT_SPRITE_HEIGHT,
     webpQuality: Int = CaptureOptions.DEFAULT_SPRITE_QUALITY,
     isLandscape: Boolean = false,
+    expectedDurationMs: Long? = null,
   ): File? {
     // Treat `fps <= 0` as "caller doesn't want sprites." Without this guard, the ffmpeg
     // frame-extraction below runs with `-vf fps=0`, fails noisily, and the caller has to
@@ -97,7 +166,15 @@ object VideoSpriteExtractor {
       val tempDir = java.nio.file.Files.createTempDirectory("trailblaze_sprites_").toFile()
       try {
         // Step 1: Extract individual frames as PNG (lossless intermediary for dedup accuracy).
-        val (vf, noAutorotate) = buildVideoFilter(videoFile, fps, frameHeight, isLandscape)
+        val (baseVf, noAutorotate) = buildVideoFilter(videoFile, fps, frameHeight, isLandscape)
+        // If the caller passed an expected wall-clock duration, validate the input mp4's
+        // self-reported duration against it. When the two disagree (Android raw-H.264 wrap
+        // producing a 2-second mp4 for an 80-second recording is the canonical case), prepend
+        // a `setpts=N/<rate>/TB` filter that re-stamps each frame at a constant synthetic rate
+        // chosen so the captured frames spread uniformly across the expected window. The
+        // `fps=<sprite>` filter further down the chain then resamples from that re-stamped
+        // timeline. For correctly-timestamped mp4s the prepended filter is omitted entirely.
+        val vf = maybeRestamp(videoFile, baseVf, expectedDurationMs)
         val extractCmd =
           mutableListOf(
             "ffmpeg",
@@ -114,19 +191,18 @@ object VideoSpriteExtractor {
             "${tempDir.absolutePath}/vf_%06d.png",
           )
         )
-        val extractProcess = ProcessBuilder(extractCmd).redirectErrorStream(true).start()
-        val extractOutput = extractProcess.inputStream.bufferedReader().readText()
-        val extractFinished = extractProcess.waitFor(120, TimeUnit.SECONDS)
-        if (!extractFinished || extractProcess.exitValue() != 0) {
-          Console.log("ffmpeg frame extraction failed")
-          writeFailureMarker(
-            dir,
+        val extractResult = runSubprocessWithTimeout(extractCmd, FFMPEG_LONG_TIMEOUT_SECONDS)
+        if (extractResult == null || extractResult.exitCode != 0) {
+          val reason =
             "ffmpeg frame extraction failed " +
-              "(finished=$extractFinished, exit=${if (extractFinished) extractProcess.exitValue() else "n/a"})\n" +
+              "(${if (extractResult == null) "process did not start or timed out" else "exit=${extractResult.exitCode}"})\n" +
               "cmd: ${extractCmd.joinToString(" ")}\n" +
-              "videoSize=${videoFile.length()}B fps=$fps frameHeight=$frameHeight isLandscape=$isLandscape\n" +
-              "stdout/stderr:\n$extractOutput",
-          )
+              "videoSize=${videoFile.length()}B fps=$fps frameHeight=$frameHeight isLandscape=$isLandscape" +
+              if (extractResult != null && extractResult.output.isNotBlank())
+                "\nstdout/stderr:\n${sanitizeSubprocessOutputForLog(extractResult.output.trim())}"
+              else ""
+          Console.log(reason)
+          writeFailureMarker(dir, reason)
           return null
         }
 
@@ -140,7 +216,7 @@ object VideoSpriteExtractor {
             "ffmpeg ran (exit=0) but produced 0 frames\n" +
               "videoSize=${videoFile.length()}B fps=$fps frameHeight=$frameHeight isLandscape=$isLandscape\n" +
               "Likely cause: video too short or unreadable at the requested fps.\n" +
-              "ffmpeg stdout/stderr:\n$extractOutput",
+              "ffmpeg stdout/stderr:\n${sanitizeSubprocessOutputForLog(extractResult.output.trim())}",
           )
           return null
         }
@@ -256,42 +332,42 @@ object VideoSpriteExtractor {
               else "video_sprites_$sheetIndex.webp"
             val spriteFile = File(dir, spriteFilename)
 
-            val tileProcess =
-              ProcessBuilder(
-                  "ffmpeg",
-                  "-f",
-                  "image2",
-                  "-framerate",
-                  "1",
-                  "-i",
-                  "${tileDir.absolutePath}/uf_%06d.png",
-                  "-vf",
-                  "tile=${sheetColumns}x${sheetRows}",
-                  "-c:v",
-                  "libwebp",
-                  "-quality",
-                  webpQuality.toString(),
-                  "-frames:v",
-                  "1",
-                  "-loglevel",
-                  "error",
-                  "-y",
-                  spriteFile.absolutePath,
-                )
-                .redirectErrorStream(true)
-                .start()
-            val tileOutput = tileProcess.inputStream.bufferedReader().readText()
-            val tileFinished = tileProcess.waitFor(120, TimeUnit.SECONDS)
-            if (!tileFinished || tileProcess.exitValue() != 0 || !spriteFile.exists()) {
-              Console.log("ffmpeg sprite sheet assembly failed for sheet $sheetIndex")
-              writeFailureMarker(
-                dir,
-                "ffmpeg sprite sheet assembly failed for sheet $sheetIndex " +
-                  "(finished=$tileFinished, exit=${if (tileFinished) tileProcess.exitValue() else "n/a"}, " +
-                  "spriteFileExists=${spriteFile.exists()})\n" +
-                  "grid=${sheetColumns}x${sheetRows} frames=$sheetFrameCount quality=$webpQuality\n" +
-                  "stdout/stderr:\n$tileOutput",
+            val tileResult =
+              runSubprocessWithTimeout(
+                command =
+                  listOf(
+                    "ffmpeg",
+                    "-f",
+                    "image2",
+                    "-framerate",
+                    "1",
+                    "-i",
+                    "${tileDir.absolutePath}/uf_%06d.png",
+                    "-vf",
+                    "tile=${sheetColumns}x${sheetRows}",
+                    "-c:v",
+                    "libwebp",
+                    "-quality",
+                    webpQuality.toString(),
+                    "-frames:v",
+                    "1",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    spriteFile.absolutePath,
+                  ),
+                timeoutSeconds = FFMPEG_LONG_TIMEOUT_SECONDS,
               )
+            if (tileResult == null || tileResult.exitCode != 0 || !spriteFile.exists()) {
+              val reason =
+                "ffmpeg sprite sheet assembly failed for sheet $sheetIndex " +
+                  "(${if (tileResult == null) "process did not start or timed out" else "exit=${tileResult.exitCode}, fileExists=${spriteFile.exists()}"})\n" +
+                  "grid=${sheetColumns}x${sheetRows} frames=$sheetFrameCount quality=$webpQuality" +
+                  if (tileResult != null && tileResult.output.isNotBlank())
+                    "\nstdout/stderr:\n${sanitizeSubprocessOutputForLog(tileResult.output.trim())}"
+                  else ""
+              Console.log(reason)
+              writeFailureMarker(dir, reason)
               spriteFile.delete()
               return null
             }
@@ -458,9 +534,10 @@ object VideoSpriteExtractor {
 
   /** Gets the coded dimensions of a video file using ffprobe. */
   private fun getVideoDimensions(videoFile: File): Pair<Int, Int>? {
-    return try {
-      val process =
-        ProcessBuilder(
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
             "ffprobe",
             "-v",
             "error",
@@ -471,20 +548,144 @@ object VideoSpriteExtractor {
             "-of",
             "csv=s=x:p=0",
             videoFile.absolutePath,
-          )
-          .redirectErrorStream(true)
-          .start()
-      val output = process.inputStream.bufferedReader().readText().trim()
-      process.waitFor(5, TimeUnit.SECONDS)
-      val parts = output.split("x")
-      if (parts.size == 2) {
-        val w = parts[0].trim().toIntOrNull()
-        val h = parts[1].trim().toIntOrNull()
-        if (w != null && h != null) Pair(w, h) else null
-      } else null
-    } catch (_: Exception) {
-      null
+          ),
+        timeoutSeconds = FFPROBE_TIMEOUT_SECONDS,
+      ) ?: return null
+    if (result.exitCode != 0) return null
+    val parts = result.output.trim().split("x")
+    if (parts.size != 2) return null
+    val w = parts[0].trim().toIntOrNull()
+    val h = parts[1].trim().toIntOrNull()
+    return if (w != null && h != null) Pair(w, h) else null
+  }
+
+  /**
+   * Prepend a `setpts=N/<rate>/TB` filter to [baseVf] when the input mp4's container duration
+   * doesn't match the recorder-observed wall-clock window. The synthetic rate is chosen so the
+   * input's frames spread evenly across the expected window; the downstream `fps=<sprite>`
+   * filter then resamples from that re-stamped timeline.
+   *
+   * Returns [baseVf] unchanged when:
+   *  - the caller didn't provide an expected duration (`null` or `<= 0`),
+   *  - ffprobe can't read both `duration` and `nb_frames` from the input,
+   *  - the reported duration is within the mismatch tolerance.
+   *
+   * Logs a single line via `Console.log` whenever a re-stamp is applied so the underlying
+   * recording bug is visible in CI artifacts without spamming healthy runs.
+   */
+  private fun maybeRestamp(videoFile: File, baseVf: String, expectedDurationMs: Long?): String {
+    if (expectedDurationMs == null || expectedDurationMs <= 0L) return baseVf
+    val expectedS = expectedDurationMs / 1000.0
+    val probe = probeDurationAndFrameCount(videoFile) ?: return baseVf
+    val (reportedS, nbFrames) = probe
+    if (nbFrames <= 0L || reportedS <= 0.0) {
+      Console.log(
+        "[VideoSpriteExtractor] duration probe yielded non-positive values for " +
+          "${videoFile.name}: reportedS=$reportedS nbFrames=$nbFrames — skipping re-stamp"
+      )
+      return baseVf
     }
+    // Base the fractional tolerance on the expected (recorder-observed) duration rather than
+    // the reported one: the recorder's wall-clock is the authoritative source here, and the
+    // canonical failure mode this guards against — a 79s recording showing up as a 2s
+    // container — has a tiny reported duration whose 10% fraction (0.2s) is meaningless,
+    // while expected*0.10 (~8s) is the actual "is this close enough to ignore" window.
+    val tolerance = maxOf(DURATION_MISMATCH_TOLERANCE_FLOOR_S, expectedS * DURATION_MISMATCH_TOLERANCE_FRAC)
+    if (kotlin.math.abs(reportedS - expectedS) <= tolerance) return baseVf
+
+    val syntheticRate = nbFrames / expectedS
+    // Defensive clamp: a pathological input (e.g. nbFrames=10_000 against expectedS=0.1)
+    // would produce a rate ffmpeg's setpts filter accepts but renders meaningless output.
+    // 1000 fps is well above any realistic capture rate (60/120 fps is the practical ceiling)
+    // and 0.1 fps is below any sane lower bound; outside that range, trust the un-re-stamped
+    // pipeline rather than write a definitely-broken filter chain.
+    if (syntheticRate !in SYNTHETIC_RATE_MIN..SYNTHETIC_RATE_MAX) {
+      Console.log(
+        "[VideoSpriteExtractor] computed synthetic rate ${"%.3f".format(syntheticRate)} fps " +
+          "is outside the sane range [$SYNTHETIC_RATE_MIN, $SYNTHETIC_RATE_MAX] " +
+          "(nbFrames=$nbFrames expectedS=${"%.3f".format(expectedS)}, file=${videoFile.name}) " +
+          "— skipping re-stamp"
+      )
+      return baseVf
+    }
+    Console.log(
+      "[VideoSpriteExtractor] video duration mismatch: " +
+        "reported=${"%.2f".format(reportedS)}s expected=${"%.2f".format(expectedS)}s " +
+        "frames=$nbFrames — re-stamping at ${"%.3f".format(syntheticRate)} fps across wall-clock " +
+        "(file=${videoFile.name})"
+    )
+    return "setpts=N/$syntheticRate/TB,$baseVf"
+  }
+
+  /**
+   * Probes [videoFile] via ffprobe for `(durationSeconds, nb_frames)`. Reads only container
+   * header metadata — no `-count_frames` full-decode pass — so the cost is bounded regardless
+   * of video length. Returns null if ffprobe is unavailable, times out, exits non-zero, or
+   * either field is missing/unparseable; logs a single line at each null-return so an operator
+   * looking at sparse sprite sheets can distinguish "ffprobe failed" from "duration was within
+   * tolerance" from "expectedDurationMs wasn't passed."
+   *
+   * `nb_frames` may be reported as `N/A` for some containers; we treat that case as "can't
+   * validate" and return null so the caller falls back to the un-re-stamped pipeline.
+   */
+  private fun probeDurationAndFrameCount(videoFile: File): Pair<Double, Long>? {
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames,duration",
+            "-of",
+            "default=nw=1",
+            videoFile.absolutePath,
+          ),
+        timeoutSeconds = FFPROBE_TIMEOUT_SECONDS,
+      )
+    if (result == null) {
+      Console.log(
+        "[VideoSpriteExtractor] ffprobe could not be run or timed out for ${videoFile.name} — " +
+          "duration check skipped"
+      )
+      return null
+    }
+    if (result.exitCode != 0) {
+      Console.log(
+        "[VideoSpriteExtractor] ffprobe exited with code ${result.exitCode} for ${videoFile.name}; " +
+          "duration check skipped. stdout/stderr:\n${sanitizeSubprocessOutputForLog(result.output.trim())}"
+      )
+      return null
+    }
+    var duration: Double? = null
+    var nbFrames: Long? = null
+    for (line in result.output.lines()) {
+      val trimmed = line.trim()
+      when {
+        trimmed.startsWith("duration=") ->
+          duration = parseDoubleOrNull(trimmed.removePrefix("duration=").trim())
+        trimmed.startsWith("nb_frames=") ->
+          nbFrames = trimmed.removePrefix("nb_frames=").trim().toLongOrNull()
+      }
+    }
+    if (duration == null || nbFrames == null) {
+      Console.log(
+        "[VideoSpriteExtractor] ffprobe output missing duration or nb_frames for " +
+          "${videoFile.name}: duration=$duration nbFrames=$nbFrames — duration check skipped. " +
+          "Raw output:\n${sanitizeSubprocessOutputForLog(result.output.trim())}"
+      )
+      return null
+    }
+    return Pair(duration, nbFrames)
+  }
+
+  private fun parseDoubleOrNull(s: String): Double? = try {
+    java.lang.Double.parseDouble(s)
+  } catch (_: NumberFormatException) {
+    null
   }
 
   /**
@@ -492,9 +693,10 @@ object VideoSpriteExtractor {
    * rotation metadata is found.
    */
   private fun getVideoRotation(videoFile: File): Int {
-    return try {
-      val process =
-        ProcessBuilder(
+    val result =
+      runSubprocessWithTimeout(
+        command =
+          listOf(
             "ffprobe",
             "-v",
             "error",
@@ -505,14 +707,10 @@ object VideoSpriteExtractor {
             "-of",
             "default=nw=1:nk=1",
             videoFile.absolutePath,
-          )
-          .redirectErrorStream(true)
-          .start()
-      val output = process.inputStream.bufferedReader().readText().trim()
-      process.waitFor(5, TimeUnit.SECONDS)
-      output.lines().firstNotNullOfOrNull { it.trim().toIntOrNull() } ?: 0
-    } catch (_: Exception) {
-      0
-    }
+          ),
+        timeoutSeconds = FFPROBE_TIMEOUT_SECONDS,
+      ) ?: return 0
+    if (result.exitCode != 0) return 0
+    return result.output.lines().firstNotNullOfOrNull { it.trim().toIntOrNull() } ?: 0
   }
 }

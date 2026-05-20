@@ -233,10 +233,40 @@ abstract class TrailblazeHostAppTarget(
     id = "default",
     displayName = "Default",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
+    // Empty list (not null) honors the base-class contract: every platform is supported,
+    // just with no specific app id declared. Returning null was misread by the UI's
+    // platform-support gate as "platform not supported" and disabled every device row.
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String> = emptyList()
 
     override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
       setOf()
+
+    // Default is the generic stand-in: no specific app id declared, any installed app is fine.
+    override val allowsAppNotInstalled: Boolean = true
+  }
+
+  /**
+   * Whether a device on [platform] is eligible for selection with this target. Single source
+   * of truth for the Run Configuration dialog's per-row gate; before this lived as a four-site
+   * inline predicate that drifted easily when the rule evolved.
+   *
+   * A target accepts a device when:
+   *   - the target supports [platform] — `getPossibleAppIdsForPlatform(platform)` is non-null
+   *     per the documented contract (null = unsupported, empty list = supported with no id);
+   *     AND
+   *   - either the target opts into [allowsAppNotInstalled] (the generic Default stand-in) OR
+   *     one of the declared app ids is actually present on the device (signalled by a non-null
+   *     [installedAppId] resolved from [getAppIdIfInstalled]).
+   *
+   * The platform-support gate is what stops a web-only target from enabling Android/iOS
+   * device rows just because `allowsAppNotInstalled` is true.
+   */
+  fun acceptsDeviceForPlatform(
+    platform: TrailblazeDevicePlatform,
+    installedAppId: String?,
+  ): Boolean {
+    val supported = getPossibleAppIdsForPlatform(platform) != null
+    return supported && (allowsAppNotInstalled || installedAppId != null)
   }
 
   fun getAppIdIfInstalled(

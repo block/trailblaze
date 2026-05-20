@@ -26,3 +26,7 @@ Commands:
                       log.
   graph             Render the waypoint navigation graph (waypoints, authored
                       shortcuts, authored
+  tune              Analyze a session set for near-miss patterns and propose
+                      YAML edits.
+  propose           Synthesize draft waypoint YAMLs from unmatched-cluster
+                      fingerprints.

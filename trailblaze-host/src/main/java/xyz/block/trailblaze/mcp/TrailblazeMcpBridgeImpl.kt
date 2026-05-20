@@ -744,7 +744,7 @@ class TrailblazeMcpBridgeImpl(
         Console.log("[MCP Bridge] Starting on-device agent for $key (driver=${driverType?.name})")
 
         // Install APK and start instrumentation (reuses existing agent if already running)
-        // Pass LLM tokens so the on-device runner can create LLM clients (e.g., SSO token).
+        // Pass LLM tokens so the on-device runner can create LLM clients (e.g., OAuth token).
         runBlocking {
           HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
             sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },

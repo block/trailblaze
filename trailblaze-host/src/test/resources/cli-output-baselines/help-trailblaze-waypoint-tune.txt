@@ -1,0 +1,36 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint tune [-hV] [--idempotence-check] [--min-support=<n>]
+                                [--out-dir=<dir>] [--root=<path>]
+                                --sessions=<dir> [--target=<id>]
+Analyze a session set for near-miss patterns and propose YAML edits.
+Each surviving proposal lands as a JSON+YAML pair under --out-dir, ready for the
+pipeline's auto-PR step to materialize as one PR per proposal.
+  -h, --help                Show this help message and exit.
+      --idempotence-check   After the first pass, re-run the analyzer on the
+                              same session set with the proposals applied
+                              in-memory and fail if the second pass emits any
+                              proposal.
+      --min-support=<n>     Minimum number of supporting sessions for a
+                              proposal to fire. Default: 5.
+      --out-dir=<dir>       Output directory for proposal sidecars. Default: ./.
+                              waypoints_tune/proposals/. Wiped at the start of
+                              each run.
+      --root=<path>         Directory containing *.waypoint.yaml files to
+                              consider for tuning. Overrides --target.
+                              (Convention: ./trails)
+      --sessions=<dir>      Directory containing one or more session
+                              subdirectories. Each subdirectory is treated as a
+                              session; *_AgentDriverLog.json (or any
+                              screen-state log) inside is treated as a step.
+                              Required.
+      --target=<id>         Pack id. Resolves --root to
+                              <workspace>/packs/<id>/waypoints/. Also supplies
+                              the pack's app_ids for templated selector
+                              expansion.
+  -V, --version             Print version information and exit.

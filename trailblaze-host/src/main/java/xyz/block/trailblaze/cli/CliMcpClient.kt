@@ -601,7 +601,7 @@ class CliMcpClient(
     Console.info("Session commands:")
     Console.info("  trailblaze session info      --id $sessionId   # recorded steps so far")
     Console.info("  trailblaze session save      --id $sessionId   # write *.trail.yaml you can replay")
-    Console.info("  trailblaze session report    --id $sessionId   # generate HTML report for this session")
+    Console.info("  trailblaze report            --id $sessionId   # generate HTML report for this session")
     Console.info("  trailblaze session artifacts --id $sessionId   # video, logs, screenshots")
     Console.info("  trailblaze session end       --id $sessionId   # end the session")
   }

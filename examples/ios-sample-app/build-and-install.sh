@@ -29,7 +29,12 @@ fi
 # introduced in Xcode 16. Older Xcode versions silently regenerate the project
 # in a different format, breaking the scheme and committed pbxproj contents —
 # fail fast instead.
-XCODE_VERSION_LINE="$(xcodebuild -version | head -n 1)"
+#
+# Capture the full output and slice locally — `xcodebuild -version | head -n 1`
+# SIGPIPEs xcodebuild after head closes its end of the pipe, which under
+# `set -o pipefail` makes the whole script exit 141 intermittently.
+XCODE_VERSION_OUTPUT="$(xcodebuild -version)"
+XCODE_VERSION_LINE="${XCODE_VERSION_OUTPUT%%$'\n'*}"
 if ! printf '%s' "${XCODE_VERSION_LINE}" | grep -Eq 'Xcode (1[6-9]|[2-9][0-9])'; then
   printf '%s\n' "error: ${XCODE_VERSION_LINE} is too old — this project requires Xcode 16+." >&2
   printf '%s\n' "       Hint: Install Xcode 16 from developer.apple.com/download and run 'xcode-select -s'." >&2

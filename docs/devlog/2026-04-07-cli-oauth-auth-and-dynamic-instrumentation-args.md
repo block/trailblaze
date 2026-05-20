@@ -1,25 +1,25 @@
 ---
-title: "CLI-Based SSO/Auth and Dynamic On-Device Instrumentation Args"
+title: "CLI-Based OAuth/Auth and Dynamic On-Device Instrumentation Args"
 type: plan
 date: 2026-04-07
 ---
 
-# Trailblaze Plan 037: CLI-Based SSO/Auth and Dynamic On-Device Instrumentation Args
+# Trailblaze Plan 037: CLI-Based OAuth/Auth and Dynamic On-Device Instrumentation Args
 
 ## Status
 
 - **Part 1 (Dynamic Instrumentation Args):** Complete as of 2026-04-07.
-- **Part 2 (CLI-Based SSO/Auth):** Future work — direction and design documented below but not yet implemented.
+- **Part 2 (CLI-Based OAuth/Auth):** Future work — direction and design documented below but not yet implemented.
 
 ## Summary
 
-Two related problems: (1) SSO/OAuth for LLM providers is hardcoded to a single provider, and (2) on-device Android LLM calls use hardcoded env var names that don't scale to arbitrary YAML-configured providers. Part 1 introduced a convention-based instrumentation arg scheme for on-device token passing. Part 2 proposes shell-out token commands for auth.
+Two related problems: (1) OAuth/auth for LLM providers is hardcoded to a single provider, and (2) on-device Android LLM calls use hardcoded env var names that don't scale to arbitrary YAML-configured providers. Part 1 introduced a convention-based instrumentation arg scheme for on-device token passing. Part 2 proposes shell-out token commands for auth.
 
 ## Context
 
-### Problem 1: SSO diversity
+### Problem 1: Auth/OAuth diversity
 
-Organization-specific OAuth implementations (e.g., a custom OAuth client and JVM token provider for a corp LLM gateway) are hardcoded and don't generalize. Different organizations use different SSO/OAuth/SAML flows. We can't model every auth flow variant in the framework.
+Organization-specific OAuth implementations (e.g., a custom OAuth client and JVM token provider for a corp LLM gateway) are hardcoded and don't generalize. Different organizations use different OAuth/SAML flows. We can't model every auth flow variant in the framework.
 
 ### Problem 2: Hardcoded on-device instrumentation args (resolved by Part 1)
 
@@ -77,7 +77,7 @@ fun getProviderType(): String? =
 6. ~~Audit other CI scripts for hardcoded arg references~~ — Done (scripts set env vars; `atf.sh` converts to new arg format)
 7. ~~Remove legacy arg writes~~ — Complete; no legacy arg writes remain in active code paths
 
-### Part 2: CLI-Based SSO/Auth for LLM Providers (Future Work)
+### Part 2: CLI-Based OAuth/Auth for LLM Providers (Future Work)
 
 Instead of implementing OAuth flows in the framework, let users specify CLI commands that produce tokens. The framework handles caching and lifecycle; the user's tooling handles auth complexity. **This part is not yet implemented — the design below captures the intended direction.**
 
@@ -159,11 +159,11 @@ The custom OAuth client moves into a `trailblaze auth <provider>` command. The J
 
 ## What This Enables
 
-- Any SSO provider (Okta, Azure AD, Google Workspace, custom SAML)
+- Any OAuth/SAML provider (Okta, Azure AD, Google Workspace, custom SAML)
 - Corporate proxy auth
 - Hardware token / MFA flows
 - Keychain-based token retrieval (macOS Keychain, Linux secret-service)
-- Cloud provider CLI auth (`gcloud auth print-access-token`, `aws sso get-role-credentials`)
+- Cloud provider CLI auth (`gcloud auth print-access-token`, `aws sts get-session-token`)
 - On-device LLM calls with any YAML-configured provider
 - No hardcoded provider knowledge on the Android side
 
