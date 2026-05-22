@@ -1,0 +1,44 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze device create web [-hV] [--[no-]headless]
+                                    [--emulate=<preset>] [--instance-id=<id>]
+                                    [--viewport=<WxH>]
+Provision a Playwright web browser slot with a viewport / emulation profile.
+
+Does NOT launch a browser — the spec is stored on the slot and applied at the
+next browser launch.
+
+Examples:
+  trailblaze device create web --instance-id mobile-iphone --emulate "iPhone 15"
+  trailblaze device create web --instance-id desktop-large --viewport 1920x1080
+  trailblaze device create web --emulate "Pixel 7"
+      --emulate=<preset>   Playwright `devices` preset name. Applies full
+                             device emulation: viewport, deviceScaleFactor,
+                             userAgent, isMobile, hasTouch. Examples: 'iPhone
+                             14', 'Pixel 7', 'iPad Pro 11'. Mutually exclusive
+                             with --viewport.
+  -h, --help               Show this help message and exit.
+      --[no-]headless      Launch the browser headless (--headless) or headed
+                             (--no-headless). When omitted, defers to the
+                             slot's stored preference, falling back to the
+                             headed-when-display-available default — so running
+                             this on a desktop without --headless does NOT
+                             force a hidden window.
+      --instance-id=<id>   Slot name. Subsequent commands address this slot as
+                             `--device web/<id>`. Defaults to the singleton
+                             `playwright-native` when omitted (the same slot
+                             the desktop app's Launch Browser button operates
+                             on).
+  -V, --version            Print version information and exit.
+      --viewport=<WxH>     Raw viewport size, e.g. '375x812' or '1920x1080'.
+                             Sets ONLY the viewport box — does not change
+                             User-Agent, deviceScaleFactor, isMobile, or
+                             hasTouch, so pages that UA-sniff still serve their
+                             desktop variant. Use --emulate for a full
+                             mobile/tablet emulation profile. Mutually
+                             exclusive with --emulate.

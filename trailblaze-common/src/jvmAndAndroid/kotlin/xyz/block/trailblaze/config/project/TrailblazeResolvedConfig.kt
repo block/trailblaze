@@ -37,4 +37,18 @@ data class TrailblazeResolvedConfig(
    */
   val targets: List<AppTargetYamlConfig> = emptyList(),
   val waypoints: List<WaypointDefinition> = emptyList(),
+  /**
+   * Every successfully-loaded pack (target and library) with its source manifest, source
+   * location, and dereferenced sibling content. Surfaced for codegen consumers
+   * (per-pack `client.d.ts` emission) that need the pack-local typing surface — toolset
+   * declarations, scripted-tool list, `exports:` — without re-walking pack manifests.
+   *
+   * Library packs that contribute scripted tools or platform `tool_sets:` show up here even
+   * though they don't produce a [targets] entry. The runtime/codegen layers filter by source
+   * type (filesystem vs classpath) and whether the pack has a `target:` block.
+   *
+   * Includes every pack that completed `resolvePackSiblings` cleanly. Packs that failed
+   * sibling resolution drop out (atomic-per-pack failure model) and don't show up here.
+   */
+  val resolvedPacks: List<ResolvedPack> = emptyList(),
 )

@@ -34,11 +34,15 @@ class BundlerYamlSchemaDriftTest {
     val bundlerSchema = locate("trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/BundlerYamlSchema.kt")
     val packManifest = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailblazePackManifest.kt")
     val packScriptedToolFile = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/PackScriptedToolFile.kt")
+    // PlatformConfig (per-platform shape) lives alongside AppTargetYamlConfig — the
+    // bundler's `BundlerPlatformConfig` slim mirror needs that file in the authoritative
+    // pool so its `tool_sets` SerialName matches.
+    val appTargetYamlConfig = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/AppTargetYamlConfig.kt")
 
     val bundlerNames = extractSerialNames(bundlerSchema.readText())
     // Authoritative names: union of TrailblazePackManifest.kt + PackScriptedToolFile.kt
-    // (the latter declares ScriptedToolProperty alongside the tool-file class). Each
-    // file contributes BOTH explicit `@SerialName(...)` values AND plain property names
+    // + AppTargetYamlConfig.kt (which declares `PlatformConfig` alongside the target shape).
+    // Each file contributes BOTH explicit `@SerialName(...)` values AND plain property names
     // (where `@SerialName` is absent, kotlinx-serialization uses the Kotlin property name
     // as the wire key — trailblaze-models leans on that for the common case). Combining
     // both prevents false negatives on fields like `name` / `description` that exist in
@@ -47,7 +51,9 @@ class BundlerYamlSchemaDriftTest {
     val authoritativeNames = extractSerialNames(packManifest.readText()) +
       extractKotlinPropertyNames(packManifest.readText()) +
       extractSerialNames(packScriptedToolFile.readText()) +
-      extractKotlinPropertyNames(packScriptedToolFile.readText())
+      extractKotlinPropertyNames(packScriptedToolFile.readText()) +
+      extractSerialNames(appTargetYamlConfig.readText()) +
+      extractKotlinPropertyNames(appTargetYamlConfig.readText())
 
     assertTrue("Expected to find SerialNames in BundlerYamlSchema; got 0") { bundlerNames.isNotEmpty() }
     assertTrue("Expected to find SerialNames in trailblaze-models; got 0") { authoritativeNames.isNotEmpty() }
@@ -61,6 +67,7 @@ class BundlerYamlSchemaDriftTest {
           appendLine("but no matching @SerialName exists in the authoritative trailblaze-models files:")
           appendLine("  $packManifest")
           appendLine("  $packScriptedToolFile")
+          appendLine("  $appTargetYamlConfig")
           appendLine()
           missing.sorted().forEach { appendLine("  - $it") }
           appendLine()

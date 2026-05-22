@@ -4,7 +4,7 @@ dependencies:
 target:
   display_name: Google Calendar
   tools:
-    - tools/calendar_android_launchApp.yaml
+    - calendar_android_launchApp
   platforms:
     android:
       app_ids:

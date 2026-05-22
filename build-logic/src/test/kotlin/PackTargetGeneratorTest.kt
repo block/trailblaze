@@ -726,6 +726,276 @@ class PackTargetGeneratorTest {
     )
   }
 
+  // -------------------------------------------------------------------------
+  // Phase C — scripted-tool name resolution.
+  //
+  // `target.tools:` is a list of tool *names* that resolve against a per-pack
+  // registry built by discover-and-decode of every `.yaml` under `<pack>/tools/`
+  // (operational suffixes excluded). These tests pin the discovery, lookup, and
+  // diagnostic behavior of `buildPackScriptedToolRegistry` + `resolveScriptedToolList`.
+  // The sister implementations (runtime loader, build-time bundler, daemon bundler)
+  // have their own tests in their respective modules; these guard the Gradle
+  // generator's slice of the same algorithm.
+  // -------------------------------------------------------------------------
+
+  @Test
+  fun `multi-tool descriptor entries resolve individually by name in target tools`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "multipack").mkdirs()
+    File(packsDir, "multipack/tools").mkdirs()
+    // One descriptor exposing two named entries — only one referenced in target.tools.
+    File(packsDir, "multipack/tools/multi.yaml").writeText(
+      """
+      script: ./multi.ts
+      tools:
+        - name: keepMe
+          description: This one is referenced.
+          inputSchema:
+            x: { type: string }
+        - name: skipMe
+          description: This one is intentionally not referenced.
+      """.trimIndent(),
+    )
+    File(packsDir, "multipack/pack.yaml").writeText(
+      """
+      id: multipack
+      target:
+        display_name: MultiPack
+        tools:
+          - keepMe
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val expected = generator.buildExpectedTargets()
+    val (_, content) = expected.entries.single()
+
+    assertTrue(content.contains("name: keepMe"), "generated YAML should include the referenced entry; got: $content")
+    assertTrue(
+      !content.contains("name: skipMe"),
+      "generated YAML must NOT include unreferenced multi-tool entries; got: $content",
+    )
+  }
+
+  @Test
+  fun `target tools entry that doesn't match any descriptor fails with available names`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "unknownnamepack").mkdirs()
+    File(packsDir, "unknownnamepack/tools").mkdirs()
+    File(packsDir, "unknownnamepack/tools/real.yaml").writeText(
+      """
+      script: ./real.ts
+      name: realTool
+      """.trimIndent(),
+    )
+    File(packsDir, "unknownnamepack/pack.yaml").writeText(
+      """
+      id: unknownnamepack
+      target:
+        display_name: Unknown
+        tools:
+          - missingTool
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("'missingTool'") == true,
+      "error must name the unknown tool; got: ${ex.message}",
+    )
+    assertTrue(
+      ex.message?.contains("realTool") == true,
+      "error must enumerate available names so authors can spot typos; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `legacy file-path entry in target tools fires the migration hint`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "legacypack").mkdirs()
+    File(packsDir, "legacypack/tools").mkdirs()
+    File(packsDir, "legacypack/tools/real.yaml").writeText(
+      """
+      script: ./real.ts
+      name: realTool
+      """.trimIndent(),
+    )
+    File(packsDir, "legacypack/pack.yaml").writeText(
+      """
+      id: legacypack
+      target:
+        display_name: Legacy
+        tools:
+          - tools/real.yaml
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("Hint:") == true && ex.message?.contains("looks like a file path") == true,
+      "legacy file-path entries must trigger the migration hint; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `two descriptors declaring the same name in one pack fail with both file names`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "duppack").mkdirs()
+    File(packsDir, "duppack/tools").mkdirs()
+    File(packsDir, "duppack/tools/first.yaml").writeText(
+      """
+      script: ./first.ts
+      name: dupTool
+      """.trimIndent(),
+    )
+    File(packsDir, "duppack/tools/second.yaml").writeText(
+      """
+      script: ./second.ts
+      name: dupTool
+      """.trimIndent(),
+    )
+    File(packsDir, "duppack/pack.yaml").writeText(
+      """
+      id: duppack
+      target:
+        display_name: Dup
+        tools:
+          - dupTool
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("'dupTool'") == true, "got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("first.yaml") == true && ex.message?.contains("second.yaml") == true,
+      "error must name both contributing files so the author can pick which to keep; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `duplicate target tools entries within one pack fail loudly`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "dupentrypack").mkdirs()
+    File(packsDir, "dupentrypack/tools").mkdirs()
+    File(packsDir, "dupentrypack/tools/foo.yaml").writeText(
+      """
+      script: ./foo.ts
+      name: foo
+      """.trimIndent(),
+    )
+    File(packsDir, "dupentrypack/pack.yaml").writeText(
+      """
+      id: dupentrypack
+      target:
+        display_name: DupEntry
+        tools:
+          - foo
+          - foo
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("'foo'") == true && ex.message?.contains("more than once") == true,
+      "duplicate entry in target.tools must fail loudly; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `operational tool YAMLs in tools dir are skipped during scripted-tool discovery`() {
+    // `<pack>/tools/foo.tool.yaml` is a pure-YAML operational tool. The scripted-tool
+    // discovery walk excludes it by suffix so it doesn't get decoded as a scripted-tool
+    // descriptor (which would either fail to parse or shadow a legitimate scripted name).
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "mixedpack").mkdirs()
+    File(packsDir, "mixedpack/tools").mkdirs()
+    File(packsDir, "mixedpack/tools/scripted.yaml").writeText(
+      """
+      script: ./scripted.ts
+      name: scriptedTool
+      """.trimIndent(),
+    )
+    File(packsDir, "mixedpack/tools/legacy.tool.yaml").writeText(
+      """
+      # Pure-YAML operational tool — not a scripted-tool descriptor.
+      id: legacyOperationalTool
+      description: not a scripted tool
+      """.trimIndent(),
+    )
+    File(packsDir, "mixedpack/pack.yaml").writeText(
+      """
+      id: mixedpack
+      target:
+        display_name: Mixed
+        tools:
+          - scriptedTool
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val expected = generator.buildExpectedTargets()
+    val (_, content) = expected.entries.single()
+    assertTrue(content.contains("name: scriptedTool"), "scripted-tool entry must be present; got: $content")
+    assertTrue(
+      !content.contains("legacyOperationalTool"),
+      "operational `.tool.yaml` siblings must NOT be decoded as scripted-tool descriptors; got: $content",
+    )
+  }
+
+  @Test
+  fun `symlinked descriptor that escapes the pack directory is rejected`() {
+    // Mirrors the runtime loader's containment guarantee — a `<pack>/tools/foo.yaml`
+    // symlink that resolves outside the pack must be rejected, not silently followed.
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "containmentpack").mkdirs()
+    File(packsDir, "containmentpack/tools").mkdirs()
+    // The descriptor file that *would* be the escape target — outside the pack.
+    val outsideDir = newTempDir()
+    val outsideTarget = File(outsideDir, "outside.yaml").apply {
+      writeText(
+        """
+        script: ./outside.ts
+        name: outsideTool
+        """.trimIndent(),
+      )
+    }
+    val symlinkSource = File(packsDir, "containmentpack/tools/escape.yaml").toPath()
+    val symlinkTarget = outsideTarget.toPath()
+    try {
+      java.nio.file.Files.createSymbolicLink(symlinkSource, symlinkTarget)
+    } catch (_: UnsupportedOperationException) {
+      // Filesystem doesn't support symlinks (Windows without elevated perms) — skip the test.
+      return
+    }
+    File(packsDir, "containmentpack/pack.yaml").writeText(
+      """
+      id: containmentpack
+      target:
+        display_name: Containment
+        tools:
+          - escape
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("resolves outside the pack directory") == true,
+      "escaping symlinks must be rejected at discovery time; got: ${ex.message}",
+    )
+  }
+
   private fun newTempDir(): File =
     createTempDirectory("pack-target-generator-test").toFile().also { tempDirs += it }
 }

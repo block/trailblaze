@@ -1,0 +1,29 @@
+- config:
+    title: 'Contacts (iOS): Search query that returns no results'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: Open Contacts and search for "ZzZzNoSuchContact". Verify "No Results" is visible. Do not tap any rows.
+    recording:
+      tools:
+      - contacts_ios_searchContacts:
+          query: ZzZzNoSuchContact
+          openFirstResult: false
+      - tapOnElementBySelector:
+          reason: To search for 'ZzZzNoSuchContact', I need to tap the 'Search' field (q410), which is visible at the bottom of the screen.
+          selector:
+            textRegex: Search
+          nodeSelector:
+            iosMaestro:
+              hintTextRegex: Search
+      - inputText:
+          text: ZzZzNoSuchContact
+          reasoning: Now that the search field is focused, I will input the search term 'ZzZzNoSuchContact' into the search field to trigger the search and look for 'No Results'.
+      - assertVisibleBySelector:
+          reason: The screen displays 'No Results for “ZzZzNoSuchContact”', which verifies 'No Results' is visible as required by the objective.
+          selector:
+            textRegex: No Results for “ZzZzNoSuchContact”
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: No Results for “ZzZzNoSuchContact”

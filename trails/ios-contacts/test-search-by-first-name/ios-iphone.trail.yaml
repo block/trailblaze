@@ -1,0 +1,18 @@
+- config:
+    title: 'Contacts (iOS): Search by first name'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: Open the iOS Contacts app, search Contacts for "John", and open the resulting "John Appleseed" contact. Verify its detail screen renders the name "John Appleseed".
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The task requires opening the "John Appleseed" contact. The contact "John Appleseed" is already visible in the list, so I will tap on it to open the detail screen.
+          selector:
+            textRegex: John Appleseed
+            index: "1"
+          nodeSelector:
+            iosMaestro:
+              textRegex: John Appleseed
+            index: 1

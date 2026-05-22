@@ -42,7 +42,7 @@ import xyz.block.trailblaze.util.Console
  * 90% across a wrapping paragraph stays at 90% after the paragraph re-lays out.
  */
 @Serializable
-@TrailblazeToolClass("tapOn", isForLlm = false)
+@TrailblazeToolClass("tapOn", surfaceToLlm = false, surfaceToScriptedTools = false)
 data class TapOnTrailblazeTool(
   val selector: TrailblazeNodeSelector,
   val relativePoint: String? = null,

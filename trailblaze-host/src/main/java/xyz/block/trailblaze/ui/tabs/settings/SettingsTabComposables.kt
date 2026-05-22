@@ -11,6 +11,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeImageFormat
+import xyz.block.trailblaze.cli.SCREENSHOT_QUALITY_MIN
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
@@ -498,19 +501,6 @@ object SettingsTabComposables {
         Spacer(modifier = Modifier.height(8.dp))
 
         PreferenceToggle(
-          label = "Show Record Tab",
-          description = "Show the Record tab for interactive test recording",
-          checked = serverState.appConfig.showRecordTab,
-          onCheckedChange = { checkedValue ->
-            trailblazeSettingsRepo.updateAppConfig {
-              it.copy(showRecordTab = checkedValue)
-            }
-          }
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        PreferenceToggle(
           label = "Show Device Status Panel",
           description = "Show floating device status overlay in the bottom-right corner",
           checked = serverState.appConfig.showDeviceStatusPanel,
@@ -841,6 +831,239 @@ object SettingsTabComposables {
               )
             }
           }
+        }
+      }
+    }
+
+    val screenshotsSection: @Composable () -> Unit = {
+      SettingsSection(title = "Screenshots") {
+        val appConfig = serverState.appConfig
+        val frameworkDefault = ScreenshotScalingConfig.DEFAULT
+        val effectiveFormat = appConfig.screenshotImageFormat ?: frameworkDefault.imageFormat
+        val effectiveLonger = appConfig.screenshotMaxLongerSide ?: frameworkDefault.maxDimension1
+        val effectiveShorter = appConfig.screenshotMaxShorterSide ?: frameworkDefault.maxDimension2
+        val effectiveQuality = appConfig.screenshotCompressionQuality ?: frameworkDefault.compressionQuality
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          SelectableText(
+            text = "Controls the screenshots Trailblaze sends to the LLM and renders in the timeline. " +
+              "The framework default is WebP at 1536×768 (80% quality) — bump quality or change format " +
+              "if you're seeing pixelation in the desktop timeline.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+
+        // Format dropdown
+        var showFormatMenu by remember { mutableStateOf(false) }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          SelectableText("Image format", style = MaterialTheme.typography.bodyMedium)
+          ExposedDropdownMenuBox(
+            expanded = showFormatMenu,
+            onExpandedChange = { showFormatMenu = !showFormatMenu },
+          ) {
+            OutlinedTextField(
+              modifier = Modifier.fillMaxWidth().menuAnchor(),
+              value = effectiveFormat.name +
+                if (appConfig.screenshotImageFormat == null) " (default)" else "",
+              onValueChange = {},
+              readOnly = true,
+              trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = showFormatMenu)
+              },
+            )
+            DropdownMenu(
+              expanded = showFormatMenu,
+              onDismissRequest = { showFormatMenu = false },
+            ) {
+              TrailblazeImageFormat.entries.forEach { format ->
+                DropdownMenuItem(
+                  text = { SelectableText(format.name) },
+                  onClick = {
+                    showFormatMenu = false
+                    trailblazeSettingsRepo.updateAppConfig {
+                      it.copy(screenshotImageFormat = format)
+                    }
+                  },
+                )
+              }
+            }
+          }
+        }
+
+        // Max dimensions: two numeric fields with preset chips above
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          SelectableText("Max dimensions", style = MaterialTheme.typography.bodyMedium)
+          SelectableText(
+            text = "Longer side × shorter side. Screenshots scale down to fit while maintaining aspect ratio.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+
+          // Presets: only finite scaling targets. The previous "native" preset wrote
+          // `Int.MAX_VALUE` to disk and surfaced as a literal 10-digit integer in the
+          // text fields below, which was confusing and made manual edits awkward. To
+          // disable scaling, users can just bump to a very large explicit value (e.g.
+          // 8192×8192) or run with `screenshotImageFormat = PNG` which is lossless.
+          // A real "no cap" sentinel (nullable dimensions) is tracked as follow-up.
+          val presets = listOf(
+            "1024×512" to (1024 to 512),
+            "1536×768" to (1536 to 768),
+            "2048×1024" to (2048 to 1024),
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            presets.forEach { (label, dims) ->
+              val isActive = effectiveLonger == dims.first && effectiveShorter == dims.second
+              OutlinedButton(
+                onClick = {
+                  trailblazeSettingsRepo.updateAppConfig {
+                    it.copy(
+                      screenshotMaxLongerSide = dims.first,
+                      screenshotMaxShorterSide = dims.second,
+                    )
+                  }
+                },
+                colors = if (isActive) {
+                  ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                  )
+                } else {
+                  ButtonDefaults.outlinedButtonColors()
+                },
+              ) {
+                Text(label)
+              }
+            }
+          }
+
+          // Render `Int.MAX_VALUE` (legacy "native" sentinel persisted by prior versions)
+          // as an empty placeholder so a returning user doesn't see `2147483647` and try
+          // to hand-edit it. Save validation rejects anything that isn't a positive int,
+          // so this empty state can't be persisted; the user has to pick a real value.
+          val sentinelToDisplay: (Int) -> String = { v ->
+            if (v == Int.MAX_VALUE) "" else v.toString()
+          }
+          var draftLonger by remember(effectiveLonger) {
+            mutableStateOf(sentinelToDisplay(effectiveLonger))
+          }
+          var draftShorter by remember(effectiveShorter) {
+            mutableStateOf(sentinelToDisplay(effectiveShorter))
+          }
+          val parsedLonger = draftLonger.toIntOrNull()
+          val parsedShorter = draftShorter.toIntOrNull()
+          val isValid = parsedLonger != null && parsedShorter != null &&
+            parsedLonger > 0 && parsedShorter > 0
+          val hasChanges = parsedLonger != effectiveLonger || parsedShorter != effectiveShorter
+
+          Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            OutlinedTextField(
+              modifier = Modifier.weight(1f),
+              value = draftLonger,
+              onValueChange = { draftLonger = it },
+              label = { Text("Longer side") },
+              placeholder = {
+                if (effectiveLonger == Int.MAX_VALUE) Text("native (no cap)")
+              },
+              singleLine = true,
+              isError = draftLonger.isNotEmpty() && (parsedLonger == null || parsedLonger <= 0),
+            )
+            OutlinedTextField(
+              modifier = Modifier.weight(1f),
+              value = draftShorter,
+              onValueChange = { draftShorter = it },
+              label = { Text("Shorter side") },
+              placeholder = {
+                if (effectiveShorter == Int.MAX_VALUE) Text("native (no cap)")
+              },
+              singleLine = true,
+              isError = draftShorter.isNotEmpty() && (parsedShorter == null || parsedShorter <= 0),
+            )
+          }
+
+          if (hasChanges) {
+            Button(
+              enabled = isValid,
+              onClick = {
+                trailblazeSettingsRepo.updateAppConfig {
+                  it.copy(
+                    screenshotMaxLongerSide = parsedLonger,
+                    screenshotMaxShorterSide = parsedShorter,
+                  )
+                }
+              },
+            ) { Text("Save dimensions") }
+          }
+        }
+
+        // Quality slider — disabled when PNG since PNG is lossless. Mirrors the Save
+        // dimensions / Server Ports pattern in this same file: hold a local `draftQuality`
+        // for the duration of the drag and only push the final value to
+        // `trailblazeSettingsRepo` once on `onValueChangeFinished`. The prior version
+        // fired `updateAppConfig` on every tick, which serialized the entire settings
+        // JSON to disk and broadcast `EffectiveScreenshotScalingConfig` for every
+        // intermediate float — hundreds of disk writes per drag.
+        //
+        // Lower bound is 0.05 rather than 0.0 — quality 0 produces effectively unreadable
+        // images on JPEG/WebP that the LLM can't interpret, so it's never a useful
+        // production value. CLI parsing applies the same lower bound for consistency.
+        val isLossy = effectiveFormat != TrailblazeImageFormat.PNG
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          SelectableText("Compression quality", style = MaterialTheme.typography.bodyMedium)
+          SelectableText(
+            text = if (isLossy) {
+              "Only applies to JPEG and WebP. Higher = larger files, less pixelation."
+            } else {
+              "Not applicable — PNG is lossless. Switch format to JPEG or WebP to adjust quality."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          // Coerce the seed value into the slider's range so a legacy persisted quality
+          // below 0.05 (predating the new lower bound) doesn't render the slider thumb
+          // visually pinned to 0.05 while the printed `%.2f` label shows a smaller number.
+          var draftQuality by
+            remember(effectiveQuality) {
+              mutableStateOf(effectiveQuality.coerceIn(SCREENSHOT_QUALITY_MIN, 1f))
+            }
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Slider(
+              modifier = Modifier.weight(1f),
+              value = draftQuality,
+              onValueChange = { newValue -> draftQuality = newValue },
+              onValueChangeFinished = {
+                trailblazeSettingsRepo.updateAppConfig {
+                  it.copy(screenshotCompressionQuality = draftQuality)
+                }
+              },
+              valueRange = SCREENSHOT_QUALITY_MIN..1f,
+              enabled = isLossy,
+            )
+            SelectableText(
+              text = "%.2f".format(draftQuality),
+              modifier = Modifier.padding(start = 12.dp).widthIn(min = 48.dp),
+              style = MaterialTheme.typography.bodyMedium,
+            )
+          }
+        }
+
+        // Reset row — only show when any override is set
+        val hasOverride = appConfig.screenshotImageFormat != null ||
+          appConfig.screenshotMaxLongerSide != null ||
+          appConfig.screenshotMaxShorterSide != null ||
+          appConfig.screenshotCompressionQuality != null
+        if (hasOverride) {
+          OutlinedButton(
+            onClick = {
+              trailblazeSettingsRepo.updateAppConfig {
+                it.copy(
+                  screenshotImageFormat = null,
+                  screenshotMaxLongerSide = null,
+                  screenshotMaxShorterSide = null,
+                  screenshotCompressionQuality = null,
+                )
+              }
+            },
+          ) { Text("Reset to defaults") }
         }
       }
     }
@@ -1384,6 +1607,7 @@ object SettingsTabComposables {
                     ) {
                       languageModelSection()
                       deviceTargetsSection()
+                      screenshotsSection()
                       globalSettingsSection()
                     }
                   }
@@ -1392,6 +1616,7 @@ object SettingsTabComposables {
                   applicationSettingsSection()
                   languageModelSection()
                   deviceTargetsSection()
+                  screenshotsSection()
                   globalSettingsSection()
                   environmentVariablesSection()
                   advancedConfigSection()

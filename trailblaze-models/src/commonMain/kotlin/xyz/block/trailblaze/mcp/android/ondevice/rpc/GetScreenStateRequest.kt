@@ -15,13 +15,15 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
  * @param includeScreenshot Whether to include the screenshot bytes in the response.
  *                          Default is true. Set to false for faster, text-only responses.
  * @param screenshotMaxDimension1 Maximum dimension for the longer side of the screenshot.
- *                                Default is 1536. Screenshots are scaled down (never up) to fit.
- * @param screenshotMaxDimension2 Maximum dimension for the shorter side of the screenshot.
- *                                Default is 768. Screenshots are scaled down (never up) to fit.
+ *   Default is 1536. Screenshots are scaled down (never up) to fit. Host call sites that
+ *   need to honor the user's `trailblaze config screenshot-*` overrides should construct
+ *   via [withScreenshotScalingConfig] passing [xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig.effective].
+ * @param screenshotMaxDimension2 Maximum dimension for the shorter side. See
+ *   [screenshotMaxDimension1] for the user-override path.
  * @param screenshotImageFormat Format for the screenshot output (PNG, JPEG, or WEBP).
- *                              Default is WEBP for smaller file sizes.
- * @param screenshotCompressionQuality Compression quality (0.0 to 1.0) for lossy formats (JPEG, WEBP).
- *                                     Default is 0.80.
+ *   Default is WEBP. See [screenshotMaxDimension1] for the user-override path.
+ * @param screenshotCompressionQuality Compression quality (0.0 to 1.0) for lossy formats
+ *   (JPEG, WEBP). Default 0.80. See [screenshotMaxDimension1] for the user-override path.
  * @param includeAnnotatedScreenshot Whether to render and include the set-of-mark annotated
  *                                   screenshot. Annotation costs CPU, memory, and transfer bytes,
  *                                   so callers that only need the clean screenshot (e.g. CLI
@@ -68,7 +70,23 @@ data class GetScreenStateRequest(
    * a trail — only what we ship over the wire for live preview.
    */
   val includeTree: Boolean = true,
-) : RpcRequest<GetScreenStateResponse>
+) : RpcRequest<GetScreenStateResponse> {
+  /**
+   * Returns a copy of this request with the screenshot scaling fields populated from
+   * [config]. Use at host-side construction sites that previously relied on the
+   * built-in defaults — so the on-device honors the user's
+   * `trailblaze config screenshot-*` overrides without each call site having to
+   * unpack the config by hand.
+   */
+  fun withScreenshotScalingConfig(
+    config: xyz.block.trailblaze.api.ScreenshotScalingConfig,
+  ): GetScreenStateRequest = copy(
+    screenshotMaxDimension1 = config.maxDimension1,
+    screenshotMaxDimension2 = config.maxDimension2,
+    screenshotImageFormat = config.imageFormat,
+    screenshotCompressionQuality = config.compressionQuality,
+  )
+}
 
 /**
  * Response containing the current screen state.

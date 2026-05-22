@@ -5,6 +5,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import picocli.CommandLine
 
@@ -28,27 +29,106 @@ class CompileCommandTest {
   }
 
   @Test
-  fun `findWorkspaceRoot returns the nearest ancestor containing trails-config`() {
-    // Set up: workDir/some/nested/dir, with workDir/trails/config marking the workspace root.
+  fun `findWorkspaceRoot returns the workspace itself when invoked from the root`() {
     val workspaceRoot = workDir
-    File(workspaceRoot, "trails/config").mkdirs()
-    val nested = File(workspaceRoot, "modules/feature/src").apply { mkdirs() }
+    File(workspaceRoot, "trails/config/packs").mkdirs()
 
     val command = CompileCommand()
-    val found = command.findWorkspaceRoot(startDir = nested)
-    assertEquals(workspaceRoot.canonicalFile, found.canonicalFile)
+    val found = command.findWorkspaceRoot(startPath = workspaceRoot.toPath())
+    assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
   }
 
   @Test
-  fun `findWorkspaceRoot falls back to the start dir when no workspace marker is found`() {
-    // No `trails/config` anywhere up the tree — workDir is /tmp/<random> with no parent
-    // marker — so the helper returns the start dir as a sensible default rather than
-    // walking all the way to / and erroring out.
+  fun `findWorkspaceRoot walks up from a pack root to the workspace root`() {
+    val workspaceRoot = workDir
+    val packRoot = File(workspaceRoot, "trails/config/packs/wikipedia").apply { mkdirs() }
+    File(packRoot, "pack.yaml").writeText("id: wikipedia\n")
+
+    val command = CompileCommand()
+    val found = command.findWorkspaceRoot(startPath = packRoot.toPath())
+    assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
+  }
+
+  @Test
+  fun `findWorkspaceRoot walks up from a pack tools dir to the workspace root`() {
+    // The canonical "deep dir" scenario — running `trailblaze compile` from
+    // inside a pack's tools/ directory should still find the workspace root
+    // without the user counting `../` segments to construct an --input path.
+    val workspaceRoot = workDir
+    val packToolsDir = File(workspaceRoot, "trails/config/packs/wikipedia/tools").apply { mkdirs() }
+
+    val command = CompileCommand()
+    val found = command.findWorkspaceRoot(startPath = packToolsDir.toPath())
+    assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
+  }
+
+  @Test
+  fun `findWorkspaceRoot returns null when no workspace marker is found`() {
+    // workDir is /tmp/<random> with no `trails/config/packs/` anywhere up the tree,
+    // so the helper returns null and the caller is expected to emit a usage error
+    // rather than silently defaulting to a bogus root.
     val isolated = File(workDir, "isolated").apply { mkdirs() }
 
     val command = CompileCommand()
-    val found = command.findWorkspaceRoot(startDir = isolated)
-    assertEquals(isolated.canonicalFile, found.canonicalFile)
+    val found = command.findWorkspaceRoot(startPath = isolated.toPath())
+    assertNull(found)
+  }
+
+  @Test
+  fun `findWorkspaceRoot still finds a marker many levels above the start dir`() {
+    // No depth cap: a deeply-nested start (deeper than what monorepo CLIs would
+    // typically encounter) must still walk all the way up to the marker. Pins
+    // the "uncapped walk" contract so a future depth-limit regression fails here.
+    File(workDir, "trails/config/packs").mkdirs()
+    var deep = workDir
+    repeat(20) { deep = File(deep, "level").apply { mkdirs() } }
+
+    val command = CompileCommand()
+    val found = command.findWorkspaceRoot(startPath = deep.toPath())
+    assertEquals(workDir.canonicalFile.toPath(), found?.toRealPath())
+  }
+
+  @Test
+  fun `compile from inside a workspace exits OK with no flags`() {
+    // End-to-end coverage for the headline UX fix: cwd inside a workspace tree
+    // (here, the pack tools/ dir 4 levels deep), no flags → exits 0 and emits
+    // the materialized target. Uses `CliCallerContext.withCallerCwd` to pin the
+    // walk-up start dir without mutating the JVM-wide cwd.
+    val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
+    val packToolsDir = File(workspaceRoot, "trails/config/packs/alpha/tools").apply { mkdirs() }
+    File(workspaceRoot, "trails/config/packs/alpha/pack.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+      """.trimIndent(),
+    )
+
+    val exit = CliCallerContext.withCallerCwd(packToolsDir.toPath()) {
+      CommandLine(CompileCommand()).execute()
+    }
+
+    assertEquals(0, exit, "Expected EXIT_OK from a no-flag run inside a workspace")
+    assertTrue(
+      File(workspaceRoot, "trails/config/dist/targets/alpha.yaml").exists(),
+      "alpha.yaml should land at <workspace>/trails/config/dist/targets/",
+    )
+  }
+
+  @Test
+  fun `compile from outside any workspace exits EXIT_USAGE with no flags`() {
+    // End-to-end coverage for the negative branch: cwd outside any workspace,
+    // no --input → walks to filesystem root, finds nothing, exits EXIT_USAGE.
+    val isolated = File(workDir, "isolated").apply { mkdirs() }
+
+    val exit = CliCallerContext.withCallerCwd(isolated.toPath()) {
+      CommandLine(CompileCommand()).execute()
+    }
+
+    assertEquals(2, exit, "Expected EXIT_USAGE when run with no flags outside any workspace")
   }
 
   @Test
@@ -158,5 +238,14 @@ class CompileCommandTest {
     val command = CompileCommand()
     val exit = CommandLine(command).execute("--help")
     assertEquals(0, exit)
+  }
+
+  @Test
+  fun `commandLabel defaults to 'compile' for direct invocation`() {
+    // Regression marker: a freshly-constructed CompileCommand emits error prefixes
+    // under `trailblaze compile:` unless CheckCommand routes it via
+    // `apply { commandLabel = "check" }`. A silent default rename here would break
+    // the routing contract without surfacing in any other test.
+    assertEquals("compile", CompileCommand().commandLabel)
   }
 }

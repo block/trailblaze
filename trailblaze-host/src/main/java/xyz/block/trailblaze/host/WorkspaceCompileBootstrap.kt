@@ -2,6 +2,10 @@ package xyz.block.trailblaze.host
 
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.compile.TrailblazeCompiler
+import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
@@ -136,6 +140,37 @@ object WorkspaceCompileBootstrap {
    */
   internal fun bootstrap(configDir: File, version: String): BootstrapResult {
     val packsDir = File(configDir, TrailblazeConfigPaths.PACKS_SUBDIR)
+
+    // Typed-bindings + SDK extraction live OUTSIDE the workspace-packs gate below and
+    // OUTSIDE the hash-skip gate inside it. Two regeneration invariants ride on this:
+    //   1. A deleted `<packDir>/tools/.trailblaze/client.d.ts` regenerates on the next
+    //      daemon start without needing the input hash to invalidate first.
+    //   2. The workspace SDK declaration bundle exists as soon as the daemon sees a
+    //      workspace, even when there are no workspace packs yet (a fresh clone or a
+    //      classpath-only consumer). Without this, the very first pack a user authors
+    //      would point at a non-existent `.trailblaze/sdk/dist/index.d.ts`.
+    //
+    // Both helpers are idempotent (skip-write-if-content-matches) so re-running them
+    // every bootstrap is sub-millisecond on the common case. Failures downgrade to
+    // `Console.error` rather than aborting the daemon; the CLI path (`trailblaze
+    // compile`) elevates the same failures to non-zero exit.
+    // Order matters: per-pack codegen asserts the SDK bundle exists (so it
+    // doesn't write per-pack tsconfigs pointing at a missing `paths` target), and
+    // that file is written by `runWorkspaceTypeScriptSetup`. If setup fails,
+    // skip per-pack codegen with a single explanatory line — running it anyway
+    // would produce a misleading second "codegen failed" diagnostic that masks
+    // the SDK-extraction root cause.
+    val workspaceSetupOk = runWorkspaceTypeScriptSetup(configDir)
+    if (workspaceSetupOk) {
+      runPerPackTypedBindingsCodegen(configDir)
+    } else {
+      Console.error(
+        "Per-pack typed-bindings codegen skipped because workspace TypeScript setup " +
+          "failed above (see prior error). Restart the daemon after fixing the SDK " +
+          "extraction failure to regenerate per-pack client.d.ts / tsconfig.json / .gitignore.",
+      )
+    }
+
     if (!packsDir.isDirectory) return BootstrapResult.NoWorkspacePacks
 
     val packManifests = listPackManifests(packsDir)
@@ -192,65 +227,65 @@ object WorkspaceCompileBootstrap {
         throw WorkspaceCompileException(result.errors)
       }
       writeHash(hashFile, expectedHash)
-      // Emit per-target typed bindings (`client.<target-id>.d.ts`) so authors get IDE
-      // autocomplete on `client.callTool(name, args)` without any explicit setup step.
-      // The hash check above is the gate — if the workspace is up-to-date we skip both
-      // the recompile and the binding regen because the bindings are already on disk
-      // from the previous Recompiled run. If a user manually deletes the bindings,
-      // `trailblaze compile` always regenerates regardless.
-      //
-      // Emission failures are downgraded to warnings: the daemon must come up even if
-      // typed-bindings codegen has a bug, since trail execution doesn't depend on the
-      // `.d.ts` files. The CLI's `trailblaze compile` exits non-zero on the same
-      // failure so authors see it immediately — the asymmetry is intentional.
-      try {
-        PerTargetClientDtsEmitter.emit(
-          workspaceRoot = configDir.parentFile.toPath(),
-          resolvedTargets = result.resolvedTargets,
-        )
-      } catch (e: Exception) {
-        Console.error(
-          "Typed-bindings codegen failed (daemon will continue without per-target " +
-            ".d.ts files): ${e.message ?: e.javaClass.simpleName}",
-        )
-      }
-      // Extract the bundled `@trailblaze/scripting` SDK into `.trailblaze/sdk/typescript/`
-      // and run `bun install` per pack-with-package.json — but ONLY in pack tools dirs
-      // whose `node_modules/` is missing. Subsequent `trailblaze blaze` etc. invocations
-      // don't re-pay the install cost; only the first run after a fresh clone does.
-      // Compile path (`trailblaze compile`) passes `onlyInstallIfMissing = false` so it
-      // always refreshes regardless of the existing state.
-      try {
-        val tsSetup = WorkspaceTypeScriptSetup.setUp(
-          workspaceRoot = configDir.parentFile.toPath(),
-          resolvedTargets = result.resolvedTargets,
-          packsDir = packsDir,
-          onlyInstallIfMissing = true,
-        )
-        // Daemon path is non-fatal on per-pack install failures (the daemon must come up
-        // regardless), but failures need to be SURFACED — silently passing them as
-        // success would leave a half-populated `node_modules/` that subsequent runs would
-        // skip via `onlyInstallIfMissing = true`, leaving authors with broken IDE typing
-        // and no clear signal of why. CLI path (`trailblaze compile`) elevates the same
-        // failures to non-zero exit; this path just logs them loudly.
-        tsSetup.installs
-          .filterIsInstance<WorkspaceTypeScriptSetup.PackInstall.Failed>()
-          .forEach { failed ->
-            Console.error(
-              "trailblaze: bun install failed in pack '${failed.packId}' (exit ${failed.exitCode}); " +
-                "IDE typing for `@trailblaze/scripting` won't resolve in this pack until you " +
-                "fix the failure and re-run `trailblaze compile`. Output:\n" +
-                failed.output.lines().take(8).joinToString("\n"),
-            )
-          }
-      } catch (e: Exception) {
-        Console.error(
-          "TypeScript workspace setup failed (SDK extraction or bun-install — daemon will " +
-            "continue but per-pack node_modules may be missing): " +
-            "${e.message ?: e.javaClass.simpleName}",
-        )
-      }
       BootstrapResult.Recompiled(emitted = result.emittedTargets.size)
+    }
+  }
+
+  /**
+   * Extract the bundled `@trailblaze/scripting` declaration bundle to
+   * `<workspaceRoot>/.trailblaze/sdk/dist/index.d.ts`. No `bun install` — the SDK type
+   * surface is delivered as a single self-contained `.d.ts` consumed via the per-pack
+   * tsconfig's `paths` mapping. Failures are non-fatal: the daemon comes up regardless
+   * because trail execution doesn't depend on IDE typing.
+   *
+   * Returns `true` when setup completed (or there was nothing to do), `false` when an
+   * exception was caught. The caller uses this to decide whether to run downstream
+   * per-pack codegen (which would otherwise hit the missing-bundle assert and produce a
+   * confusing second error).
+   */
+  private fun runWorkspaceTypeScriptSetup(configDir: File): Boolean = try {
+    WorkspaceTypeScriptSetup.setUp(workspaceRoot = configDir.parentFile.toPath())
+    true
+  } catch (e: Exception) {
+    Console.error(
+      "TypeScript workspace setup failed (SDK declaration-bundle extraction — daemon will " +
+        "continue but IDE typing for `@trailblaze/scripting` may be missing): " +
+        "${e.message ?: e.javaClass.simpleName}",
+    )
+    false
+  }
+
+  /**
+   * Re-resolve the pack pool from [configDir] and emit per-pack `client.d.ts` files
+   * plus framework-managed `tools/tsconfig.json` + pack-root `.gitignore` artifacts.
+   * Zero-pack pools no-op cleanly inside the emitters. Failures downgrade to a
+   * warning for the same daemon-must-come-up reason as [runWorkspaceTypeScriptSetup].
+   */
+  private fun runPerPackTypedBindingsCodegen(configDir: File) {
+    try {
+      val loaded = LoadedTrailblazeProjectConfig(
+        raw = TrailblazeProjectConfig(),
+        sourceFile = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME),
+      )
+      val resolvedPacks = TrailblazeProjectConfigLoader
+        .resolveRuntime(loaded, includeClasspathPacks = true)
+        .resolvedPacks
+      PerPackClientDtsEmitter.emit(resolvedPacks = resolvedPacks)
+      PerPackTsconfigEmitter.emit(
+        workspaceRoot = configDir.parentFile.toPath(),
+        resolvedPacks = resolvedPacks,
+      )
+    } catch (e: TrailblazeProjectConfigException) {
+      Console.error(
+        "Typed-bindings codegen skipped — pack re-resolution failed " +
+          "(daemon will continue without per-pack client.d.ts / tsconfig.json / .gitignore files): " +
+          "${e.message ?: e.javaClass.simpleName}",
+      )
+    } catch (e: Exception) {
+      Console.error(
+        "Typed-bindings codegen failed (daemon will continue without per-pack " +
+          "client.d.ts / tsconfig.json / .gitignore files): ${e.message ?: e.javaClass.simpleName}",
+      )
     }
   }
 

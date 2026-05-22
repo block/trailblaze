@@ -169,14 +169,33 @@ class ConfigCommand : Callable<Int> {
       )
     }
 
+    // Screenshots section: print the effective per-machine screenshot scaling. Each row
+    // reads through its `ConfigKey.get`, which emits `(framework default)` when the user
+    // hasn't set a per-machine override and the raw value otherwise — no `*` prefix here
+    // because there's no "selected vs. selectable" choice like Drivers or Targets have.
     Console.info("")
-    Console.info("  trailblaze config llm <provider/model>   Set LLM")
-    Console.info("  trailblaze config llm none               Disable LLM")
-    Console.info("  trailblaze config target <name>          Set target app")
-    Console.info("  trailblaze config android-driver <type>  Set Android driver (instrumentation|accessibility)")
-    Console.info("  trailblaze config ios-driver <type>      Set iOS driver (host|axe)")
-    Console.info("  trailblaze config models                 List available models")
-    Console.info("  trailblaze config reset                  Reset all settings to defaults")
+    Console.info("Screenshots:")
+    val screenshotKeys = listOf(
+      "screenshot-format" to "Format",
+      "screenshot-max-dimensions" to "Max dimensions",
+      "screenshot-quality" to "Quality",
+    )
+    for ((key, label) in screenshotKeys) {
+      val configKey = CONFIG_KEYS[key]!!
+      Console.info("  $label: ${configKey.get(currentConfig)}")
+    }
+
+    Console.info("")
+    Console.info("  trailblaze config llm <provider/model>      Set LLM")
+    Console.info("  trailblaze config llm none                  Disable LLM")
+    Console.info("  trailblaze config target <name>             Set target app")
+    Console.info("  trailblaze config android-driver <type>     Set Android driver (instrumentation|accessibility)")
+    Console.info("  trailblaze config ios-driver <type>         Set iOS driver (host|axe)")
+    Console.info("  trailblaze config screenshot-format <fmt>   Set screenshot format (png|jpeg|webp|unset)")
+    Console.info("  trailblaze config screenshot-max-dimensions <WxH>  Set max screenshot dimensions")
+    Console.info("  trailblaze config screenshot-quality <0..1> Set lossy compression quality")
+    Console.info("  trailblaze config models                    List available models")
+    Console.info("  trailblaze config reset                     Reset all settings to defaults")
     Console.info("")
     Console.info("For advanced settings, use the Trailblaze desktop app.")
     Console.info("")

@@ -52,7 +52,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 /**
  * Active editor inside [ActionYamlCard]'s edit mode. Both modes are present when the tool's
  * descriptor resolves to a flat-form-compatible shape; YAML is the only viable mode for
- * tools the form can't represent (`isForLlm = false` wrappers, tools with nested params).
+ * tools the form can't represent (`surfaceToLlm = false` wrappers, tools with nested params).
  * The toggle button only renders when both are viable.
  *
  * Internal to [ActionYamlCard]; exposed only because the composable's body branches on it.
@@ -76,7 +76,7 @@ enum class ActionEditorMode { FORM, YAML }
  * the platform-neutral [TrailblazeNodeSelectorGenerator] already produces.
  *
  * @param descriptorResolver returns `(descriptor, current-values)` for the tool, or null when
- *   the tool can't be rendered as a flat form (`isForLlm = false` tools, nested params, etc.).
+ *   the tool can't be rendered as a flat form (`surfaceToLlm = false` tools, nested params, etc.).
  *   Pass `{ _ -> null }` on platforms without JVM reflection (Compose Web / WASM) to disable
  *   the rich-form editor while keeping every other control available.
  */
@@ -168,7 +168,7 @@ fun ActionYamlCard(
   var editError by remember(interaction) { mutableStateOf<String?>(null) }
 
   // Try to resolve the tool's descriptor + current values for the rich form. Returns null when
-  // the tool is `isForLlm = false` (`SwipeWithRelativeCoordinatesTool` and other internal/
+  // the tool is `surfaceToLlm = false` (`SwipeWithRelativeCoordinatesTool` and other internal/
   // wrapper tools), when any field is non-primitive (nested selectors, nested params, lists),
   // or on platforms where the resolver lambda is a no-op stub (wasmJs has no JVM reflection,
   // so the web callers pass `{ _ -> null }`). In all of those cases we fall back to the raw
@@ -487,7 +487,7 @@ fun ActionYamlCard(
         }
       } else if (isEditing) {
         // YAML editor — either the user toggled into it explicitly, or the tool can't be
-        // represented as a flat form (`isForLlm = false` tools like
+        // represented as a flat form (`surfaceToLlm = false` tools like
         // `SwipeWithRelativeCoordinatesTool`, anything with nested objects/lists). Free-
         // text editing preserves whatever structure the form widgets would silently drop.
         OutlinedTextField(

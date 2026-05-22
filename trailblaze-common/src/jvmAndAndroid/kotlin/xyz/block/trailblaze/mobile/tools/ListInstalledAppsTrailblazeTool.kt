@@ -34,7 +34,7 @@ data class ListInstalledAppsResult(val appIds: List<String>)
 @Serializable
 @TrailblazeToolClass(
   name = "mobile_listInstalledApps",
-  isForLlm = false,
+  surfaceToLlm = false,
   // Dual-mode primitive: scripted-tool authors compose this via `client.callTool(...)` to read
   // the installed-app id list off `Success.message`; on-device-RPC strips that payload, so the
   // host-side actual is the contract surface for callback paths.

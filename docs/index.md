@@ -60,7 +60,7 @@ Drivers are decoupled, web is first-class through Playwright, Android has a cust
 - **[Self-heal](architecture.md#execution-modes)** — opt in (`--self-heal`) and the `blaze` agent patches a failing recorded step and updates the recording on success. Default is fail-loud, so flakes don't get silently masked.
 - **[Trails](project_layout.md)** — drop a `.trail.yaml` anywhere in your project. No `trails/` directory required. Run by path or shell glob; auto-discovered.
 - **High-fidelity reporting** — every run produces a rich report (per-step screenshots, hierarchies, recorded tool calls, LLM transcripts, video replay). CI exposes it inline on every build; the desktop app shows the same UI for local sessions.
-- **[External config bundles](generated/external-config.md)** — layer app targets, YAML toolsets, and JS/TS scripted tools on top of the binary without rebuilding Trailblaze.
+- **[External config bundles](generated/external-config.md)** — layer app targets, YAML toolsets, and TypeScript scripted tools on top of the binary without rebuilding Trailblaze.
 - **Multi-device CLI sessions** — drive Android + iOS + web from the same shell, in parallel, each with its own bound device.
 
 ## Active Prototypes
@@ -73,9 +73,9 @@ A **pack** is a reusable bundle of target-aware capabilities — tools, waypoint
 
 See: the [Packs guide](packs.md) for the manifest schema, per-file scripted tools, and the workspace-vs-classpath precedence rule. Background: [Target Packs: Local-First Packaging](devlog/2026-04-26-target-packs-local-first.md), [Trailblaze as the Robot Pattern — and More](devlog/2026-04-26-robot-pattern-plus-packs.md).
 
-### Scripted Tools (JS/TS)
+### Scripted Tools (TypeScript)
 
-Custom tools, written in TypeScript, that drop into a pack with no Kotlin or Gradle build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`, `memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via `client.callTool()` to compose higher-level behavior. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
+Custom tools, written in TypeScript, that drop into a pack with no Kotlin or Gradle build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`, `memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via the typed `client.tools.<name>(args)` surface to compose higher-level behavior. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
 
 Walkthrough: [Author Your First Scripted Tool](scripted_tools.md). Background: [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md), [Scripted Tools Execution Model](devlog/2026-04-20-scripted-tools-execution-model.md).
 

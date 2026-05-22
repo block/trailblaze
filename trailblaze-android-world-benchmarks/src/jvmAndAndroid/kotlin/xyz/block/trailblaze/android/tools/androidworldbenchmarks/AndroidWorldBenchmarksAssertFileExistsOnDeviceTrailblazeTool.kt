@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_assertFileExistsOnDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Asserts that a file exists (or does not exist) at the given path on the device.")
 data class AndroidWorldBenchmarksAssertFileExistsOnDeviceTrailblazeTool(

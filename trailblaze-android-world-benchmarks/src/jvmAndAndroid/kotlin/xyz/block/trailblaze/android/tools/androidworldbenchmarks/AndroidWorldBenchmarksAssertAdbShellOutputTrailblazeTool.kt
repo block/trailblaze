@@ -17,7 +17,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_assertAdbShellOutput",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Runs an adb shell command and asserts the output matches expected value.")
 data class AndroidWorldBenchmarksAssertAdbShellOutputTrailblazeTool(

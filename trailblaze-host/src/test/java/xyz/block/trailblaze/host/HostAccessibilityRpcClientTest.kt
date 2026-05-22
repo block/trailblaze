@@ -496,8 +496,8 @@ class HostAccessibilityRpcClientTest {
    * polymorphic-fallback path would skip interpolation entirely.
    */
   // Note: a full host-only e2e through `client.execute(...)` would require a tool that is
-  // both `isForLlm = true` (so the toolRepo's class-name lookup can find it — see
-  // [TrailblazeKoogToolExt.toKoogToolDescriptor]'s null-return on isForLlm=false) AND
+  // both `surfaceToLlm = true` (so the toolRepo's class-name lookup can find it — see
+  // [TrailblazeKoogToolExt.toKoogToolDescriptor]'s null-return on surfaceToLlm=false) AND
   // `requiresHost = true`. No such tool exists in the codebase today, and inventing a
   // test-only one would require @Serializable plumbing. The host-only branch correctness is
   // covered by:

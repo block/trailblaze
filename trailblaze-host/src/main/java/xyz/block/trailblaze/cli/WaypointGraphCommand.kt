@@ -22,7 +22,7 @@ import java.util.concurrent.Callable
     "side.",
     "",
     "For a live, refresh-on-edit view from the running daemon, point your browser at",
-    "http://localhost:<daemon-port>/waypoints/graph instead.",
+    "`http://localhost:<daemon-port>/waypoints/graph` instead.",
   ],
 )
 class WaypointGraphCommand : Callable<Int> {

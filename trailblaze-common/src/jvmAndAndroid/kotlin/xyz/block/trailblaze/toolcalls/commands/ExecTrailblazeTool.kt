@@ -50,7 +50,7 @@ internal const val EXEC_TOOL_NAME = "exec"
 @Serializable
 @TrailblazeToolClass(
   name = EXEC_TOOL_NAME,
-  isForLlm = false,
+  surfaceToLlm = false,
   isRecordable = false,
   requiresHost = true,
 )

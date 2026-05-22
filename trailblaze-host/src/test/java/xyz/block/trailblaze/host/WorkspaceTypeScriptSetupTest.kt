@@ -8,27 +8,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import xyz.block.trailblaze.config.AppTargetYamlConfig
-import xyz.block.trailblaze.config.PlatformConfig
 
 /**
- * Tests for [WorkspaceTypeScriptSetup] — the orchestration layer that extracts the
- * vendored TypeScript SDK + runs `bun install` per pack-with-package.json after a
- * successful compile/bootstrap.
+ * Tests for [WorkspaceTypeScriptSetup] — extracts the vendored TypeScript SDK declaration
+ * bundle (`dist/index.d.ts`) to `<workspaceRoot>/.trailblaze/sdk/dist/` once per workspace.
+ * No per-pack `bun install`, no `node_modules/`, no workspace `tsconfig.base.json`.
  *
  * Coverage:
- *  - SDK extraction from JAR resources writes the expected file layout under
- *    `<workspace>/config/tools/.trailblaze/sdk/typescript/`.
- *  - `skipNpmInstall = true` emits the SDK but skips bun install entirely.
- *  - `onlyInstallIfMissing = true` skips bun install in pack dirs whose `node_modules/`
- *    already exists — the daemon-init optimization that keeps subsequent commands fast.
- *  - Empty `resolvedTargets` is a no-op for the install loop (SDK still extracts, but
- *    no bun install is attempted because there are no per-pack tools dirs to walk).
- *
- * NOT covered here: the actual `bun install` subprocess (would require bun on the test
- * runner's PATH). The `bun.missing` warning path is exercised by the production code's
- * `isBunOnPath()` check; CI containers typically don't have bun, so we just assert the
- * helper degrades gracefully via the `skipNpmInstall` opt-out instead.
+ *  - Extraction writes the declaration bundle under `<workspaceRoot>/.trailblaze/sdk/dist/`.
+ *  - Extraction is idempotent — second call leaves mtimes unchanged.
+ *  - `setUp` returns the absolute path of the extracted bundle.
+ *  - Stale files from a prior SDK shape get pruned.
  */
 class WorkspaceTypeScriptSetupTest {
 
@@ -41,26 +31,33 @@ class WorkspaceTypeScriptSetupTest {
   }
 
   @Test
-  fun `extractSdk writes bundled SDK source under config-tools-dot-trailblaze-sdk-typescript`() {
+  fun `extractSdk writes the declaration bundle under dot-trailblaze-sdk-dist`() {
     val workspace = newWorkspaceRoot()
 
     val sdkDir = WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
 
-    // Top-level layout:
-    val sdkRoot = File(workspace, "config/tools/.trailblaze/sdk/typescript")
+    val sdkRoot = File(workspace, ".trailblaze/sdk")
     assertTrue(sdkRoot.isDirectory, "expected SDK root at $sdkRoot")
     assertEquals(sdkRoot.absolutePath, sdkDir.toAbsolutePath().toString())
 
-    // Spot-check the canonical files the JAR resource bundling step ships:
-    assertTrue(File(sdkRoot, "package.json").isFile, "expected package.json")
-    assertTrue(File(sdkRoot, "src/index.ts").isFile, "expected src/index.ts")
-    assertTrue(File(sdkRoot, "src/context.ts").isFile, "expected src/context.ts")
+    // The declaration bundle that ships from `:trailblaze-models`'s
+    // `copyTypescriptSdkResources` task lands at this fixed relative path. Per-pack
+    // tsconfigs hard-code it as the `paths` target.
+    val bundle = File(sdkRoot, "dist/index.d.ts")
+    assertTrue(bundle.isFile, "expected bundled .d.ts at $bundle")
 
-    // package.json content sanity (it's the actual SDK package.json, not a stub):
-    val packageJson = File(sdkRoot, "package.json").readText()
+    val content = bundle.readText()
+    // Spot-check the bundle's well-known content — both the dts-bundle-generator
+    // header banner AND the `TrailblazeToolMap` interface re-exported from the SDK.
+    // Either one disappearing means the bundle shipping in the JAR is corrupted or
+    // the generator argv drifted.
     assertTrue(
-      packageJson.contains("@trailblaze/scripting"),
-      "expected SDK package.json to declare @trailblaze/scripting; got: ${packageJson.take(200)}",
+      content.contains("dts-bundle-generator"),
+      "expected the generator banner in the bundle; got first 200 chars: ${content.take(200)}",
+    )
+    assertTrue(
+      content.contains("TrailblazeToolMap"),
+      "expected the public SDK type surface in the bundle; got first 200 chars: ${content.take(200)}",
     )
   }
 
@@ -69,13 +66,13 @@ class WorkspaceTypeScriptSetupTest {
     val workspace = newWorkspaceRoot()
 
     val sdkDir = WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
-    val indexTs = sdkDir.resolve("src/index.ts")
-    val firstMtime = Files.getLastModifiedTime(indexTs)
+    val bundle = sdkDir.resolve("dist/index.d.ts")
+    val firstMtime = Files.getLastModifiedTime(bundle)
 
     Thread.sleep(1_100) // bigger than 1s mtime granularity on older filesystems
 
     WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
-    val secondMtime = Files.getLastModifiedTime(indexTs)
+    val secondMtime = Files.getLastModifiedTime(bundle)
 
     assertEquals(
       firstMtime,
@@ -86,132 +83,190 @@ class WorkspaceTypeScriptSetupTest {
   }
 
   @Test
-  fun `setUp with skipNpmInstall emits SDK but reports skipped install`() {
+  fun `setUp returns the bundle path along with the SDK dir`() {
     val workspace = newWorkspaceRoot()
-    val packsDir = packsDirFor(workspace)
-    // Even with a target pack having a package.json, skipNpmInstall=true bypasses the
-    // install loop entirely.
-    val packId = "alpha"
-    val toolsDir = File(packsDir, "$packId/tools").apply { mkdirs() }
-    File(toolsDir, "package.json").writeText("""{"name":"alpha-tools","private":true}""")
 
-    val target = AppTargetYamlConfig(
-      id = packId,
-      displayName = "Alpha",
-      platforms = mapOf("android" to PlatformConfig(appIds = listOf("com.example.alpha"))),
-      tools = emptyList(),
-    )
+    val result = WorkspaceTypeScriptSetup.setUp(workspace.toPath())
 
-    val result = WorkspaceTypeScriptSetup.setUp(
-      workspaceRoot = workspace.toPath(),
-      resolvedTargets = listOf(target),
-      packsDir = packsDir,
-      skipNpmInstall = true,
-    )
-
-    // SDK was still extracted.
-    assertTrue(File(workspace, "config/tools/.trailblaze/sdk/typescript/package.json").isFile)
-    // Install was skipped.
-    assertTrue(result.skippedInstall)
-    assertTrue(result.installs.isEmpty(), "expected no install attempts when skipped: ${result.installs}")
-    // Critically, no node_modules was created.
-    assertFalse(File(toolsDir, "node_modules").exists())
+    val sdkRoot = File(workspace, ".trailblaze/sdk")
+    val bundle = File(sdkRoot, "dist/index.d.ts")
+    assertTrue(bundle.isFile, "expected declaration bundle at $bundle")
+    assertEquals(sdkRoot.absolutePath, result.sdkDir.toAbsolutePath().toString())
+    assertEquals(bundle.absolutePath, result.sdkDtsBundle.toAbsolutePath().toString())
   }
 
   @Test
-  fun `setUp with empty resolvedTargets extracts SDK and runs no installs`() {
-    // Library-only workspace (no target packs) — no per-pack tools dirs to walk.
+  fun `setUp prunes a stale workspace tsconfig base left behind from the prior layout`() {
+    // Pre-bundled-.d.ts workspaces had a `.trailblaze/tsconfig.base.json` that per-pack
+    // tsconfigs `extends:`-ed. After this PR no workspace base is written, but the old
+    // file would otherwise linger forever — cruft for authors and a foot-gun for anyone
+    // debugging tsconfig resolution who finds a stale base file the framework no longer
+    // reads. The setup must garbage-collect it.
     val workspace = newWorkspaceRoot()
-    val packsDir = packsDirFor(workspace)
+    val staleBase = File(workspace, ".trailblaze/tsconfig.base.json").apply {
+      parentFile.mkdirs()
+      writeText("""{ "compilerOptions": { "strict": true } }""")
+    }
+    assertTrue(staleBase.isFile, "fixture should pre-populate the stale file")
 
-    val result = WorkspaceTypeScriptSetup.setUp(
-      workspaceRoot = workspace.toPath(),
-      resolvedTargets = emptyList(),
-      packsDir = packsDir,
-      skipNpmInstall = true, // either way, but explicit for clarity
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+
+    assertFalse(
+      staleBase.exists(),
+      "expected the stale workspace tsconfig.base.json to be pruned; found it at $staleBase",
     )
-
-    // SDK extracted...
-    assertTrue(File(workspace, "config/tools/.trailblaze/sdk/typescript/package.json").isFile)
-    // ...but no install loop iterations.
-    assertTrue(result.installs.isEmpty())
   }
 
   @Test
-  fun `runPerPackBunInstall with onlyInstallIfMissing skips packs whose node_modules already exists`() {
-    // Daemon-init optimization: subsequent `trailblaze blaze` etc. don't re-pay install
-    // cost when node_modules is already populated.
+  fun `setUp is idempotent when no stale tsconfig base exists — fresh workspaces`() {
+    // Most workspaces (post-first-run, or anyone who started on the bundled-.d.ts
+    // shape) have nothing to prune. setUp must complete cleanly and the daemon must
+    // not log a misleading "Pruned X" line for a file that was never there.
     val workspace = newWorkspaceRoot()
-    val packsDir = packsDirFor(workspace)
-    val packId = "alpha"
-    val toolsDir = File(packsDir, "$packId/tools").apply { mkdirs() }
-    File(toolsDir, "package.json").writeText("""{"name":"alpha-tools","private":true}""")
-    File(toolsDir, "node_modules").mkdirs()
 
-    val target = AppTargetYamlConfig(
-      id = packId,
-      displayName = "Alpha",
-      platforms = mapOf("android" to PlatformConfig(appIds = listOf("com.example.alpha"))),
-      tools = emptyList(),
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+    // Second call to confirm the absent path stays absent — guards against future
+    // refactors that would write the file back ("for compatibility").
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+
+    val workspaceTsconfigBase = File(workspace, ".trailblaze/tsconfig.base.json")
+    assertFalse(
+      workspaceTsconfigBase.exists(),
+      "fresh workspace should never have a tsconfig.base.json materialized; found one at $workspaceTsconfigBase",
     )
+  }
 
-    val installs = WorkspaceTypeScriptSetup.runPerPackBunInstall(
-      resolvedTargets = listOf(target),
-      packsDir = packsDir,
-      onlyInstallIfMissing = true,
-      isBunAvailable = { true },
-    )
+  @Test
+  fun `setUp tolerates a corrupt-workspace directory at the legacy tsconfig base path`() {
+    // Defensive: if a user accidentally `mkdir .trailblaze/tsconfig.base.json` (or a
+    // corrupt git checkout produces the same shape), the prune step would otherwise
+    // tear down daemon startup with `DirectoryNotEmptyException`. The framework
+    // shouldn't repair corrupt workspaces, but it also shouldn't crash on them — the
+    // guard skips non-regular-file paths so the rest of setUp can proceed.
+    val workspace = newWorkspaceRoot()
+    val collision = File(workspace, ".trailblaze/tsconfig.base.json").apply {
+      mkdirs()
+      File(this, "stray.txt").writeText("noise") // make the dir non-empty
+    }
+    assertTrue(collision.isDirectory, "fixture should pre-populate the colliding dir")
 
-    // Exactly one entry, of the Skipped variant — pack had package.json AND node_modules.
-    assertEquals(1, installs.size)
-    val install = installs.single()
+    // Should not throw — guard at the top of pruneStaleWorkspaceTsconfigBase skips the path.
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+
     assertTrue(
-      install is WorkspaceTypeScriptSetup.PackInstall.Skipped,
-      "expected Skipped variant, got: ${install.javaClass.simpleName}",
+      collision.isDirectory,
+      "the colliding directory should be left untouched (framework doesn't repair corrupt workspaces)",
     )
-    assertEquals(packId, install.packId)
   }
 
   @Test
-  fun `runPerPackBunInstall ignores packs without a package_json`() {
-    // A pack without authored TypeScript tooling — no package.json — produces no install
-    // entry at all (not Skipped, not anything). It just doesn't show up.
+  fun `setUp does not write a workspace tsconfig base — per-pack tsconfigs are self-contained`() {
+    // Regression coverage for the npm-portability cut: a workspace `tsconfig.base.json`
+    // would force every per-pack tsconfig to `extends:` a known relative path, which
+    // breaks when a pack is published to npm and installed into a different workspace.
+    // The bundled-.d.ts approach makes per-pack tsconfigs fully self-contained — see
+    // [PerPackTsconfigEmitter.renderTsconfig] — so no workspace base file is written.
     val workspace = newWorkspaceRoot()
-    val packsDir = packsDirFor(workspace)
-    val packId = "alpha"
-    File(packsDir, "$packId/tools").mkdirs() // tools dir exists, no package.json inside
 
-    val target = AppTargetYamlConfig(
-      id = packId,
-      displayName = "Alpha",
-      tools = emptyList(),
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+
+    val workspaceTsconfigBase = File(workspace, ".trailblaze/tsconfig.base.json")
+    assertFalse(
+      workspaceTsconfigBase.exists(),
+      "expected NO workspace tsconfig.base.json to be written; found one at $workspaceTsconfigBase",
     )
-
-    val installs = WorkspaceTypeScriptSetup.runPerPackBunInstall(
-      resolvedTargets = listOf(target),
-      packsDir = packsDir,
-      onlyInstallIfMissing = false,
-    )
-
-    assertTrue(installs.isEmpty(), "expected no install entries for pack without package.json: $installs")
   }
 
-  // ---- helpers ----------------------------------------------------------------------------
+  @Test
+  fun `extractSdk prunes stale files from a prior SDK shape`() {
+    // Framework upgrade case: the SDK ships file X today and stops shipping it
+    // tomorrow. The next bootstrap should garbage-collect the stale file so module
+    // resolution doesn't pick it up. Without this guarantee, a v1.2 → v1.3 SDK upgrade
+    // could leave an `oldHelper.d.ts` shadowing the new shape.
+    val workspace = newWorkspaceRoot()
 
-  /**
-   * Mirrors production layout: `<temp>/trails/` is the generator's `workspaceRoot`, and
-   * `<temp>/trails/config/packs/` is the `packsDir`. Tests pass these paths to the
-   * production code so any path-derivation regression (e.g. an off-by-one
-   * `parentFile`/`resolve` in the wire-in code) would fail here too.
-   */
+    val sdkDir = WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
+    val staleFile = File(sdkDir.toFile(), "dist/_stale_helper.d.ts").apply {
+      parentFile.mkdirs()
+      writeText("// Synthetic stale file — should disappear on next extractSdk.")
+    }
+    assertTrue(staleFile.isFile, "stale fixture file should land")
+
+    WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
+
+    assertFalse(staleFile.exists(), "expected stale file to be pruned on re-extract")
+    // Real SDK file should still be intact after the prune walk.
+    assertTrue(File(sdkDir.toFile(), "dist/index.d.ts").isFile)
+  }
+
+  @Test
+  fun `setUp does NOT extract the tsc payload — that's a separate opt-in call`() {
+    // The bundled tsc is ~6 MB of resource I/O that only `trailblaze typecheck` needs.
+    // Folding it into `setUp` would force every `trailblaze compile` and daemon-init
+    // bootstrap to pay the same cost — so the contract is that `setUp` writes the SDK
+    // and nothing else, and `extractTypecheck` is called explicitly by the typecheck
+    // command.
+    val workspace = newWorkspaceRoot()
+
+    WorkspaceTypeScriptSetup.setUp(workspace.toPath())
+
+    val typecheckDir = File(workspace, ".trailblaze/typecheck")
+    assertFalse(
+      typecheckDir.isDirectory,
+      "setUp must not extract typecheck/ — only `extractTypecheck` does. Found at $typecheckDir",
+    )
+  }
+
+  @Test
+  fun `extractTypecheck writes the bundled tsc payload under dot-trailblaze-typecheck when shipped`() {
+    // The framework JAR ships typescript@6.0.3's `_tsc.js` + `lib.*.d.ts` via the
+    // `copyTypescriptCompilerResources` Gradle task in `:trailblaze-host`. CI's
+    // `pr_static_checks.sh` runs `bun install` in `sdks/typescript/` before the Gradle
+    // build, so the payload is always populated in CI runs of this test. A local dev who
+    // hasn't run `bun install` will see `extractTypecheck` return `null` — the early
+    // return below skips assertions in that case so the test stays passing.
+    val workspace = newWorkspaceRoot()
+
+    val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspace.toPath()) ?: return
+
+    val tscRoot = File(workspace, ".trailblaze/typecheck/typescript")
+    assertTrue(tscRoot.isDirectory, "expected typecheck root at $tscRoot")
+    assertTrue(File(tscRoot, "lib/_tsc.js").isFile, "expected lib/_tsc.js")
+    assertTrue(
+      File(tscRoot, "lib/_tsc.js").length() > 100_000,
+      "expected non-trivial _tsc.js (got ${File(tscRoot, "lib/_tsc.js").length()} bytes)",
+    )
+    assertTrue(tscJs.toString().endsWith("lib/_tsc.js"))
+  }
+
+  @Test
+  fun `extractTypecheck prunes stale files from a prior tsc payload`() {
+    // Framework upgrade case for the bundled tsc payload, mirroring the SDK prune test
+    // a few rows up. A future framework version that drops e.g. `lib/lib.es5.d.ts`
+    // should garbage-collect the stale file so module resolution doesn't pick it up.
+    // Without this guarantee, a v1.2 → v1.3 tsc upgrade could leave the stale file
+    // shadowing the new layout.
+    val workspace = newWorkspaceRoot()
+
+    val tscRoot = WorkspaceTypeScriptSetup.extractTypecheck(workspace.toPath()) ?: return
+    val staleFile = File(tscRoot.toFile().parentFile, "_stale_helper.d.ts").apply {
+      parentFile.mkdirs()
+      writeText("// Synthetic stale file — should disappear on next extractTypecheck.")
+    }
+    assertTrue(staleFile.isFile, "stale fixture file should land")
+
+    WorkspaceTypeScriptSetup.extractTypecheck(workspace.toPath())
+
+    assertFalse(staleFile.exists(), "expected stale typecheck file to be pruned on re-extract")
+    // Real tsc entry point should still be intact after the prune walk.
+    assertTrue(File(workspace, ".trailblaze/typecheck/typescript/lib/_tsc.js").isFile)
+  }
+
   private fun newWorkspaceRoot(): File {
     val dir = createTempDirectory("workspace-typescript-setup-test").toFile()
     tempDirs += dir
     val trailsDir = File(dir, "trails")
-    File(trailsDir, "config/packs").mkdirs()
+    trailsDir.mkdirs()
     return trailsDir
   }
-
-  /** Resolves the `<workspaceRoot>/config/packs` path used by production callers. */
-  private fun packsDirFor(workspaceRoot: File): File = File(workspaceRoot, "config/packs")
 }

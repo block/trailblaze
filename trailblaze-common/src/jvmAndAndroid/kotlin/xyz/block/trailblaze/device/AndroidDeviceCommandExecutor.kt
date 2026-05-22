@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.device
 
+import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.util.Console
 
 /**
  * Expected class for executing device commands on Android devices.
@@ -24,6 +26,15 @@ const val APPOPS_MANAGE_EXTERNAL_STORAGE = "MANAGE_EXTERNAL_STORAGE"
  * that token.
  */
 private val ANDROID_PACKAGE_NAME_REGEX =
+  Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")
+
+/**
+ * Android permission name format: a package-qualified identifier (e.g.
+ * `android.permission.BLUETOOTH_CONNECT`, `com.example.MY_PERMISSION`). Two or more
+ * segments separated by dots, each segment letters/digits/underscores, leading segment
+ * starting with a letter. This matches both platform permissions and app-defined ones.
+ */
+private val ANDROID_PERMISSION_NAME_REGEX =
   Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")
 
 /**
@@ -53,6 +64,61 @@ internal fun validateRunAsArgs(appId: String, command: String) {
   }
 }
 
+/**
+ * Shared swallow-and-log used by both `actual` implementations of
+ * [AndroidDeviceCommandExecutor.grantRuntimePermission].
+ *
+ * Callers pass a [block] that invokes the platform-specific `pm grant` transport. If the
+ * block returns a non-blank string (treated as a stderr-like diagnostic — `pm grant` writes
+ * to stderr when it can't grant), the message is logged. If the block throws, the exception
+ * is logged and swallowed. Either way control returns to the caller so a permission loop
+ * over a conservative superset does not abort partway when one entry isn't declared in the
+ * target manifest.
+ *
+ * Tested directly in `GrantRuntimePermissionTest` — the swallow contract is load-bearing
+ * for any caller that grants a conservative superset of permissions in a loop (one entry
+ * missing from one app variant's manifest must not abort the launch) and must not silently
+ * flip if a future refactor changes the underlying transport.
+ */
+/**
+ * Validates `appId` and `permission` strings before they're interpolated into a `pm grant`
+ * shell invocation. Mirrors [validateRunAsArgs] — restricting both tokens to the Android
+ * package/permission grammar means neither can smuggle shell metacharacters through the
+ * device's `sh`. Today's only caller passes a hardcoded const list, so this is a defensive
+ * guard against a future caller forwarding less-trusted input.
+ */
+internal fun validateGrantRuntimePermissionArgs(appId: String, permission: String) {
+  require(appId.isNotBlank()) { "appId must not be blank" }
+  require(ANDROID_PACKAGE_NAME_REGEX.matches(appId)) {
+    "appId must be a syntactically valid Android package name (got: '$appId')."
+  }
+  require(permission.isNotBlank()) { "permission must not be blank" }
+  require(ANDROID_PERMISSION_NAME_REGEX.matches(permission)) {
+    "permission must be a syntactically valid Android permission name (got: '$permission'). " +
+      "Expected format: dot-separated identifier such as 'android.permission.BLUETOOTH_CONNECT'."
+  }
+}
+
+internal fun handleGrantRuntimePermissionOutcome(
+  appId: String,
+  permission: String,
+  block: () -> String?,
+) {
+  try {
+    val result = block()?.trim().orEmpty()
+    if (result.isNotEmpty()) {
+      Console.log("[AndroidDeviceCommandExecutor] pm grant $appId $permission: $result")
+    }
+  } catch (e: CancellationException) {
+    // Cancellation must propagate to honor structured concurrency — swallowing it here
+    // would silently mask coroutine cancellation if any caller (or future refactor of
+    // the underlying transport) runs inside a suspend context.
+    throw e
+  } catch (e: Exception) {
+    Console.log("[AndroidDeviceCommandExecutor] pm grant $appId $permission failed: ${e.message}")
+  }
+}
+
 expect class AndroidDeviceCommandExecutor(
   deviceId: TrailblazeDeviceId,
 ) {
@@ -67,6 +133,22 @@ expect class AndroidDeviceCommandExecutor(
    * Executes a shell command on the Android device.
    */
   fun executeShellCommand(command: String): String
+
+  /**
+   * Executes a shell command on the device, treating each element of [args] as a distinct
+   * argument token.
+   *
+   * Unlike [executeShellCommand], this method does not split on spaces on the host side. On the
+   * JVM actual, each token is forwarded individually to the underlying transport (dadb) which joins
+   * them with spaces before sending to the device shell. On the Android actual, each token is
+   * shell-escaped before joining so that arguments containing spaces or metacharacters survive the
+   * device shell's word-splitting.
+   *
+   * Do **not** pre-escape the individual arguments — the implementations handle escaping internally.
+   *
+   * @return stdout from the executed command.
+   */
+  fun executeShellCommandArgs(vararg args: String): String
 
   /**
    * Executes a shell command on the device as the specified app's UID via `run-as`.
@@ -186,6 +268,40 @@ expect class AndroidDeviceCommandExecutor(
   fun grantAppOpsPermission(appId: String, permission: String)
 
   /**
+   * Grants a standard Android runtime permission to the specified app via `pm grant`.
+   *
+   * Use this for `protectionLevel="dangerous"` permissions like `BLUETOOTH_CONNECT`,
+   * `POST_NOTIFICATIONS`, `ACCESS_FINE_LOCATION`, `CAMERA`, etc. — the kind that normally
+   * prompt the user with a runtime dialog on first request. Granting before launch
+   * suppresses the dialog entirely, so trails don't have to model the OS overlay.
+   *
+   * **Distinction from [grantAppOpsPermission]:** AppOps covers a separate class of
+   * privileged operations (broad file access, system alert windows, install unknown apps)
+   * controlled by `appops set`, not `pm grant`. Both are needed in different cases —
+   * runtime perms (this method) gate user-facing dangerous APIs, AppOps gate
+   * platform-privileged operations.
+   *
+   * **Failure handling:** the underlying `pm grant` writes a stderr line and exits non-zero
+   * when the target package doesn't declare the permission in its manifest, when the
+   * permission isn't a changeable runtime permission, or when the package isn't installed.
+   * Implementations tolerate that — they log the stderr (so a regression is debuggable)
+   * but do not throw. Callers can grant a conservative superset without each variant of
+   * the target app having to declare every entry.
+   *
+   * Requires `adb shell` privilege (UID 2000) — works through the host adb path or
+   * on-device instrumentation's UiAutomation. Does **not** require root.
+   *
+   * Android-only — the iOS permission model is interaction-driven rather than
+   * pre-grantable, so there is no cross-platform analog on the iOS driver path.
+   *
+   * @param appId the application package name
+   * @param permission the fully-qualified Android permission (e.g. `"android.permission.BLUETOOTH_CONNECT"`)
+   * @see grantAppOpsPermission
+   * @see <a href="https://developer.android.com/studio/command-line/adb#pm">adb pm docs</a>
+   */
+  fun grantRuntimePermission(appId: String, permission: String)
+
+  /**
    * Writes a file to the device's public Downloads directory.
    * On Android, this uses MediaStore/ContentResolver for Q+ compatibility.
    * On JVM, this uses adb to push the file.
@@ -206,6 +322,28 @@ expect class AndroidDeviceCommandExecutor(
    * Return the installed apps on a device
    */
   fun listInstalledApps(): List<String>
+
+  /**
+   * Disables a package for the current user via `pm disable-user`.
+   *
+   * Useful for preventing an authenticator or system service from running during a test so the
+   * app under test cannot silently auto-authenticate via AccountManager. Requires shell user
+   * privileges (available via ADB or UiAutomation.executeShellCommand in instrumentation tests).
+   *
+   * Use [enablePackageForUser] to restore the package after the test action completes.
+   *
+   * @param packageId the package to disable
+   */
+  fun disablePackageForUser(packageId: String)
+
+  /**
+   * Re-enables a package for the current user via `pm enable`.
+   *
+   * Counterpart to [disablePackageForUser]. Safe to call even if the package is already enabled.
+   *
+   * @param packageId the package to enable
+   */
+  fun enablePackageForUser(packageId: String)
 
   /**
    * Adds a contact to the device's contacts provider.

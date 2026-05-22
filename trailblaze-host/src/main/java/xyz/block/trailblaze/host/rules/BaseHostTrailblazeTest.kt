@@ -132,7 +132,10 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
       deviceClassifiers = trailblazeDeviceClassifiers,
-      screenshotScalingConfig = trailblazeLlmModel.screenshotScalingConfig,
+      // Tests deliberately pin to the resolved per-model config; live `EffectiveScreenshotScalingConfig`
+      // re-reads aren't useful here because the test fixture's model isn't running through the
+      // interactive desktop settings.
+      screenshotScalingConfigProvider = { trailblazeLlmModel.screenshotScalingConfig },
     )
   }
 

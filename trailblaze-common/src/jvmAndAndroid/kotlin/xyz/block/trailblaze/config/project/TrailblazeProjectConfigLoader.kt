@@ -145,6 +145,7 @@ object TrailblazeProjectConfigLoader {
       projectConfig = projectConfig,
       targets = packArtifacts.targets,
       waypoints = packArtifacts.waypoints,
+      resolvedPacks = packArtifacts.resolvedPacks,
     )
   }
 
@@ -473,6 +474,7 @@ object TrailblazeProjectConfigLoader {
       toolsets = toolsets,
       tools = tools,
       waypoints = waypoints,
+      resolvedPacks = resolvedPacks.toList(),
     )
   }
 
@@ -584,34 +586,74 @@ object TrailblazeProjectConfigLoader {
   private fun resolvePackSiblings(
     loadedManifest: LoadedTrailblazePackManifest,
   ): ResolvedPack {
+    // Auto-discover every scripted-tool descriptor under `<pack>/tools/` and index it by the
+    // `name:` field declared inside (or by each entry's `name:` for multi-tool descriptors).
+    // `target.tools:` then names which of those discovered tools the target exposes — names,
+    // not paths. The registry also serves the duplicate-name guard so two files declaring the
+    // same tool name fail loudly with both file paths in the error.
+    val discovery = discoverPackScriptedTools(loadedManifest)
+    val scriptedToolRegistry = discovery.registry
+
+    val declaredTargetTools = loadedManifest.manifest.target?.tools.orEmpty()
+    // Detect duplicates inside `target.tools:` itself before resolving them; without this guard
+    // a `target.tools:` list with the same name twice silently double-registers the resulting
+    // [InlineScriptToolConfig] and the runtime tool repo's later collision check then fails
+    // with a confusing "tool already registered" message that points away from the manifest.
+    // SISTER-IMPL-TAG: pack-target-tools-dup-detection. Same per-pack dup check lives in
+    // TrailblazePackBundler / DaemonScriptedToolBundler / TrailblazeBundledConfigTasks;
+    // grep that tag to find all four sites if you change the wording or behavior.
+    val seenTargetToolNames = mutableSetOf<String>()
+    declaredTargetTools.forEach { toolName ->
+      if (!seenTargetToolNames.add(toolName)) {
+        throw TrailblazeProjectConfigException(
+          "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
+            "`target.tools:` lists '$toolName' more than once. Each scripted-tool name " +
+            "must appear at most once in `target.tools:`.",
+        )
+      }
+    }
     val resolvedScriptedTools: List<InlineScriptToolConfig> =
-      loadedManifest.manifest.target?.tools.orEmpty()
-        .flatMap { path ->
-          // `target.tools:` accepts ONLY scripted (`script:` + `name:` OR `script:` + `tools:`)
-          // descriptors. A user who lists a `*.tool.yaml` (pure-YAML composed tool) here will hit
-          // a `MissingFieldException` from kotlinx-serialization complaining about missing
-          // `script` — actionable only if you happen to know that two tool flavors share the same
-          // directory but bind through different mechanisms. Intercept the common mistake by
-          // suffix and emit a pack-author-facing diagnostic that names the right path
-          // (auto-discovery from `<pack>/tools/`).
-          if (path.endsWith(".tool.yaml")) {
-            throw TrailblazeProjectConfigException(
-              "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
-                "`target.tools:` listed `$path`, but `.tool.yaml` files are pure-YAML composed tools " +
-                "that auto-discover from `<pack>/tools/` by filename suffix — they don't belong in " +
-                "the manifest. Remove this entry. Only scripted tool descriptors (the `.yaml` half of " +
-                "a `.yaml` + `.ts` pair, with top-level `script:` and either `name:` or `tools:` fields) " +
-                "go in `target.tools:`.",
+      declaredTargetTools
+        .flatMap { toolName ->
+          val match = scriptedToolRegistry[toolName]
+            ?: throw TrailblazeProjectConfigException(
+              buildString {
+                append("Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): ")
+                append("`target.tools:` references '$toolName' but no scripted-tool descriptor ")
+                append("with that `name:` was discovered under <pack>/tools/. ")
+                append(describeAvailableScriptedTools(scriptedToolRegistry))
+                append(" Tool names must match the `name:` field inside a `<pack>/tools/<file>.yaml` ")
+                append("descriptor (or one of its `tools:` entries) — `target.tools:` is a list of ")
+                append("names, not file paths.")
+                if (toolName.endsWith(".yaml") || toolName.contains('/')) {
+                  append(" Hint: '$toolName' looks like a file path; this field used to hold paths ")
+                  append("but now holds tool names — open the descriptor at that path and copy its ")
+                  append("`name:` field here.")
+                }
+                // If a descriptor was skipped during discovery whose pack-relative path's base
+                // matches the unknown tool name (the conventional `<name>.yaml`), point the
+                // author directly at it rather than relying on them grepping back through
+                // Console.log warnings.
+                val likelyCulprit = discovery.skipped.firstOrNull {
+                  it.substringAfterLast('/') == "$toolName.yaml"
+                }
+                if (likelyCulprit != null) {
+                  append(" Note: descriptor '$likelyCulprit' was skipped during discovery ")
+                  append("(see earlier log warning for the parse error). Fix that file to ")
+                  append("register the '$toolName' name.")
+                } else if (discovery.skipped.isNotEmpty()) {
+                  append(" Note: ${discovery.skipped.size} other descriptor(s) under ")
+                  append("<pack>/tools/ were skipped during discovery (see earlier log ")
+                  append("warnings); one of them may have been intended to declare '$toolName'.")
+                }
+              },
             )
-          }
-          // `toInlineScriptToolConfigs()` returns a singleton list for single-tool descriptors and
-          // an N-element list (one per entry) for multi-tool descriptors — the framework's MCP
-          // synthesizer and QuickJS bundler later dedup by `script:` path so a group of 8 tools
-          // running off one author module spawns one subprocess (or bundles one QuickJS engine),
-          // not eight. `flatMap` is the right combinator here: each descriptor expands to 1..N
-          // inline configs and the loader downstream sees a uniform list.
-          val configs = loadPackSibling(path, loadedManifest.source, PackScriptedToolFile.serializer(), "pack scripted tool")
-            .toInlineScriptToolConfigs()
+          // For multi-tool descriptors, `toInlineScriptToolConfigs()` returns one config per
+          // entry — but we only want the entry matching `toolName`, not all of them. The
+          // descriptor's other entries are referenced separately via their own `target.tools:`
+          // entries (or omitted intentionally). Filtering by name keeps the surfaces aligned:
+          // one `target.tools:` entry → one runtime [InlineScriptToolConfig].
+          val configs = match.descriptor.toInlineScriptToolConfigs().filter { it.name == toolName }
           // Resolve `script:` relative to the descriptor YAML file's parent directory so the
           // downstream runtime bundler can read the source from a stable absolute path
           // regardless of the daemon's cwd. Pure path math when the pack is filesystem-backed
@@ -620,7 +662,7 @@ object TrailblazeProjectConfigLoader {
           // bundling stays explicit at the bundler call site.
           val source = loadedManifest.source
           if (source is PackSource.Filesystem) {
-            val yamlDir = File(source.packDir, path).parentFile
+            val yamlDir = File(source.packDir, match.relativePath).parentFile
               ?: source.packDir
             configs.map { cfg ->
               val raw = File(cfg.script)
@@ -715,6 +757,164 @@ object TrailblazeProjectConfigLoader {
   private const val PACK_WAYPOINTS_DIR = "waypoints"
   private val PACK_WAYPOINT_SUFFIXES = listOf(".waypoint.yaml")
 
+  /**
+   * Subdirectory under each pack that holds scripted-tool descriptor YAMLs. Same directory
+   * the operational tool layout's `*.tool.yaml` entries occupy — the suffix distinguishes
+   * the two flavors at discovery time.
+   */
+  private const val PACK_SCRIPTED_TOOLS_DIR = "tools"
+
+  /**
+   * Filename suffixes that mark an operational tool YAML under `<pack>/tools/` rather than a
+   * scripted-tool descriptor. Scripted-tool descriptors are plain `*.yaml` files whose name
+   * does NOT end with any of these reserved operational suffixes. Keeping the exclude list
+   * explicit (rather than just `*.tool.yaml`) leaves room for any future operational class
+   * that lands under `tools/` without re-litigating the discovery rule.
+   */
+  private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
+    ".tool.yaml",
+    ".shortcut.yaml",
+    ".trailhead.yaml",
+    ".waypoint.yaml",
+  )
+
+  /**
+   * A scripted-tool descriptor entry in the per-pack name registry — the descriptor itself
+   * plus the pack-relative path it was discovered at. The path is used to resolve relative
+   * `script:` references against the descriptor's parent directory and to produce actionable
+   * duplicate-name errors that name both contributing files.
+   */
+  private data class ScriptedToolRegistryEntry(
+    val relativePath: String,
+    val descriptor: PackScriptedToolFile,
+  )
+
+  /**
+   * Builds a name-keyed registry of every scripted-tool descriptor under `<pack>/tools/`.
+   * Direct children of `tools/` only — operational tool YAMLs (`.tool.yaml`, etc.) are
+   * skipped via the suffix exclude list. Each descriptor's `name:` (single-tool shape) or
+   * each entry's `name:` (multi-tool shape) registers one key.
+   *
+   * Duplicate names fail loudly with both contributing file paths so the author can pick
+   * which file to keep or rename.
+   *
+   * SISTER IMPLEMENTATIONS — same discovery walk + suffix exclude list + name-keyed registry
+   * shape lives in three other places. Keep them in lockstep on every edit (the exclude list,
+   * the single-vs-multi shape detection, and the duplicate-name diagnostic format must all
+   * agree — otherwise the runtime resolves a different set than the build-time generators):
+   *   - `trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/TrailblazePackBundler.kt`
+   *     `buildScriptedToolRegistry` — emits the typed `.d.ts` augmentation per pack.
+   *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/scripting/DaemonScriptedToolBundler.kt`
+   *     `discoverScriptedToolDescriptors` — esbuild-bundles each script at daemon start.
+   *   - `build-logic/src/main/kotlin/TrailblazeBundledConfigTasks.kt`
+   *     `buildPackScriptedToolRegistry` — generates the bundled per-target YAMLs under
+   *     `dist/targets/`.
+   * Build-logic stays independent of `:trailblaze-models` (the Gradle plugin classpath
+   * concern documented on `TrailblazePackBundler`'s class kdoc) so the duplication can't be
+   * collapsed into one shared util today; cross-referenced comments are the second-best fix.
+   *
+   * Search tag for grepping all four sister implementations at once (resilient against
+   * future file moves): `SISTER-IMPL-TAG: pack-scripted-tool-discovery`.
+   */
+  /**
+   * Discovery result: the name-keyed registry plus the list of descriptor pack-relative paths
+   * that were skipped because their decode failed. The skip list is plumbed downstream to the
+   * UnknownScriptedToolName diagnostic so an author whose `target.tools:` references the
+   * skipped file's intended name gets pointed at it directly rather than just seeing a
+   * Console.log warning earlier in the build log.
+   */
+  private data class ScriptedToolDiscoveryResult(
+    val registry: Map<String, ScriptedToolRegistryEntry>,
+    val skipped: List<String>,
+  )
+
+  private fun discoverPackScriptedTools(
+    loadedManifest: LoadedTrailblazePackManifest,
+  ): ScriptedToolDiscoveryResult {
+    val candidatePaths = loadedManifest.source
+      .listSiblings(relativeDir = PACK_SCRIPTED_TOOLS_DIR, suffixes = listOf(".yaml"))
+      .filter { path -> OPERATIONAL_TOOL_YAML_SUFFIXES.none { suffix -> path.endsWith(suffix) } }
+    val registry = linkedMapOf<String, ScriptedToolRegistryEntry>()
+    val skipped = mutableListOf<String>()
+    candidatePaths.forEach { path ->
+      // Per-descriptor decode wrapped in try/log/skip so a single malformed (or half-written
+      // WIP) file under `<pack>/tools/` doesn't tank the entire pack at load time. The
+      // referenced-name resolution downstream surfaces a clear UnknownScriptedToolName error
+      // if `target.tools:` actually points at the skipped file's name — so the failure stays
+      // visible to anyone who relied on the tool, just not to packs that never referenced it.
+      // See lead-dev review #2 (round 2) for the rationale.
+      val descriptor = try {
+        loadPackSibling(
+          path,
+          loadedManifest.source,
+          PackScriptedToolFile.serializer(),
+          "pack scripted tool",
+        )
+      } catch (e: TrailblazeProjectConfigException) {
+        Console.log(
+          "Note: skipping malformed scripted-tool descriptor '$path' in pack " +
+            "'${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): ${e.message}. " +
+            "Sibling descriptors still register; any `target.tools:` entry that names a tool " +
+            "from this file will fail with UnknownScriptedToolName until the file is fixed.",
+        )
+        skipped += path
+        return@forEach
+      }
+      val multi = descriptor.tools
+      val single = descriptor.name
+      val declaredNames: List<String> = when {
+        multi != null -> multi.map { it.name }
+        single != null -> listOf(single)
+        else -> {
+          // Same skip-and-log treatment for a descriptor missing both `name:` and `tools:`. A
+          // typical WIP shape (`script: ./foo.ts` and nothing else) is invisible rather than
+          // pack-fatal; `target.tools:` references surface as UnknownScriptedToolName.
+          Console.log(
+            "Note: skipping scripted-tool descriptor '$path' in pack " +
+              "'${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}) — must " +
+              "declare either a top-level `name:` (single-tool shape) or a `tools:` list " +
+              "(multi-tool shape). Sibling descriptors still register.",
+          )
+          skipped += path
+          return@forEach
+        }
+      }
+      declaredNames.forEach { name ->
+        // Reject blank tool names symmetrically with the bundler's `BlankToolName` guard —
+        // `name: ""` (or whitespace-only) decodes successfully but would register under the
+        // empty key, where a `target.tools: [""]` typo or the runtime tool repo's later
+        // registration would silently match it. SISTER-IMPL-TAG: pack-scripted-tool-discovery.
+        if (name.isBlank()) {
+          throw TrailblazeProjectConfigException(
+            "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
+              "scripted-tool descriptor '$path' declares a blank tool name. Tool names " +
+              "must be non-empty and contain at least one non-whitespace character.",
+          )
+        }
+        val previous = registry[name]
+        if (previous != null) {
+          throw TrailblazeProjectConfigException(
+            "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): " +
+              "two scripted-tool descriptors under <pack>/tools/ declare the same tool name " +
+              "'$name': '${previous.relativePath}' and '$path'. Tool names must be unique within " +
+              "a pack — rename one of the descriptors' `name:` field (or, for a multi-tool " +
+              "descriptor, the offending entry under `tools:`).",
+          )
+        }
+        registry[name] = ScriptedToolRegistryEntry(relativePath = path, descriptor = descriptor)
+      }
+    }
+    return ScriptedToolDiscoveryResult(registry, skipped)
+  }
+
+  private fun describeAvailableScriptedTools(
+    registry: Map<String, ScriptedToolRegistryEntry>,
+  ): String = if (registry.isEmpty()) {
+    "No scripted-tool descriptors discovered under <pack>/tools/."
+  } else {
+    "Available tool names: [${registry.keys.sorted().joinToString(", ")}]."
+  }
+
   private fun <T> loadPackSibling(
     refPath: String,
     source: PackSource,
@@ -766,22 +966,10 @@ object TrailblazeProjectConfigLoader {
     val toolsets: List<ToolSetYamlConfig> = emptyList(),
     val tools: List<ToolYamlConfig> = emptyList(),
     val waypoints: List<WaypointDefinition> = emptyList(),
+    /** Every pack that completed sibling resolution — surfaced via [TrailblazeResolvedConfig]. */
+    val resolvedPacks: List<ResolvedPack> = emptyList(),
   )
 
-  /**
-   * A pack manifest after sibling refs are resolved but before dependency-graph
-   * defaults are applied. The first pass of [resolvePackArtifacts] produces these;
-   * the second pass walks the dep graph using [PackDependencyResolver] and emits
-   * final [AppTargetYamlConfig] entries.
-   */
-  internal data class ResolvedPack(
-    val manifest: TrailblazePackManifest,
-    val source: PackSource,
-    val target: AppTargetYamlConfig?,
-    val toolsets: List<ToolSetYamlConfig>,
-    val tools: List<ToolYamlConfig>,
-    val waypoints: List<WaypointDefinition>,
-  )
 }
 
 /**
@@ -797,3 +985,33 @@ data class LoadedTrailblazeProjectConfig(
 /** Thrown by [TrailblazeProjectConfigLoader] on parse failure or missing refs. */
 class TrailblazeProjectConfigException(message: String, cause: Throwable? = null) :
   RuntimeException(message, cause)
+
+/**
+ * A pack manifest after sibling refs are resolved but before dependency-graph defaults
+ * are applied. Surfaced on [TrailblazeResolvedConfig.resolvedPacks] so codegen consumers
+ * (per-pack `client.d.ts` emitter) can read pack-local declarations without re-walking
+ * the workspace's pack manifests.
+ *
+ * @property manifest The parsed pack manifest with its `id`, `dependencies`, optional
+ *   `target:` block, optional top-level `platforms:` (library packs), and optional
+ *   `exports:` list.
+ * @property source Where the pack was loaded from — filesystem packDir or classpath
+ *   resource prefix. Codegen that writes per-pack output (e.g. `client.d.ts`) skips
+ *   classpath-backed packs since they can't be written into a JAR.
+ * @property target The resolved [AppTargetYamlConfig] for target packs; null for library
+ *   packs (those without a `target:` block).
+ * @property toolsets Toolset YAML configs declared via the pack manifest's `toolsets:` list.
+ * @property tools Operational tool YAMLs auto-discovered under the pack's `tools/` /
+ *   `shortcuts/` / `trailheads/` directories. These are the pure-YAML composed tools
+ *   (`.tool.yaml`), not the scripted tools listed under `target.tools:` (those live on
+ *   [target] via `AppTargetYamlConfig.tools`).
+ * @property waypoints Waypoints auto-discovered under the pack's `waypoints/` directory.
+ */
+data class ResolvedPack(
+  val manifest: TrailblazePackManifest,
+  val source: PackSource,
+  val target: AppTargetYamlConfig?,
+  val toolsets: List<ToolSetYamlConfig>,
+  val tools: List<ToolYamlConfig>,
+  val waypoints: List<WaypointDefinition>,
+)

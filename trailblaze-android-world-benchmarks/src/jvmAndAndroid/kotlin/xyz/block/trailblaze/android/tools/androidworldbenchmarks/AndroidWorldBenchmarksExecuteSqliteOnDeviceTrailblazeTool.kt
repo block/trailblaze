@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_executeSqliteOnDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Executes SQL statements on a SQLite database on the device.")
 data class AndroidWorldBenchmarksExecuteSqliteOnDeviceTrailblazeTool(

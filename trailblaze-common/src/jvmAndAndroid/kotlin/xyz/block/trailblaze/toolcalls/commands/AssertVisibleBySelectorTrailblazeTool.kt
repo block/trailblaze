@@ -27,7 +27,8 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @Serializable
 @TrailblazeToolClass(
   name = "assertVisibleBySelector",
-  isForLlm = false,
+  surfaceToLlm = false,
+  surfaceToScriptedTools = false,
   isVerification = true,
 )
 @LLMDescription("Asserts that an element with the provided selector is visible on the screen.")

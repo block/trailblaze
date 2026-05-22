@@ -4,7 +4,7 @@
 # TS handlers call `mobile_listInstalledApps` to resolve the installed Square app id, then
 # `android_sendBroadcast` to fire the actual intent.
 #
-# Each tool in here is declared `isForLlm = false` at the class level, so this toolset does
+# Each tool in here is declared `surfaceToLlm = false` at the class level, so this toolset does
 # NOT pollute the LLM's tool catalog. The point of being a toolset (rather than discoverable
 # only via `ToolYamlLoader`) is to land these tools in the runtime `TrailblazeToolRepo` so
 # the daemon's `/scripting/callback` dispatcher can resolve them by name. Without this

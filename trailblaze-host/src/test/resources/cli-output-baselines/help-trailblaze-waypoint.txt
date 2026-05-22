@@ -30,3 +30,5 @@ Commands:
                       YAML edits.
   propose           Synthesize draft waypoint YAMLs from unmatched-cluster
                       fingerprints.
+  shortcut          Analyze a session set for (A->B) waypoint transitions and
+                      synthesize draft

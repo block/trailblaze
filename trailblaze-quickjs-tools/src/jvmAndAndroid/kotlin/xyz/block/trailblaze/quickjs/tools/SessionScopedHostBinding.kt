@@ -6,6 +6,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
@@ -24,7 +25,7 @@ import xyz.block.trailblaze.util.Console
  *
  * 1. Look up the named tool via
  *    [TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered] — this bypasses the
- *    `isForLlm = false` filter that hides YAML-defined building-block tools from the LLM
+ *    `surfaceToLlm = false` filter that hides YAML-defined building-block tools from the LLM
  *    descriptor list. Class-backed tools were already reachable through the dispatch path
  *    (see `TrailblazeToolRepo.toolCallToTrailblazeTool` line 257-269); the unfiltered
  *    variant extends the bypass to YAML-defined tools that exist globally on the classpath
@@ -98,6 +99,34 @@ class SessionScopedHostBinding(
       return errorEnvelope(
         "trailblaze.call('$name'): no execution context installed for this session",
       )
+    }
+
+    // Unknown-key gate — runtime side of the typed-surface contract (#3209). Pairs
+    // with the matching check in [JsScriptingCallbackDispatcher] so both scripted-tool
+    // dispatch transports (HTTP subprocess + on-device QuickJS binding) reject keys that
+    // `client.d.ts` would have flagged at compile time. Done BEFORE the repo lookup so a
+    // typo'd key on a known tool surfaces as an unknown-key error, not as a `decode`
+    // failure or a missing-required-arg downstream.
+    //
+    // Keep this call in sync with [JsScriptingCallbackDispatcher.dispatchCallTool]'s
+    // matching block — both sites must call the same validator with the same envelope
+    // shape so authors see identical rejection behavior regardless of host runtime.
+    // #3214 will consolidate them into the repo.
+    JsScriptingCallbackArgumentValidator.validate(toolRepo, name, argsJson)?.let { message ->
+      // Distinguish unknown-key rejections from missing-required rejections in the log line —
+      // same rationale as [JsScriptingCallbackDispatcher.dispatchCallTool]: operators
+      // grepping one tag must not see the other. The substring match keeps the two call
+      // sites' log shapes parallel; sync with [JsScriptingCallbackArgumentValidator.validate]
+      // if the message wording ever changes.
+      val rejectionTag = if (message.contains("without required argument keys")) {
+        "MISSING_REQUIRED_REJECTED"
+      } else {
+        "UNKNOWN_KEYS_REJECTED"
+      }
+      Console.log(
+        "[SessionScopedHostBinding] $rejectionTag tool=$name session=${sessionId.value} $message",
+      )
+      return errorEnvelope(message)
     }
 
     val resolved: TrailblazeTool? = try {

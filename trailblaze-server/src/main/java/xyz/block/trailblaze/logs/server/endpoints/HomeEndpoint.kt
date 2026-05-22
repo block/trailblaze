@@ -5,6 +5,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
 import io.ktor.util.toMap
+import java.io.File
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import xyz.block.trailblaze.logs.model.SessionInfo
@@ -29,7 +30,7 @@ object HomeEndpoint {
     val rows = if (sessions.isEmpty()) {
       """<tr><td colspan="4" class="empty">No sessions yet. Run a trail to populate this list.</td></tr>"""
     } else {
-      sessions.joinToString("\n") { sessionRow(it) }
+      sessions.joinToString("\n") { sessionRow(it, logsRepo) }
     }
 
     return """
@@ -58,6 +59,10 @@ object HomeEndpoint {
           .title-link:hover { text-decoration: underline; }
           .meta { color: #888; font-size: 12px; }
           .nowrap { white-space: nowrap; }
+          .extras { font-size: 12px; margin-top: 2px; }
+          .extras a { color: #0066cc; text-decoration: none; margin-right: 12px; }
+          .extras a:hover { text-decoration: underline; }
+          .extras .hint { color: #aaa; cursor: help; }
         </style>
       </head>
       <body>
@@ -86,7 +91,7 @@ object HomeEndpoint {
     """
   }
 
-  private fun sessionRow(info: SessionInfo): String {
+  private fun sessionRow(info: SessionInfo, logsRepo: LogsRepo): String {
     val sessionId = info.sessionId.value
     val (statusLabel, statusClass) = statusLabelAndClass(info.latestStatus)
     val title = htmlEscape(info.displayName)
@@ -94,17 +99,33 @@ object HomeEndpoint {
     val duration = formatDuration(info.durationMs)
     val href = "/report?session=${urlEncode(sessionId)}"
     val sessionIdEscaped = htmlEscape(sessionId)
+    val storyboardExtra = storyboardLinkHtml(sessionId, logsRepo)
     return """
             <tr>
               <td><span class="status $statusClass">$statusLabel</span></td>
               <td>
                 <a class="title-link" href="$href">$title</a>
                 <div class="meta">$sessionIdEscaped</div>
+                <div class="extras">
+                  <a href="$href">Report</a>
+                  $storyboardExtra
+                </div>
               </td>
               <td class="meta nowrap">$when_</td>
               <td class="meta nowrap">$duration</td>
             </tr>
     """.trimEnd()
+  }
+
+  private fun storyboardLinkHtml(sessionId: String, logsRepo: LogsRepo): String {
+    val storyboardFile = File(logsRepo.logsDir, "reports/$sessionId.storyboard.html")
+    return if (storyboardFile.exists()) {
+      val staticPath = "/static/reports/${urlEncode(sessionId)}.storyboard.html"
+      """<a href="$staticPath">Storyboard</a>"""
+    } else {
+      val hint = htmlEscape("Run: trailblaze report --id $sessionId --storyboard")
+      """<span class="hint" title="$hint">Storyboard —</span>"""
+    }
   }
 
   private fun statusLabelAndClass(status: SessionStatus): Pair<String, String> = when (status) {

@@ -1,4 +1,4 @@
-script: ./playwrightSample_web_submitContactForm.js
+script: ./playwrightSample_web_submitContactForm.ts
 name: playwrightSample_web_submitContactForm
 description: Fill out the sample contact form, submit it, and verify the success banner.
 _meta:

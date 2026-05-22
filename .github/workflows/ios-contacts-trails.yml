@@ -1,0 +1,120 @@
+name: iOS Contacts Trails
+
+on:
+  # Runs on PRs targeting the default branch
+  pull_request:
+    branches: [ "main" ]
+
+  # Runs after merging to the default branch
+  push:
+    branches: [ "main" ]
+
+# Allow only one concurrent run per ref, cancelling any queued run when a
+# newer one is triggered (mirrors the pr-checks.yml concurrency policy).
+concurrency:
+  group: ios-contacts-trails-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Drives a recorded iOS Contacts trail via the Trailblaze CLI
+  # (`./trailblaze trail -d ios …`). Agent loop runs in-process on the host
+  # using the bundled Maestro/XCTest driver. No external Maestro CLI
+  # installation is required — Maestro is a JVM dependency of trailblaze-host
+  # and ships inside the Trailblaze JAR. The XCTest runner is auto-installed
+  # on the simulator at first connection.
+  #
+  # Requires a macOS runner for iOS Simulator support. macOS-15 ships with
+  # Xcode 16 which includes iOS 18 simulator runtimes.
+  ios-contacts-trails:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      # Recordings-only — LLM is never invoked. A non-empty sentinel value is
+      # required to satisfy the provider/client wiring.
+      OPENAI_API_KEY: no-key-set
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Boot iOS Simulator
+        run: |
+          echo "Available iPhone simulators:"
+          xcrun simctl list devices available | grep "iPhone"
+
+          # Prefer iPhone 16 Pro (available on Xcode 16 / macOS-15 runners).
+          # Fall back to the first available iPhone so the job degrades
+          # gracefully if the runner image changes the set of pre-installed
+          # simulators (e.g. Xcode minor update removes a device type).
+          SIMULATOR_UDID=$(
+            xcrun simctl list devices available |
+            grep "iPhone 16 Pro " | grep -v "Max\|Plus" |
+            head -1 |
+            grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
+          )
+
+          if [ -z "$SIMULATOR_UDID" ]; then
+            echo "iPhone 16 Pro not found, falling back to first available iPhone..."
+            SIMULATOR_UDID=$(
+              xcrun simctl list devices available |
+              grep "iPhone" |
+              head -1 |
+              grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
+            )
+          fi
+
+          if [ -z "$SIMULATOR_UDID" ]; then
+            echo "ERROR: No iPhone simulator found"
+            exit 1
+          fi
+
+          echo "Booting simulator UDID: $SIMULATOR_UDID"
+          xcrun simctl boot "$SIMULATOR_UDID"
+
+          # Block until the simulator reaches the Booted state. -b causes
+          # bootstatus to exit once boot is complete rather than streaming.
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          echo "✓ Simulator booted: $SIMULATOR_UDID"
+
+      - name: Run iOS Contacts trail
+        id: run-trails
+        continue-on-error: true
+        run: ./.github/pr_run_ios_contacts_trails.sh
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_generate_trailblaze_report.sh
+
+      - name: Create artifacts
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_create_artifacts.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts-ios-contacts
+          path: |
+            trailblaze-logs.zip
+            trailblaze_report.html
+
+      - name: Fail if trails failed
+        if: steps.run-trails.outcome == 'failure'
+        run: |
+          echo "iOS Contacts trails failed - failing the workflow"
+          exit 1

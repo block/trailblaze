@@ -125,12 +125,12 @@ class DaemonScriptedToolBundlerTest {
       )
     }
     // Descriptor uses a descriptor-relative path — just the filename with no dir prefix.
-    val toolYaml = File(packDir, "tools/myPack_relativePathTool.yaml").apply {
-      writeText(toolDescriptorYaml(name = "myPack_relativePathTool", scriptPath = "./${toolScript.name}"))
-    }
+    File(packDir, "tools/myPack_relativePathTool.yaml").writeText(
+      toolDescriptorYaml(name = "myPack_relativePathTool", scriptPath = "./${toolScript.name}"),
+    )
     val pack = TrailblazePackManifest(
       id = "relativePathPack",
-      target = packTarget(displayName = "Relative Path Pack", toolPaths = listOf(toolYaml.relativeTo(packDir).path)),
+      target = packTarget(displayName = "Relative Path Pack", toolNames = listOf("myPack_relativePathTool")),
     )
     val result = bundler.bundleAll(
       packs = listOf(pack),
@@ -152,22 +152,22 @@ class DaemonScriptedToolBundlerTest {
     val toolAScript = writeTinyTs("toolA-source.ts", exportName = "packA_demo_toolA", body = "console.log('A')")
     val toolBScript = writeTinyTs("toolB-source.ts", exportName = "packB_demo_toolB", body = "console.log('B')")
 
-    val toolAYaml = File(packADir, "tools/toolA.yaml").apply {
+    File(packADir, "tools/toolA.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = "packA_demo_toolA", scriptPath = toolAScript.absolutePath))
     }
-    val toolBYaml = File(packBDir, "tools/toolB.yaml").apply {
+    File(packBDir, "tools/toolB.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = "packB_demo_toolB", scriptPath = toolBScript.absolutePath))
     }
 
     val packA = TrailblazePackManifest(
       id = "packA",
-      target = packTarget(displayName = "Pack A", toolPaths = listOf(toolAYaml.relativeTo(packADir).path)),
+      target = packTarget(displayName = "Pack A", toolNames = listOf("packA_demo_toolA")),
     )
     val packB = TrailblazePackManifest(
       id = "packB",
-      target = packTarget(displayName = "Pack B", toolPaths = listOf(toolBYaml.relativeTo(packBDir).path)),
+      target = packTarget(displayName = "Pack B", toolNames = listOf("packB_demo_toolB")),
     )
 
     val result = bundler.bundleAll(
@@ -187,56 +187,55 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
-  fun `bundleAll rejects relative descriptor path that escapes the pack dir`() = runBlocking {
-    // Pins descriptor-path containment. Without this guard, a manifest declaring
-    // `target.tools: [../outside.yaml]` would decode an unrelated YAML file outside the
-    // pack before the script-side check ever ran — same threat model as the script case
-    // but one level earlier. Caught by Copilot review on PR #2889.
-    val packDir = tempFolder.newFolder("descriptorContainmentPack")
-    // Create a real YAML file outside the pack so the test pins containment, not file-not-found.
-    val outsideDescriptor = File(packDir.parentFile, "outside-descriptor.yaml").apply {
-      writeText(toolDescriptorYaml(name = "outsideTool", scriptPath = "./outside.ts"))
+  fun `bundleAll fails when target tools references an unknown name`() = runBlocking {
+    // With the name-based resolution model, `target.tools:` lists tool names rather than
+    // paths. A name that doesn't match any descriptor under `<pack>/tools/` fails with the
+    // discovered-name list embedded for triage. (Replaces the legacy descriptor-path
+    // containment test — there are no paths in `target.tools:` to escape from anymore.)
+    val packDir = tempFolder.newFolder("unknownNamePack")
+    File(packDir, "tools/known.yaml").apply {
+      parentFile.mkdirs()
+      writeText(toolDescriptorYaml(name = "knownTool", scriptPath = "./known.ts"))
     }
-    assertTrue(outsideDescriptor.isFile, "outside descriptor must exist for containment to be the real failure")
     val pack = TrailblazePackManifest(
-      id = "descriptorContainmentPack",
-      target = packTarget(displayName = "Descriptor Containment", toolPaths = listOf("../${outsideDescriptor.name}")),
+      id = "unknownNamePack",
+      target = packTarget(displayName = "Unknown Name Pack", toolNames = listOf("missingTool")),
     )
     val thrown = assertFailsWith<IOException> {
       bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue(
-      message.contains("resolves outside the pack directory"),
-      "expected message to call out pack containment; got: $message",
+      message.contains("'missingTool'"),
+      "expected message to name the unknown tool; got: $message",
     )
     assertTrue(
-      message.contains("tool descriptor"),
-      "expected message to name the descriptor as the offending path kind; got: $message",
+      message.contains("knownTool"),
+      "expected message to surface available names; got: $message",
     )
   }
 
   @Test
   fun `bundleAll rejects relative script that escapes the pack dir`() = runBlocking {
     // Pins canonical-path containment for the session-time resolver, matching the loader's
-    // mcp_servers containment guarantee and the build-time bundler. Without this check, a
-    // descriptor declaring `script: ../sibling.ts` would resolve outside the pack at session
-    // start with no guard — defense-in-depth across all three resolvers (build-time,
-    // load-time, session-time).
+    // mcp_servers containment guarantee. Without this check, a descriptor declaring
+    // `script: ../sibling.ts` would resolve outside the pack at session start with no
+    // guard — defense-in-depth across all the resolvers.
     val packDir = tempFolder.newFolder("containmentPack")
     // Sibling file OUTSIDE the pack — exists so the test pins containment, not file-not-found.
     val outsideScript = File(packDir.parentFile, "sibling-outside.ts").apply {
       writeText("export function escapeTool(): void {}")
     }
     assertTrue(outsideScript.isFile, "outside script must exist for containment to be the real failure")
-    // Place the descriptor at the pack root so `../sibling-outside.ts` resolves to the
-    // pack's parent directory — outside the pack.
-    val toolYaml = File(packDir, "escapeTool.yaml").apply {
-      writeText(toolDescriptorYaml(name = "escapeTool", scriptPath = "../${outsideScript.name}"))
+    // Descriptor lives under `<packDir>/tools/` (the only place discovery looks). Its
+    // `script:` field reaches outside the pack via `../../`.
+    File(packDir, "tools/escapeTool.yaml").apply {
+      parentFile.mkdirs()
+      writeText(toolDescriptorYaml(name = "escapeTool", scriptPath = "../../${outsideScript.name}"))
     }
     val pack = TrailblazePackManifest(
       id = "containmentPack",
-      target = packTarget(displayName = "Containment Pack", toolPaths = listOf(toolYaml.name)),
+      target = packTarget(displayName = "Containment Pack", toolNames = listOf("escapeTool")),
     )
     val thrown = assertFailsWith<IOException> {
       bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
@@ -265,22 +264,22 @@ class DaemonScriptedToolBundlerTest {
     val toolAScript = writeTinyTs("dupA-source.ts", exportName = sharedToolName, body = "console.log('A')")
     val toolBScript = writeTinyTs("dupB-source.ts", exportName = sharedToolName, body = "console.log('B')")
 
-    val toolAYaml = File(packADir, "tools/tool.yaml").apply {
+    File(packADir, "tools/tool.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = sharedToolName, scriptPath = toolAScript.absolutePath))
     }
-    val toolBYaml = File(packBDir, "tools/tool.yaml").apply {
+    File(packBDir, "tools/tool.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = sharedToolName, scriptPath = toolBScript.absolutePath))
     }
 
     val packA = TrailblazePackManifest(
       id = "dupPackA",
-      target = packTarget(displayName = "Dup A", toolPaths = listOf(toolAYaml.relativeTo(packADir).path)),
+      target = packTarget(displayName = "Dup A", toolNames = listOf(sharedToolName)),
     )
     val packB = TrailblazePackManifest(
       id = "dupPackB",
-      target = packTarget(displayName = "Dup B", toolPaths = listOf(toolBYaml.relativeTo(packBDir).path)),
+      target = packTarget(displayName = "Dup B", toolNames = listOf(sharedToolName)),
     )
 
     val thrown = assertFailsWith<IOException> {
@@ -297,6 +296,138 @@ class DaemonScriptedToolBundlerTest {
     assertTrue(
       message.contains(toolBScript.absolutePath),
       "expected message to name the conflicting source path; got: $message",
+    )
+  }
+
+  @Test
+  fun `bundleAll fails when target tools lists the same name twice in one pack`() = runBlocking {
+    // Pin the per-pack dedup added alongside the name-resolution flip. Without this check,
+    // listing the same name twice in `target.tools:` would trip the cross-pack collision
+    // guard later with a message that incorrectly blames a sibling pack. The per-pack check
+    // fires first and produces an accurate diagnostic.
+    val packDir = tempFolder.newFolder("dupInTargetPack")
+    File(packDir, "tools/foo.yaml").apply {
+      parentFile.mkdirs()
+      writeText(toolDescriptorYaml(name = "foo", scriptPath = "./foo.ts"))
+    }
+    val pack = TrailblazePackManifest(
+      id = "dupInTargetPack",
+      target = packTarget(displayName = "Dup In Target", toolNames = listOf("foo", "foo")),
+    )
+
+    val thrown = assertFailsWith<IOException> {
+      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    }
+    val message = thrown.message.orEmpty()
+    assertTrue(message.contains("'foo'"), "expected duplicate name in message; got: $message")
+    assertTrue(message.contains("more than once"), "expected per-pack diagnostic; got: $message")
+    assertTrue(
+      !message.contains("Duplicate scripted-tool name 'foo' across packs"),
+      "must NOT misattribute to cross-pack collision; got: $message",
+    )
+  }
+
+  @Test
+  fun `bundleAll rejects symlinked descriptor that escapes the pack dir at discovery`() = runBlocking {
+    // Pin the symlink-containment check added in the round-1 follow-up. A `<pack>/tools/foo.yaml`
+    // that symlinks outside the pack must be rejected, not silently followed — matches the
+    // runtime loader's `PackSource.readFilesystemSibling` containment guarantee.
+    //
+    // Note the fixture: `target.tools:` lists `outsideTool` (the name *inside* the outside
+    // descriptor) rather than `escape` (the symlink filename) so the test pins discovery-time
+    // rejection unambiguously. If the canonical-path check ever silently relaxed, the
+    // failure would change to UnknownScriptedToolName ('outsideTool' didn't register because
+    // it was filtered out at containment time) — distinguishable from the current "resolves
+    // outside" assertion.
+    val packDir = tempFolder.newFolder("symlinkContainmentPack")
+    File(packDir, "tools").mkdirs()
+    val outsideDir = tempFolder.newFolder("outside-tools")
+    val outsideDescriptor = File(outsideDir, "outside.yaml").apply {
+      writeText(toolDescriptorYaml(name = "outsideTool", scriptPath = "./outside.ts"))
+    }
+    val symlinkSource = File(packDir, "tools/outsideTool.yaml").toPath()
+    try {
+      java.nio.file.Files.createSymbolicLink(symlinkSource, outsideDescriptor.toPath())
+    } catch (_: UnsupportedOperationException) {
+      // Filesystem doesn't support symlinks (Windows without elevated perms) — skip the test
+      // rather than fail it. The bundler test for the same guard uses the same pattern.
+      return@runBlocking
+    }
+    val pack = TrailblazePackManifest(
+      id = "symlinkContainmentPack",
+      target = packTarget(displayName = "Symlink Containment", toolNames = listOf("outsideTool")),
+    )
+
+    val thrown = assertFailsWith<IOException> {
+      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    }
+    val message = thrown.message.orEmpty()
+    assertTrue(
+      message.contains("resolves outside the pack directory"),
+      "expected containment failure; got: $message",
+    )
+  }
+
+  @Test
+  fun `bundleAll surfaces unknown-name with skipped-file hint when target tools references a malformed descriptor`() = runBlocking {
+    // Lead-dev round 3 #I2 + #I5: this test exercises the discovery-phase skip-and-log
+    // behavior + the downstream unknown-name diagnostic WITHOUT requiring esbuild — the
+    // failure surfaces before any bundling happens. Pinning this independently of esbuild
+    // means clean CI agents (no `bun install`) still get the regression check.
+    val packDir = tempFolder.newFolder("malformedReferencedPack")
+    File(packDir, "tools").mkdirs()
+    File(packDir, "tools/foo.yaml").writeText(
+      """
+      |script: ./foo.ts
+      |this is not valid yaml:::
+      |  - { unclosed
+      |""".trimMargin(),
+    )
+    val pack = TrailblazePackManifest(
+      id = "malformedReferencedPack",
+      target = packTarget(displayName = "Malformed Referenced", toolNames = listOf("foo")),
+    )
+
+    val thrown = assertFailsWith<IOException> {
+      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    }
+    val message = thrown.message.orEmpty()
+    assertTrue("got: $message") { message.contains("'foo'") }
+    assertTrue(
+      "expected the skipped-file hint to point at foo.yaml; got: $message",
+    ) { message.contains("foo.yaml") && message.contains("skipped during discovery") }
+  }
+
+  @Test
+  fun `bundleAll skips malformed descriptors and continues with sibling tools`() = runBlocking {
+    // Lead-dev review #2 (round 2): a half-written `<pack>/tools/broken.yaml` must NOT take
+    // the whole pack out — sibling descriptors still register and `target.tools:` references
+    // resolve normally against them.
+    assumeEsbuildPresent()
+    val packDir = tempFolder.newFolder("wipFriendlyPack")
+    File(packDir, "tools").mkdirs()
+    // Malformed YAML — half-written by the author.
+    File(packDir, "tools/broken.yaml").writeText(
+      """
+      |script: ./broken.ts
+      |this is not valid yaml:::
+      |  - { unclosed
+      |""".trimMargin(),
+    )
+    // Working sibling — must still register and bundle.
+    val workingScript = writeTinyTs("wip-working.ts", exportName = "workingTool")
+    File(packDir, "tools/working.yaml").writeText(
+      toolDescriptorYaml(name = "workingTool", scriptPath = workingScript.absolutePath),
+    )
+    val pack = TrailblazePackManifest(
+      id = "wipFriendlyPack",
+      target = packTarget(displayName = "WIP Friendly", toolNames = listOf("workingTool")),
+    )
+
+    val result = bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    assertTrue(
+      result.containsKey("workingTool"),
+      "sibling descriptor must still register despite the malformed neighbor; got keys: ${result.keys}",
     )
   }
 
@@ -476,8 +607,8 @@ class DaemonScriptedToolBundlerTest {
     return file
   }
 
-  private fun packTarget(displayName: String, toolPaths: List<String>): PackTargetConfig =
-    PackTargetConfig(displayName = displayName, tools = toolPaths)
+  private fun packTarget(displayName: String, toolNames: List<String>): PackTargetConfig =
+    PackTargetConfig(displayName = displayName, tools = toolNames)
 
   /**
    * Minimal descriptor YAML — just the fields the bundler reads (`name`, `script`).

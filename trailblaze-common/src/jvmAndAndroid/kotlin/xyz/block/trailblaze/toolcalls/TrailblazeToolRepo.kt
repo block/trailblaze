@@ -4,8 +4,10 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.message.Message
 import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.config.YamlDefinedToolSerializer
+import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
@@ -255,7 +257,7 @@ class TrailblazeToolRepo(
     snapshot.dynamic[ToolName(toolName)]?.let { return it.decodeToolCall(toolContent) }
 
     // 2. Class-backed path — look up by the @TrailblazeToolClass(name=...) value, not by the
-    //    Koog descriptor name. Descriptor lookup misses any tool with isForLlm = false (e.g.
+    //    Koog descriptor name. Descriptor lookup misses any tool with surfaceToLlm = false (e.g.
     //    TapOnByElementSelector), since toKoogToolDescriptor() returns null for those — the
     //    annotation-name lookup keeps every class-backed tool reachable regardless of LLM
     //    visibility.
@@ -295,13 +297,13 @@ class TrailblazeToolRepo(
   }
 
   /**
-   * Variant of [toolCallToTrailblazeTool] that bypasses the `isForLlm` filter for YAML-defined
+   * Variant of [toolCallToTrailblazeTool] that bypasses the `surfaceToLlm` filter for YAML-defined
    * tools by falling back to the global [TrailblazeSerializationInitializer.buildYamlDefinedTools]
    * registry if the standard lookup misses.
    *
    * Used by inline scripted-tool composition (`SessionScopedHostBinding` in
    * `:trailblaze-quickjs-tools`) where author bundles can call into YAML-defined tools that
-   * are intentionally hidden from the LLM (`is_for_llm: false`). The standard
+   * are intentionally hidden from the LLM (`surface_to_llm: false`). The standard
    * [toolCallToTrailblazeTool] already bypasses the filter for class-backed tools and for
    * YAML tools that are registered into [registeredYamlToolNames]; this method extends that
    * bypass to YAML tools that exist globally on the classpath but aren't in the session's
@@ -338,6 +340,165 @@ class TrailblazeToolRepo(
       @OptIn(InternalSerializationApi::class)
       TrailblazeJsonInstance.decodeFromString(toolClass.serializer(), toolContent)
     }
+  }
+
+  /**
+   * Set of argument keys the runtime deserializer for [toolName] will recognize, or `null` if
+   * no schema can be located. Wrappers that want to enforce the typed contract at dispatch time
+   * (e.g. [xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher],
+   * [SessionScopedHostBinding]) use this to reject incoming `arguments_json` carrying keys the
+   * tool doesn't accept — closing the loophole where `kotlinx.serialization`'s
+   * `ignoreUnknownKeys = true` silently drops misspelled / LLM-scaffolding keys.
+   *
+   * **Paired with [requiredArgumentKeysFor]** — both methods walk the same four-tier resolution
+   * chain (dynamic → session class → session YAML → global YAML → global class) and return
+   * `null` for the same "schema can't be introspected" branch. Any future change that re-routes
+   * one method's resolution chain MUST update the other in lockstep, or the validator's
+   * unknown-key gate and missing-required gate will fall out of agreement.
+   *
+   * The returned set is the union of all keys the deserializer is willing to decode (not just
+   * the LLM-visible parameters), so the message can list the canonical shape including fields
+   * like `nodeSelector` that scripted callers may legitimately set even when the LLM descriptor
+   * excludes them.
+   *
+   * Resolution mirrors [toolCallToTrailblazeTool] / [toolCallToTrailblazeToolUnfiltered]:
+   *  1. Class-backed tool (session-registered, then global registry as a fallback for the
+   *     unfiltered path).
+   *  2. Dynamic tool registration (subprocess MCP, bundled on-device runtimes).
+   *  3. YAML-defined tool (session-registered, then global classpath as a fallback).
+   *
+   * Returns `null` only when no schema can be located:
+   *  - The tool name is unknown to every resolution tier, OR
+   *  - A dynamic tool registration declares no parameters (subprocess MCP servers can legitimately
+   *    advertise no schema; defaulting to "skip" avoids false rejections on tools whose schema
+   *    simply isn't modelled in the descriptor).
+   *
+   * Returns an **empty set** when the tool's schema is author-controlled and exhaustively
+   * declares zero parameters (class-backed `@TrailblazeToolClass` with no constructor args;
+   * YAML tools with `parameters: []`). In that case every incoming key is unknown and the
+   * validator MUST reject — leniency here would re-introduce the exact silent-drop behavior
+   * this change closes (e.g. for `pressBack` and other no-arg YAML tools).
+   */
+  @OptIn(InternalSerializationApi::class)
+  fun expectedArgumentKeysFor(toolName: String): Set<String>? {
+    val snapshot = snapshotRegisteredTools()
+    val typedName = ToolName(toolName)
+
+    snapshot.dynamic[typedName]?.let { registration ->
+      // Dynamic tools (subprocess MCP) can legitimately advertise no schema — fall through
+      // to "skip" rather than rejecting every call to an unannotated subprocess tool.
+      return registration.trailblazeDescriptor.parameterNames().ifEmpty { null }
+    }
+
+    val sessionClass = snapshot.toolClasses.firstOrNull { it.toolName() == typedName }
+    if (sessionClass != null) {
+      // Class-backed: empty `elementNames` means the Kotlin data class declares no
+      // properties — strictly reject extra keys.
+      return sessionClass.serializer().descriptor.elementNames.toSet()
+    }
+
+    if (typedName in snapshot.yamlToolNames) {
+      val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
+      if (config != null) {
+        // YAML tools: author-controlled exhaustive `parameters:` list. Empty means
+        // "tool takes no args" — reject any incoming key (closes the `pressBack` /
+        // no-arg YAML loophole flagged on #3213).
+        return config.toTrailblazeToolDescriptor().parameterNames()
+      }
+    }
+
+    // Unfiltered fallback — covers [toolCallToTrailblazeToolUnfiltered]'s lookup of global
+    // YAML configs and class-backed tools that aren't in the session's registered set. Keeps
+    // the unknown-key check live for scripted bundles that compose host-side helpers like
+    // `runCommand` which intentionally aren't in every target's toolset.
+    val globalYamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
+    if (globalYamlConfig != null) {
+      return globalYamlConfig.toTrailblazeToolDescriptor().parameterNames()
+    }
+    val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
+    if (globalToolClass != null) {
+      return globalToolClass.serializer().descriptor.elementNames.toSet()
+    }
+
+    return null
+  }
+
+  private fun TrailblazeToolDescriptor.parameterNames(): Set<String> =
+    (requiredParameters.map { it.name } + optionalParameters.map { it.name }).toSet()
+
+  private fun TrailblazeToolDescriptor.requiredParameterNames(): Set<String> =
+    requiredParameters.map { it.name }.toSet()
+
+  /**
+   * Set of argument keys the runtime considers REQUIRED for [toolName], or `null` if no schema
+   * can be located. Pairs with [expectedArgumentKeysFor] — the unknown-key gate and the
+   * missing-required-key gate run off the same four-tier resolution chain (dynamic → session
+   * class → session YAML → global YAML → global class), so a tool whose schema is
+   * introspectable for one check is introspectable for the other. Future changes to one
+   * method's chain MUST update the other in lockstep.
+   *
+   * Returns an **empty set** when the tool's schema is known but declares no required
+   * parameters — e.g., a scripted tool whose every input is `required: false`, a YAML tool
+   * with `parameters: []`, or a class-backed tool whose every constructor argument has a
+   * default. Returning empty (rather than null) means "I checked, nothing is required" so
+   * callers reject empty payloads only when something actually must be present.
+   *
+   * Returns `null` only when the resolver doesn't recognize the tool at all — same skip
+   * branch [expectedArgumentKeysFor] uses for "dynamic tool advertises no schema." Falling
+   * through to null keeps the validator a no-op for tools whose schema can't be read.
+   *
+   * Class-backed tools introspect via `SerialDescriptor.isElementOptional` so a Kotlin
+   * property with a default value (`val foo: String = "x"`) is treated as optional even
+   * though `expectedArgumentKeysFor` lists it among the accepted keys. YAML and dynamic
+   * tools read straight off the descriptor's `requiredParameters` split — the partition
+   * that [LazyYamlScriptedToolRegistration] and [ToolYamlConfig.toTrailblazeToolDescriptor]
+   * already populate from the author-declared `required:` annotation.
+   */
+  @OptIn(InternalSerializationApi::class)
+  fun requiredArgumentKeysFor(toolName: String): Set<String>? {
+    val snapshot = snapshotRegisteredTools()
+    val typedName = ToolName(toolName)
+
+    snapshot.dynamic[typedName]?.let { registration ->
+      // Mirror [expectedArgumentKeysFor]'s "schema can be empty" skip: a dynamic tool that
+      // advertises no parameters at all (subprocess MCP server without an explicit schema)
+      // falls through rather than synthesizing a missing-required error on every empty call.
+      if (registration.trailblazeDescriptor.parameterNames().isEmpty()) return null
+      return registration.trailblazeDescriptor.requiredParameterNames()
+    }
+
+    val sessionClass = snapshot.toolClasses.firstOrNull { it.toolName() == typedName }
+    if (sessionClass != null) {
+      return classRequiredKeys(sessionClass)
+    }
+
+    if (typedName in snapshot.yamlToolNames) {
+      val config = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
+      if (config != null) {
+        return config.toTrailblazeToolDescriptor().requiredParameterNames()
+      }
+    }
+
+    val globalYamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
+    if (globalYamlConfig != null) {
+      return globalYamlConfig.toTrailblazeToolDescriptor().requiredParameterNames()
+    }
+    val globalToolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName]
+    if (globalToolClass != null) {
+      return classRequiredKeys(globalToolClass)
+    }
+
+    return null
+  }
+
+  @OptIn(InternalSerializationApi::class)
+  private fun classRequiredKeys(klass: KClass<out TrailblazeTool>): Set<String> {
+    val descriptor = klass.serializer().descriptor
+    val out = LinkedHashSet<String>(descriptor.elementsCount)
+    for (i in 0 until descriptor.elementsCount) {
+      if (!descriptor.isElementOptional(i)) out += descriptor.getElementName(i)
+    }
+    return out
   }
 
   fun getCurrentToolDescriptors(): List<ToolDescriptor> {

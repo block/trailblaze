@@ -14,52 +14,45 @@ import xyz.block.trailblaze.config.project.PackScriptedToolFile
 import xyz.block.trailblaze.config.project.ScriptedToolProperty
 
 /**
- * Daemon-time codegen that emits workspace-local `.d.ts` files declaring typed `client.callTool`
- * overloads for the tools registered in this Trailblaze daemon — both Kotlin-defined
- * (`ToolDescriptor` from `TrailblazeToolRepo.getCurrentToolDescriptors()`) and per-pack
- * scripted tools (either the author-shape [PackScriptedToolFile] parsed from pack manifests'
- * `target.tools:` entries, or the post-compile [InlineScriptToolConfig] shape produced by
- * `TrailblazeCompiler.compile()`).
+ * Daemon-time codegen that emits per-pack `client.d.ts` files declaring typed
+ * `client.callTool` overloads for the tools authored TS code in that pack can dispatch —
+ * the Kotlin-defined tools resolved through the pack's own platform `tool_sets:`, plus
+ * pack-local scripted tools, plus scripted tools transitively inherited via deps' `exports:`.
  *
- * **Per-target slicing.** Each resolved app target gets its own `client.<target-id>.d.ts`
- * file containing only the tools that target's resolved toolsets expose, so an author
- * editing a pack imports the matching slice and gets autocomplete scoped to that target.
- * For example, a workspace with `clock` and `wikipedia` target packs will produce both
- * `client.clock.d.ts` and `client.wikipedia.d.ts`. Cross-target tool autocomplete pollution
- * is avoided. Within a target's binding every platform/driver variant is included — a
- * cross-platform conditional tool sees `*_android_*` and `*_ios_*` siblings together at
- * authoring time.
+ * **Per-pack slicing — three-layer pack-typing model.** Each pack gets a typed surface
+ * scoped to *what its `.ts` authors can call*: the pack's OWN `platforms.<p>.tool_sets:`
+ * declarations (Kotlin half) plus the union of pack-local scripted tools and
+ * transitively-inherited scripted tools from `exports:`. This is the *typed surface* layer
+ * — distinct from the runtime registry (transitive union of every pack-in-closure's
+ * `tool_sets:`) and the agent toolbox (closest-wins on the target's `tool_sets:` + library
+ * `exports:`). See [PackRuntimeRegistryResolver]'s kdoc for the full model and gradle
+ * analogy.
  *
- * **Output path:** `<workspace>/trails/config/tools/.trailblaze/<filename>`. Default filename
- * (single-file legacy callers): `client.d.ts`. Per-target callers pass
- * `outputFileName = "client.<target-id>.d.ts"`. The `.trailblaze/` parent dir is named after
- * the framework so authors can either commit it (treat the typed surface as a checked-in API
- * contract) OR add it to `.gitignore` (treat it as derived output) — both choices are
- * supported because the file is idempotent: a re-run with the same registered toolset writes
- * the same bytes.
+ * **Output path:** `<packDir>/tools/.trailblaze/client.d.ts` — one file per pack. The
+ * `.trailblaze/` parent dir is named after the framework so authors can either commit it
+ * (treat the typed surface as a checked-in API contract) OR add it to `.gitignore` (treat
+ * it as derived output) — both choices are supported because the file is idempotent: a
+ * re-run with the same registered toolset writes the same bytes.
  *
  * **Companion to [TrailblazePackBundler].** That class emits `tools.d.ts` per build for the
  * scripted tools a *single pack* declares — useful when authoring inside a pack's source
- * tree before the daemon is running. THIS class emits per-target `client.<target>.d.ts` at
- * *daemon startup* covering the resolved toolset (built-ins + every pack's scripted tools
- * resolved across the workspace, sliced per target). Authors get autocomplete at author-time
- * (per-pack file) AND at runtime-aware time (per-target workspace file).
+ * tree before the daemon is running. THIS class emits `client.d.ts` per pack at *daemon
+ * startup* / `trailblaze compile` time. Both files declaration-merge into the same
+ * `TrailblazeToolMap` interface in `@trailblaze/scripting`.
  *
  * **Reuses [jsonSchemaToTsType]** (top-level `internal` in this package) so the schema → TS
  * vocabulary stays identical to the per-pack writer. New schema types added there flow
  * through automatically.
  */
-class WorkspaceClientDtsGenerator(
-  private val workspaceRoot: Path,
-) {
+class WorkspaceClientDtsGenerator {
   /**
-   * Generate the `.d.ts` file using author-shape scripted tools ([PackScriptedToolFile] —
-   * the flat `inputSchema` map). Used by tests and any caller working directly off the
-   * pack-manifest YAML shape.
+   * Generate the pack's `client.d.ts` under `<packDir>/tools/.trailblaze/client.d.ts`
+   * using author-shape scripted tools ([PackScriptedToolFile] — the flat `inputSchema`
+   * map). Used by tests and any caller working directly off the pack-manifest YAML shape.
    *
    * For the post-compile flow (after `TrailblazeCompiler.compile()` has resolved per-target
-   * tool closures), prefer the [InlineScriptToolConfig] overload below — its inputs are
-   * already the runtime shape, no need to round-trip through author shape.
+   * tool closures), prefer [generateForPackFromResolved] — its inputs are already the
+   * runtime shape, no need to round-trip through author shape.
    *
    * Writes only if the rendered content differs from any existing output, so a daemon
    * restart that finds the same tool registry doesn't churn mtimes (and downstream tooling
@@ -67,42 +60,52 @@ class WorkspaceClientDtsGenerator(
    *
    * Returns the absolute path of the output file. The parent dir is created on demand.
    */
-  fun generate(
+  fun generateForPack(
+    packDir: Path,
     toolDescriptors: List<ToolDescriptor>,
     scriptedTools: List<PackScriptedToolFile>,
-    outputFileName: String = GENERATED_FILE_NAME,
   ): Path {
     val entries = collectEntries(toolDescriptors, scriptedTools)
-    return writeRendered(entries, outputFileName)
+    return writeRendered(entries, packDir)
   }
 
   /**
-   * Generate a per-target `.d.ts` from resolved [InlineScriptToolConfig] entries (the shape
-   * `TrailblazeCompiler.compile()` emits, with `target.tools:` already inlined and JSON
-   * Schema already shaped). This is the primary daemon-init / `trailblaze compile` wire-in
-   * path.
-   *
-   * @param outputFileName typically `"client.<target-id>.d.ts"` so each target gets its own
-   *   sliced binding. Defaults to [GENERATED_FILE_NAME] for callers that genuinely want the
-   *   legacy single-file workspace-wide shape.
+   * Generate the pack's `client.d.ts` from resolved [InlineScriptToolConfig] entries (the
+   * shape `TrailblazeCompiler.compile()` emits, with `target.tools:` already inlined and
+   * JSON Schema already shaped). Primary daemon-init / `trailblaze compile` wire-in path.
    */
-  fun generateFromResolved(
+  fun generateForPackFromResolved(
+    packDir: Path,
     toolDescriptors: List<ToolDescriptor>,
     scriptedTools: List<InlineScriptToolConfig>,
-    outputFileName: String = GENERATED_FILE_NAME,
   ): Path {
     val entries = collectEntriesFromResolved(toolDescriptors, scriptedTools)
-    return writeRendered(entries, outputFileName)
+    return writeRendered(entries, packDir)
   }
 
-  /** Shared write path — idempotent (skip-write-if-content-matches). */
-  private fun writeRendered(entries: List<ToolEntry>, outputFileName: String): Path {
-    requireSafeFilename(outputFileName)
+  /**
+   * Shared write path — idempotent (skip-write-if-content-matches).
+   *
+   * Defense in depth: even though both production call sites currently pass a [packDir]
+   * derived from `PackSource.Filesystem.packDir` (which the pack loader has already
+   * canonicalized + containment-validated), the generator is a `public class` so a
+   * future caller could pass a relative or `..`-laced path. The `require` below ensures
+   * an absolute, existing directory — the same containment posture as the
+   * `SAFE_FILENAME_PATTERN` guard the previous workspace-wide emitter used, just moved
+   * to the new boundary (the path now comes from `packDir`, not from a user-authored
+   * filename template).
+   */
+  private fun writeRendered(entries: List<ToolEntry>, packDir: Path): Path {
+    require(packDir.isAbsolute && Files.isDirectory(packDir)) {
+      "WorkspaceClientDtsGenerator: packDir must be an absolute path to an existing " +
+        "directory (got '$packDir'). Callers should pass `PackSource.Filesystem.packDir` " +
+        "or an equivalently-canonicalized path."
+    }
     val rendered = renderClientDts(entries)
-    val outputPath = workspaceRoot
-      .resolve(WORKSPACE_CONFIG_TOOLS_SUBDIR)
+    val outputPath = packDir
+      .resolve(PACK_TOOLS_SUBDIR)
       .resolve(GENERATED_DIR_NAME)
-      .resolve(outputFileName)
+      .resolve(GENERATED_FILE_NAME)
       .toAbsolutePath()
     Files.createDirectories(outputPath.parent)
     val existing = if (Files.isRegularFile(outputPath)) Files.readString(outputPath) else null
@@ -110,27 +113,6 @@ class WorkspaceClientDtsGenerator(
       Files.writeString(outputPath, rendered)
     }
     return outputPath
-  }
-
-  /**
-   * Path-traversal guard. The `outputFileName` parameter flows from caller-supplied target
-   * ids (`client.${target.id}.d.ts`), and target ids are user-authored in pack manifests.
-   * Without this check, an id like `../../../etc/passwd` would let the generator write
-   * outside `<workspaceRoot>/config/tools/.trailblaze/`.
-   *
-   * The accepted shape is the conservative subset that covers every real-world case:
-   * letters / digits / underscores / hyphens / dots, with no leading dot. Hyphens and dots
-   * are valid in both target ids (kebab-case) and the conventional `client.<id>.d.ts`
-   * filename, so the regex permits them but rejects path separators (`/`, `\\`),
-   * traversal sequences (`..`), and absolute-path indicators.
-   */
-  private fun requireSafeFilename(outputFileName: String) {
-    require(outputFileName.isNotEmpty() && SAFE_FILENAME_PATTERN.matches(outputFileName)) {
-      "Refusing to write generator output: filename '$outputFileName' is not a safe filename. " +
-        "Expected a plain filename matching $SAFE_FILENAME_PATTERN (no path separators, no `..`, " +
-        "no leading dot). This usually means a caller passed a tainted target id — sanitize at " +
-        "the call site or constrain the upstream id contract."
-    }
   }
 
   /**
@@ -396,21 +378,13 @@ class WorkspaceClientDtsGenerator(
   )
 
   companion object {
-    /** Subdirectory under the workspace root where Trailblaze authors keep their pack/tool config. */
-    const val WORKSPACE_CONFIG_TOOLS_SUBDIR: String = "config/tools"
+    /** Subdirectory under each pack where the generator writes — matches authoring convention. */
+    const val PACK_TOOLS_SUBDIR: String = "tools"
 
     /** Hidden subdirectory the generator writes into so a `.gitignore` can target the whole tree. */
     const val GENERATED_DIR_NAME: String = ".trailblaze"
 
     /** Output filename — `client.d.ts` so an author's tsconfig finds it via the standard glob. */
     const val GENERATED_FILE_NAME: String = "client.d.ts"
-
-    /**
-     * Plain-filename pattern enforced at write time to prevent path-traversal via the
-     * caller-supplied `outputFileName` parameter. Letters, digits, underscores, hyphens,
-     * and dots — with no leading dot, no path separators, no traversal sequences. Covers
-     * the conventional `client.<id>.d.ts` shape and all real-world target ids.
-     */
-    val SAFE_FILENAME_PATTERN: Regex = Regex("^[A-Za-z0-9_][A-Za-z0-9_.\\-]*$")
   }
 }

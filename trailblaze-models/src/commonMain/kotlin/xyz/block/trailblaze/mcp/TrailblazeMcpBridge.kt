@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp
 
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -149,7 +150,7 @@ interface TrailblazeMcpBridge {
    */
   suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean = true,
-    screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+    screenshotScalingConfig: ScreenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
     includeAnnotatedScreenshot: Boolean = true,
     includeAllElements: Boolean = false,
   ): GetScreenStateResponse? = null
@@ -270,6 +271,54 @@ interface TrailblazeMcpBridge {
    *   window. Driven by the CLI's `--headless` flag.
    */
   fun setWebBrowserHeadless(instanceId: String, headless: Boolean) {}
+
+  /**
+   * Records the viewport / device-emulation spec for the named web browser slot.
+   * Mirrors [setWebBrowserHeadless] — the spec is stored on the slot and consumed
+   * the next time the browser is launched; it has no effect on a browser that is
+   * already running (viewport is baked into the BrowserContext at construction).
+   *
+   * Accepts either a Playwright `devices` preset name (`"iPhone 14"`, `"Pixel 7"`,
+   * `"iPad Pro 11"`) or a raw `<width>x<height>` pair (`"375x812"`). Pass `null`
+   * to clear any prior preference. Resolution against the Playwright registry
+   * happens at browser launch — typos surface there with a clean error.
+   *
+   * Plumbed by the `device create web` CLI command and the desktop UI's web
+   * browser control panel.
+   *
+   * @param instanceId Web instance ID. The slot is provisioned lazily if absent.
+   * @param viewportSpec Playwright preset name OR `WIDTHxHEIGHT`, or null to clear.
+   */
+  fun setWebBrowserViewportSpec(instanceId: String, viewportSpec: String?) {}
+
+  /**
+   * Provisions a web browser slot and launches its browser, waiting for the slot
+   * to reach a terminal state (`Running` or `Error`) before returning.
+   *
+   * When [viewportSpec] or [headless] are non-null they are applied to the slot
+   * under the slot's launch mutex before the launch starts — collapsing the
+   * older three-call sequence (`setWebBrowserViewportSpec` + `setWebBrowserHeadless`
+   * + this) into a single atomic step so two concurrent `CREATE_WEB` calls for
+   * the same instance id can't observe a half-written slot state. Passing `null`
+   * means "leave the prior preference in place" (don't clobber a desktop-UI write).
+   *
+   * Driven by `device create web` — the user expects "after this command returns,
+   * the slot is ready to be referenced by `trail --device web/<id>`". Idempotent
+   * for an already-running slot.
+   *
+   * @param instanceId Web slot to launch.
+   * @param viewportSpec Playwright preset name OR `WIDTHxHEIGHT`, or null to leave
+   *   the slot's stored spec untouched.
+   * @param headless True for a headless browser, false for a visible window, or
+   *   null to leave the slot's stored preference untouched.
+   * @return null on success, or a human-readable error string when the launch
+   *   failed (used to surface up through `device(action=CREATE_WEB)`).
+   */
+  suspend fun launchWebBrowserAwait(
+    instanceId: String,
+    viewportSpec: String? = null,
+    headless: Boolean? = null,
+  ): String? = null
 
   /**
    * Sets the bridge's active device selection without validation or connection setup.

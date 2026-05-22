@@ -1,0 +1,19 @@
+script: ./wikipedia_web_openRandomArticle.ts
+name: wikipedia_web_openRandomArticle
+description: |
+  Open a random Wikipedia article via the sidebar's "Random article" link.
+  Use this whenever the task is to navigate to a random article, click
+  Random article, jump to a random page, or surf to an unpredictable
+  article. Verifies that a new article page rendered (its #firstHeading
+  is visible) — the resulting title is non-deterministic so don't try to
+  assert specific heading text afterwards.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  ensureOnWikipedia:
+    type: boolean
+    description: |
+      When true (default), navigates to the main page first if not already on
+      en.wikipedia.org. Set false to assume the sidebar is already reachable.
+    required: false

@@ -81,6 +81,8 @@ import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
+import xyz.block.trailblaze.scripting.ScriptedToolImportAnalyzer
+import xyz.block.trailblaze.scripting.partitionByImportClosure
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -233,7 +235,7 @@ object TrailblazeHostYamlRunner {
     //    avoids subprocess fork overhead, and is the only path that works inside the
     //    on-device `:trailblaze-scripting-bundle`. Bundle via [DaemonScriptedToolBundler]
     //    (esbuild) and register as an in-process QuickJS-backed dynamic tool. The
-    //    LLM-shape `isForLlm`/`requiresHost` filter that previously hid
+    //    LLM-shape `surfaceToLlm`/`requiresHost` filter that previously hid
     //    `runCommand`/`mobile_clearAppData` from scripted-tool composition is bypassed via
     //    [SessionScopedHostBinding].
     //
@@ -267,13 +269,26 @@ object TrailblazeHostYamlRunner {
         emptyList()
       } else {
         val bundler = DaemonScriptedToolBundler(esbuildBinary)
+        // Static-analysis pre-pass (#3190): before invoking the real bundler, walk each
+        // tool's import closure to find `node:*` builtins or known Node-only npm deps. A
+        // tool whose closure reaches any of those would fail the real bundle pass with a
+        // cryptic "Could not resolve" error AND tank session start for every sibling tool
+        // in the QuickJS partition — there's no per-tool isolation downstream. The
+        // analyzer lets us skip such tools cleanly with a directed breadcrumb, register
+        // the sibling tools that ARE on-device-viable, and leave the author with a
+        // one-line explanation of how to recover. See [partitionByImportClosure] for the
+        // full author-flag-honoring / per-tool isolation contract; logic lives there so
+        // the unit-test suite can pin the splice behavior without spinning up the runner.
+        val analyzer = ScriptedToolImportAnalyzer(esbuildBinary)
+        val partition = partitionByImportClosure(quickJsInlineTools, analyzer)
+        val toBundle = partition.toBundle
         // Build registrations one by one so a partial failure (bad bundle, host-connect
         // throw, addDynamicTools collision, etc.) can dispose the QuickJS engines we
         // already created before rethrowing. Without this cleanup, every aborted session
         // start would leak as many QuickJS engines as registrations had succeeded so far.
         val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
         try {
-          for (tool in quickJsInlineTools) {
+          for (tool in toBundle) {
             val bundlePath = bundler.bundleOne(File(tool.script), tool.name)
             accumulated += LazyYamlScriptedToolRegistration.create(
               toolConfig = tool,
@@ -511,6 +526,18 @@ object TrailblazeHostYamlRunner {
       }
     )
 
+    // If the request targets a web slot that already has a running browser
+    // (provisioned via `device create web` or the desktop UI's Launch Browser),
+    // reuse it as the rule's `existingBrowserManager`. Without this, the runner
+    // would spin up a SECOND PlaywrightBrowserManager — bypassing the slot's
+    // configured viewport / emulation profile and producing trail runs at the
+    // default 1280x800. The cache-reuse path's `staleBrowserToReuse` covers the
+    // intra-daemon model-change case; this covers the cross-command case.
+    val adoptedSlotBrowser: PlaywrightPageManager? = if (staleBrowserToReuse == null) {
+      deviceManager.webBrowserManager.getPageManager(requestDeviceId.instanceId)
+    } else null
+    val existingBrowserForRule = staleBrowserToReuse ?: adoptedSlotBrowser
+
     val playwrightTest = existingTest ?: BasePlaywrightNativeTest(
       customToolClasses = runOnHostParams.targetTestApp
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
@@ -519,7 +546,7 @@ object TrailblazeHostYamlRunner {
       config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
       trailblazeDeviceId = trailblazeDeviceId,
-      existingBrowserManager = staleBrowserToReuse,
+      existingBrowserManager = existingBrowserForRule,
       maxLlmCalls = runYamlRequest.maxLlmCalls,
       // Capture publishes its per-session video-record dir under the un-suffixed request
       // device id; the manager must look it up under the same key (not the per-trail

@@ -41,9 +41,9 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  * the whole UI without this default.
  *
  * **The flag values mirror [TrailblazeToolClass]'s framework defaults exactly** —
- * `isForLlm = true`, `isRecordable = true`, `requiresHost = false`, `isVerification = false`.
+ * `surfaceToLlm = true`, `isRecordable = true`, `requiresHost = false`, `isVerification = false`.
  * That's load-bearing for `YamlDefinedToolLlmVisibilityTest`'s null-passthrough contract: a
- * YAML config that omits `is_for_llm` / `is_recordable` / `requires_host` produces a per-
+ * YAML config that omits `surface_to_llm` / `is_recordable` / `requires_host` produces a per-
  * instance `toolMetadata` with those fields null, and the resolver helpers
  * ([xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation],
  * [xyz.block.trailblaze.toolcalls.requiresHostInstance],
@@ -75,7 +75,7 @@ class YamlDefinedTrailblazeTool(
    * YAML-defined tool would inherit the same defaults regardless of its individual config.
    */
   override val toolMetadata: TrailblazeToolMetadata = TrailblazeToolMetadata(
-    isForLlm = config.isForLlm,
+    surfaceToLlm = config.surfaceToLlm,
     isRecordable = config.isRecordable,
     requiresHost = config.requiresHost,
     isVerification = config.isVerification,

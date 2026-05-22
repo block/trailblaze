@@ -4,6 +4,7 @@ import io.ktor.util.decodeBase64Bytes
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.api.AndroidCompactElementList
 import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.MigrationScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -139,7 +140,7 @@ object ScreenStateCaptureUtil {
   suspend fun captureScreenState(
     mcpBridge: TrailblazeMcpBridge,
     timeoutMs: Long = CAPTURE_TIMEOUT_MS,
-    screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+    screenshotScalingConfig: ScreenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
     fast: Boolean = false,
     includeAnnotatedScreenshot: Boolean = true,
     includeAllElements: Boolean = false,

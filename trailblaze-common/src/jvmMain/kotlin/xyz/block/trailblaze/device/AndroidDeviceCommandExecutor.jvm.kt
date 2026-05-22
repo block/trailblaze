@@ -20,6 +20,8 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     )
   }
 
+  actual fun executeShellCommandArgs(vararg args: String): String = shellCommand(*args)
+
   actual fun executeShellCommandAs(appId: String, command: String): String {
     // Delegates to `adb shell`, which runs as UID 2000 (shell). That's the privilege
     // `run-as` needs to switch into a debuggable app's UID. See the expect-class KDoc
@@ -70,6 +72,21 @@ actual class AndroidDeviceCommandExecutor actual constructor(
 
   actual fun grantAppOpsPermission(appId: String, permission: String) {
     shellCommand("appops", "set", appId, permission, "allow")
+  }
+
+  actual fun grantRuntimePermission(appId: String, permission: String) {
+    // Validate before the shared swallow helper runs — a malformed appId/permission would
+    // be silently logged-and-swallowed otherwise, and a future caller with less-trusted
+    // input could smuggle shell metacharacters into the device `sh`.
+    validateGrantRuntimePermissionArgs(appId, permission)
+    // Swallow-and-log lives in the shared `handleGrantRuntimePermissionOutcome` helper so
+    // both `actual`s share one tested contract. The dadb shell transport returns stderr
+    // from `pm grant` as a non-empty string (not an exception) — passing it through the
+    // helper's `result.isNotEmpty()` branch is what surfaces e.g. manifest-mismatch
+    // diagnostics without aborting the conservative-superset loop callers rely on.
+    handleGrantRuntimePermissionOutcome(appId, permission) {
+      shellCommand("pm", "grant", appId, permission)
+    }
   }
 
   /**
@@ -168,6 +185,14 @@ actual class AndroidDeviceCommandExecutor actual constructor(
 
   actual fun listInstalledApps(): List<String> {
     return AndroidHostAdbUtils.listInstalledPackages(deviceId)
+  }
+
+  actual fun disablePackageForUser(packageId: String) {
+    shellCommand("pm", "disable-user", packageId)
+  }
+
+  actual fun enablePackageForUser(packageId: String) {
+    shellCommand("pm", "enable", packageId)
   }
 
   actual fun addContact(contact: DeviceContact) {

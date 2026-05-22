@@ -1,0 +1,21 @@
+script: ./contacts_ios_openContact.ts
+name: contacts_ios_openContact
+description: |
+  Open a specific contact by name from the iOS Contacts list. Use this whenever
+  the task is to open a contact, view a contact, navigate to someone's
+  contact card, or look up a particular person — e.g. "open the John Appleseed
+  contact", "go to Albert Einstein's contact card". Verifies the contact's
+  detail screen rendered by asserting the contact name is visible in the
+  navbar.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  name:
+    type: string
+    description: Visible name of the contact to open (e.g. "Albert Einstein", "John Appleseed").
+    required: false
+  expectedHeading:
+    type: string
+    description: Visible text the tool asserts after opening. Defaults to `name`.
+    required: false

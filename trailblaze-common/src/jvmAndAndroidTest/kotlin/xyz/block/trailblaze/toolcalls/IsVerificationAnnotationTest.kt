@@ -82,7 +82,7 @@ class IsVerificationAnnotationTest {
     assertFalse(
       instance.isVerificationToolInstance(),
       "Explicit `false` in metadata must win over the class annotation — this is the same " +
-        "null-aware override semantics used by isForLlm/isRecordable/requiresHost.",
+        "null-aware override semantics used by surfaceToLlm/isRecordable/requiresHost.",
     )
   }
 

@@ -13,6 +13,7 @@ import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
@@ -53,7 +54,8 @@ import kotlin.system.exitProcess
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
  * Accepts explicit file arguments, shell globs, and directory arguments (directories are
- * expanded recursively to all contained trail files).
+ * expanded recursively to one trail per containing directory, with the platform-specific
+ * recording preferred over the NL `blaze.yaml` when both are present).
  */
 @Command(
   name = "trail",
@@ -62,7 +64,7 @@ import kotlin.system.exitProcess
     "Run a trail file (.trail.yaml) — execute a scripted test on a device.",
     "",
     "Accepts files, shell globs, or directories. Directory arguments expand recursively to " +
-      "every `.trail.yaml` / `blaze.yaml` under them.",
+      "one trail per containing directory (recording preferred over NL when both are present).",
     "",
     "Trail-level metadata honored by the runner:",
     "  - `tags:` (list of strings) — filtered via --tags.",
@@ -85,9 +87,9 @@ open class TrailCommand : Callable<Int> {
     paramLabel = "<trailFile>",
     description = [
       "Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories " +
-        "expand recursively to every contained trail file. If omitted, defaults to the " +
-        "`trails/` directory at the workspace root (resolved by walking up from the current " +
-        "directory).",
+        "expand recursively to one trail per containing directory (recording preferred over " +
+        "NL when both are present). If omitted, defaults to the `trails/` directory at the " +
+        "workspace root (resolved by walking up from the current directory).",
     ],
   )
   var trailFiles: List<File> = emptyList()
@@ -430,8 +432,10 @@ open class TrailCommand : Callable<Int> {
     // Build the execution plan up front: expand directories, parse each trail's config once,
     // apply --tags, classify `skip:` markers. Doing this before the run lets the "Running
     // N trail file(s)" header reflect the actual workload (post-filter) rather than the
-    // raw argument count.
-    val plan = planTrailExecution(trailFiles, includeTags)
+    // raw argument count. Device classifiers feed [findBestTrailResourcePath] so a directory
+    // containing both `blaze.yaml` and a classifier-matched recording resolves to the
+    // recording (no LLM call), not both.
+    val plan = planTrailExecution(trailFiles, includeTags, parseDeviceClassifiersFromSpec(device))
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
@@ -547,7 +551,7 @@ open class TrailCommand : Callable<Int> {
   private fun delegateToDaemon(daemon: DaemonClient): Int {
     // Same plan-then-iterate shape as the in-process path so the daemon-delegated and
     // in-process flows produce identical headers, filter counts, and summaries.
-    val plan = planTrailExecution(trailFiles, includeTags)
+    val plan = planTrailExecution(trailFiles, includeTags, parseDeviceClassifiersFromSpec(device))
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
@@ -591,6 +595,11 @@ open class TrailCommand : Callable<Int> {
           val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
           val testName = deriveTestName(file)
 
+          // Surface the effective replay-vs-AI mode to the user before the run kicks off.
+          // See [logReplayModeBanner] for the three-state rationale and wording.
+          val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
+          logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
+
           val request = CliRunRequest(
             yamlContent = yamlContent,
             trailFilePath = file.absolutePath,
@@ -599,7 +608,7 @@ open class TrailCommand : Callable<Int> {
             deviceId = device,
             llmProvider = llmProvider,
             llmModel = llmModel,
-            useRecordedSteps = resolveUseRecordedSteps(yamlContent),
+            useRecordedSteps = effectiveUseRecordedSteps,
             // --show-browser is the legacy flag; --headless is the new spelling. Either
             // produces a visible browser when explicitly requested. Both are off by default.
             showBrowser = showBrowser || !headless,
@@ -917,6 +926,7 @@ open class TrailCommand : Callable<Int> {
     val testName = deriveTestName(file)
 
     val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
+    logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
 
     // Pin a session ID upfront so the post-completion status check can target THIS
     // trail's session rather than enumerating every "new" session in the logs repo.
@@ -1383,7 +1393,9 @@ open class TrailCommand : Callable<Int> {
     val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
     if (!targetFile.exists()) return // not the "existing target" skip reason
     Console.info(
-      "Recording not overwritten (target exists; pass --self-heal to regenerate): " +
+      "Recording not overwritten (target exists; pass --self-heal to regenerate, or " +
+        "re-run with --use-recorded-steps to replay the recorded tools instead of " +
+        "re-driving every step via the LLM): " +
         targetFile.absolutePath,
     )
   }
@@ -1508,6 +1520,64 @@ open class TrailCommand : Callable<Int> {
       false
     }
 
+  /**
+   * Emits an author-facing banner describing the run's effective replay-vs-AI mode.
+   *
+   * Authors who pass `--use-recorded-steps` for deterministic replay otherwise have no
+   * signal that the flag actually engaged — silent LLM calls during a supposedly-
+   * deterministic run are an expensive surprise. Three states:
+   *
+   *   1. Flag set + loaded YAML has `recording:` blocks → "Replay mode: ..." (info).
+   *      Per-step `runRecordedPrompt` is invoked for steps that have a usable recording.
+   *      Caveats acknowledged in the wording: `--self-heal` can fall back to the LLM
+   *      when a recorded tool fails, and steps without a `recording:` block fall back to
+   *      `runAiPrompt` even with the flag set.
+   *
+   *   2. Flag set + loaded YAML has no `recording:` blocks → loud `Console.error` warning.
+   *      The flag has no effect because there's nothing to replay; every step will go
+   *      through `runAiPrompt`. Common cause is the directory-expansion lookup picking
+   *      `blaze.yaml` over a sibling `<device-classifiers>.trail.yaml` because the
+   *      on-disk filename's classifier list doesn't match the `--device <platform>`
+   *      request — surface that diagnosis directly so the user can re-point at the file.
+   *
+   *   3. Flag unset/off → silent. The default AI-driven path is what the help text
+   *      describes; no banner needed for the unsurprising case.
+   *
+   * Called from both the daemon-delegated path ([runViaDaemon]) and the in-process loop
+   * ([runInProcess]) so the message appears regardless of which route the run took.
+   */
+  private fun logReplayModeBanner(
+    file: File,
+    yamlContent: String,
+    effectiveUseRecordedSteps: Boolean,
+  ) {
+    val yamlHasRecording: Boolean = try {
+      val trailYaml = createTrailblazeYaml()
+      trailYaml.hasRecordedSteps(trailYaml.decodeTrail(yamlContent))
+    } catch (_: Exception) {
+      false
+    }
+    if (useRecordedSteps == true && !yamlHasRecording) {
+      Console.error(
+        "Warning: --use-recorded-steps was set but the loaded trail (${file.name}) has no " +
+          "`recording:` blocks. Per-step LLM rounds will still fire. " +
+          "Check that the recording file (e.g. `<platform>.trail.yaml`) lives in the same " +
+          "directory and matches the device classifiers from --device.",
+      )
+    } else if (effectiveUseRecordedSteps && yamlHasRecording) {
+      // Wording is intentionally conditional. Replay mode short-circuits the LLM for steps
+      // with a usable recording, but: (a) steps without `recording:` blocks still call
+      // `runAiPrompt`, and (b) `--self-heal` can hand off to the LLM when a recorded tool
+      // fails. Calling out both so the banner doesn't over-promise determinism.
+      Console.info(
+        "Replay mode: using each step's `recording:` tools verbatim (no LLM round-trips " +
+          "for those steps). Steps without `recording:` blocks still call the LLM, and " +
+          "`--self-heal` can fall back to the LLM if a recorded tool fails. Pass " +
+          "--no-use-recorded-steps to force AI mode for every step.",
+      )
+    }
+  }
+
   companion object {
     /**
      * Derives a meaningful test name from a trail file.
@@ -1585,16 +1655,46 @@ open class TrailCommand : Callable<Int> {
 
     /**
      * Expands directory arguments to their contained trail files (`*.trail.yaml` + `blaze.yaml`)
-     * recursively. Plain file arguments pass through unchanged. Within each directory, results
-     * are sorted by absolute path for stable run order. The combined output is de-duplicated so
-     * passing both a directory and a file under it (or two overlapping globs) doesn't run the
-     * same trail twice.
+     * recursively. Plain file arguments pass through unchanged.
+     *
+     * **Trail directory = trail identity.** By convention each containing directory holds at
+     * most one trail, expressed either as a `blaze.yaml` (NL source of truth) or as one or
+     * more platform-specific recordings (`<classifiers>.trail.yaml`). Walking recursively and
+     * returning *every* file would double-bill a directory containing both — the NL file gets
+     * an AI run, then the recording gets a deterministic replay. Instead, for each containing
+     * directory we delegate to [TrailRecordings.findBestTrailResourcePath] — the same resolver
+     * `BaseHostTrailblazeTest.runFromResource` and the eval harnesses use — so the
+     * classifier-priority order (e.g. `web.trail.yaml` &gt; `blaze.yaml` when `--device web`) is
+     * picked exactly once. Nested directories are still walked, so a workspace `trails/`
+     * directory with N test directories expands to N trails, not 2·N.
+     *
+     * [deviceClassifiers] threads through from the resolved `--device` so the resolver picks
+     * a classifier-matched recording when one exists. **Limitation vs. the JUnit harness:**
+     * the CLI list is platform-only (`[android]`, `[web]`, …) because device discovery
+     * hasn't run at expansion time — see [parseDeviceClassifiersFromSpec]. A directory with
+     * `android.trail.yaml` + `pixel-android.trail.yaml` will pick the platform-level
+     * `android.trail.yaml` here, while the JUnit harness path (with real device classifiers)
+     * picks the more specific one. See that helper's KDoc for the architectural trade-off.
+     *
+     * When [deviceClassifiers] is empty (no `--device`, or a device spec we can't parse), the
+     * resolver only matches `blaze.yaml` / `trailblaze.yaml`. If a directory has *only*
+     * platform-specific recordings in that case, we fall back to the first alphabetically and
+     * emit a one-line warning — naming the recordings that were skipped if there's more than
+     * one, or noting that the lone recording is being run regardless of device classifiers if
+     * there's only one. Pass `--device` to pick the right one.
+     *
+     * Results are sorted by absolute path for stable run order and de-duplicated so passing
+     * both a directory and a file under it (or two overlapping globs) doesn't run the same
+     * trail twice.
      */
-    fun expandTrailFiles(files: List<File>): List<File> {
+    fun expandTrailFiles(
+      files: List<File>,
+      deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    ): List<File> {
       val expanded = mutableListOf<File>()
       for (arg in files) {
         if (arg.isDirectory) {
-          arg.walkTopDown()
+          val byParent: Map<File, List<File>> = arg.walkTopDown()
             .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
             // `TrailRecordings.isTrailFile` matches `trailblaze.yaml` because that name is
             // also used as an alias for `blaze.yaml` in the NL-definition list. When walking
@@ -1604,13 +1704,93 @@ open class TrailCommand : Callable<Int> {
             // specifically; other `trailblaze.yaml` files (e.g. NL definitions outside a
             // `config/` directory) pass through unchanged.
             .filterNot { it.parentFile?.name == "config" && it.name == "trailblaze.yaml" }
-            .sortedBy { it.absolutePath }
-            .forEach { expanded += it }
+            // `parentFile` is non-null here: the walk root is a directory (`arg.isDirectory`
+            // above) and the `it.isFile` filter rules out the walk root itself, so every
+            // surviving entry has a directory parent.
+            .groupBy { it.parentFile.absoluteFile }
+          val sortedDirs = byParent.keys.sortedBy { it.absolutePath }
+          for (dir in sortedDirs) {
+            // Gate the resolver's filesystem probe on the post-filter file set. Without this,
+            // a `config/` directory holding both the workspace config (`trailblaze.yaml`) and
+            // a sibling recording would let [findBestTrailResourcePath] probe the
+            // pre-filtered-out `trailblaze.yaml` on disk and resurrect it as a runnable
+            // trail — defeating the `filterNot` above. By constraining `doesResourceExist`
+            // to filenames that survived the walk, the exclusion stays authoritative even if
+            // the resolver's candidate list expands in the future.
+            val allowedNames = byParent.getValue(dir).map { it.name }.toSet()
+            val picked = TrailRecordings.findBestTrailResourcePath(
+              path = dir.absolutePath,
+              deviceClassifiers = deviceClassifiers,
+              doesResourceExist = { File(it).name in allowedNames && File(it).exists() },
+            )
+            if (picked != null) {
+              expanded += File(picked)
+            } else {
+              // No NL definition and no classifier-matched recording — the directory still
+              // contains *some* trail file (groupBy yielded the dir, so the list is non-empty).
+              // Sort by absolute path (all candidates share this parent dir, so this is
+              // equivalent to alphabetical by name) and run the first one so the CLI surface
+              // stays usable. Always warn here — even with a single non-matching recording,
+              // the user is running a recording for a *different* device than they asked for,
+              // and silent execution would be misleading. The warning scales to the count.
+              // Routed via [Console.error] (stderr) so the warning survives `--quiet`/JSON
+              // modes and matches the convention used by other warning/error messages in
+              // this file (`resolveTargetDevice` etc.).
+              val candidates = byParent.getValue(dir).sortedBy { it.absolutePath }
+              expanded += candidates.first()
+              // Phrase the hint as "platform-prefixed `--device`" so users who already
+              // passed `--device <instance-id>` (no platform prefix) understand that the
+              // platform segment is what disambiguates here — see
+              // [parseDeviceClassifiersFromSpec] for why a raw instance-id yields empty
+              // classifiers at expansion time.
+              val hint = "Pass a platform-prefixed `--device <platform>` (e.g. `--device android`) " +
+                "to pick the right one."
+              if (candidates.size > 1) {
+                Console.error(
+                  "Warning: ${dir.absolutePath} contains multiple recordings and no `blaze.yaml`; " +
+                    "running ${candidates.first().name} and skipping " +
+                    "${candidates.drop(1).joinToString(", ") { it.name }}. $hint",
+                )
+              } else {
+                Console.error(
+                  "Warning: ${dir.absolutePath} contains only ${candidates.first().name} and no " +
+                    "`blaze.yaml`; running it regardless of the requested device classifiers. $hint",
+                )
+              }
+            }
+          }
         } else {
           expanded += arg
         }
       }
       return expanded.distinctBy { it.absoluteFile }
+    }
+
+    /**
+     * Parses the CLI `--device` spec into the device-classifier list used to disambiguate
+     * which recording a trail directory resolves to. Delegates the `platform[/instance]`
+     * split + case-insensitive lookup to [TrailblazeDevicePlatform.fromString] so the CLI
+     * stays in lockstep with the canonical parser — if `fromString` grows aliases or
+     * display-name fallback later, this helper picks them up for free.
+     *
+     * **Platform-only classifier — known limitation vs. the JUnit harness.** The runtime
+     * device-classifier list in `BaseHostTrailblazeTest` and the eval harnesses is
+     * multi-segment (e.g. `[pixel, android, 5g]`), built from real device introspection
+     * inside `TrailblazeHostDeviceClassifier`. At CLI expansion time device discovery
+     * hasn't run yet (we're still planning the workload before connecting), so we only
+     * have the platform name from the `--device` spec. That means [findBestTrailResourcePath]
+     * will pick `android.trail.yaml` even when a richer `pixel-android-5g.trail.yaml`
+     * sits in the same directory. If/when this becomes the bottleneck, move the
+     * `expandTrailFiles` call to after `resolveTargetDevice` and thread the connected
+     * device's real classifier list through. Until then this is a deliberate trade-off:
+     * we get one-trail-per-directory dedup at planning time at the cost of not picking
+     * the most-specific recording across multi-segment names.
+     */
+    internal fun parseDeviceClassifiersFromSpec(
+      deviceSpec: String?,
+    ): List<TrailblazeDeviceClassifier> {
+      val platform = deviceSpec?.let { TrailblazeDevicePlatform.fromString(it) } ?: return emptyList()
+      return listOf(platform.asTrailblazeDeviceClassifier())
     }
 
     /**
@@ -1629,8 +1809,9 @@ open class TrailCommand : Callable<Int> {
     internal fun planTrailExecution(
       files: List<File>,
       includeTags: List<String>,
+      deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     ): TrailExecutionPlan {
-      val expanded = expandTrailFiles(files)
+      val expanded = expandTrailFiles(files, deviceClassifiers)
       val items = mutableListOf<TrailExecutionItem>()
       var filteredOutByTag = 0
       for (file in expanded) {

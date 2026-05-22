@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.ui.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -76,7 +78,6 @@ data class TrailblazeServerState(
     // Tab visibility settings
     val showTrailsTab: Boolean = true, // Default true for backward compatibility
     val showDevicesTab: Boolean = false, // Default hidden - can be enabled in Settings
-    val showRecordTab: Boolean = false, // Default hidden - can be enabled in Settings
     val showWaypointsTab: Boolean = true, // Default visible — Block app overrides via initialConfig to hide as experimental
     val showDeviceStatusPanel: Boolean = false, // Floating device status overlay in bottom-right
     // Navigation rail expanded/collapsed state
@@ -85,6 +86,16 @@ data class TrailblazeServerState(
     // Web browser visibility for MCP sessions (true = show browser window, false = headless)
     // Defaults to true so desktop app users can see the browser as tests run.
     val showWebBrowser: Boolean = true,
+    /**
+     * Desktop-app's stored viewport / device emulation spec for the Playwright web
+     * browser. Accepts the same forms as the `trailblaze device create web --emulate`
+     * / `--viewport` CLI flags and the desktop viewport picker: a Playwright
+     * `devices` preset (e.g. `"iPhone 14"`) or raw `WIDTHxHEIGHT` (e.g. `"375x812"`).
+     * Null = use the Playwright default (1280x800 desktop). Applied at browser
+     * launch — close and re-launch to pick up a change. Use the `web_resize` tool
+     * to change the viewport box mid-session without rebuilding the context.
+     */
+    val webViewport: String? = null,
     // Local dev capture settings
     val captureLogcat: Boolean = false,
     // Capture iOS Simulator system logs (off by default — extremely high volume).
@@ -127,7 +138,39 @@ data class TrailblazeServerState(
      * `TrailCommand.resolveEffectiveMaxLlmCalls` for the full chain.
      */
     val maxLlmCalls: Int? = null,
-  )
+    /**
+     * Per-machine screenshot scaling overrides. Each field is null when the user has not
+     * customized it; `screenshotScalingConfig()` materializes a full
+     * [ScreenshotScalingConfig] by filling in unset fields from the framework defaults.
+     * Workspace `trailblaze.yaml` `defaults.screenshot` still wins for any LLM model that
+     * resolves through the workspace config.
+     */
+    val screenshotImageFormat: TrailblazeImageFormat? = null,
+    val screenshotMaxLongerSide: Int? = null,
+    val screenshotMaxShorterSide: Int? = null,
+    val screenshotCompressionQuality: Float? = null,
+  ) {
+    /**
+     * Materializes the user's effective [ScreenshotScalingConfig], substituting framework
+     * defaults for any field the user hasn't overridden.
+     */
+    fun screenshotScalingConfig(): ScreenshotScalingConfig {
+      val base = ScreenshotScalingConfig.DEFAULT
+      // Coerce/validate persisted overrides so a hand-edited or corrupt settings file
+      // can't crash downstream encoders (e.g. Skia's WebP path, which does no input
+      // validation on the `(quality * 100).toInt()` conversion) or feed non-positive
+      // dimensions into BufferedImageUtils.scale().
+      val safeLonger = screenshotMaxLongerSide?.takeIf { it > 0 } ?: base.maxDimension1
+      val safeShorter = screenshotMaxShorterSide?.takeIf { it > 0 } ?: base.maxDimension2
+      val safeQuality = screenshotCompressionQuality?.coerceIn(0f, 1f) ?: base.compressionQuality
+      return ScreenshotScalingConfig(
+        maxDimension1 = safeLonger,
+        maxDimension2 = safeShorter,
+        imageFormat = screenshotImageFormat ?: base.imageFormat,
+        compressionQuality = safeQuality,
+      )
+    }
+  }
 
   @Serializable
   enum class ThemeMode {

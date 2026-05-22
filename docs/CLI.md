@@ -79,11 +79,13 @@ It does not reap device-scoped `blaze` sessions; use `app --stop` for those.
 | `session` | Every blaze records a session — save it as a replayable trail |
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
+| `results` | Query the persisted test-result index for a TestRail case |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `app` | Start or stop the Trailblaze daemon (background service that drives devices) |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
-| `compile` | Compile pack manifests into resolved target YAMLs |
+| `check` | Materialize pack manifests + type-check pack TypeScript/JavaScript sources |
+| `test` | Run scripted-tool unit tests (*.test.ts) via bun test |
 
 ---
 
@@ -272,7 +274,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 
 ### `trailblaze trail`
 
-Run a trail file (.trail.yaml) — execute a scripted test on a device.  Accepts files, shell globs, or directories. Directory arguments expand recursively to every `.trail.yaml` / `blaze.yaml` under them.  Trail-level metadata honored by the runner:   - `tags:` (list of strings) — filtered via --tags.   - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the `N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:` line.
+Run a trail file (.trail.yaml) — execute a scripted test on a device.  Accepts files, shell globs, or directories. Directory arguments expand recursively to one trail per containing directory (recording preferred over NL when both are present).  Trail-level metadata honored by the runner:   - `tags:` (list of strings) — filtered via --tags.   - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the `N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:` line.
 
 **Synopsis:**
 
@@ -284,7 +286,7 @@ trailblaze trail [OPTIONS] [<<trailFile>>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to every contained trail file. If omitted, defaults to the `trails/` directory at the workspace root (resolved by walking up from the current directory). | No |
+| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to one trail per containing directory (recording preferred over NL when both are present). If omitted, defaults to the `trails/` directory at the workspace root (resolved by walking up from the current directory). | No |
 
 **Options:**
 
@@ -558,6 +560,9 @@ trailblaze report [OPTIONS]
 | `--video` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an MP4. NOT the raw device recording — that's a separate artifact in the session's logs dir. Path defaults to <report-dir>/<session-id>.mp4 (or <output-dir>/timeline.mp4 when --output-dir is set). Single-session only — pass --id or --current. | - |
 | `--gif` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated GIF. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.gif (or <output-dir>/timeline.gif when --output-dir is set). Smaller and easier to paste into a PR than --video, at the cost of a lower frame rate and 256-color palette. Single-session only — pass --id or --current. Frame capture is shared with --webp: passing this bare (no path) auto-emits a companion .webp at the default path for free — pass --no-webp to suppress. An explicit path here limits output to just that file. | - |
 | `--webp` | Export the HTML report's timeline autoplay (the scrubbing view with step labels and annotations) as an animated WebP. NOT the raw device recording. Path defaults to <report-dir>/<session-id>.webp (or <output-dir>/timeline.webp when --output-dir is set). Typically 25–50% smaller than the equivalent --gif (24-bit color, inter-frame deltas) — useful when the GIF would push past GitHub's 10MB inline attachment limit. GitHub renders animated WebP inline the same as GIF. Single-session only — pass --id or --current. Frame capture is shared with --gif: passing this bare (no path) auto-emits a companion .gif at the default path for free — pass --no-gif to suppress. An explicit path here limits output to just that file. | - |
+| `--storyboard` | Export a single-frame WebP storyboard — every step's screenshot tiled into a CSS grid (one cell per executed action / taken snapshot, labeled with the action verb), then full-page-screenshotted via headless Playwright and encoded to WebP. Complements --gif/--webp (which play through the timeline over time) — embed both in a PR comment to get glance-overview plus the animated walkthrough. A companion .html with the same content is written alongside the WebP for standalone viewing. Path defaults to <report-dir>/<session-id>.storyboard.webp (or <output-dir>/storyboard.webp when --output-dir is set). Single-session only — pass --id or --current. | - |
+| `--storyboard-columns` | Number of columns in the --storyboard grid. When omitted, the exporter auto-picks by cell aspect ratio: landscape-majority sessions (desktop / tablet) get 3 columns so each cell stays meaningfully large at GitHub's ~760px embed width without burning vertical space, portrait-majority sessions (phone) get 4 columns for denser inline glance. The auto-pick decision (landscape-cell count, threshold) is logged so the chosen value is visible from the CLI tail. Pass an explicit value to override (e.g. 6 / 8 for very long sessions that would otherwise force the auto-fit cell-width shrink — spreading wider on the page is cleaner than thumbnailing the cells). | - |
+| `--storyboard-yaml` | Annotate each --storyboard cell with the YAML form of the recordable tool that produced it (looked up by traceId against the session's TrailblazeToolLog entries). The YAML strip replaces the synthesized verb/sublabel line — strictly more informative for "what was invoked here" triage. Cells without a sibling tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress (reduces total rendered height by ~20% on a typical session, at the cost of less actionable per-cell labels). Has no effect without --storyboard. | - |
 | `--no-gif` | Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. Use this on scripts and CI flows that only embed the .webp and want to skip the wasted GIF encode. Mutually exclusive with --gif. | - |
 | `--no-webp` | Suppress the auto-emitted .webp companion when --gif is requested with a bare flag. Mutually exclusive with --webp. | - |
 | `--max-size` | Cap each exported timeline artifact (--gif / --video / --webp) at the given byte size. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G). After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap, the export fails with an actionable error — drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The flag is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
@@ -584,6 +589,7 @@ trailblaze waypoint segment
 trailblaze waypoint graph
 trailblaze waypoint tune
 trailblaze waypoint propose
+trailblaze waypoint shortcut
 ```
 
 **Options:**
@@ -809,7 +815,7 @@ trailblaze waypoint segment list [OPTIONS]
 
 ### `trailblaze waypoint graph`
 
-Render the waypoint navigation graph (waypoints, authored shortcuts, authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at http://localhost:<daemon-port>/waypoints/graph instead.
+Render the waypoint navigation graph (waypoints, authored shortcuts, authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at `http://localhost:<daemon-port>/waypoints/graph` instead.
 
 **Synopsis:**
 
@@ -882,6 +888,130 @@ trailblaze waypoint propose [OPTIONS]
 
 ---
 
+### `trailblaze waypoint shortcut`
+
+Analyze a session set for (A->B) waypoint transitions and synthesize draft shortcut YAMLs, then empirically replay each candidate on a fresh emulator before opening a PR. Subcommands: propose (offline), verify (on-device).
+
+**Synopsis:**
+
+```
+trailblaze waypoint shortcut [OPTIONS]
+trailblaze waypoint shortcut propose
+trailblaze waypoint shortcut verify
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze waypoint shortcut propose`
+
+Analyze a session set for (A->B) transitions and emit draft shortcut YAMLs. Each surviving proposal lands as a JSON+YAML pair under --out-dir, ready for the pipeline's verify + auto-PR steps.
+
+**Synopsis:**
+
+```
+trailblaze waypoint shortcut propose [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--sessions` | Directory containing one or more session subdirectories with *_AgentDriverLog.json files. Each subdirectory is one session. | - |
+| `--target` | Pack id. Resolves --root to <workspace>/packs/<id>/waypoints/ and supplies the pack's app_ids for templated selector expansion. | - |
+| `--root` | Override the waypoint-root dir for waypoint + existing-shortcut discovery. (Convention: ./trails) | - |
+| `--min-support` | Minimum distinct sessions for a transition to be proposed. Default: 3. | - |
+| `--fingerprint-agreement` | Fraction of supporting sessions that must share the dominant action fingerprint (default: 0.67). Sessions disagreeing on the procedure short-circuit the proposal. | - |
+| `--top-k` | Process at most the top-K surviving proposals by hit count. The replay step is expensive enough that v1 caps weekly throughput here. Default: 5. | - |
+| `--out-dir` | Output directory for proposal sidecars. Default: ./.waypoints_shortcut/proposals/. Wiped at the start of each run. | - |
+| `--idempotence-check` | Re-run after applying the surviving proposals in-memory; fail (exit 1) if any new proposal surfaces. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze waypoint shortcut verify`
+
+Empirical replay of a proposed shortcut against a connected emulator. Generates a throwaway trail YAML and runs it via `trailblaze trail`. Returns 0 if the post-condition waypoint matches, non-zero otherwise.
+
+**Synopsis:**
+
+```
+trailblaze waypoint shortcut verify [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--yaml` | Path to the shortcut YAML to verify (a `*.shortcut.yaml`). | - |
+| `--device` | Device id to run against (forwarded to `trailblaze trail --device`). | - |
+| `--driver` | Driver to use in the generated trail config. Default: ANDROID_ONDEVICE_ACCESSIBILITY. Pick a different value when verifying an iOS shortcut (v1 ships Android-first). | - |
+| `--max-attempts` | Total attempts before declaring failure. Default: 1 (no retries). Trail-runtime exit codes are not distinguishable today between infrastructure and test-side failures (picocli SOFTWARE=1 covers both driver-init failures and post-condition mismatches), so v1 defaults to no retries. Override to 2+ only when investigating known transient infra flake; a flaky shortcut is a bad shortcut and the default policy reflects that. | - |
+| `--trail-out` | Write the generated trail YAML to <path> for debugging. Default: ./.waypoints_shortcut/verify/<shortcut-id>.trail.yaml | - |
+| `--trailblaze-bin` | Override the `trailblaze` binary used for the inner trail run. Default: ./trailblaze (so framework changes are picked up). CI sets this to the installed-distribution binary to mirror the end-user code path. | - |
+| `--timeout-seconds` | Per-attempt timeout in seconds for the inner `trailblaze trail` subprocess. Default: 600 (10 min). A wedged trail run (device disconnect, ADB hung, runtime stuck on settle) is destroyed and returns exit code 124 so the outer bootstrap can move on. Without a timeout, a single stuck replay would block the rest of v1's sequential top-K loop indefinitely. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze results`
+
+Query the persisted test-result index for a TestRail case
+
+**Synopsis:**
+
+```
+trailblaze results [OPTIONS]
+trailblaze results show
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze results show`
+
+Show the recorded result for a TestRail case ID
+
+**Synopsis:**
+
+```
+trailblaze results show [OPTIONS] <<case-id>>
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<case-id>>` | TestRail case ID, e.g. C12345. Case-insensitive; the leading `C` is required. | Yes |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--device` | Device profile to look up (e.g. android-phone, android-tablet, ios-iphone, ios-ipad, web). Required unless --all-devices is passed. The same case runs on multiple devices and produces materially different results per device, so this command refuses to guess. | - |
+| `--all-devices` | Print a one-line summary for every device profile that has a recorded result for this case. Enumerates the case directory in the index repo. Mutually exclusive with --device / --latest / --json (single-device flags). Exit code: 0 iff every listed device's latest run is a pass AND a recorded success file is present; 1 if any device is currently failing OR its latest state could not be determined (e.g. 'data unavailable' shown when the cell's latest.json couldn't be read — check stderr for the underlying HTTP error). Usable as a CI gate, e.g. `results show C12345 --all-devices && deploy`. | - |
+| `--latest` | Show the most recent terminal run instead of the most recent successful run. Reads latest.json instead of latest_success.json for the chosen device cell. | - |
+| `--json` | Print the raw JSON document instead of a pretty summary. | - |
+| `--repo` | owner/name of the results repo to query. Falls back to the TRAILBLAZE_RESULTS_REPO env var when not supplied. The OSS CLI ships with no default; distributions point at their own index repo via the launcher. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
 ### `trailblaze config`
 
 View and set configuration (target app, device defaults, AI provider)
@@ -927,6 +1057,9 @@ trailblaze config reset
 | `mode` | CLI working mode: trail (author reproducible trails) or blaze (explore device) | trail, blaze |
 | `web-headless` | Default for `--headless` on web devices (CLI flag still wins when explicitly passed) | true, false |
 | `device` | Default device platform for CLI commands | android, ios, web |
+| `screenshot-format` | Image format used for screenshots sent to the LLM and shown in the timeline | png, jpeg, webp, or 'unset' to use the framework default (webp) |
+| `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
+| `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
 
 **Examples:**
 
@@ -1036,6 +1169,7 @@ List and connect devices (Android, iOS, Web)
 trailblaze device [OPTIONS]
 trailblaze device list
 trailblaze device connect
+trailblaze device create
 ```
 
 **Options:**
@@ -1093,6 +1227,49 @@ trailblaze device connect [OPTIONS] <<platform>>
 
 ---
 
+### `trailblaze device create`
+
+Provision a device with a configured profile (web today; iOS / Android future).
+
+**Synopsis:**
+
+```
+trailblaze device create [OPTIONS]
+trailblaze device create web
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze device create web`
+
+Provision a Playwright web browser slot with a viewport / emulation profile.  Does NOT launch a browser — the spec is stored on the slot and applied at the next browser launch.  Examples:   trailblaze device create web --instance-id mobile-iphone --emulate "iPhone 15"   trailblaze device create web --instance-id desktop-large --viewport 1920x1080   trailblaze device create web --emulate "Pixel 7"
+
+**Synopsis:**
+
+```
+trailblaze device create web [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--instance-id` | Slot name. Subsequent commands address this slot as `--device web/<id>`. Defaults to the singleton `playwright-native` when omitted (the same slot the desktop app's Launch Browser button operates on). | - |
+| `--emulate` | Playwright `devices` preset name. Applies full device emulation: viewport, deviceScaleFactor, userAgent, isMobile, hasTouch. Examples: 'iPhone 14', 'Pixel 7', 'iPad Pro 11'. Mutually exclusive with --viewport. | - |
+| `--viewport` | Raw viewport size, e.g. '375x812' or '1920x1080'. Sets ONLY the viewport box — does not change User-Agent, deviceScaleFactor, isMobile, or hasTouch, so pages that UA-sniff still serve their desktop variant. Use --emulate for a full mobile/tablet emulation profile. Mutually exclusive with --emulate. | - |
+| `--headless` | Launch the browser headless (--headless) or headed (--no-headless). When omitted, defers to the slot's stored preference, falling back to the headed-when-display-available default — so running this on a desktop without --headless does NOT force a hidden window. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
 ### `trailblaze app`
 
 Start or stop the Trailblaze daemon (background service that drives devices)
@@ -1138,22 +1315,55 @@ trailblaze mcp [OPTIONS]
 
 ---
 
-### `trailblaze compile`
+### `trailblaze check`
 
-Compile pack manifests into resolved target YAMLs
+Materialize pack manifests + type-check pack TypeScript/JavaScript sources
 
 **Synopsis:**
 
 ```
-trailblaze compile [OPTIONS]
+trailblaze check [OPTIONS] [<<pack-id>>]
 ```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<pack-id>>` | Name of the pack to scope the type-check to (directory name under <workspace>/trails/config/packs/). Omit when running from inside a pack tree (auto-detected) or pass --all to type-check every pack. Mutually exclusive with --all. | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--input`, `-i` | Directory containing one <id>/pack.yaml per pack. Defaults to <workspace-root>/trails/config (workspace root is found by walking up from the current directory looking for `trails/config/`). | - |
-| `--output`, `-o` | Directory to emit resolved <id>.yaml files into. Defaults to <workspace-root>/trails/config/dist/targets. | - |
+| `--all` | Type-check every pack in the discovered workspace, even when running from inside a specific pack tree. Mutually exclusive with the positional <pack-id>. | - |
+| `--workspace` | Pin the workspace root explicitly (the directory containing `trails/config/packs/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
+| `--no-typecheck` | Skip the bundled-tsc typecheck pass — only materialize the workspace's SDK + per-pack typed bindings. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze test`
+
+Run scripted-tool unit tests (*.test.ts) via bun test
+
+**Synopsis:**
+
+```
+trailblaze test [OPTIONS] [<<pack-id>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<pack-id>>` | Name of the pack whose tests to run (directory name under <workspace>/trails/config/packs/). Omit when running from inside a pack tree — the command walks up to the nearest pack root and uses that. Mutually exclusive with --all. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--all` | Run tests for every pack with *.test.ts files in the discovered workspace. Mutually exclusive with the positional <pack-id>. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

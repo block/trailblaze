@@ -1,14 +1,11 @@
 package xyz.block.trailblaze.bundle
 
 import java.io.File
-import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import org.junit.Assume.assumeTrue
 
 /**
  * Tests for [TrailblazePackBundler] — the core walker used by the
@@ -21,10 +18,14 @@ import org.junit.Assume.assumeTrue
  *  - Special TS-identifier characters in tool names get quoted (`"foo-bar": ...`).
  *  - Empty schema → `Record<string, never>` to model "tool takes no args."
  *  - Multi-pack collection produces a single sorted-by-name augmentation block.
- *  - Duplicate tool names across packs fail loudly (declaration-merging would silently
+ *  - Cross-pack-closure tool-name collisions fail loudly (declaration-merging would silently
  *    pick one shape otherwise).
  *  - Missing `inputSchema` is OK — emits a parameterless entry.
  *  - JSDoc `* /` sequences inside descriptions are escaped so they don't close the comment.
+ *  - `target.tools:` is a list of **tool names** auto-discovered from each `.yaml` file
+ *    under `<pack>/tools/` (not file paths) — duplicate-name detection, unknown-name
+ *    resolution errors, and the operational-suffix exclude list (`.tool.yaml`, etc.) all
+ *    live in the bundler's discovery walk.
  *
  * Each test runs against a temp-dir fixture; no Gradle test fixture is needed.
  */
@@ -48,13 +49,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Alpha
           tools:
-            - tools/alpha_doThing.yaml
+            - alpha_doThing
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "alpha", toolFile = "tools/alpha_doThing.yaml",
       toolYaml = """
-        script: ./tools/alpha_doThing.js
+        script: ./tools/alpha_doThing.ts
         name: alpha_doThing
         description: Does a thing.
         inputSchema:
@@ -91,13 +92,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/withEnum.yaml
+            - withEnum
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/withEnum.yaml",
       toolYaml = """
-        script: ./tools/withEnum.js
+        script: ./tools/withEnum.ts
         name: withEnum
         inputSchema:
           mode:
@@ -122,13 +123,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/widget.yaml
+            - widget
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/widget.yaml",
       toolYaml = """
-        script: ./tools/widget.js
+        script: ./tools/widget.ts
         name: widget
         inputSchema:
           tags:
@@ -162,13 +163,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/noargs.yaml
+            - noargs
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/noargs.yaml",
       toolYaml = """
-        script: ./tools/noargs.js
+        script: ./tools/noargs.ts
         name: noargs
         description: Takes no args.
       """.trimIndent(),
@@ -194,13 +195,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Alpha
           tools:
-            - tools/shared.yaml
+            - sharedTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "alpha", toolFile = "tools/shared.yaml",
       toolYaml = """
-        script: ./tools/shared.js
+        script: ./tools/shared.ts
         name: sharedTool
         inputSchema:
           x: { type: string }
@@ -213,13 +214,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Beta
           tools:
-            - tools/shared.yaml
+            - sharedTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "beta", toolFile = "tools/shared.yaml",
       toolYaml = """
-        script: ./tools/shared.js
+        script: ./tools/shared.ts
         name: sharedTool
         inputSchema:
           y: { type: number }
@@ -235,10 +236,10 @@ class TrailblazePackBundlerTest {
   }
 
   @Test
-  fun `same tool name twice inside one pack fails with a clear message`() {
-    // Per-pack dedup still applies — a typo in the same pack that registers two YAML
-    // descriptors with the same `name:` would silently produce a broken `.d.ts` without
-    // this guard.
+  fun `same tool name registered by two descriptor files in one pack fails with a clear message`() {
+    // Per-pack discovery walks every `<pack>/tools/*.yaml` and indexes by `name:`. Two files
+    // claiming the same name (typo, accidental copy-paste) would silently shadow at runtime
+    // without this guard.
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -247,27 +248,30 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/a.yaml
-            - tools/b.yaml
+            - dupTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/a.yaml",
       toolYaml = """
-        script: ./tools/a.js
+        script: ./tools/a.ts
         name: dupTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/b.yaml",
       toolYaml = """
-        script: ./tools/b.js
+        script: ./tools/b.ts
         name: dupTool
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("Duplicate scripted tool name 'dupTool'") == true }
+    val ex = assertFailsWith<TrailblazePackBundleException.DuplicateToolName> { runGenerator(packsDir) }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("'dupTool'") == true &&
+        ex.message?.contains("a.yaml") == true &&
+        ex.message?.contains("b.yaml") == true
+    }
   }
 
   @Test
@@ -283,13 +287,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Z
           tools:
-            - tools/zebra.yaml
+            - zebraTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "z", toolFile = "tools/zebra.yaml",
       toolYaml = """
-        script: ./tools/zebra.js
+        script: ./tools/zebra.ts
         name: zebraTool
       """.trimIndent(),
     )
@@ -300,13 +304,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: A
           tools:
-            - tools/apple.yaml
+            - appleTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "a", toolFile = "tools/apple.yaml",
       toolYaml = """
-        script: ./tools/apple.js
+        script: ./tools/apple.ts
         name: appleTool
       """.trimIndent(),
     )
@@ -336,13 +340,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Lib
           tools:
-            - tools/libTool.yaml
+            - libTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "lib", toolFile = "tools/libTool.yaml",
       toolYaml = """
-        script: ./tools/libTool.js
+        script: ./tools/libTool.ts
         name: libTool
         description: Provided by the library pack.
         inputSchema:
@@ -358,13 +362,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: App
           tools:
-            - tools/appTool.yaml
+            - appTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "app", toolFile = "tools/appTool.yaml",
       toolYaml = """
-        script: ./tools/appTool.js
+        script: ./tools/appTool.ts
         name: appTool
       """.trimIndent(),
     )
@@ -416,13 +420,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: C
           tools:
-            - tools/cTool.yaml
+            - cTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "c", toolFile = "tools/cTool.yaml",
       toolYaml = """
-        script: ./tools/cTool.js
+        script: ./tools/cTool.ts
         name: cTool
       """.trimIndent(),
     )
@@ -434,13 +438,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: B
           tools:
-            - tools/bTool.yaml
+            - bTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "b", toolFile = "tools/bTool.yaml",
       toolYaml = """
-        script: ./tools/bTool.js
+        script: ./tools/bTool.ts
         name: bTool
       """.trimIndent(),
     )
@@ -452,13 +456,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: A
           tools:
-            - tools/aTool.yaml
+            - aTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "a", toolFile = "tools/aTool.yaml",
       toolYaml = """
-        script: ./tools/aTool.js
+        script: ./tools/aTool.ts
         name: aTool
       """.trimIndent(),
     )
@@ -494,13 +498,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: D
           tools:
-            - tools/dTool.yaml
+            - dTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "d", toolFile = "tools/dTool.yaml",
       toolYaml = """
-        script: ./tools/dTool.js
+        script: ./tools/dTool.ts
         name: dTool
       """.trimIndent(),
     )
@@ -514,13 +518,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Root
           tools:
-            - tools/rootTool.yaml
+            - rootTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "root", toolFile = "tools/rootTool.yaml",
       toolYaml = """
-        script: ./tools/rootTool.js
+        script: ./tools/rootTool.ts
         name: rootTool
       """.trimIndent(),
     )
@@ -551,13 +555,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/pTool.yaml
+            - pTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/pTool.yaml",
       toolYaml = """
-        script: ./tools/pTool.js
+        script: ./tools/pTool.ts
         name: pTool
       """.trimIndent(),
     )
@@ -578,13 +582,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: A
           tools:
-            - tools/aTool.yaml
+            - aTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "a", toolFile = "tools/aTool.yaml",
       toolYaml = """
-        script: ./tools/aTool.js
+        script: ./tools/aTool.ts
         name: aTool
       """.trimIndent(),
     )
@@ -608,13 +612,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/pTool.yaml
+            - pTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/pTool.yaml",
       toolYaml = """
-        script: ./tools/pTool.js
+        script: ./tools/pTool.ts
         name: pTool
       """.trimIndent(),
     )
@@ -635,13 +639,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Lib
           tools:
-            - tools/clash.yaml
+            - clashingName
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "lib", toolFile = "tools/clash.yaml",
       toolYaml = """
-        script: ./tools/clash.js
+        script: ./tools/clash.ts
         name: clashingName
       """.trimIndent(),
     )
@@ -653,13 +657,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: Consumer
           tools:
-            - tools/myclash.yaml
+            - clashingName
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "consumer", toolFile = "tools/myclash.yaml",
       toolYaml = """
-        script: ./tools/myclash.js
+        script: ./tools/myclash.ts
         name: clashingName
       """.trimIndent(),
     )
@@ -699,13 +703,13 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - tools/hyphen.yaml
+            - weird-tool-name
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/hyphen.yaml",
       toolYaml = """
-        script: ./tools/hyphen.js
+        script: ./tools/hyphen.ts
         name: weird-tool-name
       """.trimIndent(),
     )
@@ -737,7 +741,10 @@ class TrailblazePackBundlerTest {
   }
 
   @Test
-  fun `parent-segment tool refs are rejected`() {
+  fun `target tools entry that doesn't match any discovered descriptor fails loudly`() {
+    // `target.tools:` lists a name that no descriptor under `<pack>/tools/` declares. The
+    // discovery walk surfaces the available names in the error so the author can spot
+    // typos quickly.
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -746,97 +753,28 @@ class TrailblazePackBundlerTest {
         target:
           display_name: P
           tools:
-            - ../escape.yaml
+            - missingName
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/actuallyHere.yaml",
+      toolYaml = """
+        script: ./tools/actuallyHere.ts
+        name: actuallyHere
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("'..' segments") == true }
-  }
-
-  @Test
-  fun `absolute tool refs are rejected`() {
-    val packsDir = newTempDir()
-    writePack(
-      packsDir, packId = "p",
-      packYaml = """
-        id: p
-        target:
-          display_name: P
-          tools:
-            - /etc/passwd
-      """.trimIndent(),
-    )
-
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("must not start with '/'") == true }
-  }
-
-  @Test
-  fun `URL-encoded tool refs are rejected`() {
-    val packsDir = newTempDir()
-    writePack(
-      packsDir, packId = "p",
-      packYaml = """
-        id: p
-        target:
-          display_name: P
-          tools:
-            - "tools/%2e%2e/escape.yaml"
-      """.trimIndent(),
-    )
-
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("URL encoding") == true }
-  }
-
-  @Test
-  fun `symlink resolving outside the pack directory is rejected`() {
-    // Textual rules (`..`, absolute, URL-encoded, etc.) are tested above. This case is the
-    // canonical-path containment branch: the tool ref is a perfectly innocent string that
-    // happens to be a SYMLINK pointing OUTSIDE the pack directory. The textual guard can't
-    // see this — only the NIO `Path.startsWith` containment check rejects it.
-    //
-    // Skipped on filesystems that don't support symlink creation (Windows without
-    // elevated perms) — `Assume.assumeTrue` reports SKIPPED rather than falsely PASSED.
-    assumeTrue(
-      "filesystem does not support symlink creation — skipping",
-      supportsSymlinks(),
-    )
-    val packsDir = newTempDir()
-val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
-      writeText(
-        """
-        script: ./tools/outside.js
-        name: outsideTool
-        """.trimIndent(),
-      )
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> {
+      runGenerator(packsDir)
     }
-    writePack(
-      packsDir, packId = "p",
-      packYaml = """
-        id: p
-        target:
-          display_name: P
-          tools:
-            - tools/escape.yaml
-      """.trimIndent(),
-    )
-    val packDir = File(packsDir, "p")
-    File(packDir, "tools").mkdirs()
-    Files.createSymbolicLink(
-      File(packDir, "tools/escape.yaml").toPath(),
-      outsideTarget.toPath(),
-    )
-
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") {
-      ex.message?.contains("resolves outside the pack directory") == true
+      ex.message?.contains("'missingName'") == true &&
+        ex.message?.contains("actuallyHere") == true
     }
   }
 
   @Test
-  fun `malformed inputSchema property value fails loudly`() {
+  fun `target tools entry that points at an empty tools directory surfaces the empty registry`() {
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -845,52 +783,175 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/bad.yaml
+            - nothingHere
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("'nothingHere'") == true &&
+        ex.message?.contains("No scripted-tool descriptors discovered") == true
+    }
+  }
+
+  @Test
+  fun `target tools entry listed twice fails loudly`() {
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - dupName
+            - dupName
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/dupName.yaml",
+      toolYaml = """
+        script: ./tools/dupName.ts
+        name: dupName
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.DuplicateToolName> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("'dupName'") == true &&
+        ex.message?.contains("more than once") == true
+    }
+  }
+
+  @Test
+  fun `operational tool YAMLs in tools dir are skipped during scripted-tool discovery`() {
+    // `tools/foo.tool.yaml` is a pure-YAML operational tool (auto-discovered from the same
+    // directory but bound by suffix, not by name). It must not appear in the scripted-tool
+    // registry — otherwise the bundler would try to decode it as a `PackScriptedToolFile`
+    // and either fail or shadow a legitimate scripted-tool name.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - scriptedTool
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/scripted.yaml",
+      toolYaml = """
+        script: ./tools/scripted.ts
+        name: scriptedTool
+      """.trimIndent(),
+    )
+    // Operational tool YAML lives in the same dir but uses the reserved `.tool.yaml`
+    // suffix. The scripted-tool discovery walk skips it; the operational walk picks it up
+    // separately (out of scope for this bundler).
+    writeTool(
+      packsDir, packId = "p", toolFile = "tools/legacy.tool.yaml",
+      toolYaml = """
+        # A pure-YAML composed tool — unrelated to the scripted-tool descriptor shape.
+        id: legacyOperationalTool
+        description: Not a scripted tool.
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "p").readText()
+    assertTrue("rendered: $rendered") { rendered.contains("scriptedTool:") }
+    assertTrue("operational tool must not surface as a scripted-tool entry: $rendered") {
+      !rendered.contains("legacyOperationalTool")
+    }
+  }
+
+  @Test
+  fun `multi-tool descriptor registers every entry name and resolves each individually`() {
+    // One `.ts` module exports two functions; the descriptor lists both under `tools:`.
+    // `target.tools:` references each name; the bundler emits one entry per name.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "m",
+      packYaml = """
+        id: m
+        target:
+          display_name: M
+          tools:
+            - firstMulti
+            - secondMulti
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "m", toolFile = "tools/multi.yaml",
+      toolYaml = """
+        script: ./tools/multi.ts
+        tools:
+          - name: firstMulti
+            description: First entry.
+            inputSchema:
+              a: { type: string }
+          - name: secondMulti
+            description: Second entry.
+            inputSchema:
+              b: { type: number }
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "m").readText()
+    assertTrue("firstMulti present: $rendered") { rendered.contains("firstMulti: {") }
+    assertTrue("secondMulti present: $rendered") { rendered.contains("secondMulti: {") }
+    assertTrue("a: string;: $rendered") { rendered.contains("a: string;") }
+    assertTrue("b: number;: $rendered") { rendered.contains("b: number;") }
+  }
+
+  @Test
+  fun `malformed inputSchema property value is skipped and a target-tools reference surfaces unknown-name`() {
+    // Lead-dev review #2 (round 2): the discovery walk now wraps decode in try/log/skip so
+    // a single malformed descriptor doesn't tank unrelated packs. The referenced-name
+    // resolution downstream surfaces the failure clearly when `target.tools:` names a tool
+    // from a skipped file — the author still sees a clear error.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - badTool
       """.trimIndent(),
     )
     // YAML decodes `mode: string` as a plain string scalar at the property's value position —
-    // author probably meant `mode: { type: string }` but forgot the wrapper. Runtime
-    // serialization throws on this shape; the generator now matches.
+    // author probably meant `mode: { type: string }` but forgot the wrapper. The descriptor
+    // is now skipped at discovery time (with a stderr warning) rather than fatally aborting
+    // the bundler; the `target.tools:` reference then surfaces UnknownScriptedToolName.
     writeTool(
       packsDir, packId = "p", toolFile = "tools/bad.yaml",
       toolYaml = """
-        script: ./tools/bad.js
+        script: ./tools/bad.ts
         name: badTool
         inputSchema:
           mode: string
       """.trimIndent(),
     )
 
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    // kaml rejects the property-value type mismatch when decoding into BundlerScriptedToolProperty;
-    // the bundler wraps that as "is not a valid YAML object the bundler can parse: ...".
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> { runGenerator(packsDir) }
     assertTrue("message: ${ex.message}") {
-      ex.message?.contains("is not a valid YAML") == true && ex.message?.contains("bad.yaml") == true
+      ex.message?.contains("'badTool'") == true
     }
-  }
-
-  @Test
-  fun `dangling scripted tool path fails with a clear message`() {
-    val packsDir = newTempDir()
-    writePack(
-      packsDir, packId = "p",
-      packYaml = """
-        id: p
-        target:
-          display_name: P
-          tools:
-            - tools/missing.yaml
-      """.trimIndent(),
-    )
-
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("missing.yaml") == true }
   }
 
   @Test
   fun `target-tools as a non-list value fails loudly`() {
     val packsDir = newTempDir()
-// Author wrote `tools: 42` instead of a list — runtime would reject; generator must too.
+    // Author wrote `tools: 42` instead of a list — runtime would reject; generator must too.
     writePack(
       packsDir, packId = "p",
       packYaml = """
@@ -906,7 +967,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
   }
 
   @Test
-  fun `target-tools containing a non-string scalar fails when the resolved path does not exist`() {
+  fun `target-tools containing a non-string scalar fails because the coerced name has no descriptor`() {
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -915,24 +976,27 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/valid.yaml
+            - validTool
             - 42
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/valid.yaml",
       toolYaml = """
-        script: ./tools/valid.js
+        script: ./tools/valid.ts
         name: validTool
       """.trimIndent(),
     )
-    // kaml coerces the integer `42` to the string `"42"` when decoding into List<String>
-    // — we don't get to reject it at the schema level. The downstream guard fires instead:
-    // the bundler tries to resolve `42` as a tool ref, finds no file at that path, and
-    // throws "does not exist." Different surface than under SnakeYAML (which threw at
-    // schema-time), same fail-loud outcome.
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    assertTrue("message: ${ex.message}") { ex.message?.contains("does not exist") == true }
+    // kaml coerces the integer `42` to the string `"42"` when decoding into List<String>.
+    // The downstream guard fires when the name-keyed registry has no entry called "42" —
+    // surfacing as an UnknownScriptedToolName with the discovered name list embedded.
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("'42'") == true &&
+        ex.message?.contains("validTool") == true
+    }
   }
 
   @Test
@@ -951,7 +1015,10 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
   }
 
   @Test
-  fun `inputSchema as a non-map value fails loudly`() {
+  fun `inputSchema as a non-map value is skipped and a target-tools reference surfaces unknown-name`() {
+    // Same skip-and-log behavior as the malformed-property-value test — the descriptor's
+    // decode fails (kaml rejects `inputSchema: "string"` when the typed model expects a map),
+    // discovery skips with a stderr warning, and `target.tools:` surfaces UnknownScriptedToolName.
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -960,24 +1027,27 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/bad.yaml
+            - badInputSchemaTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/bad.yaml",
       toolYaml = """
-        script: ./tools/bad.js
+        script: ./tools/bad.ts
         name: badInputSchemaTool
         inputSchema: "string"
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    // kaml rejects the scalar string when decoding inputSchema as Map<String, ...>.
-    assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> { runGenerator(packsDir) }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'badInputSchemaTool'") == true }
   }
 
   @Test
-  fun `tool YAML missing the name field fails loudly`() {
+  fun `tool YAML missing the name field is skipped at discovery and target-tools reference surfaces unknown-name`() {
+    // Lead-dev review #2 (round 2): a descriptor that declares neither `name:` nor `tools:`
+    // is now treated as a WIP file rather than a fatal error — discovery skips it with a
+    // stderr warning. If `target.tools:` references the tool that would have lived in that
+    // file, the resulting UnknownScriptedToolName surfaces the failure clearly.
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -986,28 +1056,20 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/nameless.yaml
+            - anyName
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/nameless.yaml",
       toolYaml = """
-        script: ./tools/nameless.js
+        script: ./tools/nameless.ts
         description: Forgot to declare a name.
       """.trimIndent(),
     )
-    // `name:` is now nullable on `BundlerToolFile` because the multi-tool shape (`tools:`)
-    // also satisfies the descriptor — kaml no longer rejects a missing top-level `name:` at
-    // decode time. The validation moves into `collectScriptedToolEntries`, which throws
-    // `BlankToolName` when neither `name:` nor `tools:` is present. The new error message
-    // names both shapes so authors know how to fix it.
-    val ex = assertFailsWith<TrailblazePackBundleException.BlankToolName> {
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> {
       runGenerator(packsDir)
     }
-    assertTrue("message: ${ex.message}") {
-      ex.message?.contains("must declare either a top-level `name:`") == true &&
-        ex.message?.contains("`tools:`") == true
-    }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'anyName'") == true }
   }
 
   @Test
@@ -1020,7 +1082,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/blank.yaml
+            - anyName
       """.trimIndent(),
     )
     // Empty `name: ""` decodes successfully via kaml (the field is non-null but the
@@ -1030,7 +1092,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
     writeTool(
       packsDir, packId = "p", toolFile = "tools/blank.yaml",
       toolYaml = """
-        script: ./tools/blank.js
+        script: ./tools/blank.ts
         name: ""
       """.trimIndent(),
     )
@@ -1052,13 +1114,13 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/spaces.yaml
+            - anyName
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/spaces.yaml",
       toolYaml = """
-        script: ./tools/spaces.js
+        script: ./tools/spaces.ts
         name: "   "
       """.trimIndent(),
     )
@@ -1080,7 +1142,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/numkey.yaml
+            - numKeyTool
       """.trimIndent(),
     )
     // YAML allows numeric keys; kaml coerces them to string when decoding into
@@ -1091,7 +1153,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
     writeTool(
       packsDir, packId = "p", toolFile = "tools/numkey.yaml",
       toolYaml = """
-        script: ./tools/numkey.js
+        script: ./tools/numkey.ts
         name: numKeyTool
         inputSchema:
           1: { type: string }
@@ -1112,13 +1174,13 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/emptyenum.yaml
+            - emptyEnumTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/emptyenum.yaml",
       toolYaml = """
-        script: ./tools/emptyenum.js
+        script: ./tools/emptyenum.ts
         name: emptyEnumTool
         inputSchema:
           mode: { type: string, enum: [] }
@@ -1140,13 +1202,13 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/mixed.yaml
+            - mixedEnumTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/mixed.yaml",
       toolYaml = """
-        script: ./tools/mixed.js
+        script: ./tools/mixed.ts
         name: mixedEnumTool
         inputSchema:
           mode: { type: string, enum: [fast, 42] }
@@ -1163,7 +1225,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
   }
 
   @Test
-  fun `non-list enum value fails loudly`() {
+  fun `non-list enum value is skipped and a target-tools reference surfaces unknown-name`() {
     val packsDir = newTempDir()
     writePack(
       packsDir, packId = "p",
@@ -1172,21 +1234,203 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
         target:
           display_name: P
           tools:
-            - tools/scalarenum.yaml
+            - scalarEnumTool
       """.trimIndent(),
     )
     writeTool(
       packsDir, packId = "p", toolFile = "tools/scalarenum.yaml",
       toolYaml = """
-        script: ./tools/scalarenum.js
+        script: ./tools/scalarenum.ts
         name: scalarEnumTool
         inputSchema:
           mode: { type: string, enum: fast }
       """.trimIndent(),
     )
-    val ex = assertFailsWith<TrailblazePackBundleException> { runGenerator(packsDir) }
-    // kaml rejects the scalar when decoding enum as List<String>?.
-    assertTrue("message: ${ex.message}") { ex.message?.contains("is not a valid YAML") == true }
+    val ex = assertFailsWith<TrailblazePackBundleException.UnknownScriptedToolName> { runGenerator(packsDir) }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'scalarEnumTool'") == true }
+  }
+
+  @Test
+  fun `scripted tool with a js script field is rejected with the migration hint`() {
+    // Pack-typing locks the authoring language to TypeScript so per-pack `client.tools.<name>`
+    // codegen stays meaningful — the bundler can only statically analyse a `.ts` file. A
+    // descriptor that still points at a `.js` file would silently produce typed bindings
+    // whose runtime shape diverges from the `.d.ts` signature; better to refuse the bundle.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "legacyJs",
+      packYaml = """
+        id: legacyJs
+        target:
+          display_name: LegacyJs
+          tools:
+            - legacyJsTool
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "legacyJs", toolFile = "tools/legacyJsTool.yaml",
+      toolYaml = """
+        script: ./legacyJsTool.js
+        name: legacyJsTool
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.JsToolFileNotAllowed> {
+      runGenerator(packsDir)
+    }
+    // The author needs four pieces of info to fix the bundle: which tool, which pack, the
+    // offending path, and the rename target. Assert each surfaces in the error message so a
+    // future refactor that loses one piece fails this test rather than silently degrading the
+    // diagnostic.
+    assertTrue("message: ${ex.message}") { ex.message?.contains("legacyJsTool") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'legacyJs'") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("./legacyJsTool.js") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("./legacyJsTool.ts") == true }
+    assertTrue("message: ${ex.message}") {
+      ex.message?.contains("TypeScript is the only supported authoring language") == true
+    }
+  }
+
+  @Test
+  fun `scripted tool with an mjs or cjs script field is also rejected`() {
+    // Same policy as `.js` — both `.mjs` (ES modules) and `.cjs` (CommonJS) are JavaScript
+    // sources that bypass the TypeScript-only codegen contract. Two-pack fixture, one
+    // extension each, keeps the assertion narrow.
+    listOf("mjs", "cjs").forEach { ext ->
+      val packsDir = newTempDir()
+      writePack(
+        packsDir, packId = "p_$ext",
+        packYaml = """
+          id: p_$ext
+          target:
+            display_name: P
+            tools:
+              - tool
+        """.trimIndent(),
+      )
+      writeTool(
+        packsDir, packId = "p_$ext", toolFile = "tools/tool.yaml",
+        toolYaml = """
+          script: ./tool.$ext
+          name: tool
+        """.trimIndent(),
+      )
+
+      val ex = assertFailsWith<TrailblazePackBundleException.JsToolFileNotAllowed> {
+        runGenerator(packsDir)
+      }
+      assertTrue("ext=$ext message: ${ex.message}") { ex.message?.contains(".$ext") == true }
+      assertTrue("ext=$ext message: ${ex.message}") { ex.message?.contains("./tool.ts") == true }
+    }
+  }
+
+  @Test
+  fun `multi-tool descriptor with a js script field is rejected and names the first member`() {
+    // Multi-tool descriptors share one `script:` source — `script:` applies to the whole
+    // file. The error message's `displayName` falls back from the top-level `name:` (which
+    // is absent in multi-tool shape) to the first entry's `name:`. This test covers that
+    // fallback branch — otherwise it's dead code.
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "multi",
+      packYaml = """
+        id: multi
+        target:
+          display_name: Multi
+          tools:
+            - multiToolFirst
+            - multiToolSecond
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "multi", toolFile = "tools/multiTool.yaml",
+      toolYaml = """
+        script: ./multiTool.js
+        tools:
+          - name: multiToolFirst
+            description: First member.
+          - name: multiToolSecond
+            description: Second member.
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.JsToolFileNotAllowed> {
+      runGenerator(packsDir)
+    }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("multiToolFirst") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'multi'") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("./multiTool.js") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("./multiTool.ts") == true }
+  }
+
+  @Test
+  fun `js rejection falls back to the descriptor file name when both name and tools are absent`() {
+    // The rejection check runs before the BlankToolName guard, so a descriptor with
+    // `script: foo.js` and neither `name:` nor `tools:` reaches the third arm of the
+    // displayName fallback (`toolFile.nameWithoutExtension`). This case is the only path
+    // that exercises it — without coverage the comment claiming the fallback exists is
+    // unverifiable.
+    val packsDir = newTempDir()
+    // Any non-empty `target.tools:` entry triggers the discovery walk, which is where the
+    // JS rejection fires. The entry doesn't have to resolve — the rejection throws inside
+    // `buildScriptedToolRegistry` (during the per-descriptor decode loop) BEFORE the
+    // name-lookup step gets a chance to surface UnknownScriptedToolName.
+    writePack(
+      packsDir, packId = "namelessPack",
+      packYaml = """
+        id: namelessPack
+        target:
+          display_name: Nameless
+          tools:
+            - placeholderToExerciseDiscovery
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "namelessPack", toolFile = "tools/nameless.yaml",
+      toolYaml = """
+        script: ./nameless.js
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<TrailblazePackBundleException.JsToolFileNotAllowed> {
+      runGenerator(packsDir)
+    }
+    // The file-name fallback surfaces as the displayName, NOT the BlankToolName message —
+    // confirming the .js policy fires ahead of the blank-name check (which the author
+    // would otherwise see only after migrating their file extension).
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'nameless'") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("'namelessPack'") == true }
+    assertTrue("message: ${ex.message}") { ex.message?.contains("./nameless.js") == true }
+  }
+
+  @Test
+  fun `scripted tool with a ts script field is accepted`() {
+    // Happy-path counterpart: the same fixture as the rejection test but pointing at a `.ts`
+    // file should produce a valid `.d.ts`. Guards against a regression where the suffix
+    // matcher matches too aggressively (e.g. starts rejecting `.ts` because of a typo'd
+    // `endsWith`).
+    val packsDir = newTempDir()
+    writePack(
+      packsDir, packId = "okPack",
+      packYaml = """
+        id: okPack
+        target:
+          display_name: OK
+          tools:
+            - okTool
+      """.trimIndent(),
+    )
+    writeTool(
+      packsDir, packId = "okPack", toolFile = "tools/okTool.yaml",
+      toolYaml = """
+        script: ./okTool.ts
+        name: okTool
+      """.trimIndent(),
+    )
+
+    runGenerator(packsDir)
+    val rendered = dtsFile(packsDir, "okPack").readText()
+    assertTrue("rendered: $rendered") { rendered.contains("okTool: Record<string, never>;") }
   }
 
   @Test
@@ -1225,7 +1469,7 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
 
   private fun newTempDir(): File = createTempDirectory("trailblaze-bindings-test").toFile().also(tempDirs::add)
 
-  private fun     writePack(packsDir: File, packId: String, packYaml: String) {
+  private fun writePack(packsDir: File, packId: String, packYaml: String) {
     val dir = File(packsDir, packId).apply { mkdirs() }
     File(dir, "pack.yaml").writeText(packYaml)
   }
@@ -1243,21 +1487,4 @@ val outsideTarget = File(newTempDir(), "outsideTool.yaml").apply {
   /** Resolves the per-pack `tools.d.ts` location the bundler now writes to. */
   private fun dtsFile(packsDir: File, packId: String): File =
     File(packsDir, "$packId/tools/.trailblaze/tools.d.ts")
-
-  /**
-   * Probe for symlink-creation support — `Files.createSymbolicLink` requires elevated
-   * permissions on Windows. Used by the canonical-containment test to skip cleanly on
-   * environments that can't exercise the symlink path.
-   */
-  private fun supportsSymlinks(): Boolean = try {
-    val probeDir = createTempDirectory("symlink-probe").toFile().also(tempDirs::add)
-    val target = File(probeDir, "target").apply { writeText("x") }
-    val link = File(probeDir, "link").toPath()
-    Files.createSymbolicLink(link, target.toPath())
-    true
-  } catch (_: UnsupportedOperationException) {
-    false
-  } catch (_: java.io.IOException) {
-    false
-  }
 }

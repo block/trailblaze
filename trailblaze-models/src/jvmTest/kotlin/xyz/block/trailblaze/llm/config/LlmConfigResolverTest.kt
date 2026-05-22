@@ -1,12 +1,24 @@
 package xyz.block.trailblaze.llm.config
 
 import ai.koog.prompt.llm.LLMCapability
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
 class LlmConfigResolverTest {
+
+  @AfterTest
+  fun resetEffectiveDefault() {
+    // Several tests below set `EffectiveScreenshotScalingConfig.effective` to pin
+    // determinism invariants. Clear after each test so the singleton doesn't leak into
+    // the next test class in this Gradle test JVM.
+    EffectiveScreenshotScalingConfig.clearForTests()
+  }
 
   @Test
   fun `empty config returns built-in model lists`() {
@@ -334,8 +346,11 @@ class LlmConfigResolverTest {
 
     val result = LlmConfigResolver.resolve(config)
     val model = result.modelLists.single().entries.single()
-    assertEquals(1536, model.screenshotScalingConfig.maxDimension1)
-    assertEquals(768, model.screenshotScalingConfig.maxDimension2)
+    // Read through `ScreenshotScalingConfig.DEFAULT.*` so the test tracks the framework
+    // default if it ever shifts — pinning these to literals would break the moment the
+    // shipped default is tuned (e.g. dimensions bumped for a larger context window).
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension1, model.screenshotScalingConfig.maxDimension1)
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension2, model.screenshotScalingConfig.maxDimension2)
   }
 
   @Test
@@ -386,6 +401,103 @@ class LlmConfigResolverTest {
     val model = result.modelLists.single().entries.single()
     assertEquals(1024, model.screenshotScalingConfig.maxDimension1)
     assertEquals(768, model.screenshotScalingConfig.maxDimension2)
+  }
+
+  @Test
+  fun `screenshot format and quality are resolved from model config`() {
+    val config = LlmConfig(
+      providers = mapOf(
+        "custom" to LlmProviderConfig(
+          type = LlmProviderType.OPENAI_COMPATIBLE,
+          models = listOf(
+            LlmModelConfigEntry(
+              id = "test-model",
+              contextLength = 100000,
+              maxOutputTokens = 4096,
+              screenshot = LlmScreenshotConfig(
+                format = TrailblazeImageFormat.PNG,
+                quality = 1.0f,
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val result = LlmConfigResolver.resolve(config)
+    val model = result.modelLists.single().entries.single()
+    assertEquals(TrailblazeImageFormat.PNG, model.screenshotScalingConfig.imageFormat)
+    assertEquals(1.0f, model.screenshotScalingConfig.compressionQuality)
+    // Dimensions fall back to ScreenshotScalingConfig.DEFAULT when unset — read through the
+    // constant so this test tracks framework-default tuning instead of pinning to literals.
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension1, model.screenshotScalingConfig.maxDimension1)
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension2, model.screenshotScalingConfig.maxDimension2)
+  }
+
+  @Test
+  fun `partial workspace yaml inherits unset peer fields from framework default not per-machine override`() {
+    // Determinism guard: even if a developer has bumped their per-machine
+    // `trailblaze config screenshot-quality 0.5`, a committed `defaults.screenshot:
+    // {format: PNG}` should resolve to PNG + framework dimensions + framework quality —
+    // not PNG + framework dimensions + 0.5 quality. Otherwise two teammates with the
+    // same committed yaml would render different bytes.
+    EffectiveScreenshotScalingConfig.setEffectiveDefault(
+      ScreenshotScalingConfig(
+        maxDimension1 = 9999,
+        maxDimension2 = 4444,
+        imageFormat = TrailblazeImageFormat.JPEG,
+        compressionQuality = 0.5f,
+      ),
+    )
+    val config = LlmConfig(
+      providers = mapOf(
+        "custom" to LlmProviderConfig(
+          type = LlmProviderType.OPENAI_COMPATIBLE,
+          models = listOf(LlmModelConfigEntry(id = "test-model")),
+        ),
+      ),
+      defaults = LlmDefaultsConfig(
+        screenshot = LlmScreenshotConfig(format = TrailblazeImageFormat.PNG),
+      ),
+    )
+
+    val model = LlmConfigResolver.resolve(config).modelLists.single().entries.single()
+    assertEquals(TrailblazeImageFormat.PNG, model.screenshotScalingConfig.imageFormat)
+    // Unset peer fields fall back to framework default — not the per-machine override that
+    // was injected above. Read through `ScreenshotScalingConfig.DEFAULT.*` so the test stays
+    // honest if the framework default ever shifts.
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension1, model.screenshotScalingConfig.maxDimension1)
+    assertEquals(ScreenshotScalingConfig.DEFAULT.maxDimension2, model.screenshotScalingConfig.maxDimension2)
+    assertEquals(ScreenshotScalingConfig.DEFAULT.compressionQuality, model.screenshotScalingConfig.compressionQuality)
+  }
+
+  @Test
+  fun `model screenshot partial override inherits from project default field-by-field`() {
+    // Model entry sets only `format`; missing `max_dimensions` and `quality` should fall
+    // back to the project-level defaults, not all the way to framework. Without this the
+    // per-field composition would silently drop the project default's dimensions.
+    val config = LlmConfig(
+      providers = mapOf(
+        "custom" to LlmProviderConfig(
+          type = LlmProviderType.OPENAI_COMPATIBLE,
+          models = listOf(
+            LlmModelConfigEntry(
+              id = "test-model",
+              screenshot = LlmScreenshotConfig(format = TrailblazeImageFormat.PNG),
+            ),
+          ),
+        ),
+      ),
+      defaults = LlmDefaultsConfig(
+        screenshot = LlmScreenshotConfig(maxDimensions = "1024x768", quality = 0.9f),
+      ),
+    )
+
+    val model = LlmConfigResolver.resolve(config).modelLists.single().entries.single()
+    assertEquals(TrailblazeImageFormat.PNG, model.screenshotScalingConfig.imageFormat)
+    assertEquals(1024, model.screenshotScalingConfig.maxDimension1)
+    assertEquals(768, model.screenshotScalingConfig.maxDimension2)
+    assertEquals(0.9f, model.screenshotScalingConfig.compressionQuality)
   }
 
   @Test

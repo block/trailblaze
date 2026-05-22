@@ -1,0 +1,30 @@
+script: ./wikipedia_web_openArticle.ts
+name: wikipedia_web_openArticle
+description: |
+  Open a specific Wikipedia article by its title. Use this whenever the task
+  is to read, open, navigate to, or view a particular Wikipedia article —
+  e.g. "open the Albert Einstein article", "go to the Python (programming
+  language) page", "navigate to the Shakespeare article". Spaces in the
+  title are normalized to underscores (Wikipedia's URL convention) so you
+  can pass the title verbatim. Verifies the article rendered by checking
+  the #firstHeading element is visible.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  title:
+    type: string
+    description: |
+      Article title to open (e.g. "Albert Einstein", "Python (programming language)").
+      Spaces are converted to underscores before being placed in the URL path.
+    required: false
+  expectedHeading:
+    type: string
+    description: |
+      Visible text the tool asserts appears in the article's first heading. Defaults
+      to `title` if omitted.
+    required: false
+  dismissBanner:
+    type: boolean
+    description: When true, attempts to dismiss the fundraising banner if it's visible. Defaults to true.
+    required: false

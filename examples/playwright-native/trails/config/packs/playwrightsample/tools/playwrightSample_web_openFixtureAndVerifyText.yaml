@@ -1,4 +1,4 @@
-script: ./playwrightSample_web_openFixtureAndVerifyText.js
+script: ./playwrightSample_web_openFixtureAndVerifyText.ts
 name: playwrightSample_web_openFixtureAndVerifyText
 description: Open the Playwright sample page and verify visible text.
 _meta:

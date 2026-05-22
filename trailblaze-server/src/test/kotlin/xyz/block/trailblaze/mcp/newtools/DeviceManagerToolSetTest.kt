@@ -770,6 +770,139 @@ class DeviceManagerToolSetTest {
     assertContains(ex.message ?: "", "not-a-real-target")
     assertContains(ex.message ?: "", "not a known target id")
   }
+
+  // ── CREATE_WEB action ───────────────────────────────────────────────────────
+
+  @Test
+  fun `device CREATE_WEB happy path forwards viewport and headless to launchWebBrowserAwait`() = runTest {
+    val bridge = DeviceTestBridge()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.CREATE_WEB,
+      deviceId = "mobile",
+      viewport = "iPhone 14",
+      headless = false,
+    )
+
+    // Single atomic call to the bridge — no separate set-viewport / set-headless
+    // round-trips, so two concurrent CREATE_WEB calls can't interleave.
+    assertEquals(1, bridge.launchAwaitCalls.size, "CREATE_WEB must invoke launchWebBrowserAwait exactly once")
+    val call = bridge.launchAwaitCalls.single()
+    assertEquals("mobile", call.instanceId)
+    assertEquals("iPhone 14", call.viewportSpec)
+    assertEquals(false, call.headless)
+
+    assertContains(result, "Provisioned and launched")
+    assertContains(result, "mobile")
+    assertContains(result, "iPhone 14")
+    assertContains(result, "web/mobile")
+  }
+
+  @Test
+  fun `device CREATE_WEB omitted headless forwards null to preserve slot preference`() = runTest {
+    val bridge = DeviceTestBridge()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.CREATE_WEB,
+      deviceId = "mobile",
+    )
+
+    val call = bridge.launchAwaitCalls.single()
+    // null headless = inherit the slot's stored preference rather than forcing
+    // headless=true on a headed desktop.
+    kotlin.test.assertNull(call.headless)
+    kotlin.test.assertNull(call.viewportSpec)
+  }
+
+  @Test
+  fun `device CREATE_WEB rejects malformed viewport before calling the bridge`() = runTest {
+    val bridge = DeviceTestBridge()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.CREATE_WEB,
+      deviceId = "mobile",
+      viewport = "375x",
+    )
+
+    assertContains(result, "Error:")
+    // Spec validation fails eagerly so we never burn a slot on a typo.
+    assertTrue(
+      bridge.launchAwaitCalls.isEmpty(),
+      "Bad viewport must short-circuit before launchWebBrowserAwait runs (got ${bridge.launchAwaitCalls})",
+    )
+  }
+
+  @Test
+  fun `device CREATE_WEB propagates a launch error from the bridge`() = runTest {
+    val bridge = DeviceTestBridge()
+    bridge.launchAwaitErrorToReturn = "Unknown Playwright device preset 'iPhne 14'."
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.CREATE_WEB,
+      deviceId = "mobile",
+      viewport = "iPhne 14",
+    )
+
+    assertContains(result, "Error:")
+    assertContains(result, "browser launch failed")
+    assertContains(result, "Unknown Playwright device preset")
+  }
+
+  @Test
+  fun `device CREATE_WEB surfaces slot-cap IllegalStateException as structured error`() = runTest {
+    val bridge = DeviceTestBridge()
+    bridge.launchAwaitThrowable = IllegalStateException(
+      "Refusing to provision web browser instance 'mobile-33': 32 named instances already exist.",
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.CREATE_WEB,
+      deviceId = "mobile-33",
+    )
+
+    assertContains(result, "Error:")
+    assertContains(result, "32 named instances")
+    // Important: the toolset catches the exception rather than letting it bubble
+    // out as an MCP infrastructure failure.
+  }
+
+  @Test
+  fun `device CREATE_WEB defaults instanceId to playwright-native singleton`() = runTest {
+    val bridge = DeviceTestBridge()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.CREATE_WEB)
+
+    val call = bridge.launchAwaitCalls.single()
+    assertEquals(
+      xyz.block.trailblaze.devices.WebInstanceIds.PLAYWRIGHT_NATIVE,
+      call.instanceId,
+      "CREATE_WEB without deviceId must target the singleton so the desktop app's Launch Browser button sees it",
+    )
+  }
 }
 
 /**
@@ -798,6 +931,25 @@ class DeviceTestBridge(
   var lastWebBrowserHeadless: Pair<String, Boolean>? = null
     private set
 
+  /**
+   * Captures every call to [launchWebBrowserAwait] in arrival order so CREATE_WEB
+   * tests can assert: (a) it was called exactly once, (b) the viewport / headless
+   * preferences flowed through atomically, (c) downstream errors from the bridge
+   * are propagated into the structured response.
+   */
+  data class LaunchAwaitCall(
+    val instanceId: String,
+    val viewportSpec: String?,
+    val headless: Boolean?,
+  )
+  val launchAwaitCalls = mutableListOf<LaunchAwaitCall>()
+
+  /** When set, [launchWebBrowserAwait] returns this error string instead of null. */
+  var launchAwaitErrorToReturn: String? = null
+
+  /** When non-null, [launchWebBrowserAwait] throws this exception. */
+  var launchAwaitThrowable: Throwable? = null
+
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> = devices
 
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary {
@@ -818,6 +970,16 @@ class DeviceTestBridge(
 
   override fun setWebBrowserHeadless(instanceId: String, headless: Boolean) {
     lastWebBrowserHeadless = instanceId to headless
+  }
+
+  override suspend fun launchWebBrowserAwait(
+    instanceId: String,
+    viewportSpec: String?,
+    headless: Boolean?,
+  ): String? {
+    launchAwaitCalls += LaunchAwaitCall(instanceId, viewportSpec, headless)
+    launchAwaitThrowable?.let { throw it }
+    return launchAwaitErrorToReturn
   }
 
   override fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? =

@@ -6,6 +6,7 @@ import xyz.block.trailblaze.llm.ImageTokenFormula
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.util.Console
 
 /**
  * Resolves an [LlmConfig] into concrete [TrailblazeLlmModelList] instances.
@@ -66,7 +67,13 @@ object LlmConfigResolver {
       if (providerConfig.enabled == false) return@mapNotNull null
       val provider = resolveProvider(key, providerConfig)
       val models = providerConfig.models.map { entry ->
-        resolveModelEntry(entry, provider, providerConfig, registry, defaultScreenshot ?: ScreenshotScalingConfig.DEFAULT)
+        resolveModelEntry(
+          entry,
+          provider,
+          providerConfig,
+          registry,
+          defaultScreenshot ?: ScreenshotScalingConfig.DEFAULT,
+        )
       }
       ConfiguredLlmModelList(provider = provider, entries = models)
     }
@@ -107,7 +114,14 @@ object LlmConfigResolver {
     defaultScreenshot: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
   ): TrailblazeLlmModel {
     val baseModel = registry.find(entry.id)
-    val screenshot = resolveScreenshotConfig(entry.screenshot) ?: defaultScreenshot
+    // Model-level partial overrides inherit unset fields from the project-level
+    // `defaults.screenshot` (passed in via `defaultScreenshot`), not the framework default.
+    // This way `defaults.screenshot.format: PNG` + `models[].screenshot.max_dimensions:
+    // 512x384` resolves to PNG @ 512x384, instead of silently dropping the project-level
+    // format and falling back to WEBP. Resolved against `defaultScreenshot` so the project
+    // default contributes the missing pieces.
+    val screenshot = resolveScreenshotConfig(entry.screenshot, defaultScreenshot)
+      ?: defaultScreenshot
     return if (baseModel != null) {
       applyOverrides(baseModel, entry, provider, providerConfig, screenshot)
     } else {
@@ -209,10 +223,50 @@ object LlmConfigResolver {
 
   /**
    * Parses an [LlmScreenshotConfig] into a [ScreenshotScalingConfig], or returns null
-   * if no screenshot config is specified.
+   * if no screenshot config is specified at all. Fields left unset on the YAML side fall
+   * back to [base], so a workspace yaml can override just one knob (e.g. `format: PNG`)
+   * without having to restate the others.
+   *
+   * **Determinism note:** [base] defaults to [ScreenshotScalingConfig.DEFAULT] (the framework
+   * default) rather than `EffectiveScreenshotScalingConfig.effective`, so a partial workspace
+   * yaml produces identical scaled-image bytes on every developer's checkout regardless of
+   * their per-machine `trailblaze config screenshot-*` overrides. Committed team intent
+   * does not silently inherit local preference.
+   *
+   * Callers passing a non-default [base] (e.g. project `defaults.screenshot`) get
+   * field-by-field composition with that base — so model-level partial overrides can
+   * inherit from the project-level defaults.
+   *
+   * Quality is clamped to `0.0..1.0` here so a corrupt or hand-edited yaml can't crash
+   * downstream encoders (e.g. Skia's WebP encoder, which does no input validation on the
+   * `(quality * 100).toInt()` path).
    */
-  private fun resolveScreenshotConfig(config: LlmScreenshotConfig?): ScreenshotScalingConfig? {
-    val dims = config?.parseDimensions() ?: return null
-    return ScreenshotScalingConfig(maxDimension1 = dims.first, maxDimension2 = dims.second)
+  private fun resolveScreenshotConfig(
+    config: LlmScreenshotConfig?,
+    base: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  ): ScreenshotScalingConfig? {
+    if (config == null) return null
+    val dims = config.parseDimensions()
+    // Distinguish "user didn't set max_dimensions" (null) from "user set it but it failed
+    // the positivity / WIDTHxHEIGHT shape guards" (non-null string, null parse). The latter
+    // would otherwise silently drop a configured-but-malformed value; surfacing a warning to
+    // Console makes the mismatch visible without crashing the resolver.
+    val maxDimensionsMalformed = config.maxDimensions != null && dims == null
+    if (maxDimensionsMalformed) {
+      Console.log(
+        "[LlmConfigResolver] Ignoring malformed screenshot max_dimensions=\"${config.maxDimensions}\" " +
+          "(expected <longer>x<shorter> with positive integers); falling back to base " +
+          "${base.maxDimension1}x${base.maxDimension2}.",
+      )
+    }
+    // Only the dims malformed-with-no-other-fields path returns null — every other
+    // combination produces a config so the user's other intent (format/quality) survives.
+    if (dims == null && config.format == null && config.quality == null) return null
+    return ScreenshotScalingConfig(
+      maxDimension1 = dims?.first ?: base.maxDimension1,
+      maxDimension2 = dims?.second ?: base.maxDimension2,
+      imageFormat = config.format ?: base.imageFormat,
+      compressionQuality = (config.quality ?: base.compressionQuality).coerceIn(0f, 1f),
+    )
   }
 }

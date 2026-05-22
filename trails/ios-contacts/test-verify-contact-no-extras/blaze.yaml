@@ -1,0 +1,15 @@
+# Branch coverage: exercises `contacts_ios_verifyContactStructure` with an
+# empty `requireFields` list — the lightweight "did the detail screen render?"
+# path. Pair with `test-verify-contact-fields` (non-empty list) for full
+# branch coverage of that tool.
+- config:
+    title: "Contacts (iOS): Verify a contact renders with no field requirements"
+    platform: ios
+    driver: IOS_HOST
+    target: contacts
+    tags: [contact]
+- prompts:
+    - step: Open the "John Appleseed" contact in Contacts.
+    - step: |
+        Call the `contacts_ios_verifyContactStructure` tool with
+        name="John Appleseed", requireFields=[].

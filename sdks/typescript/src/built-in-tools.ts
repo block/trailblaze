@@ -22,8 +22,12 @@
 // these TS types are an authoring convenience that mirror it.
 //
 // Coverage is intentionally a subset — common interaction tools that show up in tutorial
-// flows and demos. Tools not listed here fall through to the untyped `(string, Record)`
-// fallback overload on `client.callTool` — fully usable, just no autocomplete on args.
+// flows and demos. Tools not listed here are unreachable from a typed `.ts` author: the
+// public `TrailblazeClient` type omits `callTool`, so the only call path is
+// `client.tools.<name>(args)`, which requires a `TrailblazeToolMap` entry. Additional
+// framework tools (`android_adbShell`, `web_navigate`, etc.) land here as they're added to
+// the curated subset; pack-local scripted tools land in their pack's generated
+// `tools/.trailblaze/tools.d.ts` instead.
 //
 // Source-of-truth files for each entry below are linked next to the type. Changes to those
 // Kotlin files MUST be reflected here.

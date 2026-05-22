@@ -34,6 +34,7 @@ class WebToolSetCatalogTest {
       PlaywrightNativeScrollTool::class,
       PlaywrightNativeSnapshotTool::class,
       PlaywrightNativeRequestDetailsTool::class,
+      PlaywrightNativeResizeTool::class,
     )
   }
 

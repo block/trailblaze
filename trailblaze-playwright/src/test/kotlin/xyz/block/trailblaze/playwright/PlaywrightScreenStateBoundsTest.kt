@@ -816,16 +816,26 @@ class PlaywrightScreenStateBoundsTest {
    * surface what's behind the overlay if needed.
    */
   @Test
-  fun `pointer-events none overlay visually occludes underlying element`() {
+  fun `pointer-events none overlay does not occlude clickable underlying element`() {
+    // A transparent or click-through wrapper that has `pointer-events: none`
+    // does NOT intercept clicks — `elementsFromPoint` skips it, so the
+    // underlying button is the actual hit-target. We match Playwright's
+    // actionability decision verbatim: if the click would land on the button,
+    // the button is visible to the LLM.
+    //
+    // (Earlier versions of this snapshot supplier injected
+    // `* { pointer-events: auto !important }` before the hit-test to treat
+    // visually-painted-but-click-through wrappers as occluders. That
+    // divergence caused systematic false positives for every transparent
+    // full-viewport wrapper — focus traps, drawer roots, route transitions,
+    // ambient layers — and was removed in favor of fully matching Playwright.
+    // See PR #2917 review thread.)
     page.setContent(
       """
       <!DOCTYPE html>
       <html>
       <body style="margin:0; padding:0;">
         <button id="real-button" style="position: absolute; left: 50px; top: 50px; width: 160px; height: 40px;">Real Button</button>
-        <!-- Opaque overlay covering the button with pointer-events: none.
-             Mirrors Square Dashboard's Managerbot toast pattern — visually
-             on top but pointer-events:none keeps page underneath interactive. -->
         <div aria-hidden="true"
              style="position: absolute; left: 30px; top: 30px; width: 200px; height: 80px;
                     background: #222; pointer-events: none;"></div>
@@ -841,13 +851,13 @@ class PlaywrightScreenStateBoundsTest {
     )
 
     val text = screenState.viewHierarchyTextRepresentation!!
-    assertFalse(
-      text.contains("\"Real Button\""),
-      "pointer-events:none overlay should visually occlude the underlying button (Managerbot case):\n$text",
-    )
     assertTrue(
-      text.contains("occluded elements hidden"),
-      "Should produce an occluded-summary line:\n$text",
+      text.contains("\"Real Button\""),
+      "Button under a pointer-events:none wrapper must stay visible — the click would reach it. Got:\n$text",
+    )
+    assertFalse(
+      text.lines().any { it.contains("\"Real Button\"") && it.contains("(occluded)") },
+      "Button must not be annotated occluded. Got:\n$text",
     )
   }
 
@@ -1140,8 +1150,8 @@ class PlaywrightScreenStateBoundsTest {
     // `document.querySelectorAll('*')` returns the shadow HOSTS but not the
     // shadow children — and the role/name map built from the light DOM
     // misses 80%+ of the ARIA-tree candidates that Playwright's
-    // `ariaSnapshot()` sees. Without the shadow-DOM walk fix, the buried
-    // candidates never reach `OcclusionDetector`.
+    // `ariaSnapshot()` sees. Without the shadow-DOM walk in roleNameMap,
+    // the buried candidates never get bbox lookups and silently leak to the LLM.
     page.setContent(
       """
       <!DOCTYPE html>
@@ -1174,6 +1184,89 @@ class PlaywrightScreenStateBoundsTest {
       "Shadow-DOM nav button under a shadow-DOM popup should be filtered as occluded; without the shadow-root walk, the role/name lookup misses both elements and the LLM sees the buried button. Got:\n$text",
     )
     assertTrue(text.contains("occluded elements hidden"), "Expected occluded summary:\n$text")
+  }
+
+  @Test
+  fun `slotted light-DOM button inside shadow-DOM dialog stays visible via assignedSlot traversal`() {
+    // Hermetic version of Shoelace's actual pattern: a `<sl-dialog>`-style
+    // host with an open shadow root that contains a `<slot>`, plus a
+    // light-DOM `<button>` slotted into the host's default slot. Visually
+    // the button paints inside the dialog card. The Playwright port walks
+    // up via `hitElement.assignedSlot ?? parentElementOrShadowHost(hitElement)`;
+    // without `assignedSlot`, the walk goes button → light-DOM body and
+    // never reaches the slot inside the shadow root, so the slotted button
+    // gets falsely flagged as occluded by the dialog card. Pins the
+    // `assignedSlot` branch of the upstream algorithm.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <my-dialog id="host">
+          <button id="slotted-btn" aria-label="Slotted OK">Slotted OK</button>
+        </my-dialog>
+        <script>
+          customElements.define('my-dialog', class extends HTMLElement {
+            connectedCallback() {
+              const sr = this.attachShadow({ mode: 'open' });
+              sr.innerHTML =
+                '<div style="position:absolute;left:100px;top:100px;width:400px;height:300px;background:white;border:1px solid #ccc;">' +
+                  '<h2>Dialog</h2>' +
+                  '<slot></slot>' +
+                '</div>';
+            }
+          });
+          // Position the slotted button so it sits inside the dialog card.
+          document.getElementById('slotted-btn').style.cssText =
+            'position:absolute;left:250px;top:300px;width:140px;height:40px;background:#0066ff;color:white;';
+        </script>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertTrue(
+      text.contains("\"Slotted OK\""),
+      "Slotted light-DOM button painted inside the shadow dialog must stay visible — without assignedSlot traversal it would be falsely flagged occluded by the dialog card. Got:\n$text",
+    )
+    assertFalse(
+      text.lines().any { it.contains("\"Slotted OK\"") && it.contains("(occluded)") },
+      "Slotted button must not be annotated occluded. Got:\n$text",
+    )
+  }
+
+  @Test
+  fun `display contents wrapper does not break the hit-target walk`() {
+    // The Playwright port's `display: contents` fix-up unshifts the
+    // `elementFromPoint` result onto the `elementsFromPoint` stack when the
+    // single element is a `display: contents` ancestor of the topmost element.
+    // Without it, a `display: contents` wrapper between the hit target and
+    // its visible descendants would let `elementsFromPoint` miss the
+    // descendant entirely on some engines. Pins the unshift branch.
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <div style="display:contents;">
+          <button id="contents-btn" aria-label="Contents OK"
+                  style="position:absolute;left:50px;top:50px;width:160px;height:40px;background:white;">Contents OK</button>
+        </div>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertTrue(
+      text.contains("\"Contents OK\""),
+      "Button inside a display:contents wrapper must remain visible — the upstream unshift fix-up keeps it in the hit-target walk. Got:\n$text",
+    )
+    assertFalse(
+      text.lines().any { it.contains("\"Contents OK\"") && it.contains("(occluded)") },
+      "Button must not be annotated occluded. Got:\n$text",
+    )
   }
 
   @Test
@@ -1374,6 +1467,97 @@ class PlaywrightScreenStateBoundsTest {
     assertFalse(
       text.contains("occluded elements hidden"),
       "Should not have any occluded summary on a canvas-rendered page, but got:\n$text",
+    )
+  }
+
+  /**
+   * Regression guard for the `clampHitPoint` viewport-intersection logic added
+   * in response to Codex P2 / Copilot review of PR #2917. A tall element
+   * (height ≥ 1.5× viewport) anchored at top:100 has its geometric center far
+   * below the viewport. Without clamping, `elementsFromPoint(cx, cy)` is
+   * called below the viewport and returns nothing, so the element is falsely
+   * marked occluded. With clamping, the hit-test point is taken from the
+   * intersection of the element rect and the viewport, which correctly lands
+   * on the visible top sliver of the element.
+   */
+  @Test
+  fun `tall element with geometric center below viewport is not falsely flagged occluded`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <!-- 2000px-tall section, top:100, so geometric center at y=1100 — well below the 800px viewport.
+             Top sliver (y=100..800) is visible; the rest is below the fold. -->
+        <section aria-label="Very Tall Section"
+                 style="position:absolute;left:50px;top:100px;width:300px;height:2000px;background:white;border:1px solid black;">
+        </section>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    val sectionLine = text.lines().find { it.contains("\"Very Tall Section\"") }
+    assertNotNull(
+      sectionLine,
+      "Tall section's visible top sliver should keep it in the snapshot — without viewport-clamped hit point it would be falsely occluded. Got:\n$text",
+    )
+    assertFalse(
+      sectionLine.contains("(occluded)"),
+      "Tall section must not be annotated occluded — its top sliver is visible:\n$sectionLine",
+    )
+  }
+
+  /**
+   * Regression guard for the per-candidate try/catch + `skipped` list. If
+   * one candidate's DOM lookup throws (detached element, overridden getter,
+   * etc.) the rest of the batch must still classify correctly — without the
+   * inner try/catch a single throw would unwind through the outer
+   * try/finally and zero out visibility for every candidate, so a button
+   * that should have been filtered as offscreen would survive.
+   */
+  @Test
+  fun `single throwing candidate does not unfilter the rest of the batch`() {
+    page.setContent(
+      """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <button id="visible-btn" aria-label="Stays Visible"
+                style="position:absolute;left:50px;top:50px;width:160px;height:40px;">Stays Visible</button>
+        <button id="throw-btn" aria-label="Throws During Bounds"
+                style="position:absolute;left:50px;top:120px;width:160px;height:40px;">Throws During Bounds</button>
+        <!-- Anchored well below the 800px viewport, so it should be filtered as offscreen
+             ONLY IF the rest of the batch is still processed after throw-btn throws. -->
+        <button id="offscreen-btn" aria-label="Way Below Fold"
+                style="position:absolute;left:50px;top:1600px;width:160px;height:40px;">Way Below Fold</button>
+        <script>
+          // Surgically override getBoundingClientRect on this one element with an own-property
+          // that shadows the prototype method. Only throw-btn throws; the rest of the DOM is intact.
+          const t = document.getElementById('throw-btn');
+          Object.defineProperty(t, 'getBoundingClientRect', {
+            value: function() { throw new Error('synthetic-throw for skipped-list test'); },
+            configurable: true,
+          });
+        </script>
+      </body>
+      </html>
+      """.trimIndent(),
+    )
+
+    val text = PlaywrightScreenState(page, 1280, 800).viewHierarchyTextRepresentation!!
+    assertTrue(
+      text.contains("\"Stays Visible\""),
+      "Visible button must remain — single-candidate throw must not unfilter the rest of the batch:\n$text",
+    )
+    assertFalse(
+      text.contains("\"Way Below Fold\""),
+      "Offscreen button must still be filtered — pre-fix, a throwing sibling would have unwound the loop and left every candidate unfiltered:\n$text",
+    )
+    assertTrue(
+      text.contains("offscreen elements hidden"),
+      "Offscreen summary must still appear — proves the offscreen classifier ran for siblings of the throwing candidate:\n$text",
     )
   }
 }

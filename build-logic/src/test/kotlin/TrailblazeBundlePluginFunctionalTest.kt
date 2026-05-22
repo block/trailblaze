@@ -58,13 +58,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: P
           tools:
-            - tools/sayHi.yaml
+            - sayHi
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
       toolYaml = """
-        script: ./tools/sayHi.js
+        script: ./tools/sayHi.ts
         name: sayHi
         inputSchema:
           message: { type: string }
@@ -130,13 +130,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: P
           tools:
-            - tools/sayHi.yaml
+            - sayHi
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
       toolYaml = """
-        script: ./tools/sayHi.js
+        script: ./tools/sayHi.ts
         name: sayHi
         inputSchema:
           message: { type: string }
@@ -174,13 +174,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: P
           tools:
-            - tools/sayHi.yaml
+            - sayHi
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
       toolYaml = """
-        script: ./tools/sayHi.js
+        script: ./tools/sayHi.ts
         name: sayHi
         inputSchema:
           message: { type: string }
@@ -198,7 +198,7 @@ class TrailblazeBundlePluginFunctionalTest {
     writeTool(
       projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
       toolYaml = """
-        script: ./tools/sayHi.js
+        script: ./tools/sayHi.ts
         name: sayHi
         inputSchema:
           message: { type: string }
@@ -239,13 +239,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: Alpha
           tools:
-            - tools/alphaTool.yaml
+            - alphaTool
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "alpha", toolFile = "tools/alphaTool.yaml",
       toolYaml = """
-        script: ./tools/alphaTool.js
+        script: ./tools/alphaTool.ts
         name: alphaTool
       """.trimIndent(),
     )
@@ -256,13 +256,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: Beta
           tools:
-            - tools/betaTool.yaml
+            - betaTool
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "beta", toolFile = "tools/betaTool.yaml",
       toolYaml = """
-        script: ./tools/betaTool.js
+        script: ./tools/betaTool.ts
         name: betaTool
       """.trimIndent(),
     )
@@ -334,13 +334,13 @@ class TrailblazeBundlePluginFunctionalTest {
         target:
           display_name: Lib
           tools:
-            - tools/libTool.yaml
+            - libTool
       """.trimIndent(),
     )
     writeTool(
       projectDir, packId = "lib", toolFile = "tools/libTool.yaml",
       toolYaml = """
-        script: ./tools/libTool.js
+        script: ./tools/libTool.ts
         name: libTool
         inputSchema:
           message: { type: string }
@@ -377,6 +377,263 @@ class TrailblazeBundlePluginFunctionalTest {
       second.task(":bundleTrailblazePack")?.outcome,
       "expected UP-TO-DATE on the second invocation; got ${second.output}",
     )
+  }
+
+  @Test
+  fun `compileTrailblazeWorkspace task is registered with trailblaze group and the expected mainClass`() {
+    // The new convention task wires `xyz.block.trailblaze.host.WorkspaceCompileMain` so a
+    // fresh `./gradlew build` materializes per-pack `client.d.ts` + the workspace
+    // `@trailblaze/scripting` SDK that IDE autocomplete depends on (#3210). The fixture
+    // doesn't have `:trailblaze-host` available, but the task should still be REGISTERED
+    // — its `:check` wiring is conditional on a non-empty compile classpath, but the task
+    // itself is part of the plugin's contract.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+        tasks.register("dumpCompileTask") {
+          doLast {
+            val t = tasks.named("compileTrailblazeWorkspace").get() as org.gradle.api.tasks.JavaExec
+            println("MAIN_CLASS=" + t.mainClass.get())
+            println("GROUP=" + t.group)
+            println("DESCRIPTION_OK=" + (t.description?.contains("compile chain") == true))
+          }
+        }
+      """.trimIndent(),
+    )
+
+    val result = runner(projectDir, "dumpCompileTask").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":dumpCompileTask")?.outcome)
+    assertTrue("expected mainClass set: ${result.output}") {
+      result.output.contains("MAIN_CLASS=xyz.block.trailblaze.host.WorkspaceCompileMain")
+    }
+    assertTrue("expected trailblaze group: ${result.output}") {
+      result.output.contains("GROUP=trailblaze")
+    }
+    assertTrue("expected description set: ${result.output}") {
+      result.output.contains("DESCRIPTION_OK=true")
+    }
+  }
+
+  @Test
+  fun `compileTrailblazeWorkspace is NOT wired to check when no trailblaze-host project exists`() {
+    // Fixture projects don't have a sibling `:trailblaze-host` in their multi-project
+    // build, so the plugin's `afterEvaluate` default-deps wiring leaves the compile
+    // classpath empty. With no classpath, running the JavaExec would fail with a
+    // confusing "main class not found" error — so the plugin skips wiring it to `:check`
+    // entirely. Verifies the guard rather than the inverse: if a future regression
+    // started force-wiring `:check → compileTrailblazeWorkspace`, every TestKit fixture's
+    // `:check` invocation in this file would start failing instead of staying green.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+      """.trimIndent(),
+    )
+
+    val result = runner(projectDir, "check").build()
+    // `:check` is a lifecycle task with no actions; its outcome can vary across Gradle
+    // versions and task-graph shapes (UP_TO_DATE when no work, SUCCESS when it has any
+    // dep that ran, etc.). The contract we actually care about here is "the new compile
+    // task didn't sneak into the graph" — assert that directly, not the lifecycle task's
+    // outcome enum.
+    assertTrue("expected :check to have run: ${result.tasks.map { it.path }}") {
+      result.task(":check") != null
+    }
+    assertTrue("compileTrailblazeWorkspace should not have run: ${result.tasks.map { it.path }}") {
+      result.task(":compileTrailblazeWorkspace") == null
+    }
+  }
+
+  @Test
+  fun `workspaceRoot consumer override wins over the packsDir-derived convention`() {
+    // The plugin sets a `workspaceRoot` convention of `packsDir.map { it.dir("../../..") }`
+    // so the canonical `<workspace>/trails/config/packs/` layout Just Works. But if a
+    // consumer explicitly overrides `workspaceRoot`, the override must win — a regression
+    // that drops the `.convention(...)` semantics (e.g. switching to `.set(...)` at
+    // extension creation time) would silently stomp the override and the JavaExec would
+    // run against the wrong working directory. Gradle's `Provider.convention` only sets
+    // the default if no explicit value was set, so this test asserts that contract.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+          workspaceRoot.set(layout.projectDirectory.dir("custom-workspace"))
+        }
+        tasks.register("dumpWorkspaceRoot") {
+          doLast {
+            val t = tasks.named("compileTrailblazeWorkspace").get() as org.gradle.api.tasks.JavaExec
+            println("WORKING_DIR=" + t.workingDir.canonicalPath)
+          }
+        }
+      """.trimIndent(),
+    )
+    File(projectDir, "custom-workspace").mkdirs()
+
+    val result = runner(projectDir, "dumpWorkspaceRoot").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":dumpWorkspaceRoot")?.outcome)
+    val expected = File(projectDir, "custom-workspace").canonicalPath
+    assertTrue("expected workingDir to honor the explicit workspaceRoot ($expected): ${result.output}") {
+      result.output.contains("WORKING_DIR=$expected")
+    }
+  }
+
+  @Test
+  fun `bundleEnabled = false disables bundleTrailblazePack without disabling the compile half`() {
+    // The declarative replacement for `tasks.named("bundleTrailblazePack") { enabled = false }`.
+    // Packs that still ship `.js` script descriptors (pre-TS-only-lockdown) toggle this
+    // flag to keep the bundle half quiet while leaving the workspace-compile half
+    // unaffected. A regression that ignores the flag or wires it to the wrong task would
+    // surface as the bundle still running on a `.js`-bearing pack, blowing up CI.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+          bundleEnabled.set(false)
+        }
+      """.trimIndent(),
+    )
+    writePack(
+      projectDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - sayHi
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
+      toolYaml = """
+        script: ./tools/sayHi.ts
+        name: sayHi
+      """.trimIndent(),
+    )
+
+    val result = runner(projectDir, "bundleTrailblazePack").build()
+    // `onlyIf` should short-circuit the task — Gradle reports SKIPPED, not SUCCESS.
+    assertEquals(TaskOutcome.SKIPPED, result.task(":bundleTrailblazePack")?.outcome)
+    val bindings = File(projectDir, "packs/p/tools/.trailblaze/tools.d.ts")
+    assertTrue("bindings should NOT have been written: $bindings") { !bindings.exists() }
+  }
+
+  @Test
+  fun `bundleEnabled = true (the default) runs bundleTrailblazePack and writes bindings`() {
+    // Inverse pair of the `bundleEnabled = false` test above. Without this, a regression
+    // that always skips the task — say, an `onlyIf { false }` typo or an unrelated `onlyIf`
+    // condition that happens to evaluate false — would still pass the SKIPPED assertion
+    // there. Asserting the SUCCESS path here pins the positive direction.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+          // bundleEnabled left at the convention default (true).
+        }
+      """.trimIndent(),
+    )
+    writePack(
+      projectDir, packId = "p",
+      packYaml = """
+        id: p
+        target:
+          display_name: P
+          tools:
+            - sayHi
+      """.trimIndent(),
+    )
+    writeTool(
+      projectDir, packId = "p", toolFile = "tools/sayHi.yaml",
+      toolYaml = """
+        script: ./tools/sayHi.ts
+        name: sayHi
+        inputSchema:
+          message: { type: string }
+      """.trimIndent(),
+    )
+
+    val result = runner(projectDir, "bundleTrailblazePack").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":bundleTrailblazePack")?.outcome)
+    val bindings = File(projectDir, "packs/p/tools/.trailblaze/tools.d.ts")
+    assertTrue("bindings file should exist after default-enabled run: $bindings") { bindings.isFile }
+    assertTrue("bindings should declare sayHi: ${bindings.readText()}") {
+      bindings.readText().contains("sayHi: {")
+    }
+  }
+
+  @Test
+  fun `compileTrailblazeWorkspace doFirst surfaces a directed error on empty classpath`() {
+    // The plugin's `doFirst` guard is the only thing between a misconfigured consumer and
+    // a cryptic "Could not find or load main class" page from the JVM. TestKit fixtures
+    // never include `:trailblaze-host`, so `defaultDependencies` leaves the classpath
+    // empty AND the `:check` wiring is skipped — but manually invoking the task is exactly
+    // the path an author hits when they apply the plugin to a module outside the wired
+    // multi-project build. This test simulates that and asserts the directed message.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        trailblazeBundle {
+          packsDir.set(layout.projectDirectory.dir("packs"))
+        }
+      """.trimIndent(),
+    )
+
+    val result = runner(projectDir, "compileTrailblazeWorkspace").buildAndFail()
+    assertTrue("expected the directed classpath error message: ${result.output}") {
+      result.output.contains("no `:trailblaze-host` in this build")
+    }
+  }
+
+  @Test
+  fun `compileTrailblazeWorkspace doFirst surfaces a directed error when both roots are unset`() {
+    // The first guard — neither `packsDir` nor `workspaceRoot` is set. Since the
+    // convention is `workspaceRoot.convention(packsDir.map { ... })`, both being unset is
+    // the only state in which `workspaceRoot.isPresent` is false. Stub the classpath via
+    // a dummy local file so the empty-classpath guard doesn't trigger first and mask the
+    // intended assertion path.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.bundle")
+        }
+        dependencies {
+          trailblazeWorkspaceCompileClasspath(files("dummy.jar"))
+        }
+        // No `trailblazeBundle { ... }` — packsDir and workspaceRoot both unset.
+      """.trimIndent(),
+    )
+    File(projectDir, "dummy.jar").writeText("")
+
+    val result = runner(projectDir, "compileTrailblazeWorkspace").buildAndFail()
+    assertTrue("expected the directed missing-roots error message: ${result.output}") {
+      result.output.contains("compileTrailblazeWorkspace needs `trailblazeBundle")
+    }
   }
 
   @Test

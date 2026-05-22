@@ -84,13 +84,13 @@ class YamlDefinedToolLlmVisibilityTest {
   }
 
   @Test
-  fun `tools-mode YAML round-trips is_for_llm is_recordable requires_host`() {
+  fun `tools-mode YAML round-trips surface_to_llm is_recordable requires_host`() {
     val config = parse(
       """
       id: customComposite
       description: Composition that opts out of LLM and recording, requires host.
       parameters: []
-      is_for_llm: false
+      surface_to_llm: false
       is_recordable: false
       requires_host: true
       tools:
@@ -98,7 +98,7 @@ class YamlDefinedToolLlmVisibilityTest {
             screenName: custom
       """.trimIndent(),
     )
-    assertThat(config.isForLlm).isEqualTo(false)
+    assertThat(config.surfaceToLlm).isEqualTo(false)
     assertThat(config.isRecordable).isEqualTo(false)
     assertThat(config.requiresHost).isEqualTo(true)
 
@@ -109,7 +109,7 @@ class YamlDefinedToolLlmVisibilityTest {
   }
 
   @Test
-  fun `tools-mode defaults all three fields to null which behave like the annotation defaults`() {
+  fun `tools-mode defaults all surface fields to null which behave like the annotation defaults`() {
     val config = parse(
       """
       id: defaultedComposite
@@ -120,7 +120,7 @@ class YamlDefinedToolLlmVisibilityTest {
             screenName: defaulted
       """.trimIndent(),
     )
-    assertThat(config.isForLlm).isEqualTo(null)
+    assertThat(config.surfaceToLlm).isEqualTo(null)
     assertThat(config.isRecordable).isEqualTo(null)
     assertThat(config.requiresHost).isEqualTo(null)
 
@@ -131,7 +131,7 @@ class YamlDefinedToolLlmVisibilityTest {
   }
 
   @Test
-  fun `buildKoogToolsForYamlDefined drops configs with is_for_llm false`() {
+  fun `buildKoogToolsForYamlDefined drops configs with surface_to_llm false`() {
     val visible = parse(
       """
       id: visibleTool
@@ -145,9 +145,9 @@ class YamlDefinedToolLlmVisibilityTest {
     val hidden = parse(
       """
       id: hiddenTool
-      description: Hidden from the LLM via is_for_llm false.
+      description: Hidden from the LLM via surface_to_llm false.
       parameters: []
-      is_for_llm: false
+      surface_to_llm: false
       tools:
         - takeSnapshot:
             screenName: hidden
@@ -179,9 +179,9 @@ class YamlDefinedToolLlmVisibilityTest {
   }
 
   @Test
-  fun `class-mode validate rejects is_for_llm is_recordable requires_host is_verification`() {
+  fun `class-mode validate rejects surface and capability flags`() {
     listOf(
-      "is_for_llm: false",
+      "surface_to_llm: false",
       "is_recordable: false",
       "requires_host: true",
       "is_verification: true",

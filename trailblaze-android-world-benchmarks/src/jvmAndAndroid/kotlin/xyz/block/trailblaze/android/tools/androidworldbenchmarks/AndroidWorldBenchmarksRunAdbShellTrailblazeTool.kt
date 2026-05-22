@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_runAdbShell",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Use this to run adb shell commands on the device.")
 data class AndroidWorldBenchmarksRunAdbShellTrailblazeTool(

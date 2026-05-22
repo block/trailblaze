@@ -5,12 +5,14 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.util.escapeForIdentifier
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.cli.yaml.TrailblazeNodeSelectorYamlEmitter
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
@@ -256,28 +258,34 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
         }
         val ancestorDetail = ancestor.driverDetail as DriverNodeDetail.AndroidAccessibility
         val leafDetail = target.driverDetail as? DriverNodeDetail.AndroidAccessibility ?: return
+        // Build the anchor selector shape and route it through the shared emitter so any
+        // future addition to the AndroidAccessibility field set picks up here for free
+        // (same forcing-function guarantee as the regular candidate selectors emitted
+        // above). The text-OR-contentDescription preference for the leaf matches the
+        // previous hand-rolled output: prefer textRegex if present, fall back to
+        // contentDescriptionRegex.
+        val leafTextRegex = leafDetail.text?.let { "^" + Regex.escape(it) + "$" }
+        val leafContentDescriptionRegex = leafDetail.contentDescription
+          ?.takeIf { leafDetail.text == null }
+          ?.let { "^" + Regex.escape(it) + "$" }
+        val anchorSelector = TrailblazeNodeSelector(
+          androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+            classNameRegex = ancestorDetail.className?.let { escapeForIdentifier(it) },
+            isSelected = true,
+          ),
+          containsChild = TrailblazeNodeSelector(
+            androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+              classNameRegex = leafDetail.className?.let { escapeForIdentifier(it) },
+              textRegex = leafTextRegex,
+              contentDescriptionRegex = leafContentDescriptionRegex,
+            ),
+          ),
+        )
         Console.log("# Anchored: parent isSelected + this as containsChild")
         Console.log("# This is the canonical bottom-nav-tab pattern — only matches when this tab is the active one.")
         Console.log("- description: \"\"")
         Console.log("  selector:")
-        Console.log("    androidAccessibility:")
-        ancestorDetail.className?.let {
-          Console.log("      classNameRegex: \"${escapeYamlString(escapeForIdentifier(it))}\"")
-        }
-        Console.log("      isSelected: true")
-        Console.log("    containsChild:")
-        Console.log("      androidAccessibility:")
-        leafDetail.className?.let {
-          Console.log("        classNameRegex: \"${escapeYamlString(escapeForIdentifier(it))}\"")
-        }
-        when {
-          leafDetail.text != null -> Console.log(
-            "        textRegex: \"${escapeYamlString("^" + Regex.escape(leafDetail.text!!) + "$")}\"",
-          )
-          leafDetail.contentDescription != null -> Console.log(
-            "        contentDescriptionRegex: \"${escapeYamlString("^" + Regex.escape(leafDetail.contentDescription!!) + "$")}\"",
-          )
-        }
+        TrailblazeNodeSelectorYamlEmitter.emit(anchorSelector, indent = 4) { Console.log(it) }
       }
       else -> Console.log("# Unknown --anchor mode: '$anchor'. Supported: parent-selected.")
     }
@@ -511,78 +519,8 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
   }
 
   private fun emitSelectorBody(selector: TrailblazeNodeSelector, indent: Int) {
-    val pad = " ".repeat(indent)
-    val childPad = " ".repeat(indent + 2)
-    selector.androidAccessibility?.let { match ->
-      Console.log("${pad}androidAccessibility:")
-      match.classNameRegex?.let { Console.log("$childPad" + "classNameRegex: \"${escapeYamlString(it)}\"") }
-      match.resourceIdRegex?.let { Console.log("$childPad" + "resourceIdRegex: \"${escapeYamlString(it)}\"") }
-      match.textRegex?.let { Console.log("$childPad" + "textRegex: \"${escapeYamlString(it)}\"") }
-      match.contentDescriptionRegex?.let { Console.log("$childPad" + "contentDescriptionRegex: \"${escapeYamlString(it)}\"") }
-      match.hintTextRegex?.let { Console.log("$childPad" + "hintTextRegex: \"${escapeYamlString(it)}\"") }
-      match.labeledByTextRegex?.let { Console.log("$childPad" + "labeledByTextRegex: \"${escapeYamlString(it)}\"") }
-      match.stateDescriptionRegex?.let { Console.log("$childPad" + "stateDescriptionRegex: \"${escapeYamlString(it)}\"") }
-      match.paneTitleRegex?.let { Console.log("$childPad" + "paneTitleRegex: \"${escapeYamlString(it)}\"") }
-      match.roleDescriptionRegex?.let { Console.log("$childPad" + "roleDescriptionRegex: \"${escapeYamlString(it)}\"") }
-      match.composeTestTagRegex?.let { Console.log("$childPad" + "composeTestTagRegex: \"${escapeYamlString(it)}\"") }
-      match.uniqueId?.let { Console.log("$childPad" + "uniqueId: \"${escapeYamlString(it)}\"") }
-      match.isSelected?.takeIf { it }?.let { Console.log("$childPad" + "isSelected: true") }
-      match.isHeading?.takeIf { it }?.let { Console.log("$childPad" + "isHeading: true") }
-      match.isClickable?.takeIf { it }?.let { Console.log("$childPad" + "isClickable: true") }
-      match.isCheckable?.takeIf { it }?.let { Console.log("$childPad" + "isCheckable: true") }
-      match.isChecked?.takeIf { it }?.let { Console.log("$childPad" + "isChecked: true") }
-      match.isEditable?.takeIf { it }?.let { Console.log("$childPad" + "isEditable: true") }
-      match.isPassword?.takeIf { it }?.let { Console.log("$childPad" + "isPassword: true") }
-      match.isScrollable?.takeIf { it }?.let { Console.log("$childPad" + "isScrollable: true") }
-      match.isEnabled?.takeIf { it }?.let { Console.log("$childPad" + "isEnabled: true") }
-      match.isFocused?.takeIf { it }?.let { Console.log("$childPad" + "isFocused: true") }
-      match.inputType?.takeIf { it != 0 }?.let { Console.log("$childPad" + "inputType: $it") }
-      match.collectionItemRowIndex?.let { Console.log("$childPad" + "collectionItemRowIndex: $it") }
-      match.collectionItemColumnIndex?.let { Console.log("$childPad" + "collectionItemColumnIndex: $it") }
-    }
-    selector.containsChild?.let {
-      Console.log("${pad}containsChild:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.childOf?.let {
-      Console.log("${pad}childOf:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.containsDescendants?.takeIf { it.isNotEmpty() }?.let { list ->
-      Console.log("${pad}containsDescendants:")
-      list.forEach { d ->
-        Console.log("$pad  -")
-        emitSelectorBody(d, indent + 4)
-      }
-    }
-    selector.above?.let {
-      Console.log("${pad}above:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.below?.let {
-      Console.log("${pad}below:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.leftOf?.let {
-      Console.log("${pad}leftOf:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.rightOf?.let {
-      Console.log("${pad}rightOf:")
-      emitSelectorBody(it, indent + 2)
-    }
-    selector.index?.let { Console.log("${pad}index: $it") }
+    TrailblazeNodeSelectorYamlEmitter.emit(selector, indent) { Console.log(it) }
   }
-
-  /**
-   * Minimal YAML string escape: backslashes and double-quotes only, since these are the
-   * two characters that break a `"..."`-quoted scalar. Regex literals like `\Qfoo\E` need
-   * the backslash doubled so YAML parses them back as the literal `\Q...\E` for the regex
-   * engine. Newlines and control characters don't appear in selector regex strings (the
-   * generator escapes input via `escapeForSelector`), so this stays simple.
-   */
-  private fun escapeYamlString(s: String): String =
-    s.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
 /**

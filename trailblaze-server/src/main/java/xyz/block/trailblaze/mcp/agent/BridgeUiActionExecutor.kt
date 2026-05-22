@@ -7,6 +7,7 @@ import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.AndroidCompactElementList
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.IosCompactElementList
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -53,7 +54,17 @@ class BridgeUiActionExecutor(
   private val mcpBridge: TrailblazeMcpBridge,
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
   private val dynamicToolRepoProvider: (suspend () -> TrailblazeToolRepo?)? = null,
-  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  /**
+   * Resolves the screenshot scaling config to apply on each capture. Defaults to a lambda
+   * that re-reads [EffectiveScreenshotScalingConfig.effective] per call so a
+   * `trailblaze config screenshot-*` change picks up on the next capture without rebuilding
+   * the executor — `TrailblazeMcpServer` keeps a single executor per session, so the prior
+   * `val` snapshot at construction time silently ignored live settings changes for the
+   * lifetime of the session. Tests can pass a constant-returning lambda to pin a value.
+   */
+  private val screenshotScalingConfigProvider: () -> ScreenshotScalingConfig = {
+    EffectiveScreenshotScalingConfig.effective
+  },
 ) : UiActionExecutor {
 
   /**
@@ -154,7 +165,9 @@ class BridgeUiActionExecutor(
     return try {
       ScreenStateCaptureUtil.captureScreenState(
         mcpBridge = mcpBridge,
-        screenshotScalingConfig = screenshotScalingConfig
+        // Re-resolve per call so live settings changes (e.g. `trailblaze config
+        // screenshot-format png` mid-session) take effect on the very next capture.
+        screenshotScalingConfig = screenshotScalingConfigProvider(),
       )
     } catch (e: Exception) {
       Console.log("[BridgeUiActionExecutor] Failed to capture screen state: ${e.message}")

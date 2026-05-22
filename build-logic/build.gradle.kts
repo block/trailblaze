@@ -46,6 +46,14 @@ gradlePlugin {
       id = "trailblaze.sdk-bundle"
       implementationClass = "TrailblazeSdkBundlePlugin"
     }
+    // Sibling of `sdk-bundle` for the declaration-bundle artifact (`dist/index.d.ts`).
+    // Same regenerate-and-commit / byte-diff verify cadence; different bundler binary
+    // (dts-bundle-generator instead of esbuild). See the plugin kdoc for why the two
+    // aren't unified.
+    create("sdk-dts-bundle") {
+      id = "trailblaze.sdk-dts-bundle"
+      implementationClass = "TrailblazeSdkDtsBundlePlugin"
+    }
   }
 }
 

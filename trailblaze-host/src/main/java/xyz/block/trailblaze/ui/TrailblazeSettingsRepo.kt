@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -146,7 +147,12 @@ class TrailblazeSettingsRepo(
 
   val serverStateFlow = MutableStateFlow(
     TrailblazeServerState(
-      appConfig = load(initialConfig),
+      appConfig = load(initialConfig).also {
+        // Publish the user's screenshot config immediately on load so call sites
+        // resolving `EffectiveScreenshotScalingConfig.effective` during early startup
+        // (before the collector below runs) see the user values, not the framework default.
+        EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfig())
+      },
     ),
   ).also { serverStateFlow ->
     CoroutineScope(Dispatchers.IO).launch {
@@ -154,6 +160,9 @@ class TrailblazeSettingsRepo(
         .distinctUntilChangedBy { newState -> newState }
         .collect { newState ->
           saveConfig(newState.appConfig)
+          EffectiveScreenshotScalingConfig.setEffectiveDefault(
+            newState.appConfig.screenshotScalingConfig(),
+          )
         }
     }
   }

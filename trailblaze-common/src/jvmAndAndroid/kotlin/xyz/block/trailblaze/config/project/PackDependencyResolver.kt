@@ -86,7 +86,7 @@ internal object PackDependencyResolver {
   fun resolveTarget(
     ownTarget: AppTargetYamlConfig,
     ownDependencies: List<String>,
-    packsById: Map<String, TrailblazeProjectConfigLoader.ResolvedPack>,
+    packsById: Map<String, ResolvedPack>,
     rootPackId: String,
   ): AppTargetYamlConfig {
     val ownPlatforms = ownTarget.platforms
@@ -142,7 +142,7 @@ internal object PackDependencyResolver {
   private fun walk(
     depId: String,
     depth: Int,
-    packsById: Map<String, TrailblazeProjectConfigLoader.ResolvedPack>,
+    packsById: Map<String, ResolvedPack>,
     visiting: MutableSet<String>,
     contributions: MutableList<DefaultsContribution>,
   ) {

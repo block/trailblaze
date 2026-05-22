@@ -1,0 +1,17 @@
+- config:
+    title: "Wikipedia: Type a search query without submitting"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [search]
+- prompts:
+    # This trail exercises the `openFirstResult: false` branch of
+    # `wikipedia_web_searchAndOpenFirstResult`. Distinct from
+    # `test-search-autocomplete` (which asserts the popup is visible — flaky)
+    # — here we just verify the search input ends up with the query in it.
+    # Deterministic, no popup timing involved.
+    - step: |
+        Open Wikipedia and type "Albert Einstein" into the header search box,
+        but do NOT submit the form (don't press Enter, don't click the search
+        button). After typing, verify that the search input contains the
+        text "Albert Einstein".

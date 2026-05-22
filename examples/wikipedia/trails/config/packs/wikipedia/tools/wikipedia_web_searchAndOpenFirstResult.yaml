@@ -1,0 +1,31 @@
+script: ./wikipedia_web_searchAndOpenFirstResult.ts
+name: wikipedia_web_searchAndOpenFirstResult
+description: |
+  Search Wikipedia from the header search box. Use this whenever the task
+  is to search Wikipedia for something — e.g. "search for Albert Einstein",
+  "look up Python on Wikipedia", "find articles about Mount Everest". Types
+  the query into the header search input, submits the form, and verifies
+  the resulting article's first heading. Pass `openFirstResult=false` to
+  only type the query without submitting (useful for autocomplete-suggestion
+  tests).
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  query:
+    type: string
+    description: Search query to type into the header search box.
+    required: false
+  expectedHeading:
+    type: string
+    description: |
+      Visible text the tool asserts appears in the opened article's heading.
+      Defaults to `query` when omitted.
+    required: false
+  openFirstResult:
+    type: boolean
+    description: |
+      When true (default), submits the search form. Wikipedia's exact-match search
+      typically redirects straight to the matching article. When false, types the
+      query but does not submit — useful for testing autocomplete suggestions.
+    required: false

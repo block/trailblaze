@@ -69,7 +69,22 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
     val pageManager = deviceManager.webBrowserManager.getPageManager(instanceId)
       ?: run {
         val stateFlow = deviceManager.webBrowserManager.browserStateFlow(instanceId)
-        deviceManager.webBrowserManager.launchBrowser(instanceId = instanceId, headless = true)
+        val savedViewport = deviceManager.settingsRepo.serverStateFlow.value.appConfig.webViewport
+        // Make the desktop's saved viewport authoritative for this slot — including
+        // the "cleared back to default" case. Without this explicit write,
+        // [WebBrowserManager.launchBrowser] only records non-null specs, so a slot
+        // that earlier received `device create web --emulate "iPhone 14"` would
+        // inherit that stale spec here even after the user cleared the desktop's
+        // viewport field.
+        deviceManager.webBrowserManager.setViewportSpec(
+          instanceId = instanceId,
+          viewportSpec = savedViewport,
+        )
+        deviceManager.webBrowserManager.launchBrowser(
+          instanceId = instanceId,
+          headless = true,
+          viewportSpec = savedViewport,
+        )
         val terminal = withContext(Dispatchers.IO) {
           stateFlow.first { it is WebBrowserState.Running || it is WebBrowserState.Error }
         }

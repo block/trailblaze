@@ -13,7 +13,7 @@ dependencies:
 target:
   display_name: Wikipedia (en)
   tools:
-    - tools/wikipedia_android_launchApp.yaml
+    - wikipedia_android_launchApp
   platforms:
     android:
       app_ids:

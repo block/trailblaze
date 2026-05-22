@@ -21,7 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_createFileOnDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Creates a file with specified content at a given path on the device.")
 data class AndroidWorldBenchmarksCreateFileOnDeviceTrailblazeTool(

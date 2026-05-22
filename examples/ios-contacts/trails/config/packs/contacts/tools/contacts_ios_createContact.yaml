@@ -1,34 +1,25 @@
-script: ./contacts_ios_createContact.js
+script: ./contacts_ios_createContact.ts
 name: contacts_ios_createContact
-description: Launch Contacts, create a new contact, and save it.
+description: |
+  Create a brand-new contact in the iOS Contacts app. Use this whenever the
+  task is to add a contact, create a contact, save a new person, or otherwise
+  populate the contacts list with someone new. Opens the new-contact draft,
+  types first + last name (and optionally a phone number), and saves. Verifies
+  the save round-trip completed by asserting the contact's full name is
+  visible on the post-save detail screen iOS navigates to.
 _meta:
   trailblaze/supportedPlatforms: [ios]
   trailblaze/requiresContext: true
 inputSchema:
-  appId:
-    type: string
-    description: iOS bundle id of the Contacts app.
   firstName:
     type: string
-    description: First name to type into the contact's First Name field.
+    description: First name to type into the First Name field.
+    required: false
   lastName:
     type: string
-    description: Last name to type into the contact's Last Name field.
+    description: Last name to type into the Last Name field.
+    required: false
   phoneNumber:
     type: string
-    description: Phone number to type into the contact's Phone field. Formatting is preserved verbatim.
-  addButtonLabel:
-    type: string
-    description: Accessibility label of the "+" / Add button (locale-dependent).
-  firstNameLabel:
-    type: string
-    description: Accessibility label of the First Name field (locale-dependent).
-  lastNameLabel:
-    type: string
-    description: Accessibility label of the Last Name field (locale-dependent).
-  addPhoneLabel:
-    type: string
-    description: Accessibility label of the "Add Phone" / "Add new phone" affordance (locale-dependent).
-  doneButtonLabel:
-    type: string
-    description: Accessibility label of the Done / Save button (locale-dependent).
+    description: Phone number to type. When omitted or empty, no phone is added. Formatting (spaces, dashes, parens) is preserved verbatim.
+    required: false

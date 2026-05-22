@@ -6,6 +6,7 @@ import org.gradle.api.file.Directory
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.IgnoreEmptyDirectories
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
@@ -33,6 +34,46 @@ abstract class TrailblazeBundleExtension @Inject constructor(objects: ObjectFact
    * when it's zipped or published.
    */
   val packsDir: DirectoryProperty = objects.directoryProperty()
+
+  /**
+   * Workspace root — the directory that holds `trails/config/trailblaze.yaml`. The
+   * `compileTrailblazeWorkspace` JavaExec task uses this as its `workingDir` so the
+   * embedded [xyz.block.trailblaze.host.WorkspaceCompileBootstrap] walk-up resolves the
+   * workspace correctly. Defaults to three directories above [packsDir] (the canonical
+   * `<workspace>/trails/config/packs/` layout), which is correct for every workspace that
+   * follows the convention; consumers with a non-standard layout can override.
+   */
+  val workspaceRoot: DirectoryProperty = objects.directoryProperty()
+
+  /**
+   * Whether the per-pack `bundleTrailblazePack` half of the plugin runs. `true` by
+   * default — every consumer gets `tools.d.ts` generation alongside the
+   * `compileTrailblazeWorkspace` JavaExec. Packs that still ship `.js` scripted-tool
+   * descriptors (pre-`project_scripting_sdk_ts_only_authoring.md` lockdown) hit the
+   * bundler's TS-only enforcement and can't pass — those modules set this to `false` so
+   * only the workspace-compile half runs (which routes through `TrailblazeCompiler` and
+   * still accepts `.js` for now). Declarative form replaces the older
+   * `tasks.named("bundleTrailblazePack") { enabled = false }` workaround that previously
+   * had to be repeated across every affected consumer.
+   *
+   * Usage:
+   * ```kotlin
+   * plugins { id("trailblaze.bundle") }
+   *
+   * trailblazeBundle {
+   *   packsDir.set(layout.projectDirectory.dir("trails/config/packs"))
+   *   // Legacy `.js` scripted tools in this pack — skip the TS-only bundler half.
+   *   bundleEnabled.set(false)
+   * }
+   * ```
+   *
+   * Scope: this flag controls ONLY the `bundleTrailblazePack` task that emits per-pack
+   * `tools.d.ts`. The `compileTrailblazeWorkspace` JavaExec (workspace SDK extraction +
+   * per-pack `client.d.ts` + per-pack `tsconfig.json`) is unaffected and keeps running
+   * — that's what makes setting `bundleEnabled = false` safe for `.js` packs that still
+   * want IDE autocomplete materialized on every `./gradlew build`.
+   */
+  val bundleEnabled: Property<Boolean> = objects.property(Boolean::class.java)
 }
 
 /**

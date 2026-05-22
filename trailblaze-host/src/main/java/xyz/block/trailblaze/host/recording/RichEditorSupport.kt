@@ -17,7 +17,7 @@ import kotlin.reflect.KClass
  * Best-effort lookup for the rich-editor surface in [ActionYamlCard]. Resolves the descriptor
  * the form widgets need (param names, types, descriptions, enum values) by reading the tool
  * class's `@TrailblazeToolClass` annotation through [toKoogToolDescriptor], then falls back
- * to `null` for tools the descriptor pipeline can't represent — `isForLlm = false` tools
+ * to `null` for tools the descriptor pipeline can't represent — `surfaceToLlm = false` tools
  * (`SwipeWithRelativeCoordinatesTool`, internal/wrapper tools, etc.) intentionally short-
  * circuit there. Callers treat null as "fall back to YAML editor" so we don't lose the
  * ability to edit those by-text.

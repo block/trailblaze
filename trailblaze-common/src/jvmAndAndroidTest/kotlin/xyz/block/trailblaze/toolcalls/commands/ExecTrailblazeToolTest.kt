@@ -173,7 +173,7 @@ class ExecTrailblazeToolTest {
     val annotation = ExecTrailblazeTool::class.java.getAnnotation(TrailblazeToolClass::class.java)!!
     assertThat(annotation.name).isEqualTo("exec")
     assertThat(annotation.requiresHost).isEqualTo(true)
-    assertThat(annotation.isForLlm).isEqualTo(false)
+    assertThat(annotation.surfaceToLlm).isEqualTo(false)
   }
 
   private fun createContext(): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(

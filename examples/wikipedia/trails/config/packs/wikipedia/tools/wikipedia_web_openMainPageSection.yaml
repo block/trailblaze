@@ -1,0 +1,24 @@
+script: ./wikipedia_web_openMainPageSection.ts
+name: wikipedia_web_openMainPageSection
+description: |
+  Verify one of Wikipedia's four Main_Page sections is present and visible.
+  Use this whenever the task is to verify a main-page section: "Did you
+  know", "In the news", "On this day", or "From today's featured article"
+  (also known as DYK, ITN, OTD, TFA). Pass the section short code to pick
+  which one. The tool anchors verification on the section's stable wrapper
+  element id (`#mp-dyk` etc.) — which survives Wikipedia's day-to-day copy
+  drift — rather than the visible heading text (which rotates daily).
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  section:
+    type: string
+    description: |
+      Which main page section to verify. One of: tfa (Today's featured
+      article), itn (In the news), dyk (Did you know), otd (On this day).
+  ensureOnMainPage:
+    type: boolean
+    description: |
+      When true (default), navigates to Main_Page first if not already there.
+    required: false

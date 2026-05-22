@@ -15,6 +15,7 @@ tools:
   - web_wait
   - web_snapshot
   - web_request_details
+  - web_resize
   # Read-only / wait primitives — safe for LLM use.
   - web_currentUrl
   - web_waitForUrl

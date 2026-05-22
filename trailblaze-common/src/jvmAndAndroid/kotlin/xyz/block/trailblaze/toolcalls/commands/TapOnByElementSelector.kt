@@ -26,7 +26,8 @@ import xyz.block.trailblaze.util.Console
 @Serializable
 @TrailblazeToolClass(
   name = "tapOnElementBySelector",
-  isForLlm = false
+  surfaceToLlm = false,
+  surfaceToScriptedTools = false,
 )
 @LLMDescription("Taps on an element by its selector.")
 /**
@@ -71,7 +72,6 @@ data class TapOnByElementSelector(
       TapOnElementCommand(
         selector = maestroSelector.toMaestroElementSelector(),
         longPress = longPress,
-        optional = maestroSelector.optional,
       ),
     )
   }

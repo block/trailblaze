@@ -16,7 +16,7 @@ internal const val RUN_COMMAND_TOOL_NAME = "runCommand"
 /**
  * Runs a shell command on the host and returns its output.
  *
- * Intentionally hidden from the LLM (`isForLlm = false`) — this is a building block for
+ * Intentionally hidden from the LLM (`surfaceToLlm = false`) — this is a building block for
  * higher-level tools that wrap specific CLIs. Callers are responsible for sanitizing any
  * untrusted input that flows into [command], since the string is evaluated by `sh -c` on
  * Unix and `cmd /c` on Windows.
@@ -38,7 +38,7 @@ internal const val RUN_COMMAND_TOOL_NAME = "runCommand"
 @Serializable
 @TrailblazeToolClass(
   name = RUN_COMMAND_TOOL_NAME,
-  isForLlm = false,
+  surfaceToLlm = false,
   isRecordable = false,
   requiresHost = true,
 )

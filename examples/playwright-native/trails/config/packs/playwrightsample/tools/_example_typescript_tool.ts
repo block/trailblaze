@@ -30,8 +30,8 @@
 import type { TrailblazeContext, TrailblazeClient } from "@trailblaze/scripting";
 
 /**
- * Demonstrates the Tier-1 handler signature, including typesafe `client.callTool`
- * (Tier-2 generated bindings have since landed).
+ * Demonstrates the author-facing handler signature against the typesafe
+ * `client.tools.<name>(args)` namespace.
  *
  * Hover over `args` in your IDE — the `{ greeting: string }` shape comes from this
  * file's annotation, NOT from a YAML inputSchema. The inputSchema in the YAML
@@ -42,13 +42,17 @@ import type { TrailblazeContext, TrailblazeClient } from "@trailblaze/scripting"
  * Hover over `ctx` — autocomplete shows `device`, `sessionId`, `invocationId`,
  * `memory`, `baseUrl`, `runtime`. All typed via `TrailblazeContext` from the SDK.
  *
- * Hover over `client.callTool` — autocomplete now shows both:
+ * Hover over `client.tools.` — autocomplete shows both:
  *   1. Vendored built-ins from `@trailblaze/scripting` (e.g. `inputText`,
  *      `tapOnElementWithText`).
- *   2. This pack's scripted tools, generated from the pack manifest into
- *      `.trailblaze/tools.d.ts` by `./gradlew bundleTrailblazePack`.
- * Tool names not in either set fall through to the untyped
- * `(string, Record<string, unknown>)` overload — fully usable, just no autocomplete.
+ *   2. This pack's scripted tools plus the Kotlin tools resolved through its
+ *      `tool_sets:`, written to `.trailblaze/client.d.ts` by `trailblaze
+ *      compile`. (`./gradlew bundleTrailblazePack` writes the sibling
+ *      `.trailblaze/tools.d.ts`, which covers the pack's scripted tools only;
+ *      both files declaration-merge into the same `TrailblazeToolMap`.)
+ * Tool names outside that union are a compile error — the low-level
+ * `client.callTool` dispatcher is intentionally hidden from the public type to
+ * keep the namespace the single typed entry point.
  */
 export async function exampleHello(
   args: { greeting: string },
@@ -98,26 +102,27 @@ export async function exampleHello(
     `${greeting} from session ${ctx.sessionId} on ` +
     `${ctx.device.platform} (${dimensions}, ${ctx.device.driverType})`;
 
-  // Composition example — `client.callTool` dispatches any registered Trailblaze
-  // tool (built-in or another scripted tool from this pack). The result has
-  // `success`, `textContent`, `errorMessage` fields. Throws on failure (no
-  // success-flag branching needed in the happy path).
+  // Composition example — `client.tools.<name>(args)` dispatches any registered
+  // Trailblaze tool (built-in or another scripted tool from this pack). The
+  // result has `success`, `textContent`, `errorMessage` fields. Throws on
+  // failure (no success-flag branching needed in the happy path).
   //
-  // The two calls below resolve through the strict overload — autocomplete shows
-  // the parameter shapes, and a typo / wrong-keyed args object errors at compile
-  // time. They're left commented out to keep this reference file inert (no live
-  // device required to run `tsc`); uncomment to exercise against a session.
+  // The two calls below resolve through the typed namespace — autocomplete
+  // shows the parameter shapes, and a typo / wrong-keyed args object errors at
+  // compile time. They're left commented out to keep this reference file
+  // inert (no live device required to run `tsc`); uncomment to exercise
+  // against a session.
   //
   //   // Built-in tool, args typed from the SDK's vendored `built-in-tools.ts`.
-  //   await client.callTool("inputText", { text: args.greeting });
+  //   await client.tools.inputText({ text: args.greeting });
   //
   //   // Scripted tool from this pack, args typed from the generated
   //   // `.trailblaze/tools.d.ts`. Try changing `relativePath` to `releativePath`
   //   // — `tsc` errors immediately.
-  //   const verified = await client.callTool(
-  //     "playwrightSample_web_openFixtureAndVerifyText",
-  //     { relativePath: "fixtures/text-snippet.html", text: args.greeting },
-  //   );
+  //   const verified = await client.tools.playwrightSample_web_openFixtureAndVerifyText({
+  //     relativePath: "fixtures/text-snippet.html",
+  //     text: args.greeting,
+  //   });
   //   console.error("[exampleHello] verified:", verified.textContent);
 
   // Suppress the unused-parameter lint for `client` in the inert reference.

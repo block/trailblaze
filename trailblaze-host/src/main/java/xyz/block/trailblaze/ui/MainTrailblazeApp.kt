@@ -344,14 +344,12 @@ fun TrailblazeAppContent(
   val visibleTabs = remember(
     currentServerState.appConfig.showTrailsTab,
     currentServerState.appConfig.showDevicesTab,
-    currentServerState.appConfig.showRecordTab,
     currentServerState.appConfig.showWaypointsTab,
   ) {
     allTabs().filter { tab ->
       when (tab.route) {
         TrailblazeRoute.Trails -> currentServerState.appConfig.showTrailsTab
         TrailblazeRoute.Devices -> currentServerState.appConfig.showDevicesTab
-        TrailblazeRoute.Record -> currentServerState.appConfig.showRecordTab
         TrailblazeRoute.Waypoints -> currentServerState.appConfig.showWaypointsTab
         else -> true
       }

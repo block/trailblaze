@@ -1,0 +1,8 @@
+- config:
+    title: "Wikipedia: Switch the Albert Einstein article to Spanish"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [i18n, article]
+- prompts:
+    - step: Open the Wikipedia article for "Albert Einstein" in Spanish and verify the article page rendered with the heading "Albert Einstein".

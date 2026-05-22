@@ -1,0 +1,8 @@
+- config:
+    title: "Wikipedia: Search for Albert Einstein"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [smoke, search]
+- prompts:
+    - step: Search Wikipedia for "Albert Einstein" and verify the resulting article page shows the heading "Albert Einstein".

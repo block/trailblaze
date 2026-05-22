@@ -24,6 +24,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import maestro.Driver
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -125,7 +126,18 @@ class TrailblazeDeviceManager(
    * Browser state can be observed via [webBrowserStateFlow].
    */
   fun launchWebBrowser() {
-    webBrowserManager.launchBrowser {
+    val savedViewport = settingsRepo.serverStateFlow.value.appConfig.webViewport
+    // Explicitly sync the slot's viewport spec so the desktop UI's stored value is
+    // authoritative — including the "clear back to default" case. Without this,
+    // [WebBrowserManager.launchBrowser] only writes when its `viewportSpec` arg is
+    // non-null, so a slot that earlier received e.g. `device create web --emulate
+    // "iPhone 14"` would inherit that stale spec on the next desktop-UI launch even
+    // after the user cleared the desktop viewport field.
+    webBrowserManager.setViewportSpec(
+      instanceId = WebBrowserManager.PLAYWRIGHT_NATIVE_INSTANCE_ID,
+      viewportSpec = savedViewport,
+    )
+    webBrowserManager.launchBrowser(viewportSpec = savedViewport) {
       // Refresh device list to include the new browser
       loadDevices()
     }
@@ -628,9 +640,8 @@ class TrailblazeDeviceManager(
         sendProgressMessage = { },
       )
       
-      val request = GetScreenStateRequest(
-        includeScreenshot = true,
-      )
+      val request = GetScreenStateRequest(includeScreenshot = true)
+        .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
       
       when (val result = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {

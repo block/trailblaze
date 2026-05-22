@@ -112,9 +112,9 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(repo.getRegisteredDynamicTools().keys.toList()).containsExactly(ToolName("a"))
   }
 
-  @Test fun `toolCallToTrailblazeTool resolves a class-backed tool with isForLlm = false`() {
+  @Test fun `toolCallToTrailblazeTool resolves a class-backed tool with surfaceToLlm = false`() {
     // Regression for the lookup change in #2634: previously the repo matched class-backed
-    // tools via `toKoogToolDescriptor()?.name`, which returns null for `isForLlm = false`
+    // tools via `toKoogToolDescriptor()?.name`, which returns null for `surfaceToLlm = false`
     // tools (they're not surfaced to the LLM). Now it matches via `toolName().toolName`
     // straight from the `@TrailblazeToolClass` annotation, so non-LLM-visible tools stay
     // reachable through the repo for recording-replay paths that never go through the LLM.
@@ -161,12 +161,12 @@ class TrailblazeToolRepoDynamicTest {
 
   /**
    * Stand-in for a non-LLM-visible class-backed tool (e.g. `TapOnByElementSelector`). Has
-   * `isForLlm = false` so its koog descriptor is null — the lookup fix in
+   * `surfaceToLlm = false` so its koog descriptor is null — the lookup fix in
    * `toolCallToTrailblazeTool` must reach it via the `@TrailblazeToolClass(name)` annotation
    * directly, not via `toKoogToolDescriptor()`.
    */
   @Serializable
-  @TrailblazeToolClass(name = "test_non_llm", isForLlm = false)
+  @TrailblazeToolClass(name = "test_non_llm", surfaceToLlm = false)
   private data class NonLlmTool(val reason: String) : TrailblazeTool
 
   private fun stubRegistration(toolName: String): DynamicTrailblazeToolRegistration =

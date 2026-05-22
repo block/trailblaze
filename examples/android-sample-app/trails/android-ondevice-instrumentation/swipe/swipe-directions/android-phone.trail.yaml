@@ -29,17 +29,21 @@
           direction: LEFT
       - swipe:
           direction: RIGHT
-  - step: Verify the page-body label shows "Page 2"
+  - step: Verify "Page 2 of 5" is displayed
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: Verify the page-body label (set imperatively by SwipePageFragment via
-            TextView.setText) shows "Page 2" — proves the ViewPager has settled on page 2.
-            We intentionally do NOT assert on the header "Page 2 of 5" here even though it
-            visually updates, because that header is a Compose `Text` whose state-driven
-            recomposition doesn't reliably fire an accessibility-cache-invalidating event,
-            making it an unreliable target on the accessibility driver. The body label is
-            a plain Android TextView in a fragment that's swapped on page change, so its
-            accessibility node is naturally fresh on every read.
+          reason: Proves the ViewPager has settled on page 2. The pattern matches either
+            the Compose header "Page 2 of 5" or the body label "Page 2" (a TextView inside
+            `AndroidView { ViewPager2 { Fragment { TextView } } }`). Both targets appear
+            depending on whether Compose's accessibility delegate is authoritative for the
+            ComposeView subtree at read time. Post-#3237, when the on-device accessibility
+            service is started unconditionally, Compose owns the subtree and filters
+            AndroidView holders out (the WebView/AndroidView accessibility gap; see
+            devlog 2026-05-14-android-webview-compose-accessibility-gap.md) — only the
+            Compose header is reachable on UiAutomator2. In RPC/daemon execution where the
+            instrumentation rule never fires (accessibility service stays unbound), the
+            body TextView is also reachable. Matching either keeps the assertion robust
+            across both execution shapes.
           selector:
-            textRegex: ^Page 2$
+            textRegex: Page 2( of 5)?

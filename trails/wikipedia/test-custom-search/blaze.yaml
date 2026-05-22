@@ -1,0 +1,13 @@
+# Demonstrates `wikipedia_web_searchAndOpenFirstResult` composed on top of the
+# `wikipedia_web_openMainPage` trailhead.
+- config:
+    title: "Wikipedia (scripted): trailhead + search the header search box"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+- prompts:
+    - step: Call the `wikipedia_web_openMainPage` tool with dismissBanner=true.
+    - step: |
+        Call the `wikipedia_web_searchAndOpenFirstResult` tool with
+        query="Python (programming language)", expectedHeading="Python (programming language)",
+        openFirstResult=true.

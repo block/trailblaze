@@ -362,11 +362,13 @@ class TrailblazeVersionProvider : IVersionProvider {
     SessionCommand::class,
     ReportCommand::class,
     WaypointCommand::class,
+    ResultsCommand::class,
     ConfigCommand::class,
     DeviceCommand::class,
     AppCommand::class,
     McpCommand::class,
-    CompileCommand::class,
+    CheckCommand::class,
+    TestCommand::class,
     // Hidden — see DesktopCommand. Resolves by name (`trailblaze desktop snapshot`)
     // but doesn't appear in `--help` or the GroupedCommandListRenderer's groups.
     DesktopCommand::class,
@@ -486,11 +488,11 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("trail", "session", "report", "waypoint"),
+      listOf("trail", "session", "report", "results", "waypoint"),
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "app", "mcp", "compile"),
+      listOf("config", "device", "app", "mcp", "check", "test"),
     ),
   )
 

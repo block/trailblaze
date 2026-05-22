@@ -51,7 +51,7 @@ import xyz.block.trailblaze.util.Console
  * ```
  */
 @Serializable(with = MaestroTrailblazeToolSerializer::class)
-@TrailblazeToolClass(name = "maestro", isForLlm = false, isRecordable = true)
+@TrailblazeToolClass(name = "maestro", surfaceToLlm = false, isRecordable = true)
 @LLMDescription("Execute raw Maestro YAML commands directly. Prefer using specific Trailblaze tools instead.")
 data class MaestroTrailblazeTool(
   /** Full Maestro commands-list YAML (list items prefixed with `- `). */

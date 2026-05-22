@@ -9,8 +9,19 @@ surfaces the Trailblaze-injected envelope (`_meta.trailblaze`) as a typed
 
 ## Install
 
+The recommended path is a Trailblaze workspace: `trailblaze check` extracts the SDK's
+rolled-up declaration bundle into `<workspace>/.trailblaze/sdk/dist/index.d.ts` AND writes
+each pack's `tools/tsconfig.json` as a framework-managed self-contained file whose `paths`
+mapping points at that bundle. Per-pack `package.json` and `bun install` are not required
+in that path, and authors don't hand-author the per-pack tsconfig either. See *Typed
+bindings* below for the per-pack wiring.
+
+For ad-hoc / non-Trailblaze-workspace consumption (e.g. you're vendoring `tools.ts`
+into a stand-alone bun or node+tsx project that does not run `trailblaze check`),
+install the package the usual way:
+
 ```bash
-cd <your-target>/trails/config/mcp-sdk   # or wherever your tools.ts lives
+cd path/to/your-mcp-project   # wherever your tools.ts lives
 bun install   # or `npm install`
 ```
 
@@ -25,8 +36,8 @@ trailblaze.tool(
   async (_args, ctx, client) => {
     // ctx:    injected TrailblazeContext (device, sessionId, memory, ...) — `undefined`
     //         only when the tool is invoked outside a live Trailblaze session.
-    // client: always provided; exposes `callTool(name, args)` for composing other
-    //         Trailblaze tools (see "Composing tools" below).
+    // client: always provided; exposes the typed `client.tools.<name>(args)` namespace
+    //         for composing other Trailblaze tools (see "Composing tools" below).
     return {
       content: [{ type: "text", text: JSON.stringify({ name: "Sam", email: "sam@example.com" }) }],
       isError: false,
@@ -46,24 +57,26 @@ mcp_servers:
   - script: ./mcp-sdk/tools.ts
 ```
 
-## Composing tools — `client.callTool`
+## Composing tools — `client.tools.<name>(args)`
 
-The third handler argument is a `TrailblazeClient`. Its `callTool(name, args)`
-method dispatches any Trailblaze tool (host-side Kotlin tools, other scripted
-tools, …) against the live session and returns the result.
+The third handler argument is a `TrailblazeClient`. Its `tools` namespace
+dispatches any Trailblaze tool (framework tools, pack-scripted tools, sibling
+tools registered in the same file) against the live session and returns the
+result. Each property is a typed method — autocomplete on the tool name, args
+type-checked against the tool's declared schema.
 
 ```typescript
 trailblaze.tool(
   "signUpNewUser",
   { description: "Generates a user and signs them up.", inputSchema: {} },
   async (_args, _ctx, client) => {
-    const userResult = await client.callTool("generateTestUser", {});
+    const userResult = await client.tools.generateTestUser({});
     const user = JSON.parse(userResult.textContent) as { name: string; email: string };
 
-    // Drive the UI with built-in Trailblaze tools — same callback surface.
-    await client.callTool("tapOnElementWithText", { text: "Sign up" });
-    await client.callTool("inputText", { text: user.email });
-    await client.callTool("tapOnElementWithText", { text: "Continue" });
+    // Drive the UI with built-in Trailblaze tools — same typed surface.
+    await client.tools.tapOnElementWithText({ text: "Sign up" });
+    await client.tools.inputText({ text: user.email });
+    await client.tools.tapOnElementWithText({ text: "Continue" });
 
     return {
       content: [{ type: "text", text: JSON.stringify(user) }],
@@ -73,27 +86,64 @@ trailblaze.tool(
 );
 ```
 
-`callTool` throws on any non-success outcome (tool failure, timeout,
-reentrance cap hit, transport error) — so the happy path is a plain sequence
-of awaits, no success-flag branching.
+`client.tools.<name>` throws on any non-success outcome (tool failure,
+timeout, reentrance cap hit, transport error) — so the happy path is a plain
+sequence of awaits, no success-flag branching. Only tools declared in
+`TrailblazeToolMap` are reachable; the SDK ships built-ins (`inputText`,
+`tapOnPoint`, `pressKey`, …) and the per-pack `client.d.ts` files written
+by `trailblaze check` augment `TrailblazeToolMap` for every scripted tool
+declared in a pack's `target.tools:` plus tools transitively inherited via
+`dependencies:` `exports:` (see *Typed bindings* below).
+
+The lower-level `callTool` dispatcher still exists on the runtime object —
+it's how the `tools` Proxy actually dispatches and how the on-device QuickJS
+bundle calls back — but it's hidden from the public `TrailblazeClient` type
+so author code can't bypass the typed surface.
 
 A working example lives at
 `examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk/tools.ts`
 (look for `signUpNewUserSdk`).
 
+### Typed bindings
+
+Each pack that ships scripted tools gets a generated `tools/.trailblaze/client.d.ts`
+that augments `TrailblazeToolMap` with one entry per tool the pack's TS authors can
+dispatch — the pack's own `target.tools:` plus every scripted tool transitively
+inherited through `dependencies:` via the dep's `exports:` field, plus the Kotlin
+tools resolved from the pack's own platform `tool_sets:`. The file is regenerated on
+every `trailblaze check` (and on every daemon-aware command via the bootstrap), and
+is content-stable across restarts of the same toolset. Commit it (treat it as an API
+contract) or `.gitignore` it (treat it as derived output) — both choices are supported.
+
+The per-pack `tools/tsconfig.json` is also framework-managed — `trailblaze check`
+writes it (and adds `tools/tsconfig.json` + `tools/.trailblaze/` to a `.gitignore` at
+the pack root). Authors don't author or maintain it. The file is fully self-contained:
+every compiler option is inlined, and the only workspace-relative reference is the
+`paths` mapping pointing at the SDK declaration bundle at
+`<workspace>/.trailblaze/sdk/dist/index.d.ts` — a single rolled-up `.d.ts` with the
+zod types the SDK re-exports inlined into the same file. No `extends:` chain, no
+`node_modules`, no workspace `tsconfig.base.json`. That self-contained shape is what
+lets a pack be npm-distributed and installed into a different workspace's `node_modules/`
+— the next `trailblaze check` re-derives the `paths` mapping at the new location.
+If you're upgrading from an older Trailblaze that expected you to hand-author the
+tsconfig, delete your existing `tools/tsconfig.json` and re-run `trailblaze check` —
+the emitter preserves files without its banner so it won't silently destroy custom
+overrides.
+
 ## Runtimes — the same TS runs in two places
 
 Identical author code runs in two Trailblaze runtimes; the SDK transparently
-picks the right `callTool` transport. Authors should never need to branch on
+picks the right dispatch transport. Authors should never need to branch on
 which — but it helps when debugging:
 
-| Runtime      | When                                                                                           | `callTool` transport                                              | `ctx.baseUrl` | `ctx.runtime`  |
+| Runtime      | When                                                                                           | Dispatch transport                                                | `ctx.baseUrl` | `ctx.runtime`  |
 |--------------|------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|---------------|----------------|
 | **Host**     | Tool runs as a subprocess spawned by the Trailblaze daemon (local dev, host JVM tests).        | HTTP POST to `${baseUrl}/scripting/callback`.                     | set           | absent         |
 | **On-device**| Tool runs inside an Android QuickJS bundle on-device (instrumented tests, cloud device farm).  | In-process `globalThis.__trailblazeCallback` binding — no HTTP.   | absent        | `"ondevice"`   |
 
-Error wording from `callTool` surfaces the transport source (the HTTP URL or
-`__trailblazeCallback`) so you can tell at a glance which path failed.
+Error wording from `client.tools.<name>` surfaces the transport source (the
+HTTP URL or `__trailblazeCallback`) so you can tell at a glance which path
+failed.
 
 Design record for the on-device transport:
 `docs/devlog/2026-04-23-on-device-callback-channel.md`.
@@ -216,7 +266,7 @@ After PRs #2941 / #2942 / #2943 (in-process QuickJS, subprocess, on-device bundl
   consumers ignore). The framework's `toTrailblazeToolResult` mapper reads the first
   `TextContent` block; if your handler returned image/audio/resource_link variants only,
   the log's success message will be empty.
-- **Reentrance: `client.callTool` hits a depth cap.** Composing tools is supported, but
+- **Reentrance: `client.tools.<name>` hits a depth cap.** Composing tools is supported, but
   the framework caps recursion depth at `MAX_CALLBACK_DEPTH = 16` to defend against
   infinite loops. When exceeded, the dispatcher refuses further dispatch and the error
   message includes the current depth. If you legitimately need a deeper chain, file an
@@ -254,8 +304,9 @@ jq -r 'select(.toolName == "fundAccount") | {successful, exceptionMessage}' \
 | `trailblaze.run(opts?)`               | namespace | Start the MCP server. Also exported as a named `run`.                |
 | `fromMeta(meta)`                      | function  | Parse `_meta.trailblaze` into a `TrailblazeContext` (for custom paths; `trailblaze.tool` handlers already receive the parsed context as `ctx`). |
 | `TrailblazeContext`                   | type      | Injected envelope: `{ sessionId, invocationId, device, memory, baseUrl?, runtime? }`. |
-| `TrailblazeClient`                    | type      | Third handler arg. Exposes `callTool(name, args)`.                   |
-| `TrailblazeCallToolResult`            | type      | Resolved value from `callTool`. `{ success: true, textContent, errorMessage }`. |
+| `TrailblazeClient`                    | type      | Third handler arg. Exposes the typed `client.tools.<name>(args)` namespace. |
+| `TrailblazeToolMap`                   | type      | Open interface mapping tool name → arg shape. Augmented by built-ins + per-pack `.d.ts` codegen. |
+| `TrailblazeCallToolResult`            | type      | Resolved value from any `client.tools.<name>(args)` call. `{ success: true, textContent, errorMessage }`. |
 | `TrailblazeDevice`                    | type      | `ctx.device`: `{ platform, widthPixels, heightPixels, driverType }`. |
 | `RunOptions`, `TrailblazeToolHandler`, `TrailblazeToolSpec` | types | Supporting types for `run` / `tool`. |
 

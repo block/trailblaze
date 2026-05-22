@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.tabs.session
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
@@ -50,6 +53,7 @@ import xyz.block.trailblaze.ui.composables.StatusBadge
 import xyz.block.trailblaze.ui.composables.getIcon
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
+import xyz.block.trailblaze.yaml.TrailConfig
 
 @Composable
 internal fun SessionDetailHeader(
@@ -125,8 +129,15 @@ internal fun SessionDetailHeader(
             StatusBadge(status = it)
           }
         }
-        // Subtitle: device info, driver, agent, classifiers, duration
+        // Subtitle: device info, driver, agent, classifiers, duration, More Details toggle
         if (sessionDetail != null) {
+          val trailConfig = sessionDetail.session.trailConfig
+          val trailConfigDetails = remember(trailConfig) {
+            buildTrailConfigDetails(trailConfig)
+          }
+          var showMoreDetails by remember(sessionDetail.session) {
+            mutableStateOf(false)
+          }
           val subtitleParts = mutableListOf<String>()
           sessionDetail.deviceName?.let { subtitleParts.add(it) }
           sessionDetail.session.trailblazeDeviceInfo?.trailblazeDriverType?.let {
@@ -137,26 +148,47 @@ internal fun SessionDetailHeader(
             ?.takeIf { it.isNotEmpty() }
             ?.let { subtitleParts.add(it.joinToString(", ")) }
           sessionDetail.totalDurationMs?.let { subtitleParts.add(formatDuration(it)) }
-          if (subtitleParts.isNotEmpty()) {
-            Text(
-              text = subtitleParts.joinToString("  \u00b7  "),
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          // Trail path (testClass::testName) if different from title
-          val trailPath = listOfNotNull(
-            sessionDetail.session.testClass,
-            sessionDetail.session.testName
-          ).joinToString("::")
-          if (trailPath.isNotEmpty() && trailPath != title) {
-            SelectableText(
-              text = trailPath,
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
+          if (subtitleParts.isNotEmpty() || trailConfigDetails.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              if (subtitleParts.isNotEmpty()) {
+                Text(
+                  text = subtitleParts.joinToString("  \u00b7  "),
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              if (trailConfigDetails.isNotEmpty()) {
+                if (subtitleParts.isNotEmpty()) {
+                  Text(
+                    text = "  \u00b7  ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.clickable { showMoreDetails = !showMoreDetails },
+                ) {
+                  Text(
+                    text = if (showMoreDetails) "Hide Details" else "More Details",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                  Icon(
+                    imageVector = if (showMoreDetails) {
+                      Icons.Default.ExpandLess
+                    } else {
+                      Icons.Default.ExpandMore
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                }
+              }
+            }
           }
           val externalLinks = extractExternalLinks(sessionDetail.session.trailblazeDeviceInfo)
           if (externalLinks.isNotEmpty()) {
@@ -173,6 +205,9 @@ internal fun SessionDetailHeader(
                 )
               }
             }
+          }
+          if (showMoreDetails && trailConfigDetails.isNotEmpty()) {
+            TrailConfigDetailsPanel(trailConfigDetails)
           }
         }
       }
@@ -369,6 +404,61 @@ internal fun SessionDetailHeader(
             Icon(Icons.Outlined.TextIncrease, contentDescription = "Increase font size")
           }
         }
+      }
+    }
+  }
+}
+
+private fun buildTrailConfigDetails(config: TrailConfig?): List<Pair<String, String>> {
+  if (config == null) return emptyList()
+  val rows = mutableListOf<Pair<String, String>>()
+  config.description?.takeIf { it.isNotBlank() }?.let { rows.add("Description" to it) }
+  config.context?.takeIf { it.isNotBlank() }?.let { rows.add("Context" to it) }
+  config.id?.takeIf { it.isNotBlank() }?.let { rows.add("ID" to it) }
+  config.priority?.takeIf { it.isNotBlank() }?.let { rows.add("Priority" to it) }
+  config.tags?.takeIf { it.isNotEmpty() }?.let { rows.add("Tags" to it.joinToString(", ")) }
+  config.source?.let { source ->
+    val parts = listOfNotNull(source.type?.name, source.reason?.takeIf { it.isNotBlank() })
+    if (parts.isNotEmpty()) rows.add("Source" to parts.joinToString(" — "))
+  }
+  config.target?.takeIf { it.isNotBlank() }?.let { rows.add("Target" to it) }
+  config.platform?.takeIf { it.isNotBlank() }?.let { rows.add("Platform" to it) }
+  config.driver?.takeIf { it.isNotBlank() }?.let { rows.add("Driver" to it) }
+  config.skip?.takeIf { it.isNotBlank() }?.let { rows.add("Skip" to it) }
+  config.metadata
+    ?.filter { (k, v) -> k.isNotBlank() && v.isNotBlank() }
+    ?.forEach { (k, v) -> rows.add("metadata.$k" to v) }
+  return rows
+}
+
+@Composable
+private fun TrailConfigDetailsPanel(rows: List<Pair<String, String>>) {
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(top = 4.dp, bottom = 8.dp, end = 8.dp)
+      .background(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(6.dp),
+      )
+      .padding(horizontal = 12.dp, vertical = 8.dp),
+  ) {
+    rows.forEachIndexed { index, (label, value) ->
+      if (index > 0) Spacer(modifier = Modifier.size(4.dp))
+      Row(verticalAlignment = Alignment.Top) {
+        Text(
+          text = label,
+          style = MaterialTheme.typography.labelSmall,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.width(110.dp),
+        )
+        SelectableText(
+          text = value,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurface,
+          modifier = Modifier.weight(1f),
+        )
       }
     }
   }

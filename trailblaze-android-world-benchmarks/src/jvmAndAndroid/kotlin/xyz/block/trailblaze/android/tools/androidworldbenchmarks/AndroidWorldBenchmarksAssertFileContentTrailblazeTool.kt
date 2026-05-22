@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_assertFileContent",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Reads a file on the device and asserts its content matches expected value.")
 data class AndroidWorldBenchmarksAssertFileContentTrailblazeTool(

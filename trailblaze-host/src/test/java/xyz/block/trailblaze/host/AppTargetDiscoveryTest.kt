@@ -97,12 +97,13 @@ class AppTargetDiscoveryTest {
             app_ids:
               - com.example.workspace
         tools:
-          - tools/open_workspace.yaml
+          - openWorkspace
       """.trimIndent(),
     )
-    // `target.tools:` (per-target scripted-tool descriptors) is still an explicit list —
-    // those go through the per-target tool path, distinct from the auto-discovered
-    // operational tools under `<pack>/tools/<name>.{tool,shortcut,trailhead}.yaml`.
+    // `target.tools:` is now a list of tool *names* — each name must match the `name:`
+    // field declared inside a `<pack>/tools/*.yaml` descriptor (auto-discovered into a
+    // pack-local registry). Operational tools (`*.tool.yaml`, `*.shortcut.yaml`,
+    // `*.trailhead.yaml`) in the same directory load through their own paths.
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(

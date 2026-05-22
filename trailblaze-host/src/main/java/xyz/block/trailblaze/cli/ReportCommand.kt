@@ -132,6 +132,57 @@ class ReportCommand : Callable<Int> {
   var webpOutput: String? = null
 
   @Option(
+    names = ["--storyboard"],
+    arity = "0..1",
+    fallbackValue = USE_DEFAULT_PATH,
+    description = [
+      "Export a single-frame WebP storyboard — every step's screenshot tiled into a CSS " +
+        "grid (one cell per executed action / taken snapshot, labeled with the action " +
+        "verb), then full-page-screenshotted via headless Playwright and encoded to WebP. " +
+        "Complements --gif/--webp (which play through the timeline over time) — embed both " +
+        "in a PR comment to get glance-overview plus the animated walkthrough. A companion " +
+        ".html with the same content is written alongside the WebP for standalone viewing. " +
+        "Path defaults to <report-dir>/<session-id>.storyboard.webp (or " +
+        "<output-dir>/storyboard.webp when --output-dir is set). Single-session only — " +
+        "pass --id or --current.",
+    ],
+  )
+  var storyboardOutput: String? = null
+
+  @Option(
+    names = ["--storyboard-columns"],
+    description = [
+      "Number of columns in the --storyboard grid. When omitted, the exporter auto-picks " +
+        "by cell aspect ratio: landscape-majority sessions (desktop / tablet) get 3 " +
+        "columns so each cell stays meaningfully large at GitHub's ~760px embed width " +
+        "without burning vertical space, portrait-majority sessions (phone) get 4 columns " +
+        "for denser inline glance. The auto-pick decision (landscape-cell count, " +
+        "threshold) is logged so the chosen value is visible from the CLI tail. Pass an " +
+        "explicit value to override (e.g. 6 / 8 for very long sessions that would " +
+        "otherwise force the auto-fit cell-width shrink — spreading wider on the page is " +
+        "cleaner than thumbnailing the cells).",
+    ],
+  )
+  var storyboardColumns: Int? = null
+
+  @Option(
+    names = ["--storyboard-yaml"],
+    negatable = true,
+    description = [
+      "Annotate each --storyboard cell with the YAML form of the recordable tool that " +
+        "produced it (looked up by traceId against the session's TrailblazeToolLog " +
+        "entries). The YAML strip replaces the synthesized verb/sublabel line — strictly " +
+        "more informative for \"what was invoked here\" triage. Cells without a sibling " +
+        "tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML " +
+        "so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines " +
+        "per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress " +
+        "(reduces total rendered height by ~20% on a typical session, at the cost of " +
+        "less actionable per-cell labels). Has no effect without --storyboard.",
+    ],
+  )
+  var storyboardYaml: Boolean = true
+
+  @Option(
     names = ["--no-gif"],
     description = [
       "Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. " +
@@ -182,10 +233,12 @@ class ReportCommand : Callable<Int> {
       }
       else -> null
     }
-    if ((videoOutput != null || gifOutput != null || webpOutput != null) && resolvedId == null) {
+    if ((videoOutput != null || gifOutput != null || webpOutput != null || storyboardOutput != null) &&
+      resolvedId == null
+    ) {
       Console.error(
-        "--video / --gif / --webp require --id or --current. The all-sessions index has nothing " +
-          "to play, so the exporter has nothing to record.",
+        "--video / --gif / --webp / --storyboard require --id or --current. The all-sessions " +
+          "index has nothing to play, so the exporter has nothing to record.",
       )
       return CommandLine.ExitCode.USAGE
     }
@@ -216,13 +269,26 @@ class ReportCommand : Callable<Int> {
       )
       return CommandLine.ExitCode.USAGE
     }
-    if (maxSize != null && videoOutput == null && gifOutput == null && webpOutput == null) {
+    if (maxSize != null && videoOutput == null && gifOutput == null && webpOutput == null &&
+      storyboardOutput == null
+    ) {
       Console.error(
-        "--max-size has no effect without an artifact to cap. Add --gif, --video, or " +
-          "--webp — e.g. `trailblaze report --id <id> --webp --max-size=$maxSize`.",
+        "--max-size has no effect without an artifact to cap. Add --gif, --video, --webp, " +
+          "or --storyboard — e.g. `trailblaze report --id <id> --webp --max-size=$maxSize`.",
       )
       return CommandLine.ExitCode.USAGE
     }
+    storyboardColumns?.let { cols ->
+      if (cols !in 1..12) {
+        Console.error("--storyboard-columns must be in 1..12, got $cols.")
+        return CommandLine.ExitCode.USAGE
+      }
+    }
+    // (No guard for --storyboard-yaml without --storyboard: with the default flipped to
+    // on, the flag's value is always set even when the user didn't mention it, so
+    // gating execution on it would block every non-storyboard run. Silent no-op is the
+    // right behavior — the CLI help already documents the "has no effect without
+    // --storyboard" semantic.)
     val maxBytes: Long? = maxSize?.let {
       try {
         MaxArtifactSize.parseSize(it)
@@ -239,6 +305,9 @@ class ReportCommand : Callable<Int> {
       videoSpec = videoOutput,
       gifSpec = gifOutput,
       webpSpec = webpOutput,
+      storyboardSpec = storyboardOutput,
+      storyboardColumns = storyboardColumns,
+      storyboardIncludeYaml = storyboardYaml,
       suppressGif = noGif,
       suppressWebp = noWebp,
       maxBytes = maxBytes,
@@ -299,6 +368,9 @@ internal fun generateSessionReport(
   videoSpec: String? = null,
   gifSpec: String? = null,
   webpSpec: String? = null,
+  storyboardSpec: String? = null,
+  storyboardColumns: Int? = null,
+  storyboardIncludeYaml: Boolean = false,
   suppressGif: Boolean = false,
   suppressWebp: Boolean = false,
   maxBytes: Long? = null,
@@ -366,13 +438,24 @@ internal fun generateSessionReport(
   // when we do reach the single-session branch, the list is guaranteed to be size 1.
   val needsDefaultName = videoSpec == ReportCommand.USE_DEFAULT_PATH ||
     effectiveGifSpec == ReportCommand.USE_DEFAULT_PATH ||
-    effectiveWebpSpec == ReportCommand.USE_DEFAULT_PATH
+    effectiveWebpSpec == ReportCommand.USE_DEFAULT_PATH ||
+    storyboardSpec == ReportCommand.USE_DEFAULT_PATH
   val defaultNames = when {
-    !needsDefaultName -> ExportDefaults("", "", "")
-    outputDir != null -> ExportDefaults("timeline.mp4", "timeline.gif", "timeline.webp")
+    !needsDefaultName -> ExportDefaults("", "", "", "")
+    outputDir != null -> ExportDefaults(
+      mp4 = "timeline.mp4",
+      gif = "timeline.gif",
+      webp = "timeline.webp",
+      storyboard = "storyboard.webp",
+    )
     else -> {
       val stem = sessionIds.single().value
-      ExportDefaults("$stem.mp4", "$stem.gif", "$stem.webp")
+      ExportDefaults(
+        mp4 = "$stem.mp4",
+        gif = "$stem.gif",
+        webp = "$stem.webp",
+        storyboard = "$stem.storyboard.webp",
+      )
     }
   }
 
@@ -477,6 +560,38 @@ internal fun generateSessionReport(
     }
   }
 
+  // Storyboard runs on its OWN Playwright session — it loads a purpose-built grid HTML
+  // (not the timeline report) and takes a single fullPage screenshot. Not part of the
+  // shared-capture block above because the input HTML is different. The companion
+  // .storyboard.html sits next to the .storyboard.webp for standalone viewing.
+  val storyboardWebpFile = resolveExportPath(storyboardSpec, htmlFile, defaultNames.storyboard)
+  if (storyboardWebpFile != null) {
+    val storyboardHtmlFile = File(
+      storyboardWebpFile.parentFile ?: File("."),
+      storyboardWebpFile.nameWithoutExtension + ".html",
+    )
+    try {
+      Console.log("Exporting storyboard to ${storyboardWebpFile.absolutePath} ...")
+      outputsToCleanupOnFailure.add(storyboardWebpFile)
+      outputsToCleanupOnFailure.add(storyboardHtmlFile)
+      ReportStoryboardExporter.export(
+        sessionId = sessionIds.single(),
+        logsRepo = logsRepo,
+        outputWebp = storyboardWebpFile,
+        outputHtml = storyboardHtmlFile,
+        columns = storyboardColumns,
+        includeYaml = storyboardIncludeYaml,
+        headless = true,
+        maxBytes = maxBytes,
+      )
+      Console.info("Storyboard: ${storyboardWebpFile.absolutePath} (${storyboardWebpFile.length() / 1024}KB)")
+    } catch (e: Exception) {
+      Console.error("Failed to export storyboard: ${e.message}")
+      cleanupOutputsOnFailure(outputsToCleanupOnFailure)
+      return CommandLine.ExitCode.SOFTWARE
+    }
+  }
+
   if (open) {
     TrailblazeDesktopUtil.openInDefaultBrowser("file://${htmlFile.absolutePath}")
   }
@@ -486,7 +601,12 @@ internal fun generateSessionReport(
   exitProcess(CommandLine.ExitCode.OK)
 }
 
-private data class ExportDefaults(val mp4: String, val gif: String, val webp: String)
+private data class ExportDefaults(
+  val mp4: String,
+  val gif: String,
+  val webp: String,
+  val storyboard: String,
+)
 
 /**
  * Apply the auto-emit-both rule for the shared-capture GIF/WebP path. If the user passed

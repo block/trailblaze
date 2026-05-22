@@ -11,7 +11,7 @@ import xyz.block.trailblaze.config.PlatformConfig
 /**
  * Unit tests for [PackDependencyResolver]. These exercise the dep-graph + closest-wins
  * defaults inheritance in isolation from the rest of the loader pipeline. Synthetic
- * [TrailblazeProjectConfigLoader.ResolvedPack] fixtures stand in for parsed pack
+ * [ResolvedPack] fixtures stand in for parsed pack
  * manifests so the merge semantics can be tested without touching the filesystem.
  */
 class PackDependencyResolverTest {
@@ -512,7 +512,7 @@ class PackDependencyResolverTest {
     id: String,
     dependencies: List<String> = emptyList(),
     defaults: Map<String, PlatformConfig>? = null,
-  ): TrailblazeProjectConfigLoader.ResolvedPack = TrailblazeProjectConfigLoader.ResolvedPack(
+  ): ResolvedPack = ResolvedPack(
     manifest = TrailblazePackManifest(
       id = id,
       target = null,

@@ -1,0 +1,22 @@
+- config:
+    title: 'Wikipedia: On this day section visible on main page'
+    target: wikipedia
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+    recording:
+      tools:
+      - web_navigate:
+          url: https://en.wikipedia.org/wiki/Main_Page
+          reasoning: The objective is to navigate to the Wikipedia main page. The current screen is blank, so a direct navigation to the target URL is the correct next step.
+  - step: Verify the "On this day" section is visible on the page.
+    recording:
+      tools:
+      - web_scroll:
+          reasoning: The visible portion of the page does not show an 'On this day' section. Scrolling down should reveal more of the main page content, which likely contains this section based on Wikipedia's standard layout.
+      - web_verify_element_visible:
+          reasoning: The objective requires verification that the 'On this day' section is visible. In the view hierarchy, [e121] is the heading for this section. Confirming its visibility will fulfill the objective.
+          nodeSelector:
+            web:
+              cssSelector: "#mp-otd-h2"

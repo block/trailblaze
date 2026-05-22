@@ -1,4 +1,4 @@
-script: ./playwrightSample_web_incrementCounterToValue.js
+script: ./playwrightSample_web_incrementCounterToValue.ts
 name: playwrightSample_web_incrementCounterToValue
 description: Open the counter demo, click increment repeatedly, and verify the final value.
 _meta:

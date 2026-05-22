@@ -29,6 +29,7 @@ import kotlin.system.exitProcess
   subcommands = [
     DeviceListCommand::class,
     DeviceConnectCommand::class,
+    DeviceCreateCommand::class,
   ],
 )
 class DeviceCommand : Callable<Int> {

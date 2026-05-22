@@ -59,11 +59,11 @@ class SessionScopedHostBindingTest {
   }
 
   /**
-   * Hidden-from-LLM, host-only tool — proves the binding bypasses the `isForLlm` filter
+   * Hidden-from-LLM, host-only tool — proves the binding bypasses the `surfaceToLlm` filter
    * that hides `runCommand`-shaped building-block tools from the LLM descriptor list.
    */
   @Serializable
-  @TrailblazeToolClass(name = "test_host_only", isForLlm = false, requiresHost = true)
+  @TrailblazeToolClass(name = "test_host_only", surfaceToLlm = false, requiresHost = true)
   private data class HostOnlyTool(val command: String) : ExecutableTrailblazeTool {
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
@@ -148,11 +148,11 @@ class SessionScopedHostBindingTest {
     }
   }
 
-  // ---- Test 2: isForLlm=false / requiresHost=true tool IS callable through the binding ----
+  // ---- Test 2: surfaceToLlm=false / requiresHost=true tool IS callable through the binding ----
 
   @Test
-  fun `callFromBundle reaches a tool with isForLlm=false and requiresHost=true`() = runBlocking {
-    // This is the load-bearing claim of Sub-PR-A2: tools annotated `isForLlm = false`
+  fun `callFromBundle reaches a tool with surfaceToLlm=false and requiresHost=true`() = runBlocking {
+    // This is the load-bearing claim of Sub-PR-A2: tools annotated `surfaceToLlm = false`
     // (e.g. `runCommand`, `mobile_clearAppData`) must remain reachable through scripted-tool
     // composition even though they're hidden from the LLM. The repo's
     // `toolCallToTrailblazeTool` already handles this for class-backed tools — pin the
@@ -311,7 +311,107 @@ class SessionScopedHostBindingTest {
     }
   }
 
-  // ---- Test 6: CancellationException propagates instead of being converted to error envelope ----
+  // ---- Test 6: unknown argument keys rejected via the typed-surface contract ----
+
+  @Test
+  fun `callFromBundle rejects unknown argument keys with a canonical-shape error envelope`() = runBlocking {
+    // #3209 — the on-device QuickJS binding is the second scripted-tool dispatch
+    // transport that needs to enforce the typed-surface contract; the HTTP dispatcher's
+    // matching test lives in `JsScriptingCallbackDispatcherTest`. Both transports must
+    // agree so a bundle author can't get a different correctness model depending on which
+    // host runtime serves the call. Today the deserializer's `ignoreUnknownKeys = true`
+    // would silently drop `element`; the gate flips that to a structured error.
+    val repo = newRepoWith(PingTool::class)
+    val binding = SessionScopedHostBinding(repo, sessionId)
+    val ctx = buildContext()
+    SessionScopedHostBinding.installContext(ctx)
+    try {
+      val resultJson = binding.callFromBundle(
+        "test_ping",
+        // `text` is the real arg; `element` is the LLM authoring hint that today gets
+        // silently dropped. The gate should reject the call with a message naming the
+        // bad key and the canonical accepted keys.
+        """{"text":"hi","element":"the ping target"}""",
+      )
+      val parsed = Json.parseToJsonElement(resultJson) as JsonObject
+      assertEquals(
+        true,
+        (parsed["isError"] as JsonPrimitive).content.toBoolean(),
+        "expected isError=true for an unknown argument key; got $resultJson",
+      )
+      val errorMessage = (parsed["error"] as JsonPrimitive).content
+      assertTrue(
+        errorMessage.contains("test_ping"),
+        "expected the offending tool name in the error; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("\"element\""),
+        "expected the offending key '\"element\"' in the error; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("text"),
+        "expected the canonical 'text' key in the error; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("client.tools.test_ping"),
+        "expected the canonical-shape pointer in the error; got '$errorMessage'",
+      )
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  // ---- Test 6b: missing required argument keys rejected via the typed-surface contract ----
+
+  @Test
+  fun `callFromBundle rejects missing required arguments with a canonical-shape error envelope`() = runBlocking {
+    // #3261 — runtime side of the typed-surface contract for required args. Mirrors the
+    // HTTP dispatcher's matching `missing required argument is rejected before dispatch
+    // with directed message` test so both scripted-tool transports surface the same
+    // missing-required envelope. Without parity, a bundle author would see different
+    // failure shapes depending on which host runtime serves the call — the exact
+    // divergence #3209 / #3261 set out to eliminate.
+    val repo = newRepoWith(PingTool::class)
+    val binding = SessionScopedHostBinding(repo, sessionId)
+    val ctx = buildContext()
+    SessionScopedHostBinding.installContext(ctx)
+    try {
+      val resultJson = binding.callFromBundle(
+        "test_ping",
+        // `text` is the required arg. Omitting it should surface the validator's
+        // missing-required message — not reach the deserializer (which would produce a
+        // less directed "MissingFieldException" string).
+        """{}""",
+      )
+      val parsed = Json.parseToJsonElement(resultJson) as JsonObject
+      assertEquals(
+        true,
+        (parsed["isError"] as JsonPrimitive).content.toBoolean(),
+        "expected isError=true for a missing required arg; got $resultJson",
+      )
+      val errorMessage = (parsed["error"] as JsonPrimitive).content
+      assertTrue(
+        errorMessage.contains("test_ping"),
+        "expected the tool name in the error; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("\"text\""),
+        "expected the missing key '\"text\"' in the error; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("Required: text"),
+        "expected the canonical 'Required: <list>' wording; got '$errorMessage'",
+      )
+      assertTrue(
+        errorMessage.contains("client.tools.test_ping"),
+        "expected the canonical-shape pointer in the error; got '$errorMessage'",
+      )
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  // ---- Test 7: CancellationException propagates instead of being converted to error envelope ----
 
   @Test
   fun `callFromBundle propagates CancellationException without converting it to an error envelope`() {

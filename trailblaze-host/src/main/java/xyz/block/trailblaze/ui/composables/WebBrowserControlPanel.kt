@@ -21,17 +21,23 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.devices.WebViewportSpec
 import xyz.block.trailblaze.host.devices.PlaywrightInstallState
+import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.icons.BrowserChrome
@@ -51,6 +57,7 @@ fun WebBrowserControlPanel(
 ) {
   val browserState by deviceManager.webBrowserStateFlow.collectAsState()
   val playwrightState by deviceManager.webBrowserManager.playwrightInstaller.installState.collectAsState()
+  val serverState by deviceManager.settingsRepo.serverStateFlow.collectAsState()
 
   Card(
     modifier = modifier.fillMaxWidth(),
@@ -82,6 +89,24 @@ fun WebBrowserControlPanel(
           color = MaterialTheme.colorScheme.primary
         )
       }
+
+      // Viewport / device emulation picker. Editable when the browser is idle —
+      // viewport is fixed for the life of a BrowserContext, so a change while the
+      // browser is running would only take effect on the next launch. Disabling
+      // the field while Running surfaces that constraint visually.
+      ViewportField(
+        currentSpec = serverState.appConfig.webViewport,
+        enabled = browserState is WebBrowserState.Idle || browserState is WebBrowserState.Error,
+        onCommit = { newSpec ->
+          deviceManager.settingsRepo.updateState {
+            it.copy(appConfig = it.appConfig.copy(webViewport = newSpec))
+          }
+          deviceManager.webBrowserManager.setViewportSpec(
+            instanceId = WebBrowserManager.PLAYWRIGHT_NATIVE_INSTANCE_ID,
+            viewportSpec = newSpec,
+          )
+        },
+      )
 
       // Content based on state
       when (val state = browserState) {
@@ -323,6 +348,66 @@ private fun RunningBrowserContent(
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+  }
+}
+
+/**
+ * Single-line text field that mirrors the `trailblaze device create web --emulate
+ * / --viewport` CLI flags. Validates the spec shape on the fly using
+ * [WebViewportSpec.parse]: raw `WIDTHxHEIGHT` and any non-blank preset name are
+ * accepted; obviously-broken dimension input (`"0x800"`, `"375x"`) shows an inline
+ * error and keeps the field dirty until the user fixes it. Preset typos
+ * (`"iPhne 14"`) pass validation here — they fall through to a clearer "Unknown
+ * Playwright device preset" thrown at browser launch, where we can list valid
+ * alternatives.
+ */
+@Composable
+private fun ViewportField(
+  currentSpec: String?,
+  enabled: Boolean,
+  onCommit: (String?) -> Unit,
+) {
+  var draft by remember(currentSpec) { mutableStateOf(currentSpec.orEmpty()) }
+  val parseError: String? = remember(draft) {
+    if (draft.isBlank()) {
+      null
+    } else {
+      try {
+        WebViewportSpec.parse(draft)
+        null
+      } catch (e: IllegalArgumentException) {
+        e.message
+      }
+    }
+  }
+  val isDirty = draft.trim().takeIf { it.isNotEmpty() } != currentSpec
+  Column(
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    OutlinedTextField(
+      value = draft,
+      onValueChange = { draft = it },
+      enabled = enabled,
+      singleLine = true,
+      label = { Text("Viewport") },
+      placeholder = { Text("iPhone 14, Pixel 7, or 375x812") },
+      isError = parseError != null,
+      supportingText = {
+        when {
+          parseError != null -> Text(parseError, color = MaterialTheme.colorScheme.error)
+          enabled -> Text("Applies on next launch. Empty = Playwright default (1280x800).")
+          else -> Text("Close the browser to change viewport.")
+        }
+      },
+      modifier = Modifier.fillMaxWidth(),
+    )
+    if (enabled && isDirty && parseError == null) {
+      Button(
+        onClick = { onCommit(draft.trim().takeIf { it.isNotEmpty() }) },
+      ) {
+        Text("Save viewport")
+      }
+    }
   }
 }
 

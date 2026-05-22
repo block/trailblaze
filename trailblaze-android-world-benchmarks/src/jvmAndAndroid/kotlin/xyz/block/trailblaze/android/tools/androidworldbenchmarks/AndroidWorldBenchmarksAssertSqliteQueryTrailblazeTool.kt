@@ -18,7 +18,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_assertSqliteQuery",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Runs a SQL query on a device SQLite database and asserts the output matches expected value.")
 data class AndroidWorldBenchmarksAssertSqliteQueryTrailblazeTool(

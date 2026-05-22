@@ -8,6 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.devices.WebViewportSpec
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceBusyException
@@ -70,6 +71,13 @@ class DeviceManagerToolSet(
     DESKTOP,
     /** Show info about the currently connected device */
     INFO,
+    /**
+     * Provision a web browser slot with a viewport / device-emulation profile baked
+     * in (does NOT launch a browser yet). The slot's spec is consumed the next time
+     * `device(action=WEB, deviceId=<id>)` or a trail with `--device web/<id>` launches
+     * a browser for that instance. Used by `trailblaze device create web`.
+     */
+    CREATE_WEB,
   }
 
   /**
@@ -107,16 +115,18 @@ class DeviceManagerToolSet(
   )
   @Tool(McpToolProfile.TOOL_DEVICE)
   suspend fun device(
-    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, or INFO")
+    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, INFO, or CREATE_WEB")
     action: DeviceAction,
-    @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS, WEB actions). For WEB, any value provisions a new browser instance keyed by this ID.")
+    @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS, WEB, CREATE_WEB actions). For WEB and CREATE_WEB, any value provisions a new browser instance keyed by this ID.")
     deviceId: String? = null,
     @LLMDescription("Detail level for INFO action: SUMMARY (default), APPS, or FULL")
     detail: DeviceDetail = DeviceDetail.SUMMARY,
     @LLMDescription("Optional display name for this session (shown in the Trailblaze report)")
     testName: String? = null,
-    @LLMDescription("For WEB action: launch the browser headless (default true). Set false to show a visible browser window.")
-    headless: Boolean = true,
+    @LLMDescription("For WEB and CREATE_WEB actions: launch the browser headless (default true). Set false to show a visible browser window. For CREATE_WEB null means 'inherit the slot's current preference', so the desktop UI's headed-when-display-available default is preserved.")
+    headless: Boolean? = null,
+    @LLMDescription("For CREATE_WEB action: Playwright `devices` preset name (e.g. 'iPhone 14', 'Pixel 7', 'iPad Pro 11') OR raw '<width>x<height>' viewport like '375x812'. Sets the slot's viewport / emulation profile. Pass null to clear.")
+    viewport: String? = null,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -257,7 +267,56 @@ class DeviceManagerToolSet(
         // device(action=WEB, deviceId=foo, headless=…) call: the second writer
         // wins on the side-channel preference even though only one wins the
         // claim, so the winning command's browser could launch in the wrong mode.
-        connectToDeviceUnified(webDeviceId, testName, webHeadless = headless)
+        // WEB preserves the historical "default to headless when caller omits the
+        // flag" behavior; CREATE_WEB threads null through so the slot's stored
+        // preference (or WebBrowserManager's headed-when-display-available
+        // default) takes over.
+        connectToDeviceUnified(webDeviceId, testName, webHeadless = headless ?: true)
+      }
+
+      DeviceAction.CREATE_WEB -> {
+        // Provision-and-launch: apply the slot's viewport/headless preferences
+        // and launch the browser in a single bridge call so two concurrent
+        // CREATE_WEB invocations for the same instanceId can't observe a
+        // half-written slot state. We launch (not just provision) so that
+        // subsequent `trail --device web/<id>` commands find the slot in
+        // `loadDevicesSuspend`'s output — that listing only surfaces running
+        // slots, not provisioned-but-cold ones.
+        //
+        // [headless] is intentionally a tri-state nullable: null means "inherit
+        // the slot's stored preference" so that running CREATE_WEB on a headed
+        // workstation doesn't force the singleton browser into a hidden window.
+        val instanceId = deviceId?.takeIf { it.isNotBlank() } ?: WebInstanceIds.PLAYWRIGHT_NATIVE
+        val spec = viewport?.takeIf { it.isNotBlank() }
+        if (spec != null) {
+          // Eagerly validate the spec shape so a typo like `web/foo, viewport=375x`
+          // surfaces here instead of crashing the next trail's browser launch.
+          try {
+            WebViewportSpec.parse(spec)
+          } catch (e: IllegalArgumentException) {
+            return "Error: ${e.message}"
+          }
+        }
+        val descriptor = spec?.let { "viewport=$it" } ?: "Playwright default viewport (1280x800)"
+        // Catch the slot-cap IllegalStateException so it surfaces in the
+        // structured "Error: …" response shape callers expect, not as an MCP
+        // infrastructure failure. Parallel `device create web --instance-id …`
+        // loops will trip this once they exhaust MAX_NAMED_SLOTS.
+        val launchError = try {
+          mcpBridge.launchWebBrowserAwait(
+            instanceId = instanceId,
+            viewportSpec = spec,
+            headless = headless,
+          )
+        } catch (e: IllegalStateException) {
+          return "Error: ${e.message}"
+        }
+        if (launchError != null) {
+          "Error: Provisioned slot 'web/$instanceId' ($descriptor) but browser launch failed: $launchError"
+        } else {
+          "Provisioned and launched web browser slot 'web/$instanceId' ($descriptor). " +
+            "Reference from trails as `--device web/$instanceId`."
+        }
       }
 
       DeviceAction.DESKTOP -> {

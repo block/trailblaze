@@ -18,7 +18,8 @@ Usage: trailblaze trail [-hvV] [--capture-all] [--capture-logcat]
 Run a trail file (.trail.yaml) — execute a scripted test on a device.
 
 Accepts files, shell globs, or directories. Directory arguments expand
-recursively to every `.trail.yaml` / `blaze.yaml` under them.
+recursively to one trail per containing directory (recording preferred over NL
+when both are present).
 
 Trail-level metadata honored by the runner:
   - `tags:` (list of strings) — filtered via --tags.
@@ -28,10 +29,12 @@ Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:`
 line.
       [<trailFile>...]       Trail files (.trail.yaml or blaze.yaml), shell
                                globs, or directories. Directories expand
-                               recursively to every contained trail file. If
-                               omitted, defaults to the `trails/` directory at
-                               the workspace root (resolved by walking up from
-                               the current directory).
+                               recursively to one trail per containing
+                               directory (recording preferred over NL when both
+                               are present). If omitted, defaults to the
+                               `trails/` directory at the workspace root
+                               (resolved by walking up from the current
+                               directory).
   -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
                                TRAILBLAZE_RUNNER
       --capture-all          Enable all capture streams: video, logcat, network

@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
@@ -13,6 +14,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -28,6 +30,7 @@ import xyz.block.trailblaze.logs.server.endpoints.CliShutdownResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.RunState
+import xyz.block.trailblaze.util.Console
 
 /**
  * Client for communicating with the Trailblaze daemon server.
@@ -43,7 +46,20 @@ import xyz.block.trailblaze.logs.server.endpoints.RunState
 class DaemonClient(
   private val host: String = "localhost",
   private val port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+  /**
+   * How long to sleep between `/cli/run-status` polls. Production keeps the
+   * default; tests dial this down to keep the [MAX_CONSECUTIVE_POLL_ERRORS] /
+   * ping-fallback cycle fast (~30 × pollIntervalMs is the worst case before
+   * the fallback ping fires).
+   */
+  private val pollIntervalMs: Long = RUN_POLL_INTERVAL_MS,
 ) : java.io.Closeable {
+
+  init {
+    require(pollIntervalMs > 0) {
+      "pollIntervalMs must be positive, was $pollIntervalMs"
+    }
+  }
 
   private val json: Json = TrailblazeJson.defaultWithoutToolsInstance
   private val baseUrl: String
@@ -255,7 +271,7 @@ class DaemonClient(
     var consecutiveErrors = 0
     try {
       while (true) {
-        kotlinx.coroutines.delay(RUN_POLL_INTERVAL_MS)
+        kotlinx.coroutines.delay(pollIntervalMs)
 
         // Overall timeout to prevent infinite polling if daemon crashes
         if (System.currentTimeMillis() - pollStartTime > RUN_POLL_TIMEOUT_MS) {
@@ -278,27 +294,64 @@ class DaemonClient(
                 statusResponse.bodyAsText(),
               )
             } else {
-              consecutiveErrors++
-              if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-                return CliRunResponse(
-                  success = false,
-                  error =
-                    "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures",
+              val statusCode = statusResponse.status.value
+              // 4xx is terminal *except* for transient subcodes (408 Request
+              // Timeout, 429 Too Many Requests): the request itself is
+              // malformed (400) or the runId is unknown (404 — e.g. daemon
+              // restarted and lost run state). Retrying + /ping-resetting on a
+              // truly terminal 4xx would silently wait the full
+              // RUN_POLL_TIMEOUT_MS while /ping keeps succeeding, so bail
+              // immediately and surface the body to the user.
+              if (statusCode in 400..499 && statusCode !in TRANSIENT_4XX_CODES) {
+                val body = try {
+                  statusResponse.bodyAsText()
+                } catch (e: CancellationException) {
+                  throw e // Preserve coroutine cancellation through body extraction.
+                } catch (_: Exception) {
+                  ""
+                }
+                val cleanBody = body
+                  .take(ERROR_BODY_MAX_BYTES)
+                  .replace(WHITESPACE_RUN_REGEX, " ")
+                  .trim()
+                val errorMsg = if (cleanBody.isNotBlank()) {
+                  val truncated =
+                    if (body.length > ERROR_BODY_MAX_BYTES) " (truncated)" else ""
+                  "run-status returned HTTP $statusCode: $cleanBody$truncated"
+                } else {
+                  "run-status returned HTTP $statusCode"
+                }
+                return CliRunResponse(success = false, error = errorMsg)
+              }
+              if (consecutiveErrors == 0) {
+                Console.error(
+                  "[DaemonClient] run-status returned HTTP $statusCode; will retry",
                 )
               }
-              continue // Transient error, keep polling
+              consecutiveErrors =
+                resolveConsecutivePollErrors(consecutiveErrors + 1, onProgress)
+                  ?: return CliRunResponse(
+                    success = false,
+                    error =
+                      "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures (ping also failed)",
+                  )
+              continue // Transient 5xx, keep polling
             }
-          } catch (e: kotlinx.coroutines.CancellationException) {
+          } catch (e: CancellationException) {
             throw e // Preserve coroutine cancellation
-          } catch (_: Exception) {
-            consecutiveErrors++
-            if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-              return CliRunResponse(
-                success = false,
-                error =
-                  "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures",
+          } catch (e: Exception) {
+            if (consecutiveErrors == 0) {
+              Console.error(
+                "[DaemonClient] run-status poll failed (${e::class.simpleName}: ${e.message ?: e.toString()}); will retry",
               )
             }
+            consecutiveErrors =
+              resolveConsecutivePollErrors(consecutiveErrors + 1, onProgress)
+                ?: return CliRunResponse(
+                  success = false,
+                  error =
+                    "Daemon unreachable after $MAX_CONSECUTIVE_POLL_ERRORS consecutive poll failures (ping also failed)",
+                )
             continue // Transient network error, keep polling
           }
 
@@ -322,6 +375,75 @@ class DaemonClient(
     } finally {
       currentRunId = null
     }
+  }
+
+  /**
+   * Health-check fallback used by [runAsync] after [MAX_CONSECUTIVE_POLL_ERRORS]
+   * consecutive `/cli/run-status` failures. Pings the daemon's lightweight `/ping`
+   * endpoint with a dedicated short timeout — both endpoints share Netty's event
+   * loop, so a ping success is a strong signal the daemon process is alive and
+   * the run-status calls were transient (e.g. event-loop saturation, brief GC
+   * pause).
+   *
+   * Caveat: ping success is a *probabilistic* signal, not a hard guarantee. If
+   * the event loop is in a state where only `/cli/run-status` is permanently
+   * wedged but `/ping` keeps responding, the outer [RUN_POLL_TIMEOUT_MS] is the
+   * final safety net.
+   *
+   * `CancellationException` is re-thrown to preserve cooperative coroutine
+   * cancellation (e.g. Ctrl+C while the ping is in flight). All other
+   * exceptions are logged and reported as "not reachable".
+   */
+  private suspend fun isDaemonReachable(): Boolean {
+    return try {
+      val response = client.get("$baseUrl${CliEndpoints.PING}") {
+        timeout { requestTimeoutMillis = PING_HEALTHCHECK_TIMEOUT_MS }
+      }
+      val ok = response.status.isSuccess()
+      if (!ok) {
+        Console.error("[DaemonClient] /ping returned HTTP ${response.status.value}")
+      }
+      ok
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.error(
+        "[DaemonClient] /ping failed (${e::class.simpleName}: ${e.message ?: e.toString()})",
+      )
+      false
+    }
+  }
+
+  /**
+   * Threshold + ping-fallback handling for the run-status poll loop. Returns the
+   * new counter value to use going forward (possibly reset to 0 if `/ping`
+   * verified the daemon is alive), or `null` if the caller should bail.
+   *
+   * The reset path is bounded by [RUN_POLL_TIMEOUT_MS] in the outer loop, so a
+   * pathological "ping healthy but status broken" state cannot loop forever.
+   *
+   * Callbacks ([onProgress]) are isolated from the polling loop — a throwing
+   * callback is logged but does not abort the run.
+   */
+  private suspend fun resolveConsecutivePollErrors(
+    consecutiveErrors: Int,
+    onProgress: (String) -> Unit,
+  ): Int? {
+    if (consecutiveErrors < MAX_CONSECUTIVE_POLL_ERRORS) return consecutiveErrors
+    if (!isDaemonReachable()) return null
+    val message =
+      "$consecutiveErrors consecutive run-status failures, but /ping is healthy — continuing"
+    Console.error("[DaemonClient] $message")
+    try {
+      onProgress(message)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.error(
+        "[DaemonClient] onProgress callback threw (${e::class.simpleName}: ${e.message ?: e.toString()}); ignoring",
+      )
+    }
+    return 0
   }
 
   /**
@@ -371,7 +493,35 @@ class DaemonClient(
     /** Overall timeout for polling a run to completion (30 minutes) */
     const val RUN_POLL_TIMEOUT_MS = 30 * 60 * 1000L
 
-    /** Max consecutive poll errors before giving up (daemon likely crashed) */
+    /**
+     * Max consecutive poll errors before falling back to a /ping health check.
+     * If the health check also fails the run is aborted; if it succeeds, the
+     * counter resets and polling continues.
+     */
     const val MAX_CONSECUTIVE_POLL_ERRORS = 30
+
+    /** Per-request timeout for the /ping fallback health check used after [MAX_CONSECUTIVE_POLL_ERRORS]. */
+    const val PING_HEALTHCHECK_TIMEOUT_MS = 5_000L
+
+    /**
+     * 4xx subcodes that are semantically *transient* and should follow the
+     * 5xx retry+ping-fallback path instead of bailing immediately:
+     *
+     * - 408 Request Timeout — the request itself timed out, retrying is correct
+     * - 429 Too Many Requests — the server is back-pressuring; retrying is correct
+     *
+     * Everything else in 400..499 is terminal (e.g. 400 malformed, 404 unknown
+     * runId from daemon restart, 401/403 auth).
+     */
+    val TRANSIENT_4XX_CODES = setOf(408, 429)
+
+    /**
+     * Max bytes of a 4xx response body to embed in the CLI error message. Keeps
+     * a daemon stack-trace or HTML error page from flooding the user's terminal.
+     */
+    const val ERROR_BODY_MAX_BYTES = 512
+
+    /** Collapses runs of whitespace (including newlines) into single spaces for error display. */
+    private val WHITESPACE_RUN_REGEX = "\\s+".toRegex()
   }
 }

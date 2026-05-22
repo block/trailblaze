@@ -23,8 +23,9 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  * Supports two authoring modes, selected by which field is present:
  *
  * - **`class:` mode** (existing) — Kotlin-backed tool. [toolClass] points to a fully qualified
- *   class name; [description], [parameters], [isForLlm], [isRecordable], [requiresHost] are all
- *   reflected from the class's `@TrailblazeToolClass` / `@LLMDescription` annotations.
+ *   class name; [description], [parameters], [surfaceToLlm], [surfaceToScriptedTools],
+ *   [isRecordable], [requiresHost] are all reflected from the class's `@TrailblazeToolClass` /
+ *   `@LLMDescription` annotations.
  *
  *   ```yaml
  *   id: my_custom_tool
@@ -33,8 +34,8 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *
  * - **`tools:` mode** (YAML-defined) — static composition. [toolsList] is an inline list of
  *   Trailblaze tool calls. [description] and [parameters] MUST be supplied in the YAML since
- *   there is no Kotlin class to reflect. [isForLlm], [isRecordable], [requiresHost] mirror the
- *   `@TrailblazeToolClass` annotation fields and let YAML-defined tools opt out of LLM
+ *   there is no Kotlin class to reflect. [surfaceToLlm], [isRecordable], [requiresHost] mirror
+ *   the `@TrailblazeToolClass` annotation fields and let YAML-defined tools opt out of LLM
  *   visibility / recording / on-device execution. Parameter values are substituted into the
  *   tool tree via `{{params.x}}` tokens at expansion time.
  *
@@ -45,7 +46,7 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *     - name: charactersToErase
  *       type: integer
  *       required: false
- *   is_for_llm: true       # default — declare false to hide from the LLM
+ *   surface_to_llm: true   # default — declare false to hide from the LLM
  *   is_recordable: true    # default — declare false to skip recording
  *   requires_host: false   # default — declare true to forbid on-device agents
  *   tools:
@@ -138,27 +139,28 @@ data class ToolYamlConfig(
   val description: String? = null,
   val parameters: List<TrailblazeToolParameterConfig> = emptyList(),
   /**
-   * 1:1 with `@TrailblazeToolClass.isForLlm`. Only valid in `tools:` mode (in `class:` mode the
-   * annotation is the source of truth and YAML must not declare it). `null` means
+   * 1:1 with `@TrailblazeToolClass.surfaceToLlm`. Only valid in `tools:` mode (in `class:` mode
+   * the annotation is the source of truth and YAML must not declare it). `null` means
    * "framework default" — currently `true` for tools-mode, mirroring the annotation default.
    */
-  @SerialName("is_for_llm") val isForLlm: Boolean? = null,
+  @SerialName("surface_to_llm") val surfaceToLlm: Boolean? = null,
   /**
-   * 1:1 with `@TrailblazeToolClass.isRecordable`. Same authoring rule as [isForLlm]: only set
-   * in `tools:` mode. `null` defaults to `true`.
+   * 1:1 with `@TrailblazeToolClass.isRecordable`. Same authoring rule as [surfaceToLlm]: only
+   * set in `tools:` mode. `null` defaults to `true`.
    */
   @SerialName("is_recordable") val isRecordable: Boolean? = null,
   /**
-   * 1:1 with `@TrailblazeToolClass.requiresHost`. Same authoring rule as [isForLlm]. `null`
+   * 1:1 with `@TrailblazeToolClass.requiresHost`. Same authoring rule as [surfaceToLlm]. `null`
    * defaults to `false`. Setting `true` in `tools:` mode prevents the YAML-defined tool from
    * dispatching to on-device agents — host-only execution.
    */
   @SerialName("requires_host") val requiresHost: Boolean? = null,
   /**
-   * 1:1 with `@TrailblazeToolClass.isVerification`. Same authoring rule as [isForLlm]. `null`
-   * defaults to `false`. Setting `true` declares the YAML-defined tool as a read-only assertion
-   * whose successful execution is itself the verify verdict — `blaze(hint=VERIFY)` will allow
-   * such tools to run while short-circuiting any non-verification tool to a failed assertion.
+   * 1:1 with `@TrailblazeToolClass.isVerification`. Same authoring rule as [surfaceToLlm].
+   * `null` defaults to `false`. Setting `true` declares the YAML-defined tool as a read-only
+   * assertion whose successful execution is itself the verify verdict — `blaze(hint=VERIFY)`
+   * will allow such tools to run while short-circuiting any non-verification tool to a failed
+   * assertion.
    */
   @SerialName("is_verification") val isVerification: Boolean? = null,
   @SerialName("tools")
@@ -214,8 +216,8 @@ data class ToolYamlConfig(
           "Tool '$id' uses 'class:' mode; 'parameters' are reflected from the class and must not " +
             "be declared in YAML"
         }
-        require(isForLlm == null) {
-          "Tool '$id' uses 'class:' mode; 'is_for_llm' is reflected from the class's " +
+        require(surfaceToLlm == null) {
+          "Tool '$id' uses 'class:' mode; 'surface_to_llm' is reflected from the class's " +
             "@TrailblazeToolClass annotation and must not be declared in YAML"
         }
         require(isRecordable == null) {

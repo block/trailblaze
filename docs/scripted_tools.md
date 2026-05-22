@@ -71,14 +71,15 @@ export async function myapp_login(args, ctx, client) {
   }
   const appId = args.appId || DEFAULT_APP_ID;
 
-  // Compose with framework tools via `client.callTool(name, args)`. Anything in
-  // the global tool registry is reachable — `android_adbShell`, `tapOnElementBySelector`,
-  // `inputText`, etc. The shim throws on `{isError:true}` envelopes so failures
-  // bubble out via try/catch; you don't have to inspect every result.
-  await client.callTool("android_adbShell", {
+  // Compose with framework tools via the typed `client.tools.<name>(args)` surface.
+  // Every tool the pack can dispatch — Kotlin built-ins, pack-local scripted tools,
+  // tools inherited via deps' `exports:` — is a method on `client.tools`. The shim
+  // throws on `{isError:true}` envelopes so failures bubble out via try/catch; you
+  // don't have to inspect every result.
+  await client.tools.android_adbShell({
     command: ["am", "force-stop", appId],
   });
-  await client.callTool("android_adbShell", {
+  await client.tools.android_adbShell({
     command: [
       "am", "start",
       "-a", "android.intent.action.MAIN",
@@ -87,9 +88,9 @@ export async function myapp_login(args, ctx, client) {
     ],
   });
 
-  await client.callTool("inputText", { text: args.email });
-  await client.callTool("inputText", { text: args.password });
-  await client.callTool("tapOnElement", { ref: "Sign In" });
+  await client.tools.inputText({ text: args.email });
+  await client.tools.inputText({ text: args.password });
+  await client.tools.tapOnElement({ ref: "Sign In" });
 
   return `Signed in as ${args.email} on ${appId}.`;
 }
@@ -99,7 +100,7 @@ A few hard rules the runtime enforces:
 
 | Rule | Why |
 |---|---|
-| File extension is `.ts`, not `.js` / `.mjs` / `.cjs` | The daemon routes `.ts` to in-process QuickJS; the legacy extensions go through the MCP subprocess path (different transport, different lifecycle). |
+| File extension is `.ts`, not `.js` / `.mjs` / `.cjs` | `TrailblazePackBundler` hard-errors on `.js` / `.mjs` / `.cjs` files under a pack's `tools/` — TypeScript is the only authoring language. The runtime (QuickJS in-process by default, Bun subprocess opt-in) is unaffected. |
 | **Use JSDoc-only types**, never `:` parameter annotations or `import type` | Per-file scripted tools are evaluated as raw ECMAScript — no transpile step strips TS syntax today. Annotations get types in your editor without breaking the runtime. |
 | The exported function name must match the descriptor's `name:` field exactly | The synthesized wrapper does `__userModule[<name>]` to find your handler. A mismatch surfaces a clear "must export a function with that exact name" error at first dispatch. |
 | Return a string, an object, or `undefined` | The runtime normalizes string returns into the `{content: [{type:"text",...}]}` envelope automatically. Returning a function, BigInt, or circular structure throws a non-JSON-serializable error. |
@@ -183,125 +184,127 @@ the `myapp` pack.
 
 ## 4. IDE setup: typed bindings
 
-Trailblaze auto-generates a per-target TypeScript declaration file that types every
-`client.callTool(name, args)` call your scripted tool makes. Configure your IDE to pick it
+Trailblaze auto-generates a per-pack TypeScript declaration file that types every
+`client.tools.<name>(args)` call your scripted tool makes. Configure your IDE to pick it
 up and you'll get autocomplete + compile-time error checking on tool names and arg shapes
-— without any manual codegen step.
+— without any manual codegen step. An unknown tool name is a compile error.
 
 ### Where the bindings come from
 
-Every time the daemon starts (or you run `trailblaze compile`), Trailblaze emits one
-`.d.ts` file per resolved target into `<workspace>/trails/config/tools/.trailblaze/`:
+Every time the daemon starts (or you run `trailblaze check`), Trailblaze emits one
+`client.d.ts` file per pack at `<packDir>/tools/.trailblaze/client.d.ts`:
 
 ```
-trails/config/tools/.trailblaze/
-├── client.myapp.d.ts          # tools available to the `myapp` target
-├── client.someothertarget.d.ts
-└── ...
+trails/config/packs/myapp/tools/.trailblaze/
+└── client.d.ts          # tools available to the `myapp` pack's TS authors
 ```
 
 Each file declares typed overloads for:
 
-- **Every framework tool** on the JVM classpath (`android_adbShell`, `tapOnElementBySelector`,
-  `inputText`, `assertVisible`, etc.) — the same set across all targets, since these are
-  the primitives any scripted tool can compose with.
-- **The target's own scripted tools**, transitively resolved through the pack's
-  `dependencies:` graph. So `client.myapp.d.ts` includes `myapp`'s scripted tools plus
-  any tool it inherits from a library pack listed under `dependencies:` (e.g.
-  framework-bundled `trailblaze` tools).
+- **Kotlin framework tools** resolved from the pack's OWN `platforms.<p>.tool_sets:`
+  declarations (pack-local, not transitive). E.g. a pack declaring `web_core` sees
+  `web_navigate` / `web_click` / siblings.
+- **Pack-local scripted tools** declared on the pack's own `target.tools:` list.
+- **Transitively-inherited scripted tools** that the pack's dependencies publish via the
+  `exports:` field on their manifests. Tools NOT listed in a dep's `exports:` stay
+  internal to that dep — invisible to consumers' typed surface.
 
-The split is intentional: per-target slicing keeps cross-target tool autocomplete
-pollution out of your IDE (someone authoring `myapp` doesn't see `otherapp`'s tools), but
-within a target's binding **every platform/driver variant of a tool is visible** so a
-cross-platform conditional tool (`if (ctx.target.platform === "android") ...`) gets full
-autocomplete on each branch.
+Per-pack slicing keeps cross-pack autocomplete pollution out of your IDE (someone
+authoring `myapp` doesn't see `otherapp`'s tools), while still showing every platform/
+driver variant within the pack's own toolset declarations.
 
 ### Wiring up your editor
 
-Each pack that ships scripted tools should have a `package.json` next to its `tools/` dir
-that depends on `@trailblaze/scripting` via a workspace-relative `file:` link to the SDK
-that `trailblaze compile` extracts into `.trailblaze/sdk/typescript/`:
+**Nothing to hand-author.** `trailblaze check` writes the per-pack
+`tools/tsconfig.json` for you as a framework-managed artifact (and the pack-root
+`.gitignore` that hides it from `git status`). The generated tsconfig is fully
+self-contained — every compiler option is inlined, and the only workspace-relative
+reference is the `paths` mapping pointing at the rolled-up SDK declaration bundle
+at `<workspace>/.trailblaze/sdk/dist/index.d.ts`. That self-contained shape is
+what lets a pack be npm-distributed and installed into a different workspace's
+`node_modules/` — the next `trailblaze check` re-derives the `paths` mapping
+at the new location.
 
-```json
-// trails/config/packs/myapp/tools/package.json
-{
-  "name": "trailblaze-myapp-tools",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@trailblaze/scripting": "file:../../../tools/.trailblaze/sdk/typescript"
-  },
-  "devDependencies": {
-    "@types/node": "^25",
-    "typescript": "^6"
-  }
-}
-```
+The generated file looks like this — the `// FRAMEWORK-GENERATED` banner is
+load-bearing (the emitter uses it to detect framework-owned files vs. hand-authored
+overrides on upgrade), and the `include` glob covers both `.ts` and `.js` so
+JavaScript tool sources inherit the same typing:
 
-And a `tsconfig.json` that includes the per-target binding:
-
-```json
+```jsonc
 // trails/config/packs/myapp/tools/tsconfig.json
+// FRAMEWORK-GENERATED. Author should not edit. Regenerated by `trailblaze check`.
 {
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
     "strict": true,
-    "noEmit": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["@types/node"]
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@trailblaze/scripting": ["../../../../.trailblaze/sdk/dist/index.d.ts"],
+      "@trailblaze/scripting/*": ["../../../../.trailblaze/sdk/dist/*"]
+    }
   },
-  "include": [
-    "**/*.ts",
-    "../../../tools/.trailblaze/client.myapp.d.ts"
-  ]
+  "include": ["**/*.ts", "**/*.js", ".trailblaze/**/*"]
 }
 ```
 
-Replace `myapp` with your target's pack id. The `include` path walks up to the workspace's
-generated bindings dir and pulls in just the slice for this pack's target.
+The `include` glob also picks up the per-pack `client.d.ts` the emitter writes to
+`tools/.trailblaze/client.d.ts` — that's how the typed `client.tools.<name>(args)`
+surface lands in the language server.
+
+**Upgrading from a workspace that hand-authored `tools/tsconfig.json`?** Delete
+your existing `tools/tsconfig.json` and re-run `trailblaze check`. The emitter
+preserves any file lacking the framework banner verbatim (and logs a one-line
+warning per pack), so you won't lose customizations until you opt in, but you
+also won't get the latest framework wiring until you do.
 
 ### Setup gesture: one command
 
 After cloning a workspace (or creating a new one with the templates above):
 
 ```bash
-trailblaze compile
+trailblaze check
 ```
 
 This single command:
 
 1. Resolves the pack graph and emits `dist/targets/<id>.yaml` (existing behavior).
-2. Extracts the framework's `@trailblaze/scripting` SDK into `.trailblaze/sdk/typescript/`
-   (vendored from the trailblaze JAR).
-3. Emits per-target `client.<id>.d.ts` typed bindings.
-4. Runs `bun install` in every pack's `tools/` dir that has a `package.json` — populating
-   `node_modules/@trailblaze/scripting` via the workspace-relative `file:` link from step 2.
+2. Extracts the framework's `@trailblaze/scripting` declaration bundle into
+   `<workspace>/.trailblaze/sdk/dist/index.d.ts` — a single self-contained `.d.ts`
+   (zod types inlined) vendored from the trailblaze JAR.
+3. Emits per-pack typed bindings at `<packDir>/tools/.trailblaze/client.d.ts` — one file
+   per pack, scoped to that pack's pack-local `tool_sets:` + scripted tools + transitively
+   inherited `exports:`.
+4. Writes `<packDir>/tools/tsconfig.json` + `<packDir>/.gitignore` as framework-managed
+   artifacts so authors don't have to hand-author or maintain TypeScript config files.
+   The tsconfig is fully self-contained (compiler options + paths inlined), so a pack
+   that's npm-installed into a different workspace just needs `trailblaze check` to
+   re-derive its `paths` entry — no broken `extends:` chain to repair.
 
-After this, your IDE has full typing on `client.callTool(name, args)` and on any
-`@trailblaze/scripting` imports. Re-run `trailblaze compile` whenever you upgrade trailblaze
+After this, your IDE has full typing on `client.tools.<name>(args)` and on any
+`@trailblaze/scripting` imports. Re-run `trailblaze check` whenever you upgrade trailblaze
 or change your pack manifests.
 
-**Requires bun.** Install via `curl -fsSL https://bun.sh/install | bash`. Bun is the
-in-repo standard; using one supported tool keeps docs and error messages clean. If you
-genuinely don't want bun involved (CI containers that handle `node_modules/` separately,
-etc.), set `TRAILBLAZE_SKIP_NPM_INSTALL=1` to skip the install step — the SDK extraction
-and bindings generation still run.
+**No `bun install` required.** The SDK is delivered as a single rolled-up `.d.ts` resolved
+through the per-pack tsconfig's `paths` mapping, not through `node_modules`. Per-pack
+`package.json` files are no longer needed for type-checking — and per-pack `tsconfig.json`
+is now a framework-managed artifact too, so authors have zero TypeScript ceremony files
+to maintain.
 
 ### Regeneration on every daemon command
 
-Beyond explicit `trailblaze compile`, the daemon-init bootstrap fires the same setup pipeline
+Beyond explicit `trailblaze check`, the daemon-init bootstrap fires the same setup pipeline
 on every daemon-aware command (`trailblaze blaze` / `ask` / `verify` / `trail` / `session` /
 `app start`). On a fresh clone it primes everything automatically; on subsequent runs the
 hash check makes it a sub-millisecond no-op. Pack-graph drift (an edit to any `pack.yaml` or
 the running framework version) trips the hash check and re-runs everything.
-
-The daemon path differs from the explicit-compile path in one ergonomic way: it only runs
-`bun install` in pack `tools/` dirs whose `node_modules/` is missing. This keeps subsequent
-daemon commands fast — only the first run after a fresh clone pays the install cost.
-Explicit `trailblaze compile` always re-runs `bun install` so you can use it to refresh
-after a framework upgrade.
 
 Both paths are idempotent: re-running with the same SDK + toolset writes byte-identical
 output, so your file watcher and TypeScript language server don't churn.
@@ -309,10 +312,10 @@ output, so your file watcher and TypeScript language server don't churn.
 ### Should I commit the bindings?
 
 Either choice works. The `.trailblaze/` directory is named after the framework so a
-single `.gitignore` line (`trails/config/tools/.trailblaze/`) opts you out if you treat
-the bindings as derived output. Committing them is also reasonable — the file is stable
-across daemon restarts of the same toolset, and review can spot unintended API surface
-changes.
+single `.gitignore` line covers both the workspace-level (`trails/.trailblaze/`) and
+per-pack (`trails/config/packs/*/tools/.trailblaze/`) outputs if you treat them as
+derived. Committing them is also reasonable — the files are stable across daemon
+restarts of the same toolset, and review can spot unintended API surface changes.
 
 ## Calling your tool from a trail
 
@@ -342,22 +345,129 @@ trailblaze tool myapp_login -d android \
   -o "Sign in"
 ```
 
-## Composing with framework tools via `client.callTool`
+## Testing your tool
+
+Pair every `.ts` tool with a sibling `*.test.ts` file and run the suite via:
+
+```bash
+./trailblaze test myapp        # one pack
+./trailblaze test --all        # every pack with *.test.ts files
+```
+
+The runner shells out to `bun test` against the pack's `tools/` directory, so tests
+execute **without a daemon, device, or MCP roundtrip** — they import the tool function
+directly and drive it through a mock client. A failing assertion gives you a
+sub-second feedback loop that complements the slower "run on a real device"
+validation.
+
+### The mock client + context
+
+The companion `@trailblaze/scripting/testing` subpath exports two helpers that satisfy
+the `(args, ctx, client)` handler signature:
+
+- **`createMockClient()`** — returns a `MockTrailblazeClient` whose `tools` proxy
+  records every `client.tools.X(args)` invocation into `client.calls`. Tests assert
+  call order and per-call arg shapes against that array. `client.stub(toolName, {
+  textContent, errorMessage })` registers a canned response for a tool name — a
+  non-empty `errorMessage` makes the call throw with the same wording the production
+  client uses, which is how you exercise `try/catch` recovery branches.
+- **`createMockContext({ platform, sessionId?, target?, memory? })`** — returns a
+  `TrailblazeContext` with a no-op logger and sensible test defaults. Use it as the
+  second argument when the tool reads `ctx.sessionId`, `ctx.device.platform`, or
+  similar.
+
+### Minimal example
+
+```ts
+// trails/config/packs/myapp/tools/myapp_login.test.ts
+import { describe, expect, test } from "bun:test";
+import { createMockClient, createMockContext } from "@trailblaze/scripting/testing";
+
+import { myapp_login } from "./myapp_login";
+
+describe("myapp_login", () => {
+  test("dispatches tapOnElement then inputText with the email arg verbatim", async () => {
+    const client = createMockClient();
+    const ctx = createMockContext({ platform: "android" });
+
+    await myapp_login(
+      { email: "trailblaze@example.com", password: "hunter2" },
+      ctx,
+      client,
+    );
+
+    expect(client.calls.map((c) => c.tool)).toEqual([
+      "tapOnElement",
+      "inputText",
+      "inputText",
+      "tapOnElement",
+    ]);
+    expect(client.calls[1]?.args).toMatchObject({ text: "trailblaze@example.com" });
+  });
+
+  test("retries with the fallback selector when the email field isn't visible", async () => {
+    const client = createMockClient();
+    // First `inputText` call throws; the tool's catch branch should fall back to a
+    // selector-based tap before retrying.
+    client.stub("inputText", { textContent: "", errorMessage: "Element not found" });
+    const ctx = createMockContext({ platform: "android" });
+
+    await expect(
+      myapp_login({ email: "x@y", password: "z" }, ctx, client),
+    ).rejects.toThrow(/tool failed: Element not found/);
+
+    // The recovery branch ran even though the eventual throw propagated.
+    expect(client.calls.some((c) => c.tool === "tapOnElementBySelector")).toBe(true);
+  });
+});
+```
+
+### Preconditions
+
+- **`bun` on PATH.** Install from https://bun.sh — `bun test` is the runner.
+- **`tools/tsconfig.json`.** Emitted by `./trailblaze check` (runs automatically as
+  part of `./gradlew check`, which `build` depends on). Without it, `bun test` fails
+  with a module-resolution error on `@trailblaze/scripting/testing`. The CLI's
+  pre-flight surfaces a directed error pointing you back to `./trailblaze check`.
+
+### Patterns to copy
+
+The canonical example packs ship working `.test.ts` files next to real tools — copy
+the shape, swap in your tool. From the `block/trailblaze` repo:
+
+- [`playwrightSample_web_openFixtureAndVerifyText.test.ts`](https://github.com/block/trailblaze/blob/main/examples/playwright-native/trails/config/packs/playwrightsample/tools/playwrightSample_web_openFixtureAndVerifyText.test.ts)
+  — single-tool sequence with order + arg-shape assertions and a defaults test.
+- [`playwrightSample_web_searchProductsAndOpenResult.test.ts`](https://github.com/block/trailblaze/blob/main/examples/playwright-native/trails/config/packs/playwrightsample/tools/playwrightSample_web_searchProductsAndOpenResult.test.ts)
+  — five-call workflow with interpolated-selector assertions.
+- [`playwrightSample_web_openFormIfNeeded.test.ts`](https://github.com/block/trailblaze/blob/main/examples/playwright-native/trails/config/packs/playwrightsample/tools/playwrightSample_web_openFormIfNeeded.test.ts)
+  — `client.stub(name, { errorMessage })` driving a `try/catch` recovery branch.
+- [`host_writeArtifact.test.ts`](https://github.com/block/trailblaze/blob/main/examples/android-sample-app/trails/config/packs/sampleapp/tools/host_writeArtifact.test.ts)
+  — host-only tool exercised against real `node:fs` writes; demonstrates the
+  client-less `(args, ctx)` signature and argument-default coverage.
+
+For the design rationale and the SDK-internal pieces, see the devlog
+[Unit-testing scripted tools without a device](devlog/2026-05-21-scripted-tool-unit-testing.md).
+
+## Composing with framework tools via `client.tools.<name>(args)`
 
 The `client` argument your handler receives is the bridge back into the framework's tool
-registry. Anything Trailblaze knows about is reachable:
+registry. The pack's **typed surface** — its own `platforms.<p>.tool_sets:` plus its
+own scripted tools plus the scripted tools its dependencies publish via `exports:` — is
+exposed as a method on `client.tools`. (A dep's internal helper that isn't in its
+`exports:` lives in the runtime registry but is not on the typed surface, so it can't
+be dispatched from this pack's authored code.) Example calls:
 
 ```ts
 // Tap a Compose element on Android.
-await client.callTool("tapOnElement", { ref: "Sign In" });
+await client.tools.tapOnElement({ ref: "Sign In" });
 
 // Use a framework selector.
-await client.callTool("tapOnElementBySelector", {
+await client.tools.tapOnElementBySelector({
   selector: { textRegex: "ALARM" },
 });
 
 // Send an Android broadcast intent.
-await client.callTool("android_sendBroadcast", {
+await client.tools.android_sendBroadcast({
   action: "com.example.RESET",
   componentPackage: "com.example.app",
   componentClass: "com.example.ResetReceiver",
@@ -368,10 +478,14 @@ await client.callTool("android_sendBroadcast", {
 The shim:
 
 - **Throws on failure.** If the inner call fails (the inner tool throws, the lookup misses,
-  the binding is missing context), `client.callTool(...)` throws an `Error` with the
+  the binding is missing context), `client.tools.<name>(...)` throws an `Error` with the
   underlying message. You can wrap it in `try/catch` if you want to recover.
 - **Returns the result envelope on success.** That's `{content: [...]}` for tools that
   produce text, or whatever shape the inner tool defines.
+- **Catches unknown names at compile time.** An unrecognised method on `client.tools`
+  is a `tsc` error. `client.callTool(name, args)` still exists as the wire-protocol
+  primitive the framework dispatches through, but it is hidden from the public
+  `TrailblazeClient` type so author code can't bypass the typed surface.
 
 ## Framework primitives at a glance
 
@@ -397,9 +511,9 @@ framework primitives it composes:
   sugar for `_meta: { trailblaze/requiresHost: true }`). The on-device runner will skip
   the registration; host dispatch is the only path.
 
-If you forget the flag and try to run on-device, the inner `client.callTool(...)` fails
-with `Tool not registered: <name> (registered tools: ...)`. The error lists what *is*
-available on-device — the host-only tool will be conspicuously missing.
+If you forget the flag and try to run on-device, the inner `client.tools.<name>(...)`
+dispatch fails with `Tool not registered: <name> (registered tools: ...)`. The error
+lists what *is* available on-device — the host-only tool will be conspicuously missing.
 
 ### Picking between `android_adbShell` and `exec`
 
@@ -431,9 +545,9 @@ own the runtime, we own the wire.
 |---|---|
 | `Invalid scripted-tool name 'foo bar' …` | Your descriptor's `name:` violates `^[A-Za-z_][A-Za-z0-9_.\-]*$`. Update it to a supported character set. |
 | `Scripted tool myapp_login must export a function with that exact name. Found: undefined.` | Your `.ts` doesn't export a function under that name. Either rename the export or update the descriptor's `name:` to match. |
-| `Tool not registered: foo (registered tools: alpha, beta)` | The tool you tried to `client.callTool(...)` doesn't exist in the runtime registry. The error lists what *is* registered — almost always you've got a typo. |
+| `Tool not registered: foo (registered tools: alpha, beta)` | The tool you tried to dispatch via `client.tools.foo(...)` doesn't exist in the runtime registry. The error lists what *is* registered — almost always you've got a typo. (A name not in the typed surface would normally surface as a `tsc` error first; this runtime error means the surface and runtime are out of sync — re-run `trailblaze check`.) |
 | `Tool not registered: foo (no tools are registered on this host …)` | The bundle loaded but didn't populate the registry. Verify your `.ts` exports the function under the same name as the descriptor. |
-| `client.callTool('android_adbShell') failed: …` | The inner tool ran but failed (non-zero exit code, missing arg, etc.). The message after `failed:` is the inner tool's error. |
+| `client.callTool('android_adbShell') failed: …` | The inner tool ran but failed (non-zero exit code, missing arg, etc.). The error wording carries the wire-protocol name (`callTool`) even though the author surface is `client.tools.android_adbShell({...})`. The message after `failed:` is the inner tool's error. |
 | `esbuild failed (exit 1) bundling scripted-tool source /path/to/myapp_login.ts` | Your `.ts` source has a syntax error or unresolved import. The full esbuild stderr follows in the same exception message. |
 | `myapp_login requires a live Trailblaze session context.` | Your handler asserted `if (!ctx)` and `ctx` was undefined. This usually means the tool was invoked outside a session (a unit test that doesn't supply context, or a CLI invocation against a non-running session). |
 
@@ -450,7 +564,7 @@ sandboxed, and free of toolchain dependencies. Specifically:
 - **No top-level `await` in the entry script.** Module-mode evaluation supports it, but
   the bundler emits IIFE format. Top-level `await` is fine inside `async` functions.
 - **No `import` of other authored tools by relative path.** Each tool is bundled
-  independently. Use `client.callTool(...)` to compose with framework tools (which
+  independently. Use `client.tools.<name>(args)` to compose with framework tools (which
   includes other tools registered in the same pack).
 
 If your tool needs anything in this list, that's the signal to write an MCP server

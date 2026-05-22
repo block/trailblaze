@@ -1,0 +1,20 @@
+- config:
+    title: 'Wikipedia: In the news section visible on main page'
+    target: wikipedia
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+    recording:
+      tools:
+      - web_navigate:
+          url: https://en.wikipedia.org/wiki/Main_Page
+          reasoning: The objective is to navigate to the Wikipedia main page, so I will use the browser navigation tool to go directly to the specified URL.
+  - step: Verify the "In the news" section is visible on the page.
+    recording:
+      tools:
+      - web_verify_element_visible:
+          reasoning: The 'In the news' section is represented by the heading element with ID e89 in the main content area. Verifying the visibility of this heading will confirm that the 'In the news' section is currently visible on the Wikipedia Main Page.
+          nodeSelector:
+            web:
+              cssSelector: "#mp-itn-h2"

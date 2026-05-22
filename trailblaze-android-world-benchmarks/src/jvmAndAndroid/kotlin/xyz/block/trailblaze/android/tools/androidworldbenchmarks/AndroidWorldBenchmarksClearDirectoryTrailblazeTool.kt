@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_clearDirectory",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Clears all contents of a directory on the device.")
 data class AndroidWorldBenchmarksClearDirectoryTrailblazeTool(

@@ -1,0 +1,28 @@
+script: ./contacts_ios_searchContacts.ts
+name: contacts_ios_searchContacts
+description: |
+  Search the iOS Contacts list for a name and (optionally) open the first
+  matching contact. Use this whenever the task is to search Contacts for a
+  person, look up a contact by name, find someone in Contacts, or jump to a
+  known contact's detail screen. Handles the iOS pull-down-to-reveal-search
+  gesture, types the query, and either taps the first match (default) or
+  leaves the search active so the caller can verify the suggestion list.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  query:
+    type: string
+    description: Text to type into the Contacts search field (case-insensitive substring of any visible row).
+    required: false
+  rowText:
+    type: string
+    description: |
+      Row text the tool taps after typing the query. Defaults to `query` —
+      useful to override when the query is shorter than the contact's displayed
+      name (e.g. `query="alb"` + `rowText="Albert Einstein"`).
+    required: false
+  openFirstResult:
+    type: boolean
+    description: When true (default), taps the first matching row. When false, leaves the search active and does not tap.
+    required: false

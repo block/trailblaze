@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.recording
 
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
@@ -30,14 +31,16 @@ class OnDeviceRpcScreenStateProvider(
     includeScreenshot: Boolean,
     includeTree: Boolean,
   ): GetScreenStateResponse? {
-    val result = rpc.rpcCall(
-      GetScreenStateRequest(
-        includeScreenshot = includeScreenshot,
-        includeAnnotatedScreenshot = false,
-        requireAndroidAccessibilityService = requireAccessibilityService,
-        includeTree = includeTree,
-      ),
-    )
+    val request = GetScreenStateRequest(
+      includeScreenshot = includeScreenshot,
+      includeAnnotatedScreenshot = false,
+      requireAndroidAccessibilityService = requireAccessibilityService,
+      includeTree = includeTree,
+    ).let {
+      if (includeScreenshot) it.withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
+      else it
+    }
+    val result = rpc.rpcCall(request)
     return when (result) {
       is RpcResult.Success -> result.data
       is RpcResult.Failure -> null

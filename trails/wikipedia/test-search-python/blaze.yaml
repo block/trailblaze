@@ -1,0 +1,9 @@
+- config:
+    title: "Wikipedia: Search for Python (programming language)"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+    - step: Type "Python (programming language)" into the Wikipedia search input in the header.
+    - step: Press Enter to submit the search.
+    - step: Verify the heading "Python (programming language)" is visible on the resulting article page.

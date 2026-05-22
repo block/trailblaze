@@ -1,0 +1,38 @@
+# Authored pack for the Wikipedia example. Demonstrates a web target that drives the
+# public en.wikipedia.org site via the Playwright Native driver, using a small set of
+# scripted tools that wrap common Wikipedia interactions (search, language switcher,
+# random article, banner dismissal). Each scripted tool lives in its own `<name>.yaml`
+# + `<name>.ts` pair under tools/; the pack loader auto-discovers every descriptor in
+# `tools/` and resolves the names listed below into the runtime tool list.
+id: wikipedia
+target:
+  display_name: Wikipedia (en)
+  # Target-scoped system prompt that nudges the LLM toward the wikipedia_web_*
+  # scripted tools when a natural-language step matches a known task pattern
+  # ("search Wikipedia for X" → searchAndOpenFirstResult, etc.). Without this,
+  # the agent tends to inline-expand to generic web_* builtins even when the
+  # scripted-tool descriptions advertise themselves as the right choice. The
+  # file lives next to this pack.yaml and is inlined at pack-load time.
+  system_prompt_file: wikipedia-system-prompt.md
+  tools:
+    # --- Trailheads: deterministic starting points -------------------------------
+    - wikipedia_web_openMainPage
+    - wikipedia_web_openArticle
+    # --- Feature tools -----------------------------------------------------------
+    - wikipedia_web_dismissBannerIfPresent
+    - wikipedia_web_searchAndOpenFirstResult
+    - wikipedia_web_openRandomArticle
+    - wikipedia_web_verifyArticleStructure
+    - wikipedia_web_openMainPageSection
+    - wikipedia_web_switchArticleLanguage
+    # --- Composition example: a scripted tool that delegates to other -----------
+    # --- scripted tools in the same pack via `client.tools.<name>(args)`. -------
+    - wikipedia_web_searchAndVerify
+
+  platforms:
+    web:
+      drivers: [playwright-native, playwright-electron]
+      tool_sets:
+        - web_core
+        - web_verification
+        - memory

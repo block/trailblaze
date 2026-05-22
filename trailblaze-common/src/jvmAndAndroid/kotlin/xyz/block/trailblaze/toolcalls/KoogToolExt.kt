@@ -18,7 +18,7 @@ object KoogToolExt {
   fun Set<KClass<out TrailblazeTool>>.toKoogTools(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
   ): List<TrailblazeKoogTool<out TrailblazeTool>> = this
-    .filter { it.trailblazeToolClassAnnotation().isForLlm }
+    .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
     .map { trailblazeToolClass ->
       trailblazeToolClass.toKoogTool(
         trailblazeToolContextProvider = trailblazeToolContextProvider,
@@ -45,9 +45,10 @@ object KoogToolExt {
    * shares the [YamlDefinedTrailblazeTool] implementation class, differentiated at execute time
    * by the config captured in its serializer.
    *
-   * Tools whose config sets `is_for_llm: false` are filtered out — same rule the class-backed
-   * path applies via `@TrailblazeToolClass(isForLlm = false)` ([toKoogTools] above). The `tools:`
-   * mode default is `null = treat as true`, mirroring the annotation default.
+   * Tools whose config sets `surface_to_llm: false` are filtered out — same rule the
+   * class-backed path applies via `@TrailblazeToolClass(surfaceToLlm = false)` ([toKoogTools]
+   * above). The `tools:` mode default is `null = treat as true`, mirroring the annotation
+   * default.
    *
    * Names without a matching config (e.g. a typo in a toolset's `yamlToolNames`) log a warning
    * and are skipped rather than crashing registration.
@@ -83,7 +84,7 @@ object KoogToolExt {
         )
         return@mapNotNull null
       }
-      if (config.isForLlm == false) return@mapNotNull null
+      if (config.surfaceToLlm == false) return@mapNotNull null
       buildYamlDefinedKoogTool(config, trailblazeToolContextProvider)
     }
   }
@@ -94,7 +95,7 @@ object KoogToolExt {
    * alongside class-backed ones (e.g. [TrailblazeToolRepo.getCurrentToolDescriptors]) and no
    * execution context is available yet.
    *
-   * Same `is_for_llm: false` filter as [buildKoogToolsForYamlDefined].
+   * Same `surface_to_llm: false` filter as [buildKoogToolsForYamlDefined].
    *
    * Skips unknown names with a warning, same as [buildKoogToolsForYamlDefined].
    */
@@ -118,7 +119,7 @@ object KoogToolExt {
         )
         return@mapNotNull null
       }
-      if (config.isForLlm == false) return@mapNotNull null
+      if (config.surfaceToLlm == false) return@mapNotNull null
       // YAML-defined tools: author-controlled schema via `ToolYamlConfig.parameters[*].type`,
       // so unknown types are a config bug worth erroring on at registration.
       config.toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = true)

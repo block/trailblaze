@@ -20,7 +20,7 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
 @Serializable
 @TrailblazeToolClass(
   name = "mobile_clearAppData",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Clears all data for the specified app, resetting it to a fresh state.")
 data class ClearAppDataTrailblazeTool(

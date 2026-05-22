@@ -1,0 +1,17 @@
+script: ./contacts_ios_openApp.ts
+name: contacts_ios_openApp
+description: |
+  Open the iOS Contacts app from a cold start. Use this when the task is to
+  launch Contacts, open the Contacts app, go to Contacts, or otherwise begin
+  a Contacts flow. Force-restarts the app so a stale draft or in-progress
+  search from a prior run doesn't leak in. Verifies the contacts list root
+  rendered ("Contacts" navbar title visible). Optionally dismisses any leftover
+  keyboard so the next step sees the full list.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  dismissKeyboard:
+    type: boolean
+    description: When true, attempts to dismiss a leftover keyboard if one is visible. Defaults to true.
+    required: false

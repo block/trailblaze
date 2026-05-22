@@ -2,6 +2,7 @@ package xyz.block.trailblaze.scripting.callback
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import java.io.ByteArrayOutputStream
@@ -348,6 +349,162 @@ class CallbackDispatcherTest {
       field.set(Console, original)
       printStream.close()
     }
+  }
+
+  @Test
+  fun `unknown argument keys are rejected before dispatch with canonical-shape message`() = runBlocking {
+    // #3209 — the typed-surface contract (`client.d.ts`) rejects unknown keys at
+    // compile time; this runtime check closes the matching gap so a scripted tool that
+    // skipped tsc (or copied an LLM-emitted authoring hint like `element:` from a
+    // recording) can't silently drop the key at the wire. The expected shape:
+    //  - CallToolResult, success=false (NOT a protocol-level Error — the scripted caller's
+    //    awaiting promise sees the same envelope as any other tool failure).
+    //  - errorMessage names the offending key, the canonical accepted keys, and points at
+    //    `client.tools.<toolName>` so the author knows where to look.
+    val sessionId = SessionId("unknown-key-reject")
+    val handle = register(sessionId)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(
+          sessionId.value,
+          handle.invocationId,
+          "inputText",
+          // `text` is the real required arg; `element` is the LLM authoring hint that today
+          // gets silently dropped. The runtime gate should reject the call before reaching
+          // the deserializer, naming `element` as the offending key.
+          """{"text":"hi","element":"the input"}""",
+        ),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+      assertThat(cap.success).isEqualTo(false)
+      val message = cap.errorMessage ?: error("Expected errorMessage on rejection")
+      assertThat(message).contains("inputText")
+      assertThat(message).contains("\"element\"")
+      assertThat(message).contains("text")
+      assertThat(message).contains("client.tools.inputText")
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `payload using only known keys passes the unknown-key gate`() = runBlocking {
+    // Companion to the rejection test: the gate must be a no-op for the well-formed case so
+    // every existing scripted-tool caller keeps working. If this regresses, every legitimate
+    // tool call would start returning an unknown-key error.
+    val sessionId = SessionId("unknown-key-allow")
+    val handle = register(sessionId)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(
+          sessionId.value,
+          handle.invocationId,
+          "inputText",
+          """{"text":"hello"}""",
+        ),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+      // The tool itself may fail in this test harness (no real device), so we only assert
+      // that the error — if any — is NOT the unknown-key rejection message.
+      val message = cap.errorMessage.orEmpty()
+      assertThat(message).doesNotContain("unknown argument keys")
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `missing required argument is rejected before dispatch with directed message`() = runBlocking {
+    // #3261 — runtime side of the typed-surface contract for required args. The validator
+    // must reject a payload that omits a `required: true` arg with a CallToolResult whose
+    // errorMessage names the missing key and points at `client.tools.<name>`. Without
+    // this gate, the call would route into the JS handler with `args.text === undefined`
+    // and surface as an opaque "missing argument" runtime error several frames into the
+    // bundle — the validator gives the author an actionable message before any handler
+    // code runs. Mirrors the unknown-key rejection test above for shape parity; the only
+    // difference is omission vs. extra-key.
+    val sessionId = SessionId("missing-required-reject")
+    val handle = register(sessionId)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(
+          sessionId.value,
+          handle.invocationId,
+          "inputText",
+          // `inputText` declares `text` as required (no default in the data class). Omitting
+          // it must surface the validator's missing-required message — not the deserializer's
+          // MissingFieldException, which would reach the caller as a "decode failed" string.
+          """{}""",
+        ),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+      assertThat(cap.success).isEqualTo(false)
+      val message = cap.errorMessage ?: error("Expected errorMessage on rejection")
+      assertThat(message).contains("inputText")
+      assertThat(message).contains("\"text\"")
+      assertThat(message).contains("Required: text")
+      assertThat(message).contains("client.tools.inputText")
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `missing-required rejection emits MISSING_REQUIRED_REJECTED log marker distinct from unknown-key`() = runBlocking {
+    // Pins the operator-debugging contract for the new rejection tag: missing-required
+    // must NOT log under `UNKNOWN_KEYS_REJECTED` (the pre-#3261 single tag). A grep on
+    // `MISSING_REQUIRED_REJECTED` should surface only missing-required rejections from
+    // EITHER dispatch transport; `UNKNOWN_KEYS_REJECTED` should surface only the original
+    // unknown-key flavor. A refactor that re-collapses the tags would mask the failure
+    // mode in production triage.
+    val sessionId = SessionId("missing-required-log-marker")
+    val handle = register(sessionId)
+    val output = try {
+      captureConsoleLog {
+        JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(
+            sessionId.value,
+            handle.invocationId,
+            "inputText",
+            """{}""",
+          ),
+        )
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] MISSING_REQUIRED_REJECTED")
+    assertThat(output).doesNotContain("UNKNOWN_KEYS_REJECTED")
+    assertThat(output).contains("tool 'inputText'")
+    assertThat(output).contains("session ${sessionId.value}")
+  }
+
+  @Test
+  fun `unknown-key rejection emits UNKNOWN_KEYS_REJECTED log marker tagged with tool and session`() = runBlocking {
+    // Pins the operator-debugging contract for the rejection path: a single grep on
+    // `UNKNOWN_KEYS_REJECTED` must find rejections from EITHER dispatch transport. The
+    // matching marker on the QuickJS path lives in `SessionScopedHostBinding`. A refactor
+    // that renames or drops one of the two markers would silently break the unified grep —
+    // assertion here catches that.
+    val sessionId = SessionId("unknown-key-log-marker")
+    val handle = register(sessionId)
+    val output = try {
+      captureConsoleLog {
+        JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(
+            sessionId.value,
+            handle.invocationId,
+            "inputText",
+            """{"text":"hi","element":"the input"}""",
+          ),
+        )
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_KEYS_REJECTED")
+    assertThat(output).contains("tool 'inputText'")
+    assertThat(output).contains("session ${sessionId.value}")
   }
 
   @Test

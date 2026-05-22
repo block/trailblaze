@@ -17,16 +17,23 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import java.io.File
 
 /**
- * The sibling-collision guard is the load-bearing safety net for `waypoint tune`. These
- * tests pin the four contractual paths:
+ * The sibling-collision guard is the load-bearing safety net for both `waypoint tune`
+ * (refinement, via [WaypointSiblingCollisionGuard.check]) and `waypoint propose`
+ * (detection, via [WaypointSiblingCollisionGuard.checkOverlap] with
+ * `definitionBefore = null`). These tests pin the contractual paths for both modes.
  *
- * 1. Proposal that newly matches a step with **no sibling** overlap → safe.
- * 2. Proposal that newly matches a step a **sibling already matches** → collision flagged.
- * 3. Proposal whose `definitionBefore` already matched the step → not counted as
- *    newly-matched, no false-positive collision.
- * 4. Sibling list containing the proposal's own waypoint → must be ignored by the caller
- *    (the guard itself doesn't filter — verify that contract here so the caller can be
- *    relied on to filter siblings before the call).
+ * **Refinement path** (`check(proposal, ...)`):
+ *  1. Proposal that newly matches a step with **no sibling** overlap → safe.
+ *  2. Proposal that newly matches a step a **sibling already matches** → collision
+ *     flagged.
+ *  3. Proposal whose `definitionBefore` already matched the step → not counted as
+ *     newly-matched, no false-positive collision.
+ *  4. Sibling list containing the proposal's own waypoint → guard self-filters.
+ *
+ * **Detection path** (`checkOverlap(definitionBefore = null, ...)`):
+ *  5. New-waypoint definition whose screen a sibling **also matches** → collision.
+ *  6. New-waypoint definition whose screen no sibling matches → safe.
+ *  7. Siblings list containing the new waypoint itself → guard self-filters.
  */
 class WaypointSiblingCollisionGuardTest {
 
@@ -123,23 +130,24 @@ class WaypointSiblingCollisionGuardTest {
     )
   }
 
-  // ---------------- checkNewWaypoint (detection path) ----------------
+  // ---------------- checkOverlap with definitionBefore = null (detection path) ----------------
 
-  // The detection pipeline (#3095) calls `checkNewWaypoint` directly — no
-  // `definitionBefore` because a brand-new waypoint has no prior definition to diff.
-  // The empty-def trick fails here (empty def matches every screen, so [checkEdit]'s
-  // skip-clause silently no-ops the bleed check) which is why the dedicated method
-  // exists. Pin the contract.
+  // The detection pipeline (#3095) calls `checkOverlap(definitionBefore = null, ...)` —
+  // a brand-new waypoint has no prior definition to diff, so "newly-matched" collapses
+  // to "matched by definitionAfter at all." The empty-def trick fails here (empty def
+  // matches every screen, so the diff path's skip-clause silently no-ops the bleed
+  // check), which is why the null branch exists. Pin the contract.
 
   @Test
-  fun `checkNewWaypoint flags collision when sibling also matches the new waypoint screen`() {
+  fun `checkOverlap with null before flags collision when sibling also matches the new waypoint screen`() {
     val newDef = waypoint("myapp/new", required = listOf(textEntry("Accept")))
     val sibling = waypoint("myapp/home", required = listOf(textEntry("Accept")))
     val step = sessionStep("s1", "s1/a", screenStateOf("Accept"))
 
-    val verdict = WaypointSiblingCollisionGuard.checkNewWaypoint(
+    val verdict = WaypointSiblingCollisionGuard.checkOverlap(
       waypointId = "myapp/new",
-      newDefinition = newDef,
+      definitionBefore = null,
+      definitionAfter = newDef,
       siblings = listOf(sibling),
       sessions = listOf(step),
     )
@@ -151,14 +159,15 @@ class WaypointSiblingCollisionGuardTest {
   }
 
   @Test
-  fun `checkNewWaypoint safe when no sibling matches the proposal's screen`() {
+  fun `checkOverlap with null before is safe when no sibling matches the proposal's screen`() {
     val newDef = waypoint("myapp/new", required = listOf(textEntry("Accept")))
     val sibling = waypoint("myapp/home", required = listOf(textEntry("Reject")))
     val step = sessionStep("s1", "s1/a", screenStateOf("Accept"))
 
-    val verdict = WaypointSiblingCollisionGuard.checkNewWaypoint(
+    val verdict = WaypointSiblingCollisionGuard.checkOverlap(
       waypointId = "myapp/new",
-      newDefinition = newDef,
+      definitionBefore = null,
+      definitionAfter = newDef,
       siblings = listOf(sibling),
       sessions = listOf(step),
     )
@@ -168,15 +177,16 @@ class WaypointSiblingCollisionGuardTest {
   }
 
   @Test
-  fun `checkNewWaypoint self-filters when siblings list includes the new waypoint`() {
+  fun `checkOverlap with null before self-filters when siblings list includes the new waypoint`() {
     // Caller passing the full pack (incl. the new waypoint) must not produce a self-
     // collision pseudo-failure. The id-filter inside the loop is the contract.
     val newDef = waypoint("myapp/new", required = listOf(textEntry("Accept")))
     val step = sessionStep("s1", "s1/a", screenStateOf("Accept"))
 
-    val verdict = WaypointSiblingCollisionGuard.checkNewWaypoint(
+    val verdict = WaypointSiblingCollisionGuard.checkOverlap(
       waypointId = "myapp/new",
-      newDefinition = newDef,
+      definitionBefore = null,
+      definitionAfter = newDef,
       siblings = listOf(newDef),
       sessions = listOf(step),
     )

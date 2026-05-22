@@ -21,7 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_sendSmsToDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Simulates receiving an SMS message on the device by inserting into the SMS inbox.")
 data class AndroidWorldBenchmarksSendSmsToDeviceTrailblazeTool(

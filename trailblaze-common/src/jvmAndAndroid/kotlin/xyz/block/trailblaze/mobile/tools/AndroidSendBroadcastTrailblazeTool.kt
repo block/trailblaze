@@ -19,7 +19,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "android_sendBroadcast",
-  isForLlm = false,
+  surfaceToLlm = false,
   // Dual-mode primitive: scripted-tool composition relies on the `Success.message` payload
   // (broadcast result data) which the on-device-RPC return path silently discards. Host-side
   // actual is the contract surface for callback paths.

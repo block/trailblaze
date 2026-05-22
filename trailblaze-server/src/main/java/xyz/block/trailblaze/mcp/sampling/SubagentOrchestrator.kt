@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.SamplingResult
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -44,7 +45,7 @@ import kotlin.reflect.KClass
 class SubagentOrchestrator(
   private val sessionContext: TrailblazeMcpSessionContext,
   private val mcpBridge: TrailblazeMcpBridge,
-  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  private val screenshotScalingConfig: ScreenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
 ) {
   private val samplingClient = McpSamplingClient(sessionContext)
 

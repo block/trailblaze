@@ -233,10 +233,10 @@ class WaypointProposeCommand : Callable<Int> {
    *     refinement should handle the existing waypoint's drift instead.
    *  3. **Cross-waypoint bleed** — the new definition must not match any other session
    *     step that an existing waypoint already matches. Runs through
-   *     [WaypointSiblingCollisionGuard.checkNewWaypoint] — the detection-specific
-   *     match-only variant of the guard (no `definitionBefore` diff; "newly-matched"
-   *     collapses to "matched by the new definition"). The empty-definition shape that
-   *     an earlier draft tried doesn't work here — see the kdoc on `checkNewWaypoint`.
+   *     [WaypointSiblingCollisionGuard.checkOverlap] with `definitionBefore = null` —
+   *     the detection-specific match-only branch (no diff; "newly-matched" collapses
+   *     to "matched by the new definition"). The empty-definition shape that an
+   *     earlier draft tried doesn't work here — see the kdoc on `checkOverlap`.
    */
   private fun validateAndJoin(
     cluster: WaypointProposer.ClusterFingerprint,
@@ -267,13 +267,13 @@ class WaypointProposeCommand : Callable<Int> {
         ),
       )
     }
-    // Cross-waypoint bleed for a brand-new waypoint uses the guard's new-waypoint shape
-    // (no `definitionBefore` diff — there's no prior definition to compare against).
-    // For each session step the proposal matches, check whether any existing waypoint also
-    // matches; that overlap is the bleed signal.
-    val bleed = WaypointSiblingCollisionGuard.checkNewWaypoint(
+    // Cross-waypoint bleed for a brand-new waypoint: no `definitionBefore` diff — there's
+    // no prior definition to compare against. For each session step the proposal matches,
+    // check whether any existing waypoint also matches; that overlap is the bleed signal.
+    val bleed = WaypointSiblingCollisionGuard.checkOverlap(
       waypointId = s.definition.id,
-      newDefinition = s.definition,
+      definitionBefore = null,
+      definitionAfter = s.definition,
       siblings = packDefinitions,
       sessions = sessions,
       target = target,

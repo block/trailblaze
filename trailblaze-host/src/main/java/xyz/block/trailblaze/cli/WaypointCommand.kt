@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import xyz.block.trailblaze.cli.propose.WaypointProposeCommand
+import xyz.block.trailblaze.cli.shortcut.WaypointShortcutCommand
 import xyz.block.trailblaze.cli.tune.WaypointTuneCommand
 import java.util.concurrent.Callable
 
@@ -46,6 +47,10 @@ import java.util.concurrent.Callable
     // fingerprints (one PR per cluster in the trailblaze-waypoints-propose pipeline).
     // See docs/internal/devlog/2026-05-19-waypoint-pack-detection.md.
     WaypointProposeCommand::class,
+    // Shortcut loop — synthesize draft *.shortcut.yaml files from observed (A->B)
+    // waypoint transitions and empirically replay each one before opening a PR.
+    // See docs/internal/devlog/2026-05-19-waypoint-pack-shortcuts.md.
+    WaypointShortcutCommand::class,
   ],
 )
 class WaypointCommand : Callable<Int> {

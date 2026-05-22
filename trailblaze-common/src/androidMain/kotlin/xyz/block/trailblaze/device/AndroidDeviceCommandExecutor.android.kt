@@ -28,6 +28,9 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return AdbCommandUtil.execShellCommand(command)
   }
 
+  actual fun executeShellCommandArgs(vararg args: String): String =
+    AdbCommandUtil.execShellCommand(args.joinToString(" ") { it.shellEscape() })
+
   actual fun executeShellCommandAs(appId: String, command: String): String {
     // Delegates to executeShellCommand → UiDevice.executeShellCommand → UiAutomation, which
     // runs the wrapping shell as UID 2000 (shell). That's the privilege `run-as` needs to
@@ -77,6 +80,23 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     )
   }
 
+  actual fun grantRuntimePermission(appId: String, permission: String) {
+    validateGrantRuntimePermissionArgs(appId, permission)
+    // [AdbCommandUtil.grantPermission] no-ops if the permission is already granted and
+    // returns Unit on success; failures (e.g. permission not declared in the target
+    // manifest) throw. Routes through the shared `handleGrantRuntimePermissionOutcome`
+    // helper so the swallow-and-log contract matches the JVM `actual` and is covered by
+    // the same test suite. Block returns `null` so the helper's stderr-string branch is
+    // skipped — there is no stderr to surface from this transport.
+    handleGrantRuntimePermissionOutcome(appId, permission) {
+      AdbCommandUtil.grantPermission(
+        targetAppPackageName = appId,
+        permission = permission,
+      )
+      null
+    }
+  }
+
   actual fun writeFileToDownloads(fileName: String, content: ByteArray) {
     val context = InstrumentationRegistry.getInstrumentation().context
     FileReadWriteUtil.writeToDownloadsFile(
@@ -94,6 +114,14 @@ actual class AndroidDeviceCommandExecutor actual constructor(
 
   actual fun listInstalledApps(): List<String> {
     return AdbCommandUtil.listInstalledApps()
+  }
+
+  actual fun disablePackageForUser(packageId: String) {
+    AdbCommandUtil.execShellCommand("pm disable-user ${packageId.shellEscape()}")
+  }
+
+  actual fun enablePackageForUser(packageId: String) {
+    AdbCommandUtil.execShellCommand("pm enable ${packageId.shellEscape()}")
   }
 
   actual fun addContact(contact: DeviceContact) {

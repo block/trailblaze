@@ -29,9 +29,13 @@ const fakeCtx: TrailblazeContext = {
 };
 
 describe("createClient", () => {
-  test("returns an object exposing both callTool and the tools namespace", () => {
+  test("returns an object whose runtime carries callTool (hidden from the public type) and the tools namespace", () => {
     const client = createClient(fakeCtx);
-    expect(typeof client.callTool).toBe("function");
+    // `callTool` is omitted from the exported `TrailblazeClient` type so authors can only
+    // dispatch through `client.tools.<name>(args)`. The runtime object still carries the
+    // method as the internal dispatch primitive the `tools` Proxy delegates to — this test
+    // exercises that runtime contract directly via a `Record` cast.
+    expect(typeof (client as unknown as Record<string, unknown>).callTool).toBe("function");
     expect(typeof client.tools).toBe("object");
   });
 });

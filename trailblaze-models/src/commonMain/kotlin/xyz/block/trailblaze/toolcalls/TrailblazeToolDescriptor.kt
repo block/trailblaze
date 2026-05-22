@@ -25,8 +25,9 @@ data class TrailblazeToolParameterDescriptor(
 /**
  * [kotlin.io.Serializable] Mirror of [ai.koog.agents.core.tools.ToolDescriptor]
  *
- * Capability flags that live on [TrailblazeToolClass] (`isForLlm`, `isRecordable`,
- * `requiresHost`, `isVerification`) intentionally do **not** ride on this descriptor.
+ * Capability flags that live on [TrailblazeToolClass] (`surfaceToLlm`,
+ * `surfaceToScriptedTools`, `isRecordable`, `requiresHost`, `isVerification`) intentionally
+ * do **not** ride on this descriptor.
  * Descriptors are produced by several converters from many sources (Koog `ToolDescriptor`,
  * MCP `ToolSchema`, YAML configs) and threading every capability through every converter
  * is more error-prone than reading the source-of-truth annotation when needed. Consumers

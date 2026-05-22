@@ -402,12 +402,24 @@ open class AndroidTrailblazeRule(
 
   /**
    * After the parent rule chain completes its setup (UiDevice, status-bar hiding, etc.),
-   * enable the on-device [TrailblazeAccessibilityService] when the resolved driver is
-   * [TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY]. Without this hook, the
-   * accessibility-driver branch in [trailblazeAgent] constructs an [AccessibilityTrailblazeAgent]
-   * whose first interaction throws `TrailblazeAccessibilityService is not running` —
-   * the service is declared in this module's manifest and merged into the consumer APK,
-   * but Android only starts it after the host enables it in `enabled_accessibility_services`.
+   * enable the on-device [TrailblazeAccessibilityService]. Called unconditionally — not only
+   * when the resolved driver is [TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY] — because
+   * UiAutomator2 (the instrumentation driver's view-hierarchy source) reads the same OS
+   * accessibility node tree that Jetpack Compose only populates when
+   * `AccessibilityManager.isEnabled()` returns true in the app process. UiAutomation defaults
+   * to `flags = 0` (suppresses all accessibility services), which forces `isEnabled()` to false
+   * and collapses every Compose-rendered screen to a single bare `ComposeView` node with no
+   * children. Calling [OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady]
+   * reconnects UiAutomation with `FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES`, binds the
+   * service, and flips `isEnabled()` so Compose builds its semantic tree — required for the
+   * instrumentation driver on any Compose-heavy app, not only for the accessibility driver.
+   *
+   * For accessibility-driver runs the binding is also required so the
+   * [AccessibilityTrailblazeAgent] constructed in [trailblazeAgent] can issue taps/swipes
+   * (its first interaction would otherwise throw `TrailblazeAccessibilityService is not
+   * running`). The service is declared in this module's manifest and merged into the consumer
+   * APK, but Android only starts it after the host enables it in
+   * `enabled_accessibility_services`.
    *
    * Setup must happen **after** any UiDevice/shell operations that could trigger UiAutomation
    * reconnections (which destroy a running accessibility service). The parent
@@ -417,12 +429,9 @@ open class AndroidTrailblazeRule(
    */
   override fun beforeTestExecution(description: Description) {
     super.beforeTestExecution(description)
-    val isAccessibilityDriver =
-      trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
-    // Bind for the accessibility-driver case (existing behavior — required for taps/swipes).
-    if (isAccessibilityDriver) {
-      OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
-    }
+    // Bind unconditionally — needed for both the accessibility driver (taps/swipes) and the
+    // instrumentation driver (Compose semantic-tree exposure under UiAutomator2). See kdoc above.
+    OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
     // Bind for migration-mode capture (delegated to the shared helper). Subclasses that
     // insert their own UiDevice operations between this call and the test body
     // (e.g. a downstream subclass's `onBeforeTest`) MUST call the helper again *after*

@@ -1,0 +1,22 @@
+# Conditional UI handling: the `contacts_ios_dismissKeyboardIfPresent` tool
+# no-ops cleanly when no keyboard is showing, so this trail exercises both
+# branches in one run (no-op on cold start, then real dismiss after typing).
+- config:
+    title: "Contacts (iOS): Dismiss keyboard no-ops then dismisses"
+    platform: ios
+    driver: IOS_HOST
+    target: contacts
+    tags: [nav]
+- prompts:
+    - step: |
+        Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+        Expected: returns "no keyboard shown" suffix because the app
+        just cold-launched.
+    - step: |
+        Call the `contacts_ios_searchContacts` tool with query="John",
+        rowText="John Appleseed", openFirstResult=false.
+        This leaves the keyboard up with text in the field.
+    - step: |
+        Call the `contacts_ios_dismissKeyboardIfPresent` tool.
+        Expected: returns the "Dismissed iOS keyboard" string because
+        the keyboard is now visible.

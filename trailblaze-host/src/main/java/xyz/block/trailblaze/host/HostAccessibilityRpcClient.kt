@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -343,7 +344,9 @@ class HostAccessibilityRpcClient(
    * we re-run the readiness probe once and retry the capture — no blanket retry loop.
    */
   override suspend fun captureScreenState(): ScreenState? {
-    when (val first = rpcClient.rpcCall(GetScreenStateRequest())) {
+    val request = GetScreenStateRequest()
+      .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
+    when (val first = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
       is RpcResult.Failure -> Console.log(
         "[HostAccessibilityRpcClient] GetScreenState ${first.errorType}: ${first.message}" +
@@ -360,7 +363,7 @@ class HostAccessibilityRpcClient(
       Console.log("[HostAccessibilityRpcClient] Re-warm failed: ${e.message}")
       return null
     }
-    return when (val retry = rpcClient.rpcCall(GetScreenStateRequest())) {
+    return when (val retry = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> RpcScreenStateAdapter.from(retry.data)
       is RpcResult.Failure -> {
         Console.log(

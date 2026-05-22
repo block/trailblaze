@@ -1,0 +1,20 @@
+# Demonstrates the `wikipedia_web_openArticle` scripted trailhead. Requires the
+# Trailblaze daemon to be running with this pack's config dir set:
+#
+#   export TRAILBLAZE_CONFIG_DIR=$PWD/examples/wikipedia/trails/config
+#   ./trailblaze app --stop && ./trailblaze app --headless & disown
+#   ./trailblaze trail trails/wikipedia/test-custom-open-article --device web
+- config:
+    id: "wikipedia/test-custom-open-article"
+    title: "Wikipedia (scripted): open Albert Einstein via wikipedia_web_openArticle"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+- prompts:
+    - step: |
+        Call the `wikipedia_web_openArticle` tool with title="Albert Einstein",
+        expectedHeading="Albert Einstein", dismissBanner=true to navigate to the article.
+    - step: |
+        Call the `wikipedia_web_verifyArticleStructure` tool with
+        expectedHeading="Albert Einstein", requireReferences=true to confirm the
+        article shape.

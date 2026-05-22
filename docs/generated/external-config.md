@@ -125,7 +125,7 @@ target:
   # per file under tools/. No `bun install` required, no subprocess. The host runner
   # synthesizes a small wrapper at session start.
   tools:
-    - tools/host_writeArtifact.yaml
+    - host_writeArtifact
   # Subprocess MCP servers — kept for capability coverage so the path doesn't bitrot. The
   # framework supports this if a consumer needs it (deal-breaker scenarios), but prefer the
   # `tools:` block above for new authoring: zero install step, smaller dependency surface.
@@ -172,7 +172,7 @@ Toolsets are declared in `toolsets/*.yaml`. They are pure YAML groupings: `id`, 
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
 | `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 2 |
-| `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
+| `web_core` | No | `playwright-electron`, `playwright-native` | 17 |
 | `web_verification` | No | `playwright-electron`, `playwright-native` | 5 |
 
 ## Authoring Tools

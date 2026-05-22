@@ -98,17 +98,16 @@ export interface TrailblazeCallToolResult {
  * }
  * ```
  *
- * A tool listed here lights up the strict `callTool` overload (autocomplete on the name,
- * type-checked args) and surfaces on `client.tools.<name>(...)`. Tools NOT listed fall
- * through to the untyped `(string, Record)` overload — fully backward-compatible with code
- * written against the original signature.
+ * A tool listed here lights up `client.tools.<name>(args)` with autocomplete on the name
+ * and type-checked args. Tools NOT listed are not reachable through the public client
+ * surface — the lower-level `callTool` dispatch primitive is hidden from the exported
+ * [TrailblazeClient] type so an author can't reintroduce an untyped escape hatch
+ * (`client.callTool("anything", {...})` no longer compiles).
  *
- * **Preferred surface.** New code should use `client.tools.<name>(args)` for every tool
- * that has a typed entry — single autocomplete list across built-ins and per-pack scripted
- * tools, hover JSDoc on both the name and the args. `client.callTool(name, args)` is the
- * lower-level escape hatch for genuinely-dynamic tool names (e.g. names produced at
- * runtime). Both surfaces dispatch through the same wire path; the choice is purely about
- * type-safety ergonomics at the call site.
+ * **Single authoring surface.** `client.tools.<name>(args)` is the only call style
+ * available to a `.ts` author. The runtime still dispatches everything through the
+ * internal `callTool` method that the `tools` Proxy delegates to, but the type isn't
+ * exposed publicly — every tool a pack can call must be declared in `TrailblazeToolMap`.
  *
  * **Multi-pack collision risk.** Within a single pack the Gradle generator fails the build
  * if two scripted tools share a name. Across packs (a TS consumer that imports two pack
@@ -126,13 +125,14 @@ export interface TrailblazeToolMap {}
  * a typed method — e.g. given `interface TrailblazeToolMap { inputText: { text: string } }`,
  * the namespace exposes `inputText(args: { text: string }): Promise<TrailblazeCallToolResult>`.
  *
- * This is the preferred surface for tools that have a typed entry in the map: the IDE shows
- * every available tool when you type `client.tools.`, hover gives JSDoc on both the name and
- * the args, and a wrong-keyed/missing-field args object errors at compile time without any
- * string-literal fiddling.
+ * This is the sole authoring surface a `.ts` tool file has to compose other Trailblaze
+ * tools: the IDE shows every available tool when you type `client.tools.`, hover gives
+ * JSDoc on both the name and the args, and a wrong-keyed/missing-field args object errors
+ * at compile time without any string-literal fiddling.
  *
  * Tools not represented in the map (dynamically-registered, packs without generated
- * bindings) live on `client.callTool(name, args)` with the untyped fallback signature.
+ * bindings) are unreachable from a typed `.ts` author — every tool a pack can call must be
+ * declared in `TrailblazeToolMap` via the SDK's vendored built-ins or per-pack codegen.
  */
 export type TrailblazeToolMethods = {
   [K in keyof TrailblazeToolMap]: (
@@ -141,31 +141,23 @@ export type TrailblazeToolMethods = {
 };
 
 /**
- * Third handler argument on `trailblaze.tool(name, spec, handler)`. Exposes the callback
- * channel so tools can compose other Trailblaze tools. Always provided (never `undefined`) —
- * when the envelope is missing, the client's preflight check still runs and throws a clear
- * error instead of silently no-op'ing.
+ * Internal client surface — includes the low-level `callTool(name, args)` dispatch
+ * primitive that the `tools` Proxy delegates to. File-local (no `export`) and not
+ * re-exported from `index.ts` so a downstream author can't name this interface and
+ * bypass the lockdown by typing a variable as `TrailblazeClientImpl`. The public
+ * [TrailblazeClient] type uses `Omit<..., "callTool">` against this interface in the
+ * same file; that's the only consumer that needs to see it.
  */
-export interface TrailblazeClient {
+interface TrailblazeClientImpl {
   /**
    * Dispatches Trailblaze tool [name] with [args] against the live Trailblaze session and
-   * returns the result.
+   * returns the result. Internal — see [TrailblazeClient] for the public surface.
    *
-   * **Typed args via [TrailblazeToolMap].** The arg shape is selected by a conditional type:
+   * **Typed args via [TrailblazeToolMap].** `name` is constrained to `keyof TrailblazeToolMap`
+   * (vendored built-ins + per-pack-generated entries); `args` must match the typed shape
+   * exactly. Wrong keys / missing required fields error at compile time.
    *
-   *  - Name IS a key of [TrailblazeToolMap] (vendored built-ins + per-pack-generated entries):
-   *    `args` must match the typed shape. Wrong keys / missing required fields error at
-   *    compile time. Autocomplete shows the tool's parameters.
-   *  - Name is NOT a key (dynamically-registered tools, packs without generated bindings,
-   *    ad-hoc one-offs): `args` is the fallback `Record<string, unknown>` — same as the
-   *    pre-bindings signature. Existing untyped code keeps compiling.
-   *
-   * The single conditional signature (rather than two overloads) is deliberate: with two
-   * overloads, `callTool("knownTool", { wrongShape })` silently falls through to the
-   * fallback overload because `Record<string, unknown>` accepts any object. The conditional
-   * picks one branch per call-site, so the strict branch's mismatch cannot be evaded.
-   *
-   * **Transports.** Picked automatically from the envelope — authors never branch on this:
+   * **Transports.** Picked automatically from the envelope — callers never branch on this:
    *
    *  - **Host** (tool runs as a daemon-spawned subprocess): HTTP POST to
    *    `${ctx.baseUrl}/scripting/callback`.
@@ -195,13 +187,13 @@ export interface TrailblazeClient {
    *
    * **Shared state warning.** The dispatched inner tool runs against the same Trailblaze
    * execution context as the outer tool — including the same AgentMemory, driver handle, and
-   * cached screen state. Authors MUST avoid read-then-write patterns across a `callTool`
+   * cached screen state. Authors MUST avoid read-then-write patterns across a tool-call
    * boundary:
    *
    * ```ts
    * // RACE — inner tool can mutate memory between the read and the write
    * const prev = memory.get("x");
-   * await client.callTool("setFoo", {...});
+   * await client.tools.setFoo({...});
    * memory.put("x", updated(prev));
    * ```
    *
@@ -209,9 +201,9 @@ export interface TrailblazeClient {
    * concurrent-safe today). Serialize the access locally or avoid composed mutations when
    * correctness matters.
    */
-  callTool<K extends string>(
+  callTool<K extends keyof TrailblazeToolMap>(
     name: K,
-    args: K extends keyof TrailblazeToolMap ? TrailblazeToolMap[K] : Record<string, unknown>,
+    args: TrailblazeToolMap[K],
   ): Promise<TrailblazeCallToolResult>;
 
   /**
@@ -223,11 +215,31 @@ export interface TrailblazeClient {
    * The runtime is a `Proxy` — any property access becomes a `callTool(propertyName, args)`
    * dispatch. That means a tool not in the map (e.g. typed against an old SDK, or augmented
    * by a bindings file the consumer hasn't pulled in yet) still dispatches at runtime; the
-   * static type just won't show it. For genuinely-dynamic tool names use [callTool] with
-   * the untyped fallback overload.
+   * static type just won't show it.
    */
   tools: TrailblazeToolMethods;
 }
+
+/**
+ * Third handler argument on `trailblaze.tool(name, spec, handler)`. Exposes the callback
+ * channel so tools can compose other Trailblaze tools. Always provided (never `undefined`) —
+ * when the envelope is missing, the client's preflight check still runs and throws a clear
+ * error instead of silently no-op'ing.
+ *
+ * **Surface narrowing.** `callTool` is hidden from the public type via `Omit` — `.ts`
+ * authors can only compose tools through `client.tools.<name>(args)`, which forces every
+ * call through a typed entry in [TrailblazeToolMap]. The runtime keeps `callTool` as the
+ * internal dispatch primitive the `tools` Proxy delegates to.
+ *
+ * **Type-only lockdown.** The narrowing is a compile-time guarantee, not a runtime one.
+ * At runtime, the object still carries `callTool` and the `tools` Proxy accepts any string
+ * property — `(client as unknown as Record<string, unknown>).callTool("anything", {...})`
+ * or `(client.tools as Record<string, unknown>)["anything"]` still dispatch. The lockdown
+ * exists to catch honest mistakes at `tsc` time, not to prevent a determined caller from
+ * bypassing it. Authorization / tool-availability boundaries live at the daemon (allowlist,
+ * selector validation, envelope checks), not at the SDK type layer.
+ */
+export type TrailblazeClient = Omit<TrailblazeClientImpl, "callTool">;
 
 // ---- Implementation ---------------------------------------------------------------------------
 
@@ -282,17 +294,30 @@ const CLIENT_FETCH_TIMEOUT_MS = resolveClientFetchTimeoutMs();
  * through the right one.
  */
 export function createClient(ctx: TrailblazeContext | undefined): TrailblazeClient {
-  const callToolImpl = <K extends string>(
-    name: K,
-    args: K extends keyof TrailblazeToolMap ? TrailblazeToolMap[K] : Record<string, unknown>,
-  ): Promise<TrailblazeCallToolResult> => callTool(ctx, name, args as Record<string, unknown>);
+  // Loose-typed dispatcher fed to the `tools` Proxy. The Proxy's `get` handler receives
+  // arbitrary property-name strings at the JS-runtime layer (TS sees mapped-type keys, but
+  // the runtime sees raw `string`), so the impl that backs it must accept `string`/`Record`
+  // permissively. The public `TrailblazeClientImpl.callTool` narrows this to
+  // `K extends keyof TrailblazeToolMap` for the type-checker.
+  const dispatch = (name: string, args: Record<string, unknown>): Promise<TrailblazeCallToolResult> =>
+    callTool(ctx, name, args);
 
   // `client.tools.<toolName>(args)` namespace. Built as a Proxy so the SDK doesn't need to
   // know which keys are augmented — any property access becomes a `callTool(propertyName,
   // args)` dispatch at runtime. The static type (TrailblazeToolMethods) constrains what the
   // IDE/tsc see; the runtime is intentionally permissive so a downstream that augments
   // TrailblazeToolMap without touching the SDK's runtime still works end-to-end.
-  return { callTool: callToolImpl, tools: createToolsProxy(callToolImpl) };
+  //
+  // The runtime object carries `callTool` (the internal dispatcher) plus `tools`, but the
+  // exported `TrailblazeClient` type omits `callTool` — so a `.ts` tool author sees only
+  // the `tools` namespace. The cast on `dispatch` is intentional: the runtime function is
+  // permissive on (string, Record), and `TrailblazeClientImpl.callTool` is the public
+  // narrowed view onto the same runtime callable.
+  const impl: TrailblazeClientImpl = {
+    callTool: dispatch as TrailblazeClientImpl["callTool"],
+    tools: createToolsProxy(dispatch),
+  };
+  return impl;
 }
 
 /**

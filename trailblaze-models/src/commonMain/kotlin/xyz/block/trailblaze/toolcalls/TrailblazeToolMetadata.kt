@@ -13,7 +13,7 @@ package xyz.block.trailblaze.toolcalls
  * ## Null semantics
  *
  * `null` on any field means "fall through to the class annotation default" — same null
- * semantics as [xyz.block.trailblaze.config.ToolYamlConfig.isForLlm] etc. The resolver
+ * semantics as [xyz.block.trailblaze.config.ToolYamlConfig.surfaceToLlm] etc. The resolver
  * helpers ([getIsRecordableFromAnnotation], [requiresHostInstance]) treat them that way:
  * each field is consulted with `?.let { return it }` and only short-circuits when non-null.
  *
@@ -24,7 +24,7 @@ package xyz.block.trailblaze.toolcalls
  * more natural for the source.
  */
 data class TrailblazeToolMetadata(
-  val isForLlm: Boolean? = null,
+  val surfaceToLlm: Boolean? = null,
   val isRecordable: Boolean? = null,
   val requiresHost: Boolean? = null,
   val isVerification: Boolean? = null,

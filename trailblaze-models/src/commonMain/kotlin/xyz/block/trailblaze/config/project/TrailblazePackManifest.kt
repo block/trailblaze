@@ -85,10 +85,13 @@ import xyz.block.trailblaze.config.PlatformConfig
  * | [trails] | **Reserved schema slot; runtime loading deferred.** |
  *
  * **No top-level `tools:` field.** Operational tool YAMLs (`*.tool.yaml`, `*.shortcut.yaml`,
- * `*.trailhead.yaml`) are auto-discovered from `<pack>/tools/` by directory walk. Authoring is
- * "drop a YAML file in `tools/`, it ships with the pack" — the manifest doesn't enumerate. Per-
- * target scripted-tool descriptors stay listed under `target.tools:` because they're per-target
- * glue, not standard library content.
+ * `*.trailhead.yaml`, `*.waypoint.yaml`) are auto-discovered from `<pack>/tools/` (and
+ * `<pack>/waypoints/` for the waypoint flavor) by directory walk. Scripted-tool descriptors
+ * (`*.yaml` files in `<pack>/tools/` whose name doesn't carry one of those operational
+ * suffixes) are also auto-discovered into a per-pack name-keyed registry. Authoring is
+ * "drop a YAML file in `tools/`, it ships with the pack" — the manifest doesn't enumerate the
+ * tool files themselves. The `target.tools:` list still appears, but as a per-target list of
+ * scripted-tool *names* selecting which discovered tools this target exposes — names, not paths.
  *
  * The previous `routes:` reserved slot was removed in 2026-04-28 — routes were dropped as a
  * separate concept in favor of "shortcuts that invoke other shortcuts."
@@ -124,6 +127,54 @@ data class TrailblazePackManifest(
    * See class kdoc for the resolution semantics and [PlatformConfig] for field details.
    */
   @SerialName("defaults") val defaults: Map<String, PlatformConfig>? = null,
+  /**
+   * Library-pack only. Top-level per-platform configuration that declares the library's
+   * own runtime-registry needs — the toolsets the library's internal scripted tools
+   * dispatch against at runtime. Same shape as [PackTargetConfig.platforms]; keys are
+   * platform names (`android`, `ios`, `web`, `compose`).
+   *
+   * **Authoring contract.** Only library packs (no [target] block) may set this field.
+   * A target pack's per-platform configuration belongs under `target.platforms:`; setting
+   * top-level `platforms:` on a target pack is a category error rejected by
+   * [TrailblazePackManifestLoader.enforceLibraryPackContract].
+   *
+   * **Resolution layer.** Unlike [defaults] (the agent-toolbox closest-wins layer),
+   * declarations here feed the *runtime-registry* layer — the transitive union of every
+   * pack-in-closure's `platforms.<platform>.tool_sets:` (see
+   * `PackRuntimeRegistryResolver` in `:trailblaze-common`). A library pack's own scripted
+   * tools can call any tool reachable via that union even if the consumer's agent toolbox
+   * (decided by `target.platforms.tool_sets:` + library [exports]) doesn't surface it.
+   *
+   * Example (the `entity_factory` library pack):
+   * ```yaml
+   * id: entity_factory
+   * platforms:
+   *   web:
+   *     tool_sets: [web_core]    # internal — added to runtime registry,
+   *                               # not exposed to consumers' agent toolbox or typed surface
+   * exports:
+   *   - createEntity              # public — flows into consumers' toolbox + typed surface
+   * ```
+   */
+  @SerialName("platforms") val platforms: Map<String, PlatformConfig>? = null,
+  /**
+   * Tool **names** (not file paths) this pack publishes to consumers. Listed tools become
+   * part of consumers' agent toolbox + typed surface via the dependency resolver. Tools
+   * present in the pack's `tools/` directory but NOT listed here are *internal helpers* —
+   * callable inside the pack at runtime, invisible to consumers.
+   *
+   * Each name must match a `name:` field of a tool YAML file under `<pack>/tools/`.
+   *
+   * Available on both library and target packs at the schema level. **Phase B caveat:**
+   * the typed-surface emitter (`PerPackClientDtsEmitter` in `:trailblaze-host`) flows
+   * `exports:` through to consumers only for scripted tools authored under target packs'
+   * `target.tools:`. Library-pack exports of composed `.tool.yaml` tools — and library-
+   * pack scripted-tool exports more broadly — are still pending the Phase C scripted-tool
+   * relocation (`target.tools:` paths→names + scripted-tool authoring under library
+   * packs). The runtime registry surfaces them today; the typed `client.d.ts` doesn't
+   * yet.
+   */
+  @SerialName("exports") val exports: List<String>? = null,
   @SerialName("toolsets") val toolsets: List<String> = emptyList(),
   /**
    * Deprecated / ignored at the resolution layer. Waypoints are now auto-discovered from
@@ -147,13 +198,18 @@ data class TrailblazePackManifest(
  * The target shape inside a pack. Differs from [AppTargetYamlConfig] in two ways:
  *
  * - [id] is optional (defaults to the pack's [TrailblazePackManifest.id]).
- * - [tools] holds **file paths**, not inline tool definitions. Each path is resolved by
- *   the pack loader to a [PackScriptedToolFile] under the pack directory and translated
- *   into the runtime [InlineScriptToolConfig] shape. This keeps every scripted tool in
- *   its own file under `<pack>/tools/<tool-name>.yaml` and avoids ballooning the pack
- *   manifest as a workspace grows.
+ * - [tools] holds **tool names**, not inline tool definitions. Each name is resolved by
+ *   the pack loader against the per-pack scripted-tool registry — built by auto-
+ *   discovering every `.yaml` file under the pack's `tools/` directory that isn't an
+ *   operational descriptor (suffixes `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`,
+ *   `.waypoint.yaml`) and indexing each [PackScriptedToolFile] by its declared `name:`
+ *   (single-tool shape) or by each entry's `name:` (multi-tool shape). The resolved
+ *   descriptor is then translated into the runtime [InlineScriptToolConfig] shape. This
+ *   keeps every scripted tool in its own file under `<pack>/tools/<tool-name>.yaml` and
+ *   lets the manifest reference each one by its stable tool name rather than its
+ *   filesystem path.
  *
- * Use [toAppTargetYamlConfig] *after* the loader has resolved [tools] paths to the
+ * Use [toAppTargetYamlConfig] *after* the loader has resolved [tools] names to the
  * runtime tool list.
  */
 @Serializable
@@ -175,6 +231,13 @@ data class PackTargetConfig(
    * without an authoring-side schema change.
    */
   @SerialName("system_prompt_file") val systemPromptFile: String? = null,
+  /**
+   * Scripted-tool names this target exposes. Each entry must match the `name:` field on a
+   * [PackScriptedToolFile] (or one of its [PackScriptedToolEntry] entries in the multi-tool
+   * shape) auto-discovered from any `.yaml` file under the pack's `tools/` directory. The
+   * loader builds a name-keyed registry per pack and errors helpfully if a name doesn't
+   * resolve.
+   */
   @SerialName("tools") val tools: List<String> = emptyList(),
 ) {
   fun toAppTargetYamlConfig(

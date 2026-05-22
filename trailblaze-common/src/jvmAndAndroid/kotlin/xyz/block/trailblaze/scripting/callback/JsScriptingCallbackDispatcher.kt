@@ -169,6 +169,38 @@ object JsScriptingCallbackDispatcher {
     action: JsScriptingCallbackAction.CallTool,
     timeoutMs: Long,
   ): JsScriptingCallbackResult {
+    // Unknown-key gate — runtime side of the typed-surface contract (#3209). Closes the
+    // gap between `client.d.ts`'s compile-time rejection and the deserializer's
+    // `ignoreUnknownKeys = true` silent-drop behavior. Returns a CallToolResult error (not
+    // an Error envelope) so the scripted caller's awaiting promise observes the same shape
+    // as any other tool-level failure (bad URL, missing required arg, etc.) instead of a
+    // protocol-level error that would surface differently in JS.
+    //
+    // Paired with [xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding.callFromBundle]
+    // — both transports must call the same validator with the same envelope shape so a
+    // scripted bundle author sees identical rejection behavior regardless of host runtime.
+    // Keep the two call sites in sync; #3214 will consolidate them into the repo.
+    JsScriptingCallbackArgumentValidator.validate(entry.toolRepo, action.toolName, action.argumentsJson)?.let { message ->
+      // Validator surfaces two distinct rejections: "unknown argument keys" (#3209) and
+      // "without required argument keys" (#3261). Log with whichever tag matches the
+      // message so an operator grepping `MISSING_REQUIRED_REJECTED` doesn't accidentally
+      // surface unknown-key failures and vice versa. The substrings match the wording the
+      // validator emits — keep them in sync with [JsScriptingCallbackArgumentValidator.validate].
+      val rejectionTag = if (message.contains("without required argument keys")) {
+        "MISSING_REQUIRED_REJECTED"
+      } else {
+        "UNKNOWN_KEYS_REJECTED"
+      }
+      Console.log(
+        "[JsScriptingCallbackDispatcher] $rejectionTag tool '${action.toolName}' in session " +
+          "${entry.sessionId.value}: $message",
+      )
+      return JsScriptingCallbackResult.CallToolResult(
+        success = false,
+        errorMessage = message,
+      )
+    }
+
     val tool = try {
       entry.toolRepo.toolCallToTrailblazeTool(action.toolName, action.argumentsJson)
     } catch (e: Exception) {

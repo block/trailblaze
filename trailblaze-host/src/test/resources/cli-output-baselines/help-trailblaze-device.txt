@@ -12,3 +12,5 @@ List and connect devices (Android, iOS, Web)
 Commands:
   list     List available devices
   connect  Connect a device to your session (ANDROID, IOS, or WEB)
+  create   Provision a device with a configured profile (web today; iOS /
+             Android future).

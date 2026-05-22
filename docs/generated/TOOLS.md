@@ -82,6 +82,7 @@
 - [web_navigate](functions/custom/web_navigate.md)
 - [web_press_key](functions/custom/web_press_key.md)
 - [web_request_details](functions/custom/web_request_details.md)
+- [web_resize](functions/custom/web_resize.md)
 - [web_scroll](functions/custom/web_scroll.md)
 - [web_select_option](functions/custom/web_select_option.md)
 - [web_snapshot](functions/custom/web_snapshot.md)

@@ -1,0 +1,44 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze results show [-hV] [--all-devices] [--json] [--latest]
+                               [--device=<profile>] [--repo=<repo>] <case-id>
+Show the recorded result for a TestRail case ID
+      <case-id>            TestRail case ID, e.g. C12345. Case-insensitive; the
+                             leading `C` is required.
+      --all-devices        Print a one-line summary for every device profile
+                             that has a recorded result for this case.
+                             Enumerates the case directory in the index repo.
+                             Mutually exclusive with --device / --latest /
+                             --json (single-device flags). Exit code: 0 iff
+                             every listed device's latest run is a pass AND a
+                             recorded success file is present; 1 if any device
+                             is currently failing OR its latest state could not
+                             be determined (e.g. 'data unavailable' shown when
+                             the cell's latest.json couldn't be read — check
+                             stderr for the underlying HTTP error). Usable as a
+                             CI gate, e.g. `results show C12345 --all-devices
+                             && deploy`.
+      --device=<profile>   Device profile to look up (e.g. android-phone,
+                             android-tablet, ios-iphone, ios-ipad, web).
+                             Required unless --all-devices is passed. The same
+                             case runs on multiple devices and produces
+                             materially different results per device, so this
+                             command refuses to guess.
+  -h, --help               Show this help message and exit.
+      --json               Print the raw JSON document instead of a pretty
+                             summary.
+      --latest             Show the most recent terminal run instead of the
+                             most recent successful run. Reads latest.json
+                             instead of latest_success.json for the chosen
+                             device cell.
+      --repo=<repo>        owner/name of the results repo to query. Falls back
+                             to the TRAILBLAZE_RESULTS_REPO env var when not
+                             supplied. The OSS CLI ships with no default;
+                             distributions point at their own index repo via
+                             the launcher.
+  -V, --version            Print version information and exit.

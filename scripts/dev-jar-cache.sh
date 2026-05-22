@@ -14,33 +14,42 @@
 # Uses `git diff` for tracked files (captures actual content changes) and file stat
 # for untracked files. ~0.2s — fast enough for a launcher.
 #
-# Excludes trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`) —
-# these are *output* from trail runs, not inputs to the build. Including them
-# meant every `./trailblaze trail` (which writes a recording) silently changed
-# the source hash, so the very next CLI invocation would force-stop the daemon
-# and rebuild the uber JAR even though nothing about the CLI binary had changed.
+# Scope is files that invalidate the JVM uber JAR. Two-axis include:
+#  - Kotlin/Java sources + build config by extension anywhere in the tree
+#    (`.kt`/`.kts`/`.java`/`.properties`/`.toml`/`.xml`/`.pro`). No Groovy
+#    `.gradle` — there are none in the repo; `.kts` covers `build.gradle.kts`.
+#  - YAML/JSON/HTML *classpath resources* under `**/src/**/resources/**` —
+#    these get baked into the JAR (e.g. `trailblaze-compose/src/main/resources/
+#    .../*.tool.yaml` tool descriptors, `trailblaze-models/src/commonMain/
+#    resources/.../providers/*.yaml` provider configs, the bundled framework
+#    pack at `trailblaze-models/.../resources/.../packs/trailblaze/pack.yaml`,
+#    `trailblaze-host/.../waypoint-graph-template.html`).
+#
+# Everything not matched above is excluded by default — including pack-author
+# content under `trails/config/packs/**` and `examples/**` (`pack.yaml`,
+# `.ts`/`.js`/`.mjs`/`.cjs` tools, `.md` system prompts, `*.example.json`
+# waypoint snapshots) and top-level `.md` READMEs. These are inputs to the
+# *running daemon*, not the JAR build, and rebuilding for every pack-author
+# save killed the edit-test loop (60s per touch → sub-second).
+#
+# Framework-generated artifacts under `.trailblaze/` (both repo-root and nested)
+# are explicitly excluded so committing one doesn't accidentally re-include it.
 dev_source_hash() {
   {
     git rev-parse HEAD
     # Content diff of tracked files (catches edits to already-dirty files).
-    # The `:!...` pathspecs exclude artifacts that the runtime overwrites —
-    # trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`,
-    # `trails/**/*.blaze.yaml`) and waypoint example pairs (`*.example.json`)
-    # are test artifacts / captured screen-state snapshots, not source.
-    # Without the `*.example.json` exclusion here, every `capture-example`
-    # run that overwrites a tracked snapshot would change the source hash
-    # and force a daemon rebuild on the next CLI invocation, even though
-    # nothing about the binary changed.
-    git diff HEAD -- '*.kt' '*.java' '*.kts' '*.properties' '*.toml' '*.xml' '*.json' '*.yaml' '*.yml' '*.pro' '*.sql' \
-      ':!trails/**/*.trail.yaml' ':!trails/**/blaze.yaml' ':!trails/**/*.blaze.yaml' \
-      ':!*.example.json' 2>/dev/null
+    git diff HEAD -- \
+      '*.kt' '*.kts' '*.java' '*.properties' '*.toml' '*.xml' '*.pro' \
+      '**/src/**/resources/**/*.yaml' '**/src/**/resources/**/*.yml' \
+      '**/src/**/resources/**/*.json' '**/src/**/resources/**/*.html' \
+      ':!.trailblaze/**' ':!**/.trailblaze/**' 2>/dev/null
     # Untracked files: list names + sizes so new files are detected.
-    # Same exclusions as the diff filter above so the tracked / untracked
-    # paths give matching results.
+    # Same scope as the diff filter above so the tracked / untracked paths
+    # give matching results. The `(^|/)src/` anchor mirrors git pathspec's
+    # `**/src/` semantics (matches top-level `src/` too).
     git ls-files --others --exclude-standard \
-      | grep -E '\.(kt|java|kts|properties|toml|xml|html|json|yaml|yml|pro|sql)$' \
-      | grep -vE '^trails/.*(\.trail\.yaml|/blaze\.yaml|\.blaze\.yaml)$' \
-      | grep -vE '\.example\.json$' \
+      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html)$' \
+      | grep -vE '(^|/)\.trailblaze/' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
   } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }

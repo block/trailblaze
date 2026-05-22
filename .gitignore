@@ -55,17 +55,18 @@ local.settings.gradle
 node_modules/
 
 # Trailblaze pack bundle — generated per-pack `.d.ts` files emitted by the
-# `trailblaze.bundle` Gradle plugin (and, eventually, `trailblaze bundle` on the CLI).
-# Derived from the pack manifest, regenerated on build, not source-of-truth. Anchored
-# to the per-pack tools dir so an unrelated future `.trailblaze/` directory elsewhere
-# in the tree (e.g., a config dir) isn't silently ignored.
+# `trailblaze.bundle` Gradle plugin and by `trailblaze check`. Derived from the pack
+# manifest, regenerated on build, not source-of-truth. Anchored to the per-pack tools
+# dir so an unrelated future `.trailblaze/` directory elsewhere in the tree (e.g., a
+# config dir) isn't silently ignored.
 **/trailblaze-config/tools/.trailblaze/
-# Same generator, workspace-anchor layout (`<workspace>/trails/config/tools/.trailblaze/`).
-# The `trailblaze-config/` pattern above only matches the classpath-resource path; the
-# workspace path lives under `trails/config/` and needs its own anchor.
-/trails/config/tools/.trailblaze/
+# Same generator, workspace-anchor layout. Per-pack output sits under each pack's
+# `tools/.trailblaze/`; the workspace-level `.trailblaze/sdk/` + `tsconfig.base.json`
+# (written by `trailblaze check`) live one level up at `<workspace>/.trailblaze/`.
+**/trails/config/packs/*/tools/.trailblaze/
+/trails/.trailblaze/
 
-# Daemon-emitted compiled-target output (`trailblaze compile` writes per-target YAML
+# Daemon-emitted compiled-target output (`trailblaze check` writes per-target YAML
 # bundles here from the workspace's `packs/` definitions). Generated and lazy-rebundled
 # at daemon init, never edited by hand.
 /trails/config/dist/

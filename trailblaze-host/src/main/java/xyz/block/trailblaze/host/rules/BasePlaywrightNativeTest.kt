@@ -89,6 +89,17 @@ open class BasePlaywrightNativeTest(
    * request id. Default mirrors that request id when callers don't override it.
    */
   val webBrowserRecordingKey: String = trailblazeDeviceId.instanceId,
+  /**
+   * Viewport / device-emulation spec used when this rule constructs its OWN browser
+   * (no [existingBrowserManager] provided). Pass null for the desktop default.
+   *
+   * In the production daemon / desktop / MCP paths the browser is provisioned by
+   * [WebBrowserManager], which already stores per-slot viewport intent on the
+   * slot — those paths pass `existingBrowserManager` in and this field is unused.
+   * The standalone JUnit-eval path (`PlaywrightNativeEvalTests`) constructs the
+   * rule directly and is the load-bearing caller of this field.
+   */
+  viewportSpec: String? = null,
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -97,6 +108,7 @@ open class BasePlaywrightNativeTest(
 
   val browserManager: PlaywrightPageManager = existingBrowserManager ?: PlaywrightBrowserManager(
     headless = config.browserHeadless,
+    viewportSpec = viewportSpec,
     idlingConfig = idlingConfig,
     analyticsUrlPatterns = analyticsUrlPatterns,
     // Same key the capture stream publishes under in `PlaywrightVideoRecordDir`.
@@ -104,13 +116,23 @@ open class BasePlaywrightNativeTest(
   )
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo
-    get() = TrailblazeDeviceInfo(
-      trailblazeDeviceId = trailblazeDeviceId,
-      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-      widthPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_WIDTH,
-      heightPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_HEIGHT,
-      classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
-    )
+    get() {
+      // [resolvedViewport] is populated by [PlaywrightBrowserManager.init] for our own
+      // manager and by the desktop / MCP launch path for an adopted manager. Cast
+      // strictly: every BasePlaywrightNativeTest call site today supplies a
+      // PlaywrightBrowserManager (`WebBrowserManager.getPageManager()` returns one,
+      // and the inline construction at [browserManager] does too). If a future caller
+      // wires in a different PlaywrightPageManager subtype, surface that here loudly
+      // rather than silently degrading to a default viewport.
+      val viewport = (browserManager as PlaywrightBrowserManager).resolvedViewport
+      return TrailblazeDeviceInfo(
+        trailblazeDeviceId = trailblazeDeviceId,
+        trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        widthPixels = viewport.width,
+        heightPixels = viewport.height,
+        classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+      )
+    }
 
   val loggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
@@ -332,7 +354,7 @@ open class BasePlaywrightNativeTest(
     val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
     val captureSession = CaptureSession.fromOptions(
       CaptureOptions(captureVideo = true),
-      xyz.block.trailblaze.devices.TrailblazeDevicePlatform.WEB,
+      TrailblazeDevicePlatform.WEB,
     ) ?: return
     try {
       captureSession.startAll(sessionDir, webBrowserRecordingKey, appId = null)

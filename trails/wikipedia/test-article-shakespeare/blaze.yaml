@@ -1,0 +1,8 @@
+- config:
+    title: "Wikipedia: Open the William Shakespeare article"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [smoke, article]
+- prompts:
+    - step: Open the Wikipedia article for "William Shakespeare" and verify the article's first heading is "William Shakespeare".

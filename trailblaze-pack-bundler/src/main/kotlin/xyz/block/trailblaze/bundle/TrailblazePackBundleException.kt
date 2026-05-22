@@ -27,11 +27,22 @@ sealed class TrailblazePackBundleException(message: String, cause: Throwable? = 
   /** `packsDir` doesn't exist or isn't a directory — config error, not the bundler's fault. */
   class MissingPacksDir(message: String) : TrailblazePackBundleException(message)
 
-  /** A pack-relative tool path failed validation (blank, absolute, escapes the pack dir, …). */
-  class InvalidPackRelativePath(message: String) : TrailblazePackBundleException(message)
+  /**
+   * `target.tools:` references a tool name that doesn't match any scripted-tool descriptor
+   * discovered under the pack's tools directory.
+   */
+  class UnknownScriptedToolName(message: String) : TrailblazePackBundleException(message)
 
-  /** A scripted-tool YAML referenced from a pack manifest doesn't exist on disk. */
-  class MissingScriptedToolFile(message: String) : TrailblazePackBundleException(message)
+  /**
+   * A scripted-tool descriptor candidate under `<pack>/tools/` resolved (via symlink) outside
+   * the pack directory, or its canonical path could not be computed (symlink loop, filesystem
+   * quirk). Mirrors the runtime loader's `PackSource.readFilesystemSibling` containment
+   * guarantee so the bundler refuses to decode files the runtime would reject. The optional
+   * [cause] threads through the underlying I/O failure when present (canonicalization throws
+   * `IOException` on symlink cycles on some JVMs/OSes).
+   */
+  class EscapesPackDirectory(message: String, cause: Throwable? = null) :
+    TrailblazePackBundleException(message, cause)
 
   /** A scripted tool's YAML decode failed — kaml threw on shape, missing required field, etc. */
   class MalformedScriptedTool(message: String, cause: Throwable? = null) :
@@ -55,4 +66,16 @@ sealed class TrailblazePackBundleException(message: String, cause: Throwable? = 
 
   /** Two workspace packs declare the same `id:` — pack ids are the dep-graph key, must be unique. */
   class DuplicatePackId(message: String) : TrailblazePackBundleException(message)
+
+  /**
+   * A scripted-tool descriptor's `script:` field references a JavaScript source
+   * (`.js`/`.mjs`/`.cjs`). The typed-surface shape itself is derived from the YAML
+   * descriptor's `inputSchema:` / `description:`, not the script source — but the
+   * authoring-language policy is TS-only so the file an author edits matches the file the
+   * runtime (`bun`, daemon-spawned subprocess) loads. A `.js` file slipping past this
+   * guard leaves a workspace where `foo.js` and `foo.ts` can both satisfy
+   * `script: ./foo.*` ambiguously, and per-pack codegen + tsconfig drift apart silently.
+   * Migration is mechanical: rename the file and update the descriptor's `script:` field.
+   */
+  class JsToolFileNotAllowed(message: String) : TrailblazePackBundleException(message)
 }

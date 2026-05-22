@@ -280,8 +280,7 @@ object TrailblazePackManifestLoader {
       // Relative paths: anchor at pack dir, normalize via pure string manipulation, then
       // require canonical containment under the pack so `script: ../../etc/passwd` can't
       // resolve out of the pack even if such a file exists on disk. Defense-in-depth
-      // matching the same guarantee `TrailblazePackBundler.resolvePackRelativeToolFile`
-      // enforces for `tools[].script`.
+      // mirroring the runtime containment check in [PackSource.readSibling].
       //
       // Stored value is the absolute (non-canonical) path so the form is predictable and
       // matches `File.absolutePath` on downstream constructions. Canonicalization is only
@@ -373,11 +372,23 @@ object TrailblazePackManifestLoader {
   }
 
   /**
-   * Enforces the library-pack contract from [TrailblazePackManifest]'s kdoc: a pack with
-   * no `target:` block (a *library pack*) cannot declare `waypoints:` (bind to a target's
-   * screen state) or `mcp_servers:` (need a target session to spawn into). Declaring either
-   * in a target-less pack is a category error that we catch at parse time so the failure
-   * points at the exact pack and field rather than showing up later as "no target found".
+   * Enforces the library-pack contract from [TrailblazePackManifest]'s kdoc.
+   *
+   * Two rules pinned here:
+   *
+   * 1. **Library packs** (no `target:` block) cannot declare `waypoints:` (bind to a
+   *    target's screen state) or `mcp_servers:` (need a target session to spawn into).
+   *    Declaring either in a target-less pack is a category error caught at parse time
+   *    so the failure points at the exact pack and field rather than showing up later
+   *    as "no target found".
+   *
+   * 2. **Target packs** (have a `target:` block) cannot declare top-level `platforms:`.
+   *    Per-platform configuration on a target pack belongs under `target.platforms:`;
+   *    the top-level `platforms:` field is reserved for *library* packs to declare their
+   *    runtime-registry needs without a target wrapper. Without this guard, an author who
+   *    moved declarations to the wrong place would see their `tool_sets` silently dropped
+   *    from the target shape (closest-wins overlay reads `target.platforms`) while still
+   *    contributing to the runtime-registry union — confusing and asymmetric.
    *
    * The library-pack trailhead-tools rule is enforced separately in
    * `TrailblazeProjectConfigLoader.resolvePackSiblings` because it requires reading each
@@ -388,7 +399,21 @@ object TrailblazePackManifestLoader {
     manifest: TrailblazePackManifest,
     identifier: String,
   ) {
-    if (manifest.target != null) return
+    if (manifest.target != null) {
+      val topLevelPlatforms = manifest.platforms
+      if (topLevelPlatforms != null) {
+        throw TrailblazeProjectConfigException(
+          "Pack manifest $identifier declares top-level platforms: but also has a target: " +
+            "block. Target packs MUST place per-platform configuration under " +
+            "target.platforms:, not at the manifest top level. The top-level platforms: " +
+            "field is reserved for library packs (no target) to declare runtime-registry " +
+            "needs. Move the declarations under target.platforms:, or remove the target: " +
+            "block if this was intended to be a library pack. Offending platform keys: " +
+            "${topLevelPlatforms.keys.joinToString(", ")}",
+        )
+      }
+      return
+    }
     if (manifest.waypoints.isNotEmpty()) {
       throw TrailblazeProjectConfigException(
         "Pack manifest $identifier declares waypoints: but has no target: block. " +

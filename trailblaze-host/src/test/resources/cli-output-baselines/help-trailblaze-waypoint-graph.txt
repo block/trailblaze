@@ -17,7 +17,7 @@ viewer's
 side.
 
 For a live, refresh-on-edit view from the running daemon, point your browser at
-http://localhost:<daemon-port>/waypoints/graph instead.
+`http://localhost:<daemon-port>/waypoints/graph` instead.
   -h, --help            Show this help message and exit.
   -o, --out=<out>       Output HTML file path (default: ./.
                           trailblaze/reports/waypoint-graph.html, relative to

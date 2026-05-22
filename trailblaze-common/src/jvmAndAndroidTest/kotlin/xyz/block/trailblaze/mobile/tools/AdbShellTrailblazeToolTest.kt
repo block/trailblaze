@@ -188,7 +188,7 @@ class AdbShellTrailblazeToolTest {
     val annotation = AdbShellTrailblazeTool::class.java.getAnnotation(TrailblazeToolClass::class.java)!!
     assertThat(annotation.name).isEqualTo("android_adbShell")
     assertThat(annotation.requiresHost).isEqualTo(false)
-    assertThat(annotation.isForLlm).isEqualTo(false)
+    assertThat(annotation.surfaceToLlm).isEqualTo(false)
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

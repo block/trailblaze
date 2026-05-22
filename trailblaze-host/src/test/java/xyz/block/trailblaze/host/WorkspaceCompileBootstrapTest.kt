@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import org.junit.Rule
@@ -147,6 +148,65 @@ class WorkspaceCompileBootstrapTest {
     assertEquals(WorkspaceCompileBootstrap.BootstrapResult.UpToDate, result)
     // Skip path didn't rewrite the materialized target.
     assertEquals(firstMtime, targetFile.lastModified())
+  }
+
+  @Test
+  fun `UpToDate path regenerates a deleted client_d_ts and re-extracts a deleted SDK`() {
+    // Regression guard for the round-1+2 codegen-outside-hash-gate invariant. A user
+    // who manually deletes their per-pack `client.d.ts` or the workspace SDK shouldn't
+    // need to invalidate the hash to get them back — the next daemon start regenerates
+    // them. Both ops are idempotent so the cost on the UpToDate path is small.
+    //
+    // Also covers the legacy-tsconfig-base prune on the UpToDate path: a user
+    // upgrading from the extends-style era who then lands on the UpToDate branch
+    // (hash matches, no recompile needed) must still get their stale
+    // `.trailblaze/tsconfig.base.json` pruned — the prune runs alongside SDK
+    // extraction, not gated on hash drift.
+    val configDir = tempFolder.newFolder("trails", "config")
+    val packsDir = File(configDir, "packs").apply { mkdirs() }
+    writeFixturePack(packsDir, "alpha")
+
+    WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+    val clientDts = File(packsDir, "alpha/tools/.trailblaze/client.d.ts")
+    val sdkBundle = File(configDir.parentFile, ".trailblaze/sdk/dist/index.d.ts")
+    assertTrue(clientDts.isFile, "expected per-pack client.d.ts emitted on first run")
+    assertTrue(sdkBundle.isFile, "expected SDK declaration bundle extracted on first run")
+
+    // User wipes the per-pack typed bindings + workspace SDK between runs. The hash
+    // file is untouched — same input manifests, same framework version. Also
+    // synthesize a stale `.trailblaze/tsconfig.base.json` from the pre-bundled-.d.ts
+    // era to verify the prune fires on this path.
+    assertTrue(clientDts.delete())
+    assertTrue(sdkBundle.delete())
+    val staleTsconfigBase = File(configDir.parentFile, ".trailblaze/tsconfig.base.json")
+      .apply { writeText("""{ "compilerOptions": { "strict": true } }""") }
+    assertTrue(staleTsconfigBase.isFile, "fixture should pre-populate the legacy file")
+
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+
+    // The compile itself is still skip-eligible (hash matches) — confirm we hit the
+    // UpToDate branch rather than forcing a recompile to regenerate codegen outputs.
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.UpToDate, result)
+    assertTrue(clientDts.isFile, "expected client.d.ts to regenerate on UpToDate path")
+    assertTrue(sdkBundle.isFile, "expected SDK bundle to re-extract on UpToDate path")
+    assertFalse(
+      staleTsconfigBase.exists(),
+      "expected stale tsconfig.base.json to be pruned on UpToDate path; still present at $staleTsconfigBase",
+    )
+  }
+
+  @Test
+  fun `NoWorkspacePacks path still extracts the workspace SDK bundle`() {
+    // A fresh checkout or a classpath-only consumer can start the daemon with no
+    // `packs/` directory yet. The workspace SDK declaration bundle should still land so
+    // the first pack the user authors immediately picks up IDE typing.
+    val configDir = tempFolder.newFolder("trails", "config")
+
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspacePacks, result)
+    val sdkBundle = File(configDir.parentFile, ".trailblaze/sdk/dist/index.d.ts")
+    assertTrue(sdkBundle.isFile, "expected SDK bundle extracted even with no workspace packs")
   }
 
   @Test

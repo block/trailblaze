@@ -1,0 +1,8 @@
+- config:
+    title: "Wikipedia: Open a random article from Wikipedia"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [smoke, nav]
+- prompts:
+    - step: Open a random Wikipedia article and verify a new article page loaded (any article-style first heading is visible).

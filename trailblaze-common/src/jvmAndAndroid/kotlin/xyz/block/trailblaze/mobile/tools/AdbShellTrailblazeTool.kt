@@ -91,7 +91,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "android_adbShell",
-  isForLlm = false,
+  surfaceToLlm = false,
   isRecordable = false,
   // Dual-mode primitive: on-device-RPC strips `Success.message`, so scripted-tool authors that
   // compose `android_adbShell` via `client.callTool(...)` rely on host-side dispatch to receive the

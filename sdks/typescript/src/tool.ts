@@ -56,10 +56,11 @@ export interface TrailblazeToolSpec {
  * - [ctx] — Trailblaze envelope extracted from `_meta.trailblaze`. Present on every in-session
  *   invocation; undefined when the tool was invoked outside a Trailblaze session (ad-hoc MCP
  *   client, unit test).
- * - [client] — always provided, even when [ctx] is undefined. Exposes `callTool(name, args)`
- *   for composing other Trailblaze tools via the daemon's `/scripting/callback` endpoint.
- *   When [ctx] is undefined the client throws on any callTool attempt with a clear preflight
- *   error — handlers that never call back simply ignore the argument.
+ * - [client] — always provided, even when [ctx] is undefined. Exposes the typed
+ *   `client.tools.<name>(args)` namespace for composing other Trailblaze tools via the
+ *   daemon's `/scripting/callback` endpoint. When [ctx] is undefined the client throws on
+ *   any tool dispatch with a clear preflight error — handlers that never call back simply
+ *   ignore the argument.
  *
  * **Backwards compatibility.** Pre-existing 2-arg handlers (`async (args) => ...` or
  * `async (args, ctx) => ...`) remain compatible — TypeScript accepts them when assigned to this

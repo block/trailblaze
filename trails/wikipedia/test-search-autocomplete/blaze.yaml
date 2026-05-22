@@ -1,0 +1,15 @@
+- config:
+    title: "Wikipedia: Autocomplete suggestions visible while typing search"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [search, flaky]
+    # The header search autocomplete popup is timing-sensitive — the suggestion
+    # list mounts after the input fires a `keyup` event, then races with debounced
+    # API responses. We don't have a deterministic "suggestions are now visible"
+    # signal yet, so this trail flakes on slow agents. Skipped until we either
+    # (a) extend `wikipedia_web_searchAndOpenFirstResult` to expose a probe for
+    # the suggestion list, or (b) settle on a structural anchor we trust.
+    skip: "Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands."
+- prompts:
+    - step: Open Wikipedia and start typing "Albert" into the header search box without submitting. Verify an autocomplete suggestion containing "Albert Einstein" appears.

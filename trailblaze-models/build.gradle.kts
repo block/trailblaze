@@ -8,6 +8,27 @@ plugins {
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.vanniktech.maven.publish)
   id("trailblaze.bundled-config")
+  // Registers `bundleTrailblazeSdkDts` (manual regenerate) and
+  // `verifyTrailblazeSdkDtsBundle` (CI freshness gate) for the declaration-bundle
+  // artifact this module ships in JAR resources. See `TrailblazeSdkDtsBundlePlugin`.
+  id("trailblaze.sdk-dts-bundle")
+}
+
+trailblazeSdkDtsBundle {
+  trailblazeSdkDir.set(layout.projectDirectory.dir("../sdks/typescript"))
+  sdkDtsBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/index.d.ts"))
+  // Secondary bundle for `@trailblaze/scripting/testing` (mock client + mock context
+  // helpers) so a pack author can `import { createMockClient, createMockContext } from
+  // "@trailblaze/scripting/testing"` in a `*.test.ts` file with no per-pack tsconfig
+  // changes — the per-pack tsconfig's `@trailblaze/scripting/*` glob already resolves
+  // here via `dist/testing.d.ts`.
+  sdkDtsTestingBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/testing.d.ts"))
+  // Runtime ESM module that `bun test` loads at runtime when an author imports
+  // `@trailblaze/scripting/testing` from a `*.test.ts` file. Pure esbuild transpile (not
+  // bundle) — `src/testing.ts` has no runtime imports so the output is self-contained
+  // and bun resolves it via the per-pack tsconfig `paths` mapping with no
+  // node_modules step.
+  sdkTestingRuntimeOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/testing.js"))
 }
 
 configurations.all {
@@ -144,32 +165,55 @@ bundledTrailblazeConfig {
   regenerateCommand.set("./gradlew :trailblaze-models:generateBundledTrailblazeConfig")
 }
 
-// Bundle the TypeScript scripted-tools SDK source as JAR resources at
-// `trailblaze-config/sdk/typescript/...`. `WorkspaceCompileBootstrap` extracts these into
-// each workspace's `<workspace>/trails/config/tools/.trailblaze/sdk/typescript/`
-// at compile/bootstrap time so per-pack `package.json`s can reference the SDK via a
-// workspace-relative `file:` link without any install-time vendoring step.
+// Ship the TypeScript scripted-tools SDK as a single committed declaration bundle at the
+// JAR resource path `trailblaze-config/sdk/typescript/dist/index.d.ts`.
+// `WorkspaceTypeScriptSetup` extracts that single file into each workspace's
+// `<workspace>/.trailblaze/sdk/dist/index.d.ts` at compile / daemon-bootstrap time, and
+// per-pack tsconfigs point their `paths` mapping at it directly — no `node_modules/`,
+// no per-pack `package.json`, no workspace `tsconfig.base.json` extends chain.
+//
+// **Why a single committed bundle and not the SDK source tree.** Per-pack `tsc --noEmit`
+// against extracted SDK source surfaced ~20 ambient-globals / unresolvable-imports errors
+// (DOM `URL`, Node `process`, `zod`, `@modelcontextprotocol/sdk` not on the pack's
+// classpath). A rolled-up declaration bundle has none of these: it's a pure type surface
+// with zod's exported types inlined, and the SDK implementation bodies (which reference
+// runtime globals) don't ship at all. See `TrailblazeSdkDtsBundlePlugin` for the
+// regenerate-and-commit workflow + CI byte-diff gate.
 //
 // Output goes to `build/generated-resources/sdk/...`, registered as an additional
-// commonMain resources srcDir so it ships in the JAR but doesn't duplicate the SDK source
-// into git. SDK edits flow naturally on the next build — no regen-and-commit dance.
+// commonMain resources srcDir so it ships in the JAR. Authors edit `sdks/typescript/src/`
+// and run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` to refresh
+// `dist/index.d.ts`; the same task is invoked manually after a `bun install` in the SDK
+// dir picks up a new zod / typescript version.
 val copyTypescriptSdkResources by tasks.registering(Copy::class) {
   group = "trailblaze"
-  description = "Stages TypeScript SDK source into build/ for inclusion in this module's JAR resources."
+  description = "Stages the TypeScript SDK declaration bundle into build/ for inclusion in this module's JAR resources."
   // Path relative to `:trailblaze-models` project dir, so `../sdks/typescript` resolves
-  // to the SDK source tree co-located alongside this module. Using `project.layout` (this
-  // project) NOT `rootProject.layout` because the gradle root depends on which entry
-  // point is used — keying off this project's own dir is unambiguous.
-  from(layout.projectDirectory.dir("../sdks/typescript")) {
-    include("src/**/*.ts", "package.json", "tsconfig.json")
-    exclude("**/*.test.ts")
-  }
-  into(layout.buildDirectory.dir("generated-resources/sdk/trailblaze-config/sdk/typescript"))
+  // to the SDK source tree co-located alongside this module.
+  from(layout.projectDirectory.file("../sdks/typescript/dist/index.d.ts"))
+  // Sibling testing-helper bundle exposed at `@trailblaze/scripting/testing` (mock client
+  // + mock context for `*.test.ts` files next to scripted tools). Same JAR-resource
+  // extraction path — `WorkspaceTypeScriptSetup.extractSdk` walks the prefix recursively,
+  // so the additional file flows through with no further changes.
+  from(layout.projectDirectory.file("../sdks/typescript/dist/testing.d.ts"))
+  // Runtime `testing.js` — paired with `testing.d.ts` so a per-pack `*.test.ts`
+  // resolves `@trailblaze/scripting/testing` to a real executable module under bun.
+  from(layout.projectDirectory.file("../sdks/typescript/dist/testing.js"))
+  into(layout.buildDirectory.dir("generated-resources/sdk/trailblaze-config/sdk/typescript/dist"))
 }
 
 kotlin.sourceSets.commonMain.get().resources.srcDir(
   copyTypescriptSdkResources.map { layout.buildDirectory.dir("generated-resources/sdk").get() },
 )
+
+// `verifyTrailblazeSdkDtsBundle` is NOT wired into `check` — it requires
+// `node_modules/.bin/dts-bundle-generator`, which means CI agents have to run
+// `(cd sdks/typescript && bun install)` before invoking it. That installation step
+// happens in the same CI static-checks step that runs `verifyTrailblazeSdkBundle`, so
+// the verify task is gated through the CI pipeline rather than every developer's
+// `./gradlew check`. Local devs who edit SDK source run
+// `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` manually; the CI gate catches
+// the case where someone forgets.
 
 // NOT also wired into the Android source set's `assets.srcDir`: the SDK is only consumed
 // by the host-side `WorkspaceCompileBootstrap` (JVM-only), never by on-device test

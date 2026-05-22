@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.cli
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -33,6 +35,13 @@ data class ConfigKey(
 val LLM_NONE: String = TrailblazeLlmProvider.NONE.id
 
 private fun String.isLlmNoneValue(): Boolean = equals(LLM_NONE, ignoreCase = true)
+
+/**
+ * Lower bound on `screenshot-quality`. Quality 0 is technically valid for JPEG/WebP encoders
+ * but produces images so degraded the LLM can't read them — a footgun that's never useful in
+ * practice. Shared between CLI parsing and the desktop Settings slider.
+ */
+internal const val SCREENSHOT_QUALITY_MIN: Float = 0.05f
 
 /** Registry of all config keys supported by `trailblaze config <key> [<value>]`. */
 val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
@@ -214,6 +223,69 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
       }
     },
   ),
+  ConfigKey(
+    // Per-machine screenshot encoding. Workspace yaml `defaults.screenshot.format` still
+    // wins when it's set; this kicks in for everything else (host screenshots in the
+    // timeline, scaled bytes sent to the LLM when the workspace is silent).
+    name = "screenshot-format",
+    description = "Image format used for screenshots sent to the LLM and shown in the timeline",
+    validValues = "png, jpeg, webp, or 'unset' to use the framework default (webp)",
+    get = { config -> config.screenshotImageFormat?.name?.lowercase() ?: "(framework default)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(screenshotImageFormat = null)
+      } else {
+        TrailblazeImageFormat.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
+          ?.let { config.copy(screenshotImageFormat = it) }
+      }
+    },
+  ),
+  ConfigKey(
+    // Stored as two ints (longer/shorter side) on disk to match the underlying
+    // ScreenshotScalingConfig shape, but parsed/printed as WIDTHxHEIGHT here so the CLI
+    // surface matches the workspace yaml `max_dimensions: 1536x768` shape.
+    name = "screenshot-max-dimensions",
+    description = "Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024)",
+    validValues = "WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768)",
+    get = { config ->
+      val longer = config.screenshotMaxLongerSide
+      val shorter = config.screenshotMaxShorterSide
+      if (longer == null && shorter == null) "(framework default)"
+      else "${longer ?: "?"}x${shorter ?: "?"}"
+    },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(screenshotMaxLongerSide = null, screenshotMaxShorterSide = null)
+      } else {
+        val parts = value.split("x", ignoreCase = true)
+        val longer = parts.getOrNull(0)?.trim()?.toIntOrNull()
+        val shorter = parts.getOrNull(1)?.trim()?.toIntOrNull()
+        if (parts.size != 2 || longer == null || shorter == null || longer <= 0 || shorter <= 0) {
+          null
+        } else {
+          config.copy(screenshotMaxLongerSide = longer, screenshotMaxShorterSide = shorter)
+        }
+      }
+    },
+  ),
+  ConfigKey(
+    name = "screenshot-quality",
+    description = "Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png",
+    validValues = "0.05..1.0, or 'unset' to use the framework default (0.80)",
+    get = { config -> config.screenshotCompressionQuality?.toString() ?: "(framework default)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(screenshotCompressionQuality = null)
+      } else {
+        val parsed = value.toFloatOrNull()
+        // Lower bound is 0.05 (not 0.0) — quality 0 produces effectively unreadable
+        // images on JPEG/WebP that the LLM can't interpret, so it's never a useful
+        // production value. The desktop UI slider's lower bound matches.
+        if (parsed == null || parsed < SCREENSHOT_QUALITY_MIN || parsed > 1f) null
+        else config.copy(screenshotCompressionQuality = parsed)
+      }
+    },
+  ),
 ).associateBy { it.name }
 
 /**
@@ -295,7 +367,13 @@ object CliConfigHelper {
    * If you need the exact on-disk state (e.g. for a diagnostic command that
    * shows the raw settings file), use [readConfigRaw] instead.
    */
-  fun readConfig(): SavedTrailblazeAppConfig? = readConfigRaw()?.hydrateDefaults()
+  fun readConfig(): SavedTrailblazeAppConfig? =
+    readConfigRaw()?.hydrateDefaults()?.also {
+      // Seed the effective screenshot config from disk so standalone CLI processes
+      // (no daemon) honour the user's saved overrides on the very first call.
+      // The daemon's TrailblazeSettingsRepo collector keeps it fresh thereafter.
+      EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfig())
+    }
 
   /**
    * Reads the config from disk without any hydration — returns exactly what

@@ -28,7 +28,8 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  * actually does use the same filter semantics in both places.
  */
 data class TrailblazeToolMeta(
-  val isForLlm: Boolean = true,
+  val surfaceToLlm: Boolean = true,
+  val surfaceToScriptedTools: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   /** Empty = unrestricted. Non-empty = registers only if session driver is in the list. */
@@ -80,7 +81,8 @@ data class TrailblazeToolMeta(
     /** Vendor prefix the MCP spec reserves for Trailblaze-owned `_meta` keys. */
     private const val PREFIX: String = "trailblaze/"
 
-    private const val KEY_IS_FOR_LLM = "${PREFIX}isForLlm"
+    private const val KEY_SURFACE_TO_LLM = "${PREFIX}surfaceToLlm"
+    private const val KEY_SURFACE_TO_SCRIPTED_TOOLS = "${PREFIX}surfaceToScriptedTools"
     private const val KEY_IS_RECORDABLE = "${PREFIX}isRecordable"
     private const val KEY_REQUIRES_HOST = "${PREFIX}requiresHost"
     private const val KEY_SUPPORTED_DRIVERS = "${PREFIX}supportedDrivers"
@@ -101,7 +103,8 @@ data class TrailblazeToolMeta(
 
     /** Same as [fromTool] but directly on the raw [JsonObject] — exposed for tests. */
     fun fromJsonObject(meta: JsonObject): TrailblazeToolMeta = TrailblazeToolMeta(
-      isForLlm = meta.readBoolean(KEY_IS_FOR_LLM, default = true),
+      surfaceToLlm = meta.readBoolean(KEY_SURFACE_TO_LLM, default = true),
+      surfaceToScriptedTools = meta.readBoolean(KEY_SURFACE_TO_SCRIPTED_TOOLS, default = true),
       isRecordable = meta.readBoolean(KEY_IS_RECORDABLE, default = true),
       requiresHost = meta.readBoolean(KEY_REQUIRES_HOST, default = false),
       supportedDrivers = meta.readStringList(KEY_SUPPORTED_DRIVERS),

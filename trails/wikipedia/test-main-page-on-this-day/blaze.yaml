@@ -1,0 +1,9 @@
+- config:
+    title: "Wikipedia: On this day section visible on main page"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [smoke, main-page]
+- prompts:
+    - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+    - step: Verify the "On this day" section is visible on the page.

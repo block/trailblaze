@@ -1,6 +1,8 @@
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
+import org.gradle.api.tasks.JavaExec
 import xyz.block.trailblaze.bundle.TrailblazePackBundler
 
 /**
@@ -48,6 +50,18 @@ class TrailblazeBundlePlugin : Plugin<Project> {
       TrailblazeBundleExtension::class.java,
     )
 
+    // Defaults applied at extension-creation time so they're observable inside any later
+    // `trailblazeBundle { ... }` block AND in the task configure closures below — no
+    // `afterEvaluate` indirection needed. `workspaceRoot` derives from `packsDir` via a
+    // lazy `Provider` (`.map { it.dir("../../..") }`), so the path resolution happens at
+    // task-execution time, not at apply time. Three parents because the canonical
+    // workspace layout is `<workspace>/trails/config/packs/` — `packs/` → `config/` →
+    // `trails/` → workspace root — and `WorkspaceCompileBootstrap.bootstrap()` discovers
+    // a workspace by walking up looking for `trails/config/trailblaze.yaml`, so the
+    // working directory it gets needs to start from that root.
+    extension.bundleEnabled.convention(true)
+    extension.workspaceRoot.convention(extension.packsDir.map { it.dir("../../..") })
+
     val generate = project.tasks.register(
       GENERATE_TASK_NAME,
       BundleTrailblazePackTask::class.java,
@@ -56,6 +70,13 @@ class TrailblazeBundlePlugin : Plugin<Project> {
       task.description = "Generates per-pack TypeScript bindings (.d.ts) augmenting " +
         "TrailblazeToolMap with the scripted tools each pack declares."
       task.packsDir.set(extension.packsDir)
+      // Honor the `bundleEnabled` toggle on the extension. Packs that still ship pre-TS-
+      // lockdown `.js` script descriptors (see `project_scripting_sdk_ts_only_authoring.md`)
+      // can't run the bundler, but should still get `compileTrailblazeWorkspace` for
+      // autocomplete — they set `trailblazeBundle { bundleEnabled.set(false) }` to disable
+      // just this half of the plugin declaratively, rather than reaching into Gradle's task
+      // graph with `tasks.named("bundleTrailblazePack") { enabled = false }`.
+      task.onlyIf { extension.bundleEnabled.get() }
 
       // Input snapshot: only the YAML manifest files the bundler actually reads
       // (`pack.yaml` plus per-tool descriptor YAMLs referenced from `target.tools:`).
@@ -104,6 +125,121 @@ class TrailblazeBundlePlugin : Plugin<Project> {
     // up-to-date checks via the declared input/output tracking), so wiring as a build
     // dependency is cheap on no-change builds.
     project.tasks.matching { it.name == "build" }.configureEach { it.dependsOn(generate) }
+
+    // ----------------------------------------------------------------------
+    // Full workspace-compile task — wires `WorkspaceCompileBootstrap` into `check` so a
+    // fresh `./gradlew build` materializes `<workspace>/.trailblaze/sdk/` and per-pack
+    // `client.d.ts` / `tsconfig.json` artifacts that the IDE needs for autocomplete on
+    // `import { ... } from '@trailblaze/scripting'`. Without this, a brand-new
+    // contributor opens a `.ts` tool file and sees red squigglies until they remember to
+    // run `./trailblaze compile` once. See #3210.
+    //
+    // **JavaExec vs. direct call.** `WorkspaceCompileBootstrap.bootstrap()` lives in the
+    // main-build `:trailblaze-host` module, not in build-logic, so we can't call it
+    // inline from this plugin's `apply`. A `JavaExec` against `:trailblaze-host`'s
+    // runtime classpath gets us the same code path the daemon and the CLI use without
+    // duplicating the wiring or pulling the host's transitive deps (Compose Desktop,
+    // Skiko, Playwright) into the lean Gradle plugin classpath.
+    //
+    // **`workingDir` not argv.** `WorkspaceCompileBootstrap.bootstrap()` discovers the
+    // workspace via `TrailblazeWorkspaceConfigResolver.resolve(Paths.get(""))`, which
+    // walks up from the JVM's working directory. Setting `JavaExec.workingDir` to the
+    // workspace root therefore reaches the same code path as a user running
+    // `trailblaze compile` from the workspace; no extra `--workspace` arg plumbing.
+    // ----------------------------------------------------------------------
+    // `defaultDependencies { ... }` is Gradle's built-in "apply unless the consumer
+    // configured one" hook for a Configuration — it runs at resolution time and only
+    // contributes if no one else added dependencies first. Cleaner than an
+    // `afterEvaluate` + `dependencies.isNotEmpty()` dance, and configuration-cache-safe.
+    //
+    // The `hostProject` lookup happens once at apply time and is reused for both the
+    // default dep AND the `:check` wiring gate below — they MUST stay in sync (if the
+    // wiring fires but the dep doesn't, the JavaExec runs with an empty classpath), so
+    // routing through one variable makes the alignment automatic instead of relying on
+    // two separate `findProject` calls returning the same answer. The guard keeps the
+    // TestKit functional tests in `build-logic/` green — their isolated fixture projects
+    // don't include `:trailblaze-host`, so both branches no-op.
+    //
+    // Follow-up tracked off #3210: `:trailblaze-host` is heavyweight (Compose Desktop,
+    // Skiko, Playwright transitives). Extracting `WorkspaceCompileBootstrap` +
+    // `WorkspaceCompileMain` into a leaner module would shrink the JavaExec classpath and
+    // configuration phase. Out of scope for the onboarding fix; revisit when CI cycle
+    // time on `./gradlew check` starts to bite.
+    val hostProject = project.rootProject.findProject(":trailblaze-host")
+    val compileClasspath = project.configurations.create("trailblazeWorkspaceCompileClasspath") { config ->
+      config.isCanBeConsumed = false
+      config.isCanBeResolved = true
+      config.description = "Classpath for the WorkspaceCompileMain JavaExec task — pulls " +
+        "`:trailblaze-host` so `WorkspaceCompileBootstrap.bootstrap()` is reachable."
+      // `project.dependencies.project(...)` uses the `Map` overload because the Kotlin DSL
+      // `project(":path")` extension isn't on the build-logic compile classpath (this
+      // module doesn't `implementation(gradleKotlinDsl())`, intentionally — keeps the lean
+      // plugin classpath). Same Dependency object, slightly more verbose call site.
+      config.defaultDependencies { deps ->
+        if (hostProject != null) {
+          deps.add(project.dependencies.project(mapOf("path" to ":trailblaze-host")))
+        }
+      }
+    }
+
+    val compile = project.tasks.register(
+      COMPILE_TASK_NAME,
+      JavaExec::class.java,
+    ) { task ->
+      task.group = "trailblaze"
+      task.description = "Runs the full trailblaze compile chain — workspace SDK " +
+        "extraction, per-pack client.d.ts, per-pack tsconfig.json/.gitignore, and " +
+        "TrailblazeCompiler — so IDE autocomplete on @trailblaze/scripting is alive " +
+        "after a single ./gradlew build, without a manual `trailblaze compile` step."
+      task.mainClass.set("xyz.block.trailblaze.host.WorkspaceCompileMain")
+      task.classpath = compileClasspath
+      // `ProcessForkOptions.setWorkingDir(Any)` accepts a `Provider`/`Callable` and
+      // resolves it lazily at task-realization time via `project.file(...)`. The
+      // directed-error branch needs to live INSIDE the provider — not in `doFirst` —
+      // because `workingDir` is resolved during task graph wiring, before `doFirst` runs.
+      // A `doFirst` guard against `workspaceRoot.isPresent` would be unreachable in the
+      // both-unset case: Gradle's own provider resolver throws "Cannot query the value of
+      // property 'workspaceRoot' because it has no value available" first, with a less
+      // directed message than what we want to show the author.
+      //
+      // With `workspaceRoot.convention(packsDir.map { ... })`, this `.orNull` returns the
+      // convention value when packsDir is set, the explicit value when workspaceRoot is
+      // set, and null only when BOTH are unset — exactly the case we want to catch.
+      task.setWorkingDir(
+        project.provider {
+          extension.workspaceRoot.orNull?.asFile ?: throw GradleException(
+            "trailblaze.bundle: compileTrailblazeWorkspace needs `trailblazeBundle " +
+              "{ workspaceRoot.set(...) }` or `trailblazeBundle { packsDir.set(...) }`. " +
+              "Neither is set — the JavaExec has no working directory to run against.",
+          )
+        },
+      )
+
+      // Classpath guard fires AFTER workingDir resolution but BEFORE the JVM spawn. The
+      // empty-classpath case happens when the plugin is applied to a module outside the
+      // multi-project build that has `:trailblaze-host` — `defaultDependencies` no-ops
+      // and `task.classpath` resolves to an empty FileCollection. Without this guard,
+      // the JVM starts and dies with `Could not find or load main class
+      // xyz.block.trailblaze.host.WorkspaceCompileMain`, leaving the author with zero
+      // signal about how to fix it.
+      task.doFirst {
+        if (task.classpath.isEmpty) {
+          throw GradleException(
+            "trailblaze.bundle: compileTrailblazeWorkspace ran with an empty classpath — " +
+              "no `:trailblaze-host` in this build. Either include `:trailblaze-host` in " +
+              "your settings.gradle.kts (the plugin auto-wires it via defaultDependencies " +
+              "when present), or wire a classpath manually:\n" +
+              "  dependencies { trailblazeWorkspaceCompileClasspath(project(\":your-host-module\")) }",
+          )
+        }
+      }
+    }
+
+    // `:check` wiring gated on the same `hostProject` reference `defaultDependencies` uses
+    // — see the comment up there for why these two must stay in sync.
+    if (hostProject != null) {
+      project.tasks.matching { it.name == "check" }.configureEach { it.dependsOn(compile) }
+    }
   }
 
   /**
@@ -144,5 +280,6 @@ class TrailblazeBundlePlugin : Plugin<Project> {
 
   private companion object {
     const val GENERATE_TASK_NAME = "bundleTrailblazePack"
+    const val COMPILE_TASK_NAME = "compileTrailblazeWorkspace"
   }
 }

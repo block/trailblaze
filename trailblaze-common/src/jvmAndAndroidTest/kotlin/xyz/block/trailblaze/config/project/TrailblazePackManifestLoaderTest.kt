@@ -851,6 +851,107 @@ class TrailblazePackManifestLoaderTest {
     }
   }
 
+  // ==========================================================================
+  // Top-level `platforms:` + `exports:` — the runtime-registry / typed-surface
+  // schema additions. Library packs may declare both; target packs may declare
+  // `exports:` but MUST NOT declare top-level `platforms:` (that belongs under
+  // `target.platforms:`).
+  // ==========================================================================
+
+  @Test
+  fun `library pack with top-level platforms and exports parses cleanly`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: entity_factory
+          platforms:
+            web:
+              tool_sets: [web_core]
+          exports:
+            - createEntity
+            - configureEntitySettings
+          """.trimIndent(),
+        )
+      }
+
+      val manifest = TrailblazePackManifestLoader.load(packFile).manifest
+      assertEquals("entity_factory", manifest.id)
+      val webPlatform = assertNotNull(manifest.platforms?.get("web"))
+      assertEquals(listOf("web_core"), webPlatform.toolSets)
+      assertEquals(listOf("createEntity", "configureEntitySettings"), manifest.exports)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `target pack rejects top-level platforms with named offending keys`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: misplaced-platforms
+          target:
+            display_name: Misplaced Platforms Target
+          platforms:
+            android:
+              tool_sets: [core_interaction]
+            web:
+              tool_sets: [web_core]
+          """.trimIndent(),
+        )
+      }
+
+      val error = runCatching { TrailblazePackManifestLoader.load(packFile) }.exceptionOrNull()
+      val typed = assertNotNull(error as? TrailblazeProjectConfigException)
+      val message = typed.message.orEmpty()
+      assertTrue(
+        "top-level platforms:" in message && "target.platforms:" in message,
+        "Expected migration hint pointing at target.platforms:; got: $message",
+      )
+      assertTrue(
+        "android" in message && "web" in message,
+        "Expected offending platform keys named in message; got: $message",
+      )
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `target pack with exports but no top-level platforms loads cleanly`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: target-with-exports
+          target:
+            display_name: Target With Exports
+            platforms:
+              android:
+                tool_sets: [core_interaction]
+          exports:
+            - publicTool
+          """.trimIndent(),
+        )
+      }
+
+      val manifest = TrailblazePackManifestLoader.load(packFile).manifest
+      assertEquals(listOf("publicTool"), manifest.exports)
+      assertEquals(null, manifest.platforms)
+      assertEquals(
+        listOf("core_interaction"),
+        manifest.target?.platforms?.get("android")?.toolSets,
+      )
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
   @Test
   fun `target pack with waypoints loads cleanly`() {
     val tempDir = createTempDirectory("pack-loader-test").toFile()

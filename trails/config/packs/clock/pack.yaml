@@ -13,8 +13,8 @@ dependencies:
 target:
   display_name: Google Clock
   tools:
-    - tools/clock_android_launchApp.yaml
-    - tools/clock_clearAlarms.yaml
+    - clock_android_launchApp
+    - clock_clearAlarms
   platforms:
     android:
       app_ids:

@@ -186,6 +186,11 @@ Trailblaze is moving fast. These are landing now and are worth knowing about eve
   ([devlog](docs/devlog/2026-04-26-target-packs-local-first.md))
 - **Scripted Tools (JS/TS)** — write custom tools in TypeScript with the `@trailblaze/scripting` SDK. No Kotlin,
   no Gradle build. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
+  After clone, run `./trailblaze check --workspace examples/playwright-native` (or pick another example pack)
+  once to materialize the workspace SDK + per-pack typed bindings and verify the TypeScript surface — that's
+  what makes the IDE find `@trailblaze/scripting` and emit autocomplete on `client.tools.*` in your `.ts` tool
+  files. `--workspace` points at the directory containing `trails/config/trailblaze.yaml`. `./gradlew build`
+  runs the same step automatically for every example pack, so contributors who run Gradle first get it for free.
   ([devlog](docs/devlog/2026-04-22-scripting-sdk-authoring-vision.md))
 - **Waypoints** — named, assertable app locations defined structurally (element identity, stable labels), never
   by content. Agents can ask "am I on the Inbox?", land on a waypoint after a step, or use waypoints as trail

@@ -8,6 +8,7 @@ import maestro.filterOutOfBounds
 import okio.Buffer
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.CompactScreenElements
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -36,7 +37,7 @@ import javax.imageio.ImageIO
  */
 class HostMaestroDriverScreenState(
   maestroDriver: Driver,
-  private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
+  private val screenshotScalingConfig: ScreenshotScalingConfig? = EffectiveScreenshotScalingConfig.effective,
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   /** When true, skip device screenshot capture for maximum speed. View hierarchy is still captured. */
   private val skipScreenshot: Boolean = false,

@@ -67,6 +67,17 @@ class WebBrowserManager {
 
     /** Headless preference recorded by callers (e.g. CLI `--headless false`). */
     @Volatile var headlessPreference: Boolean = true
+
+    /**
+     * Viewport spec recorded by callers — written by the desktop UI text field
+     * (`WebBrowserControlPanel`), the `trailblaze device create web` CLI command
+     * (via `device(action=CREATE_WEB, viewport=…)`), and the recording-tab
+     * launcher (which forwards the desktop's `appConfig.webViewport`).
+     * Null = use Playwright defaults. Stored on the slot so a subsequent
+     * `launchBrowser()` call without an explicit spec inherits the last value the
+     * user set — same lifecycle as [headlessPreference].
+     */
+    @Volatile var viewportSpec: String? = null
   }
 
   private val slots: ConcurrentHashMap<String, BrowserSlot> = ConcurrentHashMap<String, BrowserSlot>().also {
@@ -117,6 +128,12 @@ class WebBrowserManager {
    * slots once [MAX_NAMED_SLOTS] is exceeded; reserved IDs and existing slots
    * always succeed.
    *
+   * Cap enforcement re-checks the named count INSIDE [ConcurrentHashMap.computeIfAbsent]
+   * so two concurrent provisioning calls at `namedCount == MAX_NAMED_SLOTS - 1`
+   * can't both observe the pre-cap count, both pass an outer check, and both insert.
+   * The outer check is preserved as a fast path that avoids paying the striped-lock
+   * cost when we already know the cap is full.
+   *
    * @throws IllegalStateException if the slot cap is hit on a brand-new named ID.
    */
   private fun slotFor(instanceId: String): BrowserSlot {
@@ -125,20 +142,22 @@ class WebBrowserManager {
 
     val isReserved = instanceId == WebInstanceIds.PLAYWRIGHT_NATIVE ||
       instanceId == WebInstanceIds.PLAYWRIGHT_ELECTRON
-    if (!isReserved) {
-      val namedCount = slots.keys.count { id ->
-        id != WebInstanceIds.PLAYWRIGHT_NATIVE && id != WebInstanceIds.PLAYWRIGHT_ELECTRON
-      }
-      if (namedCount >= MAX_NAMED_SLOTS) {
-        throw IllegalStateException(
-          "Refusing to provision web browser instance '$instanceId': $MAX_NAMED_SLOTS " +
-            "named instances already exist. Close one with the desktop UI or restart the daemon.",
-        )
-      }
+    if (!isReserved && countNamedSlots() >= MAX_NAMED_SLOTS) {
+      // Fast path: bail before the atomic insert when we already know the cap is full.
+      // computeIfAbsent below re-checks under the per-bucket lock so the cap stays
+      // strict under concurrent provisioning.
+      throw capExceeded(instanceId)
     }
 
     var created = false
     val slot = slots.computeIfAbsent(instanceId) { id ->
+      // Re-check INSIDE computeIfAbsent's atomic block to close the race window
+      // where two threads pass the outer check at namedCount == MAX_NAMED_SLOTS - 1
+      // and both attempt to insert. The lambda runs under the bucket's striped lock,
+      // so two named-slot insertions for distinct ids can still serialize through here.
+      if (!isReserved && countNamedSlots() >= MAX_NAMED_SLOTS) {
+        throw capExceeded(id)
+      }
       created = true
       BrowserSlot(
         instanceId = id,
@@ -153,6 +172,16 @@ class WebBrowserManager {
     }
     return slot
   }
+
+  private fun countNamedSlots(): Int = slots.keys.count { id ->
+    id != WebInstanceIds.PLAYWRIGHT_NATIVE && id != WebInstanceIds.PLAYWRIGHT_ELECTRON
+  }
+
+  private fun capExceeded(instanceId: String): IllegalStateException =
+    IllegalStateException(
+      "Refusing to provision web browser instance '$instanceId': $MAX_NAMED_SLOTS " +
+        "named instances already exist. Close one with the desktop UI or restart the daemon.",
+    )
 
   /**
    * State flow for the default playwright-native browser. Used by the desktop UI's
@@ -184,9 +213,15 @@ class WebBrowserManager {
   fun launchBrowser(
     instanceId: String = PLAYWRIGHT_NATIVE_INSTANCE_ID,
     headless: Boolean = (instanceId != PLAYWRIGHT_NATIVE_INSTANCE_ID) || !hasDisplay(),
+    viewportSpec: String? = null,
     onComplete: (() -> Unit)? = null,
   ) {
     val slot = slotFor(instanceId)
+    // Record the latest viewport intent on the slot eagerly so a `launchBrowser()`
+    // call that races with a still-running browser still updates the stored
+    // preference for the next launch. The actual manager construction below reads
+    // the slot-stored value, falling back to whatever was set previously.
+    if (viewportSpec != null) slot.viewportSpec = viewportSpec
     scope.launch {
       slot.launchMutex.withLock {
         if (slot.state.value is WebBrowserState.Running) {
@@ -200,6 +235,7 @@ class WebBrowserManager {
         try {
           val newBrowserManager = PlaywrightBrowserManager(
             headless = headless,
+            viewportSpec = slot.viewportSpec,
             onBrowserInstallProgress = { percent, message ->
               playwrightInstaller.reportInstallProgress(percent, message)
             },
@@ -282,10 +318,23 @@ class WebBrowserManager {
     if (slot == null) return null
     val isLive = slot.state.value is WebBrowserState.Running || slot.manager != null
     if (!isLive) return null
+    // Append the resolved viewport to the description so the timeline label reads
+    // e.g. "Chrome Browser · 390x844 · iPhone 14" — gives users a fast visual confirm
+    // that the right device emulation profile is in effect. `runCatching` covers the
+    // sliver of time between `slot.manager = …` being set and the manager's lateinit
+    // resolved-viewport field being populated; in practice the manager's init block
+    // assigns it before the constructor returns, so we never actually catch here.
+    val viewport = slot.manager?.let { runCatching { it.resolvedViewport }.getOrNull() }
+    val description = if (viewport != null) {
+      val presetSuffix = viewport.presetName?.let { " · $it" } ?: ""
+      "${slot.description} · ${viewport.width}x${viewport.height}$presetSuffix"
+    } else {
+      slot.description
+    }
     return TrailblazeConnectedDeviceSummary(
       trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       instanceId = slot.instanceId,
-      description = slot.description,
+      description = description,
     )
   }
 
@@ -340,6 +389,19 @@ class WebBrowserManager {
   fun setHeadlessPreference(instanceId: String, headless: Boolean) {
     slotFor(instanceId).headlessPreference = headless
   }
+
+  /**
+   * Records a caller's preferred viewport spec (Playwright preset name or
+   * `WIDTHxHEIGHT`) for [instanceId] so the next browser launch picks it up.
+   * Passing `null` clears any prior preference. Does not affect a browser that
+   * is already running — close and re-launch to apply.
+   */
+  fun setViewportSpec(instanceId: String, viewportSpec: String?) {
+    slotFor(instanceId).viewportSpec = viewportSpec
+  }
+
+  /** Returns the recorded viewport spec for [instanceId], or null when none is set. */
+  fun getViewportSpec(instanceId: String): String? = slots[instanceId]?.viewportSpec
 
   /**
    * Returns the recorded headless preference for [instanceId].

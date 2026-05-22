@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("assertVisibleWithAccessibilityText", isForLlm = false, isVerification = true)
+@TrailblazeToolClass("assertVisibleWithAccessibilityText", surfaceToLlm = false, isVerification = true)
 @LLMDescription(
   """
 Assert that an element with the provided accessibility text is visible on the screen. The accessibilityText argument is required. Only provide additional fields if the accessibility text matches elsewhere on the screen — the additional fields disambiguate the specific view.

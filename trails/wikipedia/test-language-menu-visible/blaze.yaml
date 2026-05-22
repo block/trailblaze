@@ -1,0 +1,11 @@
+- config:
+    title: "Wikipedia: Language menu trigger is present on an article"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    - step: Navigate to https://en.wikipedia.org/wiki/Albert_Einstein
+    - step: |
+        Verify that some form of language switcher is visible — either a button
+        labeled with a number followed by "languages" (e.g. "192 languages"), or
+        a sidebar / panel listing language codes such as "Español", "Français",
+        or "Deutsch".

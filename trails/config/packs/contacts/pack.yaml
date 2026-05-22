@@ -13,7 +13,7 @@ dependencies:
 target:
   display_name: Contacts
   tools:
-    - tools/contacts_android_launchApp.yaml
+    - contacts_android_launchApp
   platforms:
     android:
       app_ids:

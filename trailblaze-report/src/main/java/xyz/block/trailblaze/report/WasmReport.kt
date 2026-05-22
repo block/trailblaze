@@ -242,6 +242,10 @@ object WasmReport {
     val matchResult = compressedDataRegex.find(templateContent)
 
     if (matchResult == null) {
+      // Intentional asymmetry with WasmReport.generateRaw (which require()s the placeholder):
+      // this streaming path is reached during on-the-fly report regeneration where we'd rather
+      // emit a placeholder-less report than abort a long-running CI step. The warning above
+      // surfaces in the build log; CI parses these to detect template-shape regressions.
       Console.log("⚠️  WARNING: Could not find window.trailblaze_report_compressed in template!")
     }
 
@@ -321,26 +325,27 @@ object WasmReport {
 
     val compressedImages = compressImages(sessionToImageFiles, videoFrameImages)
 
-    val htmlTemplate = indexHtmlFile.readText()
-      .replace(
-        "window.trailblaze_report = {};",
-        buildString {
-          appendLine("window.trailblaze_report = {};")
-          appendLine(createCompressedDataBlock(
-            compressedSessionJson,
-            compressedSessionInfoJson,
-            compressedPerSessionLogs,
-            compressedImages,
-            compressedCaptureMetadata,
-            compressedDeviceLogs,
-            imageAliases,
-          ))
-        },
-      )
-      .replace(
-        "window.trailblaze_report_compressed = {};",
-        "// window.trailblaze_report_compressed already initialized above",
-      )
+    val rawTemplate = indexHtmlFile.readText()
+    val compressedDataPlaceholder = "window.trailblaze_report_compressed = {};"
+    require(rawTemplate.contains(compressedDataPlaceholder)) {
+      "WasmReport.generateRaw: ${indexHtmlFile.absolutePath} is missing the compressed-data " +
+        "placeholder `$compressedDataPlaceholder`. The .replace() below would silently no-op, " +
+        "and the generated embedded report would render with no session data — the UI would sit " +
+        "on \"Loading sessions...\" forever. Did the template shape change in trailblaze-ui's " +
+        "index.html? Update this placeholder string to match."
+    }
+    val htmlTemplate = rawTemplate.replace(
+      compressedDataPlaceholder,
+      createCompressedDataBlock(
+        compressedSessionJson,
+        compressedSessionInfoJson,
+        compressedPerSessionLogs,
+        compressedImages,
+        compressedCaptureMetadata,
+        compressedDeviceLogs,
+        imageAliases,
+      ),
+    )
 
     Console.log("\nCompressing and encoding WASM files...")
     val wasmData = runBlocking(Dispatchers.IO) {

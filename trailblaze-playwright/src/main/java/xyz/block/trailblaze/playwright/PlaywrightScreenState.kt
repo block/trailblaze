@@ -6,20 +6,18 @@ import com.microsoft.playwright.options.ScreenshotAnimations
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.DeviceInfoPrefix
 import xyz.block.trailblaze.api.DriverNodeDetail
-import xyz.block.trailblaze.api.OcclusionDetector
-import xyz.block.trailblaze.api.OpaqueRegion
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.api.VisibilityCandidate
-import xyz.block.trailblaze.api.VisibilityInput
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.util.Console
 import java.awt.Image
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -53,7 +51,7 @@ class PlaywrightScreenState(
   private val viewportHeight: Int,
   private val browserEngine: BrowserEngine = BrowserEngine.CHROMIUM,
   private val tabContext: TabContext? = null,
-  private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
+  private val screenshotScalingConfig: ScreenshotScalingConfig? = EffectiveScreenshotScalingConfig.effective,
   private val requestedDetails: Set<ViewHierarchyDetail> = emptySet(),
   private val captureTimeoutMs: Double = CAPTURE_TIMEOUT_MS,
 ) : ScreenState {
@@ -446,15 +444,14 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS]
-   * and finalized in Kotlin by [OcclusionDetector.detect].
+   * Per-element visibility data computed once per snapshot via [BATCH_VIEWPORT_CHECK_JS].
    *
-   * Three signals collapsed into a single CDP round-trip plus a pure-Kotlin sort:
-   * - [offscreen]: element's bbox center is outside the viewport.
-   * - [occluded]: element is in-viewport but visually covered by an unrelated
-   *   [OpaqueRegion] painting on top of it. The web supplies candidates + opaque
-   *   regions; [OcclusionDetector] makes the actual decision so the algorithm can
-   *   be reused by Android / iOS / Compose without re-implementing it per platform.
+   * Three signals collapsed into a single CDP round-trip:
+   * - [offscreen]: element's bbox is outside the viewport (or zero-size).
+   * - [occluded]: element is in-viewport but Playwright's `expectHitTarget`
+   *   composed-tree walk reaches a different element at the candidate's center
+   *   — i.e., the candidate is visually covered. See [BATCH_VIEWPORT_CHECK_JS]
+   *   KDoc for the upstream-pinned algorithm.
    * - [bounds]: viewport-relative bbox per id, so [annotationElements] can drop its
    *   per-element CDP `locator.boundingBox()` calls.
    */
@@ -481,9 +478,9 @@ class PlaywrightScreenState(
   @Suppress("UNCHECKED_CAST")
   private fun computeElementVisibility(
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
-  ): ElementVisibility {
-    if (compact.elementIdMapping.isEmpty()) return ElementVisibility.EMPTY
-    return try {
+  ): ElementVisibility = TrailblazeTracer.trace("computeElementVisibility", "screenState") {
+    if (compact.elementIdMapping.isEmpty()) return@trace ElementVisibility.EMPTY
+    try {
       val elements = compact.elementIdMapping.map { (id, ref) ->
         val (role, name) = parseAriaDescriptor(ref.descriptor)
         mapOf("id" to id, "role" to role, "name" to name, "nth" to ref.nthIndex)
@@ -491,47 +488,34 @@ class PlaywrightScreenState(
       val result = page.evaluate(
         BATCH_VIEWPORT_CHECK_JS,
         mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
-      ) as? Map<String, Any?> ?: return ElementVisibility.EMPTY
+      ) as? Map<String, Any?> ?: return@trace ElementVisibility.EMPTY
 
       val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
       val bounds = rawBounds.mapNotNull { (id, b) ->
         val boundsObj = b.toBoundsOrNull() ?: return@mapNotNull null
         id to boundsObj
       }.toMap()
-
-      val rawInputs = result["inputs"] as? List<Map<String, Any?>> ?: emptyList()
-      val inputs = rawInputs.mapNotNull { row ->
-        val candidateMap = row["candidate"] as? Map<String, Any?> ?: return@mapNotNull null
-        val id = candidateMap["id"] as? String ?: return@mapNotNull null
-        val boundsObj = (candidateMap["bounds"] as? Map<String, Any?>)?.toBoundsOrZero()
-          ?: return@mapNotNull null
-        val candAncestors = (candidateMap["ancestorIds"] as? List<String>) ?: emptyList()
-        val rawStack = row["paintStackAtCenter"] as? List<Map<String, Any?>> ?: emptyList()
-        val stack = rawStack.mapNotNull { regionMap ->
-          val regionId = regionMap["id"] as? String ?: return@mapNotNull null
-          val regionAncestors = (regionMap["ancestorIds"] as? List<String>) ?: emptyList()
-          OpaqueRegion(id = regionId, ancestorIds = regionAncestors)
-        }
-        VisibilityInput(
-          candidate = VisibilityCandidate(id = id, bounds = boundsObj, ancestorIds = candAncestors),
-          paintStackAtCenter = stack,
-        )
+      val offscreen = (result["offscreen"] as? List<String>)?.toSet() ?: emptySet()
+      val occluded = (result["occluded"] as? List<String>)?.toSet() ?: emptySet()
+      val skipped = (result["skipped"] as? List<String>) ?: emptyList()
+      if (skipped.isNotEmpty()) {
+        Console.log("[PlaywrightScreenState] computeElementVisibility skipped ${skipped.size} candidate(s): $skipped")
       }
 
-      val viewport = TrailblazeNode.Bounds(
-        left = 0,
-        top = 0,
-        right = viewportWidth,
-        bottom = viewportHeight,
-      )
-      val verdict = OcclusionDetector.detect(inputs, viewport)
-
-      ElementVisibility(
-        offscreen = verdict.offscreen,
-        occluded = verdict.occluded,
-        bounds = bounds,
-      )
-    } catch (_: Exception) {
+      ElementVisibility(offscreen = offscreen, occluded = occluded, bounds = bounds)
+    } catch (e: Exception) {
+      // Don't swallow silently — observability for "filtering quietly off" failure modes.
+      // Emit a discrete trace span so the failure is visible in trace.json artifacts
+      // (CI silences Console.log; the trace recorder survives).
+      TrailblazeTracer.trace(
+        "computeElementVisibilityFailed",
+        "screenState",
+        args = mapOf(
+          "exception" to (e::class.simpleName ?: "Exception"),
+          "message" to (e.message ?: ""),
+        ),
+      ) { }
+      Console.log("[PlaywrightScreenState] computeElementVisibility failed (${e::class.simpleName}: ${e.message}); falling back to no filtering")
       ElementVisibility.EMPTY
     }
   }
@@ -547,22 +531,6 @@ class PlaywrightScreenState(
     val w = (this["w"] as? Number)?.toInt() ?: return null
     val h = (this["h"] as? Number)?.toInt() ?: return null
     if (w <= 0 || h <= 0) return null
-    return TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
-  }
-
-  /**
-   * Same as [toBoundsOrNull] but keeps zero-size rectangles so candidates with
-   * empty bboxes still reach [OcclusionDetector.detect], which explicitly classifies
-   * them as offscreen (a `(x, y, 0, 0)` bbox has zero paintable surface — its
-   * `centerX/centerY` would otherwise be `(x, y)`, fooling the viewport test).
-   * Opaque regions still go through [toBoundsOrNull] since a zero-area paint
-   * surface can't occlude anything.
-   */
-  private fun Map<String, Any?>.toBoundsOrZero(): TrailblazeNode.Bounds? {
-    val x = (this["x"] as? Number)?.toInt() ?: return null
-    val y = (this["y"] as? Number)?.toInt() ?: return null
-    val w = (this["w"] as? Number)?.toInt() ?: return null
-    val h = (this["h"] as? Number)?.toInt() ?: return null
     return TrailblazeNode.Bounds(left = x, top = y, right = x + w, bottom = y + h)
   }
 
@@ -1234,59 +1202,64 @@ class PlaywrightScreenState(
     )
 
     /**
-     * JavaScript function that captures the visibility inputs for [OcclusionDetector] in
-     * a single page evaluation.
+     * JavaScript function that classifies each ARIA-tree candidate as offscreen,
+     * occluded, or visible — in one page evaluation.
      *
-     * Receives `{elements: [{id, role, name, nth}], vw, vh}` (where `elements` enumerates
-     * the candidates the LLM cares about) and returns:
+     * Receives `{elements: [{id, role, name, nth}], vw, vh}` (where `elements`
+     * enumerates the candidates the LLM cares about) and returns:
      * ```
      * {
-     *   inputs: [{
-     *     candidate: { id, bounds: {x,y,w,h}, ancestorIds: [...] },
-     *     paintStackAtCenter: [{ id, ancestorIds: [...] }, ...]   // topmost first
-     *   }],
-     *   bounds: { id: {x,y,w,h} }
+     *   bounds:    { id: {x,y,w,h}, ... },   // every matched candidate's bbox
+     *   offscreen: [id, ...],                // bbox outside viewport / zero-size
+     *   occluded:  [id, ...],                // in viewport but covered per Playwright's hit-test
+     *   skipped:   [id, ...]                 // threw during classification — fail-open (treated as visible)
      * }
      * ```
      *
-     * The supplier delegates ALL paint-order math to the browser's
-     * `document.elementsFromPoint(cx, cy)`, which returns the exact paint stack
-     * the user sees at a point (full CSS stacking-context implementation,
-     * including positioned vs static, transform-creates-context,
-     * opacity-creates-context, shadow DOM, pseudo-element backgrounds, and
-     * every CSS-spec quirk). The supplier then filters that stack to entries
-     * with a non-transparent paint — and the Kotlin algorithm just picks the
-     * first.
+     * The occlusion algorithm is a 1:1 port of Playwright's `expectHitTarget`
+     * (the actionability check that produces `<el> intercepts pointer events`
+     * errors during `locator.click()`). Specifically:
+     *   1. Walk UP from the candidate through shadow roots, collecting every
+     *      enclosing root (Document and any open ShadowRoots).
+     *   2. From outermost root inward, call `root.elementsFromPoint(cx, cy)`.
+     *      The topmost element in the innermost root is `hitElement`.
+     *   3. Walk UP from `hitElement` via `assignedSlot ?? parentElementOrShadowHost`.
+     *      If the walk reaches the candidate, it's visible. Otherwise occluded.
      *
-     * Why hit-testing per candidate instead of a global opaque-region sweep:
-     * a global sweep with our own `(z-index, document order)` approximation
-     * silently mis-ranks elements on real production DOMs (this is exactly
-     * what surfaced on Square Dashboard's Managerbot popup, where the popup's
-     * dark card sits in a CSS structure our simple predicate couldn't
-     * identify as opaque). `elementsFromPoint` gets it right by definition —
-     * it's whatever the browser actually painted at that pixel.
+     * **Upstream source — pinned to the Playwright version we depend on
+     * (`libs.versions.toml#playwright = "1.59.0"`, commit `01b2b153`):**
+     *   - `expectHitTarget`:
+     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/injectedScript.ts#L955>
+     *   - `parentElementOrShadowHost`:
+     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L43>
+     *   - `enclosingShadowRootOrDocument`:
+     *     <https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L52>
      *
-     * **Pointer-events override**: `elementsFromPoint` skips elements with
-     * `pointer-events: none`. Popups like Managerbot use that on a wrapper
-     * for click-through. We inject a temporary stylesheet rule
-     * `* { pointer-events: auto !important }` before the hit-tests and
-     * remove it in a `finally` block within the same synchronous JS
-     * evaluation — bounded scope, no MutationObserver microtask can run
-     * between append and remove.
+     * Compare against `main` (line numbers will drift but function names are
+     * stable) when bumping the Playwright dependency:
+     *   - <https://github.com/microsoft/playwright/blob/main/packages/injected/src/injectedScript.ts>
+     *   - <https://github.com/microsoft/playwright/blob/main/packages/injected/src/domUtils.ts>
      *
-     * **Canvas fail-open**: if `elementsFromPoint` at the candidate's center
-     * returns only `<canvas>` / `<html>` / `<body>` (no real opaque element
-     * in between), we emit an empty paint stack. The algorithm fail-opens
-     * and leaves the candidate unfiltered. Mirrors the behavior we want on
-     * Compose Web Wasm pages where the accessibility-overlay divs are
-     * intentionally above an opaque canvas.
+     * We intentionally match it byte-for-byte (modulo the click-failure
+     * description, which we don't need) so our visibility classification
+     * tracks Playwright's actionability decision. If upstream changes the
+     * algorithm, the right move is to re-port — not to drift locally.
+     *
+     * **One deliberate divergence:** the hit-test point is the center of the
+     * intersection of the element rect and the viewport, not the element's
+     * geometric center. Playwright's `expectHitTarget` is called from
+     * `checkHitTarget`, which receives a viewport-clamped click point from
+     * its caller; we have to do that clamping ourselves so partially-visible
+     * elements (tall sections, large tables, edge-clipped content) hit-test
+     * at a point inside the viewport. Don't "fix" this back to the geometric
+     * center without understanding why — see the clamp at the call site.
      *
      * **Aria-hidden filter** (role/name map only): elements with
      * `aria-hidden="true"` and elements with `display: none` / `visibility:
      * hidden` are excluded when building the role/name map (so candidate
      * nth-indices align with Playwright's `ariaSnapshot()`), but NOT when
-     * building the paint stack. Visual occlusion is about pixels, and
-     * aria-hidden elements still paint.
+     * doing the hit-test. Visual occlusion is about pixels, and aria-hidden
+     * elements still paint.
      */
     private val BATCH_VIEWPORT_CHECK_JS = """(args) => {
       const { elements, vw, vh } = args;
@@ -1428,31 +1401,6 @@ class PlaywrightScreenState(
         }
       }
 
-      // Composed-tree `elementsFromPoint` — pierces open shadow roots so the
-      // paint stack we hand to `OcclusionDetector` includes both shadow-host
-      // and shadow-child elements at the candidate's center. Without this,
-      // `document.elementsFromPoint` stops at shadow boundaries: a shadow-DOM
-      // popup card (e.g., Market's `<market-toast>` with the visible fill on
-      // a shadow `<div>`) would never appear in the stack and the underlying
-      // candidate would silently leak to the LLM.
-      function piercingElementsFromPoint(cx, cy) {
-        const out = [];
-        const visited = new Set();
-        function walk(stack) {
-          for (const el of stack) {
-            if (!el || visited.has(el)) continue;
-            visited.add(el);
-            out.push(el);
-            const sr = el.shadowRoot;
-            if (sr && typeof sr.elementsFromPoint === 'function') {
-              walk(sr.elementsFromPoint(cx, cy));
-            }
-          }
-        }
-        walk(document.elementsFromPoint(cx, cy));
-        return out;
-      }
-
       // Walk DOM in document order (matching the accessibility tree traversal),
       // build lookup: "role\nname" -> [el, el, ...]
       // Skips elements hidden from the accessibility tree to keep nth-indices aligned
@@ -1468,192 +1416,135 @@ class PlaywrightScreenState(
         roleNameMap[key].push(el);
       }
 
-      // Map each requested candidate (id from Kotlin) to its DOM element via the
-      // role/name/nth lookup. The element's region ID in OcclusionDetector's
-      // graph equals the candidate's ID, so the algorithm's "topmost is the
-      // candidate itself" check resolves trivially.
-      const elToCandidateId = new Map();
-      for (const elem of elements) {
-        const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
-        const matches = roleNameMap[key];
-        if (!matches || elem.nth >= matches.length) continue;
-        elToCandidateId.set(matches[elem.nth], elem.id);
-      }
+      // ---- Direct port of Playwright's expectHitTarget composed-tree algorithm ----
+      // Pinned to Playwright v1.59.0 (commit 01b2b153) — the version in libs.versions.toml.
+      //   expectHitTarget                https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/injectedScript.ts#L955
+      //   parentElementOrShadowHost      https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L43
+      //   enclosingShadowRootOrDocument  https://github.com/microsoft/playwright/blob/v1.59.0/packages/injected/src/domUtils.ts#L52
+      // Kept byte-identical to upstream so our occlusion verdict tracks Playwright's
+      // actionability decision. Re-port — don't patch locally — when the Playwright
+      // dependency moves.
 
-      // Lazily assign region IDs to every DOM element we touch. Candidates get
-      // their candidate ID (currently 'e<N>'); everything else gets a synthetic
-      // '__d<N>'. The double-underscore prefix is reserved so non-candidate
-      // synthetic IDs can't collide with candidate IDs and silently misclassify
-      // an unrelated opaque element as "self" inside OcclusionDetector.
-      let dCounter = 0;
-      const elToRegionId = new Map();
-      function getRegionId(el) {
-        let id = elToRegionId.get(el);
-        if (id != null) return id;
-        const cand = elToCandidateId.get(el);
-        id = cand != null ? cand : ('__d' + (dCounter++));
-        elToRegionId.set(el, id);
-        return id;
-      }
-
-      // Walk ancestors, crossing open shadow root boundaries via the host.
-      // Critical for Web Component popups: a candidate inside `<market-dialog>`'s
-      // shadow root has `parentElement === null` at the shadow root edge
-      // (parentNode is the shadow root, which is a DocumentFragment, not an
-      // Element). Without the host crossover, the candidate's ancestorIds
-      // misses `<market-dialog>` and the algorithm thinks the visible host is
-      // an unrelated occluder — falsely flagging the candidate.
-      function computeAncestorIds(el) {
-        const ids = [];
-        let cur = el;
-        while (true) {
-          let next = cur.parentElement;
-          if (!next) {
-            const root = cur.getRootNode();
-            if (root && root.host) next = root.host;
-          }
-          if (!next || next.tagName === 'BODY' || next.tagName === 'HTML') break;
-          ids.push(getRegionId(next));
-          cur = next;
+      function parentElementOrShadowHost(element) {
+        if (element.parentElement) return element.parentElement;
+        if (!element.parentNode) return null;
+        if (element.parentNode.nodeType === 11 /* DOCUMENT_FRAGMENT_NODE */
+            && element.parentNode.host) {
+          return element.parentNode.host;
         }
-        return ids;
+        return null;
       }
 
-      // Predicate: does this element actually paint visible pixels at its
-      // position? Used to filter the elementsFromPoint stack down to the
-      // entries that contribute to what the user actually sees. We do NOT
-      // use this as the source of truth for global paint order — only as a
-      // filter on the browser's own hit-test results.
-      //
-      // Each branch corresponds to a CSS pattern that paints opaque pixels.
-      // Empirically validated against real-world UI library popup cards via
-      // the markup-variant tests in `PlaywrightScreenStateBoundsTest`; a
-      // previous version missed `box-shadow`, pseudo-element backgrounds,
-      // and iframes, which is what defeated the filter on real production
-      // dashboard popups that use CSS-in-JS card surfaces.
-      function hasOpaqueBg(cs) {
-        const bg = cs.backgroundColor;
-        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true;
-        if (cs.backgroundImage && cs.backgroundImage !== 'none') return true;
-        return false;
-      }
-      function isVisuallyOpaqueAt(node) {
-        if (!node || node === document.documentElement || node === document.body) return false;
-        const tag = node.tagName;
-        // Replaced-content tags always paint something user-visible. IFRAME
-        // is included because embedded widgets (analytics popups, support
-        // chats, the real Managerbot toast on some routes) render via iframe
-        // and the parent page's hit-test stops at the iframe boundary.
-        if (tag === 'IMG' || tag === 'SVG' || tag === 'VIDEO' || tag === 'IFRAME') return true;
-        const cs = window.getComputedStyle(node);
-        if (hasOpaqueBg(cs)) return true;
-        // Pseudo-element backgrounds are extremely common for card surfaces
-        // in CSS-in-JS frameworks (Emotion / styled-components / Material UI
-        // all use `::before` for the visible fill while the parent stays
-        // transparent for hit-testing). `content !== 'none'` filters out
-        // pseudos that aren't actually generated.
-        for (const pseudo of ['::before', '::after']) {
-          const ps = window.getComputedStyle(node, pseudo);
-          const content = ps.content;
-          if (content && content !== 'none' && content !== 'normal') {
-            if (hasOpaqueBg(ps)) return true;
-          }
+      function enclosingShadowRootOrDocument(element) {
+        let node = element;
+        while (node.parentNode) node = node.parentNode;
+        if (node.nodeType === 11 /* DOCUMENT_FRAGMENT_NODE */
+            || node.nodeType === 9 /* DOCUMENT_NODE */) {
+          return node;
         }
-        // Non-`none` box-shadow paints visible pixels — most often used for
-        // depth/elevation on card components, but also for full-fill via
-        // `inset 0 0 0 999px <color>`. Over-counts elements that have only
-        // a subtle decorative shadow (their layout box gets treated as
-        // fully opaque), but in practice elements with shadows almost
-        // always also have an opaque background, so the over-count is
-        // harmless in real UI.
-        if (cs.boxShadow && cs.boxShadow !== 'none') return true;
-        // Non-trivial border.
-        const bw = parseFloat(cs.borderTopWidth || '0')
-          + parseFloat(cs.borderRightWidth || '0')
-          + parseFloat(cs.borderBottomWidth || '0')
-          + parseFloat(cs.borderLeftWidth || '0');
-        if (bw > 0) return true;
-        return false;
+        return null;
       }
 
-      // Inject a stylesheet rule that neutralizes every `pointer-events: none`
-      // on the page so elementsFromPoint sees the actual paint stack, not the
-      // click-target stack. Bounded to this synchronous JS evaluation — no
-      // MutationObserver microtask can run between append and remove.
-      const peOverrideStyle = document.createElement('style');
-      peOverrideStyle.textContent = '* { pointer-events: auto !important; }';
-      document.head.appendChild(peOverrideStyle);
+      function isHitTargetReached(hitPoint, targetElement) {
+        // Collect every enclosing root from the target up through shadow hosts.
+        const roots = [];
+        let parentElement = targetElement;
+        while (parentElement) {
+          const root = enclosingShadowRootOrDocument(parentElement);
+          if (!root) break;
+          roots.push(root);
+          if (root.nodeType === 9 /* DOCUMENT_NODE */) break;
+          parentElement = root.host;
+        }
+        // Walk outermost-root-first; each root's topmost-at-point must be the
+        // host of the next inner root, ending at an element in the target's
+        // own scope.
+        let hitElement;
+        for (let index = roots.length - 1; index >= 0; index--) {
+          const root = roots[index];
+          const els = root.elementsFromPoint(hitPoint.x, hitPoint.y);
+          const single = root.elementFromPoint(hitPoint.x, hitPoint.y);
+          if (single && els[0] && parentElementOrShadowHost(single) === els[0]) {
+            const style = window.getComputedStyle(single);
+            if (style && style.display === 'contents') {
+              els.unshift(single);
+            }
+          }
+          if (els[0] && els[0].shadowRoot === root && els[1] === single) {
+            els.shift();
+          }
+          const innerElement = els[0];
+          if (!innerElement) break;
+          hitElement = innerElement;
+          if (index && innerElement !== roots[index - 1].host) break;
+        }
+        // Walk up the composed tree from hitElement; reach the target → visible.
+        while (hitElement && hitElement !== targetElement) {
+          hitElement = hitElement.assignedSlot != null
+            ? hitElement.assignedSlot
+            : parentElementOrShadowHost(hitElement);
+        }
+        return hitElement === targetElement;
+      }
 
-      const inputs = [];
+      // ---- End Playwright port ----
+
       const bounds = {};
+      const offscreen = [];
+      const occluded = [];
+      const skipped = [];
 
-      try {
-        for (const elem of elements) {
+      for (const elem of elements) {
+        try {
           const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
           const matches = roleNameMap[key];
           if (!matches || elem.nth >= matches.length) continue;
           const el = matches[elem.nth];
           const rect = el.getBoundingClientRect();
 
-          const boundsObj = {
+          bounds[elem.id] = {
             x: Math.round(rect.x),
             y: Math.round(rect.y),
             w: Math.round(rect.width),
             h: Math.round(rect.height),
           };
-          bounds[elem.id] = boundsObj;
-          // Register the candidate's region ID before any descendant looks it
-          // up via computeAncestorIds.
-          getRegionId(el);
-          const candAncestors = computeAncestorIds(el);
 
-          // Build the paint stack at the candidate's center.
-          // - Zero-size: empty stack. OcclusionDetector will short-circuit to
-          //   `offscreen` based on bounds, never reading the stack.
-          // - Outside viewport: same.
-          // - In viewport: hit-test, filter to opaque entries, emit topmost-first.
-          let stack = [];
+          // Zero-size or fully-outside-viewport → offscreen. (Includes elements
+          // far below the fold on long docs pages — those are scroll-reachable
+          // but not present in the screenshot, so the LLM shouldn't see them
+          // in the current-view text either.)
           const inViewport = rect.bottom > 0 && rect.top < vh
             && rect.right > 0 && rect.left < vw
             && rect.width > 0 && rect.height > 0;
-          if (inViewport) {
-            const cx = rect.x + rect.width / 2;
-            const cy = rect.y + rect.height / 2;
-            const hitStack = piercingElementsFromPoint(cx, cy);
-            for (const node of hitStack) {
-              if (!node) continue;
-              const tag = node.tagName;
-              // Stop at HTML/BODY — anything past that is the page background.
-              if (tag === 'HTML' || tag === 'BODY') break;
-              // Canvas fail-open: don't treat canvas as opaque. If the candidate's
-              // center has a canvas on top (e.g., Compose Web Wasm rendering all
-              // pixels via canvas), we want the stack to be empty so the algorithm
-              // leaves the candidate unfiltered.
-              if (tag === 'CANVAS') continue;
-              if (!isVisuallyOpaqueAt(node)) continue;
-              stack.push({
-                id: getRegionId(node),
-                ancestorIds: computeAncestorIds(node),
-              });
-            }
+          if (!inViewport) {
+            offscreen.push(elem.id);
+            continue;
           }
 
-          inputs.push({
-            candidate: {
-              id: elem.id,
-              bounds: boundsObj,
-              ancestorIds: candAncestors,
-            },
-            paintStackAtCenter: stack,
-          });
+          // Hit-test at the center of the element's IN-VIEWPORT region —
+          // not its geometric center. A wide table row or tall section that
+          // crosses the viewport edge has its geometric center outside the
+          // viewport, where elementsFromPoint returns nothing and the element
+          // would be falsely marked occluded. Clamping to the intersection
+          // keeps the hit point on visible pixels.
+          const ix0 = Math.max(rect.left, 0);
+          const iy0 = Math.max(rect.top, 0);
+          const ix1 = Math.min(rect.right, vw);
+          const iy1 = Math.min(rect.bottom, vh);
+          const cx = (ix0 + ix1) / 2;
+          const cy = (iy0 + iy1) / 2;
+          if (!isHitTargetReached({ x: cx, y: cy }, el)) {
+            occluded.push(elem.id);
+          }
+        } catch (_) {
+          // A single bad candidate (detached during snapshot, getBoundingClientRect
+          // throws on a non-Element-shaped match, etc.) must not zero out
+          // visibility for the rest of the batch. Skip it and continue.
+          skipped.push(elem.id);
         }
-      } finally {
-        // Always remove the injected override stylesheet, even if the loop
-        // above threw.
-        peOverrideStyle.remove();
       }
 
-      return { inputs, bounds };
+      return { bounds, offscreen, occluded, skipped };
     }"""
 
     /**

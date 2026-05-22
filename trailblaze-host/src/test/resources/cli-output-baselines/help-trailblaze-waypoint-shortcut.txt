@@ -1,0 +1,17 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint shortcut [-hV] [COMMAND]
+Analyze a session set for (A->B) waypoint transitions and synthesize draft
+shortcut YAMLs, then empirically replay each candidate on a fresh emulator
+before opening a PR. Subcommands: propose (offline), verify (on-device).
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  propose  Analyze a session set for (A->B) transitions and emit draft shortcut
+             YAMLs.
+  verify   Empirical replay of a proposed shortcut against a connected emulator.

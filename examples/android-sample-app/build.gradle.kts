@@ -2,6 +2,16 @@ plugins {
   id("com.android.application")
   alias(libs.plugins.kotlin.android)
   alias(libs.plugins.compose.compiler)
+  id("trailblaze.bundle")
+}
+
+// Materialize per-pack `client.d.ts` + workspace `.trailblaze/sdk/` for IDE autocomplete
+// on every `./gradlew build` (#3210). `bundleEnabled = false` because this pack still
+// ships a legacy `host_writeArtifact.js` host-tool — see `TrailblazeBundleExtension`
+// kdoc for the full rationale.
+trailblazeBundle {
+  packsDir.set(layout.projectDirectory.dir("trails/config/packs"))
+  bundleEnabled.set(false)
 }
 
 android {

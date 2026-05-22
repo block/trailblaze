@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.api
 
+import kotlin.concurrent.Volatile
 import kotlinx.serialization.Serializable
 
 /**
@@ -63,10 +64,42 @@ data class ScreenshotScalingConfig(
     val DEFAULT = ScreenshotScalingConfig()
 
     /**
-     * Alias for [DEFAULT]. On-device in-process execution (e.g. remote device farm) uses the
-     * same config as host — WebP at 1536x768. Kept as a named constant for clarity at call
-     * sites where the on-device context matters.
+     * Fallback used in pure on-device contexts where no host config is forwarded
+     * (e.g. on-device-only in-process execution on a remote device farm). When the host
+     * drives the on-device agent over RPC, it forwards its effective config explicitly via
+     * `GetScreenStateRequest.withScreenshotScalingConfig`, so this constant is bypassed.
      */
     val ON_DEVICE = DEFAULT
+  }
+}
+
+/**
+ * JVM-wide effective screenshot scaling config, populated from user settings at startup
+ * and on every settings change. Host-side call sites that previously defaulted to
+ * [ScreenshotScalingConfig.DEFAULT] use [effective] instead so a `trailblaze config
+ * screenshot-format png` (etc.) takes effect without recompiling.
+ *
+ * When [override] is null (e.g. unit tests, on-device contexts that never call
+ * [setEffectiveDefault]), [effective] falls back to [ScreenshotScalingConfig.DEFAULT].
+ */
+object EffectiveScreenshotScalingConfig {
+  @Volatile private var override: ScreenshotScalingConfig? = null
+
+  fun setEffectiveDefault(config: ScreenshotScalingConfig?) {
+    override = config
+  }
+
+  val effective: ScreenshotScalingConfig
+    get() = override ?: ScreenshotScalingConfig.DEFAULT
+
+  /**
+   * Resets the singleton to "no override" (so [effective] returns [ScreenshotScalingConfig.DEFAULT]).
+   * Test-only hook so suites that touch `CliConfigHelper.readConfig()` /
+   * `TrailblazeSettingsRepo`'s collector — both of which call [setEffectiveDefault] as a side
+   * effect — can restore the JVM-wide singleton in `@After` and avoid leaking state into the
+   * next test class in the same Gradle test JVM.
+   */
+  fun clearForTests() {
+    override = null
   }
 }

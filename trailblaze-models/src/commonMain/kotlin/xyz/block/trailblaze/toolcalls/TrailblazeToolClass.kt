@@ -4,8 +4,17 @@ package xyz.block.trailblaze.toolcalls
  * Annotation for Trailblaze tools that defines their execution characteristics.
  *
  * @property name The unique name of the tool used for serialization and LLM selection.
- * @property isForLlm Whether the LLM can select this tool. Set to false for implementation-detail
- *   tools that use unstable identifiers (e.g., node IDs).
+ * @property surfaceToLlm Whether the LLM agent toolbox advertises this tool at session start.
+ *   Set to false for implementation-detail tools that use unstable identifiers (e.g., node IDs)
+ *   or that we don't want the LLM picking spontaneously (e.g., text-based selectors that are
+ *   brittle when authored by the LLM but fine when authored explicitly by a scripted-tool
+ *   author). Independent of [surfaceToScriptedTools] — a tool can be hidden from the LLM agent
+ *   yet still emitted into per-pack `client.d.ts` for typed scripted-tool authoring.
+ * @property surfaceToScriptedTools Whether per-pack `client.d.ts` codegen emits a typed binding
+ *   for this tool (i.e. whether scripted-tool TS authors can call `client.tools.<name>(...)`).
+ *   Set to false for tools that should remain invisible to scripted-tool authoring — typically
+ *   internal dispatcher implementation details. Independent of [surfaceToLlm]: hiding a tool
+ *   from the LLM agent does NOT imply hiding it from the scripted-tool surface.
  * @property isRecordable Whether this tool can appear in trail recordings. Set to false for
  *   wrapper tools that delegate to more precise tools.
  * @property requiresHost Whether this tool requires host-side execution (e.g., ADB commands,
@@ -41,7 +50,8 @@ package xyz.block.trailblaze.toolcalls
 @Retention(AnnotationRetention.RUNTIME)
 annotation class TrailblazeToolClass(
   val name: String,
-  val isForLlm: Boolean = true,
+  val surfaceToLlm: Boolean = true,
+  val surfaceToScriptedTools: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,

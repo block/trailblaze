@@ -1,0 +1,97 @@
+name: Wikipedia Trails
+
+on:
+  # Runs on PRs targeting the default branch
+  pull_request:
+    branches: [ "main" ]
+
+  # Runs after merging to the default branch
+  push:
+    branches: [ "main" ]
+
+# Allow only one concurrent run per ref, cancelling any queued run when a
+# newer one is triggered (mirrors the pr-checks.yml concurrency policy).
+concurrency:
+  group: wikipedia-trails-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Drives a recorded Wikipedia trail via the Trailblaze CLI (`./trailblaze trail …`).
+  # Agent loop runs in-process on the host using Playwright/Chromium; no Android
+  # emulator is required. LLM inference is never invoked because the trail has
+  # pre-recorded tool sequences.
+  wikipedia-trails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Recordings-only — LLM is never invoked. A non-empty sentinel value is
+      # required to satisfy the provider/client wiring (see android-tests-host-rpc
+      # in pr-checks.yml for the same pattern).
+      OPENAI_API_KEY: no-key-set
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install Playwright system dependencies
+        # The PlaywrightDriverManager auto-installs the Chromium binary via
+        # `playwright install chromium`, but it does not install OS-level libraries.
+        # These packages cover the shared libs that Chromium requires on Ubuntu and
+        # are not guaranteed to be present on the runner image.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libcups2 \
+            libdrm2 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxkbcommon0 \
+            libxrandr2
+
+      - name: Create and run Wikipedia trail
+        id: run-trails
+        continue-on-error: true
+        run: ./.github/pr_run_wikipedia_trails.sh
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_generate_trailblaze_report.sh
+
+      - name: Create artifacts
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_create_artifacts.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts-wikipedia
+          path: |
+            trailblaze-logs.zip
+            trailblaze_report.html
+
+      - name: Fail if trails failed
+        if: steps.run-trails.outcome == 'failure'
+        run: |
+          echo "Wikipedia trails failed - failing the workflow"
+          exit 1

@@ -7,6 +7,8 @@ import com.microsoft.playwright.Page
 import com.microsoft.playwright.Playwright
 import com.microsoft.playwright.Request
 import com.microsoft.playwright.options.LoadState
+import xyz.block.trailblaze.devices.ResolvedWebViewport
+import xyz.block.trailblaze.devices.WebViewportSpec
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
@@ -99,8 +101,15 @@ data class PlaywrightNativeIdlingConfig(
 class PlaywrightBrowserManager(
   private val browserEngine: BrowserEngine = BrowserEngine.CHROMIUM,
   private val headless: Boolean = true,
-  private val viewportWidth: Int = DEFAULT_VIEWPORT_WIDTH,
-  private val viewportHeight: Int = DEFAULT_VIEWPORT_HEIGHT,
+  /**
+   * User-facing viewport spec — Playwright preset name (`"iPhone 14"`) or raw
+   * `WIDTHxHEIGHT` (`"375x812"`). Resolved against Playwright's bundled device
+   * registry via [PlaywrightDeviceRegistry] during init on the Playwright
+   * dispatcher thread; the resolved values populate [resolvedViewport] and
+   * drive [createFreshContextAndPage]'s `Browser.NewContextOptions`. Null =
+   * default desktop viewport ([DEFAULT_VIEWPORT_WIDTH] x [DEFAULT_VIEWPORT_HEIGHT]).
+   */
+  private val viewportSpec: String? = null,
   override val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
   /** Called during first-time Chromium install with (percentComplete 0–100, statusMessage). */
@@ -355,6 +364,19 @@ class PlaywrightBrowserManager(
   private lateinit var browserContext: BrowserContext
 
   /**
+   * Concrete viewport in effect for this manager. Resolved on [init] from the
+   * caller's [viewportSpec] against the running Playwright instance's bundled
+   * device registry — preset names expand to (width, height, deviceScaleFactor,
+   * userAgent, isMobile, hasTouch); raw `WIDTHxHEIGHT` populates the two
+   * dimensions and leaves the rest null. A null spec resolves to the desktop
+   * default ([DEFAULT_VIEWPORT_WIDTH] x [DEFAULT_VIEWPORT_HEIGHT]). Consumed by
+   * [createFreshContextAndPage], [captureScreenStateForLogging], and
+   * [getScreenState].
+   */
+  lateinit var resolvedViewport: ResolvedWebViewport
+    private set
+
+  /**
    * Directory the *current* `browserContext` is recording video into, or null when the
    * context was built without video. Compared against the latest [PlaywrightVideoRecordDir]
    * registration by [syncRecordingWithRegistry] so a cached browser can pick up a freshly
@@ -402,6 +424,16 @@ class PlaywrightBrowserManager(
         // returns, all further Playwright operations on the resulting instance happen
         // independently from any other manager's instance.
         playwright = synchronized(playwrightCreateLock) { Playwright.create() }
+        // Resolve the user-facing viewport spec against the live Playwright registry
+        // before any context is built — preset typos surface here as a clean
+        // IllegalArgumentException ("Unknown Playwright device preset 'iPhne 14'…")
+        // rather than later as a confusing context-creation failure.
+        resolvedViewport = PlaywrightDeviceRegistry.resolve(
+          playwright = playwright,
+          spec = WebViewportSpec.parse(viewportSpec),
+          defaultWidth = DEFAULT_VIEWPORT_WIDTH,
+          defaultHeight = DEFAULT_VIEWPORT_HEIGHT,
+        )
         val browserType =
           when (browserEngine) {
             BrowserEngine.CHROMIUM -> playwright.chromium()
@@ -595,8 +627,8 @@ class PlaywrightBrowserManager(
     return TrailblazeTracer.trace("captureScreenStateForLogging", "browser") {
       PlaywrightScreenState(
         currentPage,
-        viewportWidth,
-        viewportHeight,
+        resolvedViewport.width,
+        resolvedViewport.height,
         browserEngine = browserEngine,
       )
     }
@@ -632,8 +664,8 @@ class PlaywrightBrowserManager(
     TrailblazeTracer.trace("PlaywrightScreenState", "browser") {
       PlaywrightScreenState(
         currentPage,
-        viewportWidth,
-        viewportHeight,
+        resolvedViewport.width,
+        resolvedViewport.height,
         browserEngine = browserEngine,
         tabContext = tabContext,
         requestedDetails = details,
@@ -714,15 +746,24 @@ class PlaywrightBrowserManager(
    */
   private fun createFreshContextAndPage() {
     val recordVideoDir = deviceId?.let { PlaywrightVideoRecordDir.getRecordDir(it) }
+    val width = resolvedViewport.width
+    val height = resolvedViewport.height
     val options = Browser.NewContextOptions()
-      .setViewportSize(viewportWidth, viewportHeight)
-      .setDeviceScaleFactor(if (isCI) 1.0 else 2.0)
+      .setViewportSize(width, height)
+    // Preset-supplied emulation properties take precedence over our defaults; for raw
+    // dimensions (or no spec) we keep the legacy CI=1.0 / dev=2.0 scale heuristic so
+    // existing desktop screenshots stay byte-identical.
+    val effectiveDeviceScaleFactor = resolvedViewport.deviceScaleFactor ?: if (isCI) 1.0 else 2.0
+    options.setDeviceScaleFactor(effectiveDeviceScaleFactor)
+    resolvedViewport.userAgent?.let { options.setUserAgent(it) }
+    resolvedViewport.isMobile?.let { options.setIsMobile(it) }
+    resolvedViewport.hasTouch?.let { options.setHasTouch(it) }
     if (recordVideoDir != null) {
       // Playwright finalizes the `.webm` only when the context closes — wire a finalizer
       // so PlaywrightVideoCapture.stop() can force-flush in the kept-alive case, where
       // the manager's own close() isn't called between sessions.
       options.setRecordVideoDir(recordVideoDir.toPath())
-        .setRecordVideoSize(viewportWidth, viewportHeight)
+        .setRecordVideoSize(width, height)
       Console.log(
         "[PlaywrightBrowserManager] recording video to ${recordVideoDir.absolutePath} (deviceId=$deviceId)",
       )

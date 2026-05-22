@@ -1,0 +1,11 @@
+# Demonstrates `wikipedia_web_openRandomArticle`. Destination article is
+# non-deterministic, so the tool asserts only structural presence (#firstHeading).
+- config:
+    id: "wikipedia/test-custom-random-article"
+    title: "Wikipedia (scripted): jump to a random article and verify it loaded"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+- prompts:
+    - step: Call the `wikipedia_web_openMainPage` tool with dismissBanner=true.
+    - step: Call the `wikipedia_web_openRandomArticle` tool with ensureOnWikipedia=false.

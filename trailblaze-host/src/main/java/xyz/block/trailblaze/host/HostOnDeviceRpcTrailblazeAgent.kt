@@ -9,6 +9,7 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -132,7 +133,14 @@ class HostOnDeviceRpcTrailblazeAgent(
    *   round-trip — saves ~200-500ms per capture on real devices.
    */
   suspend fun captureScreenState(includeScreenshot: Boolean = true): ScreenState? {
-    val request = GetScreenStateRequest(includeScreenshot = includeScreenshot)
+    // Forward the host's effective screenshot scaling config (driven by
+    // `trailblaze config screenshot-*` and the desktop Settings panel) so the on-device
+    // agent scales/encodes screenshots the way the user asked. Skipped when the request
+    // doesn't include a screenshot — no point spending the bytes.
+    val request = GetScreenStateRequest(includeScreenshot = includeScreenshot).let {
+      if (includeScreenshot) it.withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
+      else it
+    }
     when (val first = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> {
         consecutiveDeviceWedgeFailures.set(0)

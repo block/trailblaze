@@ -19,7 +19,8 @@ class TrailblazeToolMetaTest {
   @Test fun `empty meta yields defaults`() {
     val parsed = TrailblazeToolMeta.fromJsonObject(JsonObject(emptyMap()))
     assertThat(parsed).isEqualTo(TrailblazeToolMeta())
-    assertThat(parsed.isForLlm).isTrue()
+    assertThat(parsed.surfaceToLlm).isTrue()
+    assertThat(parsed.surfaceToScriptedTools).isTrue()
     assertThat(parsed.isRecordable).isTrue()
     assertThat(parsed.requiresHost).isFalse()
     assertThat(parsed.toolset).isNull()
@@ -27,7 +28,8 @@ class TrailblazeToolMetaTest {
 
   @Test fun `reads every trailblaze key when present`() {
     val meta = buildJsonObject {
-      put("trailblaze/isForLlm", false)
+      put("trailblaze/surfaceToLlm", false)
+      put("trailblaze/surfaceToScriptedTools", false)
       put("trailblaze/isRecordable", false)
       put("trailblaze/requiresHost", true)
       put("trailblaze/requiresContext", true)
@@ -39,7 +41,8 @@ class TrailblazeToolMetaTest {
 
     assertThat(parsed).isEqualTo(
       TrailblazeToolMeta(
-        isForLlm = false,
+        surfaceToLlm = false,
+        surfaceToScriptedTools = false,
         isRecordable = false,
         requiresHost = true,
         requiresContext = true,

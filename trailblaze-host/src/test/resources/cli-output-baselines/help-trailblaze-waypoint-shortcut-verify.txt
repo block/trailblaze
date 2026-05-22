@@ -1,0 +1,55 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint shortcut verify [-hV] --device=<id> [--driver=<id>]
+       [--max-attempts=<n>] [--timeout-seconds=<s>] [--trail-out=<path>]
+       [--trailblaze-bin=<path>] --yaml=<path>
+Empirical replay of a proposed shortcut against a connected emulator.
+Generates a throwaway trail YAML and runs it via `trailblaze trail`.
+Returns 0 if the post-condition waypoint matches, non-zero otherwise.
+      --device=<id>        Device id to run against (forwarded to `trailblaze
+                             trail --device`).
+      --driver=<id>        Driver to use in the generated trail config.
+                             Default: ANDROID_ONDEVICE_ACCESSIBILITY.
+                           Pick a different value when verifying an iOS
+                             shortcut (v1 ships Android-first).
+  -h, --help               Show this help message and exit.
+      --max-attempts=<n>   Total attempts before declaring failure. Default: 1
+                             (no retries).
+                           Trail-runtime exit codes are not distinguishable
+                             today between infrastructure
+                           and test-side failures (picocli SOFTWARE=1 covers
+                             both driver-init failures and
+                           post-condition mismatches), so v1 defaults to no
+                             retries. Override to 2+ only
+                           when investigating known transient infra flake; a
+                             flaky shortcut is a bad
+                           shortcut and the default policy reflects that.
+      --timeout-seconds=<s>
+                           Per-attempt timeout in seconds for the inner
+                             `trailblaze trail` subprocess.
+                           Default: 600 (10 min). A wedged trail run (device
+                             disconnect, ADB hung, runtime
+                           stuck on settle) is destroyed and returns exit code
+                             124 so the outer bootstrap can
+                           move on. Without a timeout, a single stuck replay
+                             would block the rest of v1's
+                           sequential top-K loop indefinitely.
+      --trail-out=<path>   Write the generated trail YAML to <path> for
+                             debugging.
+                           Default: ./.waypoints_shortcut/verify/<shortcut-id>.
+                             trail.yaml
+      --trailblaze-bin=<path>
+                           Override the `trailblaze` binary used for the inner
+                             trail run. Default:
+                           ./trailblaze (so framework changes are picked up).
+                             CI sets this to the
+                           installed-distribution binary to mirror the end-user
+                             code path.
+  -V, --version            Print version information and exit.
+      --yaml=<path>        Path to the shortcut YAML to verify (a `*.shortcut.
+                             yaml`).

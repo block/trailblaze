@@ -8,6 +8,7 @@ import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.PackScriptedToolFile
 import xyz.block.trailblaze.config.project.TrailblazePackManifest
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -16,9 +17,11 @@ import java.util.concurrent.TimeUnit
 /**
  * Daemon-init-time bundler for inline scripted tools declared in pack manifests.
  *
- * Walks each pack's `target.tools:` list, resolves the per-tool YAML descriptor to a
- * [PackScriptedToolFile], reads the referenced `script:` source, and runs `esbuild`
- * with the same flag set as the build-time
+ * Auto-discovers every `.yaml` scripted-tool descriptor under `<packDir>/tools/` (skipping operational
+ * tool YAMLs by suffix), indexes them by their declared tool name, then resolves each entry
+ * in `pack.target?.tools` — which now holds tool *names*, not file paths — against that
+ * registry. For every resolved descriptor it reads the referenced `script:` source and runs
+ * `esbuild` with the same flag set as the build-time
  * `BundleAuthorToolsTask` plugin (`build-logic/src/main/kotlin/TrailblazeAuthorToolBundleTasks.kt:267-278`).
  *
  * Output is cached by SHA-256 of the source `.ts` file bytes; a second call with
@@ -43,14 +46,24 @@ class DaemonScriptedToolBundler(
 ) {
 
   /**
-   * Bundles every entry in each pack's `target.tools:` list. Returns a map from
-   * the tool's declared `name` (in its YAML descriptor) to the cached bundle
-   * path on disk. Idempotent on unchanged source bytes.
+   * Bundles every entry in each pack's `target.tools:` list. Returns a map from the tool's
+   * declared `name` (in its YAML descriptor) to the cached bundle path on disk. Idempotent
+   * on unchanged source bytes.
+   *
+   * **Test-only entry point.** The production session-start path
+   * ([TrailblazeHostYamlRunner]) calls [bundleOne] per pre-resolved
+   * [xyz.block.trailblaze.config.InlineScriptToolConfig] — the loader has already done the
+   * `<pack>/tools/` discovery walk and emitted typed configs by then. This method exists
+   * to pin the daemon-time parity contract with the loader's discovery walk (matching
+   * directory scan + duplicate detection + symlink containment + skip-and-log + unknown-
+   * name diagnostic) so behavioral drift between resolvers is caught by tests rather than
+   * surfacing as a daemon-vs-loader mismatch at session start. SISTER-IMPL-TAG: pack-
+   * scripted-tool-discovery.
    *
    * @param packs Discovered pack manifests.
-   * @param packBaseDirs The on-disk base directory for each pack (so the loader
-   *   can resolve the per-tool YAML paths declared in `target.tools:`). A pack
-   *   missing from this map contributes nothing to the result.
+   * @param packBaseDirs The on-disk base directory for each pack (so the bundler can scan
+   *   `<baseDir>/tools/` for scripted-tool descriptors). A pack missing from this map
+   *   contributes nothing to the result.
    */
   suspend fun bundleAll(
     packs: List<TrailblazePackManifest>,
@@ -58,31 +71,56 @@ class DaemonScriptedToolBundler(
   ): Map<String, File> = withContext(Dispatchers.IO) {
     val result = LinkedHashMap<String, File>()
     for (pack in packs) {
-      val toolPaths = pack.target?.tools.orEmpty()
-      if (toolPaths.isEmpty()) continue
+      val toolNames = pack.target?.tools.orEmpty()
+      if (toolNames.isEmpty()) continue
       val baseDir = packBaseDirs[pack] ?: continue
-      for (toolYamlRelPath in toolPaths) {
-        val toolYamlFile = File(baseDir, toolYamlRelPath)
-        // Pack-containment check for the descriptor itself — without this, a manifest declaring
-        // `target.tools: [../outside.yaml]` would resolve a YAML file outside the pack and
-        // decode it before the script-side guard below ever ran. Same canonical-startsWith
-        // pattern used for `script:` paths; absolute entries bypass (consistent with the
-        // script-side bypass and the loader's mcp_servers resolver).
-        requirePathInsidePack(
-          packId = pack.id,
-          baseDir = baseDir,
-          path = toolYamlFile,
-          rawPath = toolYamlRelPath,
-          kind = "tool descriptor",
-          rawIsAbsolute = File(toolYamlRelPath).isAbsolute,
-        )
-        if (!toolYamlFile.isFile) {
+      // Detect duplicates inside `target.tools:` itself BEFORE the cross-pack collision check
+      // below — otherwise listing the same name twice in one pack's `target.tools:` would trip
+      // the cross-pack collision message which incorrectly blames a sibling pack.
+      // SISTER-IMPL-TAG: pack-target-tools-dup-detection.
+      val seenInPack = mutableSetOf<String>()
+      for (toolName in toolNames) {
+        if (!seenInPack.add(toolName)) {
           throw IOException(
-            "Pack '${pack.id}': scripted-tool descriptor '$toolYamlRelPath' not found at " +
-              "${toolYamlFile.absolutePath}.",
+            "Pack '${pack.id}': `target.tools:` lists '$toolName' more than once. " +
+              "Each scripted-tool name must appear at most once in `target.tools:`.",
           )
         }
-        val descriptor = decodeDescriptor(toolYamlFile)
+      }
+      val discovery = discoverScriptedToolDescriptors(pack.id, baseDir)
+      val registry = discovery.registry
+      for (toolName in toolNames) {
+        val match = registry[toolName]
+          ?: throw IOException(
+            buildString {
+              append("Pack '${pack.id}': `target.tools:` references '$toolName' but no ")
+              append("scripted-tool descriptor with that name was discovered under ")
+              append("${File(baseDir, SCRIPTED_TOOLS_DIR).absolutePath}. ")
+              append(describeAvailableNames(registry))
+              // Mirrors the loader / build-time bundler / Gradle generator hint so an author
+              // who triggers session start with a stale path-shaped `target.tools:` entry sees
+              // the same migration nudge regardless of which entry point caught it.
+              if (toolName.endsWith(".yaml") || toolName.contains('/')) {
+                append(" Hint: '$toolName' looks like a file path; this field used to hold ")
+                append("paths but now holds tool names — open the descriptor at that path and ")
+                append("copy its `name:` field here.")
+              }
+              // Point at the skipped descriptor (if any) whose filename matches the
+              // unknown name — see lead-dev round 3 #I2.
+              val likelyCulprit = discovery.skipped.firstOrNull { it.name == "$toolName.yaml" }
+              if (likelyCulprit != null) {
+                append(" Note: descriptor '${likelyCulprit.absolutePath}' was skipped during ")
+                append("discovery (see earlier log warning for the parse error). Fix that ")
+                append("file to register the '$toolName' name.")
+              } else if (discovery.skipped.isNotEmpty()) {
+                append(" Note: ${discovery.skipped.size} other descriptor(s) under ")
+                append("<pack>/tools/ were skipped during discovery (see earlier log ")
+                append("warnings); one of them may have been intended to declare '$toolName'.")
+              }
+            },
+          )
+        val descriptor = match.descriptor
+        val toolYamlFile = match.descriptorFile
         // Resolve `script:` relative to the descriptor YAML file's parent directory so the
         // implementation lives next to the descriptor inside the pack. Absolute paths pass
         // through unchanged. `Path.normalize()` collapses `./` and `../` segments via pure
@@ -96,65 +134,209 @@ class DaemonScriptedToolBundler(
             File(toolYamlFile.parentFile, descriptor.script).toPath().normalize().toFile().absoluteFile
           }
         }
-        // Canonical-path containment for relative scripts: same posture as the loader's
-        // mcp_servers resolver and the build-time `TrailblazePackBundler.resolvePackRelativeToolFile`.
-        // Absolute paths bypass by design — authors who write an absolute path opt into pointing
-        // outside the pack. Symlinks are canonicalized away on both sides so a textually-contained
-        // path can't disguise an out-of-pack target.
-        // Resolve the names this descriptor advertises. Single-tool descriptors expose one
-        // name (top-level `name:`); multi-tool descriptors expose one name per `tools:` entry.
-        // Both shapes funnel through the same bundling path — the .ts source is identical
-        // regardless of how many tools the file exposes, so a multi-tool descriptor of N tools
-        // costs ONE esbuild invocation and ONE on-disk cache entry, not N.
-        val toolNames: List<String> = descriptor.tools?.map { it.name }
-          ?: listOfNotNull(descriptor.name)
-        if (toolNames.isEmpty()) {
-          throw IOException(
-            "Pack '${pack.id}': scripted-tool descriptor '$toolYamlRelPath' must declare " +
-              "either a top-level `name:` (single-tool shape) or `tools:` (multi-tool shape).",
-          )
-        }
-        val descriptorIdentity = toolNames.first()
         requirePathInsidePack(
           packId = pack.id,
           baseDir = baseDir,
           path = scriptFile,
           rawPath = descriptor.script,
-          kind = "tool '$descriptorIdentity' script",
+          kind = "tool '$toolName' script",
           rawIsAbsolute = File(descriptor.script).isAbsolute,
         )
         if (!scriptFile.isFile) {
           throw IOException(
-            "Pack '${pack.id}': tool '$descriptorIdentity' references script '${descriptor.script}' " +
+            "Pack '${pack.id}': tool '$toolName' references script '${descriptor.script}' " +
               "(resolved to ${scriptFile.absolutePath}), but no such file exists.",
           )
         }
-        // Bundle once per descriptor (== once per script file in the multi-tool shape). The
-        // cache key downstream is content-addressed on the script bytes, so two descriptors
-        // pointing at the same file would dedupe naturally; we still call `bundleOneInternal`
-        // only once here to avoid the redundant cache lookup. Use the descriptor's first
-        // declared tool name as the bundle's identity — purely a cache-file-naming concern.
-        val bundledFile = bundleOneInternal(scriptFile, descriptorIdentity)
-        for (toolName in toolNames) {
-          // Fail loudly on duplicate tool names across packs (and across entries within a
-          // single multi-tool descriptor). A LinkedHashMap put would silently overwrite the
-          // earlier entry, and the per-tool dispatch downstream would route to whichever
-          // bundle won the race — confusing at best, broken at worst when the two tools have
-          // different schemas. TrailblazePackBundler enforces the same uniqueness guarantee.
-          val existing = result[toolName]
-          if (existing != null) {
-            throw IOException(
-              "Duplicate scripted-tool name '$toolName' across packs. " +
-                "Each pack manifest's `target.tools:` entry (and each entry under " +
-                "`tools:`) must declare a globally unique name. Previously bundled at " +
-                "${existing.absolutePath}; conflicting source is ${scriptFile.absolutePath}.",
-            )
-          }
-          result[toolName] = bundledFile
+        // Bundle once per (script, name) pair. The cache is content-addressed on the script
+        // bytes + tool name, so two `target.tools:` entries pointing at the same script via
+        // a multi-tool descriptor produce distinct bundles for distinct names.
+        val bundledFile = bundleOneInternal(scriptFile, toolName)
+        // Fail loudly on duplicate tool names across packs. A LinkedHashMap put would silently
+        // overwrite the earlier entry, and the per-tool dispatch downstream would route to
+        // whichever bundle won the race — confusing at best, broken at worst when the two tools
+        // have different schemas. TrailblazePackBundler enforces the same uniqueness guarantee.
+        val existing = result[toolName]
+        if (existing != null) {
+          throw IOException(
+            "Duplicate scripted-tool name '$toolName' across packs. " +
+              "Each pack manifest's `target.tools:` entry must resolve to a globally unique " +
+              "tool name. Previously bundled at ${existing.absolutePath}; conflicting source " +
+              "is ${scriptFile.absolutePath}.",
+          )
         }
+        result[toolName] = bundledFile
       }
     }
     result
+  }
+
+  /** Pairs a [PackScriptedToolFile] with the on-disk file it was decoded from. */
+  private data class DescriptorRegistryEntry(
+    val descriptorFile: File,
+    val descriptor: PackScriptedToolFile,
+  )
+
+  /**
+   * Scans `<baseDir>/tools/` for scripted-tool descriptor YAMLs (direct children only,
+   * operational suffixes excluded) and returns a name → (file, descriptor) registry. Both
+   * single-tool and multi-tool descriptors register one entry per declared tool name.
+   *
+   * Duplicate names across files in the same pack throw with both contributing file names.
+   *
+   * SISTER IMPLEMENTATIONS — same algorithm lives in three other places, keep all four in
+   * lockstep:
+   *   - `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailblazeProjectConfigLoader.kt`
+   *     `discoverPackScriptedTools` — runtime pack loader.
+   *   - `trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/TrailblazePackBundler.kt`
+   *     `buildScriptedToolRegistry` — build-time `.d.ts` augmentation generator.
+   *   - `build-logic/src/main/kotlin/TrailblazeBundledConfigTasks.kt`
+   *     `buildPackScriptedToolRegistry` — Gradle bundled-config generator.
+   *
+   * Search tag for grepping all four sister implementations at once (resilient against
+   * future file moves): `SISTER-IMPL-TAG: pack-scripted-tool-discovery`.
+   */
+  /**
+   * Discovery result: name-keyed registry plus the list of descriptor files that were
+   * skipped because their decode failed. Plumbed downstream to UnknownScriptedToolName so
+   * an author whose `target.tools:` references a skipped file's intended name gets pointed
+   * at it directly. See lead-dev round 3 #I2.
+   */
+  private data class ScriptedToolDiscoveryResult(
+    val registry: Map<String, DescriptorRegistryEntry>,
+    val skipped: List<File>,
+  )
+
+  private fun discoverScriptedToolDescriptors(
+    packId: String,
+    baseDir: File,
+  ): ScriptedToolDiscoveryResult {
+    val toolsDir = File(baseDir, SCRIPTED_TOOLS_DIR)
+    if (!toolsDir.isDirectory) return ScriptedToolDiscoveryResult(emptyMap(), emptyList())
+    // Canonical-path containment mirrors the loader's `PackSource.readFilesystemSibling`
+    // guarantee — a `<pack>/tools/foo.yaml` symlink that resolves outside the pack must be
+    // rejected, not silently followed. Without this check the daemon-time bundler would
+    // happily decode escape symlinks the runtime loader would refuse to read, surfacing as
+    // load-vs-daemon drift at session start.
+    val canonicalPackDir = baseDir.canonicalFile.toPath()
+    val candidateFiles = toolsDir.listFiles()
+      .orEmpty()
+      .filter { it.isFile && it.name.endsWith(".yaml") }
+      .filter { file -> OPERATIONAL_TOOL_YAML_SUFFIXES.none { file.name.endsWith(it) } }
+      .filter { file ->
+        // Translate IOException from canonicalize (symlink loop, FS quirk) into a typed
+        // failure with the descriptor name in the message rather than an opaque NIO stack
+        // trace from inside `.filter { }`.
+        val canonicalFile = try {
+          file.canonicalFile
+        } catch (e: IOException) {
+          throw IOException(
+            "Pack '$packId': scripted-tool descriptor candidate '${file.name}' under " +
+              "<pack>/tools/ could not be canonicalized (likely a symlink loop or other " +
+              "filesystem error): ${e.message}",
+            e,
+          )
+        }
+        if (!canonicalFile.toPath().startsWith(canonicalPackDir)) {
+          throw IOException(
+            "Pack '$packId': scripted-tool descriptor candidate '${file.name}' under " +
+              "<pack>/tools/ resolves outside the pack directory (canonical path: " +
+              "${canonicalFile.absolutePath}, pack at: $canonicalPackDir). " +
+              "Symlinked descriptors must stay inside the pack.",
+          )
+        }
+        true
+      }
+      .sortedBy { it.name }
+    val registry = linkedMapOf<String, DescriptorRegistryEntry>()
+    val skipped = mutableListOf<File>()
+    for (toolYamlFile in candidateFiles) {
+      // Per-descriptor decode wrapped in try/log/skip — a single malformed (or half-written
+      // WIP) file under `<pack>/tools/` doesn't tank session start. Sibling descriptors still
+      // register; any `target.tools:` entry that references a tool from the skipped file will
+      // surface downstream as the unknown-name IOException. See lead-dev review #2 (round 2).
+      // Catch only the YAML / serialization / shape failures author edits produce; let
+      // CancellationException (from the surrounding `withContext(Dispatchers.IO)`),
+      // OutOfMemoryError, and other VirtualMachineErrors propagate. A broad `catch (Exception)`
+      // here would also swallow IOException from a file-system fault (permission flip mid-build,
+      // disk eject) and mis-attribute it as an author-fixable malformed-descriptor warning.
+      val descriptor = try {
+        decodeDescriptor(toolYamlFile)
+      } catch (e: com.charleskorn.kaml.YamlException) {
+        Console.log(skippedMalformedMessage(toolYamlFile, packId, e))
+        skipped += toolYamlFile
+        continue
+      } catch (e: kotlinx.serialization.SerializationException) {
+        Console.log(skippedMalformedMessage(toolYamlFile, packId, e))
+        skipped += toolYamlFile
+        continue
+      } catch (e: IllegalArgumentException) {
+        // kaml's `Yaml.decodeFromString` raises IllegalArgumentException on a handful of shape
+        // mismatches (missing required field, wrong scalar type for an enum). Same author-side
+        // failure class as YamlException — log and skip rather than propagate.
+        Console.log(skippedMalformedMessage(toolYamlFile, packId, e))
+        skipped += toolYamlFile
+        continue
+      }
+      val multi = descriptor.tools
+      val single = descriptor.name
+      val declaredNames: List<String> = when {
+        multi != null -> multi.map { it.name }
+        single != null -> listOf(single)
+        else -> {
+          // Skip-and-log treatment for a descriptor missing both `name:` and `tools:`. A
+          // typical WIP shape (`script: ./foo.ts` and nothing else) is invisible rather than
+          // session-fatal; `target.tools:` references surface as UnknownScriptedToolName.
+          Console.log(
+            "Note: skipping scripted-tool descriptor ${toolYamlFile.absolutePath} (pack " +
+              "'$packId') — must declare either a top-level `name:` (single-tool shape) or " +
+              "`tools:` (multi-tool shape). Sibling descriptors still register.",
+          )
+          skipped += toolYamlFile
+          continue
+        }
+      }
+      for (declaredName in declaredNames) {
+        // Symmetric with the bundler's `BlankToolName` guard — see SISTER-IMPL-TAG: pack-
+        // scripted-tool-discovery. `name: ""` decodes successfully but would register under
+        // the empty key, masking author errors.
+        if (declaredName.isBlank()) {
+          throw IOException(
+            "Pack '$packId': scripted-tool descriptor '${toolYamlFile.absolutePath}' declares " +
+              "a blank tool name. Tool names must be non-empty and contain at least one " +
+              "non-whitespace character.",
+          )
+        }
+        val previous = registry[declaredName]
+        if (previous != null) {
+          throw IOException(
+            "Pack '$packId': two scripted-tool descriptors under <pack>/tools/ declare the " +
+              "same tool name '$declaredName': '${previous.descriptorFile.name}' and " +
+              "'${toolYamlFile.name}'. Tool names must be unique within a pack.",
+          )
+        }
+        registry[declaredName] = DescriptorRegistryEntry(toolYamlFile, descriptor)
+      }
+    }
+    return ScriptedToolDiscoveryResult(registry, skipped)
+  }
+
+  private fun skippedMalformedMessage(
+    toolYamlFile: File,
+    packId: String,
+    cause: Throwable,
+  ): String =
+    "Note: skipping malformed scripted-tool descriptor ${toolYamlFile.absolutePath} " +
+      "(pack '$packId'): ${cause.message}. Sibling descriptors still register; any " +
+      "`target.tools:` entry naming a tool from this file will fail with " +
+      "UnknownScriptedToolName until the file is fixed."
+
+  private fun describeAvailableNames(
+    registry: Map<String, DescriptorRegistryEntry>,
+  ): String = if (registry.isEmpty()) {
+    "No scripted-tool descriptors discovered under <pack>/tools/."
+  } else {
+    "Available tool names: [${registry.keys.sorted().joinToString(", ")}]."
   }
 
   /**
@@ -442,12 +624,11 @@ class DaemonScriptedToolBundler(
     yaml.decodeFromString(PackScriptedToolFile.serializer(), yamlFile.readText())
 
   /**
-   * Canonical-startsWith containment check applied to both `target.tools[]` descriptor refs
-   * and per-tool `script:` paths. Mirrors the load-time loader's `resolveMcpServerScripts`
-   * check and the build-time `TrailblazePackBundler.resolvePackRelativeToolFile` — relative
-   * paths must resolve strictly under the pack directory once symlinks are canonicalized
-   * away. Absolute paths bypass (consistent with the loader's `mcp_servers:` behavior and
-   * the contract documented on [PackScriptedToolFile.script]).
+   * Canonical-startsWith containment check applied to per-tool `script:` paths. Mirrors
+   * the load-time loader's `resolveMcpServerScripts` check — relative paths must resolve
+   * strictly under the pack directory once symlinks are canonicalized away. Absolute paths
+   * bypass (consistent with the loader's `mcp_servers:` behavior and the contract
+   * documented on [PackScriptedToolFile.script]).
    */
   private fun requirePathInsidePack(
     packId: String,
@@ -498,6 +679,21 @@ class DaemonScriptedToolBundler(
 
   companion object {
     private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
+    /** Pack-relative directory that owns scripted-tool descriptor YAMLs. */
+    private const val SCRIPTED_TOOLS_DIR = "tools"
+
+    /**
+     * Filename suffixes that mark an operational tool YAML rather than a scripted-tool
+     * descriptor. Mirrored from `TrailblazeProjectConfigLoader` so the daemon and loader
+     * agree on which files in `<pack>/tools/` are scripted-tool descriptors.
+     */
+    private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
+      ".tool.yaml",
+      ".shortcut.yaml",
+      ".trailhead.yaml",
+      ".waypoint.yaml",
+    )
 
     /**
      * Filename prefix for synthesized wrapper `.ts` files we drop next to the user's script.

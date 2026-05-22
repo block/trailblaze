@@ -16,10 +16,10 @@ There are three flavors of custom tool. Pick by what kind of body you need to wr
    here for thin wrappers like "press back twice" or "open the search URL for `<topic>`."
 
 2. **Scripted (TypeScript) tool** (`<pack>/tools/<id>.yaml` paired with `<id>.ts`) — a
-   handler function in JavaScript/TypeScript with access to `client.callTool(...)` for
-   nested framework-tool dispatch. Use when you need branching, retries, async
-   coordination, or anything else the YAML form can't express. Listed in `pack.yaml`'s
-   `target.tools:`.
+   TypeScript handler function with access to the typed `client.tools.<name>(args)`
+   surface for nested framework-tool dispatch. Use when you need branching, retries,
+   async coordination, or anything else the YAML form can't express. Listed in
+   `pack.yaml`'s `target.tools:`.
 
 3. **Kotlin-backed tool** (`@TrailblazeToolClass`-annotated data class) — a Kotlin
    `TrailblazeTool` implementation. Use when you need to read host-side state that
@@ -33,8 +33,8 @@ Deep dives:
   "Tool flavors: which kind do I write?" rubric and the per-suffix schema reference.
 - **TypeScript scripted tools end-to-end** — see
   [Author Your First Scripted Tool](scripted_tools.md), covering the descriptor schema,
-  the `.ts` handler signature, the scripting SDK (`client.callTool`, `ctx.target`,
-  memory), and the host-vs-on-device dispatch contract.
+  the `.ts` handler signature, the scripting SDK (`client.tools.<name>(args)`,
+  `ctx.target`, memory), and the host-vs-on-device dispatch contract.
 
 Kotlin-backed tool example:
 

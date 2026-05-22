@@ -11,6 +11,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-05-21 | [Unit-testing scripted tools without a device](2026-05-21-scripted-tool-unit-testing.md) | Devlog |
 | 2026-05-12 | [Use npm for Trailmap Distribution](2026-05-12-npm-distribution-for-trailmaps.md) | Decision |
 | 2026-05-12 | [DriverDispatch and the iOS settle gap](2026-05-12-driver-dispatch-and-the-ios-settle-gap.md) | Devlog |
 | 2026-05-11 | [Why Trailblaze beats code generators](2026-05-11-code-generation-and-the-thin-shim-tradeoff.md) | Decision |

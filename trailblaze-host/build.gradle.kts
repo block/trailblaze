@@ -236,15 +236,64 @@ val generateVersionProperties by tasks.registering {
   }
 }
 
+// Stage the TypeScript compiler (`_tsc.js` + standard-library `lib.*.d.ts` files) as JAR
+// resources at `trailblaze-config/typecheck/typescript/lib/...`, so `trailblaze typecheck`
+// can extract the bundled tsc into each workspace's `<workspace>/.trailblaze/typecheck/`
+// at compile time without going through `bun install` per pack — which was the forcing
+// function (per-pack transitive npm closure failed to resolve through corporate npm
+// mirrors in some environments).
+//
+// Source: `sdks/typescript/node_modules/typescript/lib/`, populated by `bun install` in
+// the SDK package (CI's static-checks pipeline runs this before any Gradle build does;
+// developers do the same once locally). Pinned to typescript@6.0.3 via the SDK package's
+// devDependency — matches the version `bun tsc --noEmit` would have used in the per-pack
+// era, so authors see the same diagnostics they'd seen before this command existed.
+//
+// **Trimmed payload** — locale dirs (`cs/`, `de/`, `es/`, ..., `zh-tw/`), the `_tsserver.js`
+// language-server entry point, and `_typingsInstaller.js` are excluded. `trailblaze
+// typecheck` only needs `_tsc.js` + the standard-library `lib.*.d.ts` files; the rest is
+// dead weight that would bloat the JAR by ~6 MB. The English diagnostic strings live inline
+// in `_tsc.js`, so dropping the locale dirs only loses translated messages (no fallback
+// path; tsc just emits in English).
+//
+// **Not in node_modules?** The task copies whatever exists at the source path. If
+// `bun install` hasn't populated `node_modules/typescript/`, the resource bundle stays
+// empty and `WorkspaceTypeScriptSetup.extractTypecheck` surfaces a clean error at
+// runtime asking the developer to run `bun install` in `sdks/typescript/` once. Hard-
+// failing here would block every other host build on a fresh checkout that hasn't run
+// `bun install` yet, which the existing `copyTypescriptSdkResources` (in
+// `:trailblaze-models`) also avoids.
+val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
+  group = "trailblaze"
+  description = "Stages typescript@6.0.3's tsc + lib.*.d.ts files into build/ for inclusion in this module's JAR resources."
+  // Path relative to `:trailblaze-host` project dir → `../sdks/typescript/...`
+  from(layout.projectDirectory.dir("../sdks/typescript/node_modules/typescript")) {
+    // Top-level package metadata + license — tsc loads `package.json` for its own version
+    // string. The two .txt files are tiny and let consumers see the upstream license.
+    include("package.json")
+    include("LICENSE.txt")
+    include("ThirdPartyNoticeText.txt")
+    // Compiler core + standard-library type declarations. `_tsc.js` is the entry point.
+    include("lib/_tsc.js")
+    include("lib/lib.*.d.ts")
+    include("lib/diagnosticMessages.generated.json")
+  }
+  into(layout.buildDirectory.dir("generated-resources/typecheck/trailblaze-config/typecheck/typescript"))
+}
+
 // Add generated resources to source sets
 sourceSets {
   main {
     resources.srcDir(generateVersionProperties.map { it.outputs.files.singleFile })
+    resources.srcDir(
+      copyTypescriptCompilerResources.map { layout.buildDirectory.dir("generated-resources/typecheck").get() },
+    )
   }
 }
 
 tasks.named("processResources") {
   dependsOn(generateVersionProperties)
+  dependsOn(copyTypescriptCompilerResources)
 }
 
 dependencyGuard {

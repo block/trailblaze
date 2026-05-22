@@ -1,0 +1,30 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze check [-hV] [--all] [--no-typecheck]
+                        [--workspace=<workspaceDir>] [<pack-id>]
+Materialize pack manifests + type-check pack TypeScript/JavaScript sources
+      [<pack-id>]      Name of the pack to scope the type-check to (directory
+                         name under <workspace>/trails/config/packs/). Omit
+                         when running from inside a pack tree (auto-detected)
+                         or pass --all to type-check every pack. Mutually
+                         exclusive with --all.
+      --all            Type-check every pack in the discovered workspace, even
+                         when running from inside a specific pack tree.
+                         Mutually exclusive with the positional <pack-id>.
+  -h, --help           Show this help message and exit.
+      --no-typecheck   Skip the bundled-tsc typecheck pass — only materialize
+                         the workspace's SDK + per-pack typed bindings.
+                         Intended for CI scripts that run tsc with custom
+                         settings (e.g., excluding legacy embedded
+                         sub-projects); interactive users should leave this off.
+  -V, --version        Print version information and exit.
+      --workspace=<workspaceDir>
+                       Pin the workspace root explicitly (the directory
+                         containing `trails/config/packs/`). Used by CI scripts
+                         that run with a fixed cwd; interactive users should
+                         rely on the cwd walk-up instead.

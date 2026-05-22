@@ -5,10 +5,12 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open]
-                         [--gif[=<gifOutput>]] [--video[=<videoOutput>]] [--webp
-                         [=<webpOutput>]] [--id=<id>] [--max-size=<maxSize>]
-                         [--output-dir=<outputDir>]
+Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open] [--
+                         [no-]storyboard-yaml] [--gif[=<gifOutput>]]
+                         [--storyboard[=<storyboardOutput>]] [--video
+                         [=<videoOutput>]] [--webp[=<webpOutput>]] [--id=<id>]
+                         [--max-size=<maxSize>] [--output-dir=<outputDir>]
+                         [--storyboard-columns=<storyboardColumns>]
 Generate an HTML report for session recordings, plus a best-effort JSON
 summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only
 failures log a warning and still exit 0 — HTML is the primary artifact and is
@@ -66,6 +68,54 @@ what gates the exit code.
                                Created if it doesn't exist. If omitted,
                                artifacts land in the default `logs/reports/`
                                location with timestamped names.
+      --storyboard[=<storyboardOutput>]
+                             Export a single-frame WebP storyboard — every
+                               step's screenshot tiled into a CSS grid (one
+                               cell per executed action / taken snapshot,
+                               labeled with the action verb), then
+                               full-page-screenshotted via headless Playwright
+                               and encoded to WebP. Complements --gif/--webp
+                               (which play through the timeline over time) —
+                               embed both in a PR comment to get
+                               glance-overview plus the animated walkthrough. A
+                               companion .html with the same content is written
+                               alongside the WebP for standalone viewing. Path
+                               defaults to <report-dir>/<session-id>.storyboard.
+                               webp (or <output-dir>/storyboard.webp when
+                               --output-dir is set). Single-session only — pass
+                               --id or --current.
+      --storyboard-columns=<storyboardColumns>
+                             Number of columns in the --storyboard grid. When
+                               omitted, the exporter auto-picks by cell aspect
+                               ratio: landscape-majority sessions (desktop /
+                               tablet) get 3 columns so each cell stays
+                               meaningfully large at GitHub's ~760px embed
+                               width without burning vertical space,
+                               portrait-majority sessions (phone) get 4 columns
+                               for denser inline glance. The auto-pick decision
+                               (landscape-cell count, threshold) is logged so
+                               the chosen value is visible from the CLI tail.
+                               Pass an explicit value to override (e.g. 6 / 8
+                               for very long sessions that would otherwise
+                               force the auto-fit cell-width shrink — spreading
+                               wider on the page is cleaner than thumbnailing
+                               the cells).
+      --[no-]storyboard-yaml Annotate each --storyboard cell with the YAML form
+                               of the recordable tool that produced it (looked
+                               up by traceId against the session's
+                               TrailblazeToolLog entries). The YAML strip
+                               replaces the synthesized verb/sublabel line —
+                               strictly more informative for "what was invoked
+                               here" triage. Cells without a sibling tool log
+                               fall back to the verb line. CSS Grid aligns rows
+                               to their tallest YAML so a short YAML doesn't
+                               pay the cost of a long one elsewhere. Capped at
+                               20 lines per cell as a sanity bound. Default:
+                               on. Pass --no-storyboard-yaml to suppress
+                               (reduces total rendered height by ~20% on a
+                               typical session, at the cost of less actionable
+                               per-cell labels). Has no effect without
+                               --storyboard.
   -V, --version              Print version information and exit.
       --video[=<videoOutput>]
                              Export the HTML report's timeline autoplay (the

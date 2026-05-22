@@ -1,0 +1,30 @@
+script: ./contacts_ios_searchAndVerify.ts
+name: contacts_ios_searchAndVerify
+description: |
+  Search Contacts for a name AND verify the resulting contact's detail screen
+  is well-formed in a single tool call. Use this whenever the task combines
+  "search for X" with "verify the contact has Y", e.g. "search for Albert
+  Einstein and confirm the contact has a phone number". Composes the
+  existing `contacts_ios_searchContacts` and
+  `contacts_ios_verifyContactStructure` tools so callers get both behaviors
+  with one round-trip.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  query:
+    type: string
+    description: Name to type into the Contacts search field.
+    required: false
+  expectedName:
+    type: string
+    description: Visible name the tool asserts on the opened contact. Defaults to `query`.
+    required: false
+  requireFields:
+    type: array
+    description: |
+      Optional list of visible field labels the contact must surface
+      ("phone", "email", "home", etc.). Empty list skips field assertions.
+    items:
+      type: string
+    required: false

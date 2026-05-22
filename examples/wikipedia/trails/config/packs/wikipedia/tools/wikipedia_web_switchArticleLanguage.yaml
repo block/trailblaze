@@ -1,0 +1,34 @@
+script: ./wikipedia_web_switchArticleLanguage.ts
+name: wikipedia_web_switchArticleLanguage
+description: |
+  Open the same Wikipedia article in a different language. Use this
+  whenever the task is to switch language, view in another language, or
+  read the Spanish/French/German/Japanese/etc. version of a Wikipedia
+  article. Routes directly to the matching language subdomain
+  (`es.wikipedia.org`, `fr.wikipedia.org`, …) rather than driving through
+  the in-page language picker (which varies a lot across skins). Verifies
+  the destination article's first heading is visible.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  title:
+    type: string
+    description: |
+      English article title to switch the language of. Spaces converted to
+      underscores before being placed in the URL path.
+    required: false
+  languageCode:
+    type: string
+    description: |
+      Wikipedia language code, e.g. "es" for Spanish, "fr" for French,
+      "de" for German, "ja" for Japanese, "zh-min-nan" for Min Nan Chinese.
+    required: false
+  expectedHeading:
+    type: string
+    description: |
+      Visible heading text in the destination article. The localized form
+      is usually different from the English title (e.g. "Albert Einstein"
+      → same in Spanish, but "Python (programming language)" → "Python
+      (lenguaje de programación)").
+    required: false

@@ -199,11 +199,12 @@ object MaestroCommandConverter {
     return AccessibilityAction.TapOnElement(
       nodeSelector = convertElementSelectorToNodeSelector(elementSelector),
       longPress = command.longPress == true,
-      // Preserve Maestro `optional: true` semantics so legacy recordings that gate on
-      // transient runtime permission dialogs (e.g. "Allow BLUETOOTH_CONNECT" on cold
-      // launch) become no-ops on warm devices where the dialog isn't present, instead of
-      // failing the trail. Without this the optional flag was silently dropped during the
-      // Maestro→accessibility lowering.
+      // Preserves the Maestro-level `optional: true` flag through the accessibility
+      // lowering. After issue #2910 `TrailblazeElementSelector.optional` is gone and the
+      // `TapOnByElementSelector` lowering no longer emits this branch with `true`, so the
+      // only remaining producers are inline Maestro YAML blocks parsed via
+      // `MaestroYamlParser.parseYaml` (e.g. the `assertVisible: optional: true` guard in
+      // `SquareLaunchAppSignedInTrailblazeTool.waitUntilPercentageLoadingTextIsDoneCommands`).
       optional = command.optional,
     )
   }

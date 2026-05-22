@@ -10,6 +10,7 @@ import maestro.orchestra.util.Env.withEnv
 import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.yaml.YamlCommandReader
 import xyz.block.trailblaze.android.maestro.LoggingDriver
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -44,7 +45,16 @@ class MaestroHostRunnerImpl(
    */
   appTarget: TrailblazeHostAppTarget? = null,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  /**
+   * Resolves the screenshot scaling config to apply on each capture. Defaults to a
+   * lambda that re-reads [EffectiveScreenshotScalingConfig.effective] per call so a
+   * `trailblaze config screenshot-*` change picks up on the next screen capture without
+   * recreating the runner. Tests can pass a constant-returning lambda to pin a value.
+   * The previous `val` snapshot at construction time silently ignored live settings changes.
+   */
+  private val screenshotScalingConfigProvider: () -> ScreenshotScalingConfig = {
+    EffectiveScreenshotScalingConfig.effective
+  },
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     val hostDriverType = when (trailblazeDeviceId.trailblazeDevicePlatform) {
@@ -80,7 +90,9 @@ class MaestroHostRunnerImpl(
     Console.log("screenStateProvider call count: $callCount")
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
-      screenshotScalingConfig = screenshotScalingConfig,
+      // Re-resolve per call so live settings changes (e.g. `trailblaze config
+      // screenshot-format png` mid-session) take effect on the very next capture.
+      screenshotScalingConfig = screenshotScalingConfigProvider(),
       deviceClassifiers = deviceClassifiers,
     )
   }

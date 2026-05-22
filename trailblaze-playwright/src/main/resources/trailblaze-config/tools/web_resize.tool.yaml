@@ -1,0 +1,2 @@
+id: web_resize
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeResizeTool

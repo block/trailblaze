@@ -108,22 +108,14 @@ object ReportWebpExporter {
    * requested under one shared capture.
    */
   internal fun requireLibwebpAnim() {
-    val available = runCatching {
-      val proc = ProcessBuilder("ffmpeg", "-hide_banner", "-encoders")
-        .redirectErrorStream(true)
-        .start()
-      val out = proc.inputStream.bufferedReader().readText()
-      proc.waitFor()
-      out.contains("libwebp_anim")
-    }.getOrDefault(false)
-    check(available) {
-      "ffmpeg with the `libwebp_anim` encoder is required for --webp export but was " +
-        "not found on PATH. Install ffmpeg with libwebp_anim support — typically " +
-        "`brew install ffmpeg` on macOS, `apt-get install ffmpeg` on Debian/Ubuntu, or " +
-        "`apk add ffmpeg` on Alpine. If libwebp_anim is unavailable on this system and " +
-        "you only need a GIF, invoke as `--gif --no-webp` to skip the shared-capture " +
-        "WebP companion entirely."
-    }
+    FfmpegRescaleSupport.requireEncoder(
+      encoderName = "libwebp_anim",
+      missingHint = "Required for --webp export. Install ffmpeg with libwebp_anim " +
+        "support — typically `brew install ffmpeg` on macOS, `apt-get install ffmpeg` " +
+        "on Debian/Ubuntu, or `apk add ffmpeg` on Alpine. If libwebp_anim is " +
+        "unavailable on this system and you only need a GIF, invoke as " +
+        "`--gif --no-webp` to skip the shared-capture WebP companion entirely.",
+    )
   }
 
   /**

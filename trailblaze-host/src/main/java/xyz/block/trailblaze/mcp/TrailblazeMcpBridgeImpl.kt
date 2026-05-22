@@ -6,6 +6,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
@@ -1966,6 +1967,48 @@ class TrailblazeMcpBridgeImpl(
 
   override fun setWebBrowserHeadless(instanceId: String, headless: Boolean) {
     trailblazeDeviceManager.webBrowserManager.setHeadlessPreference(instanceId, headless)
+  }
+
+  override fun setWebBrowserViewportSpec(instanceId: String, viewportSpec: String?) {
+    trailblazeDeviceManager.webBrowserManager.setViewportSpec(instanceId, viewportSpec)
+  }
+
+  override suspend fun launchWebBrowserAwait(
+    instanceId: String,
+    viewportSpec: String?,
+    headless: Boolean?,
+  ): String? {
+    val webBrowserManager = trailblazeDeviceManager.webBrowserManager
+    // Apply incoming preferences before checking running-state so the slot's
+    // stored intent reflects the caller's wishes even if we end up reusing an
+    // already-Running browser (the new spec will apply on the next launch).
+    if (viewportSpec != null) {
+      webBrowserManager.setViewportSpec(instanceId, viewportSpec)
+    }
+    if (headless != null) {
+      webBrowserManager.setHeadlessPreference(instanceId, headless)
+    }
+    if (webBrowserManager.isRunning(instanceId)) return null
+    val effectiveHeadless = headless ?: webBrowserManager.getHeadlessPreference(instanceId) ?: true
+    val stateFlow = webBrowserManager.browserStateFlow(instanceId)
+    webBrowserManager.launchBrowser(instanceId = instanceId, headless = effectiveHeadless)
+    // Wait for terminal state. The launch coroutine runs on Dispatchers.IO so we
+    // don't deadlock the MCP-handler dispatcher by suspending here.
+    val terminal: xyz.block.trailblaze.host.devices.WebBrowserState =
+      stateFlow.first { state ->
+        state is xyz.block.trailblaze.host.devices.WebBrowserState.Running ||
+          state is xyz.block.trailblaze.host.devices.WebBrowserState.Error
+      }
+    // Refresh device list so the just-launched slot becomes visible to subsequent
+    // `loadDevicesSuspend` calls — without this, the slot is live in
+    // WebBrowserManager but the cached device list (read by the trail-run path)
+    // still doesn't include it.
+    trailblazeDeviceManager.loadDevices()
+    return when (terminal) {
+      is xyz.block.trailblaze.host.devices.WebBrowserState.Running -> null
+      is xyz.block.trailblaze.host.devices.WebBrowserState.Error -> terminal.message
+      else -> "Unexpected terminal state: $terminal"
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

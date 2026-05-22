@@ -19,7 +19,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_pushAssetToDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Copies a file from test assets to a specified path on the device.")
 data class AndroidWorldBenchmarksPushAssetToDeviceTrailblazeTool(

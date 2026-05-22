@@ -1,0 +1,38 @@
+# Data-driven pattern: one trail exercises the composition tool
+# (`wikipedia_web_searchAndVerify`) across several different topics. Each
+# step is a separate tool call; the prompts vary only in the query +
+# expected heading, so a downstream team can copy this shape and swap in
+# their own list of topics without writing new tools or new trails.
+#
+# Why this pattern is interesting:
+#   * The work each step does (search + verify article shape) is identical;
+#     only the data changes. Keeping the workflow in one tool keeps the
+#     trail readable and the per-step cost predictable.
+#   * Trailblaze trails are linear by design — no `for` loop in YAML. The
+#     "data-driven" shape is "one tool call per case", which is also what
+#     keeps each case independently retriable and easy to triage when it
+#     fails.
+#   * Adding a new topic is a 3-line diff. Removing one is a 3-line diff.
+- config:
+    title: "Wikipedia (data-driven): search + verify across topics"
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+    target: wikipedia
+    tags: [search, article, slow]
+- prompts:
+    - step: Call the `wikipedia_web_openMainPage` tool with dismissBanner=true.
+    - step: |
+        Call the `wikipedia_web_searchAndVerify` tool with
+        query="Python (programming language)",
+        expectedHeading="Python (programming language)",
+        requireReferences=true.
+    - step: |
+        Call the `wikipedia_web_searchAndVerify` tool with
+        query="Albert Einstein",
+        expectedHeading="Albert Einstein",
+        requireReferences=true.
+    - step: |
+        Call the `wikipedia_web_searchAndVerify` tool with
+        query="Mount Everest",
+        expectedHeading="Mount Everest",
+        requireReferences=true.

@@ -233,13 +233,11 @@ sealed class PackSource {
   }
 
   private companion object {
-    // SISTER IMPLEMENTATION: `build-logic/src/main/kotlin/TrailblazeBundleTasks.kt`
-    // (`TrailblazePackBundler.resolvePackRelativeToolFile`) deliberately re-implements
-    // these same rules without depending on this module. Build-logic stays free of
-    // trailblaze-models / trailblaze-common to keep the configuration-phase classpath light;
-    // the duplication is the price. When editing this rule set, mirror the change in the
-    // bundler (and vice versa) — drift would silently produce typed bindings for tool
-    // paths the runtime then refuses to load.
+    // The runtime path-containment rules below apply to every pack-relative sibling reference
+    // the loader resolves (waypoints, toolsets, system_prompt_file, etc.). Scripted-tool
+    // descriptors no longer go through a path-based ref — `target.tools:` is a list of tool
+    // names auto-discovered from `<pack>/tools/` — so the path-validation surface narrowed,
+    // but the rules still gate every other sibling read.
     fun requirePackRelativePath(relativePath: String) {
       require(relativePath.isNotBlank()) {
         "Pack-relative path must not be blank"

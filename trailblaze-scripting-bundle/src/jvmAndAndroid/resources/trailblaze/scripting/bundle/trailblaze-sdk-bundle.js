@@ -30848,8 +30848,12 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   }
   var CLIENT_FETCH_TIMEOUT_MS = resolveClientFetchTimeoutMs();
   function createClient(ctx) {
-    const callToolImpl = (name, args) => callTool(ctx, name, args);
-    return { callTool: callToolImpl, tools: createToolsProxy(callToolImpl) };
+    const dispatch = (name, args) => callTool(ctx, name, args);
+    const impl = {
+      callTool: dispatch,
+      tools: createToolsProxy(dispatch)
+    };
+    return impl;
   }
   var TOOLS_PROXY_RESERVED_PROPS = /* @__PURE__ */ new Set([
     // Thenable detection — the critical one. Without this, `await client.tools` (or any

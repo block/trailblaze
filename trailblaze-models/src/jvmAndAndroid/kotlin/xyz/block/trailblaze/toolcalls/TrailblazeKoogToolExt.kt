@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 import kotlin.reflect.KParameter
 import kotlin.reflect.KType
@@ -93,17 +94,20 @@ private val excludedParameterTypes = setOf(
 )
 
 /**
- * Extracts [ToolDescriptor] info from a [TrailblazeTool] class.
+ * Builds a [ToolDescriptor] from a [TrailblazeTool] class, ignoring any surface-visibility
+ * gate. Throws when the class can't be descriptor-ized — [asToolType] throws
+ * `IllegalArgumentException` for unsupported parameter shapes (e.g. `Map<...>`); missing
+ * `@LLMDescription`, null parameter names, and other structural lowering failures throw
+ * `IllegalStateException` via `error(...)`. Callers that need to tolerate either failure mode
+ * (the scripted-tool codegen path does) must catch explicitly.
+ *
+ * Most callers should reach for [toKoogToolDescriptor] (LLM surface) or
+ * [toScriptedToolDescriptor] (scripted-tool surface) instead — those layer the appropriate
+ * `@TrailblazeToolClass` gate on top of this descriptor build.
  */
-fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
+fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescriptor {
   val kClass = this
-
   val trailblazeToolClassAnnotation = kClass.trailblazeToolClassAnnotation()
-
-  if (!trailblazeToolClassAnnotation.isForLlm) {
-    // This tool is not for the LLM
-    return null
-  }
 
   fun KParameter.isExcludedFromDescriptor(): Boolean {
     val typeName = this.type.classifier?.let { (it as? KClass<*>)?.qualifiedName }
@@ -134,4 +138,56 @@ fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
     requiredParameters = requiredParams,
     optionalParameters = optionalParams,
   )
+}
+
+/**
+ * Returns the LLM-facing [ToolDescriptor] for a [TrailblazeTool] class, or null when the
+ * class is hidden from the agent toolbox via `@TrailblazeToolClass(surfaceToLlm = false)`.
+ *
+ * This is the canonical entry point for **LLM agent toolbox composition** and any other
+ * "what tools should the LLM see?" call sites. For the scripted-tool typed surface
+ * (per-pack `client.d.ts` codegen), use [toScriptedToolDescriptor] instead — the two flags
+ * are deliberately independent so that, for example, brittle text-based selectors can stay
+ * hidden from the LLM (where they bite) but remain typed and callable in scripted tools
+ * (where authors choose them explicitly).
+ */
+fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
+  if (!trailblazeToolClassAnnotation().surfaceToLlm) return null
+  return buildToolDescriptorIgnoringSurface()
+}
+
+/**
+ * Returns the scripted-tool-facing [ToolDescriptor] for a [TrailblazeTool] class, or null
+ * when the class is hidden from per-pack `client.d.ts` codegen via
+ * `@TrailblazeToolClass(surfaceToScriptedTools = false)`, OR when the class's parameter
+ * shape can't be lowered to a `ToolDescriptor` by [buildToolDescriptorIgnoringSurface]
+ * (e.g. uses a `Map<...>` field that `asToolType` does not yet support, or other structural
+ * lowering failures). In the latter case the failure is logged and skipped so codegen for
+ * the rest of the pack succeeds — the affected tool simply doesn't get a typed binding.
+ * Scripted-tool authors can still reach it via `client.callTool(name, args)`.
+ *
+ * Counterpart to [toKoogToolDescriptor]. The two surfaces are independent: a tool can be
+ * visible to scripted-tool authors and hidden from the LLM, or vice versa.
+ */
+fun KClass<out TrailblazeTool>.toScriptedToolDescriptor(): ToolDescriptor? {
+  if (!trailblazeToolClassAnnotation().surfaceToScriptedTools) return null
+  return try {
+    buildToolDescriptorIgnoringSurface()
+  } catch (e: Exception) {
+    // [buildToolDescriptorIgnoringSurface] throws `IllegalArgumentException` from `asToolType`
+    // for parameter shapes it can't lower (e.g. `Map<String, ...>`) and `IllegalStateException`
+    // from `error(...)` for null List/Array item types, missing `@LLMDescription`, and null
+    // parameter names. The LLM path hides these failures by bailing on `surfaceToLlm = false`
+    // before reaching the lowering — the scripted-tool path can't rely on that gate, so we
+    // skip the tool from the typed surface and log so a regression doesn't disappear silently.
+    // `client.callTool(...)` remains callable. Catch broadly (Exception, not just the two
+    // specific types) because the lowering walks reflection and downstream Koog code in
+    // `asToolType` can grow new throw sites that we'd otherwise need to chase one at a time.
+    Console.log(
+      "[toScriptedToolDescriptor] Skipping ${qualifiedName ?: simpleName} from per-pack " +
+        "client.d.ts codegen: descriptor build failed (${e::class.simpleName}: ${e.message}). " +
+        "Tool remains callable via client.callTool(...).",
+    )
+    null
+  }
 }

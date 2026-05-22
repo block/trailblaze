@@ -40,7 +40,12 @@ import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.devices.WebDevicesPage
+import xyz.block.trailblaze.ui.navigation.HashWriteCommand
+import xyz.block.trailblaze.ui.navigation.parseHash
+import xyz.block.trailblaze.ui.navigation.HistoryMode
+import xyz.block.trailblaze.ui.navigation.RouteChange
 import xyz.block.trailblaze.ui.navigation.WasmRoute
+import xyz.block.trailblaze.ui.navigation.decideHashWrite
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
@@ -53,7 +58,7 @@ import xyz.block.trailblaze.util.Console
 // Central data provider instance
 private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, kotlin.js.ExperimentalWasmJsInterop::class)
 fun main() {
   ComposeViewport(document.body!!) {
     // The `/devices` path serves the live device viewer rather than the session report.
@@ -78,35 +83,36 @@ fun TrailblazeApp() {
   // explicit route), so that clicking Back to the overview is sticky.
   val initialHashWasEmpty = remember { parseRoute().isEmpty() }
 
-  // Parse initial route from URL hash for backward compatibility with existing bookmarks
-  val initialRoute = remember {
-    val hash = parseRoute()
-    when {
-      hash.startsWith("session/") -> {
-        val sessionId = hash.removePrefix("session/")
-        WasmRoute.SessionDetail(sessionId)
-      }
-      else -> WasmRoute.Home
-    }
-  }
+  // Parse initial route from URL hash for backward compatibility with existing
+  // bookmarks. Delegates to the shared [parseHash] helper so adding a new
+  // route can't leave the initial parse and the hashchange listener out of
+  // sync (and so dead-code parser branches surface in jvmTest).
+  val initialRoute = remember { parseHash(parseRoute()) }
 
-  // Track current route explicitly to avoid serialization issues with toRoute()
-  var currentRoute by remember { mutableStateOf<WasmRoute>(initialRoute) }
+  // Holds the current route together with the [HistoryMode] that should apply
+  // to the next URL sync. Keeping intent atomic with the route prevents a
+  // separate signal flag from being consumed by an unrelated recomposition.
+  // The initial mount is always REPLACE so the `/` → `/#all` rewrite doesn't
+  // push a history entry; explicit user clicks below switch to PUSH.
+  var routeChange by remember { mutableStateOf(RouteChange(initialRoute, HistoryMode.REPLACE)) }
 
-  // Update browser URL hash when route changes. Home is mapped to `#all` (an
+  // Sync the URL hash to the current route. Home is mapped to `#all` (an
   // explicit "show the overview" marker) rather than the empty hash, so that
   // when a user on a single-session report clicks Back, the URL records the
-  // intent and a reload won't re-trigger the auto-advance.
-  LaunchedEffect(currentRoute) {
-    val newHash = when (currentRoute) {
-      is WasmRoute.Home -> "all"
-      is WasmRoute.SessionDetail -> "session/${(currentRoute as WasmRoute.SessionDetail).sessionId}"
-      is WasmRoute.Devices -> "devices"
-    }
-
+  // intent and a reload won't re-trigger the auto-advance. The "push vs
+  // replace" decision lives in [decideHashWrite] (covered by jvmTest).
+  LaunchedEffect(routeChange) {
     val currentHash = window.location.hash.removePrefix("#")
-    if (currentHash != newHash) {
-      window.location.hash = newHash
+    when (val command = decideHashWrite(currentHash, routeChange)) {
+      is HashWriteCommand.Replace ->
+        window.history.replaceState(data = null, title = "", url = "#${command.newHash}")
+      is HashWriteCommand.Push -> {
+        window.location.hash = command.newHash
+      }
+      HashWriteCommand.NoOp -> {
+        // URL already at target hash (typically: hashchange listener fired
+        // because the browser changed the URL first, then we caught up state).
+      }
     }
   }
 
@@ -116,13 +122,16 @@ fun TrailblazeApp() {
   // via the detail page's Back button.
   LaunchedEffect(Unit) {
     if (!initialHashWasEmpty) return@LaunchedEffect
-    if (currentRoute !is WasmRoute.Home) return@LaunchedEffect
+    if (routeChange.route !is WasmRoute.Home) return@LaunchedEffect
     try {
       val sessionIds = dataProvider.getSessionIdsAsync()
-      if (sessionIds.size == 1 && currentRoute is WasmRoute.Home) {
+      if (sessionIds.size == 1 && routeChange.route is WasmRoute.Home) {
         val onlySessionId = sessionIds.first().value
         val newRoute = WasmRoute.SessionDetail(onlySessionId)
-        currentRoute = newRoute
+        // Auto-advance is not user-initiated — REPLACE the hash entry rather
+        // than push, so browser Back exits the report instead of landing on
+        // the `#all` overview we just left.
+        routeChange = RouteChange(newRoute, HistoryMode.REPLACE)
         navController.navigate(newRoute) {
           launchSingleTop = true
         }
@@ -141,19 +150,14 @@ fun TrailblazeApp() {
   // and update navigation accordingly
   DisposableEffect(Unit) {
     val hashChangeListener = { _: Any? ->
-      val hash = parseRoute()
-      val newRoute = when {
-        hash.startsWith("session/") -> {
-          val sessionId = hash.removePrefix("session/")
-          WasmRoute.SessionDetail(sessionId)
-        }
+      val newRoute = parseHash(parseRoute())
 
-        else -> WasmRoute.Home
-      }
-
-      // Only navigate if the route actually changed
-      if (currentRoute != newRoute) {
-        currentRoute = newRoute
+      // Only navigate if the route actually changed. Mode is irrelevant
+      // here — the URL already matches, so [decideHashWrite] returns NoOp —
+      // but PUSH is the safer default if a future hashchange path ever
+      // diverges the state-vs-URL.
+      if (routeChange.route != newRoute) {
+        routeChange = RouteChange(newRoute, HistoryMode.PUSH)
         navController.navigate(newRoute) {
           launchSingleTop = true
         }
@@ -178,7 +182,7 @@ fun TrailblazeApp() {
         dataProvider = dataProvider,
         onSessionClick = { session ->
           val newRoute = WasmRoute.SessionDetail(session.sessionId.value)
-          currentRoute = newRoute
+          routeChange = RouteChange(newRoute, HistoryMode.PUSH)
           navController.navigate(newRoute)
         },
         deleteSession = null
@@ -186,8 +190,8 @@ fun TrailblazeApp() {
     }
 
     composable<WasmRoute.SessionDetail> {
-      // Use currentRoute instead of toRoute() to avoid serialization errors
-      val sessionDetail = currentRoute as? WasmRoute.SessionDetail
+      // Read routeChange.route (not toRoute()) to avoid serialization errors
+      val sessionDetail = routeChange.route as? WasmRoute.SessionDetail
         ?: WasmRoute.SessionDetail("") // Fallback shouldn't happen
 
       WasmSessionDetailView(
@@ -195,7 +199,7 @@ fun TrailblazeApp() {
         toMaestroYaml = toMaestroYaml,
         sessionName = sessionDetail.sessionId,
         onBackClick = {
-          currentRoute = WasmRoute.Home
+          routeChange = RouteChange(WasmRoute.Home, HistoryMode.PUSH)
           navController.navigate(WasmRoute.Home) {
             popUpTo(WasmRoute.Home) {
               inclusive = false

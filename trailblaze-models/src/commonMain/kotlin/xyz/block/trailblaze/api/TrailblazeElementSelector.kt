@@ -40,16 +40,6 @@ data class TrailblazeElementSelector(
   val containsChild: TrailblazeElementSelector? = null,
   val containsDescendants: List<TrailblazeElementSelector>? = null,
   val childOf: TrailblazeElementSelector? = null,
-  /**
-   * When true, the surrounding tool (e.g. `tapOnElementBySelector`) treats a
-   * "no element matched" result as a no-op instead of an error. Lets a trail
-   * recording include best-effort steps that fire only when the target is
-   * actually on screen — typical use is dismissing onboarding popups that
-   * appear conditionally on fresh-merchant accounts.
-   *
-   * Maps to Maestro's `ElementSelector.optional` / `Command.optional` semantics.
-   */
-  val optional: Boolean = false,
 ) {
   fun description(): String {
     val descriptions = mutableListOf<String>()
@@ -215,9 +205,6 @@ data class TrailblazeElementSelector(
  * gate when lowering a [TrailblazeNodeSelector] into a [TrailblazeElementSelector] for the
  * Maestro orchestra path. A blank lowering would silently match an arbitrary element rather
  * than failing, so callers throw on it.
- *
- * Note: [optional] is intentionally ignored — it changes the missing-element handling
- * policy, not which element matches.
  */
 fun TrailblazeElementSelector.isBlank(): Boolean {
   // Any scalar matchable predicate set? Not blank.

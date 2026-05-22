@@ -21,7 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @Serializable
 @TrailblazeToolClass(
   name = "androidworldbenchmarks_addContactToDevice",
-  isForLlm = false,
+  surfaceToLlm = false,
 )
 @LLMDescription("Adds a contact with the given name and phone number to the device.")
 data class AndroidWorldBenchmarksAddContactToDeviceTrailblazeTool(
