@@ -75,6 +75,10 @@ if [ "$TEST_FAILED" != "true" ]; then
   ./trailblaze trail -d ios \
     trails/ios-contacts/test-search-by-first-name/ios-iphone.trail.yaml \
     || TEST_FAILED=true
+
+  ./trailblaze trail -d ios \
+    trails/ios-contacts/test-search-no-results/ios-iphone.trail.yaml \
+    || TEST_FAILED=true
 else
   echo "Skipping test execution because setup failed"
 fi

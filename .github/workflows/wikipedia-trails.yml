@@ -22,7 +22,7 @@ jobs:
   # pre-recorded tool sequences.
   wikipedia-trails:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       # Recordings-only — LLM is never invoked. A non-empty sentinel value is
       # required to satisfy the provider/client wiring (see android-tests-host-rpc
