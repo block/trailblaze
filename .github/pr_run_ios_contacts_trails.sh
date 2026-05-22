@@ -47,7 +47,8 @@ if [ "$TEST_FAILED" != "true" ]; then
   # blocks the process, so we background it with `&` and poll /ping until ready.
   # The `trail` invocation below detects the running daemon and reuses it.
   echo "Starting Trailblaze daemon (app --foreground --headless)..."
-  ./trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
+  TRAILBLAZE_CONFIG_DIR="$(pwd)/examples/ios-contacts/trails/config" \
+    ./trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
   TRAILBLAZE_PID=$!
   echo "Trailblaze daemon started with PID: $TRAILBLAZE_PID"
   echo "Waiting for Trailblaze daemon to be ready on port 52525 (this may take up to 2 minutes)..."
