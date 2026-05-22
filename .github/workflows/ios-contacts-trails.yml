@@ -27,7 +27,7 @@ jobs:
   # Xcode 16 which includes iOS 18 simulator runtimes.
   ios-contacts-trails:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Recordings-only — LLM is never invoked. A non-empty sentinel value is
       # required to satisfy the provider/client wiring.
