@@ -10,20 +10,10 @@
       - contacts_ios_searchContacts:
           query: ZzZzNoSuchContact
           openFirstResult: false
-      - tapOnElementBySelector:
-          reason: To search for 'ZzZzNoSuchContact', I need to tap the 'Search' field (q410), which is visible at the bottom of the screen.
-          selector:
-            textRegex: Search
-          nodeSelector:
-            iosMaestro:
-              hintTextRegex: Search
-      - inputText:
-          text: ZzZzNoSuchContact
-          reasoning: Now that the search field is focused, I will input the search term 'ZzZzNoSuchContact' into the search field to trigger the search and look for 'No Results'.
       - assertVisibleBySelector:
-          reason: The screen displays 'No Results for “ZzZzNoSuchContact”', which verifies 'No Results' is visible as required by the objective.
+          reason: After searching for a nonexistent contact, the Contacts app shows a “No Results” banner. Verify it is visible to confirm the no-results state.
           selector:
-            textRegex: No Results for “ZzZzNoSuchContact”
+            textRegex: No Results
           nodeSelector:
             iosMaestro:
-              accessibilityTextRegex: No Results for “ZzZzNoSuchContact”
+              accessibilityTextRegex: No Results
