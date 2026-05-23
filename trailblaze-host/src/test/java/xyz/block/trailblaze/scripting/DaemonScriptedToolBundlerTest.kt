@@ -588,6 +588,24 @@ class DaemonScriptedToolBundlerTest {
     )
   }
 
+  @Test
+  fun `synthesized wrapper exposes client_tools proxy for client_tools_X authoring surface`() {
+    // Pins the fix for the runtime failure "cannot read property 'X' of undefined"
+    // that occurs when a scripted tool uses `client.tools.launchApp(...)` instead of
+    // `client.callTool("launchApp", ...)`. The wrapper's `__client` shim must expose
+    // a `tools` Proxy that maps property accesses to `callTool` dispatches.
+    val src = writeTinyTs("tools-proxy-source.ts", exportName = "doSomething")
+    val wrapper = bundler.synthesizeWrapper(src, toolName = "doSomething")
+    assertTrue(
+      wrapper.contains("__client.tools = new Proxy"),
+      "expected wrapper to attach client.tools Proxy; got:\n$wrapper",
+    )
+    assertTrue(
+      wrapper.contains("return function(args) { return __client.callTool(prop, args); }"),
+      "expected tools Proxy to delegate to __client.callTool; got:\n$wrapper",
+    )
+  }
+
   // --- helpers ---
 
   private fun writeTinyTs(

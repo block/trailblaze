@@ -535,6 +535,18 @@ class DaemonScriptedToolBundler(
       appendLine("    return result;")
       appendLine("  },")
       appendLine("};")
+      // Attach a `tools` Proxy so scripted tools that use the `client.tools.<name>(args)`
+      // authoring surface (the SDK's TrailblazeClient.tools property) work correctly at
+      // runtime. Without this, `client.tools` is undefined and any `client.tools.X()`
+      // call throws "cannot read property 'X' of undefined". The Proxy maps any string
+      // property access to a callable that delegates to `__client.callTool(prop, args)`,
+      // mirroring the SDK's own `createToolsProxy` implementation.
+      appendLine("__client.tools = new Proxy({}, {")
+      appendLine("  get: function(target, prop) {")
+      appendLine("    if (typeof prop !== \"string\") return undefined;")
+      appendLine("    return function(args) { return __client.callTool(prop, args); };")
+      appendLine("  }")
+      appendLine("});")
       appendLine()
       // Normalize user return values into the `{content: [...]}` envelope `QuickJsToolHost`
       // parses. Authors typically `return "Launched X."` from their handlers; the host
