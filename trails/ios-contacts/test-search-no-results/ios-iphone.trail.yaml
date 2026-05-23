@@ -10,3 +10,5 @@
       - contacts_ios_searchContacts:
           query: ZzZzNoSuchContact
           openFirstResult: false
+      - assertVisibleWithAccessibilityText:
+          accessibilityText: "No Results"
