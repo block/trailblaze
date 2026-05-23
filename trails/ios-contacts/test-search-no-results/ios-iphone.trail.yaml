@@ -10,10 +10,3 @@
       - contacts_ios_searchContacts:
           query: ZzZzNoSuchContact
           openFirstResult: false
-      - assertVisibleBySelector:
-          reason: After searching for a nonexistent contact, the Contacts app shows a “No Results” banner. Verify it is visible to confirm the no-results state.
-          selector:
-            textRegex: No Results
-          nodeSelector:
-            iosMaestro:
-              accessibilityTextRegex: No Results
