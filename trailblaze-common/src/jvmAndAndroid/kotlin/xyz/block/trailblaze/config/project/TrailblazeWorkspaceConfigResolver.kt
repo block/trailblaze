@@ -27,9 +27,14 @@ object TrailblazeWorkspaceConfigResolver {
     if (envOverride != null) {
       val envDir = File(envOverride)
       if (envDir.isDirectory) {
+        // When the configDir has its own trailblaze.yaml, prefer it as the config file so
+        // pack targets declared there (e.g. ios-contacts/packs/contacts) are loaded instead
+        // of the workspace-root config's targets (which may point to a different pack of the
+        // same id with different tools). Falls back to the walk-up configFile when absent.
+        val envConfigFile = File(envDir, TrailblazeConfigPaths.CONFIG_FILENAME).takeIf { it.isFile }
         return ResolvedTrailblazeWorkspaceConfig(
           workspaceRoot = workspaceRoot,
-          configFile = configFile,
+          configFile = envConfigFile ?: configFile,
           configDir = envDir,
         )
       }
