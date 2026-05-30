@@ -13,7 +13,7 @@ import xyz.block.trailblaze.util.Console
  *
  * Run this test, then in a separate terminal execute:
  * ```
- * ./trailblaze trail trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
+ * ./trailblaze run trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
  * ```
  */
 @Ignore("Interactive server launchers for local CLI testing — not meant for CI")

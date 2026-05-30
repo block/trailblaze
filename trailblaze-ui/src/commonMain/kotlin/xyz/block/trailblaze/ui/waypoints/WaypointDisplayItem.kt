@@ -6,7 +6,7 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 /**
  * A waypoint plus the source label used to display it. The source label is purely
  * informational — typically a relative file path for filesystem-walked waypoints, or a
- * pack-id-prefixed string like `pack:clock` for classpath-bundled ones.
+ * trailmap-id-prefixed string like `trailmap:clock` for classpath-bundled ones.
  *
  * [example] is the captured screen tree + screenshot bundled alongside the waypoint
  * (`<id>.example.json` + `<id>.example.webp/png`). When present, the visualizer can
@@ -39,7 +39,7 @@ data class WaypointDisplayItem(
  * `WaypointExample` for every refresh, even when the underlying bytes are unchanged.
  *
  * The current JVM loader (`WaypointsTabComposable.tryLoadFilesystemExample` and
- * `loadPackWaypointAndExample`) already satisfies this contract because each call
+ * `loadTrailmapWaypointAndExample`) already satisfies this contract because each call
  * constructs a new instance from scratch. Future loaders (e.g. a WASM bootstrap that
  * fetches and caches) need to obey the same rule — wrap any cached payload in a fresh
  * `WaypointExample` before returning, don't hand back a pinned instance.

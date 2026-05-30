@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -60,7 +61,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
  */
 class OnDeviceRpcServer(
   private val loggingRule: TrailblazeLoggingRule,
-  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
   private val progressManager: ProgressSessionManager = ProgressSessionManager(),
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),

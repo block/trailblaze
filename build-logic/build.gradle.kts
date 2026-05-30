@@ -54,31 +54,50 @@ gradlePlugin {
       id = "trailblaze.sdk-dts-bundle"
       implementationClass = "TrailblazeSdkDtsBundlePlugin"
     }
+    // Selector-grammar codegen: emits `opensource/sdks/typescript/src/generated/selectors.ts`
+    // from the Kotlin source-of-truth files in `:trailblaze-models`. Same regenerate-and-
+    // commit / verify cadence as `sdk-dts-bundle`, but pure JVM (no Node tool), so the
+    // verify task wires directly into `:check`.
+    create("selector-ts-codegen") {
+      id = "trailblaze.selector-ts-codegen"
+      implementationClass = "TrailblazeSelectorTsCodegenPlugin"
+    }
   }
 }
 
-// The bundler library lives in the main build at `:trailblaze-pack-bundler`. build-logic is
+// The bundler library lives in the main build at `:trailblaze-trailmap-bundler`. build-logic is
 // an `includedBuild` (composite-build for plugin substitution), which can't take a normal
-// `project(":trailblaze-pack-bundler")` dependency on a sibling main-build module. Compose
+// `project(":trailblaze-trailmap-bundler")` dependency on a sibling main-build module. Compose
 // the bundler's sources directly via `srcDir` so this build compiles the same Kotlin files
 // the main-build module compiles — single source-of-truth, two consumers, no drift. The
 // kaml + kotlinx-serialization runtime deps need to be replicated below since the source
 // files are shared but the dependency declarations aren't.
 sourceSets["main"].kotlin {
-  srcDir(file("../trailblaze-pack-bundler/src/main/kotlin"))
+  srcDir(file("../trailblaze-trailmap-bundler/src/main/kotlin"))
   // Exclude the daemon-only `WorkspaceClientDtsGenerator` from build-logic's source set.
-  // That class imports koog (`ToolDescriptor`) and trailblaze-models (`PackScriptedToolFile`)
+  // That class imports koog (`ToolDescriptor`) and trailblaze-models (`TrailmapScriptedToolFile`)
   // — neither of which build-logic has on its lean Gradle-plugin classpath, and pulling them
   // in would inflate every Gradle build's configuration phase. The runtime consumer is
   // `:trailblaze-host`'s daemon startup; build-logic doesn't construct this generator. See
-  // the matching `compileOnly` declaration in `:trailblaze-pack-bundler/build.gradle.kts`.
+  // the matching `compileOnly` declaration in `:trailblaze-trailmap-bundler/build.gradle.kts`.
   exclude("**/WorkspaceClientDtsGenerator.kt")
+  // Same exclusion rationale for the daemon-time JSON Schema → TS literal emitter — it's
+  // only consumed by `WorkspaceClientDtsGenerator` (the analyzer-aware codegen path) which
+  // itself is already excluded. Pulling in `kotlinx-serialization-json`'s `JsonElement` API
+  // for build-logic would expand the configuration-phase classpath for a class build-logic
+  // never instantiates.
+  //
+  // **TEMPORARY.** When the follow-up wires the analyzer into `TrailblazeTrailmapBundler`
+  // (build-time path), this exclusion will need to flip and `kotlinx-serialization-json`
+  // needs to be added to the `dependencies {}` block below. The kdoc on
+  // `JsonSchemaToTsRich` documents the flip in detail.
+  exclude("**/JsonSchemaToTsRich.kt")
 }
 
 dependencies {
   implementation(libs.plugins.spotless.get().let { "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}" })
-  // YAML: kaml. Used directly by `TrailblazeBundledConfigPlugin` (parses pack manifests
-  // via the kaml tree API) and by `TrailblazePackBundler` (the bundler library composed in
+  // YAML: kaml. Used directly by `TrailblazeBundledConfigPlugin` (parses trailmap manifests
+  // via the kaml tree API) and by `TrailblazeTrailmapBundler` (the bundler library composed in
   // via shared srcDir above). SnakeYAML is gone — Trailblaze code does not import
   // `org.yaml.snakeyaml.*` directly anywhere; if Maestro pulls it transitively through
   // some other path that's fine, we just don't reach for it ourselves.
@@ -89,7 +108,7 @@ dependencies {
   testImplementation(kotlin("test-junit"))
   // Gradle TestKit — runs the plugin against an isolated fixture project and asserts on
   // task wiring + outputs. Used by `TrailblazeBundlePluginFunctionalTest` to guard the
-  // plugin contract beyond what the unit tests on `TrailblazePackBundler` can cover (build
+  // plugin contract beyond what the unit tests on `TrailblazeTrailmapBundler` can cover (build
   // task dependency, extension-property validation, symlink-skipping discovery).
   testImplementation(gradleTestKit())
 }

@@ -1,0 +1,25 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./wikipedia_web_openMainPageSection.ts
+name: wikipedia_web_openMainPageSection
+description: |
+  Verify one of Wikipedia's four Main_Page sections is present and visible.
+  Use this whenever the task is to verify a main-page section: "Did you
+  know", "In the news", "On this day", or "From today's featured article"
+  (also known as DYK, ITN, OTD, TFA). Pass the section short code to pick
+  which one. The tool anchors verification on the section's stable wrapper
+  element id (`#mp-dyk` etc.) — which survives Wikipedia's day-to-day copy
+  drift — rather than the visible heading text (which rotates daily).
+supportedPlatforms:
+  - web
+inputSchema:
+  section:
+    type: string
+    description: "Section short code: tfa | itn | dyk | otd."
+    required: false
+  ensureOnMainPage:
+    type: boolean
+    description: "Open Main_Page first if not there (default true)."
+    required: false

@@ -227,7 +227,7 @@ private fun SessionLensHeader(
       )
       val subtitle = when (state) {
         SessionLensState.Idle -> if (availableSessions.isEmpty()) {
-          "No recorded sessions available — run a `blaze` first to populate."
+          "No recorded sessions available — run a `step` first to populate."
         } else {
           "Pick a session to overlay observed segments onto the waypoint set."
         }
@@ -380,7 +380,7 @@ private fun SessionLensIdleBody(availableSessionCount: Int) {
   ) {
     SelectableText(
       text = if (availableSessionCount == 0) {
-        "No recorded sessions yet. Run `trailblaze blaze` against a device, then come " +
+        "No recorded sessions yet. Run `trailblaze step` against a device, then come " +
           "back to this tab and pick the session from the dropdown to see which transitions " +
           "between waypoints actually occurred during that run."
       } else {

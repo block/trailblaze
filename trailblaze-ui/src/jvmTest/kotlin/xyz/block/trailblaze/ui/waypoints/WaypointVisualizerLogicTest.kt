@@ -32,7 +32,7 @@ class WaypointVisualizerLogicTest {
 
   @Test
   fun platformSegmentOrNull_returnsNullForTwoSegmentId() {
-    // The shape used by simple packs like `clock/alarm-tab` — pack + local-name, no
+    // The shape used by simple trailmaps like `clock/alarm-tab` — trailmap + local-name, no
     // platform segment. Dropdown stays hidden for these.
     assertNull(def("clock/alarm-tab").platformSegmentOrNull())
   }

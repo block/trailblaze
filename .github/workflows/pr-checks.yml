@@ -35,6 +35,14 @@ jobs:
           java-version: '17'
           check-latest: true
 
+      - name: Setup Bun
+        # bun is the sole supported JS runtime. `assemble check` triggers
+        # `:trailblaze-scripting-subprocess:installTrailblazeScriptingSdk`
+        # (a `bun install` that downstream JAR builds read) and the host
+        # `CheckCommandTest` suite, which shells out to the bun-test phase.
+        # Without bun on PATH both fail hard rather than skipping.
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
       - name: Test on Ubuntu (excluding scripting-subprocess)
         # `--parallel` lets independent modules compile and test concurrently
         # across the daemon's worker pool; combined with carving out the slow

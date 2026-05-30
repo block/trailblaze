@@ -20,18 +20,17 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @TrailblazeToolClass(
   name = "android_sendBroadcast",
   surfaceToLlm = false,
-  // Dual-mode primitive: scripted-tool composition relies on the `Success.message` payload
-  // (broadcast result data) which the on-device-RPC return path silently discards. Host-side
-  // actual is the contract surface for callback paths.
-  prefersHostSideForCallback = true,
+  isRecordable = false,
 )
 @LLMDescription("Sends a broadcast intent to the connected Android device.")
 data class AndroidSendBroadcastTrailblazeTool(
   val action: String,
   val componentPackage: String,
   val componentClass: String,
-  @Serializable(with = BroadcastExtrasMapSerializer::class)
-  val extras: Map<String, BroadcastExtra> = emptyMap(),
+  // Closed-shape list-of-objects instead of `Map<String, BroadcastExtra>` so the typed
+  // scripted-tool surface (`client.tools.android_sendBroadcast`) can lower it — `asToolType`
+  // supports `List<DataClass>` natively, but not `Map<String, V>`.
+  val extras: List<BroadcastExtra> = emptyList(),
 ) : ExecutableTrailblazeTool {
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
@@ -39,6 +38,27 @@ data class AndroidSendBroadcastTrailblazeTool(
     if (toolExecutionContext.trailblazeDeviceInfo.platform != TrailblazeDevicePlatform.ANDROID) {
       return TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "android_sendBroadcast is only supported on Android devices.",
+      )
+    }
+    // Trail-authoring validation comes before infra checks so a malformed `extras:` block fails
+    // the same way regardless of whether an executor happens to be wired — the error points at
+    // the YAML/TS the author can fix, not at the host setup.
+    val blankKeyExtra = extras.firstOrNull { it.key.isBlank() }
+    if (blankKeyExtra != null) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "android_sendBroadcast: extra has a blank key (value='${blankKeyExtra.value}') — " +
+          "each extra must have a non-blank key.",
+        command = this@AndroidSendBroadcastTrailblazeTool,
+      )
+    }
+    // Duplicate keys would silently shadow inside an Android Bundle — fail loudly so trail
+    // authors notice at the broadcast site instead of debugging a missing extra downstream.
+    val duplicates = extras.groupBy { it.key }.filterValues { it.size > 1 }.keys
+    if (duplicates.isNotEmpty()) {
+      return TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "android_sendBroadcast: duplicate extra key(s) ${duplicates.joinToString()} — " +
+          "each extra key must appear at most once.",
+        command = this@AndroidSendBroadcastTrailblazeTool,
       )
     }
     val executor = toolExecutionContext.androidDeviceCommandExecutor
@@ -51,7 +71,7 @@ data class AndroidSendBroadcastTrailblazeTool(
           action = action,
           componentPackage = componentPackage,
           componentClass = componentClass,
-          extras = extras.mapValues { it.value.toTypedValue() },
+          extras = extras.associate { it.key to it.toTypedValue() },
         ),
       )
       TrailblazeToolResult.Success(

@@ -11,6 +11,13 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-05-28 | [Bun is the sole JavaScript runtime](2026-05-28-bun-only-runtime.md) | Devlog |
+| 2026-05-27 | [Trailmap-scoped tool naming](2026-05-27-trailmap-scoped-tool-naming.md) | Decision |
+| 2026-05-26 | [Playwright tool shims should be code-generated from the Playwright Java SDK](2026-05-26-playwright-tool-shim-codegen.md) | Decision |
+| 2026-05-23 | [Trailblaze Positioning: Developer-First AI Testing and the Trailmap Ecosystem](2026-05-23-pack-ecosystem-vision.md) | Decision |
+| 2026-05-23 | [Agent-Authored, Human-Readable](2026-05-23-agent-authored-human-readable.md) | Decision |
+| 2026-05-22 | [Trail YAML — Unified Per-Test File](2026-05-22-trail-yaml-unified-syntax.md) | Decision |
+| 2026-05-22 | [Kotlin Canonical, TypeScript Derived](2026-05-22-kotlin-canonical-typescript-derived.md) | Decision |
 | 2026-05-21 | [Unit-testing scripted tools without a device](2026-05-21-scripted-tool-unit-testing.md) | Devlog |
 | 2026-05-12 | [Use npm for Trailmap Distribution](2026-05-12-npm-distribution-for-trailmaps.md) | Decision |
 | 2026-05-12 | [DriverDispatch and the iOS settle gap](2026-05-12-driver-dispatch-and-the-ios-settle-gap.md) | Devlog |
@@ -18,11 +25,11 @@ Entries tagged as **Decision** record significant architectural or technical cho
 | 2026-05-08 | [Waypoint --target Flag and Magic capture-example](2026-05-08-waypoint-target-flag-and-magic-capture.md) | Decision |
 | 2026-05-08 | [Waypoint + shortcut graph: planner/executor, express routes, semantic recording](2026-05-08-waypoint-shortcut-graph-vision.md) | Decision |
 | 2026-05-08 | [Waypoint graph viewer: focal+depth, agent prompt tab, dock UX](2026-05-08-waypoint-graph-viewer-rebuild.md) | Devlog |
-| 2026-05-08 | [Pack Tools: Nested Subdirectories + Waypoint Auto-Discovery](2026-05-08-pack-tools-nested-subdirs.md) | Decision |
-| 2026-05-08 | [Pack config cleanup: id-based targets, implicit tools, transitive dependencies](2026-05-08-pack-config-cleanup.md) | Decision |
-| 2026-05-08 | [Library vs Target Packs](2026-05-08-library-vs-target-packs.md) | Decision |
-| 2026-04-27 | [Pack Manifest V1](2026-04-27-pack-manifest-v1.md) | Decision |
-| 2026-04-26 | [Target Packs: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md) | Decision |
+| 2026-05-08 | [Trailmap Tools: Nested Subdirectories + Waypoint Auto-Discovery](2026-05-08-pack-tools-nested-subdirs.md) | Decision |
+| 2026-05-08 | [Trailmap config cleanup: id-based targets, implicit tools, transitive dependencies](2026-05-08-pack-config-cleanup.md) | Decision |
+| 2026-05-08 | [Library vs Target Trailmaps](2026-05-08-library-vs-target-packs.md) | Decision |
+| 2026-04-27 | [Trailmap Manifest V1](2026-04-27-pack-manifest-v1.md) | Decision |
+| 2026-04-26 | [Target Trailmaps: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md) | Decision |
 | 2026-04-26 | [Trailblaze as the Robot Pattern — and More](2026-04-26-robot-pattern-plus-packs.md) | Devlog |
 | 2026-04-23 | [On-device MCP tool callbacks — direct QuickJS binding](2026-04-23-on-device-callback-channel.md) | Decision |
 | 2026-04-22 | [A TrailblazeTool is a function call (MCP tool, RPC request — same thing)](2026-04-22-trailblaze-tool-is-an-rpc-request.md) | Devlog |
@@ -46,8 +53,8 @@ Entries tagged as **Decision** record significant architectural or technical cho
 | 2026-04-12 | [Platform-Native Hierarchical Snapshots with Stable Element Refs](2026-04-12-platform-native-hierarchical-snapshots.md) | Decision |
 | 2026-04-10 | [CLI and MCP Session Management: Device State and Multi-Terminal Behavior](2026-04-10-cli-mcp-session-and-device-state.md) | Devlog |
 | 2026-04-07 | [Unified Provider Auto-Detection Across Host and Android](2026-04-07-unified-provider-auto-detection.md) | Decision |
-| 2026-04-07 | [Workspace Config Resolution: .trailblaze/ and trailblaze-config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md) | Decision |
-| 2026-04-07 | [Unified trailblaze-config/ Classpath Layout](2026-04-07-trailblaze-config-classpath-layout.md) | Decision |
+| 2026-04-07 | [Workspace Config Resolution: .trailblaze/ and trails/config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md) | Decision |
+| 2026-04-07 | [Unified trails/config/ Classpath Layout](2026-04-07-trailblaze-config-classpath-layout.md) | Decision |
 | 2026-04-07 | [Support reasoning_effort in LLM Config](2026-04-07-reasoning-effort-config-support.md) | Devlog |
 | 2026-04-07 | [CLI-Based OAuth/Auth and Dynamic On-Device Instrumentation Args](2026-04-07-cli-oauth-auth-and-dynamic-instrumentation-args.md) | Devlog |
 | 2026-03-20 | [Screenshot Format Optimization (WebP Everywhere)](2026-03-20-on-device-screenshot-optimization.md) | Decision |

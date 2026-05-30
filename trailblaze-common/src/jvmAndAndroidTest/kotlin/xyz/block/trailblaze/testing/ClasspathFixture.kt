@@ -9,8 +9,8 @@ import kotlin.io.path.createTempDirectory
  * context classloader to point at a fake "framework" classpath rooted at a temp
  * directory. Used by:
  *
- *  - `PackSourceTest`
- *  - `TrailblazePackManifestLoaderTest`
+ *  - `TrailmapSourceTest`
+ *  - `TrailblazeTrailmapManifestLoaderTest`
  *  - `TrailblazeProjectConfigLoaderTest`
  *
  * Two test classes outside this module (`WaypointDiscoveryTest` in `:trailblaze-host`,

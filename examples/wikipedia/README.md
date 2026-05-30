@@ -1,8 +1,8 @@
-# Wikipedia Example — a canonical Trailblaze target pack for web
+# Wikipedia Example — a canonical Trailblaze target trailmap for web
 
 A worked end-to-end example of using Trailblaze to test a real web
 application. Drives **live `en.wikipedia.org`** through the Playwright
-Native driver. The pack ships:
+Native driver. The trailmap ships:
 
 - **9 scripted tools** (in TypeScript) covering search, language switching,
   random article, main-page section verification, banner dismissal, article
@@ -12,10 +12,10 @@ Native driver. The pack ships:
   `skip:` example for opting out gracefully.
 - **A target-scoped system prompt** that teaches the LLM when to reach for
   the scripted tools instead of inline-expanding to `web_*` primitives.
-- **CLI-first runtime** — every trail runs via `./trailblaze trail …`, the
+- **CLI-first runtime** — every trail runs via `./trailblaze run …`, the
   same path an end user takes. There is no JUnit harness.
 
-If you're building a target pack for your own site, this is the reference
+If you're building a target trailmap for your own site, this is the reference
 shape to copy.
 
 ## Why use Trailblaze for web instead of raw Playwright?
@@ -38,12 +38,12 @@ the 5-10 workflows you run every build.
 
 ## Quick start (first green test in 60 seconds)
 
-> Paths below are relative to the OSS repo root (this README's canonical
-> home). If you're reading this in an internal mirror where the OSS tree is
-> nested under a sub-directory, prefix every path with that directory name.
+> Paths below are relative to the repo root (this README's canonical home).
+> If your checkout nests the tree under a sub-directory, prefix every path
+> with that directory name.
 
 ```bash
-# 1. From the repo root, point the daemon at this pack's config dir.
+# 1. From the repo root, point the daemon at this trailmap's config dir.
 #    This is what registers the wikipedia_web_* tools when the daemon boots.
 export TRAILBLAZE_CONFIG_DIR=$PWD/examples/wikipedia/trails/config
 
@@ -56,7 +56,7 @@ export TRAILBLAZE_CONFIG_DIR=$PWD/examples/wikipedia/trails/config
 ./trailblaze toolbox --device web --target wikipedia --search wikipedia_
 
 # 4. Run a single trail end-to-end.
-./trailblaze trail trails/wikipedia/test-search-einstein \
+./trailblaze run trails/wikipedia/test-search-einstein \
   --device web/playwright-native
 ```
 
@@ -64,76 +64,113 @@ The first run takes ~10s (browser launch + 2 LLM rounds). Expect
 `Results: 1 passed, 0 failed`. If you got that, you're set up. Skip to
 **Anatomy of a tool** to see how the wiring works.
 
+### When you'll need `TRAILBLAZE_SDK_DIR`
+
+Each tool YAML in this trailmap carries only `script:` + `_meta:` — the
+sibling `.ts` file's `trailblaze.tool<I, O>(handler)` declaration is the
+source of truth for `name:` / `inputSchema:` / `description:`. The
+framework recovers those at compile time via an AST analyzer that lives
+under `<repo>/sdks/typescript/`.
+
+The analyzer resolves the SDK directory in two ways, **env var first**:
+
+1. **`TRAILBLAZE_SDK_DIR`** — if set, takes precedence and the walk-up
+   below is skipped entirely.
+2. **CWD walk-up** — searches upward from `$PWD`. Per ancestor it probes
+   two sub-paths: `sdks/typescript/` (the canonical layout) and
+   `opensource/sdks/typescript/` (a nested layout where the SDK lives
+   under an `opensource/` sub-directory). One of those should match
+   automatically in every normal checkout.
+
+Set `TRAILBLAZE_SDK_DIR` explicitly only when you're running outside a
+recognizable repo layout — e.g. an installed CLI whose source tree lives
+somewhere unusual on disk:
+
+```bash
+export TRAILBLAZE_SDK_DIR=/path/to/sdks/typescript
+```
+
+Symptom you're missing it: `./trailblaze check` fails with
+*"scripted-tool descriptor(s) … use the meta-only authoring shape (no
+top-level `name:`), which requires analyzer enrichment. No
+`ScriptedToolEnrichment` was wired …"*.
+
 ---
 
 ## Anatomy of a scripted tool
 
-Every scripted tool is a `(yaml, ts)` pair under
-`trails/config/packs/wikipedia/tools/`. Here's `wikipedia_web_openArticle`
-broken into the parts that matter.
+Every scripted tool is a `.ts` file plus a sibling `<name>.yaml` under
+`trails/config/trailmaps/wikipedia/tools/`. The YAML is what the trailmap loader
+discovers (it scans `tools/*.yaml`); the `.ts` is what the analyzer reads
+for `name:` / `inputSchema:` / `description:`. Here's
+`wikipedia_web_openArticle` broken into the parts that matter.
 
-### The YAML manifest tells the LLM what the tool does
-
-```yaml
-# wikipedia_web_openArticle.yaml
-script: ./wikipedia_web_openArticle.ts                 # ← TS file with the body
-name: wikipedia_web_openArticle                        # ← the dispatchable name
-description: |                                         # ← LLM-readable; KEEP DESCRIPTIVE
-  Open a Wikipedia article by title. Use this whenever
-  the task is to navigate to a specific article — e.g.
-  "open the Albert Einstein article". Asserts the
-  destination's #firstHeading is visible.
-_meta:
-  trailblaze/supportedPlatforms: [web]                 # ← driver-scope guardrail
-  trailblaze/requiresContext: true                     # ← needs a live session
-inputSchema:
-  title:
-    type: string
-    description: Wikipedia article title (e.g. "Albert Einstein").
-    required: false                                    # ← omit from trail YAMLs to send `undefined`
-```
-
-### The TS body defines the behavior
+### The TS body defines the tool
 
 ```ts
 // wikipedia_web_openArticle.ts
-import type { TrailblazeClient, TrailblazeContext } from "@trailblaze/scripting";
-import { SELECTORS, articleUrl, nonEmptyString, requireSessionContext } from "./wikipedia_shared";
+import { trailblaze } from "@trailblaze/scripting";
+import { SELECTORS, articleUrl, nonEmptyString } from "./wikipedia_shared";
 
 export interface OpenArticleArgs {
   title?: string;
 }
 
-export async function wikipedia_web_openArticle(
-  args: OpenArticleArgs,
-  ctx: TrailblazeContext | undefined,
-  client: TrailblazeClient,            // ← typesafe; .tools.X(args) is the surface
-): Promise<string> {
-  requireSessionContext(ctx);          // ← shared helper, throws if no session
-  const title = nonEmptyString(args?.title, "Wikipedia");
+/**
+ * Open a Wikipedia article by title. Use this whenever the task is to
+ * navigate to a specific article — e.g. "open the Albert Einstein
+ * article". Asserts the destination's #firstHeading is visible.
+ *
+ * (The analyzer reads this TSDoc as the tool's registered description.)
+ */
+export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
+  async (input, ctx) => {
+    const title = nonEmptyString(input.title, "Wikipedia");
 
-  await client.tools.web_navigate({ action: "GOTO", url: articleUrl(title) });
-  await client.tools.web_verify_element_visible({ ref: SELECTORS.firstHeading });
+    await ctx.tools.web_navigate({ action: "GOTO", url: articleUrl(title) });
+    await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
 
-  return `Opened "${title}".`;         // ← string return surfaces to the LLM as the tool result
-}
+    return `Opened "${title}".`;       // ← string return surfaces to the LLM as the tool result
+  },
+);
 ```
+
+### The sibling YAML registers the tool (and carries `_meta:` flags)
+
+```yaml
+# wikipedia_web_openArticle.yaml
+script: ./wikipedia_web_openArticle.ts                 # ← TS file with the body
+_meta:
+  trailblaze/supportedPlatforms: [web]                 # ← driver-scope guardrail
+  trailblaze/requiresContext: true                     # ← needs a live session
+```
+
+The YAML is **required** for the loader to discover the tool — trailmap
+discovery scans `tools/*.yaml` and registers each file as a tool. The
+`name`, `description`, and `inputSchema` fields, though, are no longer
+authored here: the analyzer derives them from the `.ts` file's `<I, O>`
+type parameters and the TSDoc on the exported `const`. If a tool has no
+`_meta:` flags to set, the YAML still has to exist — it just collapses
+to a single `script:` line. (A TS-only discovery path is on the roadmap
+but isn't shipping yet.)
 
 Key conventions to copy:
 
 1. **Selectors live in `wikipedia_shared.ts`** as a frozen `SELECTORS`
    constant — never inlined in tool bodies. If Wikipedia changes the
    `#firstHeading` id tomorrow, you change one constant, not 9 files.
-2. **Helpers are shared too** — `requireSessionContext`, `nonEmptyString`,
-   `tryOrFalse`, `elementIsVisible`, `ensureOn`. Every tool imports from
+2. **Helpers are shared too** — `nonEmptyString`, `tryOrFalse`,
+   `elementIsVisible`, `ensureOn`. Every tool imports from
    `./wikipedia_shared`.
-3. **All dispatch goes through `client.tools.X(args)`** — typesafe;
+3. **All dispatch goes through `ctx.tools.X(args)`** — typesafe;
    `tsc` flags typos and bad arg shapes at compile time. The exported
-   `TrailblazeClient` type deliberately omits a generic `callTool`, so
+   `ToolContext` type deliberately omits a generic `callTool`, so
    unknown tool names surface as compile errors, not runtime "tool not
    registered" failures.
 4. **Return a short human-readable string.** The LLM sees this as the
-   tool result; keep it informative ("Opened X" beats "ok").
+   tool result; keep it informative ("Opened X" beats "ok"). For typed
+   structured returns, declare a second type parameter:
+   `trailblaze.tool<MyInput, MyOutput>(handler)`.
 5. **Throw on failure.** Don't swallow — the framework treats a thrown
    `Error` as the tool failing, which is what you want for the agent to
    see and react to.
@@ -142,68 +179,63 @@ Key conventions to copy:
 
 ## Recipe: add your own scripted tool
 
-Three files, then restart the daemon. Concrete steps:
+Two files, then restart the daemon. Concrete steps:
 
 ```bash
 TOOL=wikipedia_web_myNewTool
-PACK=examples/wikipedia/trails/config/packs/wikipedia
+TRAILMAP=examples/wikipedia/trails/config/trailmaps/wikipedia
 
-# 1. Manifest — what the LLM reads.
-cat > $PACK/tools/${TOOL}.yaml <<'YAML'
-script: ./wikipedia_web_myNewTool.ts
-name: wikipedia_web_myNewTool
-description: |
-  <one paragraph in plain English, including the task patterns the LLM
-  should match against. NO "USE THIS TOOL" — describe what it DOES.>
-_meta:
-  trailblaze/supportedPlatforms: [web]
-  trailblaze/requiresContext: true
-inputSchema:
-  someArg:
-    type: string
-    description: <describe>
-    required: false
-YAML
-
-# 2. Body — what it actually does.
-cat > $PACK/tools/${TOOL}.ts <<'TS'
-import type { TrailblazeClient, TrailblazeContext } from "@trailblaze/scripting";
-import { requireSessionContext } from "./wikipedia_shared";
+# 1. Body — what it actually does. The TSDoc on the exported `const` is
+#    what the LLM reads as the tool's description.
+cat > $TRAILMAP/tools/${TOOL}.ts <<'TS'
+import { trailblaze } from "@trailblaze/scripting";
 
 export interface MyNewToolArgs { someArg?: string; }
 
-export async function wikipedia_web_myNewTool(
-  args: MyNewToolArgs,
-  ctx: TrailblazeContext | undefined,
-  client: TrailblazeClient,
-): Promise<string> {
-  requireSessionContext(ctx);
-  // ... do work via client.tools.X(args) ...
-  return "Did the thing.";
-}
+/**
+ * <One paragraph in plain English, including the task patterns the LLM
+ * should match against. NO "USE THIS TOOL" — describe what it DOES.>
+ */
+export const wikipedia_web_myNewTool = trailblaze.tool<MyNewToolArgs>(
+  async (input, ctx) => {
+    // ... do work via ctx.tools.X(args) ...
+    return "Did the thing.";
+  },
+);
 TS
 
-# 3. Register in pack.yaml — list it under target.tools by bare name.
-$EDITOR $PACK/pack.yaml
+# 2. Sibling YAML — required for trailmap discovery to register the tool.
+#    Carries `_meta:` flags (supportedPlatforms, requiresContext, …) when
+#    you need them; otherwise the file can collapse to a single `script:`
+#    line. The loader scans `tools/*.yaml`, so a `.ts` without a sibling
+#    descriptor never reaches the runtime registry.
+cat > $TRAILMAP/tools/${TOOL}.yaml <<'YAML'
+script: ./wikipedia_web_myNewTool.ts
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+YAML
+
+# 3. Register in trailmap.yaml — list it under target.tools by bare name.
+$EDITOR $TRAILMAP/trailmap.yaml
 
 # 4. Restart the daemon so the new tool is discovered + bindings regenerate.
 ./trailblaze app --stop && ./trailblaze app --headless & disown
 
-# 5. Confirm registration + open the .ts file in your IDE; `client.tools.`
+# 5. Confirm registration + open the .ts file in your IDE; `ctx.tools.`
 #    autocomplete should now include your new tool.
 ./trailblaze toolbox --device web --target wikipedia --search myNewTool
 ```
 
 That's the whole loop. If autocomplete doesn't pick up the new tool, run
 `./trailblaze check --workspace examples/wikipedia/trails/config`
-manually — that's the per-pack `client.d.ts` regeneration step the daemon
+manually — that's the per-trailmap `trailblaze-client.d.ts` regeneration step the daemon
 fires on restart.
 
 ### Tool-description discipline (load-bearing)
 
-The `description:` field in the YAML manifest is read by the LLM at
-session start as the **only** way it learns what your tool does. Two
-non-obvious rules:
+The TSDoc on each exported `const` is read by the LLM at session start
+as the **only** way it learns what your tool does. Two non-obvious rules:
 
 - **Don't say "USE THIS TOOL FOR X".** The LLM picks tools by matching its
   understanding of the task against the description. Telling it to "use"
@@ -252,13 +284,13 @@ Every trail's `config:` block carries a `tags:` list. `--tags` filters by them.
 
 ```bash
 # Smoke pass (fast, deterministic, must-pass on every build):
-./trailblaze trail trails/wikipedia --device web --tags smoke
+./trailblaze run trails/wikipedia --device web --tags smoke
 
 # Anything in the i18n or article suites:
-./trailblaze trail trails/wikipedia --device web --tags i18n,article
+./trailblaze run trails/wikipedia --device web --tags i18n,article
 
 # Long-tail nightly:
-./trailblaze trail trails/wikipedia --device web --tags slow
+./trailblaze run trails/wikipedia --device web --tags slow
 ```
 
 Conventions used in this example:
@@ -314,9 +346,9 @@ when you're authoring new tools or trails for your own target:
 
 ---
 
-## IDE autocomplete on `args` / `ctx` / `client`
+## IDE autocomplete on `input` / `ctx`
 
-Pack tools are TypeScript only — the bundler rejects `.js` / `.mjs` / `.cjs`
+Trailmap tools are TypeScript only — the bundler rejects `.js` / `.mjs` / `.cjs`
 sources so authors can't fall back to a subprocess runtime that would lose
 the typesafe contract.
 
@@ -327,18 +359,18 @@ the typesafe contract.
 That writes two artifacts (both gitignored as derived output):
 
 - **Workspace SDK** at `trails/.trailblaze/sdk/` — the `@trailblaze/scripting`
-  source the per-pack `tsconfig.json` resolves through path mapping. Ships
+  source the per-trailmap `tsconfig.json` resolves through path mapping. Ships
   curated runtime globals (`URL`, `fetch`, `AbortController`, `console`).
-- **Per-pack `client.d.ts`** at `<pack>/tools/.trailblaze/client.d.ts` —
+- **Per-trailmap `trailblaze-client.d.ts`** at `<trailmap>/tools/trailblaze-client.d.ts` —
   exhaustive bindings for every tool the runtime registry knows about
-  (framework built-ins + pack-local scripted tools + Kotlin tools surfaced
-  through `tool_sets:` declared in `pack.yaml`).
+  (framework built-ins + trailmap-local scripted tools + Kotlin tools surfaced
+  through `tool_sets:` declared in `trailmap.yaml`).
 
-Open any `.ts` file in `tools/` and hover `ctx` / `client` / `args` to
-confirm the types resolve. Mistype a tool name or pass the wrong arg shape
-and `tsc` flags it at compile time.
+Open any `.ts` file in `tools/` and hover `input` / `ctx` to confirm the
+types resolve. Mistype a tool name or pass the wrong arg shape and `tsc`
+flags it at compile time.
 
-To run the bundled `tsc` against your pack:
+To run the bundled `tsc` against your trailmap:
 
 ```bash
 ./trailblaze check wikipedia
@@ -353,13 +385,16 @@ client + mock context from `@trailblaze/scripting/testing`. Tests execute withou
 daemon or a device:
 
 ```bash
-./trailblaze test wikipedia
+./trailblaze check wikipedia
 ```
 
-This pack ships scripted tools but no `.test.ts` files yet — for working examples of
+(Per-trailmap unit tests run as the third phase of `trailblaze check`, after materialize +
+tsc.)
+
+This trailmap ships scripted tools but no `.test.ts` files yet — for working examples of
 single-tool sequences, multi-step workflows, and `client.stub(...)` recovery-branch
-tests, see the [playwright-native pack's `.test.ts`
-samples](../playwright-native/trails/config/packs/playwrightsample/tools/) and the
+tests, see the [playwright-native trailmap's `.test.ts`
+samples](../playwright-native/trails/config/trailmaps/playwrightSample/tools/) and the
 canonical authoring tutorial's
 [Testing your tool](../../docs/scripted_tools.md#testing-your-tool) section.
 
@@ -370,7 +405,7 @@ canonical authoring tutorial's
 `.ts` files route through the daemon's QuickJS in-process runtime. No
 subprocess fork, no Node APIs available beyond the curated globals the SDK
 ships. Sub-millisecond dispatch; every tool call goes through
-`client.tools.X(args)`.
+`ctx.tools.X(args)`.
 
 ---
 
@@ -383,18 +418,18 @@ previous crashes are safe to delete.
 
 **Tool not registering / "tool not found at dispatch"** —
 
-1. Confirm the file is named exactly `<toolName>.ts` + `<toolName>.yaml`
-   under `tools/`. The bundler discovers by filename, not by manifest.
+1. Confirm the file is named exactly `<toolName>.ts` (and, if present,
+   `<toolName>.yaml`) under `tools/`. The bundler discovers by filename.
 2. Confirm the bare tool name is listed under `target.tools:` in
-   `pack.yaml`. Names omitted from that list are loaded by the bundler but
+   `trailmap.yaml`. Names omitted from that list are loaded by the bundler but
    not advertised to the agent for this target.
 3. Restart the daemon after editing anything under
-   `trails/config/packs/<pack>/`. Packs are discovered at boot.
+   `trails/config/trailmaps/<trailmap>/`. Trailmaps are discovered at boot.
 
-**IDE shows red squiggles on `client.tools.X(args)`** — run
-`./trailblaze check --workspace <path-to-your-config>` to regenerate the per-pack
-`client.d.ts`. If that fails, check `./trailblaze app --status` — the
-daemon writes the SDK + `client.d.ts` on every restart.
+**IDE shows red squiggles on `ctx.tools.X(args)`** — run
+`./trailblaze check --workspace <path-to-your-config>` to regenerate the per-trailmap
+`trailblaze-client.d.ts`. If that fails, check `./trailblaze app --status` — the
+daemon writes the SDK + `trailblaze-client.d.ts` on every restart.
 
 **"Daemon unreachable after 30 consecutive poll failures"** — known CLI
 flake on long agent rounds. See **Known issues** below.
@@ -415,7 +450,7 @@ canonical shape will improve when these land.
   replay as `OtherTrailblazeTool` (the dispatcher only handles `web_*`
   built-ins). Until fixed, only trails that exercise pure `web_*` tools
   get useful recordings. That's why 23/28 trails here stay NL-only.
-- **CLI poll-timeout on long LLM rounds.** `./trailblaze trail …` can
+- **CLI poll-timeout on long LLM rounds.** `./trailblaze run …` can
   return `FAILED: Daemon unreachable after 30 consecutive poll failures`
   while the daemon is still healthy and the session is making progress.
   The session artifacts under `logs/<session>/` are still written; you
@@ -431,8 +466,8 @@ examples/wikipedia/
 ├── build.gradle.kts                          ← only runs `trailblaze.bundle`
 └── trails/config/
     ├── trailblaze.yaml                       ← workspace anchor
-    └── packs/wikipedia/
-        ├── pack.yaml                         ← target manifest
+    └── trailmaps/wikipedia/
+        ├── trailmap.yaml                         ← target manifest
         ├── wikipedia-system-prompt.md        ← LLM tool-selection guidance
         └── tools/                            ← scripted tool sources
             ├── tsconfig.json                 ← extends workspace base
@@ -455,5 +490,5 @@ trails/wikipedia/
 
 CI runs the same commands a developer does — there's no separate harness.
 The benchmark pipeline scripts under `scripts/.../runway/` set up the
-daemon, fan out via `./trailblaze trail`, and summarize results. Look at
-those if you're wiring a similar pack into your own CI.
+daemon, fan out via `./trailblaze run`, and summarize results. Look at
+those if you're wiring a similar trailmap into your own CI.

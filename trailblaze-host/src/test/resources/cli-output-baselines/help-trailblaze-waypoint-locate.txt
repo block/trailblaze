@@ -28,7 +28,7 @@ Given a captured screen state, report which waypoint(s) match.
                               Default: relative to the session dir's parent
                               (yielding <session-name>/<step-filename>).
       --root=<path>         Additional directory to scan for *.waypoint.yaml
-                              files. Overrides --target. Pack waypoints are
+                              files. Overrides --target. Trailmap waypoints are
                               always included regardless. (Convention: ./trails)
       --session=<session>   Session log directory. With --step, locates a
                               single step; without --step, batch-locates every
@@ -37,7 +37,7 @@ Given a captured screen state, report which waypoint(s) match.
       --step=<step>         1-based index of the step within the session
                               (single-step mode; selects from
                               *_TrailblazeLlmRequestLog.json files)
-      --target=<id>         Pack id to operate on. Resolves --root to
-                              <workspace>/packs/<id>/waypoints/. Mutually
+      --target=<id>         Trailmap id to operate on. Resolves --root to
+                              <workspace>/trailmaps/<id>/waypoints/. Mutually
                               exclusive with --root (--root wins if both given).
   -V, --version             Print version information and exit.

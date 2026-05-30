@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -35,13 +36,9 @@ data class ListInstalledAppsResult(val appIds: List<String>)
 @TrailblazeToolClass(
   name = "mobile_listInstalledApps",
   surfaceToLlm = false,
-  // Dual-mode primitive: scripted-tool authors compose this via `client.callTool(...)` to read
-  // the installed-app id list off `Success.message`; on-device-RPC strips that payload, so the
-  // host-side actual is the contract surface for callback paths.
-  prefersHostSideForCallback = true,
 )
 @LLMDescription("Returns a JSON object with the list of installed app ids on the current mobile device.")
-data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool {
+data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val deviceInfo = toolExecutionContext.trailblazeDeviceInfo

@@ -1,0 +1,12 @@
+id: sampleapp
+target:
+  display_name: Trailblaze Sample App
+  platforms:
+    android:
+      app_ids:
+        - xyz.block.trailblaze.examples.sampleapp
+  # Authoring surface: trailmap scripted tools — flat-schema, one tool per file under tools/.
+  # No `bun install` required, no subprocess. The host runner synthesizes a small wrapper at
+  # session start.
+  tools:
+    - sampleapp_writeArtifact

@@ -39,6 +39,7 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
+import xyz.block.trailblaze.ui.devices.WebDevicesGridPage
 import xyz.block.trailblaze.ui.devices.WebDevicesPage
 import xyz.block.trailblaze.ui.navigation.HashWriteCommand
 import xyz.block.trailblaze.ui.navigation.parseHash
@@ -62,10 +63,21 @@ private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
 fun main() {
   ComposeViewport(document.body!!) {
     // The `/devices` path serves the live device viewer rather than the session report.
-    if (window.location.pathname.startsWith("/devices")) {
-      WebDevicesPage()
-    } else {
-      TrailblazeApp()
+    // `/devices/all` opens the multi-device live grid; bare `/devices` and any other
+    // `/devices/<sub-path>` fall through to the single-device picker (which is also the
+    // landing target when a grid tile is clicked).
+    //
+    // The comparison strips a trailing slash so `/devices/all/` resolves the same as
+    // `/devices/all`. Query strings live on `window.location.search`, not on `pathname`,
+    // so they're already excluded.
+    //
+    // Long-term: this should move to `WasmRoutes` (sealed interface) so future routes like
+    // `/devices/<id>` (deep-link to a single device's detail) get type-safe parse + render.
+    val pathname = window.location.pathname.trimEnd('/').ifEmpty { "/" }
+    when {
+      pathname == "/devices/all" -> WebDevicesGridPage()
+      pathname == "/devices" || pathname.startsWith("/devices/") -> WebDevicesPage()
+      else -> TrailblazeApp()
     }
   }
 }

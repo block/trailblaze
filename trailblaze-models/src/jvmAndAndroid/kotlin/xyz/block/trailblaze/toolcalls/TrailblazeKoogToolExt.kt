@@ -146,7 +146,7 @@ fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescrip
  *
  * This is the canonical entry point for **LLM agent toolbox composition** and any other
  * "what tools should the LLM see?" call sites. For the scripted-tool typed surface
- * (per-pack `client.d.ts` codegen), use [toScriptedToolDescriptor] instead — the two flags
+ * (per-trailmap `client.d.ts` codegen), use [toScriptedToolDescriptor] instead — the two flags
  * are deliberately independent so that, for example, brittle text-based selectors can stay
  * hidden from the LLM (where they bite) but remain typed and callable in scripted tools
  * (where authors choose them explicitly).
@@ -158,12 +158,12 @@ fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
 
 /**
  * Returns the scripted-tool-facing [ToolDescriptor] for a [TrailblazeTool] class, or null
- * when the class is hidden from per-pack `client.d.ts` codegen via
+ * when the class is hidden from per-trailmap `client.d.ts` codegen via
  * `@TrailblazeToolClass(surfaceToScriptedTools = false)`, OR when the class's parameter
  * shape can't be lowered to a `ToolDescriptor` by [buildToolDescriptorIgnoringSurface]
  * (e.g. uses a `Map<...>` field that `asToolType` does not yet support, or other structural
  * lowering failures). In the latter case the failure is logged and skipped so codegen for
- * the rest of the pack succeeds — the affected tool simply doesn't get a typed binding.
+ * the rest of the trailmap succeeds — the affected tool simply doesn't get a typed binding.
  * Scripted-tool authors can still reach it via `client.callTool(name, args)`.
  *
  * Counterpart to [toKoogToolDescriptor]. The two surfaces are independent: a tool can be
@@ -184,9 +184,13 @@ fun KClass<out TrailblazeTool>.toScriptedToolDescriptor(): ToolDescriptor? {
     // specific types) because the lowering walks reflection and downstream Koog code in
     // `asToolType` can grow new throw sites that we'd otherwise need to chase one at a time.
     Console.log(
-      "[toScriptedToolDescriptor] Skipping ${qualifiedName ?: simpleName} from per-pack " +
+      "[toScriptedToolDescriptor] Skipping ${qualifiedName ?: simpleName} from per-trailmap " +
         "client.d.ts codegen: descriptor build failed (${e::class.simpleName}: ${e.message}). " +
-        "Tool remains callable via client.callTool(...).",
+        "Tool remains callable via client.callTool(...). " +
+        "If this is a Map<String, V> parameter, consider modeling it as List<KV> where KV " +
+        "carries the key as a named field — closed-shape arrays of structured objects are " +
+        "LLM-friendly AND surface to the typed client.tools.<name>() autocomplete. See " +
+        "xyz.block.trailblaze.mobile.tools.BroadcastExtra for the pattern.",
     )
     null
   }

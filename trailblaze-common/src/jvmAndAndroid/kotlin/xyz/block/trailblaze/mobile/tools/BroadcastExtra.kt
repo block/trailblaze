@@ -1,15 +1,6 @@
 package xyz.block.trailblaze.mobile.tools
 
-import com.charleskorn.kaml.YamlInput
-import com.charleskorn.kaml.YamlMap
-import com.charleskorn.kaml.YamlScalar
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
 
 /**
  * A single broadcast-intent extra, using the same type names as `Intent.putExtra`
@@ -19,23 +10,35 @@ import kotlinx.serialization.encoding.Encoder
  * (matching how `am broadcast` itself takes every argument as text and lets Android
  * parse it). [type] is matched case-insensitively and also accepts the short-form
  * `am broadcast` CLI flags (`es`/`ez`/`ei`/`el`/`ef`) as aliases for
- * `string`/`boolean`/`int`/`long`/`float`; short forms are normalized to the long form
- * before storage so log output stays consistent.
+ * `string`/`boolean`/`int`/`long`/`float`; both forms are accepted at [toTypedValue]
+ * via case-insensitive lookup.
  *
  * See the Android docs for the underlying `am broadcast` CLI:
  * https://developer.android.com/tools/adb#IntentSpec
  *
- * YAML supports two shapes (interpreted by [BroadcastExtrasMapSerializer]):
+ * Extras are authored as a closed-shape list — each entry carries its [key] alongside the
+ * value/type — which keeps the tool reachable from the typed scripted-tool surface
+ * (`client.tools.android_sendBroadcast`). The per-trailmap d.ts emitter currently lowers
+ * `List<DataClass>` to `Array<unknown>` rather than rendering the nested object element type,
+ * so the typed binding's `extras` is effectively `unknown[]` in `client.d.ts` today — the win
+ * is the binding existing at all (a Map-shaped param made the whole tool skip codegen):
+ *
  * ```yaml
  * extras:
- *   enable_test_mode: "1"            # shorthand → type "string"
- *   count:
+ *   - key: enable_test_mode
+ *     value: "1"
+ *   - key: count
  *     value: "42"
  *     type: int
  * ```
+ *
+ * NOTE: this class is referenced by fully-qualified name as the teaching example in
+ * `xyz.block.trailblaze.toolcalls.TrailblazeKoogToolExt.toScriptedToolDescriptor`. If you
+ * rename or move it, update that swallow-message reference too.
  */
 @Serializable
 data class BroadcastExtra(
+  val key: String,
   val value: String,
   val type: String = SupportedExtraType.DEFAULT.typeName,
 ) {
@@ -89,76 +92,6 @@ private enum class SupportedExtraType(val typeName: String, val cliFlag: String)
     fun fromTypeName(name: String): SupportedExtraType? = entries.firstOrNull {
       it.typeName.equals(name, ignoreCase = true) || it.cliFlag.equals(name, ignoreCase = true)
     }
-    fun canonicalize(name: String): String = fromTypeName(name)?.typeName ?: name
     fun allTypeNames(): String = entries.joinToString { "${it.typeName} (or ${it.cliFlag})" }
-  }
-}
-
-/**
- * Custom serializer for a `Map<String, BroadcastExtra>` that accepts a bare YAML
- * scalar as shorthand for the common `value: <scalar>, type: string` case:
- *
- * ```yaml
- * extras:
- *   enable_test_mode: "1"                 # shorthand → BroadcastExtra(value = "1")
- *   count:                                # full form
- *     value: "42"
- *     type: int
- * ```
- *
- * Shorthand is input-only: encoding always emits the canonical object form
- * (`{ value: ..., type: ... }`), so a YAML decode → encode round-trip will expand
- * every shorthand back to its full form. This keeps JSON log output uniform.
- *
- * Lives at the map level (not on [BroadcastExtra] itself) because kaml's map
- * decoder inspects element descriptors up-front and rejects scalar values for
- * class-shaped elements before any element-level serializer gets to run.
- */
-object BroadcastExtrasMapSerializer : KSerializer<Map<String, BroadcastExtra>> {
-  private val fallback = MapSerializer(String.serializer(), BroadcastExtra.serializer())
-
-  override val descriptor: SerialDescriptor = fallback.descriptor
-
-  override fun serialize(encoder: Encoder, value: Map<String, BroadcastExtra>) {
-    fallback.serialize(encoder, value)
-  }
-
-  override fun deserialize(decoder: Decoder): Map<String, BroadcastExtra> {
-    if (decoder !is YamlInput) return fallback.deserialize(decoder)
-
-    val node = decoder.node
-    require(node is YamlMap) {
-      "Expected a map for broadcast extras, got ${node::class.simpleName}"
-    }
-    return node.entries.entries.associate { (keyNode, valueNode) ->
-      val key = keyNode.content
-      val extra = when (valueNode) {
-        is YamlScalar -> BroadcastExtra(value = valueNode.content)
-        is YamlMap -> decodeBroadcastExtra(valueNode, key)
-        else -> error(
-          "Expected scalar or map for broadcast extra '$key', got ${valueNode::class.simpleName}",
-        )
-      }
-      key to extra
-    }
-  }
-
-  private fun decodeBroadcastExtra(node: YamlMap, key: String): BroadcastExtra {
-    var value: String? = null
-    var type: String? = null
-    node.entries.forEach { (keyNode, valueNode) ->
-      when (val fieldName = keyNode.content) {
-        "value" -> value = (valueNode as? YamlScalar)?.content
-          ?: error("Expected scalar for 'value' of broadcast extra '$key'")
-        "type" -> type = (valueNode as? YamlScalar)?.content
-          ?: error("Expected scalar for 'type' of broadcast extra '$key'")
-        else -> error(
-          "Unknown key '$fieldName' on broadcast extra '$key'. Expected 'value' or 'type'.",
-        )
-      }
-    }
-    val resolvedValue = value ?: error("Broadcast extra '$key' is missing a 'value'")
-    return type?.let { BroadcastExtra(value = resolvedValue, type = SupportedExtraType.canonicalize(it)) }
-      ?: BroadcastExtra(value = resolvedValue)
   }
 }

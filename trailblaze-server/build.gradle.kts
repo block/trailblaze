@@ -44,7 +44,6 @@ dependencies {
   implementation(libs.koog.agents.tools)
   implementation(libs.koog.agents.mcp)
   implementation(libs.koog.prompt.executor.clients)
-  implementation(libs.koog.prompt.executor.llms.all)
   implementation(libs.kotlinx.datetime)
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)

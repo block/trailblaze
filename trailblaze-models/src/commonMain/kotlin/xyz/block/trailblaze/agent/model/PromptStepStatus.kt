@@ -3,8 +3,10 @@
 package xyz.block.trailblaze.agent.model
 
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
@@ -28,6 +30,7 @@ data class PromptStepStatus(
 
   private var latestObjectiveStatus: String? = null
   private var pendingCycleWarning: String? = null
+  private var pendingStaleRefRecovery: String? = null
 
   // Optional auto-termination ledger for verify steps. The runner attaches one via
   // [attachVerifyAssertionLedger] when its `autoTerminateVerifySteps` flag is on and the
@@ -78,6 +81,28 @@ data class PromptStepStatus(
     return w
   }
 
+  /**
+   * Latches a stale-ref recovery message for injection into the NEXT LLM call's reminder
+   * prompt. Set by the runner when [StaleRefTracker.recordStaleRef] returns true (N
+   * consecutive `Element ref X not found` errors for the same ref). Single-shot:
+   * [consumePendingStaleRefRecovery] reads and clears.
+   *
+   * Stored as plain text — the runner pre-formats with [buildStaleRefRecoveryMessage] so
+   * this slot stays decoupled from the recovery wording. Surfacing through
+   * [PromptStepStatus] (rather than a new helper parameter) keeps the cycle-warning
+   * pattern and avoids signature changes across the call stack.
+   */
+  fun setPendingStaleRefRecovery(message: String?) {
+    pendingStaleRefRecovery = message
+  }
+
+  /** Reads-and-clears the pending stale-ref recovery message (single-shot). */
+  fun consumePendingStaleRefRecovery(): String? {
+    val w = pendingStaleRefRecovery
+    pendingStaleRefRecovery = null
+    return w
+  }
+
   fun getLimitedHistory(): List<Message> {
     val window = koogLlmResponseHistory.takeLast(maxHistorySize)
     // Anthropic rejects requests where a tool_result block appears without the
@@ -86,9 +111,12 @@ data class PromptStepStatus(
     // drop a Tool.Call while keeping its paired Tool.Result, which the API then
     // refuses. Trim any leading orphaned Tool.Result entries from the window so
     // the conversation it sees always starts on something Anthropic accepts.
-    val firstValidIndex = window.indexOfFirst { it !is Message.Tool.Result }
+    // Tool.Result is now a [MessagePart] inside a [Message.User] message.
+    val firstValidIndex = window.indexOfFirst { msg ->
+      !(msg is Message.User && msg.parts.all { it is MessagePart.Tool.Result })
+    }
     return when {
-      // Window is entirely Tool.Result entries — every one of them is orphaned, so
+      // Window is entirely Tool.Result-only messages — every one of them is orphaned, so
       // there's nothing safe to send. Return empty rather than the unmodified window
       // (which would still start with a tool_result and trip the same Anthropic error).
       firstValidIndex == -1 -> emptyList()
@@ -128,7 +156,7 @@ data class PromptStepStatus(
     llmResponseContent: String?,
     toolName: String?,
     toolArgs: JsonObject?,
-    toolCall: Message.Tool.Call? = null,
+    toolCall: MessagePart.Tool.Call? = null,
   ) {
     if (toolCall != null && toolName != null && toolArgs != null) {
       addStructuredToolTurn(
@@ -161,7 +189,7 @@ data class PromptStepStatus(
     llmResponseContent: String?,
     toolNames: List<String>,
     toolArgs: JsonObject?,
-    toolCall: Message.Tool.Call? = null,
+    toolCall: MessagePart.Tool.Call? = null,
   ) {
     if (toolCall != null && toolNames.isNotEmpty() && toolArgs != null) {
       addStructuredToolTurn(
@@ -191,7 +219,7 @@ data class PromptStepStatus(
     commandResult: TrailblazeToolResult,
     llmResponseContent: String?,
     toolsWithArgs: Map<String, JsonObject>,
-    toolCall: Message.Tool.Call? = null,
+    toolCall: MessagePart.Tool.Call? = null,
   ) {
     if (toolCall != null && toolsWithArgs.isNotEmpty()) {
       addStructuredToolTurn(
@@ -213,30 +241,46 @@ data class PromptStepStatus(
   }
 
   /**
-   * Adds the LLM's original [Message.Tool.Call] (assistant turn) followed by a paired
-   * [Message.Tool.Result] (user turn) carrying the same `id`. This is the format the
-   * koog Anthropic adapter requires to emit `tool_use` / `tool_result` content blocks —
+   * Emits the LLM's tool call as a [Message.Assistant] carrying a [MessagePart.Tool.Call]
+   * part, immediately followed by a paired [Message.User] carrying the matching
+   * [MessagePart.Tool.Result] part (same `id` linkage). This is the shape the koog
+   * Anthropic adapter requires to emit `tool_use` / `tool_result` content blocks —
    * without a matching pair, Claude treats the prior tool call as unanswered and re-issues
    * it (the 50× verify-loop we saw on every Claude run in a reproduction).
+   *
+   * Koog 1.0.0 demoted the previous top-level `Message.Tool.Call` / `Message.Tool.Result`
+   * messages to [MessagePart.Tool.Call] / [MessagePart.Tool.Result] parts that live inside
+   * an enclosing [Message.Assistant] / [Message.User]. The two-message Assistant+User shape
+   * emitted here is the post-1.0.0 equivalent of the old pair; [getWindowedHistory] is the
+   * sibling that coordinates on this pairing invariant (trimming orphaned
+   * Tool.Result-only User messages from the window head).
    *
    * The LLM's pre-tool reasoning text (passed via the older `llmResponseContent` path) is
    * intentionally dropped here: that text is already echoed inside the tool's `reasoning`
    * argument, and adding a separate [Message.Assistant] would land back-to-back with the
-   * [Message.Tool.Call] which the Anthropic API rejects as consecutive assistant messages.
+   * tool-call Assistant message, which the Anthropic API rejects as consecutive assistant
+   * messages.
    */
   private fun addStructuredToolTurn(
-    toolCall: Message.Tool.Call,
+    toolCall: MessagePart.Tool.Call,
     contentString: String,
     isError: Boolean,
   ) {
-    addToHistory(toolCall)
     addToHistory(
-      Message.Tool.Result(
-        id = toolCall.id,
-        tool = toolCall.tool,
-        content = contentString,
-        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
-        isError = isError,
+      Message.Assistant(
+        part = toolCall,
+        metaInfo = ResponseMetaInfo.create(KoogClock.System),
+      ),
+    )
+    addToHistory(
+      Message.User(
+        part = MessagePart.Tool.Result(
+          id = toolCall.id,
+          tool = toolCall.tool,
+          output = contentString,
+          isError = isError,
+        ),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }
@@ -255,7 +299,7 @@ data class PromptStepStatus(
     addToHistory(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }
@@ -275,7 +319,7 @@ data class PromptStepStatus(
     addToHistory(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }
@@ -293,7 +337,7 @@ data class PromptStepStatus(
     addToHistory(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }
@@ -302,7 +346,7 @@ data class PromptStepStatus(
     addToHistory(
       Message.Assistant(
         content = llmContent,
-        metaInfo = ResponseMetaInfo.create(kotlin.time.Clock.System),
+        metaInfo = ResponseMetaInfo.create(KoogClock.System),
       ),
     )
   }

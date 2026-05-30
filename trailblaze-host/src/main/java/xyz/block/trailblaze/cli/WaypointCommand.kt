@@ -65,6 +65,6 @@ class WaypointCommand : Callable<Int> {
 
   override fun call(): Int {
     CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

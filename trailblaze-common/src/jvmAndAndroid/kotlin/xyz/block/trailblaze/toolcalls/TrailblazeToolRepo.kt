@@ -2,7 +2,7 @@ package xyz.block.trailblaze.toolcalls
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
-import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.serializer
@@ -34,6 +34,15 @@ class TrailblazeToolRepo(
    * `setActiveToolSets` to swap which tools are available.
    */
   val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
+  /**
+   * Optional driver type the repo is bound to. When set, [setActiveToolSets] routes
+   * through [TrailblazeToolSetCatalog.resolveForDriver] so `always_enabled` catalog
+   * entries that declare incompatible `drivers:` (e.g. `core_interaction.yaml` on a
+   * Playwright session) are filtered out — mirrors the inner-agent-tools-provider in
+   * `TrailblazeMcpServer`. Leave null in test fixtures and callers that don't know
+   * the driver yet; the resolution falls back to the non-driver-aware catalog filter.
+   */
+  val driverType: TrailblazeDriverType? = null,
 ) {
   val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
     .asTools()
@@ -219,7 +228,7 @@ class TrailblazeToolRepo(
     if (invalidIds.isNotEmpty()) {
       return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> !catalog.first { it.id == id }.alwaysEnabled }}"
     }
-    val resolved = TrailblazeToolSetCatalog.resolve(toolSetIds, catalog)
+    val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, toolSetIds, catalog)
     val newToolClasses = resolved.toolClasses + extraToolClasses
     val newYamlToolNames = resolved.yamlToolNames + extraYamlToolNames
     val dynamicToolCount = synchronized(registeredTrailblazeToolClasses) {
@@ -230,17 +239,19 @@ class TrailblazeToolRepo(
       registeredDynamicTools.size
     }
     val totalTools = newToolClasses.size + newYamlToolNames.size + dynamicToolCount
-    Console.log("Active toolsets changed to: $toolSetIds ($totalTools tools)")
+    val driverLabel = "[driver=${driverType?.name ?: "none"}]"
+    Console.log("Active toolsets changed to: $toolSetIds ($totalTools tools) $driverLabel")
     return buildString {
       appendLine("Active tool sets updated.")
       appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")
       appendLine("Total tools available: $totalTools")
+      appendLine(driverLabel)
     }
   }
 
-  fun toolCallToTrailblazeTool(toolMessage: Message.Tool): TrailblazeTool? = toolCallToTrailblazeTool(
-    toolName = toolMessage.tool,
-    toolContent = toolMessage.content,
+  fun toolCallToTrailblazeTool(toolCall: MessagePart.Tool.Call): TrailblazeTool? = toolCallToTrailblazeTool(
+    toolName = toolCall.tool,
+    toolContent = toolCall.args,
   )
 
   fun toolCallToTrailblazeTool(
@@ -552,6 +563,7 @@ class TrailblazeToolRepo(
           yamlToolNames = coreTools.yamlToolNames + customYamlToolNames,
         ),
         toolSetCatalog = catalog,
+        driverType = driverType,
       )
     }
   }

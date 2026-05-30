@@ -98,8 +98,12 @@ class HostRpcClient(
    * Live WS-backed delegate. Lazy because instantiating the underlying [HttpClient] with
    * the [io.ktor.client.plugins.websocket.WebSockets] plugin is non-trivial and we want
    * the cost only if the page actually needs it.
+   *
+   * Stored as an explicit [Lazy] so [close] can branch on `isInitialized()` and skip
+   * touching the WS client (and its lazy [HttpClient]) when nothing ever used it.
    */
-  private val wsClient: HostRpcWsClient by lazy { HostRpcWsClient(baseUrl) }
+  private val wsClientLazy: Lazy<HostRpcWsClient> = lazy { HostRpcWsClient(baseUrl) }
+  private val wsClient: HostRpcWsClient by wsClientLazy
 
   /**
    * Per-process flag: once a WS attempt has failed for this client instance, give up and
@@ -118,6 +122,24 @@ class HostRpcClient(
    * unavailable" rather than "no events yet".
    */
   val events: Flow<RpcWsEnvelope.Event> get() = wsClient.events
+
+  /**
+   * Release every resource this client owns: the always-eager [httpClient] and the
+   * lazy [wsClient] (only if it was actually initialized). The WS close cancels the
+   * read loop, fails any pending requests, and tears down its own embedded Ktor
+   * [HttpClient]. Safe to call multiple times — subsequent RPC calls after close
+   * will throw or fail-soft via the existing `try`/`null-return` paths.
+   *
+   * Composable callers (e.g. `WebDevicesGridPage`) must call this from a coroutine
+   * scope that outlives composition — `rememberCoroutineScope` cancels alongside
+   * `onDispose`, which would defeat the cleanup.
+   */
+  fun close() {
+    if (wsClientLazy.isInitialized()) {
+      wsClientLazy.value.close()
+    }
+    httpClient.close()
+  }
 
   // -----------------------------------------------------------------------
   // Public RPC surface (unchanged signatures — callers don't see the transport)

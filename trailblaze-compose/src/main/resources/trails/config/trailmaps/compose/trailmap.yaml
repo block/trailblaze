@@ -1,0 +1,20 @@
+# Library trailmap that owns the Compose Desktop interaction tools. Compose runs
+# in the JVM-hosted Skiko renderer rather than on a mobile device or browser, so
+# its tool surface (click / type / scroll / verify by composable semantics) is
+# deliberately separate from the mobile `core_interaction` and web `web_core`
+# toolsets even though the verbs overlap.
+#
+# This trailmap has no `target:` block, so it's not surfaced as a runnable target —
+# its sole job is to scope the `compose_*` tools and wire the `compose_core` +
+# `compose_verification` toolsets to the `compose` driver. Any trailmap declaring
+# `dependencies: [compose]` (or a target with `compose` in its platforms list)
+# inherits them at runtime-registry dispatch time.
+#
+# **Naming convention.** Module is `trailblaze-compose`; trailmap id is `compose`
+# matching the `compose_*` prefix on every tool and toolset shipped here.
+id: compose
+platforms:
+  compose:
+    tool_sets:
+      - compose_core
+      - compose_verification

@@ -200,8 +200,21 @@ class BasePlaywrightElectronTest(
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = trailblazeDeviceInfo.classifiers,
+    )
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Honor `config.skip:` before SessionStarted is logged. Same rationale as the
+    // BasePlaywrightNativeTest skip site — this Electron base test path is exercised by
+    // the JUnit eval suite directly, so the CLI's pre-flight planner doesn't cover it.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return@withContext loggingRule.session?.sessionId ?: SessionId("unknown")
+    }
 
     if (sendSessionStartLog) {
       val session = loggingRule.session

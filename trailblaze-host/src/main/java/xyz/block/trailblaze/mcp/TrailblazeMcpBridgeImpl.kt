@@ -1568,7 +1568,7 @@ class TrailblazeMcpBridgeImpl(
       // activator and the RunYamlRequest see the same value — eliminates a tiny
       // race window where a parallel setSessionTargetForBoundDevice could land
       // between the two reads and the two callers would see different targets.
-      val resolvedTargetAppId = resolveTargetAppIdForDevice(trailblazeDeviceId)
+      val resolvedTargetAppId = getSessionTargetAppIdForDevice(trailblazeDeviceId)
       if (
         captureNetworkTraffic &&
           trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
@@ -1894,13 +1894,13 @@ class TrailblazeMcpBridgeImpl(
    * [TrailblazeServerState.SavedTrailblazeAppConfig.selectedTargetAppId]. Does
    * NOT consult per-device target overrides.
    *
-   * Returns the daemon-wide default. Per-device overrides set via
-   * `setSessionTargetForBoundDevice` (the MCP tool) win over this value at
-   * tool-dispatch time — but the resolver that consults them is private to
-   * the bridge implementation. External callers (config and tool-discovery
-   * surfaces in `DeviceManagerToolSet`/`ConfigToolSet`/`TrailblazeMcpResources`/
-   * `TrailblazeMcpServer`) intentionally read this daemon-wide view because
-   * they don't have a device-bound context to scope to.
+   * Callers with a device-bound context should prefer
+   * [getSessionTargetAppIdForDevice], which prefers the per-device session
+   * override (set via `setSessionTargetForBoundDevice` / `--target`) before
+   * falling back here. Reading this directly from a per-device tool-list /
+   * tool-availability path is the bug that drops YAML-defined tools from the
+   * dispatch gate when the daemon-wide setting doesn't match the device's
+   * `--target`.
    */
   override fun getCurrentAppTargetId(): String? {
     return trailblazeDeviceManager.settingsRepo.getCurrentSelectedTargetApp()?.id
@@ -1938,8 +1938,8 @@ class TrailblazeMcpBridgeImpl(
     trailblazeDeviceManager.getTargetForSession(sessionId)
 
   /**
-   * Resolver used by tool dispatch paths that know which device they're about
-   * to drive. Resolution chain: the device's active Trailblaze session's
+   * Resolver used by tool dispatch paths and per-device tool-availability
+   * surfaces. Resolution chain: the device's active Trailblaze session's
    * target override (see [TrailblazeDeviceManager.getTargetForActiveSession])
    * → daemon-wide [getCurrentAppTargetId].
    *
@@ -1947,7 +1947,7 @@ class TrailblazeMcpBridgeImpl(
    * cancel / daemon restart. Per-session lifetime matches how `.trail.yaml`
    * targets are read per run.
    */
-  private fun resolveTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =
+  override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =
     trailblazeDeviceManager.getTargetForActiveSession(deviceId) ?: getCurrentAppTargetId()
 
   override fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? {

@@ -1,0 +1,20 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./wikipedia_typed_demo.ts
+name: wikipedia_typed_demo
+description: |
+  Typed-authoring demo: formats the input message with an optional prefix and returns a
+  small structured result. Intentionally trivial — exists to exercise the
+  `trailblaze.tool<I, O>(handler)` pattern end-to-end (TSDoc → IDE hover → handler
+  types → result shape).
+inputSchema:
+  message:
+    type: string
+    description: "The message to format."
+    required: true
+  prefix:
+    type: string
+    description: "Optional prefix prepended to the formatted message. Defaults to none."
+    required: false

@@ -269,13 +269,13 @@ abstract class TrailblazeDesktopAppConfig(
       val responses =
         client.createLlmClient().execute(
           prompt =
-            ai.koog.prompt.dsl.Prompt(
+            ai.koog.prompt.Prompt(
               messages =
                 listOf(
                   ai.koog.prompt.message.Message.User(
                     content = "Respond with OK",
                     metaInfo =
-                      ai.koog.prompt.message.RequestMetaInfo.create(kotlin.time.Clock.System),
+                      ai.koog.prompt.message.RequestMetaInfo.create(ai.koog.utils.time.KoogClock.System),
                   ),
                 ),
               id = "llm-connection-test",
@@ -285,7 +285,7 @@ abstract class TrailblazeDesktopAppConfig(
         )
       val elapsedMs = System.currentTimeMillis() - startTime
       report.appendLine("Response time: ${elapsedMs}ms")
-      report.appendLine("Response: ${responses.firstOrNull()?.content ?: "(empty)"}")
+      report.appendLine("Response: ${responses.textContent().ifBlank { "(empty)" }}")
       report.appendLine()
       report.appendLine("--- Request ---")
       report.append(diagnosticClient.interceptor.requestLog)

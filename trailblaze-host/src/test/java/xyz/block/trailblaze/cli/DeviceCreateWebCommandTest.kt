@@ -74,7 +74,7 @@ class DeviceCreateWebCommandTest {
       "--emulate", "iPhone 14",
       "--viewport", "375x812",
     )
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
     assertEquals("iPhone 14", command.emulate)
     assertEquals("375x812", command.viewport)
   }
@@ -87,7 +87,7 @@ class DeviceCreateWebCommandTest {
     // would surface the same error later, in a less obviously CLI-shaped place.
     val command = DeviceCreateWebCommand()
     val exitCode = CommandLine(command).execute("--viewport", "375x")
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -98,7 +98,7 @@ class DeviceCreateWebCommandTest {
     val command = DeviceCreateWebCommand()
     val exitCode = CommandLine(command).execute("--emulate", "iPhone 14")
     assertTrue(
-      exitCode == CommandLine.ExitCode.SOFTWARE || exitCode == CommandLine.ExitCode.OK,
+      exitCode == TrailblazeExitCode.INFRA_FAILED.code || exitCode == TrailblazeExitCode.SUCCESS.code,
       "Expected SOFTWARE (no daemon) or OK (daemon happens to be live); got $exitCode",
     )
   }

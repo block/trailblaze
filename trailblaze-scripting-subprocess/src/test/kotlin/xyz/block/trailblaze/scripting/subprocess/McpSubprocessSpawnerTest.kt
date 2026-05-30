@@ -18,7 +18,7 @@ class McpSubprocessSpawnerTest {
 
   private val tmpDir = Files.createTempDirectory("mcp-spawner-test").toFile()
   private val scriptFile = File(tmpDir, "fixture.ts").apply { writeText("// no-op fixture\n") }
-  private val bunRuntime = NodeRuntime.Bun(File("/opt/homebrew/bin/bun"))
+  private val bunRuntime = BunRuntime(File("/opt/homebrew/bin/bun"))
   private val context = McpSpawnContext(
     platform = TrailblazeDevicePlatform.ANDROID,
     driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
@@ -120,16 +120,6 @@ class McpSubprocessSpawnerTest {
 
     // PATH is practically universal in inherited env; sanity-checks the inheritance path.
     assertThat(env.keys).contains("PATH")
-  }
-
-  @Test fun `configure with tsx runtime produces the tsx argv shape`() {
-    val tsxRuntime = NodeRuntime.Tsx(File("/usr/local/bin/tsx"))
-    val config = McpServerConfig(script = scriptFile.absolutePath)
-    val configured = McpSubprocessSpawner.configure(config, context, tsxRuntime)
-
-    assertThat(configured.builder.command().toList()).isEqualTo(
-      listOf("/usr/local/bin/tsx", scriptFile.absolutePath),
-    )
   }
 
   @Test fun `configure rejects command-only entries`() {

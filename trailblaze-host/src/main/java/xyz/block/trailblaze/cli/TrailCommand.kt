@@ -58,7 +58,8 @@ import kotlin.system.exitProcess
  * recording preferred over the NL `blaze.yaml` when both are present).
  */
 @Command(
-  name = "trail",
+  name = "run",
+  aliases = ["trail"],
   mixinStandardHelpOptions = true,
   description = [
     "Run a trail file (.trail.yaml) — execute a scripted test on a device.",
@@ -71,12 +72,31 @@ import kotlin.system.exitProcess
     "  - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the " +
       "`N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` " +
       "is ignored. To run a skipped trail, remove its `skip:` line.",
+    "",
+    "Note: `trailblaze trail` is a deprecated alias for `trailblaze run` and will be removed " +
+      "in a future release.",
   ],
 )
+// Class name retained as `TrailCommand` (not `RunCommand`) during the one-release
+// deprecation window of the `trail` → `run` rename. Renaming the class would churn 6+
+// test classes (`TrailCommandPlanTrailExecutionTest`,
+// `TrailCommandResolveDefaultTrailDirTest`, `TrailCommandResolveMaxLlmCallsTest`,
+// `TrailCommandSaveRecordingTest`, `TrailCommandAliasWarningTest`, etc.) — deferred to
+// the same release that removes `aliases = ["trail"]`. See
+// `docs/internal/devlog/2026-05-26-cli-trail-to-run-rename.md` for the rationale and
+// the removal recipe. Once removed, follow the established `StepCommand` /
+// `AskCommand` / `VerifyCommand` convention and rename to `RunCommand`.
 open class TrailCommand : Callable<Int> {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
+
+  // Injected by picocli at parse time. Used by [wasInvokedViaTrailAlias] to detect when
+  // the user typed the deprecated `trail` name instead of the new `run` name, so we can
+  // print a one-line stderr deprecation warning. Picocli's [CommandLine.ParseResult]
+  // exposes the original args list on the root, which we walk to here.
+  @CommandLine.Spec(CommandLine.Spec.Target.SELF)
+  private lateinit var commandSpec: CommandLine.Model.CommandSpec
 
   /** Set by the shutdown hook on Ctrl+C to stop processing further trail files. */
   @Volatile private var cancelled = false
@@ -193,6 +213,37 @@ open class TrailCommand : Callable<Int> {
   var llmModel: String? = null
 
   @Option(
+    names = ["--memory"],
+    paramLabel = "KEY=VAL",
+    arity = "1",
+    description = [
+      "Pre-populate trail memory with KEY=VAL before any step runs. Repeatable " +
+        "(`--memory user=sam --memory accountTier=PRO`). Overrides any value with the " +
+        "same key in the trail YAML's `config.memory:` block. Values are strings; keys " +
+        "must be non-empty. Visible to `{{name}}` interpolation and to scripted tools via " +
+        "`ctx.memory.get(name)`.",
+      "Values are logged in cleartext and persisted into the session-start snapshot — " +
+        "use --secret for passwords, tokens, or other sensitive data."
+    ],
+  )
+  var memorySeeds: List<String> = emptyList()
+
+  @Option(
+    names = ["--secret"],
+    paramLabel = "KEY=VAL",
+    arity = "1",
+    description = [
+      "Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same " +
+        "shape as --memory; the value is redacted in logs (via `rememberSensitive`), " +
+        "excluded from the scripting envelope, and omitted from the session-start " +
+        "snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay " +
+        "knows it must re-supply the value. Repeatable. Use for passwords, tokens, " +
+        "API keys, PII."
+    ],
+  )
+  var sensitiveSeeds: List<String> = emptyList()
+
+  @Option(
     names = ["--max-llm-calls"],
     description = [
       "Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. " +
@@ -307,6 +358,16 @@ open class TrailCommand : Callable<Int> {
   )
   var captureAll: Boolean = false
 
+  @Option(
+    names = ["--test-name"],
+    description = [
+      "Override the test name used as the session ID seed. When set, replaces the default " +
+        "name derived from the trail filename. Useful in CI environments where the caller " +
+        "can supply a richer identifier (e.g. including suite/section/case context).",
+    ],
+  )
+  var testNameOverride: String? = null
+
   private val captureOptions: CaptureOptions get() {
     return CaptureOptions(
       captureVideo = captureVideo || captureAll,
@@ -321,6 +382,13 @@ open class TrailCommand : Callable<Int> {
       Console.enableQuietMode()
     }
 
+    if (wasInvokedViaTrailAlias()) {
+      Console.error(
+        "Warning: 'trailblaze trail' is deprecated and will be removed in a future release. " +
+          "Use 'trailblaze run' instead.",
+      )
+    }
+
     // Resolve --llm shorthand: splits "provider/model" into llmProvider + llmModel.
     // `--llm=none` is a sentinel for "no LLM configured" — recordings-only mode where the
     // tool stack runs without inference. Resolve it to (LLM_NONE, LLM_NONE) so downstream
@@ -328,7 +396,7 @@ open class TrailCommand : Callable<Int> {
     if (llm != null) {
       if (llmProvider != null || llmModel != null) {
         Console.error("Error: --llm is mutually exclusive with --llm-provider and --llm-model.")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       if (llm.equals(LLM_NONE, ignoreCase = true)) {
         llmProvider = LLM_NONE
@@ -337,12 +405,31 @@ open class TrailCommand : Callable<Int> {
         val parts = llm!!.split("/", limit = 2)
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
           Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1) or 'none' for recordings-only mode.")
-          return CommandLine.ExitCode.USAGE
+          return TrailblazeExitCode.MISUSE.code
         }
         llmProvider = parts[0]
         llmModel = parts[1]
       }
     }
+
+    // Validate --memory / --secret KEY=VAL entries early so a typo (e.g. `--memory invalid`)
+    // exits USAGE before any device/LLM resolution happens. Each entry must contain a `=`
+    // with a non-empty key — empty values are allowed (a deliberate sentinel for some
+    // flows). Sensitive seeds use the same shape so we reuse the same parser. Parse once
+    // here and cache so the request-build sites at the in-process and daemon paths below
+    // don't re-walk the input lists; the helper is cheap but the duplicate-parse cost
+    // is also a duplicate-error-surface that could drift between validation and use.
+    val parsedMemorySeeds: Map<String, String>
+    val parsedSensitiveSeeds: Map<String, String>
+    try {
+      parsedMemorySeeds = parseMemorySeeds(memorySeeds)
+      parsedSensitiveSeeds = parseMemorySeeds(sensitiveSeeds)
+    } catch (e: IllegalArgumentException) {
+      Console.error("Error: ${e.message}")
+      return TrailblazeExitCode.MISUSE.code
+    }
+    this.resolvedMemorySeeds = parsedMemorySeeds
+    this.resolvedSensitiveSeeds = parsedSensitiveSeeds
 
     // Validate --max-llm-calls flag value early so a CLI typo (e.g. `--max-llm-calls 0`)
     // exits USAGE rather than later tripping the model-layer require with an
@@ -351,7 +438,7 @@ open class TrailCommand : Callable<Int> {
     maxLlmCalls?.let { cap ->
       if (cap <= 0) {
         Console.error("Error: --max-llm-calls must be a positive integer (got $cap).")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
 
@@ -371,12 +458,45 @@ open class TrailCommand : Callable<Int> {
           "removing defaults.max-llm-calls from trailblaze.yaml, or running " +
           "`trailblaze config max-llm-calls unset`.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
-    // Resolve --device: flag takes priority, fall back to config default.
-    if (device == null) {
-      device = CliConfigHelper.readConfig()?.cliDevicePlatform
+    // Resolve --device with a four-tier fallback that mirrors every other action command:
+    //   1. Explicit `--device` flag (wins)
+    //   2. TRAILBLAZE_DEVICE env var — pinned per-shell via
+    //      `eval $(trailblaze device connect <platform>)` so an agent running a sequence
+    //      of trails in one shell doesn't have to repeat `--device` on every call
+    //   3. Autodetect when exactly one device is connected — closes the single-device
+    //      OOBE gap (zero setup needed); emits a stderr notice so the user sees the pick
+    //   4. Persisted `trailblaze config device` (legacy convenience for users who set
+    //      a default device once via `trailblaze config`)
+    //
+    // `trail` (replay mode) still differs from `tool`/`step`/`snapshot`/`ask`/`verify` in
+    // one respect — each replay spawns a fresh session rather than reattaching to the
+    // shell's bound one — but the *device-id* should resolve the same way regardless.
+    //
+    // We don't use the shared `resolveDeviceOrErrorBlocking` here because `trail` has a
+    // legitimate fourth tier (the persisted CLI config) the shared resolver doesn't know
+    // about, AND we want the existing downstream `resolveTargetDevice` error envelope to
+    // fire for the multi-device / no-device cases (its message lists available devices in
+    // the trail-runner-specific shape, which is more useful than the standard one here).
+    //
+    // Guard on `isNullOrBlank()` (not `== null`) so a stray `--device ""` /
+    // `--device " "` falls through to env/autodetect/config rather than being
+    // forwarded to the runner verbatim — letting a blank string slip through
+    // would surface as a cryptic "Device '' not found" mid-pipeline. Same
+    // treatment `resolveCliDevice` applies to the env var.
+    if (device.isNullOrBlank()) {
+      device = resolveCliDevice(null)
+        ?: run {
+          val port = parent.getEffectivePort()
+          val autodetected = runBlocking { autodetectSingleConnectedDevice(port) }
+          if (autodetected is DeviceAutodetectResult.Resolved) {
+            reportAutodetectedDevice(autodetected.deviceSpec)
+            autodetected.deviceSpec
+          } else null
+        }
+        ?: CliConfigHelper.readConfig()?.cliDevicePlatform
     }
 
     // Default the trail argument when omitted: walk up from the *caller's* CWD to find the
@@ -390,7 +510,7 @@ open class TrailCommand : Callable<Int> {
       if (defaultDir == null) {
         Console.error("Error: No trail file specified and no `trails/` directory found at the workspace root.")
         Console.error("  Pass a trail file/directory explicitly, or run from a workspace containing a `trails/` directory.")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       Console.info("No trail argument given; defaulting to ${defaultDir.absolutePath}")
       trailFiles = listOf(defaultDir)
@@ -400,17 +520,31 @@ open class TrailCommand : Callable<Int> {
     // (`*.trail.yaml` or `blaze.yaml`) or a directory (expanded recursively below).
     for (file in trailFiles) {
       if (!file.exists()) {
-        Console.error("Error: Trail file does not exist: ${file.absolutePath}")
-        return CommandLine.ExitCode.SOFTWARE
+        // Bad path → MISUSE (caller supplied a path that doesn't exist), not infra:
+        // the daemon, device, and network are all irrelevant here.
+        reportCliError(
+          verb = "Trail run",
+          target = file.absolutePath,
+          reason = "trail file does not exist",
+        )
+        return TrailblazeExitCode.MISUSE.code
       }
       if (file.isDirectory) continue
       if (!file.isFile) {
-        Console.error("Error: Not a regular file or directory: ${file.absolutePath}")
-        return CommandLine.ExitCode.USAGE
+        reportCliError(
+          verb = "Trail run",
+          target = file.absolutePath,
+          reason = "not a regular file or directory",
+        )
+        return TrailblazeExitCode.MISUSE.code
       }
       if (!TrailRecordings.isTrailFile(file.name)) {
-        Console.error("Error: Expected a trail file (${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX} or blaze.yaml), got: ${file.name}")
-        return CommandLine.ExitCode.USAGE
+        reportCliError(
+          verb = "Trail run",
+          target = file.name,
+          reason = "expected a trail file (${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX} or blaze.yaml)",
+        )
+        return TrailblazeExitCode.MISUSE.code
       }
     }
 
@@ -434,14 +568,21 @@ open class TrailCommand : Callable<Int> {
     // N trail file(s)" header reflect the actual workload (post-filter) rather than the
     // raw argument count. Device classifiers feed [findBestTrailResourcePath] so a directory
     // containing both `blaze.yaml` and a classifier-matched recording resolves to the
-    // recording (no LLM call), not both.
-    val plan = planTrailExecution(trailFiles, includeTags, parseDeviceClassifiersFromSpec(device))
+    // recording (no LLM call), not both. The resolver probes the OS (xcrun/adb) so a
+    // `--device ios/<UDID>` pointing at an iPhone sim yields `[ios, iphone]` and picks
+    // `ios-iphone.trail.yaml` — closing the load-vs-save filename gap the runtime save
+    // path has been writing recordings for.
+    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(device)
+    if (deviceClassifiers.isNotEmpty()) {
+      Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
+    }
+    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers)
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
     if (plan.items.isEmpty()) {
       Console.info("No trail files to run after filtering. Exiting.")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
     Console.info("Running ${plan.items.size} trail file(s)")
     Console.info(SECTION_DIVIDER)
@@ -449,6 +590,11 @@ open class TrailCommand : Callable<Int> {
     var passed = 0
     var failed = 0
     var skipped = 0
+    // Track the "worst" per-file exit code so a batch with one INFRA failure and
+    // one ASSERTION failure exits 2 (INFRA), but a batch with only ASSERTION
+    // failures exits 1. Without this, the final `exitProcess` below would
+    // collapse every non-zero outcome into INFRA_FAILED and defeat the split.
+    var worstExitCode = TrailblazeExitCode.SUCCESS.code
     val allNewSessionIds = mutableListOf<SessionId>()
 
     // Initialize the app once for all files
@@ -481,7 +627,7 @@ open class TrailCommand : Callable<Int> {
           Console.info(ITEM_DIVIDER)
           val (exitCode, sessionIds) = runSingleTrailFile(item.file, app)
           allNewSessionIds.addAll(sessionIds)
-          if (exitCode == CommandLine.ExitCode.OK) {
+          if (exitCode == TrailblazeExitCode.SUCCESS.code) {
             passed++
             // Save recording to trail source directory on success — gating delegated to
             // shouldSaveRecording so all three call sites (this one, the daemon delegate
@@ -501,6 +647,7 @@ open class TrailCommand : Callable<Int> {
             }
           } else {
             failed++
+            worstExitCode = chooseWorseExitCode(worstExitCode, exitCode)
           }
         }
       }
@@ -539,7 +686,7 @@ open class TrailCommand : Callable<Int> {
       }
     }
 
-    exitProcess(if (failed > 0) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK)
+    exitProcess(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code)
   }
 
   /**
@@ -550,14 +697,20 @@ open class TrailCommand : Callable<Int> {
    */
   private fun delegateToDaemon(daemon: DaemonClient): Int {
     // Same plan-then-iterate shape as the in-process path so the daemon-delegated and
-    // in-process flows produce identical headers, filter counts, and summaries.
-    val plan = planTrailExecution(trailFiles, includeTags, parseDeviceClassifiersFromSpec(device))
+    // in-process flows produce identical headers, filter counts, and summaries. Device
+    // discovery via xcrun/adb is read-only OS state — safe to run from this client
+    // process even while the daemon is using the same devices for execution.
+    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(device)
+    if (deviceClassifiers.isNotEmpty()) {
+      Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
+    }
+    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers)
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
     if (plan.items.isEmpty()) {
       Console.info("No trail files to run after filtering. Exiting.")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
     Console.info("Delegating ${plan.items.size} trail file(s) to running Trailblaze daemon...")
     Console.info(SECTION_DIVIDER)
@@ -565,6 +718,14 @@ open class TrailCommand : Callable<Int> {
     var passed = 0
     var failed = 0
     var skipped = 0
+    // Same per-file worst-code tracking as the in-process path above. The daemon
+    // RPC currently only signals success/failure (boolean `response.success`), so
+    // we don't yet have a per-file ASSERTION-vs-INFRA distinction from this side;
+    // map every failure to ASSERTION_FAILED for now so a real trail-assertion
+    // failure stays distinguishable from a daemon outage (which surfaces as an
+    // exception from `daemon.runSync` and routes to INFRA via the IO envelope).
+    // When the daemon RPC grows a typed exit code in its response, swap this in.
+    var worstExitCode = TrailblazeExitCode.SUCCESS.code
 
     // Register Ctrl+C handler to cancel the in-flight daemon run
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -593,7 +754,7 @@ open class TrailCommand : Callable<Int> {
 
           val rawYaml = file.readText()
           val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
-          val testName = deriveTestName(file)
+          val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
 
           // Surface the effective replay-vs-AI mode to the user before the run kicks off.
           // See [logReplayModeBanner] for the three-state rationale and wording.
@@ -619,6 +780,8 @@ open class TrailCommand : Callable<Int> {
             captureLogcat = captureLogcat || captureAll,
             captureNetworkTraffic = captureNetwork || captureAll,
             maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+            initialMemorySeeds = parsedMemorySeeds(),
+            initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
           )
 
           val response = daemon.runSync(request) { progress ->
@@ -646,6 +809,7 @@ open class TrailCommand : Callable<Int> {
           } else {
             Console.error("❌ FAILED: ${response.error ?: "Unknown error"}")
             failed++
+            worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.ASSERTION_FAILED.code)
           }
         }
       }
@@ -654,7 +818,7 @@ open class TrailCommand : Callable<Int> {
     Console.info("\n" + SECTION_DIVIDER)
     Console.info("Results: $passed passed, $failed failed, $skipped skipped out of ${plan.items.size} total")
     // Match the success marker emitted by the in-process path at the per-file `onComplete`
-    // site, so `./trailblaze trail <file>` prints the same phrase regardless of whether it
+    // site, so `./trailblaze run <file>` prints the same phrase regardless of whether it
     // runs in-process or via the daemon. Suppress the marker when nothing actually ran
     // (e.g., every trail was skipped) — exit-code 0 is still correct but the phrase would
     // mis-imply work was done.
@@ -665,7 +829,7 @@ open class TrailCommand : Callable<Int> {
     // Flush output before exiting so error messages are visible in CI logs
     System.out.flush()
     System.err.flush()
-    exitProcess(if (failed > 0) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK)
+    exitProcess(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code)
   }
 
   /** Moves a file, falling back to copy+delete when renameTo fails (e.g., cross-filesystem). */
@@ -888,9 +1052,12 @@ open class TrailCommand : Callable<Int> {
     val trailDriverType = driverString?.let { ds ->
       TrailblazeDriverType.fromString(ds)
         ?: run {
-          Console.error("Error: Unknown driver type '$ds'.")
-          Console.error("Valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}")
-          return CommandLine.ExitCode.SOFTWARE to emptyList()
+          reportCliError(
+            verb = "Trail run",
+            reason = "unknown driver type '$ds'",
+            hint = "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}",
+          )
+          return TrailblazeExitCode.MISUSE.code to emptyList()
         }
     }
 
@@ -899,10 +1066,10 @@ open class TrailCommand : Callable<Int> {
       ?: trailConfig?.platform?.let { TrailblazeDevicePlatform.fromString(it) }
 
     val allDevices = loadConnectedDevices(trailDriverType, trailPlatform, app, composePort)
-      ?: return CommandLine.ExitCode.SOFTWARE to emptyList()
+      ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
 
     val targetDevice = resolveTargetDevice(allDevices, trailDriverType, trailPlatform, device)
-      ?: return CommandLine.ExitCode.SOFTWARE to emptyList()
+      ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
 
     Console.info("Target device: ${targetDevice.trailblazeDeviceId.instanceId} (${targetDevice.platform.displayName})")
     Console.info("Driver: ${targetDevice.trailblazeDriverType}")
@@ -911,19 +1078,22 @@ open class TrailCommand : Callable<Int> {
     val agentImpl = try {
       AgentImplementation.valueOf(agent.uppercase())
     } catch (e: IllegalArgumentException) {
-      Console.error("Error: Invalid agent implementation '$agent'.")
-      Console.error("Valid options: ${AgentImplementation.entries.joinToString(", ") { it.name }}")
-      return 1 to emptyList()
+      reportCliError(
+        verb = "Trail run",
+        reason = "invalid agent implementation '$agent'",
+        hint = "valid options: ${AgentImplementation.entries.joinToString(", ") { it.name }}",
+      )
+      return TrailblazeExitCode.MISUSE.code to emptyList()
     }
 
     val config = parent.configProvider()
     val llmModel = resolveLlmModel(config, llmProvider, llmModel)
-      ?: return CommandLine.ExitCode.SOFTWARE to emptyList()
+      ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
 
     Console.info("Using LLM: ${llmModel.trailblazeLlmProvider.id}/${llmModel.modelId}")
     Console.info("Agent: $agentImpl")
 
-    val testName = deriveTestName(file)
+    val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
 
     val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
     logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
@@ -954,6 +1124,8 @@ open class TrailCommand : Callable<Int> {
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
       maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+      initialMemorySeeds = parsedMemorySeeds(),
+      initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
     )
 
     return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file, pinnedSessionId)
@@ -977,7 +1149,7 @@ open class TrailCommand : Callable<Int> {
   ): Pair<Int, List<SessionId>> {
     // Latch to wait for completion
     val completionLatch = CountDownLatch(1)
-    var exitCode = CommandLine.ExitCode.OK
+    var exitCode = TrailblazeExitCode.SUCCESS.code
 
     // Resolve target app: prefer trail config's `target` field, fall back to settings selection.
     // This ensures custom tools (e.g., myApp_launchSignedIn) are registered for the
@@ -998,8 +1170,8 @@ open class TrailCommand : Callable<Int> {
       onConnectionStatus = { status ->
         when (status) {
           is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
-            Console.error("Connection failed: ${status.errorMessage}")
-            exitCode = CommandLine.ExitCode.SOFTWARE
+            Console.error("Connection failed: ${status.errorMessage ?: "unknown cause"}")
+            exitCode = TrailblazeExitCode.INFRA_FAILED.code
             completionLatch.countDown()
           }
           is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
@@ -1025,15 +1197,19 @@ open class TrailCommand : Callable<Int> {
         when (result) {
           is TrailExecutionResult.Success -> {
             Console.info("\n✅ Trail completed successfully!")
-            exitCode = CommandLine.ExitCode.OK
+            exitCode = TrailblazeExitCode.SUCCESS.code
           }
           is TrailExecutionResult.Failed -> {
+            // Trail-execution failure means an objective or recorded assertion did not pass
+            // — that's an ASSERTION_FAILED (1) outcome, not an infra (2) one. Infra failures
+            // are surfaced via the `onConnectionStatus` callback above (daemon/device
+            // unreachable) and the interrupted/cancelled paths below.
             Console.error("\n❌ Trail failed: ${result.errorMessage ?: "Unknown error"}")
-            exitCode = CommandLine.ExitCode.SOFTWARE
+            exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
           }
           is TrailExecutionResult.Cancelled -> {
             Console.info("\n⚠️ Trail was cancelled")
-            exitCode = CommandLine.ExitCode.SOFTWARE
+            exitCode = TrailblazeExitCode.INFRA_FAILED.code
           }
         }
         completionLatch.countDown()
@@ -1055,7 +1231,7 @@ open class TrailCommand : Callable<Int> {
       completionLatch.await()
     } catch (e: InterruptedException) {
       Console.info("Execution interrupted")
-      exitCode = CommandLine.ExitCode.SOFTWARE
+      exitCode = TrailblazeExitCode.INFRA_FAILED.code
     }
 
     // Identify sessions created during this run and wait for their logs to stabilize.
@@ -1075,18 +1251,24 @@ open class TrailCommand : Callable<Int> {
     // run in parallel against the same daemon (the benchmark fan-out). Without the pin,
     // a sibling's TimeoutReached gets mis-attributed to this trail and we report 0/3 even
     // when two trails actually passed (observed during testing on haiku-4-5).
-    if (exitCode == CommandLine.ExitCode.OK) {
+    if (exitCode == TrailblazeExitCode.SUCCESS.code) {
       val status = logsRepo.getLogsForSession(pinnedSessionId).getSessionStatus()
       if (status is SessionStatus.Unknown) {
+        // "No logs received" looks like infra (the device-side runner never reported in),
+        // but the run did start, the daemon was reachable, the device was bound — the trail
+        // simply didn't finish. INFRA_FAILED is right when the path to the device broke;
+        // ASSERTION_FAILED is right when the trail's outcome is unknown but the wiring worked.
+        // Treat as ASSERTION_FAILED to keep `trailblaze run` reserving exit 2 for "you can't
+        // even attempt this run."
         Console.error("Session $pinnedSessionId has no status (no logs received)")
-        exitCode = CommandLine.ExitCode.SOFTWARE
+        exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
       } else if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
         status !is SessionStatus.Ended.SucceededWithSelfHeal) {
         Console.error("Session $pinnedSessionId ended with status: ${status::class.simpleName}")
-        exitCode = CommandLine.ExitCode.SOFTWARE
+        exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
       } else if (status !is SessionStatus.Ended) {
         Console.error("Session $pinnedSessionId did not complete (status: ${status::class.simpleName})")
-        exitCode = CommandLine.ExitCode.SOFTWARE
+        exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
       }
     }
 
@@ -1504,6 +1686,85 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
+   * Memoized result of [parseMemorySeeds] for `--memory KEY=VAL` entries — populated by
+   * the early validation block at the top of [call] so the in-process and daemon
+   * request-build sites can both consume it without re-parsing. Empty when [call] has
+   * not yet validated this run (test-only path; production callers always go through
+   * [call] first).
+   */
+  private var resolvedMemorySeeds: Map<String, String> = emptyMap()
+
+  /** Sensitive counterpart of [resolvedMemorySeeds] for `--secret KEY=VAL` entries. */
+  private var resolvedSensitiveSeeds: Map<String, String> = emptyMap()
+
+  /**
+   * Returns the resolved `--memory KEY=VAL` map for the in-flight [call]. Walks the raw
+   * `memorySeeds` list as a fallback for test paths that construct a [TrailCommand]
+   * outside `CommandLine` parsing — production callers always reach this through [call],
+   * which populates [resolvedMemorySeeds] at validation time.
+   *
+   * Cache invariant: once [call] populates [resolvedMemorySeeds], later mutations of
+   * [memorySeeds] (a test-only path) are NOT reflected by this accessor. Tests that need
+   * to swap input lists must do so before [call] (or construct a fresh [TrailCommand]).
+   * The check below short-circuits two equivalent "use the cache" cases — cache populated,
+   * OR input empty (in which case the cache and a fresh parse would both be `emptyMap()`).
+   */
+  internal fun parsedMemorySeeds(): Map<String, String> =
+    if (resolvedMemorySeeds.isNotEmpty() || memorySeeds.isEmpty()) {
+      resolvedMemorySeeds
+    } else {
+      parseMemorySeeds(memorySeeds)
+    }
+
+  /** Sensitive counterpart of [parsedMemorySeeds] for `--secret KEY=VAL` entries. */
+  internal fun parsedSensitiveSeeds(): Map<String, String> =
+    if (resolvedSensitiveSeeds.isNotEmpty() || sensitiveSeeds.isEmpty()) {
+      resolvedSensitiveSeeds
+    } else {
+      parseMemorySeeds(sensitiveSeeds)
+    }
+
+  /**
+   * Returns `true` when the user typed the deprecated `trail` alias instead of the canonical
+   * `run` name. Walks from the injected [commandSpec] up to the root [CommandLine] and reads
+   * its [picocli.CommandLine.ParseResult.originalArgs] — the first non-option token there is
+   * the subcommand name as typed (option flags on the parent are filtered out so a future
+   * top-level switch wouldn't shadow the detection).
+   *
+   * Returns `false` defensively when picocli hasn't populated the parse result yet (e.g. in
+   * unit tests that construct the command directly) so the production-only warning never
+   * fires from test paths.
+   *
+   * Caveat: picocli short-circuits `mixinStandardHelpOptions` (`-h`/`--help`) and `--version`
+   * before [call] runs, so `trailblaze trail --help` renders usage as `Usage: trailblaze run …`
+   * but never reaches this helper — no deprecation warning fires on those paths. That's the
+   * right behaviour for `--help` (users expect instant, side-effect-free help output) and
+   * matches every other deprecated CLI surface in this repo.
+   *
+   * `internal` (not `private`) so `TrailCommandAliasWarningTest` can drive each input shape
+   * directly after a real picocli parse — the in-process [call] path covers too much
+   * surface (LLM resolution, memory parsing, daemon delegation) to be a clean test driver
+   * for this one heuristic.
+   *
+   * **Intentionally hardcoded, not a reusable pattern.** The literal `"trail"` is the only
+   * deprecated alias in the CLI today, and this is a single-release deprecation. Don't
+   * generalize into `wasInvokedViaAlias(name: String)` until there's a second alias to
+   * motivate the shape — premature generalization here would also pull the `@Spec(SELF)
+   * commandSpec` field below into wherever the generic helper lives. Removal trigger:
+   * same trigger that drops `aliases = ["trail"]`; see
+   * `docs/internal/devlog/2026-05-26-cli-trail-to-run-rename.md`.
+   */
+  internal fun wasInvokedViaTrailAlias(): Boolean {
+    var root: CommandLine? = commandSpec.commandLine() ?: return false
+    while (root?.parent != null) {
+      root = root.parent
+    }
+    val args = root?.parseResult?.originalArgs() ?: return false
+    val subcommand = args.firstOrNull { !it.startsWith("-") } ?: return false
+    return subcommand == "trail"
+  }
+
+  /**
    * Three-way resolution for replay vs. AI-driven execution:
    *   `--use-recorded-steps`      → force replay (use the trail's `recording:` tools verbatim).
    *   `--no-use-recorded-steps`   → force AI (ignore recordings, drive every step via LLM).
@@ -1513,12 +1774,7 @@ open class TrailCommand : Callable<Int> {
    * re-pick selectors from current page state (which writes a fresh enriched recording).
    */
   private fun resolveUseRecordedSteps(yamlContent: String): Boolean =
-    useRecordedSteps ?: try {
-      val trailYaml = createTrailblazeYaml()
-      trailYaml.hasRecordedSteps(trailYaml.decodeTrail(yamlContent))
-    } catch (_: Exception) {
-      false
-    }
+    useRecordedSteps ?: createTrailblazeYaml().hasRecordedSteps(yamlContent)
 
   /**
    * Emits an author-facing banner describing the run's effective replay-vs-AI mode.
@@ -1551,12 +1807,7 @@ open class TrailCommand : Callable<Int> {
     yamlContent: String,
     effectiveUseRecordedSteps: Boolean,
   ) {
-    val yamlHasRecording: Boolean = try {
-      val trailYaml = createTrailblazeYaml()
-      trailYaml.hasRecordedSteps(trailYaml.decodeTrail(yamlContent))
-    } catch (_: Exception) {
-      false
-    }
+    val yamlHasRecording: Boolean = createTrailblazeYaml().hasRecordedSteps(yamlContent)
     if (useRecordedSteps == true && !yamlHasRecording) {
       Console.error(
         "Warning: --use-recorded-steps was set but the loaded trail (${file.name}) has no " +
@@ -1579,6 +1830,34 @@ open class TrailCommand : Callable<Int> {
   }
 
   companion object {
+    /**
+     * Parses `--memory KEY=VAL` (and `--secret KEY=VAL`) entries into a flat string
+     * map. Split on the first `=` so values may contain `=` (e.g.
+     * `--memory token=abc=def`). Requires a non-empty key — `--memory =foo` or
+     * `--memory bar` (no `=`) throws so a typo fails fast at CLI parse rather than
+     * silently dropping a seed. On repeated keys, later wins.
+     *
+     * Intentionally flat-strings-only — distinct from [KeyValueParser], which models
+     * dot-notation nesting, JSON value inference, and indexed lists for general
+     * structured CLI input. Memory seeds are always `Map<String, String>` end-to-end
+     * (interpolation surface, scripting `ctx.memory.get(name)`, log persistence), so
+     * fattening this parser with type inference would let a typed value silently land
+     * in a downstream consumer that's typed as `String`.
+     */
+    internal fun parseMemorySeeds(raw: List<String>): Map<String, String> {
+      val out = LinkedHashMap<String, String>()
+      for (entry in raw) {
+        val eq = entry.indexOf('=')
+        require(eq > 0) {
+          "Invalid --memory entry \"$entry\" — expected KEY=VAL with a non-empty KEY."
+        }
+        val key = entry.substring(0, eq)
+        val value = entry.substring(eq + 1)
+        out[key] = value
+      }
+      return out
+    }
+
     /**
      * Derives a meaningful test name from a trail file.
      *
@@ -1625,7 +1904,7 @@ open class TrailCommand : Callable<Int> {
       readResolvedTrailConfig(file)?.skip?.trim()?.takeIf { it.isNotEmpty() }
 
     /**
-     * Resolves the default trail-search directory used when `trailblaze trail` is invoked with
+     * Resolves the default trail-search directory used when `trailblaze run` is invoked with
      * no path argument. Walks up from [fromPath] to find the workspace root via
      * [TrailblazeWorkspaceConfigResolver], then returns `<workspace-root>/trails/` if it
      * exists. Returns null when no workspace can be resolved or the `trails/` directory is
@@ -1669,12 +1948,13 @@ open class TrailCommand : Callable<Int> {
      * directory with N test directories expands to N trails, not 2·N.
      *
      * [deviceClassifiers] threads through from the resolved `--device` so the resolver picks
-     * a classifier-matched recording when one exists. **Limitation vs. the JUnit harness:**
-     * the CLI list is platform-only (`[android]`, `[web]`, …) because device discovery
-     * hasn't run at expansion time — see [parseDeviceClassifiersFromSpec]. A directory with
-     * `android.trail.yaml` + `pixel-android.trail.yaml` will pick the platform-level
-     * `android.trail.yaml` here, while the JUnit harness path (with real device classifiers)
-     * picks the more specific one. See that helper's KDoc for the architectural trade-off.
+     * a classifier-matched recording when one exists. Production callers use
+     * [DeviceClassifierResolver.resolveFromSpec] to enrich the list with a phone-vs-tablet
+     * category by probing `xcrun simctl` / `adb`, so `--device ios/<UDID>` against an iPhone
+     * sim yields `[ios, iphone]` and picks `ios-iphone.trail.yaml` over a platform-level
+     * `ios.trail.yaml`. Tests that call this function directly typically pass the pure-parse
+     * result from [parseDeviceClassifiersFromSpec] (platform-only) and pin the platform-level
+     * fallback contract.
      *
      * When [deviceClassifiers] is empty (no `--device`, or a device spec we can't parse), the
      * resolver only matches `blaze.yaml` / `trailblaze.yaml`. If a directory has *only*
@@ -1723,8 +2003,46 @@ open class TrailCommand : Callable<Int> {
               deviceClassifiers = deviceClassifiers,
               doesResourceExist = { File(it).name in allowedNames && File(it).exists() },
             )
-            if (picked != null) {
-              expanded += File(picked)
+            // Workaround for the CLI's single-classifier limitation (see
+            // [parseDeviceClassifiersFromSpec]'s KDoc). The resolver's candidate list is
+            // `[<platform>.trail.yaml, blaze.yaml, trailblaze.yaml]` for a single-classifier
+            // spec, which can't match a multi-segment recording filename. The host driver
+            // saves recordings using the device's *full* classifier list — e.g. an iOS run
+            // on a booted iPhone writes `ios-iphone.trail.yaml`, not `ios.trail.yaml`.
+            // Without this fallback, `./trailblaze run <dir> --device ios/<udid>` silently
+            // picks `blaze.yaml` (the NL fallback that DID match), and `--use-recorded-steps`
+            // has no effect — the loud warning at the run-time site catches the confusion,
+            // but the right behavior is to find the recording in the first place.
+            //
+            // Strategy: if the resolver returned an NL fallback, scan the directory for any
+            // `<platform>-*.trail.yaml` and prefer the most-specific one. "Most specific" is
+            // approximated by longest filename (more classifier segments hyphenated into the
+            // name) — so `ios-iphone.trail.yaml` wins over `ios-ipad.trail.yaml`. Stable
+            // tiebreaker on equal length is alphabetical, so two captures of the same
+            // device-class width coexisting in one directory pick deterministically — e.g.
+            // `ios-iphone.trail.yaml` wins over `ios-iwatch.trail.yaml` (both 21 chars) by
+            // alphabetical order. An author who ships multiple device-class captures in one
+            // dir is implicitly saying any is a valid answer for `--device <platform>`
+            // without further qualification.
+            val finalPicked: String? = if (
+              picked != null &&
+              deviceClassifiers.isNotEmpty() &&
+              TrailRecordings.isNlDefinitionFile(File(picked).name)
+            ) {
+              val platform = deviceClassifiers.first().classifier
+              val platformPrefix = "$platform-"
+              val platformRecording = byParent.getValue(dir)
+                .asSequence()
+                .filter { TrailRecordings.isRecordingFile(it.name) }
+                .filter { it.name.startsWith(platformPrefix) }
+                .sortedWith(compareByDescending<File> { it.name.length }.thenBy { it.name })
+                .firstOrNull()
+              platformRecording?.absolutePath ?: picked
+            } else {
+              picked
+            }
+            if (finalPicked != null) {
+              expanded += File(finalPicked)
             } else {
               // No NL definition and no classifier-matched recording — the directory still
               // contains *some* trail file (groupBy yielded the dir, so the list is non-empty).
@@ -1767,24 +2085,12 @@ open class TrailCommand : Callable<Int> {
     }
 
     /**
-     * Parses the CLI `--device` spec into the device-classifier list used to disambiguate
-     * which recording a trail directory resolves to. Delegates the `platform[/instance]`
-     * split + case-insensitive lookup to [TrailblazeDevicePlatform.fromString] so the CLI
-     * stays in lockstep with the canonical parser — if `fromString` grows aliases or
-     * display-name fallback later, this helper picks them up for free.
-     *
-     * **Platform-only classifier — known limitation vs. the JUnit harness.** The runtime
-     * device-classifier list in `BaseHostTrailblazeTest` and the eval harnesses is
-     * multi-segment (e.g. `[pixel, android, 5g]`), built from real device introspection
-     * inside `TrailblazeHostDeviceClassifier`. At CLI expansion time device discovery
-     * hasn't run yet (we're still planning the workload before connecting), so we only
-     * have the platform name from the `--device` spec. That means [findBestTrailResourcePath]
-     * will pick `android.trail.yaml` even when a richer `pixel-android-5g.trail.yaml`
-     * sits in the same directory. If/when this becomes the bottleneck, move the
-     * `expandTrailFiles` call to after `resolveTargetDevice` and thread the connected
-     * device's real classifier list through. Until then this is a deliberate trade-off:
-     * we get one-trail-per-directory dedup at planning time at the cost of not picking
-     * the most-specific recording across multi-segment names.
+     * Pure-parse `--device` → platform-only classifier list. Used by tests that exercise
+     * [expandTrailFiles] directly without spinning up an actual device. Production code
+     * uses [DeviceClassifierResolver.resolveFromSpec] instead, which probes the OS
+     * (`xcrun simctl` / `adb`) to enrich the result with a phone-vs-tablet category
+     * classifier so [findBestTrailResourcePath] can pick a `<platform>-<category>.trail.yaml`
+     * recording — matching what the runtime save path writes.
      */
     internal fun parseDeviceClassifiersFromSpec(
       deviceSpec: String?,

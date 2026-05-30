@@ -101,7 +101,7 @@ object WaypointTuner {
 
   /**
    * Carries source provenance (so the CLI knows which file to mutate) alongside the
-   * parsed definition. Pack-bundled classpath-only waypoints are excluded — tune
+   * parsed definition. Trailmap-bundled classpath-only waypoints are excluded — tune
    * operates on filesystem-walked YAMLs.
    */
   data class WaypointSource(
@@ -157,7 +157,7 @@ object WaypointTuner {
    * group must share the same [Proposal.definitionBefore], otherwise the fold's base
    * case is ambiguous.
    */
-  fun composeMutatedPack(proposals: List<Proposal>): Map<String, WaypointDefinition> =
+  fun composeMutatedTrailmap(proposals: List<Proposal>): Map<String, WaypointDefinition> =
     proposals.groupBy { it.waypointId }.mapValues { (_, group) ->
       require(group.distinctBy { it.definitionBefore }.size == 1) {
         "Proposals on ${group.first().waypointId} have divergent definitionBefore; " +

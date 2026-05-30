@@ -20,8 +20,8 @@ class ShortcutYamlEmitterTest {
   fun `emit produces YAML that round-trips through ToolYamlConfig loader`() {
     val yaml = ShortcutYamlEmitter.emit(
       shortcutId = "auto-from__to__to",
-      fromWaypointId = "pack/from",
-      toWaypointId = "pack/to",
+      fromWaypointId = "trailmap/from",
+      toWaypointId = "trailmap/to",
       description = "test description",
       body = ShortcutProposer.ToolBody.TapOnElementBySelector(
         selector = TrailblazeNodeSelector(
@@ -36,8 +36,8 @@ class ShortcutYamlEmitterTest {
     parsed.validate()
     assertEquals("auto-from__to__to", parsed.id)
     val sc = parsed.shortcut ?: error("expected shortcut block, got null")
-    assertEquals("pack/from", sc.from)
-    assertEquals("pack/to", sc.to)
+    assertEquals("trailmap/from", sc.from)
+    assertEquals("trailmap/to", sc.to)
     assertEquals(1, parsed.toolsList?.size, "tools list should have one entry")
   }
 
@@ -45,8 +45,8 @@ class ShortcutYamlEmitterTest {
   fun `emit handles scroll body as a tools-list entry`() {
     val yaml = ShortcutYamlEmitter.emit(
       shortcutId = "auto-x__to__y",
-      fromWaypointId = "pack/x",
-      toWaypointId = "pack/y",
+      fromWaypointId = "trailmap/x",
+      toWaypointId = "trailmap/y",
       description = "scroll fwd",
       body = ShortcutProposer.ToolBody.Scroll(forward = true),
     )
@@ -84,8 +84,8 @@ class ShortcutYamlEmitterTest {
     val ex = kotlin.runCatching {
       ShortcutYamlEmitter.emit(
         shortcutId = "auto-x__to__y",
-        fromWaypointId = "pack/x",
-        toWaypointId = "pack/y",
+        fromWaypointId = "trailmap/x",
+        toWaypointId = "trailmap/y",
         description = "test",
         body = ShortcutProposer.ToolBody.TapOnElementBySelector(
           selector = iosSelector,
@@ -129,8 +129,8 @@ class ShortcutYamlEmitterTest {
     )
     val yaml = ShortcutYamlEmitter.emit(
       shortcutId = "auto-x__to__y",
-      fromWaypointId = "pack/x",
-      toWaypointId = "pack/y",
+      fromWaypointId = "trailmap/x",
+      toWaypointId = "trailmap/y",
       description = "round-trip",
       body = ShortcutProposer.ToolBody.TapOnElementBySelector(selector = selector, selectorDescription = "Text"),
     )
@@ -195,8 +195,8 @@ class ShortcutYamlEmitterTest {
     )
     val yaml = ShortcutYamlEmitter.emit(
       shortcutId = "auto-x__to__y",
-      fromWaypointId = "pack/x",
-      toWaypointId = "pack/y",
+      fromWaypointId = "trailmap/x",
+      toWaypointId = "trailmap/y",
       description = "field coverage",
       body = ShortcutProposer.ToolBody.TapOnElementBySelector(
         selector = TrailblazeNodeSelector(androidAccessibility = maximal),
@@ -255,8 +255,8 @@ class ShortcutYamlEmitterTest {
     // break with a cryptic kaml diagnostic at run-time.
     val yaml = ShortcutYamlEmitter.emit(
       shortcutId = "auto-x__to__y",
-      fromWaypointId = "pack/x",
-      toWaypointId = "pack/y",
+      fromWaypointId = "trailmap/x",
+      toWaypointId = "trailmap/y",
       description = "tools-last",
       body = ShortcutProposer.ToolBody.PressBack,
     )

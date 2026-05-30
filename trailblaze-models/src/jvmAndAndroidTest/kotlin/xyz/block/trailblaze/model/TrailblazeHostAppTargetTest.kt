@@ -29,9 +29,17 @@ class TrailblazeHostAppTargetTest {
   }
 
   @Test
-  fun `isValidId rejects uppercase`() {
-    assertFalse(TrailblazeHostAppTarget.isValidId("Myapp"))
-    assertFalse(TrailblazeHostAppTarget.isValidId("DemoApp"))
+  fun `isValidId accepts lowerCamelCase`() {
+    // Uppercase letters were widened in to support lowerCamelCase multi-word trailmap
+    // ids (e.g. `playwrightSample`, `googleCalendar`, `androidSettings`) per the
+    // 2026-05-27 trailmap-scoped tool naming devlog. Uppercase-leading ids ("Myapp",
+    // "DemoApp") are still accepted structurally; the trailmap-scoping load-time check
+    // enforces lowerCamelCase shape at the trailmap layer.
+    assertTrue(TrailblazeHostAppTarget.isValidId("Myapp"))
+    assertTrue(TrailblazeHostAppTarget.isValidId("DemoApp"))
+    assertTrue(TrailblazeHostAppTarget.isValidId("playwrightSample"))
+    assertTrue(TrailblazeHostAppTarget.isValidId("googleCalendar"))
+    assertTrue(TrailblazeHostAppTarget.isValidId("androidSettings"))
   }
 
   @Test

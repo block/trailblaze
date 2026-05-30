@@ -149,10 +149,23 @@ class TrailExecutorImpl(
 
     onProgress?.invoke("Loading trail: ${file.name}")
 
-    // Parse YAML
+    // Parse YAML. The MCP path doesn't have a resolved device at trail-load
+    // time, so we can't pass classifiers — but decodeTrail's guard refuses to
+    // silently lower a v3 trail with recordings under those conditions. For
+    // now MCP only supports v1 trails through this entry point; a v3 trail
+    // surfaces a clear "use the device runner instead" error.
     val trailItems = try {
       val yamlContent = file.readText()
       trailblazeYaml.decodeTrail(yamlContent)
+    } catch (e: IllegalStateException) {
+      return TrailExecutionResult(
+        passed = false,
+        stepsExecuted = 0,
+        durationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
+        failureReason = "MCP cannot execute Trail YAML v3 directly — v3 trails need a " +
+          "device-aware runner to resolve per-classifier recordings. Use `trailblaze run` " +
+          "with `--device` instead, or migrate the trail to v1. Underlying error: ${e.message}",
+      )
     } catch (e: Exception) {
       return TrailExecutionResult(
         passed = false,

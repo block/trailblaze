@@ -6,7 +6,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 /**
  * Per-Trailblaze-session target overrides — daemon-process state, keyed by
  * the recording's [SessionId]. Set when the CLI passes `--target X` on an
- * action command (`tool`, `blaze`, `snapshot`, `ask`, `verify`, `session
+ * action command (`tool`, `step`, `snapshot`, `ask`, `verify`, `session
  * start`). Cleared when the session ends (any of `endSessionForDevice`,
  * `cancelSessionForDevice`, or the `clearEndedSessionFromDevice` hook on
  * the `LogsRepo.sessionInfoFlow` collector).

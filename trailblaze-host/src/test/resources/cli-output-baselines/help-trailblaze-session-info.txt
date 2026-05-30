@@ -5,8 +5,11 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session info [-hV] [--id=<id>]
+Usage: trailblaze session info [-hV] [--id=<id>] [<session-id>]
 Show information about a session
-  -h, --help      Show this help message and exit.
-      --id=<id>   Session ID (defaults to current session)
-  -V, --version   Print version information and exit.
+      [<session-id>]   Session ID (positional form of --id, defaults to current
+                         session). Mutually exclusive with --id.
+  -h, --help           Show this help message and exit.
+      --id=<id>        Session ID (defaults to current session). Equivalent to
+                         the positional form.
+  -V, --version        Print version information and exit.

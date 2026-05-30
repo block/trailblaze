@@ -25,8 +25,9 @@
     # Android World checks for text "02h 30m 45s" or content_description "2 hours, 30 minutes, 45 seconds"
     - assertVisibleBySelector:
         reason: "Timer should show the entered time"
-        selector:
-          textRegex: "02h 30m 45s"
+        nodeSelector:
+          androidMaestro:
+            textRegex: 02h 30m 45s
 
 # --- Benchmark Run History ---
 # [2026-03-11] FAILED - Agent limitation: Assertion "02h 30m 45s" not visible.

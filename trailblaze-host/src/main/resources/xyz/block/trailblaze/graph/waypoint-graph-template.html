@@ -1752,7 +1752,7 @@
       else if (period > 0) cut = period;
       let title = cut > 0 ? description.substring(0, cut) : description;
       // Trim leading "<App> Android" / "<App> iOS" prefixes — they're redundant
-      // with the id's pack/platform segment shown below the screenshot.
+      // with the id's trailmap/platform segment shown below the screenshot.
       title = title.replace(/^[A-Z][\w\s]*?\b(?:Android|iOS|Web)\b[,\s]*/i, '').trim();
       title = title.replace(/^[A-Z][a-z]+ App\b[,\s]*/i, '').trim();
       title = title.replace(/^,\s+/, '').replace(/^—\s+/, '');
@@ -2081,7 +2081,7 @@
 
       // Within-rank ordering: barycentric. Initialize depth 0 alphabetically
       // (peers within the same SCC slot in next to each other since they share
-      // a pack-id prefix). For each subsequent depth, sort by avg position of
+      // a trailmap-id prefix). For each subsequent depth, sort by avg position of
       // *upstream* parents only — within-SCC same-depth parents are filtered
       // out so they don't muddy the heuristic.
       const orderIndex = new Map();
@@ -2772,7 +2772,7 @@
         const baseR = SUBWAY_RING_BASE + (d - 1) * SUBWAY_RING_STEP;
         let needed = baseR;
         if (angles.length > 1 && minGap > 0 && minGap < 2 * Math.PI) {
-          // Depth-aware separation — outer rings of smaller cards can pack
+          // Depth-aware separation — outer rings of smaller cards can fit
           // tighter without overlap.
           const minNodeSep = subwayNodeWidthForDepth(d) + 70;
           const requiredForGap = (minNodeSep / 2) / Math.sin(minGap / 2);

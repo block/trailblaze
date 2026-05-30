@@ -137,7 +137,7 @@ object AppTargetYamlLoader {
   }
 
   /**
-   * Discovers and loads all `.app.yaml` files from `trailblaze-config/targets/`. Reuses cached
+   * Discovers and loads all `.app.yaml` files from `trails/config/targets/`. Reuses cached
    * classpath discovery from [discoverConfigs] if already called with the default source.
    *
    * @param resourceSource where to discover YAML files; defaults to JVM classpath scanning

@@ -13,7 +13,7 @@
   - step: Verify the "In the news" section is visible on the page.
     recording:
       tools:
-      - web_verify_element_visible:
+      - web_verifyElementVisible:
           reasoning: The 'In the news' section is represented by the heading element with ID e89 in the main content area. Verifying the visibility of this heading will confirm that the 'In the news' section is currently visible on the Wikipedia Main Page.
           nodeSelector:
             web:

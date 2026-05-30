@@ -111,7 +111,18 @@ class AndroidVideoCapture : CaptureStream {
       )
     }
 
-    // Fallback: keep the merged video file (sprite extraction failed or ffmpeg missing).
+    // When sprite extraction returned null specifically because the underlying mp4's timing
+    // was broken beyond re-stamp recovery (e.g. the K1 CI build emitting a 2-second mp4 for
+    // an 87-second recording), don't fall back to emitting the raw VIDEO either — downstream
+    // report generation would just re-process the same broken mp4 into the same sparse sprite
+    // we're trying to avoid. Skip emission entirely and let the timeline fall back to the
+    // per-step screenshot slideshow.
+    if (VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(dir, "AndroidVideoCapture")) {
+      return null
+    }
+
+    // Fallback: keep the merged video file (sprite extraction failed for an infra reason —
+    // ffmpeg missing, sprite assembly crashed — but the mp4 itself is plausibly fine).
     return CaptureArtifact(
       file = videoFile,
       type = CaptureType.VIDEO,

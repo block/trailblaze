@@ -91,6 +91,13 @@ class PlaywrightVideoCapture : CaptureStream {
       )
     }
 
+    // If the sprite extractor flagged the mp4 as broken-beyond-recovery (e.g. a force-closed
+    // BrowserContext left a WebM with partial moov data that survived the transcode), skip
+    // VIDEO fallback so report-generation doesn't re-process the same broken file.
+    if (VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(finalFile.parentFile, "PlaywrightVideoCapture")) {
+      return null
+    }
+
     return CaptureArtifact(
       file = finalFile,
       type = CaptureType.VIDEO,

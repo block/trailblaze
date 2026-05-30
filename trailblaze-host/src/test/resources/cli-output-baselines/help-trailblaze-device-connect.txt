@@ -5,17 +5,32 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze device connect [-hV] [--headless=<headless>] <platform>
-Connect a device to your session (ANDROID, IOS, or WEB)
-      <platform>   Device platform: ANDROID, IOS, or WEB
-  -h, --help       Show this help message and exit.
+Usage: trailblaze device connect [-hV] [--headless=<headless>]
+                                 [--mcp-session=<mcpSessionOverride>]
+                                 [-t=<target>] <platform>
+Connect a device + target to your session (use `eval $(...)` to pin
+TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
+      <platform>          Device platform: ANDROID, IOS, or WEB (optionally
+                            with instance: android/emulator-5554)
+  -h, --help              Show this help message and exit.
       --headless=<headless>
-                   For --device web/...: launch the Playwright browser
-                     headless. When omitted, auto-detects: headless on machines
-                     with no display (remote workstations, CI), headed
-                     otherwise. Falls back to the persisted `web-headless`
-                     config when a display is present (see `trailblaze config
-                     web-headless`). Pass --headless=false to force a visible
-                     browser, --headless=true to force headless. Ignored for
-                     non-web devices.
-  -V, --version    Print version information and exit.
+                          For --device web/...: launch the Playwright browser
+                            headless. When omitted, auto-detects: headless on
+                            machines with no display (remote workstations, CI),
+                            headed otherwise. Falls back to the persisted
+                            `web-headless` config when a display is present
+                            (see `trailblaze config web-headless`). Pass
+                            --headless=false to force a visible browser,
+                            --headless=true to force headless. Ignored for
+                            non-web devices.
+      --mcp-session=<mcpSessionOverride>
+                          Explicit MCP session id to pin to this device
+                            (advanced). Default: pin the most-recently-active
+                            unbound MCP client (Claude Desktop, Cursor, Goose,
+                            …). No-op when no MCP clients are connected.
+  -t, --target=<target>   Target app to bind to this device's session (e.g.
+                            `default`, `sampleapp`). Optional. When set, `eval
+                            $(trailblaze device connect ... --target X)` also
+                            exports $TRAILBLAZE_TARGET so subsequent CLI calls
+                            in this shell re-apply the binding automatically.
+  -V, --version           Print version information and exit.

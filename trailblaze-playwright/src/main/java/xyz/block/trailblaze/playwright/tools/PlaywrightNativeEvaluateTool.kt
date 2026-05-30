@@ -8,21 +8,35 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
- * Executes an arbitrary JavaScript expression in the current page's context and returns the
- * result, stringified. Thin wrapper over `Page.evaluate(...)`.
+ * Internal framework utility for executing an arbitrary JavaScript expression in the
+ * current page's context, returning the result stringified. Thin wrapper over
+ * `Page.evaluate(...)`.
  *
- * Intentionally NOT in any LLM-facing toolset by default — arbitrary `eval`-in-page is a
- * sharp tool. Scripted tools call it via `client.callTool("web_evaluate", ...)` directly,
- * which bypasses toolset filtering. Pack authors who want to expose it to the LLM must add
- * it to a toolset explicitly.
+ * Registered in `web_framework.yaml` — the sibling toolset to `android_framework.yaml`
+ * for arbitrary-string-execution utilities. The toolset is `always_enabled: true` so
+ * scripted tools can dispatch this via the typed `client.tools.web_evaluate(...)`
+ * surface (per-pack codegen reads from resolved toolset membership), and the runtime
+ * `/scripting/callback` dispatcher can resolve it by name.
+ *
+ * Carries `surfaceToLlm = false` and `isRecordable = false` at the class level — same
+ * as the other arbitrary-string-execution utilities (`android_adbShell`,
+ * `android_sendBroadcast`, `RunCommandTrailblazeTool`, `ExecTrailblazeTool`,
+ * `ScriptTrailblazeTool`). The LLM never sees this in its tool catalog and the trail
+ * recorder never captures it as a step. It exists for host-side composition when
+ * nothing else fits — something the framework exposes as a utility under the tool
+ * contract, not a step in an authored flow.
  */
 @Serializable
-@TrailblazeToolClass("web_evaluate")
+@TrailblazeToolClass(
+  name = "web_evaluate",
+  surfaceToLlm = false,
+  isRecordable = false,
+)
 @LLMDescription(
   """
 Executes a JavaScript expression in the current page context and returns the result as a
-string. Useful for reaching into in-page globals (e.g. analytics SDKs, feature flags) that
-aren't exposed via the DOM. Scripted-tool only by default.
+string. Internal framework utility — not exposed to the LLM and not captured in trail
+recordings; available for host-side composition only.
 """,
 )
 data class PlaywrightNativeEvaluateTool(

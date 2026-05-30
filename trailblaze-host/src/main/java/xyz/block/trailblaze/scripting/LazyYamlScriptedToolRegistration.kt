@@ -24,7 +24,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import java.io.File
 
 /**
- * Session-scoped registration for an inline scripted tool declared under a pack manifest's
+ * Session-scoped registration for an inline scripted tool declared under a trailmap manifest's
  * `target.tools:` block. Replaces the legacy MCP-subprocess detour ([InlineScriptToolServerSynthesizer])
  * for inline scripted tools — `mcp_servers:` entries (true external MCP servers) keep going
  * through the subprocess path. See #2749 for the full motivation.
@@ -137,12 +137,29 @@ class LazyYamlScriptedToolRegistration private constructor(
      * Resolution order:
      *  1. **`PATH` lookup** — covers Homebrew installs (`brew install esbuild`), `npm i -g`,
      *     and any other globally-installed esbuild. This is the expected path on developer
-     *     machines and on CI agents where `setup.sh` has installed dependencies.
-     *  2. **Build-tree walk-up** — looks for `sdks/typescript/node_modules/.bin/esbuild`
-     *     by walking from CWD upward. Mirrors the build-time resolution in
-     *     `BundleAuthorToolsTask` so a fresh checkout that ran `bun install` once gets
-     *     esbuild for free. Walks from the current working directory up to filesystem
-     *     root.
+     *     machines that have run `brew install esbuild`.
+     *  2. **Build-tree walk-up** — walks from CWD upward looking for a Trailblaze SDK
+     *     `node_modules/.bin/esbuild` at any of the layouts the repo has used:
+     *       - `sdks/typescript/node_modules/.bin/esbuild` — the layout where the SDK
+     *         lives directly under the repo root (the OSS layout, and Trailblaze's
+     *         original layout in this repo).
+     *       - `opensource/sdks/typescript/node_modules/.bin/esbuild` — the layout where
+     *         the SDK lives under an `opensource/` subdir (the layout some
+     *         monorepo-style consumers use).
+     *     Mirrors the build-time resolution in `BundleAuthorToolsTask` so a fresh checkout
+     *     that ran `bun install` once gets esbuild for free. Walks from the current
+     *     working directory up to filesystem root.
+     *
+     * **CI silent-skip risk.** When neither path resolves, the caller skips inline-tool
+     * registration and emits the `[#2749] esbuild binary not found...` breadcrumb (now
+     * via `Console.info` so it survives CLI quiet mode — historically `Console.log` got
+     * eaten by `--verbose=false` and the only visible failure surfaced was a downstream
+     * "Unsupported tool type for RPC execution" at trail-time, with no hint about the
+     * upstream bundler skip). The `opensource/sdks/typescript/...` candidate above is
+     * what closes the CI gap on monorepo-style consumers: agents not running
+     * `brew install esbuild` would otherwise hit only the walk-up, and a walk that only
+     * recognized the flat layout would silently miss the `opensource/`-nested esbuild
+     * even though `bun install` had populated it.
      *
      * Note: monorepo developers running the daemon from a parent directory of the SDK
      * (rather than from inside it) should put esbuild on `PATH` or invoke the daemon
@@ -150,21 +167,52 @@ class LazyYamlScriptedToolRegistration private constructor(
      * ancestor directories, not sibling subtrees.
      */
     fun resolveEsbuildBinary(): File? {
-      // 1. PATH lookup
-      val path = System.getenv("PATH")
-      if (path != null) {
-        for (dir in path.split(File.pathSeparator)) {
-          if (dir.isBlank()) continue
-          val candidate = File(dir, "esbuild")
+      resolveEsbuildOnPath(System.getenv("PATH"))?.let { return it }
+      return resolveEsbuildViaWalkup(File(System.getProperty("user.dir") ?: ".").absoluteFile)
+    }
+
+    /**
+     * PATH-lookup half of [resolveEsbuildBinary], pulled out so a unit test can pin the
+     * lookup against an injected `PATH` string. Splitting on the platform-aware path
+     * separator and skipping blanks matches the shell's behavior.
+     */
+    internal fun resolveEsbuildOnPath(pathEnv: String?): File? {
+      if (pathEnv == null) return null
+      for (dir in pathEnv.split(File.pathSeparator)) {
+        if (dir.isBlank()) continue
+        val candidate = File(dir, "esbuild")
+        if (candidate.exists() && candidate.canExecute()) return candidate
+      }
+      return null
+    }
+
+    /**
+     * Walk-up half of [resolveEsbuildBinary], pulled out so a unit test can pin the
+     * walk-up against an injected starting directory without depending on the host's
+     * actual CWD or repo layout.
+     *
+     * The candidate-list order is **intentional and load-bearing**: the flat layout
+     * (`sdks/typescript/...`) comes first because it's shorter and matches the repo's
+     * documented tree shape; the `opensource/`-nested layout
+     * (`opensource/sdks/typescript/...`) is the fallback that closes the monorepo
+     * walk-up gap. A future repo reorg that introduces a third layout should add it
+     * here and pin it with the matching test in
+     * `LazyYamlScriptedToolRegistrationEsbuildResolverTest`; a regression in the walk-
+     * up silently no-ops the entire QuickJS-inline-tool-registration phase on CI
+     * agents that don't carry `esbuild` on PATH, which then surfaces hours later as a
+     * cryptic "Unsupported tool type for RPC execution" at trail-dispatch time.
+     */
+    internal fun resolveEsbuildViaWalkup(startDir: File): File? {
+      val relativeCandidates = listOf(
+        "sdks/typescript/node_modules/.bin/esbuild",
+        "opensource/sdks/typescript/node_modules/.bin/esbuild",
+      )
+      var current: File? = startDir
+      while (current != null) {
+        for (rel in relativeCandidates) {
+          val candidate = File(current, rel)
           if (candidate.exists() && candidate.canExecute()) return candidate
         }
-      }
-      // 2. Walk-up fallback. Walks ancestors of CWD looking for the SDK's installed
-      // esbuild binary.
-      var current: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-      while (current != null) {
-        val candidate = File(current, "sdks/typescript/node_modules/.bin/esbuild")
-        if (candidate.exists() && candidate.canExecute()) return candidate
         current = current.parentFile
       }
       return null

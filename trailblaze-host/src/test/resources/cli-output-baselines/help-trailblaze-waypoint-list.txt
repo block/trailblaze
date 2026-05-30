@@ -6,14 +6,14 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint list [-hV] [--root=<path>] [--target=<id>]
-List all waypoint definitions from active packs (workspace + framework
+List all waypoint definitions from active trailmaps (workspace + framework
 classpath)
 and any additional *.waypoint.yaml files discovered under --root.
   -h, --help          Show this help message and exit.
       --root=<path>   Additional directory to scan for *.waypoint.yaml files.
-                        Overrides --target. Pack waypoints are always included
-                        regardless. (Convention: ./trails)
-      --target=<id>   Pack id to operate on. Resolves --root to
-                        <workspace>/packs/<id>/waypoints/. Mutually exclusive
-                        with --root (--root wins if both given).
+                        Overrides --target. Trailmap waypoints are always
+                        included regardless. (Convention: ./trails)
+      --target=<id>   Trailmap id to operate on. Resolves --root to
+                        <workspace>/trailmaps/<id>/waypoints/. Mutually
+                        exclusive with --root (--root wins if both given).
   -V, --version       Print version information and exit.

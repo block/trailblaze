@@ -8,7 +8,7 @@ QuickJS and exposes its tools to Trailblaze's tool registry.
 ```kotlin
 val rule = AndroidTrailblazeRule(
   mcpServers = listOf(
-    McpServerConfig(script = "trailblaze-config/my-tools.bundle.js"),
+    McpServerConfig(script = "trails/config/my-tools.bundle.js"),
   ),
 )
 ```

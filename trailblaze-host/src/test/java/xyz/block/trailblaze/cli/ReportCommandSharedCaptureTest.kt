@@ -117,21 +117,21 @@ class ReportCommandSharedCaptureTest {
   fun `--no-gif --gif is a USAGE error`() {
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--gif", "--no-gif")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
   fun `--no-webp --webp is a USAGE error`() {
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--webp", "--no-webp")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
   fun `--no-gif --no-webp together is a USAGE error`() {
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--no-gif", "--no-webp")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
@@ -141,14 +141,14 @@ class ReportCommandSharedCaptureTest {
     // pointing at the missing --webp rather than no-op'ing silently.
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--no-gif")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
   fun `--no-webp alone without --gif is a USAGE error`() {
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--no-webp")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test

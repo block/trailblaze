@@ -64,8 +64,16 @@ data class TapTrailblazeTool(
     // screens with many offscreen elements.
     val targetNode = tree.findFirst { it.ref == ref }
       ?: throw TrailblazeToolExecutionException(
+        // Prefix "Element ref 'X' not found on current screen" is load-bearing: the runner's
+        // stale-ref recovery detector (StaleRefRecovery.STALE_REF_REGEX) matches on it to
+        // count consecutive hallucinations and inject a recovery message. Do NOT change
+        // that phrase without also updating the regex. The pointer text was previously
+        // "use 'snapshot'" — there is no `snapshot` LLM tool, so it sent models chasing a
+        // nonexistent tool. The view hierarchy is appended to every chat request, so the
+        // accurate guidance is to re-read it.
         message = "tap: Element ref '$ref' not found on current screen. " +
-          "The screen may have changed — use 'snapshot' to get updated refs.",
+          "The screen has changed since this ref was last visible. Re-read the view " +
+          "hierarchy appended to this request and pick a ref that is actually shown.",
         tool = this,
       )
 

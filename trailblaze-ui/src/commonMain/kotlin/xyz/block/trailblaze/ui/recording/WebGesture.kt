@@ -327,7 +327,7 @@ object WebGestureSelectorTapBuilder {
  * that the desktop's [xyz.block.trailblaze.recording.RecordingYamlCodec.interactionsToTrailYaml]
  * emits. Matching the format byte-for-byte means the daemon's `runYaml` parser path is the
  * same regardless of which surface produced the trail, and the file can be dropped into
- * `trails/` and run via `./trailblaze trail run` without edits.
+ * `trails/` and run via `./trailblaze run` without edits.
  *
  * `- tools:` is the outer list item; each gesture's [toYaml] block is itself a `- tool:` list
  * item and gets indented 4 spaces under `tools:`.

@@ -8,7 +8,7 @@
 #   ./trailblaze app --stop          - Stop the daemon
 #   ./trailblaze blaze "objective"   - Take a UI action (auto-starts daemon)
 #   ./trailblaze ask "question"      - Ask about the screen (auto-starts daemon)
-#   ./trailblaze trail <file>          - Run a trail file (auto-starts daemon)
+#   ./trailblaze run <file>            - Run a trail file (auto-starts daemon)
 #   ./trailblaze mcp                 - Start MCP server (STDIO proxy to daemon)
 #   ./trailblaze <command>           - Run other CLI commands (config, report, etc.)
 #
@@ -90,7 +90,6 @@ tb_ensure_cds_archive() {
   fi
   [ -w "$(dirname "$jsa")" ] || return 1
 
-  echo "Building CDS archive for faster Trailblaze startup (one-time, ~1.5s)..." >&2
   local classlist tmp_jsa
   classlist="$(mktemp "${TMPDIR:-/tmp}/trailblaze-classlist.XXXXXX")" || return 1
   tmp_jsa="${jsa}.tmp.$$"
@@ -269,13 +268,41 @@ ipc_try_forward() {
     for a in "$@"; do
       args_json=$(jq --arg a "$a" '. + [$a]' <<<"$args_json") || return 1
     done
+    # Forward the user's interactive shell env vars that drive CLI resolution. The
+    # daemon's own JVM env was captured at `app start` time, so `System.getenv`
+    # on the daemon side never sees an `export TRAILBLAZE_DEVICE=…` the user did
+    # after the daemon started. Without this forwarding, forwarded subcommands
+    # (`snapshot`, `ask`, `config`) silently ignored the shell pin — the bug that
+    # made `trailblaze snapshot` fail with "multiple devices connected" right
+    # after the user did exactly what the error's own hint told them to do.
+    #
+    # ALLOWLIST — env vars safe to forward across the loopback /cli/exec boundary.
+    # This is a security boundary: anything added here ships to the daemon's
+    # `CliCallerContext.callerEnv` and is visible to forwarded subcommands.
+    # Don't add general shell env (PATH, HOME, etc.) — only TRAILBLAZE_* vars
+    # that drive CLI resolution. Keep this list in sync with `CliCallerContext`
+    # consumers in `CliInfrastructure.kt` — one `env*()` / `resolveCli*()`
+    # reader function per allowlisted var. The two near-identical if-blocks
+    # below are kept explicit (not factored into a bash helper) at this scale;
+    # revisit if the list grows past ~4 vars.
+    local env_json="{}"
+    if [ -n "${TRAILBLAZE_DEVICE:-}" ]; then
+        env_json=$(jq --arg v "$TRAILBLAZE_DEVICE" '. + {TRAILBLAZE_DEVICE: $v}' <<<"$env_json") || return 1
+    fi
+    if [ -n "${TRAILBLAZE_TARGET:-}" ]; then
+        env_json=$(jq --arg v "$TRAILBLAZE_TARGET" '. + {TRAILBLAZE_TARGET: $v}' <<<"$env_json") || return 1
+    fi
     # Send the user's interactive cwd alongside argv so commands that walk relative
     # paths (e.g. `waypoint --target` resolving the workspace anchor) anchor at the
     # user's shell directory rather than the daemon's launch directory. Older daemons
-    # ignore the field (kotlinx.serialization with ignoreUnknownKeys=true); newer
-    # daemons fall back to their own cwd if absent. See [CliCallerContext].
+    # ignore unknown fields (kotlinx.serialization with ignoreUnknownKeys=true);
+    # newer daemons fall back to their own cwd/env if absent. See [CliCallerContext].
     local payload
-    payload=$(jq -n --argjson args "$args_json" --arg cwd "$PWD" '{args: $args, cwd: $cwd}') || return 1
+    payload=$(jq -n \
+        --argjson args "$args_json" \
+        --arg cwd "$PWD" \
+        --argjson env "$env_json" \
+        '{args: $args, cwd: $cwd, env: $env}') || return 1
 
     local response
     response=$(curl -sS --connect-timeout 2 --max-time 600 \
@@ -303,8 +330,31 @@ ipc_try_forward() {
     ')
     [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
 
-    [ -n "$stdout" ] && printf '%s' "$stdout"
-    [ -n "$stderr" ] && printf '%s' "$stderr" >&2
+    # Bash `$(jq -r …)` command substitution strips ALL trailing newlines
+    # from the captured stream — so a daemon-side `println` ending with `\n`
+    # arrives here as no-newline. Without restoring it, stdout (e.g. the
+    # snapshot UI tree) visually smashes into the stderr replay that follows
+    # ("Connecting to …", "Connected: …") and into the shell prompt afterwards.
+    # `%s\n` restores the newline `println` already emitted at the source —
+    # this is replaying captured bytes, not injecting a spurious blank line.
+    #
+    # Invariant this depends on: every subcommand in FORWARDABLE_SUBCOMMANDS
+    # emits only line-terminated output (Console.log/info/error → println).
+    # A future candidate that uses Console.appendLog/appendInfo or raw print()
+    # before exit would render a phantom blank line here. See the note on
+    # TrailblazeCli.FORWARDABLE_SUBCOMMANDS.
+    #
+    # Regression guard: scripts/test_ipc_replay.sh asserts the smashed form
+    # is gone for a synthetic snapshot-shaped response.
+    #
+    # NOT fixed here: the two streams are still replayed sequentially (all
+    # stdout, then all stderr), so connection chatter that fires
+    # CHRONOLOGICALLY before the snapshot still RENDERS after it. Proper fix
+    # is interleaved capture (per-chunk stream tagging in CliOutCapture +
+    # wire-format change to CliExecResponse) — deferred as out-of-scope for
+    # the smashed-streams readability fix.
+    [ -n "$stdout" ] && printf '%s\n' "$stdout"
+    [ -n "$stderr" ] && printf '%s\n' "$stderr" >&2
     exit "$exit_code"
 }
 

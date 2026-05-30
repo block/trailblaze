@@ -64,7 +64,7 @@ object WaypointProposer {
 
   /**
    * Synthesize a draft waypoint for [cluster] anchored at the [exampleScreen] (loaded
-   * from `cluster.exampleLog`). [targetId] becomes the pack-namespace prefix on the
+   * from `cluster.exampleLog`). [targetId] becomes the trailmap-namespace prefix on the
    * generated waypoint id. Returns either a valid draft or a typed skip reason.
    *
    * The algorithm:
@@ -143,7 +143,7 @@ object WaypointProposer {
     "new|" + cluster.keyTexts.sorted().joinToString(",")
 
   /**
-   * Generate a pack-scoped waypoint id with the `auto-` prefix that flags machine
+   * Generate a trailmap-scoped waypoint id with the `auto-` prefix that flags machine
    * authorship. Slug derived from the cluster's sorted key_texts; truncated to keep
    * filenames sane.
    *

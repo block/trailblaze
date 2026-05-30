@@ -10,7 +10,11 @@ List and connect devices (Android, iOS, Web)
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
-  list     List available devices
-  connect  Connect a device to your session (ANDROID, IOS, or WEB)
-  create   Provision a device with a configured profile (web today; iOS /
-             Android future).
+  list        List available devices
+  connect     Connect a device + target to your session (use `eval $(...)` to
+                pin TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
+  rebind      Change the target app for the currently-bound device
+  disconnect  Disconnect a device (use `eval $(...)` to also clear
+                TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET)
+  create      Provision a device with a configured profile (web today; iOS /
+                Android future).

@@ -121,6 +121,19 @@ class ToolDiscoveryToolSet(
   // Mode handlers
   // ─────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Index-mode handler — renders the platform-wide catalogue plus, optionally, the currently
+   * bound target's tool groups.
+   *
+   * The [suppressTargetTools] flag is the "platform tools only" signal that the dispatcher sets
+   * when the caller explicitly passed `target="default"` (the [DefaultTrailblazeHostAppTarget]
+   * sentinel — see the `isDefaultTarget` check in [toolbox]). When `true`:
+   *  - [buildTargetToolsets] is skipped (no per-target groups).
+   *  - The `systemPrompt` field is forced to `null` (a target-specific prompt above a
+   *    platform-only catalogue would mislead the caller about the scope of what was returned).
+   * When `false` (the normal index entry from `toolbox()` with no `target` argument), the
+   * current target's tools and system prompt flow through normally.
+   */
   private fun handleIndexMode(
     detail: Boolean,
     platformFilter: TrailblazeDevicePlatform? = null,
@@ -157,6 +170,15 @@ class ToolDiscoveryToolSet(
       currentTarget = currentTarget?.id,
       currentPlatform = effectivePlatform?.displayName,
       currentDriverType = effectiveDriverType?.yamlKey,
+      // Skip the system prompt when the caller explicitly asked for the "default" sentinel
+      // (platform-only listing) — the prompt is target-specific guidance, and a callsite
+      // that scoped its query to platform tools (e.g. `RecordingToolDiscovery` which uses
+      // `target=default` for its first probe, or an explicit `trailblaze toolbox --target
+      // default`) would be misled by app-specific instructions for a target whose tools
+      // were intentionally excluded. `systemPromptForTarget` enforces the same rule when
+      // `currentTarget` happens to be the default sentinel itself (e.g. `trailblaze config
+      // target default`).
+      systemPrompt = if (suppressTargetTools) null else currentTarget?.let(::systemPromptForTarget),
       platformToolsets = platformToolsets,
       targetToolsets = targetToolsets,
       otherTargets = otherTargets,
@@ -330,6 +352,7 @@ class ToolDiscoveryToolSet(
           displayName = targetApp.displayName,
           currentPlatform = effectiveDriverType.platform.displayName,
           supportedPlatforms = supportedPlatforms,
+          systemPrompt = systemPromptForTarget(targetApp),
           toolGroups = toolGroups.ifEmpty { null },
           trailheadTools = trailheadToolNames,
           shortcutTools = shortcutToolNames,
@@ -365,6 +388,7 @@ class ToolDiscoveryToolSet(
         target = targetApp.id,
         displayName = targetApp.displayName,
         supportedPlatforms = supportedPlatforms,
+        systemPrompt = systemPromptForTarget(targetApp),
         toolsByPlatform = platformTools.ifEmpty { null },
         trailheadTools = trailheadToolNames,
         shortcutTools = shortcutToolNames,
@@ -470,6 +494,22 @@ class ToolDiscoveryToolSet(
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Resolves the system prompt content the daemon ships back for [target] in target-mode.
+   *
+   * Returns null for the `default` sentinel — that target models "platform tools only" and has
+   * no app-specific guidance to surface; emitting an inherited prompt here would be inconsistent
+   * with the catalog scope. Today's `toolbox()` dispatcher already routes `target=default` through
+   * index mode (where the equivalent suppression lives), so this branch is defense-in-depth for
+   * direct MCP callers that bypass the dispatcher.
+   *
+   * `internal` rather than `private` so a regression test can pin the default-sentinel branch
+   * directly — the dispatcher's `isDefaultTarget` guard makes the branch unreachable from
+   * `toolbox()` today, so a focused unit test is the only way to keep it honest.
+   */
+  internal fun systemPromptForTarget(target: TrailblazeHostAppTarget): String? =
+    if (target.id == DefaultTrailblazeHostAppTarget.id) null else target.getSystemPromptTemplate()
 
   /**
    * Resolves the driver type used to filter discovery output, reconciling the daemon's currently
@@ -929,6 +969,13 @@ data class ToolDiscoveryIndexResult(
   val currentTarget: String? = null,
   val currentPlatform: String? = null,
   val currentDriverType: String? = null,
+  /**
+   * Inlined contents of the resolved target's `system_prompt_file:` — the curated LLM-facing
+   * prose the framework agent receives at session start. Null when the target has no system
+   * prompt configured. The CLI surfaces this verbatim under a `## System prompt` section so
+   * a shell-side agent (Claude / Codex / etc.) sees the same context as the in-session LLM.
+   */
+  val systemPrompt: String? = null,
   val platformToolsets: List<ToolDiscoveryToolsetInfo> = emptyList(),
   val targetToolsets: List<ToolDiscoveryToolsetInfo>? = null,
   val otherTargets: List<ToolDiscoveryOtherTarget>? = null,
@@ -987,6 +1034,11 @@ data class ToolDiscoveryTargetResult(
   val displayName: String? = null,
   val currentPlatform: String? = null,
   val supportedPlatforms: List<String>? = null,
+  /**
+   * Inlined contents of this target's `system_prompt_file:` — see
+   * [ToolDiscoveryIndexResult.systemPrompt] for the contract.
+   */
+  val systemPrompt: String? = null,
   /** Grouped tools for the current driver (when a device is connected). */
   val toolGroups: List<ToolDiscoveryToolsetInfo>? = null,
   /** Flat tools by platform (fallback when no device is connected). */

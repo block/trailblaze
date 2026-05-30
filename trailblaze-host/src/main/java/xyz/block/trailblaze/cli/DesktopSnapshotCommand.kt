@@ -71,7 +71,7 @@ class DesktopSnapshotCommand : Callable<Int> {
           "No Compose RPC server reachable at $baseUrl. " +
             "Is the Trailblaze desktop app running? Start it with `trailblaze app`.",
         )
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
       when (val result = client.getScreenState()) {
         is RpcResult.Success -> {
@@ -106,20 +106,20 @@ class DesktopSnapshotCommand : Callable<Int> {
           if (outFile != null) {
             if (screenshotBase64 == null) {
               Console.error("--out specified but the response had no screenshot; nothing written.")
-              return@runBlocking CommandLine.ExitCode.SOFTWARE
+              return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
             }
             outFile.parentFile?.mkdirs()
             outFile.writeBytes(Base64.getDecoder().decode(screenshotBase64))
             Console.log("Screenshot written: ${outFile.absolutePath}")
           }
-          CommandLine.ExitCode.OK
+          TrailblazeExitCode.SUCCESS.code
         }
         is RpcResult.Failure -> {
           Console.error(
             "Compose RPC call failed: ${result.errorType} ${result.message}" +
               (result.details?.let { " — $it" } ?: ""),
           )
-          CommandLine.ExitCode.SOFTWARE
+          TrailblazeExitCode.INFRA_FAILED.code
         }
       }
     } finally {

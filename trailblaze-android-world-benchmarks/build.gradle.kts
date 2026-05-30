@@ -18,7 +18,7 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
   // KMP commonMain/resources/ are not automatically included as Java resources on Android.
-  // Explicitly add them so trailblaze-config/tools/*.yaml files are bundled into the AAR/APK
+  // Explicitly add them so trails/config/tools/*.yaml files are bundled into the AAR/APK
   // and discoverable as Android assets from on-device instrumentation tests.
   sourceSets.getByName("main") {
     resources.srcDirs("src/commonMain/resources")

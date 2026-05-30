@@ -1,10 +1,10 @@
 ---
-title: "Target Packs: Local-First Packaging for Target-Aware Capabilities"
+title: "Target Trailmaps: Local-First Packaging for Target-Aware Capabilities"
 type: decision
 date: 2026-04-26
 ---
 
-# Target Packs: Local-First Packaging for Target-Aware Capabilities
+# Target Trailmaps: Local-First Packaging for Target-Aware Capabilities
 
 ## Context
 
@@ -33,10 +33,10 @@ better tools, stronger selectors, known-good waypoints, and reusable navigation 
 
 ### Core model
 
-Trailblaze will move toward a **target-pack** model.
+Trailblaze will move toward a **target-trailmap** model.
 
 - A **target** remains the runtime concept: the thing Trailblaze is acting against.
-- A **target pack** is the reusable, composable, distributable unit.
+- A **target trailmap** is the reusable, composable, distributable unit.
 
 Examples:
 
@@ -46,12 +46,12 @@ Examples:
 - `consumer-payment-app`
 - `merchant-point-of-sale`
 
-Each target pack is self-describing and target-aware. It already knows how to recognize itself
+Each target trailmap is self-describing and target-aware. It already knows how to recognize itself
 on supported platforms and what capabilities it exports once active.
 
-### One pack may span multiple platforms
+### One trailmap may span multiple platforms
 
-A target pack may support:
+A target trailmap may support:
 
 - `web`
 - `android`
@@ -59,33 +59,33 @@ A target pack may support:
 
 or only one of them.
 
-The pack is the published/local dependency unit; the runtime resolves a more specific target
+The trailmap is the published/local dependency unit; the runtime resolves a more specific target
 variant such as `gmail:web` or `gmail:android`.
 
-### Packs replace standalone authored `targets/*.yaml`
+### Trailmaps replace standalone authored `targets/*.yaml`
 
 The current standalone target YAML shape is too small to be the long-term top-level unit.
-Going forward, the authored unit should become `pack.yaml`, not a sibling `targets/foo.yaml`.
+Going forward, the authored unit should become `trailmap.yaml`, not a sibling `targets/foo.yaml`.
 
 In other words:
 
-- **today's** `target.yaml` content becomes part of a pack manifest
-- **tomorrow's** `pack.yaml` owns target detection plus all exported artifacts
+- **today's** `target.yaml` content becomes part of a trailmap manifest
+- **tomorrow's** `trailmap.yaml` owns target detection plus all exported artifacts
 
 This keeps "what is this target?" and "what does this reusable bundle provide?" in one place.
 
-### Pack ownership is implicit by layout
+### Trailmap ownership is implicit by layout
 
-Artifacts should normally inherit their owning pack from directory layout rather than repeating
+Artifacts should normally inherit their owning trailmap from directory layout rather than repeating
 that ownership in every file.
 
 For example:
 
 ```text
 trails/config/
-  packs/
+  trailmaps/
     gmail/
-      pack.yaml
+      trailmap.yaml
       tools/
         inputText.yaml
       toolsets/
@@ -94,8 +94,8 @@ trails/config/
       trails/
 ```
 
-In this shape, `tools/inputText.yaml` implicitly belongs to the `gmail` pack because it lives
-under that pack's root.
+In this shape, `tools/inputText.yaml` implicitly belongs to the `gmail` trailmap because it lives
+under that trailmap's root.
 
 This matches how package ownership works in other ecosystems:
 
@@ -103,7 +103,7 @@ This matches how package ownership works in other ecosystems:
 - TypeScript modules inherit package ownership from the package manifest and file location
 
 The system should still be able to represent ownership explicitly in generated or resolved output,
-but authored pack content should not require repetitive `pack: gmail` declarations in each file.
+but authored trailmap content should not require repetitive `trailmap: gmail` declarations in each file.
 
 ### Waypoints are first-class
 
@@ -122,14 +122,14 @@ Trails become one consumer of this structure rather than the only organizing sur
 
 ### Declarative metadata, dynamic implementation
 
-Pack discovery and composition must stay cheap.
+Trailmap discovery and composition must stay cheap.
 
 That means:
 
 - YAML is the source of truth for discovery and metadata
 - JS/TS is the source of truth for behavior
 
-Trailblaze must not need to execute TypeScript just to discover what tools a pack contains.
+Trailblaze must not need to execute TypeScript just to discover what tools a trailmap contains.
 
 Tool metadata should be declared in YAML. JS/TS implementations are referenced by that metadata
 and executed lazily at runtime. Optional generators may help authors keep YAML and TS in sync,
@@ -141,7 +141,7 @@ Users should not be required to run a separate `resolve` command during normal u
 
 Instead:
 
-- pack resolution is automatic
+- trailmap resolution is automatic
 - resolution is cheap
 - expensive JS/TS build work is lazy and cached
 
@@ -157,15 +157,15 @@ authoring surface, not a requirement for runtime startup.
 
 ### Resolve produces one flattened runtime tree
 
-Runtime should not operate directly on an unresolved forest of packs.
+Runtime should not operate directly on an unresolved forest of trailmaps.
 
 Instead, authored inputs are compiled into one resolved output tree, similar to how a JVM build
 turns many source files and dependencies into one set of generated classes or one packaged JAR.
 
 That means:
 
-- source packs can be modular and layered
-- meta-packs can depend on other packs
+- source trailmaps can be modular and layered
+- meta-trailmaps can depend on other trailmaps
 - runtime sees one clean, collision-checked output tree
 
 Conceptually:
@@ -175,7 +175,7 @@ workspace/
 ├── trails/
 │   ├── config/
 │   │   ├── trailblaze.yaml
-│   │   └── packs/
+│   │   └── trailmaps/
 │   │       ├── consumer-payment-app/
 │   │       ├── merchant-point-of-sale/
 │   │       ├── dashboard-admin-app/
@@ -201,7 +201,7 @@ handled during resolve, not left for runtime to guess about.
 Trailblaze does **not** need a registry, remote installer, version solver, or signatures to
 prove this model.
 
-The first implementation target is purely file-based local packs.
+The first implementation target is purely file-based local trailmaps.
 
 Recommended workspace shape:
 
@@ -210,9 +210,9 @@ your-workspace/
 └── trails/
     ├── config/
     │   ├── trailblaze.yaml
-    │   └── packs/
+    │   └── trailmaps/
     │       ├── gmail/
-    │       │   ├── pack.yaml
+    │       │   ├── trailmap.yaml
     │       │   ├── tools/
     │       │   ├── toolsets/
     │       │   ├── waypoints/
@@ -224,12 +224,12 @@ your-workspace/
     └── ... trail files ...
 ```
 
-`trails/config/trailblaze.yaml` then composes the packs the workspace wants to use.
+`trails/config/trailblaze.yaml` then composes the trailmaps the workspace wants to use.
 
-That composition should allow both leaf packs and aggregate meta-packs:
+That composition should allow both leaf trailmaps and aggregate meta-trailmaps:
 
-- `consumer-payment-app`, `merchant-point-of-sale`, `dashboard-admin-app` as app-specific packs
-- `company-suite` as a meta-pack that depends on those packs and resolves into one flattened
+- `consumer-payment-app`, `merchant-point-of-sale`, `dashboard-admin-app` as app-specific trailmaps
+- `company-suite` as a meta-trailmap that depends on those trailmaps and resolves into one flattened
   output
 
 This mirrors dependency-management systems where published package identity is unique, but local
@@ -257,7 +257,7 @@ original rationale is no longer the right long-term constraint:
   directly
 
 So the old document is still relevant as a description of the **current flat runtime namespace**,
-but it should no longer be treated as the main design argument against pack ownership or pack-local
+but it should no longer be treated as the main design argument against trailmap ownership or trailmap-local
 simple names in the future.
 
 ## Why this is the right cut
@@ -267,7 +267,7 @@ much stronger ecosystem:
 
 - local workspaces stay simple
 - downstream consumers can dogfood the model by moving app-specific behavior out of the binary
-- open-source examples can ship as real packs
+- open-source examples can ship as real trailmaps
 - future publishing is mostly packaging/distribution work, not a redesign of the runtime model
 
 ## What lands now vs later
@@ -282,23 +282,23 @@ The workspace/config alignment work is worth merging now:
 - shared resolver/constants
 - generated docs describing the current binary behavior
 
-That PR should **not** wait on the full pack model.
+That PR should **not** wait on the full trailmap model.
 
 ### What should be tracked as follow-up work
 
-1. Introduce local file-based target packs and `pack.yaml`.
-2. Move standalone target YAML semantics into the pack manifest.
-3. Add workspace composition of packs (`use / extend / replace`).
-4. Make waypoints and routes/segments first-class pack artifacts.
+1. Introduce local file-based target trailmaps and `trailmap.yaml`.
+2. Move standalone target YAML semantics into the trailmap manifest.
+3. Add workspace composition of trailmaps (`use / extend / replace`).
+4. Make waypoints and routes/segments first-class trailmap artifacts.
 5. Shift scripted-tool discovery to declarative YAML metadata with lazy JS/TS execution.
-6. Dogfood the pack model by migrating downstream app-specific behavior out of forked binaries.
+6. Dogfood the trailmap model by migrating downstream app-specific behavior out of forked binaries.
 
 ## Naming
 
 The naming stack locked by this decision:
 
 - **target** — runtime identity
-- **target pack** — reusable/distributable unit
+- **target trailmap** — reusable/distributable unit
 - **waypoint** — named app/site location or state
 - **route** or **segment** — movement between waypoints
 - **trail** — runnable authored flow
@@ -314,11 +314,11 @@ Explicitly deferred until the local model proves itself:
 - automatic download/install based on target detection
 
 These are packaging and ecosystem problems. The important near-term work is to make the local
-pack shape, merge rules, and lazy runtime behavior solid.
+trailmap shape, merge rules, and lazy runtime behavior solid.
 
 ## Related Documents
 
-- [Workspace Config Resolution: .trailblaze/ and trailblaze-config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md)
+- [Workspace Config Resolution: .trailblaze/ and trails/config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md)
 - [Waypoints and App Navigation Graphs](2026-03-11-waypoints-and-app-navigation-graphs.md)
 - [Scripted Tools — MCP Server Integration Patterns (forward-looking)](2026-04-21-scripted-tools-mcp-integration-patterns.md)
 - [@trailblaze/scripting — Authoring Vision & Roadmap (for TS authors)](2026-04-22-scripting-sdk-authoring-vision.md)

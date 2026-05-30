@@ -1,14 +1,14 @@
 package xyz.block.trailblaze.cli
 
-import picocli.CommandLine
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
- * Pins the early-validation guards in [cliOneShotWithDevice] and
- * [cliReusableWithDevice]. Both helpers must reject null/blank `--device`
- * with [CommandLine.ExitCode.USAGE] before any daemon traffic, so a
- * misconfigured invocation never starts an MCP session.
+ * Pins the rejection contract for [cliOneShotWithDevice] and [cliReusableWithDevice]:
+ * a bare invocation (no `--device` flag, no `TRAILBLAZE_DEVICE` env, and the
+ * resolver cannot autodetect a single connected device) must NOT proceed to
+ * the action lambda. See [assertRejectsBareDeviceInvocation] and
+ * [canAutoresolveSingleDevice] for the env-probe that keeps the assertion
+ * deterministic across test environments.
  *
  * Network-level wrapper behavior is covered by `CliMcpClient*Test` classes
  * — those exercise [CliMcpClient.connectOneShot] / [CliMcpClient.connectReusable]
@@ -17,38 +17,44 @@ import kotlin.test.assertEquals
 class CliInfrastructureHelpersTest {
 
   @Test
-  fun `cliOneShotWithDevice returns USAGE when --device is null`() {
+  fun `cliOneShotWithDevice rejects when --device is null and no env`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
     val exit = cliOneShotWithDevice(verbose = true, device = null) { _ ->
       error("action must not run when --device is null")
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertRejectsBareDeviceInvocation(exit)
   }
 
   @Test
-  fun `cliOneShotWithDevice returns USAGE when --device is blank`() {
+  fun `cliOneShotWithDevice rejects when --device is blank and no env`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
     val exit = cliOneShotWithDevice(verbose = true, device = "   ") { _ ->
       error("action must not run when --device is blank")
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertRejectsBareDeviceInvocation(exit)
   }
 
   @Test
-  fun `cliReusableWithDevice returns USAGE when --device is null`() {
+  fun `cliReusableWithDevice rejects when --device is null and no env`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
     val exit = cliReusableWithDevice(
       verbose = true,
       device = null,
-      sessionScope = "blaze-android",
     ) { _ -> error("action must not run when --device is null") }
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertRejectsBareDeviceInvocation(exit)
   }
 
   @Test
-  fun `cliReusableWithDevice returns USAGE when --device is blank`() {
+  fun `cliReusableWithDevice rejects when --device is blank and no env`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
     val exit = cliReusableWithDevice(
       verbose = true,
       device = "",
-      sessionScope = "blaze-android",
     ) { _ -> error("action must not run when --device is blank") }
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertRejectsBareDeviceInvocation(exit)
   }
 }

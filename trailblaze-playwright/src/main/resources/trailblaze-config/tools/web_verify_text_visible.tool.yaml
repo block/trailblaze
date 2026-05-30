@@ -1,2 +1,0 @@
-id: web_verify_text_visible
-class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyTextVisibleTool

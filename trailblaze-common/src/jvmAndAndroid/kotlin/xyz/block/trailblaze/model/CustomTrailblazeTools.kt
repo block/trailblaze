@@ -28,7 +28,7 @@ data class CustomTrailblazeTools(
   /**
    * App Specific YAML-defined tool names given to the LLM by default. Symmetric with
    * [registeredAppSpecificLlmTools] for the class-backed case. Use this for tools declared as
-   * YAML configs under the `trailblaze-config/tools/` resource directory (no backing [KClass])
+   * YAML configs under the `trails/config/trailmaps/<id>/tools/` resource directory (no backing [KClass])
    * that the rule wants visible to the LLM without going through a toolset-id indirection.
    * Defaults to empty; rules that only reference class-backed tools don't need to set it.
    */

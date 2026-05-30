@@ -133,6 +133,39 @@ class TrailblazeToolRepoDynamicTest {
     assertThat((decoded as NonLlmTool).reason).isEqualTo("replay")
   }
 
+  @Test fun `setActiveToolSets routes through driver-aware resolver when driverType set`() {
+    // Pre-fix, both branches of setActiveToolSets called the non-driver-aware
+    // `TrailblazeToolSetCatalog.resolve`, so a Playwright-bound session that asked the
+    // LLM to enable `core_interaction` (always_enabled, drivers: [android-*, ios-host])
+    // would end up with `tap`/`swipe`/`launchApp` registered. Post-fix, the
+    // `driverType` field routes through `resolveForSession` → `resolveForDriver`, which
+    // filters out catalog entries whose `compatibleDriverTypes` don't include the
+    // session driver.
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
+    val coreInteractionEntry = catalog.firstOrNull { it.id == "core_interaction" }
+      ?: error("core_interaction toolset missing from catalog — test fixture is stale")
+    val coreInteractionToolClasses = coreInteractionEntry.toolClasses
+    val coreInteractionToolClassNames = coreInteractionToolClasses
+      .map { it.toolName().toolName }
+      .toSet()
+
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = catalog,
+      driverType = xyz.block.trailblaze.devices.TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+    val ack = repo.setActiveToolSets(listOf("core_interaction"))
+    assertThat(ack).contains("[driver=PLAYWRIGHT_NATIVE]")
+
+    val registeredClasses = repo.getRegisteredTrailblazeTools()
+    val registeredClassNames = registeredClasses.map { it.toolName().toolName }.toSet()
+    // No tool class from core_interaction should have made it into the repo because the
+    // toolset declares drivers that exclude playwright-native.
+    val leaks = registeredClasses.intersect(coreInteractionToolClasses)
+    assertThat(leaks.isEmpty()).isEqualTo(true)
+    val nameLeaks = registeredClassNames.intersect(coreInteractionToolClassNames)
+    assertThat(nameLeaks.isEmpty()).isEqualTo(true)
+  }
+
   @Test fun `setActiveToolSets preserves dynamic tools across switches`() {
     // Derive a valid toolset id from the default catalog rather than hardcoding — if the
     // catalog evolves (rename / removal) this test keeps exercising the preservation

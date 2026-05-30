@@ -1,0 +1,2 @@
+id: web_verifyValue
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyValueTool

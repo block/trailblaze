@@ -5,6 +5,8 @@ import ai.koog.agents.core.tools.ToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.asToolType
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.utils.time.KoogClock
 import kotlin.reflect.full.starProjectedType
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
@@ -428,8 +430,11 @@ GUIDELINES:
       )
 
       // NOTE: DirectMcpAgent uses tool calls from SamplingSource, not full Koog LLM responses
-      // We pass an empty response list - the logging will still show the request side
-      val responses = emptyList<Message.Response>()
+      // We pass an empty-parts Assistant message - the logging will still show the request side
+      val responses = Message.Assistant(
+        parts = emptyList(),
+        metaInfo = ResponseMetaInfo.create(KoogClock.System),
+      )
 
       // Build PromptStepStatus for logging (requires non-null screen state provider)
       val nonNullScreenStateProvider: () -> ScreenState = {

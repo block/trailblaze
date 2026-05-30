@@ -10,7 +10,7 @@
       - web_navigate:
           url: https://en.wikipedia.org/wiki/William_Shakespeare
           reasoning: The screen is currently blank with no interactive elements, so I will directly navigate to the Wikipedia article for William Shakespeare to begin the task.
-      - web_verify_value:
+      - web_verifyValue:
           expected: William Shakespeare
           reasoning: The first heading identified in the main content area is attached to element [e48]. I will verify that its text matches 'William Shakespeare' as required by the objective.
           nodeSelector:

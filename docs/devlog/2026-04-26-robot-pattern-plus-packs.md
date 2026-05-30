@@ -59,7 +59,7 @@ The bigger model is:
 - **waypoints** are known screens or app states
 - **routes** or **segments** are reusable transitions between waypoints
 - **trails** are runnable scenarios using those pieces
-- **packs** are the reusable published container for all of it
+- **trailmaps** are the reusable published container for all of it
 
 That is the important expansion.
 
@@ -75,11 +75,11 @@ Trailblaze is trying to support something broader:
 - live agents interacting with devices
 - reusable target-aware capabilities shared across projects
 
-## Packs are the missing piece
+## Trailmaps are the missing piece
 
-The pack model is what turns "robot methods" into reusable target intelligence.
+The trailmap model is what turns "robot methods" into reusable target intelligence.
 
-A pack can contain:
+A trailmap can contain:
 
 - target detection
 - tools
@@ -88,12 +88,12 @@ A pack can contain:
 - routes
 - recorded trails
 
-That means a pack is not just a bag of config files. It is closer to a published robot library
+That means a trailmap is not just a bag of config files. It is closer to a published robot library
 plus a navigation model plus runnable proof that the model works.
 
-This is why packs matter for both tests and agents:
+This is why trailmaps matter for both tests and agents:
 
-- a **test author** can reuse the pack's tools, routes, and recorded trails
+- a **test author** can reuse the trailmap's tools, routes, and recorded trails
 - a **live agent** can reuse the same target-aware capabilities without writing tests first
 
 ## Recorded trails are still the signature
@@ -109,7 +109,7 @@ If anything, it sharpens their role:
 So the right mental model is:
 
 - **trails are the signature artifact**
-- **packs are the signature container**
+- **trailmaps are the signature container**
 
 The container can hold target detection, tools, waypoints, routes, and multiple recorded trails.
 But the recorded trail is still the most concrete demonstration of value.
@@ -135,10 +135,10 @@ So the short version is:
 
 And the longer version is:
 
-> Trailblaze is the robot pattern generalized into reusable target-aware capability packs for
+> Trailblaze is the robot pattern generalized into reusable target-aware capability trailmaps for
 > both testing and live agent control.
 
 ## Related
 
-- [Target Packs: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md)
+- [Target Trailmaps: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md)
 - [Tool Naming Convention](2026-01-14-tool-naming-convention.md)

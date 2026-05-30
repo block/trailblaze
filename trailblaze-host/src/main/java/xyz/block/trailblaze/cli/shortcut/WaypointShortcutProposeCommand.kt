@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.shortcut
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -59,8 +61,8 @@ class WaypointShortcutProposeCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id. Resolves --root to <workspace>/packs/<id>/waypoints/ and supplies the " +
-        "pack's app_ids for templated selector expansion.",
+      "Trailmap id. Resolves --root to <workspace>/trailmaps/<id>/waypoints/ and supplies the " +
+        "trailmap's app_ids for templated selector expansion.",
     ],
     required = true,
   )
@@ -116,19 +118,19 @@ class WaypointShortcutProposeCommand : Callable<Int> {
   override fun call(): Int {
     if (!sessionsDir.isDirectory) {
       Console.error("--sessions must be a directory: ${sessionsDir.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (minSupport < 1) {
       Console.error("--min-support must be >= 1, got $minSupport")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (fingerprintAgreement !in 0.0..1.0) {
       Console.error("--fingerprint-agreement must be in [0.0, 1.0], got $fingerprintAgreement")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (topK < 1) {
       Console.error("--top-k must be >= 1, got $topK")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
@@ -140,14 +142,14 @@ class WaypointShortcutProposeCommand : Callable<Int> {
       // legitimately produced nothing.
       Console.error(
         "No waypoints found under ${root.absolutePath}. " +
-          "Check --target / --root resolution; a pack-load failure would silently produce zero proposals.",
+          "Check --target / --root resolution; a trailmap-load failure would silently produce zero proposals.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(r.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> r.context
       is TargetContextResolution.NoTarget -> null
@@ -158,7 +160,7 @@ class WaypointShortcutProposeCommand : Callable<Int> {
     val sessionsLoadMs = System.currentTimeMillis() - sessionsLoadStartMs
     if (sessions.isEmpty()) {
       Console.error("No session steps found under --sessions ${sessionsDir.absolutePath}.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val totalSteps = sessions.sumOf { it.size }
     Console.log(
@@ -166,9 +168,9 @@ class WaypointShortcutProposeCommand : Callable<Int> {
         "${sessions.size} session(s) in ${sessionsLoadMs}ms.",
     )
 
-    val packRoot = resolvePackRoot(root = root, rootOverride = rootOverride)
-    val existingShortcuts = loadExistingShortcuts(packRoot)
-    Console.log("Found ${existingShortcuts.size} existing shortcut(s) under ${packRoot.absolutePath}.")
+    val trailmapRoot = resolveTrailmapRoot(root = root, rootOverride = rootOverride)
+    val existingShortcuts = loadExistingShortcuts(trailmapRoot)
+    Console.log("Found ${existingShortcuts.size} existing shortcut(s) under ${trailmapRoot.absolutePath}.")
 
     val analysis: ShortcutProposer.Analysis
     val analyzeMs = measureTimeMillis {
@@ -238,21 +240,21 @@ class WaypointShortcutProposeCommand : Callable<Int> {
         existingShortcuts = augmented,
       )
       if (secondVerdict.survived.isNotEmpty()) {
-        Console.error(
-          "Idempotence check FAILED: second pass with all guard-surviving proposals " +
-            "applied still emitted ${secondVerdict.survived.size} new proposal(s):",
+        xyz.block.trailblaze.cli.reportCliError(
+          verb = "Idempotence check",
+          reason = "second pass with all guard-surviving proposals applied still emitted ${secondVerdict.survived.size} new proposal(s)",
         )
         for (p in secondVerdict.survived) {
           Console.error("  ${p.fromWaypointId} -> ${p.toWaypointId} (key=${p.proposalKey})")
         }
-        return 1
+        return TrailblazeExitCode.ASSERTION_FAILED.code
       }
       Console.log("Idempotence check passed.")
     }
 
     writeSidecars(survivors, deferred, verdict.rejections, analysis.skipped)
     Console.log("Wrote ${survivors.size} proposal sidecar(s) to ${outDir.absolutePath}.")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun loadWaypoints(root: File): List<WaypointDefinition> {
@@ -262,11 +264,11 @@ class WaypointShortcutProposeCommand : Callable<Int> {
   }
 
   /**
-   * Resolves the pack root used to discover existing `*.shortcut.yaml` files.
+   * Resolves the trailmap root used to discover existing `*.shortcut.yaml` files.
    *
    * When the user passed `--target X` (i.e. [rootOverride] is null), [root] is the
-   * waypoints subdirectory `<workspace>/packs/X/waypoints/`; shortcut files live under
-   * sibling `shortcuts/`, so we need to climb to the pack root (the parent) to find
+   * waypoints subdirectory `<workspace>/trailmaps/X/waypoints/`; shortcut files live under
+   * sibling `shortcuts/`, so we need to climb to the trailmap root (the parent) to find
    * them. When `--root` was passed explicitly, treat that path as authoritative — the
    * user said "look here," and climbing to the parent would silently scan a different
    * directory than the one they pointed at. The pre-PR-#3131 code scanned only [root]
@@ -276,7 +278,7 @@ class WaypointShortcutProposeCommand : Callable<Int> {
    * Visible as `internal` so the focused test in WaypointShortcutProposeCommandTest can
    * pin the branch matrix (target-resolved climbs vs. explicit override stays put).
    */
-  internal fun resolvePackRoot(root: File, rootOverride: File?): File =
+  internal fun resolveTrailmapRoot(root: File, rootOverride: File?): File =
     if (
       rootOverride == null &&
       root.name == "waypoints" &&
@@ -293,7 +295,7 @@ class WaypointShortcutProposeCommand : Callable<Int> {
    * the propose pipeline already uses for waypoints.
    *
    * Classpath-bundled shortcuts (framework `clock`/`contacts`) are not enumerated
-   * here — v1 only deduplicates against on-disk pack shortcuts, which is the surface
+   * here — v1 only deduplicates against on-disk trailmap shortcuts, which is the surface
    * a new shortcut PR would conflict with anyway. Classpath duplicates would surface
    * as runtime contextual-filter conflicts and the reviewer can spot them.
    */

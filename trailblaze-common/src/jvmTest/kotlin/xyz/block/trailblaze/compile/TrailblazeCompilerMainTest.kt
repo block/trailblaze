@@ -82,11 +82,11 @@ class TrailblazeCompilerMainTest {
   fun `runCompiler returns EXIT_OK and prints summary on a successful compile`() {
     // Exercises the happy path end-to-end: parses args, invokes the compiler,
     // prints the emitted-targets summary on stdout, exits 0. Uses a synthetic
-    // pack with no `tool_sets:` references so the test doesn't depend on
+    // trailmap with no `tool_sets:` references so the test doesn't depend on
     // classpath-discoverable toolset names.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -98,7 +98,7 @@ class TrailblazeCompilerMainTest {
     )
     val outputDir = File(workDir, "out")
 
-    val exit = runCompiler(arrayOf("--input", packsDir.absolutePath, "--output", outputDir.absolutePath))
+    val exit = runCompiler(arrayOf("--input", trailmapsDir.absolutePath, "--output", outputDir.absolutePath))
 
     assertEquals(0, exit, "Expected EXIT_OK, stderr=${stderr()} stdout=${stdout()}")
     assertTrue(stdout().contains("emitted 1 target(s)"), "stdout: ${stdout()}")
@@ -107,13 +107,13 @@ class TrailblazeCompilerMainTest {
 
   @Test
   fun `runCompiler returns EXIT_COMPILE_ERROR when compile fails`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "consumer").mkdirs()
-    File(packsDir, "consumer/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "consumer").mkdirs()
+    File(trailmapsDir, "consumer/trailmap.yaml").writeText(
       """
       id: consumer
       dependencies:
-        - missing-pack
+        - missing-trailmap
       target:
         display_name: Consumer
         platforms:
@@ -123,18 +123,18 @@ class TrailblazeCompilerMainTest {
     )
     val outputDir = File(workDir, "out")
 
-    val exit = runCompiler(arrayOf("--input", packsDir.absolutePath, "--output", outputDir.absolutePath))
+    val exit = runCompiler(arrayOf("--input", trailmapsDir.absolutePath, "--output", outputDir.absolutePath))
 
     assertEquals(1, exit, "Expected EXIT_COMPILE_ERROR, stderr=${stderr()}")
     assertTrue(stderr().contains("compilation failed"), "stderr: ${stderr()}")
-    assertTrue(stderr().contains("consumer"), "Error should name the failing pack; stderr: ${stderr()}")
+    assertTrue(stderr().contains("consumer"), "Error should name the failing trailmap; stderr: ${stderr()}")
   }
 
   @Test
   fun `runCompiler accepts short flag aliases -i and -o`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -146,7 +146,7 @@ class TrailblazeCompilerMainTest {
     )
     val outputDir = File(workDir, "out")
 
-    val exit = runCompiler(arrayOf("-i", packsDir.absolutePath, "-o", outputDir.absolutePath))
+    val exit = runCompiler(arrayOf("-i", trailmapsDir.absolutePath, "-o", outputDir.absolutePath))
 
     assertEquals(0, exit, "Short aliases should work; stderr=${stderr()} stdout=${stdout()}")
   }

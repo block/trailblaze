@@ -6,13 +6,13 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze snapshot [-hvV] [--all] [--bounds] [--offscreen]
-                           [--screenshot] -d=<device> [--headless=<headless>]
+                           [--screenshot] [-d=<device>] [--headless=<headless>]
 Capture the current screen's UI tree (fast, no AI, no actions)
       --all               Show all visible elements, including those normally
                             filtered as non-interactive
       --bounds            Include bounding box {x,y,w,h} for each element
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
-                            Required.
+                            Defaults to $TRAILBLAZE_DEVICE.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser

@@ -1,0 +1,31 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./contacts_ios_searchContacts.ts
+name: contacts_ios_searchContacts
+description: |
+  Search the iOS Contacts list for a name and (optionally) open the first
+  matching contact. Use this whenever the task is to search Contacts for a
+  person, look up a contact by name, find someone in Contacts, or jump to a
+  known contact's detail screen. Handles the iOS pull-down-to-reveal-search
+  gesture, types the query, and either taps the first match (default) or
+  leaves the search active so the caller can verify the suggestion list. When
+  `openFirstResult: true` and the query yields no matches, throws a
+  descriptive error so callers can distinguish "wrong query" from "wrong row
+  text".
+supportedPlatforms:
+  - ios
+inputSchema:
+  query:
+    type: string
+    description: "Query to type into the contacts list's pull-down search field."
+    required: false
+  rowText:
+    type: string
+    description: "Row text the tool taps after typing the query. Defaults to `query`. Pass this explicitly when the query is a partial prefix of the row's visible label (e.g. `query=\"alb\"` + `rowText=\"Albert Einstein\"`)."
+    required: false
+  openFirstResult:
+    type: boolean
+    description: "When true (default), taps the first visible matching row to open the contact's detail screen. When false, leaves the search active so a caller can verify the autocomplete-style suggestion list itself."
+    required: false

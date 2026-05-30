@@ -11,7 +11,6 @@ fun main() {
 
   // Generate Tools documentation
   DocsGenerator(
-    generatedDir = generatedDir,
     generatedFunctionsDocsDir = generatedFunctionsDocsDir
   ).generate()
 

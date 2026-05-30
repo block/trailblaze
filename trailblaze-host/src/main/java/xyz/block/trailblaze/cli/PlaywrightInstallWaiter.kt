@@ -42,7 +42,11 @@ internal object PlaywrightInstallWaiter {
     return awaitReady(
       initialContent = initialResult.content,
       fetchStatus = { client.callTool("device", mapOf("action" to "INFO")) },
-      onProgress = { Console.info(it) },
+      // stderr — `device connect` is wrapped in `eval $(...)` and stdout is
+      // reserved for the export line. Progress chatter on stdout would error
+      // the eval with "command not found: Installing" before the export line
+      // gets to set TRAILBLAZE_DEVICE.
+      onProgress = { Console.error(it) },
     )
   }
 

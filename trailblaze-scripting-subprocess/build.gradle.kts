@@ -31,12 +31,13 @@ dependencies {
   testImplementation(libs.assertk)
 }
 
-// Installs npm dependencies for the sample-app reference MCP tools so
+// Installs npm dependencies (via `bun install`) for the sample-app reference MCP tools so
 // `SampleAppMcpToolsTest` can spawn `tools.ts` against the real `@modelcontextprotocol/sdk`.
 // Best-effort: failures (bun missing, no network) don't fail the build — the test downgrades
 // to an `assumeTrue(node_modules exists)` skip, matching the opt-in TS-fixture pattern. This
 // keeps the "reference example is exercised in CI" property without requiring every build
-// environment to have bun + registry access.
+// environment to have bun + registry access. bun is the sole supported JS runtime — there is
+// no npm fallback (see root CLAUDE.md and PR #3503 for the bun-only contract).
 //
 // Anchored against `projectDir` rather than `rootProject.layout.projectDirectory` so the
 // path stays stable regardless of which `settings.gradle.kts` is active when this module is
@@ -44,14 +45,7 @@ dependencies {
 // always the module's own directory; a rootProject-relative path would change meaning when
 // the rootProject does.
 val sampleAppMcpToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp")
-
-// Sister install dir for the `@trailblaze/scripting` reference example under the same target.
-// Resolves the SDK dependency via a `file:` link inside the example's package.json, so the
-// install task ends up building the local SDK into this directory's node_modules. Same
-// projectDir-relative anchoring rationale as [sampleAppMcpToolsDir] above.
-val sampleAppMcpSdkToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk")
+  .dir("../examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/mcp")
 
 // The `@trailblaze/scripting` SDK itself. Bun installs `file:` deps by symlinking each file in
 // the linked package individually (not the package root), so a consumer's `import` from the
@@ -59,30 +53,22 @@ val sampleAppMcpSdkToolsDir = layout.projectDirectory
 // `import "@modelcontextprotocol/sdk/server/mcp.js"`) walks up from `sdks/typescript/` and
 // never reaches the consumer's `node_modules`. Giving the SDK its own `node_modules` here
 // makes that walk-up find the deps on the first try on any machine, no workspace/bundling
-// setup required. Without this, `SampleAppMcpSdkToolsTest` passes only on machines that
-// happen to have these deps cached globally or hoisted by a parent node_modules — a
-// reproducibility landmine.
+// setup required.
 //
-// SUNSET CLAUSE: this "every consumer hoists the SDK's node_modules" approach is a pragmatic
-// band-aid, not the long-term shape. Revisit when any of the following is true:
-//   (a) the SDK grows a third runtime dep (it currently has two: @modelcontextprotocol/sdk
-//       and zod), at which point per-consumer install cost starts to matter;
-//   (b) a second consumer of `@trailblaze/scripting` ships (we'd start paying the hoist cost
-//       more than once);
-//   (c) bun changes `file:` linking semantics (current behaviour is file-level symlinks, not
-//       package-level — a future bun release could shift to package symlinks or hardlink
-//       copies and make this install unnecessary, or break it).
-// Likely durable replacement: bundle the SDK with esbuild into a single `dist/index.js` that
-// has no transitive-resolution problem because all deps are inlined. Tracking that migration
-// isn't necessary *today*, but the call-out saves a future reader from rediscovering this.
+// Downstream consumers (uitest JAR builds, the analyzer tests in `:trailblaze-host`, and any
+// other module that evaluates the SDK source on disk) rely on this install completing first —
+// without it, the first `@modelcontextprotocol/sdk` import fails on any machine that doesn't
+// happen to have those deps cached or hoisted by a parent `node_modules`.
 val trailblazeScriptingSdkDir = layout.projectDirectory
   .dir("../sdks/typescript")
 
 /**
- * Factored install registration so both the raw-SDK (`../mcp`) and SDK-authored (`../mcp-sdk`)
- * examples get the same bun→npm fallback + install log + bounded-wait behaviour without
- * duplicating the doLast body. [label] appears in the Gradle warning + log filename so CI
- * failures attribute to the right source.
+ * Install registration for the sample-app raw-MCP-SDK reference example, plus the
+ * `@trailblaze/scripting` SDK's own node_modules. The trailblaze-SDK authoring surface is
+ * demonstrated by the framework-loaded trailmap-scripted-tool pattern (wikipedia, ios-contacts,
+ * `sampleapp_writeArtifact`, etc.) rather than a sister standalone-MCP-server demo, so there's no
+ * longer a sibling `mcp-sdk/` install task. [label] appears in the Gradle warning + log
+ * filename so CI failures attribute to the right source.
  */
 fun registerInstallTask(
   taskName: String,
@@ -90,9 +76,18 @@ fun registerInstallTask(
   workingDirProvider: org.gradle.api.file.Directory,
   logName: String,
   testGateDocString: String,
+  // When `true`, `bun install` failure throws GradleException and fails the build. Used for
+  // installs whose output is a prerequisite of runtime-artifact-producing tasks — e.g.
+  // `installTrailblazeScriptingSdk`, which `:trailblaze-bundled-config:compileTrailblazeWorkspace`
+  // and `:trailblaze-quickjs-tools` both `dependsOn`. Without this, a missing bun would
+  // silently produce a broken daemon JAR that fails at first SDK import. When `false`, the
+  // task only warns — appropriate for the sample-app MCP install, which is gated by the
+  // test's own `assumeTrue(node_modules/.install-ok)` skip.
+  failOnInstallError: Boolean,
 ) = tasks.register(taskName) {
   group = "verification"
-  description = "Installs npm deps for $label (best-effort)."
+  val tone = if (failOnInstallError) "required" else "best-effort"
+  description = "Installs npm deps for $label via `bun install` ($tone)."
 
   val packageJson = workingDirProvider.file("package.json").asFile
   val nodeModules = workingDirProvider.dir("node_modules").asFile
@@ -112,15 +107,20 @@ fun registerInstallTask(
 
   doLast {
     // 15 minutes is the default ceiling. It covers corporate proxies that aggressively
-    // rate-limit or drop connections (e.g. an internal npm registry mirror, where npm routinely
-    // sees ~70s/package with triple ECONNRESET retries before a 200). On CI and fast
+    // rate-limit or drop connections (e.g. an internal npm registry mirror, where a fresh
+    // `bun install` can sit on triple-ECONNRESET retries before a 200). On CI and fast
     // public-registry environments the install completes in well under a minute, and
     // Gradle's input/output up-to-date check skips the task entirely on subsequent builds,
     // so the headroom is paid at most once per developer-machine. Override via Gradle
     // property for edge cases: `./gradlew test -PtrailblazeInstallTimeoutMinutes=30`.
-    val installTimeoutMinutes = (project.findProperty("trailblazeInstallTimeoutMinutes") as? String)
-      ?.toLongOrNull()
-      ?: 15L
+    // Clamp to a 1-minute floor so a stale CI config or fat-fingered `-P0` doesn't make
+    // `proc.waitFor(0, MINUTES)` return `false` instantly and mis-report a successful install
+    // as a timeout. Mirrors `InstallAuthorToolDepsTask`'s floor (same property name across
+    // both install tasks).
+    val installTimeoutMinutes = maxOf(
+      1L,
+      (project.findProperty("trailblazeInstallTimeoutMinutes") as? String)?.toLongOrNull() ?: 15L,
+    )
 
     // Surface the one-time install cost in the Gradle console so a developer watching a
     // cold `./gradlew test` understands what's happening instead of staring at a silent wait.
@@ -162,24 +162,23 @@ fun registerInstallTask(
         proc.waitFor(10, TimeUnit.SECONDS)
         -1
       }
+    } catch (e: java.io.IOException) {
+      // Most common cause: bun executable isn't on PATH. Surface at WARN so the developer
+      // sees it without hunting the log file — the path-vs-install distinction matters for
+      // triage now that there's no npm fallback to paper over a missing bun.
+      installLog.appendText("[launch failed (likely bun not on PATH): ${e.message}]\n")
+      logger.warn("${command.joinToString(" ")} failed to launch (likely bun not on PATH): ${e.message}")
+      -1
     } catch (e: Exception) {
       installLog.appendText("[launch failed: ${e.message}]\n")
       logger.info("${command.joinToString(" ")} failed to launch: ${e.message}")
       -1
     }
 
-    val installSucceeded = if (tryInstall(listOf("bun", "install")) == 0) {
-      true
-    } else {
-      logger.info("bun install failed or unavailable for $label; trying npm install")
-      // `--prefer-offline` lets npm satisfy deps from its on-disk cache without re-fetching
-      // manifests. Critical on flaky corporate proxies where a fresh install can take ~70s
-      // per package but a cached install completes in under a second — across successive
-      // runs this is the difference between "wait 15 minutes" and "wait 1 second."
-      // `--no-audit --no-fund` drop registry round-trips that have no bearing on install
-      // correctness and further shave the cold path.
-      tryInstall(listOf("npm", "install", "--prefer-offline", "--no-audit", "--no-fund")) == 0
-    }
+    // bun is the sole supported JS runtime (see root CLAUDE.md / PR #3503). No npm fallback —
+    // if bun isn't on PATH or `bun install` fails, surface that loudly rather than papering
+    // over it with a parallel toolchain that would diverge from the lockfile bun resolves.
+    val installSucceeded = tryInstall(listOf("bun", "install")) == 0
 
     if (installSucceeded) {
       // Only touch the sentinel after a clean install. Gradle's up-to-date check then skips
@@ -188,11 +187,19 @@ fun registerInstallTask(
       installSentinel.parentFile.mkdirs()
       installSentinel.writeText("ok\n")
     } else {
-      logger.warn(
-        "Failed to install $label deps via bun or npm. $testGateDocString\n" +
+      val rootDir = project.rootDir.absolutePath
+      val message =
+        "Failed to install $label deps via `bun install`. $testGateDocString\n" +
           "  Install output:  ${installLog.absolutePath}\n" +
-          "  Manual install:  cd $workingDir && bun install  (or `npm install`)",
-      )
+          "  Manual install:  (cd $workingDir && bun install)\n" +
+          "  Trailblaze requires bun; activate the repo's Hermit env " +
+          "(from repo root: $rootDir, run `source bin/activate-hermit`) " +
+          "or install bun from https://bun.sh/."
+      if (failOnInstallError) {
+        throw GradleException(message)
+      } else {
+        logger.warn(message)
+      }
     }
   }
 }
@@ -204,48 +211,42 @@ val installSampleAppMcpTools = registerInstallTask(
   logName = "install-sample-app-mcp.log",
   testGateDocString =
     "SampleAppMcpToolsTest will skip (or fail loud in CI — see TRAILBLAZE_SAMPLE_APP_MCP_TEST).",
-)
-
-val installSampleAppMcpSdkTools = registerInstallTask(
-  taskName = "installSampleAppMcpSdkTools",
-  label = "the sample-app SDK-authored MCP tools (`@trailblaze/scripting`)",
-  workingDirProvider = sampleAppMcpSdkToolsDir,
-  logName = "install-sample-app-mcp-sdk.log",
-  testGateDocString =
-    "SampleAppMcpSdkToolsTest will skip (or fail loud in CI — see TRAILBLAZE_SAMPLE_APP_MCP_TEST).",
+  // Best-effort. The test is the only consumer and self-gates on the sentinel.
+  failOnInstallError = false,
 )
 
 // See [trailblazeScriptingSdkDir] for *why* the SDK gets its own node_modules (bun's
 // file-level symlink strategy for `file:` deps makes the consumer's node_modules invisible
-// to transitive resolution inside the SDK).
+// to transitive resolution inside the SDK). Consumers across the build wire this task via
+// `tasks.named("installTrailblazeScriptingSdk")`.
 val installTrailblazeScriptingSdk = registerInstallTask(
   taskName = "installTrailblazeScriptingSdk",
   label = "the @trailblaze/scripting SDK itself",
   workingDirProvider = trailblazeScriptingSdkDir,
   logName = "install-trailblaze-scripting-sdk.log",
   testGateDocString =
-    "SampleAppMcpSdkToolsTest doesn't gate explicitly on the SDK's own node_modules — " +
-      "if this install fails the subprocess will error out on the first `@modelcontextprotocol/sdk` " +
-      "import, surfacing as a hard test failure rather than an `assumeTrue` skip. Investigate the " +
-      "install log (path printed above) before chasing the test symptom.",
+    "Analyzer tests + downstream JAR builds that read the SDK source rely on this install. " +
+      "If it fails the subprocess will error out on the first `@modelcontextprotocol/sdk` " +
+      "import, surfacing as a hard test failure rather than an `assumeTrue` skip. Investigate " +
+      "the install log (path printed above) before chasing the test symptom.",
+  // Required. This task is a transitive `dependsOn` of every `compileTrailblazeWorkspace`
+  // run (wired via `TrailblazeBundlePlugin`) and of `:trailblaze-quickjs-tools`. A silent
+  // warn-only failure would let a broken daemon JAR ship — fail loudly instead so the issue
+  // surfaces at build time, not at first SDK import.
+  failOnInstallError = true,
 )
 
 tasks.test {
   useJUnit()
   dependsOn(installSampleAppMcpTools)
-  dependsOn(installSampleAppMcpSdkTools)
   dependsOn(installTrailblazeScriptingSdk)
-  // Pass absolute paths of both reference tools.ts files into the test JVM so the tests don't
-  // rely on JVM cwd. Gradle sets cwd to `projectDir` for `./gradlew test`, but IDE test
-  // runners (IntelliJ in particular) often set cwd to the repo root or the run-configuration's
-  // dir — a `File("..")`-relative path silently breaks in that case. Resolving via Gradle at
-  // configuration time gives both paths the same absolute path.
+  // Pass the absolute path of the reference tools.ts file into the test JVM so the test
+  // doesn't rely on JVM cwd. Gradle sets cwd to `projectDir` for `./gradlew test`, but IDE
+  // test runners (IntelliJ in particular) often set cwd to the repo root or the
+  // run-configuration's dir — a `File("..")`-relative path silently breaks in that case.
+  // Resolving via Gradle at configuration time gives the path the same absolute form.
   systemProperty(
     "trailblaze.sampleApp.mcp.toolsTs",
     sampleAppMcpToolsDir.file("tools.ts").asFile.absolutePath,
-  )
-  systemProperty(
-    "trailblaze.sampleApp.mcpSdk.toolsTs",
-    sampleAppMcpSdkToolsDir.file("tools.ts").asFile.absolutePath,
   )
 }

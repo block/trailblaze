@@ -6,7 +6,18 @@
     platform: ios
     driver: IOS_HOST
     target: contacts
-    tags: [nav]
+    tags: [nav, flaky]
+    # iOS 26.4's Contacts dismisses the soft keyboard automatically after typing
+    # into the search field (verified live 2026-05-22). The trail's step 2
+    # assumption ("This leaves the keyboard up with text in the field") doesn't
+    # hold there, so step 3 finds no keyboard to dismiss and the trail's stated
+    # outcome can't be reached. The tool itself (`contacts_ios_dismissKeyboardIfPresent`)
+    # is exercised correctly in both branches by other trails — this composition
+    # exists for documentation. Skipped until either (a) iOS keyboard behavior
+    # stabilizes across the runtimes this trailmap targets, or (b) the trail's
+    # second step is replaced with something that demonstrably leaves the
+    # keyboard up on iOS 26.4+.
+    skip: "iOS 26.4 auto-dismisses the keyboard after search input — step 3 has no keyboard to dismiss. Remove `skip:` once we have a reliable keyboard-up state on the target runtime."
 - prompts:
     - step: |
         Call the `contacts_ios_openApp` tool with dismissKeyboard=true.

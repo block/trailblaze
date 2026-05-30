@@ -6,10 +6,13 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
+import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
 
 class WorkspaceCompileBootstrapTest {
 
@@ -17,13 +20,13 @@ class WorkspaceCompileBootstrapTest {
   val tempFolder = TemporaryFolder()
 
   /**
-   * Toolset names referenced by these fixture packs (`core_interaction`, `verification`)
+   * Toolset names referenced by these fixture trailmaps (`core_interaction`, `verification`)
    * are real toolsets shipped on the framework classpath, so the compiler's reference
    * validation passes in the host module's test classpath.
    */
-  private fun writeFixturePack(packsDir: File, id: String) {
-    val packDir = File(packsDir, id).apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+  private fun writeFixtureTrailmap(trailmapsDir: File, id: String) {
+    val trailmapDir = File(trailmapsDir, id).apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: $id
       target:
@@ -48,18 +51,19 @@ class WorkspaceCompileBootstrapTest {
     )
 
   @Test
-  fun `pack referencing a workspace-authored toolset compiles cleanly`() {
+  fun `trailmap referencing a workspace-authored toolset compiles cleanly`() {
     // Regression: before WorkspaceCompileBootstrap wired its referenceSource to the
-    // workspace filesystem, a pack that referenced its own `<workspace>/trails/config/toolsets/
-    // <id>.yaml` would compile-fail with "unknown toolset" because the compiler defaulted
-    // to a classpath-only resource source. The end-user reproducer: a `wikipedia_extras`
-    // workspace toolset listed in a pack's `platforms.android.tool_sets:` and authored as a
-    // workspace file rather than a classpath resource. The pack-resolved toolset wasn't on
-    // the classpath, so reference validation rejected it even though it sat right next to
-    // the pack on disk.
+    // workspace filesystem, a trailmap that referenced its own
+    // `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml` would compile-fail with
+    // "unknown toolset" because the compiler defaulted to a classpath-only resource source.
+    // The end-user reproducer: a `wikipedia_extras` workspace toolset listed in a trailmap's
+    // `platforms.android.tool_sets:` and authored as a workspace file rather than a classpath
+    // resource. The trailmap-resolved toolset wasn't on the classpath, so reference
+    // validation rejected it even though it sat right next to the trailmap on disk.
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    val toolsetsDir = File(configDir, "toolsets").apply { mkdirs() }
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    val trailmapDir = File(trailmapsDir, "workspaceapp").apply { mkdirs() }
+    val toolsetsDir = File(trailmapDir, "toolsets").apply { mkdirs() }
     File(toolsetsDir, "workspace_extras.yaml").writeText(
       """
       id: workspace_extras
@@ -70,8 +74,7 @@ class WorkspaceCompileBootstrapTest {
         - launchApp
       """.trimIndent(),
     )
-    val packDir = File(packsDir, "workspaceapp").apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -90,40 +93,40 @@ class WorkspaceCompileBootstrapTest {
     assertEquals(WorkspaceCompileBootstrap.BootstrapResult.Recompiled(emitted = 1), result)
     assertTrue(
       File(targetsDir(configDir), "workspaceapp.yaml").isFile,
-      "Compile must succeed and emit the target YAML when the pack's referenced toolset " +
+      "Compile must succeed and emit the target YAML when the trailmap's referenced toolset " +
         "lives only on the workspace filesystem, not the classpath.",
     )
   }
 
   @Test
-  fun `no packs directory returns NoWorkspacePacks`() {
+  fun `no trailmaps directory returns NoWorkspaceTrailmaps`() {
     val configDir = tempFolder.newFolder("trails", "config")
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
-    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspacePacks, result)
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspaceTrailmaps, result)
   }
 
   @Test
-  fun `empty packs directory returns NoWorkspacePacks`() {
+  fun `empty trailmaps directory returns NoWorkspaceTrailmaps`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    File(configDir, TrailblazeConfigPaths.PACKS_SUBDIR).mkdirs()
-    // Subdir without a pack.yaml — should not count.
-    File(configDir, "${TrailblazeConfigPaths.PACKS_SUBDIR}/scratch").mkdirs()
+    File(configDir, TrailblazeConfigPaths.TRAILMAPS_SUBDIR).mkdirs()
+    // Subdir without a trailmap.yaml — should not count.
+    File(configDir, "${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}/scratch").mkdirs()
 
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
 
-    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspacePacks, result)
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspaceTrailmaps, result)
     // Critical: bootstrap must NOT print "Recompiling..." or call compile when there
-    // are no manifests, otherwise the codex / Copilot zero-pack regression returns —
+    // are no manifests, otherwise the codex / Copilot zero-trailmap regression returns —
     // every startup would re-run compile against an empty input set forever.
-    assertTrue(!hashFile(configDir).exists(), "no-pack workspace should not produce a hash file")
+    assertTrue(!hashFile(configDir).exists(), "no-trailmap workspace should not produce a hash file")
   }
 
   @Test
-  fun `first run with no hash compiles and emits one yaml per app pack`() {
+  fun `first run with no hash compiles and emits one yaml per app trailmap`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
-    writeFixturePack(packsDir, "beta")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    writeFixtureTrailmap(trailmapsDir, "beta")
 
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
 
@@ -136,8 +139,8 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `second run with unchanged manifests skips compile`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
     val targetFile = File(targetsDir(configDir), "alpha.yaml")
@@ -153,7 +156,7 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `UpToDate path regenerates a deleted client_d_ts and re-extracts a deleted SDK`() {
     // Regression guard for the round-1+2 codegen-outside-hash-gate invariant. A user
-    // who manually deletes their per-pack `client.d.ts` or the workspace SDK shouldn't
+    // who manually deletes their per-trailmap `trailblaze-client.d.ts` or the workspace SDK shouldn't
     // need to invalidate the hash to get them back — the next daemon start regenerates
     // them. Both ops are idempotent so the cost on the UpToDate path is small.
     //
@@ -163,16 +166,16 @@ class WorkspaceCompileBootstrapTest {
     // `.trailblaze/tsconfig.base.json` pruned — the prune runs alongside SDK
     // extraction, not gated on hash drift.
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
-    val clientDts = File(packsDir, "alpha/tools/.trailblaze/client.d.ts")
+    val clientDts = File(trailmapsDir, "alpha/tools/trailblaze-client.d.ts")
     val sdkBundle = File(configDir.parentFile, ".trailblaze/sdk/dist/index.d.ts")
-    assertTrue(clientDts.isFile, "expected per-pack client.d.ts emitted on first run")
+    assertTrue(clientDts.isFile, "expected per-trailmap trailblaze-client.d.ts emitted on first run")
     assertTrue(sdkBundle.isFile, "expected SDK declaration bundle extracted on first run")
 
-    // User wipes the per-pack typed bindings + workspace SDK between runs. The hash
+    // User wipes the per-trailmap typed bindings + workspace SDK between runs. The hash
     // file is untouched — same input manifests, same framework version. Also
     // synthesize a stale `.trailblaze/tsconfig.base.json` from the pre-bundled-.d.ts
     // era to verify the prune fires on this path.
@@ -187,7 +190,7 @@ class WorkspaceCompileBootstrapTest {
     // The compile itself is still skip-eligible (hash matches) — confirm we hit the
     // UpToDate branch rather than forcing a recompile to regenerate codegen outputs.
     assertEquals(WorkspaceCompileBootstrap.BootstrapResult.UpToDate, result)
-    assertTrue(clientDts.isFile, "expected client.d.ts to regenerate on UpToDate path")
+    assertTrue(clientDts.isFile, "expected trailblaze-client.d.ts to regenerate on UpToDate path")
     assertTrue(sdkBundle.isFile, "expected SDK bundle to re-extract on UpToDate path")
     assertFalse(
       staleTsconfigBase.exists(),
@@ -196,29 +199,29 @@ class WorkspaceCompileBootstrapTest {
   }
 
   @Test
-  fun `NoWorkspacePacks path still extracts the workspace SDK bundle`() {
+  fun `NoWorkspaceTrailmaps path still extracts the workspace SDK bundle`() {
     // A fresh checkout or a classpath-only consumer can start the daemon with no
-    // `packs/` directory yet. The workspace SDK declaration bundle should still land so
-    // the first pack the user authors immediately picks up IDE typing.
+    // `trailmaps/` directory yet. The workspace SDK declaration bundle should still land so
+    // the first trailmap the user authors immediately picks up IDE typing.
     val configDir = tempFolder.newFolder("trails", "config")
 
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
 
-    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspacePacks, result)
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.NoWorkspaceTrailmaps, result)
     val sdkBundle = File(configDir.parentFile, ".trailblaze/sdk/dist/index.d.ts")
-    assertTrue(sdkBundle.isFile, "expected SDK bundle extracted even with no workspace packs")
+    assertTrue(sdkBundle.isFile, "expected SDK bundle extracted even with no workspace trailmaps")
   }
 
   @Test
   fun `editing a manifest invalidates the hash and triggers recompile`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
 
     // Edit the manifest's display name (a structural change that lands in the emitted YAML).
-    File(packsDir, "alpha/pack.yaml").writeText(
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -242,8 +245,8 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `framework version bump invalidates hash and forces recompile`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.1.0")
@@ -254,10 +257,10 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `compile error throws WorkspaceCompileException and clears hash`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    // Pack declares a dependency that doesn't exist — resolver fails, compile fails.
-    val brokenDir = File(packsDir, "broken").apply { mkdirs() }
-    File(brokenDir, "pack.yaml").writeText(
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    // Trailmap declares a dependency that doesn't exist — resolver fails, compile fails.
+    val brokenDir = File(trailmapsDir, "broken").apply { mkdirs() }
+    File(brokenDir, "trailmap.yaml").writeText(
       """
       id: broken
       dependencies:
@@ -283,25 +286,114 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `hash differs when manifest content changes`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
-    val before = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.0.0")
+    val before = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
 
-    File(packsDir, "alpha/pack.yaml").appendText("\n# trailing comment\n")
-    val after = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.0.0")
+    File(trailmapsDir, "alpha/trailmap.yaml").appendText("\n# trailing comment\n")
+    val after = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
 
     assertNotEquals(before, after)
   }
 
   @Test
+  fun `hash differs when a tools-subtree ts file changes`() {
+    // Regression: meta-only authoring shape (PR #3338) makes the sibling `.ts` file the
+    // source of truth for `name:` / `inputSchema:` / `description:` — the analyzer reads
+    // it during compile and bakes the extracted metadata into `dist/targets/<trailmap>.yaml`.
+    // Editing only the `.ts` (e.g., adding an input field, updating the TSDoc) must
+    // therefore invalidate the bundle hash and force a recompile; otherwise the daemon's
+    // hash-skip silently keeps the stale compile until the user touches `trailmap.yaml`.
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    val toolsDir = File(trailmapsDir, "alpha/tools").apply { mkdirs() }
+    val toolYaml = File(toolsDir, "myTool.yaml").apply {
+      writeText("script: ./myTool.ts\n_meta:\n  trailblaze/requiresContext: true\n")
+    }
+    val toolTs = File(toolsDir, "myTool.ts").apply {
+      writeText("// initial body — analyzer reads me\n")
+    }
+
+    val before = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+
+    // Touch only the `.ts` file — the `.yaml` descriptor and `trailmap.yaml` manifest stay
+    // identical to confirm the hash picks up `.ts`-only edits specifically.
+    toolTs.writeText("// edited body — analyzer must re-run\n")
+    val afterTsEdit = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+
+    assertNotEquals(before, afterTsEdit, "Editing a tool .ts file must invalidate the workspace hash")
+
+    // Confirm a `.yaml` descriptor edit also invalidates (covers full-YAML descriptor
+    // authors who don't touch the .ts at all — the YAML carries `_meta:` /
+    // `description:` that flow into compile output).
+    toolYaml.appendText("# additional comment\n")
+    val afterYamlEdit = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+    assertNotEquals(afterTsEdit, afterYamlEdit, "Editing a tool .yaml file must invalidate the workspace hash")
+  }
+
+  @Test
+  fun `hash ignores files in tools subtree that don't end in yaml or ts`() {
+    // Defensive pin on the hash's file-suffix filter: framework-managed artifacts under
+    // `tools/` (the generated `tsconfig.json`, `.gitignore`, `.trailblaze/` subdir) must
+    // NOT participate in the hash, otherwise a daemon-side regeneration of those files
+    // would force a spurious recompile on every boot.
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    val toolsDir = File(trailmapsDir, "alpha/tools").apply { mkdirs() }
+    File(toolsDir, "myTool.yaml").writeText("script: ./myTool.ts\n")
+    File(toolsDir, "myTool.ts").writeText("// content\n")
+
+    val before = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+
+    // Write framework-managed artifacts that the hash must ignore.
+    File(toolsDir, "tsconfig.json").writeText("{ \"extends\": \"…\" }")
+    File(toolsDir, ".gitignore").writeText("tsconfig.json\n.trailblaze/\n")
+    File(toolsDir, ".trailblaze").apply { mkdirs() }
+    File(toolsDir, "trailblaze-client.d.ts").writeText("// generated\n")
+
+    val after = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+    assertEquals(before, after, "Non-(yaml|ts) tool files and subdirs must not affect the hash")
+  }
+
+  @Test
+  fun `hash filter narrowly excludes only the codegen filename, not all d_ts files`() {
+    // The hash's `f.name != GENERATED_FILE_NAME` filter narrowly excludes ONE specific
+    // codegen output. Any OTHER `.ts` (including a sibling `.d.ts`) must STILL affect
+    // the hash — author-owned `.d.ts` files (e.g., hand-authored ambient declarations)
+    // are real input. This test pins that the filter doesn't over-broadly skip every
+    // `.d.ts`, only the framework's exact codegen filename.
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    val toolsDir = File(trailmapsDir, "alpha/tools").apply { mkdirs() }
+    File(toolsDir, "myTool.yaml").writeText("script: ./myTool.ts\n")
+    File(toolsDir, "myTool.ts").writeText("// content\n")
+
+    val before = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+
+    // A sibling `.d.ts` that is NOT the framework's codegen output: must affect the hash.
+    File(toolsDir, "ambient.d.ts").writeText("declare const FOO: string;\n")
+
+    val after = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+    assertNotEquals(
+      before,
+      after,
+      "Non-framework `.d.ts` files in tools/ MUST still affect the hash; the filter is " +
+        "scoped to the exact codegen filename, not all `.d.ts`.",
+    )
+  }
+
+  @Test
   fun `hash differs when version changes`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
-    val v1 = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.0.0")
-    val v2 = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.1.0")
+    val v1 = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
+    val v2 = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.1.0")
 
     assertNotEquals(v1, v2)
   }
@@ -309,15 +401,15 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `hash is identical for CRLF and LF variants of the same manifest`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
-    val packFile = File(packsDir, "alpha/pack.yaml")
-    val lfHash = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.0.0")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    val trailmapFile = File(trailmapsDir, "alpha/trailmap.yaml")
+    val lfHash = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
 
     // Rewrite the manifest with CRLF line endings — same logical content, different bytes.
-    val crlfBytes = packFile.readText(Charsets.UTF_8).replace("\n", "\r\n").toByteArray(Charsets.UTF_8)
-    packFile.writeBytes(crlfBytes)
-    val crlfHash = WorkspaceCompileBootstrap.computeWorkspaceHash(packsDir, "1.0.0")
+    val crlfBytes = trailmapFile.readText(Charsets.UTF_8).replace("\n", "\r\n").toByteArray(Charsets.UTF_8)
+    trailmapFile.writeBytes(crlfBytes)
+    val crlfHash = WorkspaceCompileBootstrap.computeWorkspaceHash(trailmapsDir, "1.0.0")
 
     assertEquals(lfHash, crlfHash, "CRLF and LF copies of the same manifest must hash identically")
   }
@@ -325,8 +417,8 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `missing dist targets dir forces recompile even when hash matches`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
     // User wiped `dist/targets/` but left `.bundle.hash` behind. The next bootstrap
@@ -340,9 +432,9 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `single missing target file forces recompile even when hash matches`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
-    writeFixturePack(packsDir, "beta")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    writeFixtureTrailmap(trailmapsDir, "beta")
 
     WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
     // User deleted exactly one materialized target. Hash file is still valid against
@@ -358,8 +450,8 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `empty hash file is treated as missing`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
 
     val hash = hashFile(configDir)
     hash.parentFile.mkdirs()
@@ -372,7 +464,7 @@ class WorkspaceCompileBootstrapTest {
 
   @Test
   fun `WorkspaceCompileException message includes resolver errors`() {
-    val errors = listOf("pack 'foo' is missing dependency 'bar'", "cycle: a -> b -> a")
+    val errors = listOf("trailmap 'foo' is missing dependency 'bar'", "cycle: a -> b -> a")
     val ex = WorkspaceCompileBootstrap.WorkspaceCompileException(errors)
     val msg = ex.message ?: ""
     for (err in errors) assertTrue(msg.contains(err), "expected '$err' in: $msg")
@@ -385,10 +477,40 @@ class WorkspaceCompileBootstrapTest {
   @Test
   fun `bootstrap handles absent hash file path components`() {
     val configDir = tempFolder.newFolder("trails", "config")
-    val packsDir = File(configDir, "packs").apply { mkdirs() }
-    writeFixturePack(packsDir, "alpha")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
     // Don't create dist/ at all — bootstrap must mkdirs along the way.
     val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
     assertEquals(WorkspaceCompileBootstrap.BootstrapResult.Recompiled(emitted = 1), result)
+  }
+
+  @Test
+  fun `bootstrap resolves a meta-only descriptor trailmap when analyzer is available`() {
+    // End-to-end integration test for the daemon-init recompile path against a workspace
+    // that has adopted the meta-only authoring shape. Pins the wiring this PR added
+    // (`AnalyzerScriptedToolEnrichment.resolveFromEnvironment()` passed through to
+    // `TrailblazeCompiler.compile`); without it, the bootstrap would throw
+    // `WorkspaceCompileException` citing the meta-only descriptor.
+    //
+    // Skipped when the analyzer isn't available locally — same `assumeTrue` shape the
+    // sister test in `CompileCommandTest` uses. Production behavior on the same gap is
+    // a clear "enrichment not wired" diagnostic, so skipping the test is safe.
+    val enrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+    assumeTrue(MetaOnlyDescriptorTestFixture.ANALYZER_UNAVAILABLE_SKIP_MESSAGE, enrichment != null)
+
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    MetaOnlyDescriptorTestFixture.writeMetaOnlyTrailmap(trailmapsDir)
+
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+    assertEquals(
+      WorkspaceCompileBootstrap.BootstrapResult.Recompiled(emitted = 1),
+      result,
+      "Meta-only descriptor must compile cleanly when analyzer is wired",
+    )
+    assertTrue(
+      File(targetsDir(configDir), "metaonly.yaml").isFile,
+      "metaonly.yaml should be emitted under the workspace's dist/targets dir",
+    )
   }
 }

@@ -13,7 +13,7 @@
   - step: Verify the "Today's featured article" section is visible on the page.
     recording:
       tools:
-      - web_verify_element_visible:
+      - web_verifyElementVisible:
           reasoning: The section titled "From today's featured article" is represented by the heading element [e40]. Verifying its visibility will confirm that the "Today's featured article" section is present on the page.
           nodeSelector:
             web:

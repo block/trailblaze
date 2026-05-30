@@ -65,7 +65,7 @@ suspend fun partitionByImportClosure(
           "To run on-device, replace the host-only import with an on-device-compatible " +
           "alternative (QuickJS exposes `fetch` natively). To keep the tool available " +
           "host-side, add `runtime: subprocess` to the tool's YAML descriptor so it " +
-          "loads in the Node-capable bun/tsx subprocess instead.",
+          "loads in the bun subprocess instead.",
       )
       continue
     }

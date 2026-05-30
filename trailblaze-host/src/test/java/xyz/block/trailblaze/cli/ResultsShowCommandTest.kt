@@ -299,4 +299,160 @@ class ResultsShowCommandTest {
     assertEquals("fail", result.status)
     assertNull(result.consecutiveFailures)
   }
+
+  // ---- v1 ↔ v2 schema migration -------------------------------------------
+  // CellView is the dual-schema reader's pivot — it normalizes both v1 (`run` block) and v2
+  // (`result` block) into a single shape so the renderer and `--all-devices` exit-code logic
+  // don't need to know about the split. These tests pin the migration contract: a v1 file
+  // and a v2 file representing the same run must produce equivalent CellSummary output.
+
+  @Test
+  fun `parseRunBlock reads v2 result block with normalized outcome`() {
+    val rawJson =
+      """
+      {
+        "schema_version": 2,
+        "test_case_id": "C12345",
+        "device": "android-phone",
+        "consecutive_failures": 0,
+        "metadata": {"ci_build_url": "https://example/builds/3459"},
+        "result": {"outcome": "PASSED", "completed_at": "2026-05-21T08:14:00Z"}
+      }
+      """.trimIndent()
+    val result = ResultsShowCommand.parseRunBlock(rawJson)
+    assertEquals("pass", result.status)
+    assertEquals("2026-05-21T08:14:00Z", result.timestamp)
+    assertEquals(0, result.consecutiveFailures)
+  }
+
+  @Test
+  fun `parseRunBlock collapses v2 terminal failure outcomes to fail`() {
+    for (outcome in listOf("FAILED", "TIMEOUT", "MAX_CALLS_REACHED", "ERROR")) {
+      val rawJson =
+        """
+        {
+          "schema_version": 2,
+          "test_case_id": "C12345",
+          "device": "android-phone",
+          "consecutive_failures": 3,
+          "metadata": {},
+          "result": {"outcome": "$outcome", "completed_at": "2026-05-21T08:14:00Z"}
+        }
+        """.trimIndent()
+      val result = ResultsShowCommand.parseRunBlock(rawJson)
+      assertEquals("fail", result.status, "outcome $outcome should map to 'fail'")
+      assertEquals(3, result.consecutiveFailures, "outcome $outcome should preserve consecutive_failures")
+    }
+  }
+
+  @Test
+  fun `parseRunBlock infers v2 from presence of result block when schema_version missing`() {
+    // Forward-compatibility: a writer that forgets the schema_version field but emits the v2
+    // `result` shape should still be readable. Presence of `result` is the unambiguous tell.
+    val rawJson =
+      """
+      {
+        "test_case_id": "C12345",
+        "device": "android-phone",
+        "metadata": {},
+        "result": {"outcome": "PASSED", "completed_at": "2026-05-21T08:14:00Z"}
+      }
+      """.trimIndent()
+    val result = ResultsShowCommand.parseRunBlock(rawJson)
+    assertEquals("pass", result.status)
+  }
+
+  @Test
+  fun `parseRunBlock rejects schema_version newer than reader supports`() {
+    // Defensive: a v3 writer may rename or restructure fields, so a v2 reader pretending to
+    // understand v3 silently produces wrong data. Return EMPTY so `--all-devices` treats the
+    // device as non-passing (conservative CI gate) rather than misreading the file.
+    val rawJson =
+      """
+      {
+        "schema_version": 999,
+        "test_case_id": "C12345",
+        "device": "android-phone",
+        "metadata": {},
+        "result": {"outcome": "PASSED"}
+      }
+      """.trimIndent()
+    val result = ResultsShowCommand.parseRunBlock(rawJson)
+    assertNull(result.status)
+    assertNull(result.timestamp)
+  }
+
+  @Test
+  fun `parseRunBlock returns EMPTY when v2 schema_version present but result block missing`() {
+    // Distinguishable from "unknown shape" via the surfaced error in stderr; the parsed
+    // CellSummary is still EMPTY so callers conservatively treat the device as not-passing.
+    val rawJson =
+      """
+      {
+        "schema_version": 2,
+        "test_case_id": "C12345",
+        "device": "android-phone",
+        "metadata": {}
+      }
+      """.trimIndent()
+    val result = ResultsShowCommand.parseRunBlock(rawJson)
+    assertNull(result.status)
+  }
+
+  @Test
+  fun `parseRunBlock prefers v2 result when both v1 run and v2 result are present`() {
+    // Migration corruption case: someone wrote both shapes into the same file. v2 wins as
+    // the authoritative current shape; the renderer emits a warning to stderr so the
+    // inconsistency is visible during triage.
+    val rawJson =
+      """
+      {
+        "schema_version": 2,
+        "test_case_id": "C12345",
+        "device": "android-phone",
+        "run": {"status": "fail", "timestamp": "2020-01-01T00:00:00Z"},
+        "metadata": {},
+        "result": {"outcome": "PASSED", "completed_at": "2026-05-21T08:14:00Z"}
+      }
+      """.trimIndent()
+    val result = ResultsShowCommand.parseRunBlock(rawJson)
+    assertEquals("pass", result.status)
+    assertEquals("2026-05-21T08:14:00Z", result.timestamp)
+  }
+
+  // ---- normalizeOutcome ---------------------------------------------------
+  // Direct unit tests of the normalization function so the contract is pinned for callers
+  // beyond `parseRunBlock` (e.g. future renderer paths).
+
+  @Test
+  fun `normalizeOutcome maps PASSED to pass`() {
+    assertEquals("pass", ResultsShowCommand.CellView.normalizeOutcome("PASSED"))
+  }
+
+  @Test
+  fun `normalizeOutcome maps terminal failure outcomes to fail`() {
+    for (outcome in listOf("FAILED", "TIMEOUT", "MAX_CALLS_REACHED", "ERROR")) {
+      assertEquals("fail", ResultsShowCommand.CellView.normalizeOutcome(outcome), "outcome=$outcome")
+    }
+  }
+
+  @Test
+  fun `normalizeOutcome passes through non-terminal outcomes as lowercase`() {
+    assertEquals("skipped", ResultsShowCommand.CellView.normalizeOutcome("SKIPPED"))
+    assertEquals("cancelled", ResultsShowCommand.CellView.normalizeOutcome("CANCELLED"))
+  }
+
+  @Test
+  fun `normalizeOutcome maps unknown outcomes to unknown sentinel`() {
+    // CI-gate safety: a future Outcome value we don't recognize must NOT silently leak as
+    // a lowercased string that `summarizeNotes` then compares against "pass" — which could
+    // be true by accident (e.g. if a hypothetical "ALMOST_PASSED" gets lowercased and
+    // accidentally compared/parsed somewhere). Sentinel forces conservative handling.
+    assertEquals("unknown", ResultsShowCommand.CellView.normalizeOutcome("FUTURE_OUTCOME"))
+  }
+
+  @Test
+  fun `normalizeOutcome returns null for null`() {
+    assertNull(ResultsShowCommand.CellView.normalizeOutcome(null))
+  }
 }

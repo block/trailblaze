@@ -1,0 +1,31 @@
+# Library trailmap that owns the Playwright web interaction tools. Web targets run
+# against `playwright-native` (headless Chromium) or `playwright-electron` drivers;
+# this trailmap's `platforms.web` block wires the `web_core` + `web_verification`
+# toolsets so any trailmap declaring `dependencies: [web]` (or a target listing
+# `web` in its platforms) inherits them at runtime-registry dispatch time.
+#
+# This trailmap has no `target:` block — it's a library trailmap whose sole job
+# is to scope the `web_*` tools (plus one `playwright_desktop_*` outlier covered
+# below) under a trailmap id matching the user authoring model.
+#
+# **Naming convention.** Module is `trailblaze-playwright`, but trailmap id is
+# `web` — matches the `web_*` prefix on the bulk of the tools and the `web`
+# platform key declared in `TrailblazeDevicePlatform`. The module name reflects
+# the implementation (Playwright is one of multiple web drivers we might add);
+# the trailmap id reflects the user-visible capability ("I want web tools").
+#
+# **Outlier.** `playwright_desktop_launchGoose.tool.yaml` carries a
+# `playwright_*` prefix because it's a desktop-Electron-specific launch helper,
+# not a generic web primitive. It still lives in this trailmap (one trailmap
+# per shipping module is the recipe we're locking in across the framework);
+# a future cleanup can rename it to `web_launchGoose` or split off a separate
+# `playwrightDesktop` trailmap if more such tools accumulate.
+id: web
+platforms:
+  web:
+    drivers:
+      - playwright-native
+      - playwright-electron
+    tool_sets:
+      - web_core
+      - web_verification

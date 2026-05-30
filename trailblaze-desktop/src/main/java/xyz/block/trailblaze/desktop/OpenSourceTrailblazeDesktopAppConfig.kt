@@ -78,7 +78,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   )
 
   // Lazy so the settings repo is fully constructed before discovery touches it. Workspace
-  // discovery now flows through the shared `trailblaze.yaml` + `trailblaze-config/`
+  // discovery now flows through the shared `trailblaze.yaml` + `trails/config/`
   // resolver used by both LLM config loading and target discovery. Discovery runs on first
   // access and caches. See `AppTargetDiscovery` — same helper `BlockAppTargets` uses, just
   // with opensource defaults (no companions, DefaultTrailblazeHostAppTarget fallback).

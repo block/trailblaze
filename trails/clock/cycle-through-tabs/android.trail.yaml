@@ -1,5 +1,5 @@
 # Cycle through all four Clock tabs in order. Exercises the custom
-# `clock_android_launchApp` scripted tool (declared by the `clock` workspace pack)
+# `clock_android_launchApp` scripted tool (declared by the `clock` workspace trailmap)
 # for setup, then drives the agent through tab navigation.
 - config:
     id: "clock/cycle-through-tabs"

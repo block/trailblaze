@@ -11,7 +11,7 @@ import java.util.concurrent.Callable
   name = "list",
   mixinStandardHelpOptions = true,
   description = [
-    "List all waypoint definitions from active packs (workspace + framework classpath)",
+    "List all waypoint definitions from active trailmaps (workspace + framework classpath)",
     "and any additional *.waypoint.yaml files discovered under --root.",
   ],
 )
@@ -20,7 +20,7 @@ class WaypointListCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/. " +
+      "Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. " +
         "Mutually exclusive with --root (--root wins if both given).",
     ],
   )
@@ -29,7 +29,7 @@ class WaypointListCommand : Callable<Int> {
   @Option(
     names = ["--root"],
     paramLabel = "<path>",
-    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
+    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Trailmap waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
   )
   var rootOverride: File? = null
 
@@ -38,19 +38,19 @@ class WaypointListCommand : Callable<Int> {
     val result = WaypointDiscovery.discover(root)
     reportLoadFailures(result.rootFailures)
     if (result.definitions.isEmpty()) {
-      // Distinguish "no packs configured anywhere" from "some packs failed to load"
+      // Distinguish "no trailmaps configured anywhere" from "some trailmaps failed to load"
       // — otherwise a typo in `trailblaze.yaml` produces the same message as a
       // genuinely empty workspace, leaving the user with nothing to act on.
-      if (result.packLoadFailed) {
-        Console.log("No waypoint definitions found (some packs failed to load — see warnings above).")
+      if (result.trailmapLoadFailed) {
+        Console.log("No waypoint definitions found (some trailmaps failed to load — see warnings above).")
       } else {
         Console.log("No waypoint definitions found.")
       }
       // Empty + no scoping flags suggests the user might want --target. Hint only here,
-      // not in resolveWaypointRoot — classpath packs typically supply 100+ results and
+      // not in resolveWaypointRoot — classpath trailmaps typically supply 100+ results and
       // a default-path warning would be noise on every invocation.
       maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
     Console.log("Found ${result.definitions.size} waypoint(s):")
     for (def in result.definitions) {
@@ -65,6 +65,6 @@ class WaypointListCommand : Callable<Int> {
         description.lineSequence().forEach { line -> Console.log("  $line") }
       }
     }
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

@@ -2,8 +2,9 @@ package xyz.block.trailblaze.logs.client
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
@@ -241,7 +242,7 @@ class TrailblazeLogger(
     koogLlmRequestMessages: List<Message>,
     stepStatus: PromptStepStatus,
     trailblazeLlmModel: TrailblazeLlmModel,
-    response: List<Message.Response>,
+    response: Message.Assistant,
     startTime: Instant,
     traceId: TraceId,
     toolDescriptors: List<ToolDescriptor>,
@@ -249,7 +250,7 @@ class TrailblazeLogger(
     tokenUsage: TokenUsage? = null, // Optional: pass directly from SamplingResult
     llmRequestLabel: String? = null,
   ) {
-    val toolMessages = response.filterIsInstance<Message.Tool>()
+    val toolCalls = response.parts.filterIsInstance<MessagePart.Tool.Call>()
     val screenshotFilename = logScreenStateAnnotated(session, stepStatus.currentScreenState)
 
     val toolOptions = toolDescriptors
@@ -258,7 +259,7 @@ class TrailblazeLogger(
     val endTime = Clock.System.now()
 
     // Use provided token usage, or extract from response metaInfo
-    val usage = response.lastOrNull()?.metaInfo
+    val usage = response.metaInfo
     val inputTokens = tokenUsage?.inputTokens ?: usage?.inputTokensCount?.toLong() ?: 0L
     val outputTokens = tokenUsage?.outputTokens ?: usage?.outputTokensCount?.toLong() ?: 0L
     // Try Koog's native metadata first (future KG-656 support), then fall back to
@@ -334,16 +335,16 @@ class TrailblazeLogger(
         trailblazeLlmModel = trailblazeLlmModel,
         llmMessages = (koogLlmRequestMessages + response).toTrailblazeLlmMessages(),
         screenshotFile = screenshotFilename,
-        llmResponse = response,
+        llmResponse = listOf(response),
         llmRequestUsageAndCost = usageAndCost,
-        actions = toolMessages.map {
+        actions = toolCalls.map {
           Action(
             it.tool,
-            if (it.content.trim() == "null") {
+            if (it.args.trim() == "null") {
               JsonObject(emptyMap())
             } else {
               try {
-                TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.content)
+                TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.args)
               } catch (e: Exception) {
                 JsonObject(emptyMap())
               }
@@ -365,64 +366,75 @@ class TrailblazeLogger(
 
   /**
    * Helper method to convert Koog messages to Trailblaze format.
-   * Handles Tool messages, attachments, and regular content.
+   *
+   * Koog 1.0.0 collapsed tool-role messages into [MessagePart.Tool] parts that live inside
+   * an enclosing [Message.User] (tool results) or [Message.Assistant] (tool calls), so a single
+   * inbound message can produce N outbound log entries — one per tool part plus one for any
+   * remaining text/attachment content.
    */
-  internal fun List<Message>.toTrailblazeLlmMessages() = map { messageFromHistory ->
-    when (messageFromHistory) {
-      is Message.Tool -> {
-        // Both Tool.Call and Tool.Result inherit role="tool" so they collapse in the
-        // serialized log; split them explicitly to keep them distinguishable for triage.
-        val toolRole = when (messageFromHistory) {
-          is Message.Tool.Call -> "tool_use"
-          is Message.Tool.Result -> "tool_result"
-          else -> messageFromHistory.role.name.lowercase()
-        }
-        TrailblazeLlmMessage(
-          role = toolRole,
-          message = buildString {
-            appendLine("**${messageFromHistory.tool}**")
-            appendLine("")
-            appendLine("```json")
-            appendLine(messageFromHistory.content)
-            appendLine("```")
-          },
-          toolName = messageFromHistory.tool,
-        )
+  internal fun List<Message>.toTrailblazeLlmMessages(): List<TrailblazeLlmMessage> = flatMap { messageFromHistory ->
+    val toolParts = messageFromHistory.parts.filterIsInstance<MessagePart.Tool>()
+    val toolEntries = toolParts.map { tool ->
+      val (toolRole, body) = when (tool) {
+        is MessagePart.Tool.Call -> "tool_use" to tool.args
+        is MessagePart.Tool.Result -> "tool_result" to tool.output
       }
-
-      else -> {
-        TrailblazeLlmMessage(
-          role = messageFromHistory.role.name.lowercase(),
-          message = buildString {
-            appendLine(messageFromHistory.content)
-            if (messageFromHistory.hasAttachments()) {
-              appendLine("")
-              val attachments = messageFromHistory.parts.filterIsInstance<ContentPart.Attachment>()
-              if (attachments.isNotEmpty()) {
-                appendLine("Attachments:")
-                attachments.forEach { attachment ->
-                  val attachmentType = when (attachment) {
-                    is ContentPart.Audio -> "Audio"
-                    is ContentPart.File -> "File"
-                    is ContentPart.Image -> "Image"
-                    is ContentPart.Video -> "Video"
-                  }
-
-                  val attachmentContentKind = when (val attachmentContent = attachment.content) {
-                    is AttachmentContent.Binary.Base64 -> "Binary, ${attachmentContent.base64.length} Base64 Encoded Characters"
-                    is AttachmentContent.Binary.Bytes -> "Binary, ${attachmentContent.data.size} Bytes"
-                    is AttachmentContent.PlainText -> "Plain Text, ${attachmentContent.text}"
-                    is AttachmentContent.URL -> "Url, ${attachmentContent.url}"
-                  }
-
-                  appendLine("- $attachmentType (${attachment.format}), $attachmentContentKind")
-                }
-              }
-            }
-          },
-        )
-      }
+      TrailblazeLlmMessage(
+        role = toolRole,
+        message = buildString {
+          appendLine("**${tool.tool}**")
+          appendLine("")
+          appendLine("```json")
+          appendLine(body)
+          appendLine("```")
+        },
+        toolName = tool.tool,
+      )
     }
+
+    val attachmentParts = messageFromHistory.parts.filterIsInstance<MessagePart.Attachment>()
+    val textParts = messageFromHistory.parts.filterIsInstance<MessagePart.Text>()
+    val hasNonToolContent = textParts.isNotEmpty() || attachmentParts.isNotEmpty()
+    // Only emit a content entry when there is actual text or attachment content. Previously we
+    // also emitted one when `toolParts.isEmpty()`, which produced an empty-body entry for
+    // assistant messages whose parts were entirely `MessagePart.Reasoning` (Reasoning is
+    // neither Text nor Attachment, so `hasNonToolContent` is false). Reasoning-only entries
+    // showed up as blank rows in the log viewer; dropping them is safer than wrapping
+    // reasoning text in an entry shape the viewer doesn't know how to render.
+    val contentEntry = if (hasNonToolContent) {
+      TrailblazeLlmMessage(
+        role = messageFromHistory.role.name.lowercase(),
+        message = buildString {
+          appendLine(textParts.joinToString(separator = "\n") { it.text })
+          if (attachmentParts.isNotEmpty()) {
+            appendLine("")
+            appendLine("Attachments:")
+            attachmentParts.forEach { attachment ->
+              val source = attachment.source
+              val attachmentType = when (source) {
+                is AttachmentSource.Audio -> "Audio"
+                is AttachmentSource.File -> "File"
+                is AttachmentSource.Image -> "Image"
+                is AttachmentSource.Video -> "Video"
+              }
+
+              val attachmentContentKind = when (val attachmentContent = source.content) {
+                is AttachmentContent.Binary.Base64 -> "Binary, ${attachmentContent.base64.length} Base64 Encoded Characters"
+                is AttachmentContent.Binary.Bytes -> "Binary, ${attachmentContent.data.size} Bytes"
+                is AttachmentContent.PlainText -> "Plain Text, ${attachmentContent.text}"
+                is AttachmentContent.URL -> "Url, ${attachmentContent.url}"
+              }
+
+              appendLine("- $attachmentType (${source.format}), $attachmentContentKind")
+            }
+          }
+        },
+      )
+    } else {
+      null
+    }
+
+    listOfNotNull(contentEntry) + toolEntries
   }
 
   // region Progress Event Logging (Phase 6)

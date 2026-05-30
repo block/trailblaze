@@ -26,6 +26,7 @@ class PromptStepSerializer : KSerializer<PromptStep> {
     element<Boolean>("recordable", isOptional = true)
     element<ToolRecording>("recording", isOptional = true)
     element<StepPostcondition>("postcondition", isOptional = true)
+    element<Int>("maxRetries", isOptional = true)
   }
 
   override fun serialize(encoder: Encoder, value: PromptStep) {
@@ -36,15 +37,26 @@ class PromptStepSerializer : KSerializer<PromptStep> {
           encodeOptionalBooleanElement(this, descriptor, 2, value.recordable)
           encodeOptionalRecording(this, descriptor, 3, value.recording)
           encodeOptionalPostcondition(this, descriptor, 4, value.postcondition)
+          encodeOptionalIntElement(this, descriptor, 5, value.maxRetries)
         }
         is VerificationStep -> {
           encodeStringElement(descriptor, 1, value.verify)
           encodeOptionalBooleanElement(this, descriptor, 2, value.recordable)
           encodeOptionalRecording(this, descriptor, 3, value.recording)
           encodeOptionalPostcondition(this, descriptor, 4, value.postcondition)
+          encodeOptionalIntElement(this, descriptor, 5, value.maxRetries)
         }
       }
     }
+  }
+
+  private fun encodeOptionalIntElement(
+    encoder: CompositeEncoder,
+    descriptor: SerialDescriptor,
+    index: Int,
+    value: Int?,
+  ) {
+    value?.let { encoder.encodeIntElement(descriptor, index, it) }
   }
 
   private fun encodeOptionalBooleanElement(

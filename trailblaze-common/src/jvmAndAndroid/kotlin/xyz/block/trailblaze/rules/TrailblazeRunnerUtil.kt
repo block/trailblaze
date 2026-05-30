@@ -73,7 +73,7 @@ class TrailblazeRunnerUtil(
    */
   private val screenStateProvider: (suspend () -> ScreenState?)? = null,
   /**
-   * Waypoint id -> definition lookup, typically backed by the classpath-bundled pack
+   * Waypoint id -> definition lookup, typically backed by the classpath-bundled trailmap
    * registry. Like [screenStateProvider], omitting it makes postconditions a no-op.
    */
   private val waypointResolver: ((String) -> WaypointDefinition?)? = null,
@@ -141,7 +141,7 @@ class TrailblazeRunnerUtil(
             "Step $index: " + StepPostconditionAsserter.describeMismatch(assertion)
           is StepPostconditionAsserter.Result.WaypointNotFound ->
             "Step $index: postcondition references unknown waypoint " +
-              "'${assertion.requestedId}'. Check the waypoint id against the loaded packs."
+              "'${assertion.requestedId}'. Check the waypoint id against the loaded trailmaps."
           is StepPostconditionAsserter.Result.NoScreenState ->
             "Step $index: postcondition '${assertion.definitionId}' could not be evaluated — " +
               "the screen state provider returned no state within ${assertion.timeoutMs}ms."

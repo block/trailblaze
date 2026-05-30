@@ -55,7 +55,10 @@ class AssertVisibleTrailblazeToolTest {
     }
     val message = ex.message.orEmpty()
     assertContains(message, "zz99")
-    assertContains(message, "snapshot")
+    // Prefix is load-bearing for StaleRefRecovery.STALE_REF_REGEX; the older "snapshot"
+    // pointer was dropped because there is no `snapshot` LLM tool — see AssertVisibleTrailblazeTool.
+    assertContains(message, "not found on current screen")
+    assertContains(message, "view hierarchy")
   }
 
   @Test
@@ -86,16 +89,17 @@ class AssertVisibleTrailblazeToolTest {
     // Target bounds (100, 200, 300, 260) → center (200, 230). The ViewHierarchyTreeNode
     // mirror must expose a node at the same center so the DFS can map back to a node
     // TapSelectorV2 can generate a selector from.
+    // Uses AndroidMaestro (non-accessibility) driver so the legacy selector path runs.
     val trailblazeTree = TrailblazeNode(
       nodeId = 1,
       bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
-      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      driverDetail = DriverNodeDetail.AndroidMaestro(),
       children = listOf(
         TrailblazeNode(
           nodeId = 2,
           ref = "y778",
           bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
-          driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Submit"),
+          driverDetail = DriverNodeDetail.AndroidMaestro(text = "Submit"),
         ),
       ),
     )
@@ -129,6 +133,35 @@ class AssertVisibleTrailblazeToolTest {
     // nodeSelector is generated inside a try/catch that silently nulls on failure; a
     // regression in TrailblazeNodeSelectorGenerator would still produce a passing legacy
     // selector but strip the richer on-device playback path. Assert it survives.
+    assertNotNull(delegated.nodeSelector)
+  }
+
+  @Test
+  fun `accessibility driver emits nodeSelector-only with no legacy selector`() {
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          ref = "y778",
+          bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+          driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Submit"),
+        ),
+      ),
+    )
+    val context = contextWithTree(trailblazeNodeTree = trailblazeTree)
+
+    val executables = AssertVisibleTrailblazeTool(
+      ref = "y778",
+      reasoning = "accessibility driver path",
+    ).toExecutableTrailblazeTools(context)
+
+    assertEquals(1, executables.size)
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(executables.single())
+    assertEquals("accessibility driver path", delegated.reason)
+    assertEquals(null, delegated.selector)
     assertNotNull(delegated.nodeSelector)
   }
 

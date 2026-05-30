@@ -251,7 +251,7 @@ class JsScriptingCallbackArgumentValidatorTest {
     // Regression for #3261: a scripted tool declaring `required: false` for a parameter
     // must accept invocations that omit that key. The handler should receive `undefined`
     // for the missing key on the JS side — matching the TS `?:` semantics emitted by the
-    // per-pack `client.d.ts` generator.
+    // per-trailmap `client.d.ts` generator.
     val repo = repoWithDynamicTool(
       name = "search_tool",
       requiredParams = mapOf("query" to "string"),

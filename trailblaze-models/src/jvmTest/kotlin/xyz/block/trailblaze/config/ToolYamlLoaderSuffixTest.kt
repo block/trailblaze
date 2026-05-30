@@ -26,7 +26,7 @@ import xyz.block.trailblaze.util.Console
  * path catches `require()` failures and logs a warning — tests capture `Console` output
  * to assert on the operator-facing message.
  *
- * Console capture mirrors the pattern used in `TrailblazePackManifestLoaderTest`.
+ * Console capture mirrors the pattern used in `TrailblazeTrailmapManifestLoaderTest`.
  */
 class ToolYamlLoaderSuffixTest {
 

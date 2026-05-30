@@ -4,7 +4,7 @@ package xyz.block.trailblaze.agent.util
 
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
-import kotlin.time.Clock
+import ai.koog.utils.time.KoogClock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -38,7 +38,7 @@ fun PromptRecordingResult.Failure.toLlmResponseHistory(): MutableList<Message> {
     history.add(
       Message.User(
         content = tool.generateContentString(),
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }
@@ -49,7 +49,7 @@ fun PromptRecordingResult.Failure.toLlmResponseHistory(): MutableList<Message> {
         toolName = failedTool.name,
         toolArgs = JsonObject(failedTool.getToolArgs()),
       ),
-      metaInfo = RequestMetaInfo.create(Clock.System),
+      metaInfo = RequestMetaInfo.create(KoogClock.System),
     ),
   )
   return history

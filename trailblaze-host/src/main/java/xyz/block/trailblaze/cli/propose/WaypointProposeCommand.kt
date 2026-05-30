@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.propose
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -80,7 +82,7 @@ class WaypointProposeCommand : Callable<Int> {
   @Option(
     names = ["--target"],
     paramLabel = "<id>",
-    description = ["Pack id. Resolves --root + provides the proposal namespace (`<target>/auto-<slug>`)."],
+    description = ["Trailmap id. Resolves --root + provides the proposal namespace (`<target>/auto-<slug>`)."],
     required = true,
   )
   lateinit var targetId: String
@@ -115,23 +117,23 @@ class WaypointProposeCommand : Callable<Int> {
   override fun call(): Int {
     if ((clusterArg == null) == (aggregateFile == null)) {
       Console.error("Pass exactly one of --cluster or --aggregate.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (!sessionsDir.isDirectory) {
       Console.error("--sessions must be a directory: ${sessionsDir.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (topN < 1) {
       Console.error("--top-n must be >= 1, got $topN")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
-    val packDefinitions = loadPackDefinitions(root)
+    val trailmapDefinitions = loadTrailmapDefinitions(root)
     val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(r.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> r.context
       is TargetContextResolution.NoTarget -> null
@@ -140,9 +142,9 @@ class WaypointProposeCommand : Callable<Int> {
     val clusters = readClusters()
     if (clusters.isEmpty()) {
       Console.log("No clusters to propose against.")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
-    Console.log("Processing ${clusters.size} cluster(s) against ${packDefinitions.size} pack waypoint(s).")
+    Console.log("Processing ${clusters.size} cluster(s) against ${trailmapDefinitions.size} trailmap waypoint(s).")
 
     // Build the session set once: every screen-state log under --sessions. Needed for
     // the cross-waypoint bleed guard (a proposal's `definitionAfter` must not match a
@@ -163,7 +165,7 @@ class WaypointProposeCommand : Callable<Int> {
 
     val proposeLoopMs = measureTimeMillis {
       for (cluster in clusters) {
-        val outcome = processCluster(cluster, packDefinitions, sessions, target)
+        val outcome = processCluster(cluster, trailmapDefinitions, sessions, target)
         when (outcome) {
           is ClusterOutcome.Survived -> proposals += outcome.proposal
           is ClusterOutcome.Skipped -> skipped += outcome.skipped
@@ -172,23 +174,26 @@ class WaypointProposeCommand : Callable<Int> {
     }
     Console.log(
       "Survived: ${proposals.size}, skipped: ${skipped.size} in ${proposeLoopMs}ms " +
-        "across ${clusters.size} cluster(s) × ${packDefinitions.size} pack waypoint(s) × " +
+        "across ${clusters.size} cluster(s) × ${trailmapDefinitions.size} trailmap waypoint(s) × " +
         "${sessions.size} session step(s).",
     )
 
     if (idempotenceCheck) {
-      val secondPass = idempotenceSecondPass(clusters, packDefinitions, proposals, sessions, target)
+      val secondPass = idempotenceSecondPass(clusters, trailmapDefinitions, proposals, sessions, target)
       if (secondPass.isNotEmpty()) {
-        Console.error("Idempotence check FAILED: second pass emitted ${secondPass.size} new proposal(s):")
+        xyz.block.trailblaze.cli.reportCliError(
+          verb = "Idempotence check",
+          reason = "second pass emitted ${secondPass.size} new proposal(s)",
+        )
         for (p in secondPass) Console.error("  ${p.definition.id} (key=${p.proposalKey})")
-        return 1
+        return TrailblazeExitCode.ASSERTION_FAILED.code
       }
       Console.log("Idempotence check passed.")
     }
 
     writeSidecars(proposals, skipped)
     Console.log("Wrote ${proposals.size} proposal sidecar(s) to ${outDir.absolutePath}.")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   /**
@@ -197,7 +202,7 @@ class WaypointProposeCommand : Callable<Int> {
    */
   private fun processCluster(
     cluster: WaypointProposer.ClusterFingerprint,
-    packDefinitions: List<WaypointDefinition>,
+    trailmapDefinitions: List<WaypointDefinition>,
     sessions: List<WaypointSiblingCollisionGuard.SessionStep>,
     target: TargetTemplateContext?,
   ): ClusterOutcome {
@@ -220,7 +225,7 @@ class WaypointProposeCommand : Callable<Int> {
 
     return when (val s = WaypointProposer.synthesize(cluster, exampleScreen, targetId)) {
       is WaypointProposer.Synthesis.Skipped -> ClusterOutcome.Skipped(s)
-      is WaypointProposer.Synthesis.Ok -> validateAndJoin(cluster, s, packDefinitions, exampleScreen, sessions, target)
+      is WaypointProposer.Synthesis.Ok -> validateAndJoin(cluster, s, trailmapDefinitions, exampleScreen, sessions, target)
     }
   }
 
@@ -228,7 +233,7 @@ class WaypointProposeCommand : Callable<Int> {
    * Three gates after a synthesis returns Ok:
    *  1. **Self-match** — the draft must match its own example. A failure here is a
    *     synthesizer bug, not a session-set signal.
-   *  2. **Sibling overlap on example** — no existing waypoint in the pack may already
+   *  2. **Sibling overlap on example** — no existing waypoint in the trailmap may already
    *     match the example screen. If one does, the cluster is a false unmatched and
    *     refinement should handle the existing waypoint's drift instead.
    *  3. **Cross-waypoint bleed** — the new definition must not match any other session
@@ -241,7 +246,7 @@ class WaypointProposeCommand : Callable<Int> {
   private fun validateAndJoin(
     cluster: WaypointProposer.ClusterFingerprint,
     s: WaypointProposer.Synthesis.Ok,
-    packDefinitions: List<WaypointDefinition>,
+    trailmapDefinitions: List<WaypointDefinition>,
     exampleScreen: xyz.block.trailblaze.api.ScreenState,
     sessions: List<WaypointSiblingCollisionGuard.SessionStep>,
     target: TargetTemplateContext?,
@@ -255,7 +260,7 @@ class WaypointProposeCommand : Callable<Int> {
         ),
       )
     }
-    val siblingsOnExample = packDefinitions.firstOrNull { sibling ->
+    val siblingsOnExample = trailmapDefinitions.firstOrNull { sibling ->
       WaypointMatcher.match(sibling, exampleScreen, target).matched
     }
     if (siblingsOnExample != null) {
@@ -274,7 +279,7 @@ class WaypointProposeCommand : Callable<Int> {
       waypointId = s.definition.id,
       definitionBefore = null,
       definitionAfter = s.definition,
-      siblings = packDefinitions,
+      siblings = trailmapDefinitions,
       sessions = sessions,
       target = target,
     )
@@ -300,36 +305,36 @@ class WaypointProposeCommand : Callable<Int> {
   }
 
   /**
-   * Second pass: apply all surviving proposals to a virtual pack, then re-run the same
+   * Second pass: apply all surviving proposals to a virtual trailmap, then re-run the same
    * propose loop. The second pass must emit zero proposals — otherwise the synthesis
    * isn't stable on its own output.
    */
   private fun idempotenceSecondPass(
     clusters: List<WaypointProposer.ClusterFingerprint>,
-    originalPack: List<WaypointDefinition>,
+    originalTrailmap: List<WaypointDefinition>,
     survivors: List<SurvivingProposal>,
     sessions: List<WaypointSiblingCollisionGuard.SessionStep>,
     target: TargetTemplateContext?,
   ): List<SurvivingProposal> {
     if (survivors.isEmpty()) return emptyList()
-    val mutatedPack = originalPack + survivors.map { it.definition }
+    val mutatedTrailmap = originalTrailmap + survivors.map { it.definition }
     val out = mutableListOf<SurvivingProposal>()
     for (cluster in clusters) {
-      val outcome = processCluster(cluster, mutatedPack, sessions, target)
+      val outcome = processCluster(cluster, mutatedTrailmap, sessions, target)
       if (outcome is ClusterOutcome.Survived) out += outcome.proposal
     }
     return out
   }
 
   /**
-   * Pack waypoints used for the sibling-overlap + cross-waypoint bleed gates. Routes
-   * through [WaypointDiscovery.discover] so classpath-bundled packs (framework
-   * `clock`/`contacts`/etc., plus workspace-declared packs) are included alongside the
+   * Trailmap waypoints used for the sibling-overlap + cross-waypoint bleed gates. Routes
+   * through [WaypointDiscovery.discover] so classpath-bundled trailmaps (framework
+   * `clock`/`contacts`/etc., plus workspace-declared trailmaps) are included alongside the
    * filesystem-walked `*.waypoint.yaml` files. Using `WaypointLoader.discover` alone
    * (filesystem-only) would silently miss a class of overlaps with framework waypoints,
    * which is exactly the kind of bleed the guard is supposed to catch.
    */
-  private fun loadPackDefinitions(root: File): List<WaypointDefinition> {
+  private fun loadTrailmapDefinitions(root: File): List<WaypointDefinition> {
     val discovery = WaypointDiscovery.discover(root)
     reportLoadFailures(discovery.rootFailures)
     return discovery.definitions

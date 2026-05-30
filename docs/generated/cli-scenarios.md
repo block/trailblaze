@@ -27,10 +27,10 @@ The --target flag selects which app configuration to use, enabling target-specif
 **CLI:**
 
 ```bash
-trailblaze blaze --target myapp Tap login
+trailblaze step --target myapp Tap login
 ```
 
-_Verified by: `CliCommandValidationTest.picocli parses blaze target flag`_
+_Verified by: `CliCommandValidationTest.picocli parses step target flag`_
 
 ---
 
@@ -61,7 +61,7 @@ Use `trailblaze tool` with `--yaml` for direct tool execution. The -o flag provi
 trailblaze tool tap ref=p386 --device=android -o "Tap the Sign In button"
 ```
 
-_Verified by: `CliCommandValidationTest.blaze without goal returns USAGE`_
+_Verified by: `CliCommandValidationTest.step without description returns USAGE`_
 
 ---
 
@@ -72,10 +72,10 @@ The --verify flag runs observation-only: the agent checks whether a condition ho
 **CLI:**
 
 ```bash
-trailblaze blaze --verify Check the login button is visible
+trailblaze step --verify Check the login button is visible
 ```
 
-_Verified by: `CliCommandValidationTest.picocli parses blaze verify flag`_
+_Verified by: `CliCommandValidationTest.picocli parses step verify flag`_
 
 ---
 
@@ -204,10 +204,24 @@ Use --self-heal to let AI take over when a recorded step fails. When omitted, th
 **CLI:**
 
 ```bash
-trailblaze trail --self-heal flows/login.trail.yaml
+trailblaze run --self-heal flows/login.trail.yaml
 ```
 
 _Verified by: `CliCommandValidationTest.trail parses --self-heal flag as true`_
+
+---
+
+### Run a trail via the deprecated 'trail' alias
+
+`trailblaze trail` is a deprecated alias for `trailblaze run`, kept for one release so existing CI scripts and developer muscle memory keep working. The alias prints a one-line stderr deprecation warning each time it's used and will be removed in a future release.
+
+**CLI:**
+
+```bash
+trailblaze trail flows/login.trail.yaml
+```
+
+_Verified by: `CliCommandValidationTest.'trail' alias dispatches to the same command as 'run'`_
 
 ---
 
@@ -220,12 +234,12 @@ The --save flag writes the session to a trail file. Use --setup to mark leading 
 **CLI:**
 
 ```bash
-trailblaze blaze --save trails/test.trail.yaml
-trailblaze blaze --save trails/test.trail.yaml --setup 1-3
-trailblaze blaze --save trails/test.trail.yaml --no-setup
+trailblaze step --save trails/test.trail.yaml
+trailblaze step --save trails/test.trail.yaml --setup 1-3
+trailblaze step --save trails/test.trail.yaml --no-setup
 ```
 
-_Verified by: `CliCommandValidationTest.blaze -- setup without save returns USAGE`_
+_Verified by: `CliCommandValidationTest.step --setup without save returns USAGE`_
 
 ---
 

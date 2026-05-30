@@ -4,11 +4,13 @@ import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
 import xyz.block.trailblaze.mcp.toolsets.generateCategorySummaryForLLM
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -88,6 +90,26 @@ fun registerResources(
   mcpBridge: TrailblazeMcpBridge,
   trailsDirProvider: () -> File,
   llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
+  /**
+   * Resolves the effective target app for a (possibly null) device, applying
+   * the per-device → daemon-wide → validity-against-availableTargets chain.
+   * Threaded in from `TrailblazeMcpServer.findCurrentTarget` so the
+   * connected-device resource reports the same target tool dispatch uses for
+   * the bound device — without re-implementing the chain inline (which is
+   * how the pre-fix resource silently surfaced daemon-wide while dispatch
+   * used per-device).
+   *
+   * Default falls back to a thin re-implementation so callers that don't
+   * thread one in (tests, alternate hosts) still get reasonable behavior.
+   */
+  currentTargetResolver: (TrailblazeDeviceId?) -> TrailblazeHostAppTarget? = { deviceId ->
+    val targetId = if (deviceId != null) {
+      mcpBridge.getSessionTargetAppIdForDevice(deviceId)
+    } else {
+      mcpBridge.getCurrentAppTargetId()
+    }
+    targetId?.let { id -> mcpBridge.getAvailableAppTargets().firstOrNull { it.id == id } }
+  },
 ) {
   // Static: What Trailblaze is and how to use it
   mcpServer.addResource(
@@ -199,7 +221,14 @@ fun registerResources(
         driver = mcpBridge.getDriverType()?.toString(),
         installedApps = mcpBridge.getInstalledAppIds().sorted(),
         appTargets = mcpBridge.getAvailableAppTargets().map { it.id },
-        currentAppTarget = mcpBridge.getCurrentAppTargetId(),
+        // Device-scoped: defers to the same resolver tool dispatch uses
+        // (`TrailblazeMcpServer.findCurrentTarget`), so the per-device
+        // session override (set via `--target` / setSessionTargetForBoundDevice)
+        // wins over daemon-wide AND the result is already filtered through
+        // `availableAppTargets` — clients can trust that any non-null
+        // `currentAppTarget` is in `appTargets`. One resolver, one place
+        // to evolve the per-device → daemon-wide → validity chain.
+        currentAppTarget = currentTargetResolver(currentDeviceId)?.id,
       )
     }
     ReadResourceResult(
@@ -327,7 +356,7 @@ and iOS devices and automates UI interactions using natural language.
 
 ## Tips
 - Sessions are recorded automatically. Save anytime with trail(action=SAVE).
-- Use `blaze` for multi-step objectives — it handles screen analysis internally.
+- Use `step` for multi-step objectives — it handles screen analysis internally.
 - Use `verify` for assertions and `ask` for data extraction.
 - Check trailblaze://devices before connecting to see what's available.
 """.trimIndent()

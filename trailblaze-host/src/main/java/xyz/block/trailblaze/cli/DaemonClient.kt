@@ -490,8 +490,8 @@ class DaemonClient(
     /** Poll interval when waiting for daemon */
     const val POLL_INTERVAL_MS = 500L
 
-    /** Overall timeout for polling a run to completion (60 minutes) */
-    const val RUN_POLL_TIMEOUT_MS = 60 * 60 * 1000L
+    /** Overall timeout for polling a run to completion (30 minutes) */
+    const val RUN_POLL_TIMEOUT_MS = 30 * 60 * 1000L
 
     /**
      * Max consecutive poll errors before falling back to a /ping health check.

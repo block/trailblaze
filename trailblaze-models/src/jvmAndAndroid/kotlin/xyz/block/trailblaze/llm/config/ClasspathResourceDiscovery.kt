@@ -16,7 +16,7 @@ object ClasspathResourceDiscovery {
    * Discovers files matching [suffix] under [directoryPath] across all classpath entries.
    * Returns the set of matching filenames (not full paths).
    *
-   * @param directoryPath classpath directory to scan (e.g., `"trailblaze-config/providers"`)
+   * @param directoryPath classpath directory to scan (e.g., `"trails/config/providers"`)
    * @param suffix file extension filter (e.g., `".yaml"`, `".toolset.yaml"`)
    * @param anchorClass class to use for classloader resolution (defaults to this object)
    */
@@ -93,15 +93,15 @@ object ClasspathResourceDiscovery {
 
   /**
    * Recursively discovers files matching [suffix] anywhere under [directoryPath]. Returns
-   * paths relative to [directoryPath] (e.g. `clock/pack.yaml`, `wikipedia/pack.yaml`).
+   * paths relative to [directoryPath] (e.g. `clock/trailmap.yaml`, `wikipedia/trailmap.yaml`).
    *
-   * Used for hierarchical layouts like `trailblaze-config/packs/<id>/pack.yaml` where the
+   * Used for hierarchical layouts like `trails/config/trailmaps/<id>/trailmap.yaml` where the
    * non-recursive [discoverFilenames] would miss subdirectory contents on `file:` classpath
    * entries. The `jar:` branch of [discoverFilenames] is already recursive, but the `file:`
    * branch was direct-child only — this method makes both protocols behave uniformly.
    *
    * The [suffix] filter is matched against the **relative path** under [directoryPath] (with
-   * `/` separators) so callers can pass `"/pack.yaml"` to require that match be a `pack.yaml`
+   * `/` separators) so callers can pass `"/trailmap.yaml"` to require that match be a `trailmap.yaml`
    * file inside a subdirectory, mirroring the jar-branch semantics where the suffix is
    * matched against the full entry name.
    */
@@ -145,7 +145,7 @@ object ClasspathResourceDiscovery {
               }
             } catch (e: Exception) {
               // Skip unreadable JARs but log the cause — corrupted artifacts, permission
-              // issues, or zip-format errors can mask "missing pack on prod" bugs that are
+              // issues, or zip-format errors can mask "missing trailmap on prod" bugs that are
               // otherwise undebuggable.
               Console.log(
                 "Warning: ClasspathResourceDiscovery failed to scan jar '$jarPath' for " +

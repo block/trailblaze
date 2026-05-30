@@ -2,7 +2,7 @@
 #
 # This file marks the OSS repo as a Trailblaze workspace — walk-up discovery
 # from any cwd inside the repo lands here, which lets the framework pick up the
-# pack manifests under `trails/config/packs/` (clock, contacts, wikipedia).
+# trailmap manifests under `trails/config/trailmaps/` (clock, contacts, wikipedia).
 #
 # It deliberately declares no `llm:` defaults. The OSS distro defaults to
 # `llm = none` so that an external CLI user driving Trailblaze through Claude
@@ -11,19 +11,19 @@
 # provider/model of their choice:
 #
 #   trailblaze config llm <provider>/<model>     # persist for this machine
-#   trailblaze trail … --llm <provider>/<model>  # one-shot for a single run
+#   trailblaze run … --llm <provider>/<model>    # one-shot for a single run
 #
 # `trailblaze config models` lists every provider / model id the framework
 # knows about so an opting-in user doesn't have to guess.
 #
-# `targets:` lists the target-pack ids the workspace opts into. Each id resolves
-# via the convention `<workspace>/packs/<id>/pack.yaml`. Library packs reach
+# `targets:` lists the target-trailmap ids the workspace opts into. Each id resolves
+# via the convention `<workspace>/trailmaps/<id>/trailmap.yaml`. Library trailmaps reach
 # scope only through transitive `dependencies:` from a listed target — not by
 # being listed here directly.
 #
 # Listing the targets below is redundant with the filesystem-based auto-discovery
-# the framework runs (an empty `targets:` would also load every target pack
-# under `packs/`) — but a non-empty document is load-bearing: the project-config
+# the framework runs (an empty `targets:` would also load every target trailmap
+# under `trailmaps/`) — but a non-empty document is load-bearing: the project-config
 # loader treats an all-comments file as an empty YAML doc, emits a parse warning
 # on every daemon start, and ignores it. The explicit list also doubles as a
 # directory-of-contents for OSS readers.

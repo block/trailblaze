@@ -11,19 +11,22 @@ surfaces the Trailblaze-injected envelope (`_meta.trailblaze`) as a typed
 
 The recommended path is a Trailblaze workspace: `trailblaze check` extracts the SDK's
 rolled-up declaration bundle into `<workspace>/.trailblaze/sdk/dist/index.d.ts` AND writes
-each pack's `tools/tsconfig.json` as a framework-managed self-contained file whose `paths`
-mapping points at that bundle. Per-pack `package.json` and `bun install` are not required
-in that path, and authors don't hand-author the per-pack tsconfig either. See *Typed
-bindings* below for the per-pack wiring.
+each trailmap's `tools/tsconfig.json` as a framework-managed self-contained file whose `paths`
+mapping points at that bundle. Per-trailmap `package.json` and `bun install` are not required
+in that path, and authors don't hand-author the per-trailmap tsconfig either. See *Typed
+bindings* below for the per-trailmap wiring.
 
 For ad-hoc / non-Trailblaze-workspace consumption (e.g. you're vendoring `tools.ts`
-into a stand-alone bun or node+tsx project that does not run `trailblaze check`),
-install the package the usual way:
+into a stand-alone bun project that does not run `trailblaze check`), install the
+package the usual way:
 
 ```bash
 cd path/to/your-mcp-project   # wherever your tools.ts lives
-bun install   # or `npm install`
+bun install
 ```
+
+Trailblaze targets the [bun](https://bun.sh) runtime — it's the only JavaScript
+runtime required to author, build, and execute scripted tools.
 
 ## Usage
 
@@ -48,19 +51,24 @@ trailblaze.tool(
 await trailblaze.run();
 ```
 
-Wire the file from your target YAML:
+Wire the file from your trailmap manifest:
 
 ```yaml
-# trails/config/targets/myapp.yaml
+# trailmaps/myapp/trailmap.yaml
 id: myapp
-mcp_servers:
-  - script: ./mcp-sdk/tools.ts
+target:
+  display_name: My App
+  tools:
+    - findUser
 ```
+
+Pair the `.ts` source with a sibling `<name>.yaml` descriptor under
+`<trailmap>/tools/` declaring the tool's `name:`, `script:`, and `inputSchema:`.
 
 ## Composing tools — `client.tools.<name>(args)`
 
 The third handler argument is a `TrailblazeClient`. Its `tools` namespace
-dispatches any Trailblaze tool (framework tools, pack-scripted tools, sibling
+dispatches any Trailblaze tool (framework tools, trailmap-scripted tools, sibling
 tools registered in the same file) against the live session and returns the
 result. Each property is a typed method — autocomplete on the tool name, args
 type-checked against the tool's declared schema.
@@ -90,9 +98,9 @@ trailblaze.tool(
 timeout, reentrance cap hit, transport error) — so the happy path is a plain
 sequence of awaits, no success-flag branching. Only tools declared in
 `TrailblazeToolMap` are reachable; the SDK ships built-ins (`inputText`,
-`tapOnPoint`, `pressKey`, …) and the per-pack `client.d.ts` files written
+`tapOnPoint`, `pressKey`, …) and the per-trailmap `trailblaze-client.d.ts` files written
 by `trailblaze check` augment `TrailblazeToolMap` for every scripted tool
-declared in a pack's `target.tools:` plus tools transitively inherited via
+declared in a trailmap's `target.tools:` plus tools transitively inherited via
 `dependencies:` `exports:` (see *Typed bindings* below).
 
 The lower-level `callTool` dispatcher still exists on the runtime object —
@@ -100,30 +108,31 @@ it's how the `tools` Proxy actually dispatches and how the on-device QuickJS
 bundle calls back — but it's hidden from the public `TrailblazeClient` type
 so author code can't bypass the typed surface.
 
-A working example lives at
-`examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk/tools.ts`
-(look for `signUpNewUserSdk`).
+Working examples live in
+`examples/wikipedia/trails/config/trailmaps/wikipedia/tools/` (e.g.
+`wikipedia_web_searchAndVerify.ts`) — typed-overload scripted tools that compose
+each other via `client.tools.<name>(args)` over the callback channel.
 
 ### Typed bindings
 
-Each pack that ships scripted tools gets a generated `tools/.trailblaze/client.d.ts`
-that augments `TrailblazeToolMap` with one entry per tool the pack's TS authors can
-dispatch — the pack's own `target.tools:` plus every scripted tool transitively
+Each trailmap that ships scripted tools gets a generated `tools/trailblaze-client.d.ts`
+that augments `TrailblazeToolMap` with one entry per tool the trailmap's TS authors can
+dispatch — the trailmap's own `target.tools:` plus every scripted tool transitively
 inherited through `dependencies:` via the dep's `exports:` field, plus the Kotlin
-tools resolved from the pack's own platform `tool_sets:`. The file is regenerated on
+tools resolved from the trailmap's own platform `tool_sets:`. The file is regenerated on
 every `trailblaze check` (and on every daemon-aware command via the bootstrap), and
 is content-stable across restarts of the same toolset. Commit it (treat it as an API
 contract) or `.gitignore` it (treat it as derived output) — both choices are supported.
 
-The per-pack `tools/tsconfig.json` is also framework-managed — `trailblaze check`
+The per-trailmap `tools/tsconfig.json` is also framework-managed — `trailblaze check`
 writes it (and adds `tools/tsconfig.json` + `tools/.trailblaze/` to a `.gitignore` at
-the pack root). Authors don't author or maintain it. The file is fully self-contained:
+the trailmap root). Authors don't author or maintain it. The file is fully self-contained:
 every compiler option is inlined, and the only workspace-relative reference is the
 `paths` mapping pointing at the SDK declaration bundle at
 `<workspace>/.trailblaze/sdk/dist/index.d.ts` — a single rolled-up `.d.ts` with the
 zod types the SDK re-exports inlined into the same file. No `extends:` chain, no
 `node_modules`, no workspace `tsconfig.base.json`. That self-contained shape is what
-lets a pack be npm-distributed and installed into a different workspace's `node_modules/`
+lets a trailmap be npm-distributed and installed into a different workspace's `node_modules/`
 — the next `trailblaze check` re-derives the `paths` mapping at the new location.
 If you're upgrading from an older Trailblaze that expected you to hand-author the
 tsconfig, delete your existing `tools/tsconfig.json` and re-run `trailblaze check` —
@@ -305,7 +314,7 @@ jq -r 'select(.toolName == "fundAccount") | {successful, exceptionMessage}' \
 | `fromMeta(meta)`                      | function  | Parse `_meta.trailblaze` into a `TrailblazeContext` (for custom paths; `trailblaze.tool` handlers already receive the parsed context as `ctx`). |
 | `TrailblazeContext`                   | type      | Injected envelope: `{ sessionId, invocationId, device, memory, baseUrl?, runtime? }`. |
 | `TrailblazeClient`                    | type      | Third handler arg. Exposes the typed `client.tools.<name>(args)` namespace. |
-| `TrailblazeToolMap`                   | type      | Open interface mapping tool name → arg shape. Augmented by built-ins + per-pack `.d.ts` codegen. |
+| `TrailblazeToolMap`                   | type      | Open interface mapping tool name → arg shape. Augmented by built-ins + per-trailmap `.d.ts` codegen. |
 | `TrailblazeCallToolResult`            | type      | Resolved value from any `client.tools.<name>(args)` call. `{ success: true, textContent, errorMessage }`. |
 | `TrailblazeDevice`                    | type      | `ctx.device`: `{ platform, widthPixels, heightPixels, driverType }`. |
 | `RunOptions`, `TrailblazeToolHandler`, `TrailblazeToolSpec` | types | Supporting types for `run` / `tool`. |
@@ -314,11 +323,12 @@ jq -r 'select(.toolName == "fundAccount") | {successful, exceptionMessage}' \
 
 Marked `private: true` while the SDK surface stabilizes — `package.json`'s
 `main` / `exports` / `types` point at `./src/index.ts` and the package has
-no build step. Authors consume via a TS-capable runtime (bun or node+tsx)
-through the `file:` link shown in the sample-app example
-(`examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp-sdk/package.json`).
-Publishing a proper `dist/` build with `.js` + `.d.ts` outputs (and flipping
-`private` off) is a follow-up once the surface stabilizes.
+no build step. Authors consume via bun (the only supported JavaScript runtime);
+in a Trailblaze workspace, `trailblaze check` materializes the SDK's `.d.ts`
+rollup into `<workspace>/.trailblaze/sdk/dist/` and writes each trailmap's
+`tools/tsconfig.json` to point at that bundle — no `bun install` step on the
+consumer side. Publishing a proper `dist/` build with `.js` + `.d.ts` outputs
+(and flipping `private` off) is a follow-up once the surface stabilizes.
 
 ## References
 

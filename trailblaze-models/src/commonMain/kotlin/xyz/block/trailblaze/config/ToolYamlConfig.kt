@@ -18,7 +18,7 @@ import kotlinx.serialization.json.JsonEncoder
 import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 
 /**
- * Schema for per-tool `.yaml` files in `trailblaze-config/tools/`.
+ * Schema for per-tool `.yaml` files in `trails/config/trailmaps/<id>/tools/`.
  *
  * Supports two authoring modes, selected by which field is present:
  *
@@ -64,7 +64,7 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  * Three operational classes of tool live in this single data class, distinguished by which
  * (if any) metadata block is populated:
  *
- * | File suffix        | Pack subdir      | Block populated  | Class      | Available when                      |
+ * | File suffix        | Trailmap subdir      | Block populated  | Class      | Available when                      |
  * | ------------------ | ---------------- | ---------------- | ---------- | ----------------------------------- |
  * | `*.tool.yaml`      | `tools/`         | (neither)        | tool       | toolset rules (existing)            |
  * | `*.shortcut.yaml`  | `shortcuts/`     | [shortcut]       | shortcut   | current waypoint matches `from`     |
@@ -72,7 +72,7 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *
  * The blocks are mutually exclusive — a tool is at most one of those classes. File-suffix
  * conformance is enforced by [ToolYamlLoader] at load time; the data class itself
- * stays loader-agnostic. Subdirectories below each top-level pack dir are organizational
+ * stays loader-agnostic. Subdirectories below each top-level trailmap dir are organizational
  * only — `shortcuts/web/`, `trailheads/android/`, etc. are walked recursively.
  *
  * ### Shortcut

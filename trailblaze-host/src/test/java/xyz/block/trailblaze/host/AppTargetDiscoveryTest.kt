@@ -35,8 +35,8 @@ class AppTargetDiscoveryTest {
   @Test
   fun `discover loads app targets from workspace trailblaze_yaml`() {
     val workspace = tempFolder.newFolder("workspace")
-    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -76,22 +76,22 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
-  fun `discover loads app targets from workspace pack manifest including inline script tools`() {
+  fun `discover loads app targets from workspace trailmap manifest including inline script tools`() {
     val workspace = tempFolder.newFolder("workspace")
-    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(packDir, "tools").mkdirs()
-    File(packDir, "tools/open_workspace.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/open_workspace.yaml").writeText(
       """
       script: ./tools/open_workspace.js
       name: openWorkspace
       description: Open the workspace app
       """.trimIndent(),
     )
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
-        display_name: Workspace Pack App
+        display_name: Workspace Trailmap App
         platforms:
           android:
             app_ids:
@@ -101,8 +101,8 @@ class AppTargetDiscoveryTest {
       """.trimIndent(),
     )
     // `target.tools:` is now a list of tool *names* — each name must match the `name:`
-    // field declared inside a `<pack>/tools/*.yaml` descriptor (auto-discovered into a
-    // pack-local registry). Operational tools (`*.tool.yaml`, `*.shortcut.yaml`,
+    // field declared inside a `<trailmap>/tools/*.yaml` descriptor (auto-discovered into a
+    // trailmap-local registry). Operational tools (`*.tool.yaml`, `*.shortcut.yaml`,
     // `*.trailhead.yaml`) in the same directory load through their own paths.
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
@@ -122,15 +122,15 @@ class AppTargetDiscoveryTest {
 
     val target = discovered.firstOrNull { it.id == "workspaceapp" }
     assertNotNull(target)
-    assertEquals("Workspace Pack App", target.displayName)
+    assertEquals("Workspace Trailmap App", target.displayName)
     assertEquals("openWorkspace", target.getInlineScriptTools().single().name)
   }
 
   @Test
-  fun `workspace pack-based target overrides filesystem flat target with same id`() {
+  fun `workspace trailmap-based target overrides filesystem flat target with same id`() {
     val workspace = tempFolder.newFolder("workspace")
-    val packDir = File(workspace, "trails/config/packs/sharedtarget").apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/sharedtarget").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: sharedtarget
       target:
@@ -216,8 +216,8 @@ class AppTargetDiscoveryTest {
   @Test
   fun `invalid workspace toolset does not suppress valid workspace toolsets`() {
     val workspace = tempFolder.newFolder("workspace")
-    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -262,11 +262,11 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
-  fun `broken workspace pack does not suppress sibling target discovery`() {
+  fun `broken workspace trailmap does not suppress sibling target discovery`() {
     val workspace = tempFolder.newFolder("workspace")
-    // Good pack — sibling that should still resolve.
-    val goodPackDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(goodPackDir, "pack.yaml").writeText(
+    // Good trailmap — sibling that should still resolve.
+    val goodTrailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(goodTrailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -277,11 +277,11 @@ class AppTargetDiscoveryTest {
               - com.example.workspace
       """.trimIndent(),
     )
-    // Broken pack at a sibling directory — manifest fails to parse. Not listed in the
+    // Broken trailmap at a sibling directory — manifest fails to parse. Not listed in the
     // workspace `targets:` so it would only enter scope via auto-discovery; the
     // discovery walk skips it with a logged warning rather than aborting.
-    val brokenPackDir = File(workspace, "trails/config/packs/broken-pack").apply { mkdirs() }
-    File(brokenPackDir, "pack.yaml").writeText("id: broken\ntarget:\n  display_name") // truncated YAML
+    val brokenTrailmapDir = File(workspace, "trails/config/trailmaps/broken-trailmap").apply { mkdirs() }
+    File(brokenTrailmapDir, "trailmap.yaml").writeText("id: broken\ntarget:\n  display_name") // truncated YAML
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
@@ -304,92 +304,21 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
-  fun `workspace tool_yaml pure-yaml composed tool registers and resolves through toolsets`() {
+  fun `workspace trailmap-local tool_yaml registers from trailmap tools subdir`() {
     // Regression: before this wiring landed, a workspace-authored `*.tool.yaml`
     // (Mode.TOOLS — pure YAML composition, no Kotlin class, no `.ts` script body) couldn't
     // be referenced by name from a workspace toolset. The toolset loader emitted
     // `Unknown tool name 'X' — skipping`, the tool dropped out of every toolset that listed
-    // it, and the daemon's tool catalog never carried it. Reproducer was a one-shot user
-    // pack with `<workspace>/trails/config/tools/wikipedia_back_safe.tool.yaml` listed in
-    // `<workspace>/trails/config/toolsets/extras.yaml`. Same gap surfaced for
-    // `<pack>/tools/<id>.tool.yaml` inside a workspace pack.
+    // it, and the daemon's tool catalog never carried it. Trailmap-scoped authoring at
+    // `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml` is the only
+    // workspace authoring layout the framework supports.
     val workspace = tempFolder.newFolder("workspace")
-    File(workspace, "trails/config/tools").apply { mkdirs() }
-    File(workspace, "trails/config/tools/workspace_back.tool.yaml").writeText(
-      """
-      id: workspace_back
-      description: |
-        Pure-YAML workspace tool that composes the bundled `pressBack` primitive via the
-        maestro adapter — same shape as the framework's `pressBack.tool.yaml`, but
-        authored by an end user in their workspace rather than shipped on the classpath.
-      parameters: []
-      tools:
-        - maestro:
-            commands:
-              - back: {}
-      """.trimIndent(),
-    )
-    File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(workspace, "trails/config/packs/workspaceapp/pack.yaml").writeText(
-      """
-      id: workspaceapp
-      target:
-        display_name: Workspace App
-        platforms:
-          android:
-            app_ids:
-              - com.example.workspace
-            tool_sets:
-              - workspace_extras
-      """.trimIndent(),
-    )
-    File(workspace, "trails/config/trailblaze.yaml").apply {
-      parentFile.mkdirs()
-      writeText(
-        """
-        toolsets:
-          - id: workspace_extras
-            tools:
-              - workspace_back
-        targets:
-          - workspaceapp
-        """.trimIndent(),
-      )
-    }
-
-    val discovered = AppTargetDiscovery.discover(
-      workspaceConfigProvider = {
-        TrailblazeWorkspaceConfigResolver.resolve(workspace.toPath(), envReader = { null })
-      },
-    )
-
-    // The target resolves and the workspace-defined YAML tool name is reachable through the
-    // serialization initializer's overlay — both registrations the resolver needs are in place.
-    val target = discovered.firstOrNull { it.id == "workspaceapp" }
-    assertNotNull(target, "workspaceapp target must be discovered")
-    assertEquals("Workspace App", target.displayName)
-    assertTrue(
-      ToolName("workspace_back") in TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
-      "workspace_back must be registered in the serialization initializer overlay so " +
-        "`TrailblazeToolRepo.toolCallToTrailblazeTool` can find its config at runtime",
-    )
-    // Overlay reset handled by `@After resetWorkspaceYamlOverlay()` so a failed assertion
-    // above still cleans up — earlier per-test inline cleanup runs only on the success path.
-  }
-
-  @Test
-  fun `workspace pack-local tool_yaml registers from pack tools subdir`() {
-    // Same as the `trails/config/tools/` registration above, but with the YAML tool inside
-    // a pack subdir (`<pack>/tools/<id>.tool.yaml`) — the documented convention for
-    // pack-owned operational tools. The resource source's filesystem walk picks both
-    // locations up; the registration plumbing must work for both.
-    val workspace = tempFolder.newFolder("workspace")
-    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(packDir, "tools").mkdirs()
-    File(packDir, "tools/workspace_pack_back.tool.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/workspace_pack_back.tool.yaml").writeText(
       """
       id: workspace_pack_back
-      description: Pack-local pure-YAML tool composed from the maestro back primitive.
+      description: Trailmap-local pure-YAML tool composed from the maestro back primitive.
       parameters: []
       tools:
         - maestro:
@@ -397,7 +326,7 @@ class AppTargetDiscoveryTest {
               - back: {}
       """.trimIndent(),
     )
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -427,8 +356,8 @@ class AppTargetDiscoveryTest {
     assertTrue(
       ToolName("workspace_pack_back") in
         TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
-      "Pack-local `<pack>/tools/<id>.tool.yaml` must register the same way " +
-        "workspace-flat `<workspace>/trails/config/tools/<id>.tool.yaml` does",
+      "Trailmap-local `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml` " +
+        "must register so toolsets referencing it resolve cleanly.",
     )
     // Overlay reset handled by `@After resetWorkspaceYamlOverlay()`.
   }
@@ -437,14 +366,17 @@ class AppTargetDiscoveryTest {
   fun `workspace tool with classpath-colliding id overrides the bundled one`() {
     // Pin the override contract documented on
     // `TrailblazeSerializationInitializer.registerWorkspaceYamlTools`. A workspace
-    // `*.tool.yaml` with an id that collides with a classpath-shipped tool — `pressBack`
-    // is bundled in `trailblaze-common`'s `trailblaze-config/tools/pressBack.tool.yaml` —
-    // must reach the overlay so the union's last-write-wins semantics apply the workspace
-    // version. Pre-fix the registration filter dropped workspace tools whose id already
-    // appeared on the classpath, silently discarding the override and leaving the
-    // bundled config in effect.
+    // `*.tool.yaml` at the same trailmap-scoped relPath as the framework-bundled tool —
+    // `<workspace>/trails/config/trailmaps/trailblaze/tools/pressBack.tool.yaml` vs the
+    // classpath-shipped `trails/config/trailmaps/trailblaze/tools/pressBack.tool.yaml` from
+    // `trailblaze-common` — must reach the overlay so the workspace body wins. The collision
+    // is now same-relPath (both layouts are trailmap-scoped), handled by
+    // `CompositeConfigResourceSource`'s workspace-wins layering before the loader sees it.
+    // Pre-fix the registration filter dropped workspace tools whose id already appeared on
+    // the classpath, silently discarding the override and leaving the bundled config in
+    // effect.
     val workspace = tempFolder.newFolder("workspace")
-    val toolsDir = File(workspace, "trails/config/tools").apply { mkdirs() }
+    val toolsDir = File(workspace, "trails/config/trailmaps/trailblaze/tools").apply { mkdirs() }
     File(toolsDir, "pressBack.tool.yaml").writeText(
       """
       id: pressBack
@@ -488,8 +420,8 @@ class AppTargetDiscoveryTest {
     // Pin the load-bearing piece of the dispatch-side fix in
     // `TrailblazeMcpServer.ensureSessionScriptToolRuntime`. The session repo is constructed
     // with
-    //   customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromPack.yamlToolNames
-    // where `resolvedFromPack = TrailblazeToolSetCatalog.resolveForDriver(driverType,
+    //   customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames
+    // where `resolvedFromTrailmap = TrailblazeToolSetCatalog.resolveForDriver(driverType,
     // target.getDeclaredToolSetIdsForDriver(driverType))`. This test verifies the part that
     // makes the dispatch fix work: after `AppTargetDiscovery.discover()` registers a
     // workspace pure-YAML composed tool referenced by a workspace toolset, the catalog's
@@ -501,7 +433,7 @@ class AppTargetDiscoveryTest {
     // registers the workspace-aware merged toolset map into the catalog overlay via
     // `TrailblazeToolSetCatalog.registerWorkspaceToolSets`, and the test passes.
     val workspace = tempFolder.newFolder("workspace")
-    val toolsDir = File(workspace, "trails/config/tools").apply { mkdirs() }
+    val toolsDir = File(workspace, "trails/config/trailmaps/workspaceapp/tools").apply { mkdirs() }
     File(toolsDir, "dispatch_back.tool.yaml").writeText(
       """
       id: dispatch_back
@@ -513,8 +445,8 @@ class AppTargetDiscoveryTest {
               - back: {}
       """.trimIndent(),
     )
-    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
-    File(packDir, "pack.yaml").writeText(
+    val trailmapDir = File(workspace, "trails/config/trailmaps/workspaceapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
       id: workspaceapp
       target:
@@ -550,8 +482,8 @@ class AppTargetDiscoveryTest {
 
     // The exact call shape `TrailblazeMcpServer.ensureSessionScriptToolRuntime` makes:
     //   val declaredToolSetIds = target.getDeclaredToolSetIdsForDriver(driverType)
-    //   val resolvedFromPack = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
-    //   customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromPack.yamlToolNames
+    //   val resolvedFromTrailmap = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
+    //   customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames
     val driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
     val declaredToolSetIds = target.getDeclaredToolSetIdsForDriver(driverType)
     assertTrue(
@@ -559,12 +491,12 @@ class AppTargetDiscoveryTest {
       "target's declared toolsets must include the workspace toolset that names the tool — " +
         "got: $declaredToolSetIds",
     )
-    val resolvedFromPack = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
+    val resolvedFromTrailmap = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
     assertTrue(
-      ToolName("dispatch_back") in resolvedFromPack.yamlToolNames,
+      ToolName("dispatch_back") in resolvedFromTrailmap.yamlToolNames,
       "TrailblazeToolSetCatalog.resolveForDriver must surface the workspace YAML-defined tool " +
         "name so the dispatch repo's `customYamlToolNames` union includes it — got: " +
-        "${resolvedFromPack.yamlToolNames.map { it.toolName }.sorted()}",
+        "${resolvedFromTrailmap.yamlToolNames.map { it.toolName }.sorted()}",
     )
   }
 
@@ -618,7 +550,7 @@ class AppTargetDiscoveryTest {
     // then `registerWorkspaceYamlTools(emptySet)` would wipe the overlay entirely. The
     // workspace tool would seem to "disappear" on the next session-init call.
     val workspace = tempFolder.newFolder("workspace")
-    val toolsDir = File(workspace, "trails/config/tools").apply { mkdirs() }
+    val toolsDir = File(workspace, "trails/config/trailmaps/persistapp/tools").apply { mkdirs() }
     File(toolsDir, "persistent_back.tool.yaml").writeText(
       """
       id: persistent_back
@@ -628,6 +560,17 @@ class AppTargetDiscoveryTest {
         - maestro:
             commands:
               - back: {}
+      """.trimIndent(),
+    )
+    File(workspace, "trails/config/trailmaps/persistapp/trailmap.yaml").writeText(
+      """
+      id: persistapp
+      target:
+        display_name: Persist App
+        platforms:
+          android:
+            app_ids:
+              - com.example.persist
       """.trimIndent(),
     )
     File(workspace, "trails/config/trailblaze.yaml").apply {
@@ -700,7 +643,7 @@ class AppTargetDiscoveryTest {
     File(distTargets, "shared.yaml").writeText(
       """
       id: shared
-      display_name: Compiled From Pack
+      display_name: Compiled From Trailmap
       platforms:
         android:
           app_ids:
@@ -717,10 +660,10 @@ class AppTargetDiscoveryTest {
     val target = discovered.firstOrNull { it.id == "shared" }
     assertNotNull(target)
     assertEquals(
-      "Compiled From Pack",
+      "Compiled From Trailmap",
       target.displayName,
       "dist/targets/ must override workspace targets/ on id collision so freshly-compiled " +
-        "packs win over stale hand-authored copies left over from a pre-pack-migration setup",
+        "trailmaps win over stale hand-authored copies left over from a pre-trailmap-migration setup",
     )
   }
 }

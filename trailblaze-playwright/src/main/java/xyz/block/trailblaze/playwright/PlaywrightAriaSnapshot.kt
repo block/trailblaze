@@ -448,11 +448,16 @@ object PlaywrightAriaSnapshot {
     for (i in parsedLines.indices) {
       val pl = parsedLines[i]
 
-      // Pop landmarks that are at the same or deeper indent (no longer ancestors)
+      // Pop landmarks that are at the same or deeper indent (no longer ancestors).
+      // `removeAt(size - 1)` not `removeLast()` — Kotlin 2.x compiles
+      // `MutableList.removeLast()` to a direct `java.util.List.removeLast()` call,
+      // which is a JDK 21+ method that doesn't exist at runtime on JDK 17 (our target),
+      // surfacing as `NoSuchMethodError: 'Object java.util.List.removeLast()'`.
+      // `removeAt(int)` routes through pre-JDK-21 `List.remove(int)`. KT-65235.
       while (landmarkStack.isNotEmpty() &&
         parsedLines[landmarkStack.last()].indent >= pl.indent
       ) {
-        landmarkStack.removeLast()
+        landmarkStack.removeAt(landmarkStack.size - 1)
       }
 
       if (pl.isLandmark) {
@@ -565,7 +570,7 @@ object PlaywrightAriaSnapshot {
    * roles (list, table) so the LLM can see and target these structural elements.
    * Without list/table here, their children (listitem, cell) appear to float under
    * the wrong parent in the compact view, causing tools like
-   * `web_verify_list_visible` to target headings instead of lists.
+   * `web_verifyListVisible` to target headings instead of lists.
    */
   private val LANDMARK_ROLES =
     setOf(

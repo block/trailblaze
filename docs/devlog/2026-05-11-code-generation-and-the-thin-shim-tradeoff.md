@@ -69,7 +69,7 @@ The recent web-side work that adopted the playwright-mcp request-tracking settle
 The emit becomes a `when (tool)` dispatch with one branch per `web_*` tool type:
 
 - `web_navigate { url }` → `await page.goto(url)`
-- `web_click` / `web_type` / `web_hover` / `web_select_option` → resolved locator + the corresponding Playwright action
+- `web_click` / `web_type` / `web_hover` / `web_selectOption` → resolved locator + the corresponding Playwright action
 - `web_verify_*` → `await expect(...).toBeVisible() / toContainText / toHaveValue / toHaveAttribute`
 - `web_wait` → a follow-up marker comment, **not** `page.waitForTimeout`, because the framework now waits semantically
 

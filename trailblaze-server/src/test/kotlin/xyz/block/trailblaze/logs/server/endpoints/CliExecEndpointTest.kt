@@ -52,6 +52,58 @@ class CliExecEndpointTest {
     assertTrue(body.forwarded)
   }
 
+  @Test fun `success path deserializes env field and surfaces it to the callback`() = testApplication {
+    // Pins the wire contract for env forwarding: the bash shim sends the
+    // user's allowlisted shell env vars (currently just TRAILBLAZE_DEVICE)
+    // in the JSON body, and the daemon must deserialize them into
+    // request.env so `executeForDaemon` can pin them on the thread-local
+    // via CliCallerContext.withCallerEnv. Without this test, a future
+    // refactor that drops the field on the wire would silently regress
+    // the snapshot-honors-env fix and we'd only catch it via FTUX.
+    var capturedEnv: Map<String, String>? = null
+    application {
+      routing {
+        CliExecEndpoint.register(this) { req ->
+          capturedEnv = req.env
+          CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = true)
+        }
+      }
+    }
+    val response = client.post(CliEndpoints.EXEC) {
+      contentType(ContentType.Application.Json)
+      setBody(
+        """{"args":["snapshot"],"cwd":"/some/dir","env":{"TRAILBLAZE_DEVICE":"android/emulator-1"}}""",
+      )
+    }
+    assertEquals(HttpStatusCode.OK, response.status)
+    assertEquals(mapOf("TRAILBLAZE_DEVICE" to "android/emulator-1"), capturedEnv)
+  }
+
+  @Test fun `missing env field deserializes to null for backward compat with older shims`() = testApplication {
+    // Older bash shims that predate the env-forwarding fix send no env
+    // field. The daemon must accept those requests cleanly (env = null);
+    // downstream `withCallerEnv(null)` then falls back to `System.getenv`,
+    // which is the pre-fix behavior on the daemon-forwarded path (broken
+    // for the snapshot scenario, but no worse than before — never
+    // crashes). This pins the rollback safety contract.
+    var capturedEnv: Map<String, String>? = mapOf("UNEXPECTED" to "value")
+    application {
+      routing {
+        CliExecEndpoint.register(this) { req ->
+          capturedEnv = req.env
+          CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = true)
+        }
+      }
+    }
+    val response = client.post(CliEndpoints.EXEC) {
+      contentType(ContentType.Application.Json)
+      // No `env` field at all — the old-shim shape.
+      setBody("""{"args":["snapshot"]}""")
+    }
+    assertEquals(HttpStatusCode.OK, response.status)
+    assertEquals(null, capturedEnv, "missing env must deserialize to null, not an empty map")
+  }
+
   @Test fun `forwarded false is passed through`() = testApplication {
     application {
       routing {

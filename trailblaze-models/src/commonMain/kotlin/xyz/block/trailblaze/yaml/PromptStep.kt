@@ -8,6 +8,19 @@ sealed interface PromptStep {
   val recordable: Boolean
   val recording: ToolRecording?
   val postcondition: StepPostcondition?
+
+  /**
+   * Per-step override for the AI-execution retry budget.
+   *
+   * When set, `TrailGoalPlanner.executeWithAi` uses `maxRetries + 1` as the
+   * per-step attempt cap for THIS step only, instead of [TrailblazeConfig.maxRetries].
+   * Use for steps that legitimately need many tool calls to satisfy — most commonly
+   * multi-character keypad entry (e.g. a 6-digit passcode needs 6+ tool calls, which
+   * exceeds the default `maxRetries = 3` → 4 attempts cap).
+   *
+   * Null means "use config-level default" (fully backward-compatible).
+   */
+  val maxRetries: Int?
 }
 
 fun PromptStep.toDetailedString() {
@@ -17,6 +30,7 @@ fun PromptStep.toDetailedString() {
     appendLine("Recordable: $recordable")
     appendLine("Recording: $recording")
     appendLine("Postcondition: $postcondition")
+    appendLine("MaxRetries: $maxRetries")
   }
 }
 
@@ -26,6 +40,7 @@ data class DirectionStep(
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
   override val postcondition: StepPostcondition? = null,
+  override val maxRetries: Int? = null,
 ) : PromptStep {
   override val prompt: String = step
 }
@@ -36,6 +51,7 @@ data class VerificationStep(
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
   override val postcondition: StepPostcondition? = null,
+  override val maxRetries: Int? = null,
 ) : PromptStep {
   override val prompt: String = verify
 }

@@ -20,7 +20,7 @@ import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
  *    URLs served by the daemon) is a future optimization for the live in-desktop view
  *    but would break the standalone-file workflow. Inline by default; revisit if file
  *    sizes get unreasonable for huge waypoint sets.
- *  - **Pack ids parsed lazily on the front-end.** We don't pre-compute pack/platform
+ *  - **Trailmap ids parsed lazily on the front-end.** We don't pre-compute trailmap/platform
  *    grouping here because React Flow's filter UI is cheap and doing it in JS keeps the
  *    JSON payload smaller and lets the front-end iterate without re-emitting the file.
  */
@@ -54,7 +54,7 @@ data class WaypointGraphNode(
    */
   val screenshotDataUri: String?,
   /**
-   * Provenance label for hover tooltip — e.g. `pack:myapp — waypoints/banking.waypoint.yaml`
+   * Provenance label for hover tooltip — e.g. `trailmap:myapp — waypoints/banking.waypoint.yaml`
    * or a relative filesystem path. Helps the viewer debug "which file did this come from?"
    * without leaving the page.
    */
@@ -62,7 +62,7 @@ data class WaypointGraphNode(
   /**
    * Platform for this waypoint variant — `"android"`, `"ios"`, `"web"`, or `null` when not
    * platform-specific. Derived from the waypoint file's location on disk
-   * (`packs/<pack>/waypoints/<platform>/...`); the id itself no longer carries the
+   * (`trailmaps/<trailmap>/waypoints/<platform>/...`); the id itself no longer carries the
    * platform segment. Drives the platform filter pills in the graph viewer.
    */
   val platform: String?,

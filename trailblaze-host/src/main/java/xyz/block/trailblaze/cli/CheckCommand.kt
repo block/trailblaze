@@ -1,69 +1,105 @@
 package xyz.block.trailblaze.cli
 
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
+import java.util.concurrent.TimeUnit
 
 /**
- * Single-command entry point that materializes a workspace and type-checks its
- * TypeScript / JavaScript pack tools — the consolidation of the pre-issue-#3231
+ * Single-command entry point that materializes a workspace, type-checks its
+ * TypeScript / JavaScript trailmap tools via the bundled `tsc`, and runs `*.test.ts`
+ * unit tests via `bun test` — the consolidation of the pre-issue-#3231
  * `trailblaze compile` + `trailblaze typecheck` two-step.
  *
  * Resolves the workspace in three ways:
  *  1. From inside a workspace tree (CWD or any subdirectory has
- *     `trails/config/packs/` as an ancestor): walk-up finds the workspace root.
- *     If CWD is inside a specific pack, that pack is the default typecheck scope;
- *     otherwise, all packs are checked.
- *  2. From outside any workspace, with `<pack-id>`: enumerate known workspace
- *     locations (currently the per-example `examples/[name]/trails/config/packs/`
+ *     `trails/config/trailmaps/` as an ancestor): walk-up finds the workspace root.
+ *     If CWD is inside a specific trailmap, that trailmap is the default scope;
+ *     otherwise, all trailmaps are checked.
+ *  2. From outside any workspace, with `<trailmap-id>`: enumerate known workspace
+ *     locations (currently the per-example `examples/[name]/trails/config/trailmaps/`
  *     trees) and resolve the id against the union. A unique match is used;
  *     ambiguity / no-match is an error naming the candidates.
- *  3. From outside any workspace, no `<pack-id>`: emit an actionable error.
+ *  3. From outside any workspace, no `<trailmap-id>`: emit an actionable error.
  *
  * `--workspace <dir>` pins the workspace root explicitly — used by CI scripts
  * (e.g. `pr_validate_ts_tooling.sh` under `scripts/`) that run from a fixed
  * working directory and can't rely on the walk-up.
  *
- * Materialization (the compile equivalent) is delegated to [CompileCommand];
- * typechecking is delegated to [TypecheckCommand]. Both inner commands are still
- * the source of truth for their respective behavior — `CheckCommand` only orchestrates
- * resolution and ordering. The compile-only and typecheck-only picocli surfaces are
- * unregistered from [TrailblazeCli] (hard cut per the pre-external-users policy);
- * the Kotlin classes remain so internal callers and this orchestrator can use them.
+ * Materialization (the compile half) is delegated to [CompileCommand], which
+ * remains the source of truth for that behavior; the type-check and unit-test
+ * phases live here directly (previously a sibling `TypecheckCommand`, folded in
+ * after `trailblaze typecheck` was retired as a user-facing subcommand).
+ *
+ * **Type-check runtime.** Spawns `bun <tscJs> ...` — tsc is plain
+ * Node-compatible JS and bun's Node-compatibility layer executes it identically.
+ * Trailblaze's documented contract is "install bun; nothing else is required"
+ * so the typecheck pass does not fall back to Node — a missing-bun host surfaces
+ * a directed "install bun" diagnostic instead of silently switching runtimes.
+ *
+ * **Bundled tsc on-disk cache.** The framework-bundled tsc lives at
+ * `<workspace>/trails/.trailblaze/typecheck/typescript/` after first run (~6 MB).
+ * This directory is a regeneratable cache — `rm -rf` it any time to force
+ * re-extraction. The framework prunes stale files on version upgrades
+ * automatically (see [WorkspaceTypeScriptSetup.extractTypecheck]).
+ *
+ * **Per-trailmap tsc timeout.** Each `tsc` invocation is bounded by a 5-minute default
+ * that catches infinite-include-glob misconfigurations without ever interrupting a
+ * real type-check. Override via the [TIMEOUT_MS_ENV_VAR] env var (milliseconds)
+ * for codebases with known-slow cyclic types — values below the 1-minute floor are
+ * clamped up to keep `waitFor` semantically sane.
  */
 @Command(
   name = "check",
   mixinStandardHelpOptions = true,
   description = [
-    "Materialize pack manifests + type-check pack TypeScript/JavaScript sources",
+    "Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, " +
+      "and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal " +
+      "package.json at the workspace root if absent so `bun install` can be used as the " +
+      "canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`).",
   ],
 )
 class CheckCommand : Callable<Int> {
 
   @Parameters(
     arity = "0..1",
-    paramLabel = "<pack-id>",
+    paramLabel = "<trailmap-id>",
     description = [
-      "Name of the pack to scope the type-check to (directory name under " +
-        "<workspace>/trails/config/packs/). Omit when running from inside a pack " +
-        "tree (auto-detected) or pass --all to type-check every pack. Mutually " +
+      "Name of the trailmap to scope the type-check to (directory name under " +
+        "<workspace>/trails/config/trailmaps/). Omit when running from inside a trailmap " +
+        "tree (auto-detected) or pass --all to type-check every trailmap. Mutually " +
         "exclusive with --all.",
     ],
   )
-  var packId: String? = null
+  var trailmapId: String? = null
 
   @Option(
     names = ["--all"],
     description = [
-      "Type-check every pack in the discovered workspace, even when running from " +
-        "inside a specific pack tree. Mutually exclusive with the positional " +
-        "<pack-id>.",
+      "Type-check every trailmap in the discovered workspace, even when running from " +
+        "inside a specific trailmap tree. Mutually exclusive with the positional " +
+        "<trailmap-id>.",
     ],
   )
   var checkAll: Boolean = false
@@ -71,7 +107,7 @@ class CheckCommand : Callable<Int> {
   @Option(
     names = ["--workspace"],
     description = [
-      "Pin the workspace root explicitly (the directory containing `trails/config/packs/`). " +
+      "Pin the workspace root explicitly (the directory containing `trails/config/trailmaps/`). " +
         "Used by CI scripts that run with a fixed cwd; interactive users should rely on " +
         "the cwd walk-up instead.",
     ],
@@ -81,28 +117,50 @@ class CheckCommand : Callable<Int> {
   @Option(
     names = ["--no-typecheck"],
     description = [
-      "Skip the bundled-tsc typecheck pass — only materialize the workspace's SDK + " +
-        "per-pack typed bindings. Intended for CI scripts that run tsc with custom " +
-        "settings (e.g., excluding legacy embedded sub-projects); interactive users " +
-        "should leave this off.",
+      "Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap " +
+        "typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI " +
+        "scripts that run tsc with custom settings (e.g., excluding legacy embedded " +
+        "sub-projects); interactive users should leave this off.",
     ],
   )
   var noTypecheck: Boolean = false
 
+  @Option(
+    names = ["--show-typed-tools"],
+    description = [
+      "Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each " +
+        "trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic " +
+        "when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by " +
+        "default because the per-trailmap subprocess spawn it requires adds noticeable latency " +
+        "to `check`. Has no effect when node, the SDK shim, or the SDK's " +
+        "`ts-json-schema-generator` install are missing — the analyzer skips cleanly with " +
+        "an explanatory log line.",
+    ],
+  )
+  var showTypedTools: Boolean = false
+
   override fun call(): Int {
-    if (checkAll && packId != null) {
-      Console.error("trailblaze check: --all and <pack-id> are mutually exclusive.")
-      return CommandLine.ExitCode.USAGE
+    if (checkAll && trailmapId != null) {
+      Console.error("trailblaze check: --all and <trailmap-id> are mutually exclusive.")
+      return TrailblazeExitCode.MISUSE.code
     }
-    packId?.let { id ->
-      TypecheckCommand.validatePackId(id)?.let { reason ->
-        Console.error("trailblaze check: invalid pack id '$id' — $reason.")
-        return CommandLine.ExitCode.USAGE
+    trailmapId?.let { id ->
+      validateTrailmapId(id)?.let { reason ->
+        Console.error("trailblaze check: invalid trailmap id '$id' — $reason.")
+        return TrailblazeExitCode.MISUSE.code
       }
     }
 
     val callerCwd = CliCallerContext.callerCwd()
-    val resolved = resolveWorkspace(callerCwd) ?: return CommandLine.ExitCode.USAGE
+    val resolved = resolveWorkspace(callerCwd) ?: return TrailblazeExitCode.MISUSE.code
+
+    // Bootstrap discoverability: scaffold a minimal `package.json` at the workspace
+    // root if one isn't already present. Once committed, every future clone of that
+    // workspace can be bootstrapped via standard `npm install` — its `postinstall`
+    // hook fires `trailblaze check`, which populates `.trailblaze/sdk/` and the per-
+    // trailmap typed bindings the IDE indexes. Strictly non-fatal — a failure here must
+    // not block the actual check work below.
+    scaffoldWorkspacePackageJson(resolved.workspaceRoot)
 
     // Step 1: materialize. CompileCommand discovers the workspace via the same walk-up
     // shape we just used, so setting `inputDir` explicitly keeps it from re-walking
@@ -114,37 +172,253 @@ class CheckCommand : Callable<Int> {
       }.call()
     }
     if (compileExit != 0) return compileExit
-    if (noTypecheck) return 0
 
-    // Step 2: typecheck. Decision logic is in [decideTypecheckDispatch] so it can be
-    // unit-tested without spawning the inner TypecheckCommand (which itself needs
-    // bun/node on PATH and a real workspace marker). See that function's kdoc for the
-    // three dispatch branches (resolved-pack-dir / forceAll / fallback-to-callerCwd).
+    // Dispatch shape shared by both the typecheck and unit-test phases below — keeps
+    // them targeting the same trailmap set whether the user pinned `--all`, a single trailmap,
+    // or relied on the cwd walk-up.
     val dispatch = decideTypecheckDispatch(
       resolved = resolved,
       callerCwd = callerCwd,
       checkAll = checkAll,
     )
-    val typecheckExit = CliCallerContext.withCallerCwd(dispatch.cwd) {
-      TypecheckCommand().apply {
-        this.packId = dispatch.packId
-        this.typecheckAll = dispatch.typecheckAll
-        this.commandLabel = "check"
-      }.call()
+
+    // Pre-flight: resolve the trailmap list once, up front. The result feeds both the
+    // typecheck phase and the test phase, AND acts as an early-validation gate so a bad
+    // input (unknown trailmap id, no enclosing trailmap from the walk-up) surfaces ONE error
+    // here rather than two identical ones from the typecheck phase + the test-phase's
+    // own resolution call. `dispatch.cwd` is passed as an explicit `callerCwd`
+    // parameter — no [CliCallerContext] swap is needed because none of the post-compile
+    // callees (`resolveTrailmapsToCheck`, `runTypecheckPhase`, `TrailmapUnitTestRunner.run`)
+    // read the thread-local. The wrap is only retained around the [CompileCommand]
+    // call above, which DOES walk up from the thread-local cwd internally.
+    val trailmapsToValidate = resolveTrailmapsToCheck(
+      workspaceRoot = resolved.workspaceRoot,
+      callerCwd = dispatch.cwd,
+      trailmapId = dispatch.trailmapId,
+      typecheckAll = dispatch.typecheckAll,
+    ) ?: return TrailblazeExitCode.MISUSE.code
+
+    // Step 2: typecheck (skippable via `--no-typecheck`).
+    //
+    // `--no-typecheck` skips ONLY this phase, NOT the unit-test phase below. The CI
+    // script (`pr_validate_ts_tooling.sh`) uses `--no-typecheck` because it runs its
+    // own legacy-filtered tsc pass — but it still wants bun unit tests to run as part
+    // of `check`. Tests are an independent validation axis from tsc.
+    val typecheckExit = if (noTypecheck) {
+      0
+    } else {
+      runTypecheckPhase(workspaceRoot = resolved.workspaceRoot, trailmaps = trailmapsToValidate)
     }
-    return typecheckExit
+
+    // Step 3: per-trailmap unit tests via `bun test`, against the pre-resolved list above.
+    // Tests run even if typecheck failed — gradle-check-style "surface every failure
+    // in one run" so an author iterating doesn't have to fix one signal, rerun, fix
+    // the next, rerun. The aggregate exit code below picks the worst of the two
+    // phases.
+    val testExit = TrailmapUnitTestRunner.run(trailmaps = trailmapsToValidate)
+
+    // Opt-in diagnostic: print the typed scripted tools
+    // (`trailblaze.tool<I, O>({...})`) discovered in each trailmap. Off by default
+    // because the per-trailmap bun subprocess spawn adds noticeable latency; the
+    // flag makes the diagnostic available as a permanent self-service tool for
+    // authors wiring a new typed tool or chasing a missing-tool / wrong-schema
+    // bug, rather than getting removed when downstream consumers (the d.ts
+    // emitter, LLM tool registration, ajv runtime validation) wire the analyzer
+    // in directly. **Strictly non-fatal** — any analyzer failure (missing bun
+    // binary, missing shim, missing node_modules, subprocess crash, unexpected
+    // schema shape) is caught and logged; this hook never influences the check
+    // exit code.
+    if (showTypedTools) {
+      emitScriptedToolDefinitionsDebug(trailmapsToValidate, workspaceRoot = resolved.workspaceRoot)
+    }
+
+    // Worst-of-two wins. Exit codes are ordered OK(0) < FAILURE(1) < USAGE(2), so max()
+    // surfaces operator-fixable preconditions over real failures over success.
+    return maxOf(typecheckExit, testExit)
+  }
+
+  /**
+   * Opt-in `--show-typed-tools` diagnostic: runs [ScriptedToolDefinitionAnalyzer]
+   * across each trailmap's `tools/` directory and emits a flat human-readable
+   * listing of every typed scripted tool — name, source file (relative to the
+   * trailmap root when displayable), and a compact one-line input/output summary.
+   *
+   * Off by default because each trailmap costs one bun subprocess spawn (~500ms
+   * cold start); the flag makes the diagnostic available as a permanent self-
+   * service tool for authors wiring a new typed tool or chasing a missing-tool
+   * / wrong-schema bug.
+   *
+   * **Strictly non-fatal**: the entire body runs inside a top-level try-catch on
+   * [Throwable] (not just [ScriptedToolDefinitionException]) so a subprocess
+   * launch failure, an unexpected JSON shape, or a programmer error inside the
+   * analyzer cannot abort `trailblaze check`. Errors are logged under the
+   * `[ScriptedToolDefinitionAnalyzer]` prefix for grep-ability.
+   */
+  private fun emitScriptedToolDefinitionsDebug(trailmaps: List<Path>, workspaceRoot: File) {
+    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary()
+    val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
+    val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir)
+    if (bun == null || sdkDir == null || shim == null) {
+      Console.info(
+        "[ScriptedToolDefinitionAnalyzer] Skipping typed-scripted-tool extraction — " +
+          "bun=${bun?.absolutePath ?: "<missing>"}, sdkDir=${sdkDir?.absolutePath ?: "<missing>"}, " +
+          "shim=${shim?.absolutePath ?: "<missing>"}.",
+      )
+      return
+    }
+    // Preflight: even when the shim exists, it depends on
+    // `ts-json-schema-generator` + `typescript` under `<sdkDir>/node_modules/`.
+    // A fresh checkout that hasn't run `bun install` under the SDK has the
+    // shim but no resolvable deps — invoking bun would yield an
+    // `ERR_MODULE_NOT_FOUND` for every trailmap. Skip cleanly with the same
+    // message shape the analyzer-runnable assume in the test suite uses.
+    val tsjsg = File(sdkDir, "node_modules/ts-json-schema-generator")
+    if (!tsjsg.isDirectory) {
+      Console.info(
+        "[ScriptedToolDefinitionAnalyzer] Skipping typed-scripted-tool extraction — " +
+          "ts-json-schema-generator not installed under ${sdkDir.absolutePath}/node_modules; " +
+          "run `bun install` in sdks/typescript to enable.",
+      )
+      return
+    }
+    val analyzer = ScriptedToolDefinitionAnalyzer(
+      bunBinary = bun,
+      extractorShim = shim,
+      sdkDir = sdkDir,
+      // Anchor the cache to the explicit workspace, NOT to JVM cwd. With
+      // `--workspace <dir>` and the documented CI script use case (where cwd is
+      // a sibling directory), the default `resolveDefaultCacheDir()` would
+      // otherwise land under cwd's `.trailblaze/` rather than the workspace
+      // the rest of `check` operates on — every cache hit/miss would be
+      // misaligned with what the user pinned. (Automated review feedback.)
+      cacheDir = ScriptedToolDefinitionCache.resolveDefaultCacheDir(searchFrom = workspaceRoot),
+    )
+
+    val perTrailmap = try {
+      runBlocking {
+        trailmaps.map { trailmapDir ->
+          val toolsDir = trailmapDir.resolve("tools").toFile()
+          val trailmapId = trailmapDir.fileName?.toString() ?: trailmapDir.toString()
+          try {
+            Triple(trailmapId, trailmapDir, analyzer.analyze(toolsDir))
+          } catch (e: ScriptedToolDefinitionException) {
+            Console.error(
+              "[ScriptedToolDefinitionAnalyzer] trailmap '$trailmapId': ${e.message}",
+            )
+            e.errors.forEach { err ->
+              Console.error(
+                "    - ${err.file}${err.toolName?.let { " (tool: $it)" }.orEmpty()}: ${err.message}",
+              )
+            }
+            // Surface partial extractions through the debug print too — a trailmap
+            // with 9 healthy tools and 1 broken tool should still show the
+            // 9 in the listing, with the broken one's error already logged.
+            Triple(trailmapId, trailmapDir, e.partialTools)
+          }
+        }
+      }
+    } catch (e: Throwable) {
+      // Belt-and-suspenders catch-all to honor the strict non-fatal contract:
+      // subprocess launch failures (`IOException`), `InterruptedException`s
+      // bubbling out of `runBlocking`, schema-shape `require` failures inside
+      // ScriptedToolDefinition's init block — any non-ScriptedToolDefinition-
+      // Exception throwable would otherwise abort `trailblaze check` despite
+      // this hook being marked debug-only. Log under the same prefix and
+      // continue.
+      Console.error(
+        "[ScriptedToolDefinitionAnalyzer] Unexpected failure during debug " +
+          "extraction (ignored — debug output is non-fatal): ${e.message ?: e::class.simpleName}",
+      )
+      return
+    }
+    val totalTools = perTrailmap.sumOf { it.third.size }
+    Console.info(
+      "trailblaze check: discovered $totalTools typed scripted tool(s) across " +
+        "${perTrailmap.size} trailmap(s).",
+    )
+    perTrailmap.forEach { (trailmapId, trailmapDir, defs) ->
+      if (defs.isEmpty()) return@forEach
+      Console.info("  trailmap '$trailmapId':")
+      defs.forEach { def ->
+        Console.info(
+          "    - ${def.name}  (${describeSchemaShape(def.inputSchemaObject)} → " +
+            "${describeSchemaShape(def.outputSchemaObject)})  " +
+            "[${relativizeToTrailmap(def.sourcePath, trailmapDir)}:${def.line}]",
+        )
+      }
+    }
+  }
+
+  /**
+   * Render a tool's [sourcePath] relative to its [trailmapDir] for the debug print —
+   * makes the output stable across hosts (no `/Users/$USER/...` noise) and matches
+   * the docstring promise that source paths are shown "relative to the trailmap root".
+   * Falls back to the absolute path verbatim when the relativize fails (e.g.
+   * source on a different filesystem volume) so we never silently truncate.
+   *
+   * **Local on purpose.** A grep across the host module's `.relativize(` call
+   * sites (`PerTrailmapTsconfigEmitter`, `WorkspaceTypeScriptSetup`,
+   * `WaypointLocateCommand`, `CompileCommand`, `TrailsBrowserTabComposable`) shows
+   * each one uses raw `Path.relativize` without a `..`-prefix or
+   * `IllegalArgumentException` fallback because they all assume the source IS
+   * under the anchor (a guaranteed precondition in their call sites). This
+   * helper exists because the debug print receives source paths the analyzer
+   * extracted from a subprocess — those CAN land outside the trailmap root in
+   * adversarial fixtures (a symlinked source, a different mount), and the
+   * surface needs to degrade to a readable absolute path rather than throwing.
+   * If a third caller emerges that needs the same defensive shape, lift this
+   * into `CliPathUtils` then.
+   */
+  private fun relativizeToTrailmap(absoluteSourcePath: String, trailmapDir: Path): String {
+    return try {
+      val source = File(absoluteSourcePath).toPath().toAbsolutePath().normalize()
+      val anchor = trailmapDir.toAbsolutePath().normalize()
+      val rel = anchor.relativize(source)
+      // `relativize` produces a `..`-prefixed result when the source isn't under
+      // the anchor. Fall back to the absolute path in that case — relativizing
+      // to a sibling tree would be more confusing than helpful.
+      if (rel.toString().startsWith("..")) absoluteSourcePath else rel.toString()
+    } catch (_: IllegalArgumentException) {
+      absoluteSourcePath
+    }
+  }
+
+  /**
+   * One-line compact summary of a JSON Schema for the debug print — collapses an
+   * object schema to `{ field1: type, field2?: type, ... }`, leaves other shapes
+   * as their bare `type:` value (or `?` when unrecognized). Not meant for round-
+   * trip, just for visually verifying that the analyzer extracted the right shape.
+   */
+  private fun describeSchemaShape(schema: JsonObject): String {
+    val type = (schema["type"] as? JsonPrimitive)?.contentOrNull
+    if (type != "object") {
+      // anyOf / oneOf / non-object — surface as its discriminator key for the
+      // debug print rather than expanding it.
+      schema.keys.firstOrNull { it == "anyOf" || it == "oneOf" }?.let { return it }
+      return type ?: "?"
+    }
+    val props = (schema["properties"] as? JsonObject) ?: return "{}"
+    val required = (schema["required"] as? JsonArray)
+      ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+      ?.toSet().orEmpty()
+    val rendered = props.entries.joinToString(", ") { (name, propSchema) ->
+      val isReq = name in required
+      val propType = ((propSchema as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull ?: "?"
+      "$name${if (isReq) "" else "?"}: $propType"
+    }
+    return "{ $rendered }"
   }
 
   private fun resolveWorkspace(callerCwd: Path): WorkspaceResolution? {
     // --workspace wins over walk-up. Reject if the explicit dir doesn't carry the
     // workspace marker — failing here is friendlier than letting CompileCommand
-    // surface a missing-packs error later.
+    // surface a missing-trailmaps error later.
     workspaceDir?.let { explicit ->
-      val packsDir = File(explicit, TrailblazeConfigPaths.WORKSPACE_PACKS_DIR)
-      if (!packsDir.isDirectory) {
+      val trailmapsDir = File(explicit, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+      if (!trailmapsDir.isDirectory) {
         Console.error(
           "trailblaze check: --workspace ${explicit.absolutePath} does not contain " +
-            "`${TrailblazeConfigPaths.WORKSPACE_PACKS_DIR}/`. Pass a directory whose " +
+            "`${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/`. Pass a directory whose " +
             "subtree has the workspace marker.",
         )
         return null
@@ -158,39 +432,39 @@ class CheckCommand : Callable<Int> {
     }
 
     // Outside any workspace.
-    val pid = packId
+    val pid = trailmapId
     if (pid == null) {
       val startAbs = callerCwd.toAbsolutePath().normalize()
       Console.error(
         "trailblaze check: not inside a Trailblaze workspace. Walked up from " +
-          "$startAbs to the filesystem root and found no `${TrailblazeConfigPaths.WORKSPACE_PACKS_DIR}/` " +
+          "$startAbs to the filesystem root and found no `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/` " +
           "marker. To resolve, either: (a) `cd` into a workspace tree, " +
-          "(b) pass `<pack-id>` to enumerate workspaces under `./examples/`, or " +
+          "(b) pass `<trailmap-id>` to enumerate workspaces under `./examples/`, or " +
           "(c) pass `--workspace <dir>` to pin the workspace root explicitly.",
       )
       return null
     }
 
     // Enumerate candidate workspaces under CWD and pick the one (or fail with the
-    // candidate list) that carries the requested pack id. Today's enumeration is
+    // candidate list) that carries the requested trailmap id. Today's enumeration is
     // narrow on purpose — `./examples/*/trails/` — which mirrors how the docs +
     // CI scripts arrange example workspaces. The npm-distribution future can extend
     // this with `./node_modules/*/trails/` without breaking the existing path.
     val candidates = enumerateWorkspaces(callerCwd)
     val matches = candidates.filter {
-      File(it, "${TrailblazeConfigPaths.WORKSPACE_PACKS_DIR}/$pid/${TrailblazeConfigPaths.PACK_MANIFEST_FILENAME}").isFile
+      File(it, "${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/$pid/${TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME}").isFile
     }
     if (matches.isEmpty()) {
       val cwdAbs = callerCwd.toAbsolutePath().normalize()
       if (candidates.isEmpty()) {
         Console.error(
-          "trailblaze check: pack '$pid' not found — no workspaces enumerable under $cwdAbs. " +
-            "Run from a directory whose `examples/*/trails/config/packs/$pid/` subtree exists, " +
+          "trailblaze check: trailmap '$pid' not found — no workspaces enumerable under $cwdAbs. " +
+            "Run from a directory whose `examples/*/trails/config/trailmaps/$pid/` subtree exists, " +
             "or pass `--workspace <dir>`.",
         )
       } else {
         Console.error(
-          "trailblaze check: pack '$pid' not found in any enumerated workspace. " +
+          "trailblaze check: trailmap '$pid' not found in any enumerated workspace. " +
             "Searched: ${candidates.joinToString(", ") { it.absolutePath }}",
         )
       }
@@ -198,21 +472,21 @@ class CheckCommand : Callable<Int> {
     }
     if (matches.size > 1) {
       Console.error(
-        "trailblaze check: pack '$pid' is ambiguous — found in: " +
+        "trailblaze check: trailmap '$pid' is ambiguous — found in: " +
           matches.joinToString(", ") { it.absolutePath } +
           ". Pass `--workspace <dir>` to disambiguate.",
       )
       return null
     }
     val workspaceRoot = matches.single()
-    val scopePackDir = File(
+    val scopeTrailmapDir = File(
       workspaceRoot,
-      "${TrailblazeConfigPaths.WORKSPACE_PACKS_DIR}/$pid",
+      "${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/$pid",
     )
     return WorkspaceResolution(
       workspaceRoot = workspaceRoot,
-      scopePackId = pid,
-      scopePackDir = scopePackDir,
+      scopeTrailmapId = pid,
+      scopeTrailmapDir = scopeTrailmapDir,
       forceAll = false,
     )
   }
@@ -220,65 +494,65 @@ class CheckCommand : Callable<Int> {
   /**
    * Decide the typecheck scope inside an already-located workspace. Three outputs to set,
    * one per branch:
-   *  - **Explicit pack id**: fail fast if the pack dir doesn't exist (avoids a less
+   *  - **Explicit trailmap id**: fail fast if the trailmap dir doesn't exist (avoids a less
    *    actionable error from a deeper layer); otherwise resolve with that scope.
-   *  - **--all**: workspace-wide scope, no pack dir.
-   *  - **Neither**: defer to TypecheckCommand's cwd walk-up. If the caller's cwd sits at or
-   *    above the workspace's `packs/` dir (i.e. there's no enclosing pack for the walk-up
-   *    to latch onto), promote the resolution to `forceAll = true` so the caller doesn't
-   *    have to re-run with an explicit flag. That promotion is the reason this function
-   *    can't be inlined into [resolveWorkspace] — it's the only place that needs the
-   *    caller cwd in addition to the workspace root.
+   *  - **--all**: workspace-wide scope, no trailmap dir.
+   *  - **Neither**: defer to the typecheck-phase cwd walk-up. If the caller's cwd sits
+   *    at or above the workspace's `trailmaps/` dir (i.e. there's no enclosing trailmap for the
+   *    walk-up to latch onto), promote the resolution to `forceAll = true` so the caller
+   *    doesn't have to re-run with an explicit flag. That promotion is the reason this
+   *    function can't be inlined into [resolveWorkspace] — it's the only place that
+   *    needs the caller cwd in addition to the workspace root.
    */
   private fun resolveScopeInWorkspace(workspaceRoot: File, callerCwd: Path): WorkspaceResolution? {
-    val explicitPackId = packId
-    val packsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_PACKS_DIR)
-    if (explicitPackId != null) {
-      val packDir = File(packsDir, explicitPackId)
-      if (!packDir.isDirectory) {
-        val availablePacks = packsDir.listFiles { f -> f.isDirectory }
+    val explicitTrailmapId = trailmapId
+    val trailmapsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    if (explicitTrailmapId != null) {
+      val trailmapDir = File(trailmapsDir, explicitTrailmapId)
+      if (!trailmapDir.isDirectory) {
+        val availableTrailmaps = trailmapsDir.listFiles { f -> f.isDirectory }
           ?.map { it.name }
           ?.sorted()
           .orEmpty()
-        val availableLabel = if (availablePacks.isEmpty()) "<none>" else availablePacks.joinToString(", ")
+        val availableLabel = if (availableTrailmaps.isEmpty()) "<none>" else availableTrailmaps.joinToString(", ")
         Console.error(
-          "trailblaze check: pack '$explicitPackId' not found in workspace " +
+          "trailblaze check: trailmap '$explicitTrailmapId' not found in workspace " +
             "${workspaceRoot.absolutePath}. Available: $availableLabel",
         )
         return null
       }
       return WorkspaceResolution(
         workspaceRoot = workspaceRoot,
-        scopePackId = explicitPackId,
-        scopePackDir = packDir,
+        scopeTrailmapId = explicitTrailmapId,
+        scopeTrailmapDir = trailmapDir,
         forceAll = false,
       )
     }
     if (checkAll) {
       return WorkspaceResolution(
         workspaceRoot = workspaceRoot,
-        scopePackId = null,
-        scopePackDir = null,
+        scopeTrailmapId = null,
+        scopeTrailmapDir = null,
         forceAll = true,
       )
     }
-    // No explicit scope — let TypecheckCommand's walk-up decide based on cwd. If the
-    // walk-up wouldn't find an enclosing pack (because the cwd is at or above the workspace
-    // root, or sits in a sibling of `packs/`), promote to `forceAll = true` here so the
+    // No explicit scope — let the typecheck phase's walk-up decide based on cwd. If the
+    // walk-up wouldn't find an enclosing trailmap (because the cwd is at or above the workspace
+    // root, or sits in a sibling of `trailmaps/`), promote to `forceAll = true` here so the
     // user doesn't have to re-run with a flag.
-    val forceAll = callerCwd.cwdHasNoEnclosingPack(workspaceRoot.toPath())
+    val forceAll = callerCwd.cwdHasNoEnclosingTrailmap(workspaceRoot.toPath())
     return WorkspaceResolution(
       workspaceRoot = workspaceRoot,
-      scopePackId = null,
-      scopePackDir = null,
+      scopeTrailmapId = null,
+      scopeTrailmapDir = null,
       forceAll = forceAll,
     )
   }
 
   /**
    * Walk-down enumeration of candidate workspace roots, used only when the cwd-walkup
-   * found nothing AND the user supplied a pack id. Looks under each `<cwd>/examples/[name]`
-   * directory for the `trails/config/packs/` marker. Limited to one filesystem depth so
+   * found nothing AND the user supplied a trailmap id. Looks under each `<cwd>/examples/[name]`
+   * directory for the `trails/config/trailmaps/` marker. Limited to one filesystem depth so
    * a misplaced invocation at `$HOME` doesn't scan the whole tree.
    */
   internal fun enumerateWorkspaces(callerCwd: Path): List<File> {
@@ -286,15 +560,15 @@ class CheckCommand : Callable<Int> {
     if (!examplesDir.isDirectory) return emptyList()
     val children = examplesDir.listFiles { f -> f.isDirectory } ?: return emptyList()
     return children
-      .filter { File(it, TrailblazeConfigPaths.WORKSPACE_PACKS_DIR).isDirectory }
+      .filter { File(it, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR).isDirectory }
       .map { it.canonicalFile }
       .sortedBy { it.name }
   }
 
   /**
-   * True when [callerCwd] is positioned such that [TypecheckCommand]'s no-arg walk-up
-   * would NOT find an enclosing pack — either because the cwd is the workspace root
-   * itself, or because it sits in a sibling of `packs/` (e.g. `trails/config/dist/`,
+   * True when [callerCwd] is positioned such that the typecheck-phase walk-up would NOT
+   * find an enclosing trailmap — either because the cwd is the workspace root itself, or
+   * because it sits in a sibling of `trailmaps/` (e.g. `trails/config/dist/`,
    * `trails/scripts/`). Used to decide whether to promote a no-args invocation to
    * `forceAll = true` so the user doesn't have to re-run with an explicit flag.
    *
@@ -303,83 +577,654 @@ class CheckCommand : Callable<Int> {
    * Outside-workspace inputs would also return true here, which is technically wrong
    * but unreachable from the resolver.
    */
-  private fun Path.cwdHasNoEnclosingPack(workspaceRoot: Path): Boolean {
-    val canonicalCwd = try {
-      this.toRealPath()
-    } catch (_: java.io.IOException) {
-      this.toAbsolutePath().normalize()
-    }
-    val canonicalWs = try {
-      workspaceRoot.toRealPath()
-    } catch (_: java.io.IOException) {
-      workspaceRoot.toAbsolutePath().normalize()
-    }
-    // Three ways `forceAll` should fire (TypecheckCommand's walk-up has nothing to
-    // latch onto): cwd is the workspace root, cwd is `packs/` itself, or cwd doesn't
-    // sit under `packs/` at all (e.g. `trails/config/dist/`, `trails/scripts/`).
-    // `Path.startsWith` is reflexive so the explicit `cwd == packsDir` case must
+  private fun Path.cwdHasNoEnclosingTrailmap(workspaceRoot: Path): Boolean {
+    val canonicalCwd = this.canonicalize()
+    val canonicalWs = workspaceRoot.canonicalize()
+    // Three ways `forceAll` should fire (the typecheck-phase walk-up has nothing to
+    // latch onto): cwd is the workspace root, cwd is `trailmaps/` itself, or cwd doesn't
+    // sit under `trailmaps/` at all (e.g. `trails/config/dist/`, `trails/scripts/`).
+    // `Path.startsWith` is reflexive so the explicit `cwd == trailmapsDir` case must
     // come before the `!startsWith` fallback — otherwise it'd be silently swallowed.
-    val packsDir = canonicalWs.resolve(TrailblazeConfigPaths.WORKSPACE_PACKS_DIR)
+    val trailmapsDir = canonicalWs.resolve(TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
     return canonicalCwd == canonicalWs ||
-      canonicalCwd == packsDir ||
-      !canonicalCwd.startsWith(packsDir)
+      canonicalCwd == trailmapsDir ||
+      !canonicalCwd.startsWith(trailmapsDir)
+  }
+
+  // ----- Typecheck phase (folded in from the retired TypecheckCommand) ------------
+
+  /**
+   * Type-check the supplied trailmap list via the framework-bundled `tsc`.
+   *
+   * `trailblaze check`'s typecheck phase is the terminal-side equivalent of the IDE's
+   * "save and watch for red squiggles" loop: spawns the framework-bundled `tsc`
+   * (extracted to `<workspace>/trails/.trailblaze/typecheck/typescript/`) against
+   * each trailmap's framework-generated `tools/tsconfig.json` and surfaces the compiler's
+   * diagnostics verbatim. The bundled tsc gives a deterministic pinned version with no
+   * per-trailmap `bun install` step, which was the forcing function — `bun install` inside
+   * a trailmap dir fails when the trailmap's transitive npm closure can't be resolved through
+   * corporate npm mirrors in some environments.
+   *
+   * **Exit codes** (aggregated across trailmaps into three buckets so shell consumers can
+   * distinguish failure modes; the specific tsc exit code — which varies across
+   * TypeScript versions, 5.x emits `1`, 6.x emits `2` for the same diagnostics — is
+   * normalized to a single [EXIT_TYPE_ERROR] so callers don't have to track
+   * tsc-version drift):
+   *  - `0` — every trailmap passed (or no trailmaps supplied).
+   *  - `1` — at least one trailmap reported tsc-side type errors, or the spawn failed.
+   *  - `2` — usage error (missing JS runtime, missing `tools/tsconfig.json` because
+   *    the user forgot the compile phase first).
+   *  - `3` — operational error (framework JAR missing the bundled tsc payload, I/O
+   *    failure during workspace setup).
+   *
+   * Visible for testing: `CheckCommandTest` calls this directly with a fixture trailmap
+   * that has no `tools/tsconfig.json` to pin the phase's `"trailblaze check: ..."`
+   * stderr prefix against accidental drift back to `"trailblaze typecheck:"`.
+   */
+  internal fun runTypecheckPhase(workspaceRoot: File, trailmaps: List<Path>): Int {
+    if (trailmaps.isEmpty()) {
+      Console.log("trailblaze check: no trailmaps to type-check.")
+      return EXIT_OK
+    }
+
+    // [WorkspaceTypeScriptSetup.setUp] writes its outputs relative to a `trails/` directory
+    // (same convention `CompileCommand` follows — see CompileCommand.generatorRoot). The
+    // workspace root from the walk-up is the directory containing `trails/config/trailmaps/`,
+    // so descend one level into `trails/` before handing it off — otherwise setUp would
+    // emit `.trailblaze/sdk/` one level above where trailmap tsconfigs reference it.
+    val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
+
+    // Set up the workspace's SDK declaration bundle. Cheap idempotent no-ops if
+    // the compile phase already ran. Setup failures are operational (filesystem /
+    // resource issues), not user input — map to EXIT_OPERATIONAL_ERROR so shell
+    // consumers can distinguish "your invocation was wrong" (USAGE) from "the
+    // framework couldn't do its work" (OPERATIONAL).
+    try {
+      WorkspaceTypeScriptSetup.setUp(workspaceRoot = trailsRoot)
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze check: TypeScript workspace setup failed: ${e.message ?: e.javaClass.simpleName}",
+      )
+      return EXIT_OPERATIONAL_ERROR
+    }
+
+    // The tsc payload is opt-in (NOT part of setUp): only the typecheck phase needs it,
+    // and we don't want the compile phase paying the 6 MB extraction cost.
+    val tscJs = try {
+      WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = trailsRoot)
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze check: tsc extraction failed: ${e.message ?: e.javaClass.simpleName}",
+      )
+      return EXIT_OPERATIONAL_ERROR
+    }
+    if (tscJs == null) {
+      Console.error(
+        "trailblaze check: the framework JAR did not ship a bundled tsc payload. " +
+          "If you're running a framework built from source, run `bun install` in " +
+          "`sdks/typescript/` and rebuild — pre-built distributions always " +
+          "ship tsc.",
+      )
+      return EXIT_OPERATIONAL_ERROR
+    }
+
+    val jsRuntime = resolveJsRuntime()
+    if (jsRuntime == null) {
+      Console.error(
+        "trailblaze check: `bun` not found on PATH. Install bun and re-run — " +
+          "see https://bun.sh/ for the one-line install. Trailblaze uses bun as " +
+          "its sole JavaScript runtime (no Node fallback).",
+      )
+      return EXIT_USAGE
+    }
+
+    // Run tsc once per trailmap and aggregate exit codes. We do NOT short-circuit on the
+    // first failure — CI cares about the full picture, and `tsc`'s per-file diagnostics
+    // are independent across trailmaps anyway. Failure precedence: USAGE (missing tsconfig)
+    // beats TYPE_ERROR (tsc found problems) — if any trailmap is missing its tsconfig the
+    // process exits USAGE so the operator knows the compile phase didn't materialize it.
+    // A final summary names every failed trailmap so the operator doesn't have to scan
+    // the full log on `--all`.
+    var sawTypeError = false
+    var sawMissingTsconfig = false
+    val failedTrailmaps = mutableListOf<String>()
+    for (trailmap in trailmaps) {
+      val tsconfig = trailmap.resolve("tools").resolve("tsconfig.json")
+      if (!Files.isRegularFile(tsconfig)) {
+        Console.error(
+          "trailblaze check: trailmap '${trailmap.fileName}' has no tools/tsconfig.json. " +
+            "The compile phase should have emitted it — re-run `trailblaze check`.",
+        )
+        sawMissingTsconfig = true
+        failedTrailmaps += trailmap.fileName.toString()
+        continue
+      }
+      Console.log("── typecheck: ${trailmap.fileName} ────")
+      val exit = runTsc(jsRuntime = jsRuntime, tscJs = tscJs, tsconfig = tsconfig)
+      if (exit != 0) {
+        // Normalize tsc's specific exit value (which drifted from `1` in 5.x to `2`
+        // in 6.x for the same diagnostics) to a single [EXIT_TYPE_ERROR] so shell
+        // consumers see a stable contract regardless of tsc version.
+        sawTypeError = true
+        failedTrailmaps += trailmap.fileName.toString()
+      }
+    }
+    if (failedTrailmaps.isNotEmpty() && trailmaps.size > 1) {
+      // One-line summary on multi-trailmap runs so a CI consumer can grep the tail of the
+      // log and see exactly which trailmaps failed. Single-trailmap runs skip the summary —
+      // the per-trailmap header already named the failing trailmap.
+      Console.error("trailblaze check: failed trailmaps: ${failedTrailmaps.joinToString(", ")}")
+    }
+    return when {
+      sawMissingTsconfig -> EXIT_USAGE
+      sawTypeError -> EXIT_TYPE_ERROR
+      else -> EXIT_OK
+    }
+  }
+
+  /**
+   * Resolve the list of trailmap directories the typecheck + test phases should run against.
+   * Mirrors [CompileCommand]'s discovery shape — we don't reuse the project-config loader
+   * here because the per-trailmap typecheck only cares about per-trailmap tsconfig presence, not
+   * the full dependency closure (transitive deps surface through the per-trailmap tsconfig's
+   * generated `client.d.ts` already).
+   *
+   * Returns `null` when the user gave an unresolvable input (an unknown trailmap name, or no
+   * trailmap at the caller's cwd) — caller maps that to [TrailblazeExitCode.MISUSE.code].
+   *
+   * `trailmapId` / `typecheckAll` come from the dispatch decision in [decideTypecheckDispatch]
+   * rather than the CLI fields directly so a `--all` invocation routes through the same
+   * code path as a `forceAll` coercion.
+   */
+  internal fun resolveTrailmapsToCheck(
+    workspaceRoot: File,
+    callerCwd: Path,
+    trailmapId: String?,
+    typecheckAll: Boolean,
+  ): List<Path>? {
+    val trailmapsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    if (!trailmapsDir.isDirectory) {
+      Console.error(
+        "trailblaze check: no trailmaps/ directory found at ${trailmapsDir.absolutePath}.",
+      )
+      return null
+    }
+
+    if (typecheckAll) {
+      val trailmapDirs = trailmapsDir.listFiles { f ->
+        f.isDirectory && File(f, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME).isFile
+      }
+      // `File.listFiles` returns `null` on I/O errors (permission denied, dir
+      // disappeared mid-walk). Treating null as "no trailmaps" would silently hide a real
+      // filesystem problem — surface it as a usage error with a pointer to the dir.
+      if (trailmapDirs == null) {
+        Console.error(
+          "trailblaze check: failed to list trailmaps at ${trailmapsDir.absolutePath} " +
+            "(I/O or permission error).",
+        )
+        return null
+      }
+      return trailmapDirs.sortedBy { it.name }.map { it.toPath() }
+    }
+
+    if (trailmapId != null) {
+      val target = File(trailmapsDir, trailmapId)
+      if (!File(target, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME).isFile) {
+        Console.error(
+          "trailblaze check: unknown trailmap '$trailmapId' — no trailmap.yaml at " +
+            "${target.absolutePath}.",
+        )
+        return null
+      }
+      return listOf(target.toPath())
+    }
+
+    // No --all and no positional arg → walk up from cwd to find the enclosing trailmap.
+    val trailmap = findEnclosingTrailmap(callerCwd, trailmapsDirAbs = trailmapsDir.canonicalFile.toPath())
+    if (trailmap == null) {
+      Console.error(
+        "trailblaze check: no trailmap to type-check. Pass a trailmap id (e.g. `trailblaze " +
+          "check wikipedia`) or --all, or run from inside a trailmap's directory tree.",
+      )
+      return null
+    }
+    return listOf(trailmap)
+  }
+
+  /**
+   * Walk up from [startPath] looking for the nearest ancestor containing a `trailmap.yaml`
+   * sibling, stopping at [trailmapsDirAbs] (we don't want to walk past `trailmaps/` into the
+   * workspace root — only directories under `trailmaps/<id>/` are valid trailmap roots).
+   *
+   * Visible for testing.
+   */
+  internal fun findEnclosingTrailmap(startPath: Path, trailmapsDirAbs: Path): Path? {
+    // Canonicalize both sides via `toRealPath()` so symlink-prefixed temp roots like
+    // macOS's `/tmp -> /private/tmp` don't make the `parent == trailmapsDirAbs` comparison
+    // miss its target. Falls back to `toAbsolutePath().normalize()` if the path doesn't
+    // exist yet — important for unit tests that pass paths constructed by string-
+    // concatenation under a temp dir that hasn't been written to.
+    val canonicalTrailmapsDir = trailmapsDirAbs.canonicalize()
+    val startDir = startPath.canonicalize()
+    var current: Path? = if (Files.isRegularFile(startDir)) startDir.parent else startDir
+    while (current != null) {
+      // A "trailmap root" is a directory directly under `trailmaps/` (depth 1) that contains a
+      // `trailmap.yaml` file. Detecting both conditions guards against the edge where a user
+      // drops a stray `trailmap.yaml` somewhere unrelated under their workspace.
+      val parentCanonical = current.parent?.canonicalize()
+      if (Files.isRegularFile(current.resolve(TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)) &&
+        parentCanonical != null &&
+        parentCanonical == canonicalTrailmapsDir
+      ) {
+        return current
+      }
+      if (current.canonicalize() == canonicalTrailmapsDir) return null
+      current = current.parent
+    }
+    return null
+  }
+
+  /**
+   * Canonicalize a path so it compares stably to other canonicalized paths. Uses
+   * `toRealPath()` when the path exists (resolves symlinks like macOS's `/tmp ->
+   * /private/tmp`); falls back to `toAbsolutePath().normalize()` otherwise so callers
+   * can hand us paths constructed by string-concatenation under not-yet-materialized
+   * directories.
+   */
+  private fun Path.canonicalize(): Path = try {
+    this.toRealPath()
+  } catch (_: java.io.IOException) {
+    this.toAbsolutePath().normalize()
+  }
+
+  /**
+   * Resolve the `bun` binary on PATH — Trailblaze's sole supported JavaScript
+   * runtime. The framework's scripted-tool analyzer, esbuild pipeline (see
+   * [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]), and
+   * per-trailmap test runner all route through bun, so requiring it
+   * uniformly keeps the developer-experience contract simple: "install bun,
+   * everything else just works."
+   *
+   * Returns `null` when bun is missing. PATH probing delegates to
+   * [CliPathUtils.isCommandOnPath] for cross-platform behavior (`.exe`
+   * resolution on Windows via `PATHEXT`).
+   */
+  internal fun resolveJsRuntime(): String? {
+    for (candidate in JS_RUNTIME_PREFERENCE) {
+      if (CliPathUtils.isCommandOnPath(candidate)) return candidate
+    }
+    return null
+  }
+
+  /**
+   * Spawn `<jsRuntime> <tscJs> --pretty --noEmit --project <tsconfig>` against [tsconfig]
+   * and pipe the output to the caller's terminal verbatim. `--pretty` keeps tsc's
+   * coloring; `--noEmit` is the standard "check only" flag that matches what the IDE's
+   * language server does on save. We pass `--project` explicitly so tsc anchors its
+   * include globs at the trailmap's `tools/` dir rather than the cwd.
+   *
+   * Returns the spawned process's exit code — tsc itself uses `0` for success and `1`
+   * for type errors, which propagate upstream as [EXIT_TYPE_ERROR].
+   */
+  private fun runTsc(jsRuntime: String, tscJs: Path, tsconfig: Path): Int {
+    val argv = listOf(
+      jsRuntime,
+      tscJs.toAbsolutePath().toString(),
+      "--pretty",
+      "--noEmit",
+      "--project",
+      tsconfig.toAbsolutePath().toString(),
+    )
+    val timeoutMs = resolveTscTimeoutMs()
+    return try {
+      val proc = ProcessBuilder(argv)
+        .redirectErrorStream(true)
+        // No `directory(...)` — `tsc --project <abs>` reads its include set from the
+        // resolved tsconfig anchor, not the cwd.
+        .inheritIO()
+        .start()
+      // Default cap is 5 minutes. tsc is usually well under 5 seconds even on cold
+      // caches; a 5-minute ceiling catches pathological misconfigurations (infinite
+      // include glob, runaway process) without ever interrupting a real type-check.
+      // Override via [TIMEOUT_MS_ENV_VAR] when working with codebases that have known
+      // pathological cyclic types — see [resolveTscTimeoutMs] for clamp behavior.
+      if (proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+        proc.exitValue()
+      } else {
+        Console.error(
+          "trailblaze check: tsc did not finish within ${timeoutMs}ms — killing. " +
+            "Bump $TIMEOUT_MS_ENV_VAR if this is a known-slow codebase.",
+        )
+        proc.destroyForcibly()
+        proc.waitFor(10, TimeUnit.SECONDS)
+        EXIT_TYPE_ERROR
+      }
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze check: failed to spawn $jsRuntime: ${e.message ?: e.javaClass.simpleName}",
+      )
+      EXIT_TYPE_ERROR
+    }
+  }
+
+  /**
+   * Resolve the per-trailmap tsc subprocess timeout in milliseconds.
+   *
+   * Reads [TIMEOUT_MS_ENV_VAR] once. A missing / unparseable value falls back to
+   * [DEFAULT_TSC_TIMEOUT_MS] (5 minutes). The result is clamped to a 1-minute lower
+   * bound so a fat-fingered `=0` or `=1` doesn't make `waitFor` return false
+   * immediately and report every typecheck as a timeout — same defensive clamp the
+   * Gradle install-task helpers in this repo use for an analogous env var.
+   *
+   * Logged once per command invocation (only when overridden) so a CI consumer can
+   * trace which value was actually in effect when an unexpected timeout fires.
+   */
+  internal fun resolveTscTimeoutMs(): Long {
+    val raw = System.getenv(TIMEOUT_MS_ENV_VAR) ?: return DEFAULT_TSC_TIMEOUT_MS
+    val parsed = raw.toLongOrNull()
+    if (parsed == null) {
+      Console.error(
+        "trailblaze check: $TIMEOUT_MS_ENV_VAR='$raw' is not a valid number of " +
+          "milliseconds — using default ${DEFAULT_TSC_TIMEOUT_MS}ms.",
+      )
+      return DEFAULT_TSC_TIMEOUT_MS
+    }
+    val clamped = parsed.coerceAtLeast(MIN_TSC_TIMEOUT_MS)
+    if (clamped != parsed) {
+      Console.error(
+        "trailblaze check: $TIMEOUT_MS_ENV_VAR=${parsed}ms is below the 1-minute " +
+          "floor — clamped to ${clamped}ms.",
+      )
+    }
+    return clamped
   }
 
   /**
    * Result of [resolveWorkspace]. Carries everything step 2 needs to dispatch the
-   * inner [TypecheckCommand] without re-deriving from cwd.
+   * inner typecheck phase without re-deriving from cwd.
    *
-   * - [scopePackId] / [scopePackDir]: the explicit pack the user asked for (or that we
-   *   resolved by enumeration), or null when no specific pack was scoped.
+   * - [scopeTrailmapId] / [scopeTrailmapDir]: the explicit trailmap the user asked for (or that we
+   *   resolved by enumeration), or null when no specific trailmap was scoped.
    * - [forceAll]: true when the resolver determined the typecheck should run against every
-   *   pack — either because `--all` was passed, or because the caller cwd has no enclosing
-   *   pack for the inner walk-up to find. Lifting this here keeps the call site readable
+   *   trailmap — either because `--all` was passed, or because the caller cwd has no enclosing
+   *   trailmap for the inner walk-up to find. Lifting this here keeps the call site readable
    *   (`checkAll || resolved.forceAll`) and puts the decision next to the rest of the
    *   workspace-shape logic.
    */
   internal data class WorkspaceResolution(
     val workspaceRoot: File,
-    val scopePackId: String?,
-    val scopePackDir: File?,
+    val scopeTrailmapId: String?,
+    val scopeTrailmapDir: File?,
     val forceAll: Boolean,
   ) {
     init {
-      // Forcing function: a scoped pack already implies "typecheck this one pack", while
+      // Forcing function: a scoped trailmap already implies "typecheck this one trailmap", while
       // `forceAll` implies workspace-wide. The combination is meaningless and would feed
       // [decideTypecheckDispatch] a state that produces an internally inconsistent
-      // dispatch (pack-dir cwd with `typecheckAll = true`), which the inner
-      // TypecheckCommand then rejects as a usage error. Catch it at construction so the
+      // dispatch (trailmap-dir cwd with `typecheckAll = true`), which the typecheck phase's
+      // pre-resolution then rejects as a usage error. Catch it at construction so the
       // invariant lives next to the data instead of leaking out as a confusing error.
-      require(!(scopePackDir != null && forceAll)) {
-        "WorkspaceResolution: scopePackDir and forceAll are mutually exclusive — got " +
-          "scopePackDir=$scopePackDir, forceAll=$forceAll. A scoped pack already implies " +
-          "per-pack typecheck; forceAll implies workspace-wide. Pick one."
+      require(!(scopeTrailmapDir != null && forceAll)) {
+        "WorkspaceResolution: scopeTrailmapDir and forceAll are mutually exclusive — got " +
+          "scopeTrailmapDir=$scopeTrailmapDir, forceAll=$forceAll. A scoped trailmap already implies " +
+          "per-trailmap typecheck; forceAll implies workspace-wide. Pick one."
       }
     }
   }
 
   /**
-   * What step 2 actually hands to [TypecheckCommand]: a cwd to root its walk-up against,
-   * a pack-id (or null), and a typecheck-all flag. Pure data — exposed for unit tests
+   * What step 2 actually hands to the typecheck phase: a cwd to root its walk-up against,
+   * a trailmap-id (or null), and a typecheck-all flag. Pure data — exposed for unit tests
    * of [decideTypecheckDispatch].
    */
   internal data class TypecheckDispatch(
     val cwd: Path,
-    val packId: String?,
+    val trailmapId: String?,
     val typecheckAll: Boolean,
   )
 
+  /**
+   * `internal` (rather than `private`, which the sibling [CompileCommand] uses for
+   * its companion) so the migrated typecheck-helper tests in `CheckCommandTest`
+   * can reach the exit-code constants, `validateTrailmapId`, `JS_RUNTIME_PREFERENCE`,
+   * and the timeout-clamp invariants directly. If the typecheck phase ever leaves
+   * `CheckCommand`, tighten this back to `private` and lift these onto whatever
+   * object takes ownership of the phase.
+   */
   internal companion object {
+    /** Picocli OK. */
+    const val EXIT_OK = 0
+
     /**
-     * Decide how to drive [TypecheckCommand] for the given resolution + caller state.
+     * The shell command this scaffold pins into `scripts.postinstall`. Guarded with
+     * `command -v` so `npm install` succeeds gracefully when the `trailblaze` binary
+     * isn't on PATH — important for in-repo contributors who invoke the wrapper
+     * (`./trailblaze` from the repo root) rather than a globally installed binary.
+     * If the CLI IS on PATH the postinstall hydrates `.trailblaze/sdk/` + the per-
+     * trailmap typed bindings the IDE indexes; if it isn't, npm prints a one-line
+     * advisory instead of failing the install. Exact-match string-compared in
+     * [scaffoldWorkspacePackageJson]: a hand-edit that diverges by even a character
+     * triggers the "Tip:" hint, intentionally — the bootstrap loop only closes when
+     * the file matches verbatim.
+     */
+    internal const val POSTINSTALL_HOOK: String =
+      "command -v trailblaze >/dev/null 2>&1 && trailblaze check || " +
+        "printf 'trailblaze CLI not on PATH; skipping IDE bootstrap.\\n'"
+
+    /**
+     * Fallback `name` field for the scaffolded package.json when the workspace
+     * directory's basename can't yield a valid npm-style identifier (empty,
+     * dot-prefixed, or — after sanitization — produces an empty string).
+     */
+    internal const val DEFAULT_WORKSPACE_NAME: String = "trailblaze-workspace"
+
+    /**
+     * Lower-case the workspace dir's basename and replace anything outside
+     * `[a-z0-9_-]` with `-`. Falls back to [DEFAULT_WORKSPACE_NAME] for inputs that
+     * are blank, dot-prefixed (a hidden dir is never a great npm name), sanitize
+     * down to an empty string (`"!!!"` etc.), or that sanitize to a leading-`-`
+     * name (`"@scope"` → `"-scope"`, which npm rejects — defeats the whole point of
+     * the scaffold). Matches npm's "private package" naming surface — strict enough
+     * to avoid `npm install` warnings, loose enough to round-trip common workspace
+     * dir names verbatim.
+     */
+    internal fun sanitizeWorkspaceName(basename: String): String {
+      if (basename.isBlank() || basename.startsWith(".")) return DEFAULT_WORKSPACE_NAME
+      val sanitized = basename.lowercase().replace(Regex("[^a-z0-9_-]"), "-")
+      // npm rejects names starting with `-` or `.` — `npm install` would fail loudly
+      // on the very command we're scaffolding. Strip a leading run before the
+      // ifBlank fallback. Trailing hyphens are fine (npm accepts them).
+      val trimmed = sanitized.trimStart('-', '.')
+      return trimmed.ifBlank { DEFAULT_WORKSPACE_NAME }
+    }
+
+    /**
+     * Build the scaffold's literal file contents.
+     *
+     * Built via [buildJsonObject] rather than raw string interpolation because
+     * [POSTINSTALL_HOOK] contains characters that need JSON-escaping (`\n` inside
+     * the `printf` fallback). Interpolating into a triple-quoted template would
+     * produce invalid JSON (the raw `\n` would be parsed as a newline character
+     * by any consumer, dropping the literal backslash the shell needs).
+     *
+     * Trailing newline so a `cat` of the file under tooling that line-counts (most
+     * editors, `wc -l`) reports the same row count humans see; matches the
+     * convention every other file we emit follows.
+     */
+    internal fun packageJsonTemplate(workspaceRoot: File): String {
+      val name = sanitizeWorkspaceName(workspaceRoot.name)
+      val obj = buildJsonObject {
+        put("name", name)
+        put("private", true)
+        putJsonObject("scripts") {
+          put("postinstall", POSTINSTALL_HOOK)
+        }
+      }
+      return JSON_FORMATTER.encodeToString(JsonObject.serializer(), obj) + "\n"
+    }
+
+    /**
+     * `Json` configured to pretty-print with the 2-space indent used by the rest of
+     * this codebase's emitted files. Single shared instance because [Json] is
+     * thread-safe and the configuration never changes per call.
+     */
+    private val JSON_FORMATTER: Json = Json {
+      prettyPrint = true
+      prettyPrintIndent = "  "
+    }
+
+    /**
+     * Scaffold `<workspaceRoot>/package.json` on first run. Four branches:
+     *
+     *  - **Absent** → write [packageJsonTemplate] and ask the developer to commit it.
+     *    Write failures (permission denied, disk full, parent dir missing) log to
+     *    stderr under the `trailblaze check:` prefix and return without aborting
+     *    the rest of `check`. Once the file lands, every future clone is
+     *    bootstrapped by a standard `npm install` (its `postinstall` re-runs
+     *    `trailblaze check`, which re-populates `.trailblaze/sdk/` and the per-trailmap
+     *    typed bindings the IDE indexes).
+     *  - **Present (a regular file), postinstall == [POSTINSTALL_HOOK]** → silent
+     *    no-op. The file is already wired the way we'd write it.
+     *  - **Present (a regular file), anything else** → leave the file untouched,
+     *    print a one-line hint. Once a package.json exists it belongs to the
+     *    developer; we never overwrite or auto-edit it.
+     *  - **Present but unparseable / not a regular file** → silent no-op. We
+     *    deliberately don't surface the read or parse error: a malformed
+     *    package.json (or a path collision where `package.json` is a directory)
+     *    will be flagged the next time the developer runs `npm install` (or any
+     *    other JS tool) with a much better diagnostic than we could produce here.
+     *
+     * Visible for testing via the [CheckCommand] companion entrypoint so the four
+     * branches can be exercised without spinning up the full compile + typecheck
+     * pipeline. Strictly non-fatal — write-side I/O failures log to stderr; read-
+     * side failures (including parse errors and non-regular-file path collisions)
+     * are silent on purpose.
+     */
+    internal fun scaffoldWorkspacePackageJson(workspaceRoot: File) {
+      val pkgJson = File(workspaceRoot, "package.json")
+      if (!pkgJson.exists()) {
+        try {
+          pkgJson.writeText(packageJsonTemplate(workspaceRoot))
+        } catch (e: Exception) {
+          Console.error(
+            "trailblaze check: failed to scaffold ${pkgJson.absolutePath}: " +
+              (e.message ?: e.javaClass.simpleName),
+          )
+          return
+        }
+        Console.info(
+          "Wrote ${pkgJson.absolutePath} — review and commit so `bun install` " +
+            "auto-bootstraps for future clones.",
+        )
+        return
+      }
+      // `exists()` is reflexively true for directories too — guard with `isFile`
+      // so a `<workspaceRoot>/package.json` directory (filesystem corruption, a
+      // weird mis-clone) doesn't fall through to `readText()` and throw. Bail
+      // silently per the kdoc contract.
+      if (!pkgJson.isFile) return
+      val postinstall = try {
+        val root = Json.parseToJsonElement(pkgJson.readText()).jsonObject
+        val scripts = root["scripts"] as? JsonObject
+        (scripts?.get("postinstall") as? JsonPrimitive)?.contentOrNull
+      } catch (_: Exception) {
+        // Unparseable / unexpected shape — treat as "developer's problem" and stay
+        // quiet. See the kdoc above for why we don't surface read/parse errors.
+        return
+      }
+      if (postinstall == POSTINSTALL_HOOK) return
+      Console.info(
+        "Tip: set `\"postinstall\": \"$POSTINSTALL_HOOK\"` in " +
+          "${pkgJson.absolutePath} so `bun install` auto-bootstraps the IDE for " +
+          "future clones.",
+      )
+    }
+
+
+    /**
+     * Type errors (or any tsc-side spawn failure). Maps to picocli convention `1`.
+     * Matches tsc's own non-zero exit semantics so shell scripts that already check
+     * `tsc && deploy` keep working when swapped to `trailblaze check && deploy`.
+     */
+    const val EXIT_TYPE_ERROR = 1
+
+    /** Usage errors (missing workspace, unknown / invalid trailmap, missing runtime, missing tsconfig). */
+    const val EXIT_USAGE = 2
+
+    /**
+     * Operational failures: framework JAR missing the bundled tsc payload, filesystem
+     * I/O errors during workspace setup, etc. Distinct from [EXIT_TYPE_ERROR] (which
+     * is for tsc-reported failures) and [EXIT_USAGE] (which is for caller-side
+     * mistakes), so a CI consumer can route "user error" vs "framework broken" vs
+     * "code is broken" to different alerts. Maps to `3` to avoid colliding with the
+     * other two exit codes.
+     */
+    const val EXIT_OPERATIONAL_ERROR = 3
+
+    /**
+     * The sole JavaScript runtime Trailblaze runs against. A single-entry list
+     * rather than a literal `"bun"` so future extension points (e.g. allowing
+     * a vendored-in runtime, or splitting Windows/non-Windows binary names)
+     * have a single place to grow. Note: there is intentionally NO `node`
+     * fallback — Trailblaze's contract on every host (CI agents, binary
+     * installs, local dev) is that bun is the only JS runtime required.
+     */
+    internal val JS_RUNTIME_PREFERENCE: List<String> = listOf("bun")
+
+    /**
+     * Default per-trailmap tsc subprocess timeout. 5 minutes is more than 50× the typical
+     * tsc cold-start + check time on a small trailmap; the override exists for codebases
+     * with known pathological types (deeply-recursive zod schemas, cyclic interfaces).
+     */
+    internal const val DEFAULT_TSC_TIMEOUT_MS: Long = 5L * 60L * 1000L
+
+    /**
+     * Lower clamp for [TIMEOUT_MS_ENV_VAR]. A value below this is forced up to one
+     * minute so a fat-fingered `=0` doesn't cause every type-check to report as a
+     * timeout instantly (mirroring the same clamp `InstallAuthorToolDepsTask` uses
+     * for its `trailblazeInstallTimeoutMinutes` override).
+     */
+    internal const val MIN_TSC_TIMEOUT_MS: Long = 60L * 1000L
+
+    /**
+     * Env var that overrides [DEFAULT_TSC_TIMEOUT_MS] in milliseconds. Read once per
+     * trailmap via [resolveTscTimeoutMs]; an unparseable or below-floor value falls back
+     * to the default / clamp with a single line of stderr telemetry so the operator
+     * knows the override didn't take effect.
+     */
+    internal const val TIMEOUT_MS_ENV_VAR: String = "TRAILBLAZE_TYPECHECK_TIMEOUT_MS"
+
+    /**
+     * Reject trailmap ids that aren't a single directory-name segment under `trailmaps/`. The
+     * downstream `File(trailmapsDir, trailmapId)` would otherwise let an explicit `..` escape
+     * the trailmaps tree — the `trailmap.yaml` existence guard happens to catch the common
+     * case ("no trailmap.yaml at /etc/foo/trailmap.yaml"), but defense-in-depth (and a clearer
+     * error message) is cheap. Returns the reason as a human-readable string, or null
+     * when the id is well-formed.
+     */
+    internal fun validateTrailmapId(id: String): String? {
+      if (id.isBlank()) return "trailmap id must not be blank"
+      if (id.contains('/') || id.contains('\\')) return "trailmap id must not contain path separators"
+      if (id == "." || id == ".." || id.split('/', '\\').any { it == ".." }) {
+        return "trailmap id must not contain `..` segments"
+      }
+      // Absolute Unix path (`/etc/foo`) or Windows drive letter (`C:\…`).
+      if (id.startsWith("/") || id.startsWith("\\") || (id.length >= 2 && id[1] == ':')) {
+        return "trailmap id must be a single directory name under trailmaps/, not an absolute path"
+      }
+      return null
+    }
+
+    /**
+     * Decide how to drive the typecheck phase for the given resolution + caller state.
      * Pure function; no I/O. The branches:
-     *  - **Resolved a pack directory** (explicit pack-id, or enumeration found one):
-     *    point cwd at the pack so TypecheckCommand's no-arg walk-up latches onto it.
+     *  - **Resolved a trailmap directory** (explicit trailmap-id, or enumeration found one):
+     *    point cwd at the trailmap so the typecheck phase's no-arg walk-up latches onto it.
      *    `typecheckAll = false`.
      *  - **`--all` (explicit or coerced via [WorkspaceResolution.forceAll])**: point cwd
      *    at the workspace root, set `typecheckAll = true`.
      *  - **Otherwise** (no scope, no force): leave cwd as the caller's original cwd —
-     *    TypecheckCommand's walk-up will find whatever enclosing pack the cwd sits in.
+     *    the typecheck phase's walk-up will find whatever enclosing trailmap the cwd sits in.
      *    `typecheckAll = false`.
      */
     internal fun decideTypecheckDispatch(
@@ -389,13 +1234,13 @@ class CheckCommand : Callable<Int> {
     ): TypecheckDispatch {
       val typecheckAll = checkAll || resolved.forceAll
       val cwd = when {
-        resolved.scopePackDir != null -> resolved.scopePackDir.toPath()
+        resolved.scopeTrailmapDir != null -> resolved.scopeTrailmapDir.toPath()
         typecheckAll -> resolved.workspaceRoot.toPath()
         else -> callerCwd
       }
       return TypecheckDispatch(
         cwd = cwd,
-        packId = resolved.scopePackId,
+        trailmapId = resolved.scopeTrailmapId,
         typecheckAll = typecheckAll,
       )
     }

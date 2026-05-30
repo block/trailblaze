@@ -6,7 +6,7 @@ import java.io.File
  * [ConfigResourceSource] that reads YAML configuration files from an arbitrary filesystem
  * directory tree.
  *
- * Lets users point Trailblaze at a `trailblaze-config/` directory that lives with their app
+ * Lets users point Trailblaze at a `trails/config/` directory that lives with their app
  * (e.g. checked into the app's repo) rather than needing every target/toolset/tool to be
  * built into the framework's classpath. Pairs with [ClasspathConfigResourceSource] via
  * [CompositeConfigResourceSource] so framework-shipped config and user-contributed config
@@ -48,12 +48,12 @@ class FilesystemConfigResourceSource(
 
   companion object {
     /**
-     * Strips the conventional `trailblaze-config/` prefix from classpath-style paths so the
+     * Strips the conventional `trails/config/` prefix from classpath-style paths so the
      * remaining relative portion resolves under [rootDir], whatever the user named that dir.
      * Paths that don't start with the prefix are used as-is.
      *
-     * Example: `directoryPath = "trailblaze-config/targets"`, `rootDir = /app/trailblaze-config`
-     * → reads from `/app/trailblaze-config/targets`.
+     * Example: `directoryPath = "trails/config/targets"`, `rootDir = /app/trails/config`
+     * → reads from `/app/trails/config/targets`.
      */
     internal fun resolveSubDir(rootDir: File, directoryPath: String): File {
       val prefix = "${TrailblazeConfigPaths.CONFIG_DIR}/"

@@ -3,12 +3,12 @@ package xyz.block.trailblaze.cli.shortcut
 import xyz.block.trailblaze.cli.shortcut.ShortcutProposer.Proposal
 
 /**
- * Validates a batch of [Proposal]s against the existing pack's shortcut set and against
+ * Validates a batch of [Proposal]s against the existing trailmap's shortcut set and against
  * each other. Structurally different from
  * `xyz.block.trailblaze.cli.tune.WaypointSiblingCollisionGuard`:
  *
  *  - Waypoints collide on **screen-match overlap** (does my match set overlap a sibling's?).
- *  - Shortcuts collide on **(from, to, variant) set membership** in the pack's shortcut
+ *  - Shortcuts collide on **(from, to, variant) set membership** in the trailmap's shortcut
  *    registry — the runtime's contextual descriptor filter can't pick between two
  *    shortcuts whose addressing tuple agrees.
  *
@@ -31,7 +31,7 @@ object ShortcutSiblingCollisionGuard {
   data class Rejection(val proposal: Proposal, val reason: String)
 
   /**
-   * Filters [proposals] against [existingShortcuts] (the pack's authored shortcut set)
+   * Filters [proposals] against [existingShortcuts] (the trailmap's authored shortcut set)
    * and against each other. Returns the survivors plus typed rejection reasons for the
    * sidecar writer.
    *

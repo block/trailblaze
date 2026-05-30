@@ -11,12 +11,12 @@ date: 2026-01-14
 > still use. The original rationale — that names were tightly coupled to finding backing
 > Kotlin classes during serialization and registration — no longer holds. YAML-described
 > tools now point at fully-qualified class names directly, so id shape is no longer
-> driven by class lookup. The forward direction is the pack model in
-> [Target Packs: Local-First Packaging](2026-04-26-target-packs-local-first.md), where
+> driven by class lookup. The forward direction is the trailmap model in
+> [Target Trailmaps: Local-First Packaging](2026-04-26-target-packs-local-first.md), where
 > ownership is implicit by directory layout and the canonical id shape becomes
-> `<pack>:<local-name>` (e.g. `gmail:web`, `clock:alarm-tab`) rather than the underscore
+> `<trailmap>:<local-name>` (e.g. `gmail:web`, `clock:alarm-tab`) rather than the underscore
 > prefix form below. Treat this document as a record of current state, **not** the
-> design argument against pack-scoped simple names going forward.
+> design argument against trailmap-scoped simple names going forward.
 >
 > **Update (2026-05-15):** Enforcement now exists. A unit test in
 > `:trailblaze-common` (`ToolNamingConventionTest`) asserts every

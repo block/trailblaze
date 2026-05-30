@@ -236,12 +236,20 @@ internal fun isTextAcceptingNode(
   AccessibilityNodeInfo.ACTION_SET_TEXT in actionIds
 
 /**
+ * Canonical name [standardActionName] emits for [AccessibilityNodeInfo.ACTION_CLICK].
+ * Shared so callers that need to test for ACTION_CLICK against
+ * [DriverNodeDetail.AndroidAccessibility.actions] (the captured list of action *names*)
+ * do not duplicate the string literal.
+ */
+internal const val ACTION_CLICK_NAME = "ACTION_CLICK"
+
+/**
  * Maps standard [AccessibilityNodeInfo] action IDs to their constant names.
  * Returns null when the ID is not a known standard action — callers decide
  * whether to fall back to a custom label or a generic `ACTION_<id>` form.
  */
 internal fun standardActionName(actionId: Int): String? = when (actionId) {
-  AccessibilityNodeInfo.ACTION_CLICK -> "ACTION_CLICK"
+  AccessibilityNodeInfo.ACTION_CLICK -> ACTION_CLICK_NAME
   AccessibilityNodeInfo.ACTION_LONG_CLICK -> "ACTION_LONG_CLICK"
   AccessibilityNodeInfo.ACTION_FOCUS -> "ACTION_FOCUS"
   AccessibilityNodeInfo.ACTION_CLEAR_FOCUS -> "ACTION_CLEAR_FOCUS"

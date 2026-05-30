@@ -1,0 +1,59 @@
+# Android framework-primitive tools owned by the `android` library trailmap (see
+# trailmaps/android/trailmap.yaml). These are the three `android_*` tools that historically
+# carried the flat name prefix; this toolset makes the prefix-equals-trailmap-id rule hold by
+# grouping them under a trailmap-aligned name. Parallel to `mobile_primitives` (PR #3451).
+#
+# All three tools are declared `surfaceToLlm = false` at the class level, so this toolset
+# does NOT pollute the LLM's tool catalog. What toolset membership actually provides is:
+#  - **Scoped-lookup path** — the session's active `TrailblazeToolRepo.registeredTrailblazeToolClasses`
+#    set, which the callback dispatcher consults FIRST. Without toolset membership, callback
+#    dispatch falls through to the unfiltered global registry lookup
+#    (`TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered` → `TrailblazeSerializationInitializer.buildAllTools()`),
+#    which already had all three tools via their `@TrailblazeToolClass` annotations registered
+#    at JVM init. So this PR doesn't add a net-new dispatch surface — it adds a properly-scoped
+#    one.
+#  - **Per-trailmap typed surface** — once `PerTrailmapClientDtsEmitter` walks dependency
+#    closures (consumers depending on `android`), these three tools will appear in the
+#    consumer's `client.d.ts` typed bindings. Without toolset membership they'd remain in the
+#    fallback global path and stay typeless (`client.callTool` only, no `client.tools.<name>`).
+#
+# Net effect: this PR cleans up the *scoping* of these tools without changing whether a
+# scripted tool can call them. Old call sites that already worked via the unfiltered path
+# continue to work; new consumer trailmaps that depend on `android` get them scoped + typed.
+#
+# Two of the three (`android_adbShell`, `android_sendBroadcast`) additionally carry
+# `prefersHostSideForCallback = true`: the on-device-RPC return path strips the
+# `Success.message` payload these tools' scripted-tool consumers depend on (shell stdout/stderr,
+# broadcast result data), so callback dispatch routes to the host-side actual. The third
+# (`android_systemUiDemoMode`) is purely on-device. The toolset doesn't model this split —
+# the per-tool annotation is the source of truth — but it groups them together because they
+# share the same `android_*` prefix and live behind the same library trailmap.
+#
+# `always_enabled: true` is load-bearing — the LLM never calls `setActiveToolSets` for these
+# (it doesn't see them in the first place), so they have to be active from session start or
+# the very first callback fails. Same reasoning as `mobile_primitives` / `android_framework`.
+#
+# Driver scope matches where these primitives have working on-device actuals today. iOS is
+# deliberately omitted — the tools throw "Android only" at runtime if invoked under an iOS
+# device context, so registering them on `ios-host` would only surface as confusing runtime
+# failures rather than catalog-time filtering. Mirrors the scope decision in
+# `android_framework.yaml`.
+#
+# NOTE: this toolset is additive. The existing `android_framework` toolset still lists
+# `android_sendBroadcast` and `android_adbShell` alongside `mobile_listInstalledApps`; that
+# duplication is intentional in this PR — future PRs can clean it up once consumers migrate
+# to depend on the new `android` trailmap. `android_systemUiDemoMode` was not previously
+# in any toolset (only in `TrailblazeToolSet.NonLlmTrailblazeTools`) — it's net-new under a
+# toolset here, which lets callback dispatch resolve it by name without code changes elsewhere.
+id: android_primitives
+description: "Android framework-primitive composition tools (adbShell, sendBroadcast, systemUiDemoMode) used by scripted tools via `client.callTool(...)`. Not LLM-facing — registered so callback dispatch can resolve them by name."
+always_enabled: true
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+tools:
+  - android_adbShell
+  - android_grantAppOpsPermission
+  - android_grantPermission
+  - android_sendBroadcast
+  - android_systemUiDemoMode

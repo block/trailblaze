@@ -20,7 +20,7 @@ class TrailblazeToolPolymorphicSerializerTest {
 
   /**
    * Regression guard for silent YAML → class drops. `ToolYamlLoader.discoverAndLoadAll()` logs a
-   * warning and returns an incomplete map when a `trailblaze-config/tools/<name>.yaml` file has a
+   * warning and returns an incomplete map when a `trails/config/tools/<name>.yaml` file has a
    * typo'd `class:` FQCN or the class has been renamed/moved without updating the YAML. Without an
    * explicit assertion, such regressions are invisible to the test suite and only surface at
    * runtime as "Could not find Trailblaze tool for name: ..." from the scripting callback
@@ -33,8 +33,8 @@ class TrailblazeToolPolymorphicSerializerTest {
     assertEquals(
       expected = ListInstalledAppsTrailblazeTool::class,
       actual = discovered[ToolName("mobile_listInstalledApps")],
-      message = "mobile_listInstalledApps.yaml did not resolve to ListInstalledAppsTrailblazeTool. " +
-        "Check `trailblaze-common/src/commonMain/resources/trailblaze-config/tools/mobile_listInstalledApps.yaml` " +
+      message = "mobile_listInstalledApps.tool.yaml did not resolve to ListInstalledAppsTrailblazeTool. " +
+        "Check `trailblaze-common/src/commonMain/resources/trails/config/trailmaps/mobile/tools/mobile_listInstalledApps.tool.yaml` " +
         "for a typo'd or stale `class:` FQCN.",
     )
   }

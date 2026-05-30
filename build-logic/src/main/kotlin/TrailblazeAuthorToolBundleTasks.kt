@@ -44,8 +44,9 @@ import org.gradle.api.tasks.TaskAction
  *    produced bundles are ~2 KB per author. No global pre-load required at runtime; the
  *    bundle is fully self-contained.
  *  - [autoInstall] — when `true` (default), the plugin registers a sibling install task
- *    that runs `bun install` (or `npm install`) in [sourceDir] before bundling. Set to
- *    `false` when another module already manages the same `node_modules/` (e.g.
+ *    that runs `bun install` in [sourceDir] before bundling. bun is the sole supported JS
+ *    runtime (see root CLAUDE.md / PR #3503); there is no npm fallback. Set to `false`
+ *    when another module already manages the same `node_modules/` (e.g.
  *    `:trailblaze-scripting-subprocess`'s install tasks); the consumer wires `dependsOn(...)`
  *    explicitly to avoid two install tasks colliding on the same on-disk sentinel.
  */
@@ -73,8 +74,10 @@ abstract class TrailblazeAuthorToolBundlesExtension @Inject constructor(
 }
 
 /**
- * Runs `bun install` (with `npm install` fallback) inside [AuthorToolBundleSpec.sourceDir]
- * so esbuild and any author-side transitive deps resolve at bundle time. Output is the install
+ * Runs `bun install` inside [AuthorToolBundleSpec.sourceDir] so esbuild and any author-side
+ * transitive deps resolve at bundle time. bun is the sole supported JS runtime (see root
+ * CLAUDE.md / PR #3503) — no npm fallback; missing-bun or install failure is fatal so we
+ * never paper over a contract violation with a parallel toolchain. Output is the install
  * sentinel under `node_modules/.install-ok` — keying the up-to-date check off the sentinel
  * (rather than the dir itself) means a Ctrl-C'd install leaves Gradle still seeing the task as
  * out-of-date next run, instead of silently passing on a half-populated `node_modules/`.
@@ -130,24 +133,33 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
         proc.waitFor(10, TimeUnit.SECONDS)
         -1
       }
+    } catch (e: java.io.IOException) {
+      // Most common cause: bun executable isn't on PATH. Surface at WARN so the developer
+      // sees it without hunting the log file — the path-vs-install distinction matters for
+      // triage now that there's no npm fallback to paper over a missing bun.
+      logFile.appendText("[launch failed (likely bun not on PATH): ${e.message}]\n")
+      logger.warn("${command.joinToString(" ")} failed to launch (likely bun not on PATH): ${e.message}")
+      -1
     } catch (e: Exception) {
       logFile.appendText("[launch failed: ${e.message}]\n")
       logger.info("${command.joinToString(" ")} failed to launch: ${e.message}")
       -1
     }
 
-    val ok = if (tryInstall(listOf("bun", "install")) == 0) {
-      true
-    } else {
-      logger.info("bun install failed or unavailable for `$name`; trying npm install")
-      tryInstall(listOf("npm", "install", "--prefer-offline", "--no-audit", "--no-fund")) == 0
-    }
+    // bun is the sole supported JS runtime (see root CLAUDE.md / PR #3503). No npm fallback —
+    // if `bun install` fails or bun isn't on PATH, fail loudly rather than papering over the
+    // contract violation with a parallel toolchain.
+    val ok = tryInstall(listOf("bun", "install")) == 0
 
     if (!ok) {
+      val rootDir = project.rootDir.absolutePath
       throw GradleException(
-        "Failed to install author tool bundle deps for `$name` via bun or npm.\n" +
+        "Failed to install author tool bundle deps for `$name` via `bun install`.\n" +
           "  Install output:  ${logFile.absolutePath}\n" +
-          "  Manual install:  cd $workingDir && bun install  (or `npm install`)",
+          "  Manual install:  (cd $workingDir && bun install)\n" +
+          "  Trailblaze requires bun; activate the repo's Hermit env " +
+          "(from repo root: $rootDir, run `source bin/activate-hermit`) " +
+          "or install bun from https://bun.sh/.",
       )
     }
     sentinel.parentFile.mkdirs()
@@ -321,8 +333,8 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
 /**
  * Walk-up + immediate-children scan for the framework root marker
  * (`sdks/typescript-tools/package.json`). Avoids any layout-specific path literal in the
- * source code — works for both the internal-monorepo layout (where the framework root sits
- * one directory below `rootProject.projectDir`) and the open-source release layout (where
+ * source code — works for both a nested layout (where the framework root sits
+ * one directory below `rootProject.projectDir`) and a flat release layout (where
  * it IS `rootProject.projectDir`).
  *
  * Used to construct the `defaultEsbuildBinary` and `defaultToolsSdkSrc` paths without

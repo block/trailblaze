@@ -13,7 +13,7 @@ import kotlin.system.exitProcess
  * Usage:
  * ```
  * java -cp ... xyz.block.trailblaze.compile.TrailblazeCompilerMain \
- *   --input  <packs-dir> \
+ *   --input  <trailmaps-dir> \
  *   --output <targets-dir>
  * ```
  *
@@ -47,17 +47,17 @@ internal fun runCompiler(args: Array<String>): Int {
 }
 
 private fun runWithArgs(parsed: ParseResult.Success): Int {
-  val packsDir = File(parsed.input)
+  val trailmapsDir = File(parsed.input)
   val outputDir = File(parsed.output)
 
-  if (!packsDir.isDirectory) {
+  if (!trailmapsDir.isDirectory) {
     System.err.println(
-      "trailblaze compile: --input does not exist or is not a directory: ${packsDir.absolutePath}",
+      "trailblaze compile: --input does not exist or is not a directory: ${trailmapsDir.absolutePath}",
     )
     return EXIT_USAGE
   }
 
-  val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+  val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir)
   if (!result.isSuccess) {
     System.err.println("trailblaze compile: compilation failed:")
     result.errors.forEach { System.err.println("  - $it") }
@@ -120,19 +120,19 @@ private fun parseArgs(args: Array<String>): ParseResult {
 private fun printUsage() {
   System.err.println(
     """
-    |Usage: trailblaze-compile --input <packs-dir> --output <targets-dir>
+    |Usage: trailblaze-compile --input <trailmaps-dir> --output <targets-dir>
     |
-    |Compiles every <id>/pack.yaml under --input into a resolved <id>.yaml
-    |under --output, one per app pack (a pack with a `target:` block).
-    |Library packs (no target) contribute defaults but produce no output.
+    |Compiles every <id>/trailmap.yaml under --input into a resolved <id>.yaml
+    |under --output, one per app trailmap (a trailmap with a `target:` block).
+    |Library trailmaps (no target) contribute defaults but produce no output.
     |
     |Stale `<id>.yaml` files left in <targets-dir> from a previous compile
-    |that no longer correspond to a current pack are deleted automatically
+    |that no longer correspond to a current trailmap are deleted automatically
     |(orphan cleanup). Hand-authored YAMLs without the generated-file
     |banner are left alone.
     |
     |Options:
-    |  --input,  -i <packs-dir>   Directory containing one <id>/pack.yaml per pack.
+    |  --input,  -i <trailmaps-dir>   Directory containing one <id>/trailmap.yaml per trailmap.
     |  --output, -o <targets-dir> Directory to emit resolved <id>.yaml files into.
     |  --help,   -h               Show this message and exit (exit code 0).
     """.trimMargin()

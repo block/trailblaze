@@ -135,7 +135,13 @@ internal fun JsonObject.toTrailblazeToolResult(toolName: String? = null): Trailb
     )
   }
   val rendered = envelope.renderContent()
-  return TrailblazeToolResult.Success(message = rendered.ifBlank { null })
+  return TrailblazeToolResult.Success(
+    message = rendered.ifBlank { null },
+    // `structuredContent` flows verbatim — a bundle handler that returns a typed value
+    // (via `trailblaze.tool<I, O>({ handler })` or by populating the field explicitly) lands
+    // here and gets forwarded to the scripted caller's `client.tools.<name>(...)` unwrap.
+    structuredContent = envelope.structuredContent,
+  )
 }
 
 private fun toolLabel(toolName: String?): String = toolName?.let { "'$it' " }.orEmpty()

@@ -131,6 +131,37 @@ data class RunYamlRequest(
    * equivalent primitive so the flag means the same thing across agent implementations.
    */
   val maxLlmCalls: Int? = null,
+
+  /**
+   * CLI-supplied memory seeds — entries passed via `--memory KEY=VAL` flags. Applied
+   * AFTER the trail YAML's `config.memory:` block (so CLI overrides YAML on the same key)
+   * and BEFORE any tool runs. Empty by default. Distinct from [memorySnapshot], which
+   * carries already-populated host memory through to a sub-trail RPC dispatch.
+   *
+   * Values are logged in cleartext via [xyz.block.trailblaze.AgentMemory.remember] and
+   * persist into the [xyz.block.trailblaze.logs.model.SessionStatus.Started] snapshot.
+   * For passwords / tokens / API keys, use [initialMemorySensitiveSeeds] (CLI `--secret`)
+   * which routes through `rememberSensitive` and is excluded from the session-start
+   * snapshot.
+   *
+   * Appended after [maxLlmCalls] (rather than inserted alongside [memorySnapshot]) so
+   * existing positional `componentN` accessors and binary-compatibility baselines for
+   * earlier fields stay stable.
+   */
+  val initialMemorySeeds: Map<String, String> = emptyMap(),
+
+  /**
+   * CLI-supplied sensitive memory seeds — entries passed via `--secret KEY=VAL` flags.
+   * Same composition order as [initialMemorySeeds] (applied after the trail YAML's
+   * `config.memory:` defaults and after [initialMemorySeeds]), but routed through
+   * [xyz.block.trailblaze.AgentMemory.rememberSensitive] so values are redacted in
+   * `Console.log`, excluded from the scripting envelope, and omitted from the
+   * [xyz.block.trailblaze.logs.model.SessionStatus.Started.resolvedInitialMemory]
+   * snapshot persisted to session logs. Keys still appear in
+   * [xyz.block.trailblaze.logs.model.SessionStatus.Started.sensitiveMemoryKeys] so
+   * replay knows to expect them.
+   */
+  val initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

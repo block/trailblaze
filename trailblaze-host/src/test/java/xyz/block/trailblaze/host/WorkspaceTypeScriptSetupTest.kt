@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 /**
  * Tests for [WorkspaceTypeScriptSetup] — extracts the vendored TypeScript SDK declaration
  * bundle (`dist/index.d.ts`) to `<workspaceRoot>/.trailblaze/sdk/dist/` once per workspace.
- * No per-pack `bun install`, no `node_modules/`, no workspace `tsconfig.base.json`.
+ * No per-trailmap `bun install`, no `node_modules/`, no workspace `tsconfig.base.json`.
  *
  * Coverage:
  *  - Extraction writes the declaration bundle under `<workspaceRoot>/.trailblaze/sdk/dist/`.
@@ -41,7 +41,7 @@ class WorkspaceTypeScriptSetupTest {
     assertEquals(sdkRoot.absolutePath, sdkDir.toAbsolutePath().toString())
 
     // The declaration bundle that ships from `:trailblaze-models`'s
-    // `copyTypescriptSdkResources` task lands at this fixed relative path. Per-pack
+    // `copyTypescriptSdkResources` task lands at this fixed relative path. Per-trailmap
     // tsconfigs hard-code it as the `paths` target.
     val bundle = File(sdkRoot, "dist/index.d.ts")
     assertTrue(bundle.isFile, "expected bundled .d.ts at $bundle")
@@ -58,6 +58,26 @@ class WorkspaceTypeScriptSetupTest {
     assertTrue(
       content.contains("TrailblazeToolMap"),
       "expected the public SDK type surface in the bundle; got first 200 chars: ${content.take(200)}",
+    )
+
+    // Runtime ESM companion to the declaration bundle. Per-trailmap tsconfigs' `paths`
+    // mapping resolves the stem `dist/index` — bun loads `index.js`, tsc loads
+    // `index.d.ts`. The extractor walks the classpath prefix recursively, so this
+    // file flows through the same code path with no special wiring.
+    val runtime = File(sdkRoot, "dist/index.js")
+    assertTrue(runtime.isFile, "expected runtime ESM bundle at $runtime")
+    val runtimeContent = runtime.readText()
+    // Assert the actual ESM `export { trailblaze }` (or `export ... trailblaze`) shape
+    // rather than a bare substring — a bundle that lost the runtime namespace export
+    // but kept the identifier inside a comment, a string literal, or an internal
+    // closure would otherwise pass a `.contains("trailblaze")` check and silently
+    // ship a non-functional SDK to the workspace.
+    val exportsTrailblaze = Regex("""export\s*\{[^}]*\btrailblaze\b""").containsMatchIn(runtimeContent) ||
+      Regex("""export\s+(?:const|let|var|function)\s+trailblaze\b""").containsMatchIn(runtimeContent)
+    assertTrue(
+      exportsTrailblaze,
+      "expected the SDK runtime to ESM-export the `trailblaze` namespace; got first 500 chars: " +
+        runtimeContent.take(500),
     )
   }
 
@@ -97,7 +117,7 @@ class WorkspaceTypeScriptSetupTest {
 
   @Test
   fun `setUp prunes a stale workspace tsconfig base left behind from the prior layout`() {
-    // Pre-bundled-.d.ts workspaces had a `.trailblaze/tsconfig.base.json` that per-pack
+    // Pre-bundled-.d.ts workspaces had a `.trailblaze/tsconfig.base.json` that per-trailmap
     // tsconfigs `extends:`-ed. After this PR no workspace base is written, but the old
     // file would otherwise linger forever — cruft for authors and a foot-gun for anyone
     // debugging tsconfig resolution who finds a stale base file the framework no longer
@@ -160,12 +180,12 @@ class WorkspaceTypeScriptSetupTest {
   }
 
   @Test
-  fun `setUp does not write a workspace tsconfig base — per-pack tsconfigs are self-contained`() {
+  fun `setUp does not write a workspace tsconfig base — per-trailmap tsconfigs are self-contained`() {
     // Regression coverage for the npm-portability cut: a workspace `tsconfig.base.json`
-    // would force every per-pack tsconfig to `extends:` a known relative path, which
-    // breaks when a pack is published to npm and installed into a different workspace.
-    // The bundled-.d.ts approach makes per-pack tsconfigs fully self-contained — see
-    // [PerPackTsconfigEmitter.renderTsconfig] — so no workspace base file is written.
+    // would force every per-trailmap tsconfig to `extends:` a known relative path, which
+    // breaks when a trailmap is published to npm and installed into a different workspace.
+    // The bundled-.d.ts approach makes per-trailmap tsconfigs fully self-contained — see
+    // [PerTrailmapTsconfigEmitter.renderTsconfig] — so no workspace base file is written.
     val workspace = newWorkspaceRoot()
 
     WorkspaceTypeScriptSetup.setUp(workspace.toPath())

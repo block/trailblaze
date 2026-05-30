@@ -1,0 +1,7 @@
+{
+  "name": "android-sample-app",
+  "private": true,
+  "scripts": {
+    "postinstall": "command -v trailblaze >/dev/null 2>&1 && trailblaze check || printf 'trailblaze CLI not on PATH; skipping IDE bootstrap.\\n'"
+  }
+}

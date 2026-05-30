@@ -5,8 +5,12 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session delete [-hV] --id=<id>
+Usage: trailblaze session delete [-hV] [--id=<id>] [<session-id>]
 Delete a session's logs and artifacts
-  -h, --help      Show this help message and exit.
-      --id=<id>   Session ID to delete (supports prefix matching)
-  -V, --version   Print version information and exit.
+      [<session-id>]   Session ID to delete (positional form of --id, supports
+                         prefix matching). Mutually exclusive with --id; one of
+                         the two is required.
+  -h, --help           Show this help message and exit.
+      --id=<id>        Session ID to delete (supports prefix matching).
+                         Equivalent to the positional form.
+  -V, --version        Print version information and exit.

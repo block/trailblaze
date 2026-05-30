@@ -62,7 +62,7 @@ object TrailYamlValidator {
       if (meaningfulLines.isEmpty()) return true
       meaningfulLines.any { line ->
         line.startsWith("defaults:") ||
-          line.startsWith("packs:") ||
+          line.startsWith("trailmaps:") ||
           line.startsWith("targets:") ||
           line.startsWith("toolsets:") ||
           line.startsWith("tools:") ||

@@ -42,11 +42,11 @@ class WaypointValidateBehaviorTest {
   @Test
   fun `validate fails fast when --step is given without --session`() {
     // Same fail-fast contract as capture-example. Set up a real waypoint on a
-    // classpath pack so discovery doesn't error before the --step check fires.
+    // classpath trailmap so discovery doesn't error before the --step check fires.
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "myapp",
+      trailmapId = "myapp",
       waypoints = mapOf(
         "home.waypoint.yaml" to "id: \"myapp/home\"\ndescription: \"Test.\"",
       ),
@@ -69,7 +69,7 @@ class WaypointValidateBehaviorTest {
     }
 
     assertTrue(
-      exitCode != CommandLine.ExitCode.OK,
+      exitCode != TrailblazeExitCode.SUCCESS.code,
       "validate must NOT exit OK when --step is given without --session",
     )
     val err = capturedErr.toString()
@@ -98,19 +98,19 @@ class WaypointValidateBehaviorTest {
   private fun <T> withCapture(block: () -> T): T =
     CliOutCapture.withCapture(capturedOut, capturedErr, block)
 
-  private fun addClasspathPack(
+  private fun addClasspathTrailmap(
     root: File,
-    packId: String,
+    trailmapId: String,
     waypoints: Map<String, String>,
   ) {
-    val packDir = File(root, "trailblaze-config/packs/$packId").apply { mkdirs() }
-    val waypointDir = File(packDir, "waypoints").apply { mkdirs() }
+    val trailmapDir = File(root, "trails/config/trailmaps/$trailmapId").apply { mkdirs() }
+    val waypointDir = File(trailmapDir, "waypoints").apply { mkdirs() }
     val waypointRefs = waypoints.keys.joinToString("\n") { "  - waypoints/$it" }
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
-      id: $packId
+      id: $trailmapId
       target:
-        display_name: $packId
+        display_name: $trailmapId
       waypoints:
       $waypointRefs
       """.trimIndent(),

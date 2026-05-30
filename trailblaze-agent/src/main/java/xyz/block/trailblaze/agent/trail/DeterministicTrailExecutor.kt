@@ -235,7 +235,7 @@ class DeterministicTrailExecutor(
       "Step $stepIndex: ${StepPostconditionAsserter.describeMismatch(result)}"
     is StepPostconditionAsserter.Result.WaypointNotFound ->
       "Step $stepIndex: postcondition references unknown waypoint '${result.requestedId}'. " +
-        "Check the waypoint id against the loaded packs."
+        "Check the waypoint id against the loaded trailmaps."
     is StepPostconditionAsserter.Result.NoScreenState ->
       "Step $stepIndex: postcondition '${result.definitionId}' could not be evaluated — " +
         "the screen state provider returned no state within ${result.timeoutMs}ms."

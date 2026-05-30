@@ -140,13 +140,25 @@ expect class AndroidDeviceCommandExecutor(
    *
    * Unlike [executeShellCommand], this method does not split on spaces on the host side. On the
    * JVM actual, each token is forwarded individually to the underlying transport (dadb) which joins
-   * them with spaces before sending to the device shell. On the Android actual, each token is
-   * shell-escaped before joining so that arguments containing spaces or metacharacters survive the
-   * device shell's word-splitting.
+   * them with spaces before sending to the device shell. On the Android actual, tokens are joined
+   * with spaces and passed directly to [AdbCommandUtil.execShellCommand] — no shell escaping is
+   * applied, because [android.app.UiAutomationConnection.executeShellCommand] routes through
+   * [Runtime.exec], which splits on whitespace and execs directly without a shell interpreter.
+   * Applying shell quoting (e.g. single-quoting each token) would embed the quotes as literal
+   * characters in the program name, causing "No such file or directory".
    *
-   * Do **not** pre-escape the individual arguments — the implementations handle escaping internally.
+   * **Platform limitation:** individual arguments must not contain whitespace on Android.
+   * [Runtime.exec] re-splits the joined string on whitespace, so a single arg with an embedded
+   * space would silently become two tokens. The Android actual enforces this with a
+   * [require] check that throws [IllegalArgumentException] immediately rather than letting the
+   * command misbehave silently. Arguments for the current callers (`su`, `root`, `pm`, package
+   * names) never contain whitespace, so this is not a practical restriction for the existing
+   * use-cases.
+   *
+   * Do **not** pre-escape the individual arguments.
    *
    * @return stdout from the executed command.
+   * @throws IllegalArgumentException if any argument contains whitespace (Android actual only).
    */
   fun executeShellCommandArgs(vararg args: String): String
 

@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.host.recording
 
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.params.LLMParams
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
@@ -54,18 +56,18 @@ class RecordingLlmService(
       val messages = listOf(
         Message.System(
           content = systemPrompt,
-          metaInfo = ai.koog.prompt.message.RequestMetaInfo.create(kotlin.time.Clock.System),
+          metaInfo = ai.koog.prompt.message.RequestMetaInfo.create(KoogClock.System),
         ),
         Message.User(
           content = userPrompt,
-          metaInfo = ai.koog.prompt.message.RequestMetaInfo.create(kotlin.time.Clock.System),
+          metaInfo = ai.koog.prompt.message.RequestMetaInfo.create(KoogClock.System),
         ),
       )
 
       val promptId = Uuid.random().toString()
       // llmClient is lazy — first access may trigger auth (e.g., an OAuth browser flow).
       // Running on Dispatchers.IO ensures this doesn't block the UI thread.
-      val responses: List<Message.Response> = llmClient.execute(
+      val response: Message.Assistant = llmClient.execute(
         prompt = Prompt(
           messages = messages,
           id = promptId,
@@ -80,8 +82,20 @@ class RecordingLlmService(
         tools = emptyList(),
       )
 
-      val responseText = responses.filterIsInstance<Message.Assistant>()
-        .joinToString("\n") { it.content }
+      val textParts = response.parts.filterIsInstance<MessagePart.Text>()
+      if (textParts.isEmpty()) {
+        // Fail loud rather than producing an empty recording. Koog 1.0.0's MessagePart split
+        // makes the "no text parts in the response" case substantially more reachable than
+        // pre-1.0.0 (e.g. a Reasoning-only response, an Attachment-only response, or an
+        // unexpected tool call). Returning whatever `extractYamlFromResponse("")` yields
+        // would silently swallow the failure and surface as a broken recording downstream.
+        val partTypes = response.parts.joinToString(", ") { it::class.simpleName ?: "?" }
+        error(
+          "LLM returned no text parts when transforming recording to natural language. " +
+            "Response had parts: [$partTypes]. Check the LLM provider / model configuration.",
+        )
+      }
+      val responseText = textParts.joinToString("\n") { it.text }
 
       extractYamlFromResponse(responseText)
     }

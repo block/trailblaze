@@ -1,0 +1,27 @@
+# Framework-level Playwright web composition primitives. Sibling to
+# `android_framework.yaml` — same pattern, different platform: arbitrary-string-execution
+# utilities that scripted tools (`.ts` via `@trailblaze/scripting`) need to dispatch from
+# `client.tools.<name>(args)`, but that must never land in the LLM's tool catalog.
+#
+# Each tool here is declared `surfaceToLlm = false` and `isRecordable = false` at the class
+# level, so the LLM never advertises them and the trail recorder never captures them as
+# steps. The point of being a toolset (rather than discoverable only via `ToolYamlLoader`)
+# is to land these tools in the runtime `TrailblazeToolRepo` so the daemon's
+# `/scripting/callback` dispatcher can resolve them by name AND so per-pack codegen emits
+# a `TrailblazeToolMap` entry for them — without the toolset membership, scripted tools
+# couldn't reach them through the typed `client.tools.<name>(...)` surface either.
+#
+# `always_enabled: true` is load-bearing — the LLM never calls `setActiveToolSets` for
+# these (it doesn't see them in the first place), so they have to be active from session
+# start or the first scripted-tool composition fails.
+#
+# Driver scope matches `web_core.yaml` — the same two Playwright driver variants that
+# carry the rest of the web surface.
+id: web_framework
+description: "Framework-level Playwright web composition primitives used by scripted tools via `client.tools.<name>(...)`. Not LLM-facing — registered so callback dispatch and per-pack codegen can resolve them by name."
+always_enabled: true
+drivers:
+  - playwright-native
+  - playwright-electron
+tools:
+  - web_evaluate

@@ -251,7 +251,7 @@ class PlaywrightInteractionToolFactory(
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>? {
     val tool = PlaywrightNativePressKeyTool(key = key)
-    return tool to "web_press_key"
+    return tool to "web_pressKey"
   }
 
   private fun computeScrollDirection(

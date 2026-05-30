@@ -8,7 +8,7 @@ date: 2026-05-08
 
 ## Summary
 
-A direction note for where the waypoint + shortcut framework is heading, captured before any of it is built. Four pieces fall out of treating the waypoint set as an explicit graph: a single `goTo(waypoint_id)` agent surface backed by runtime pathfinding, multi-step "express route" shortcuts as graph-equivalent edges for common deep paths, session logs that record `(shortcut, params)` instead of raw taps, and a clean parallel to the Robot Pattern that makes the upgrade path obvious to anyone with a mobile-test background. None of this is implemented — the [pack manifest](2026-04-27-pack-manifest-v1.md) and [magic capture-example](2026-05-08-waypoint-target-flag-and-magic-capture.md) work landed the primitives the rest of this builds on.
+A direction note for where the waypoint + shortcut framework is heading, captured before any of it is built. Four pieces fall out of treating the waypoint set as an explicit graph: a single `goTo(waypoint_id)` agent surface backed by runtime pathfinding, multi-step "express route" shortcuts as graph-equivalent edges for common deep paths, session logs that record `(shortcut, params)` instead of raw taps, and a clean parallel to the Robot Pattern that makes the upgrade path obvious to anyone with a mobile-test background. None of this is implemented — the [trailmap manifest](2026-04-27-pack-manifest-v1.md) and [magic capture-example](2026-05-08-waypoint-target-flag-and-magic-capture.md) work landed the primitives the rest of this builds on.
 
 ## Planner/executor split
 
@@ -20,7 +20,7 @@ What the LLM sees as graph context lands on a spectrum. Cheapest is just the too
 
 ## Express-route shortcuts as graph-equivalent edges
 
-The current `*.shortcut.yaml` schema already accepts a multi-step `tools:` body. We've underused it: 64 of 64 atomic shortcuts in the calendar pack landed today are single-tap edges. That's correct for the atom layer — every adjacent waypoint pair has a one-tap edge — but the framework also wants *express routes* for common deep paths.
+The current `*.shortcut.yaml` schema already accepts a multi-step `tools:` body. We've underused it: 64 of 64 atomic shortcuts in the calendar trailmap landed today are single-tap edges. That's correct for the atom layer — every adjacent waypoint pair has a one-tap edge — but the framework also wants *express routes* for common deep paths.
 
 The key insight is that an express route is just an edge from the planner's perspective. A `from: day_view → to: event_saved` shortcut whose body fires seven taps is graph distance 1, full stop. Shortest-path picks it over the equivalent seven-atom traversal automatically. No special casing. The planner doesn't know or care whether an edge is one tap or seven; the executor just walks the body.
 
@@ -46,7 +46,7 @@ Off-graph actions still record as raw tools — that's the escape hatch. But for
 The downstream consequences are all wins:
 
 - **Replay portability across UI changes.** A button moves; the shortcut body gets fixed once; every recording that used it keeps working. No re-record.
-- **Cross-platform replay.** Same `(from, to, variant)` resolves to an Android body or an iOS body. A test recorded on one replays on the other if the platform pack has the matching shortcut.
+- **Cross-platform replay.** Same `(from, to, variant)` resolves to an Android body or an iOS body. A test recorded on one replays on the other if the platform trailmap has the matching shortcut.
 - **Compact LLM context.** Past behavior shown to the agent is N shortcut entries instead of 5N raw taps. Fits in the prompt; the agent can plan against it.
 - **Debuggable failure attribution.** "Shortcut `createEvent` failed at step 4 of 7 (tap on Add description)" is debuggable. "Tap at (300, 1500) failed" is not.
 

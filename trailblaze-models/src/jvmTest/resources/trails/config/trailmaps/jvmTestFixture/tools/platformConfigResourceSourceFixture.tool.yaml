@@ -1,0 +1,6 @@
+# Fixture for PlatformConfigResourceSourceJvmTest — never loaded as a real tool. Lives in
+# the trailblaze-models test classpath so the workspace-vs-classpath collision precedence
+# test can prove the workspace value wins by comparing against this specific bundled body.
+# Intentionally lacks `class:` so it would fail as a real tool if anything tried to load it.
+id: platformConfigResourceSourceFixture
+description: classpath-bundled fixture body

@@ -8,6 +8,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isLessThan
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.messageContains
@@ -24,7 +25,6 @@ import org.junit.Before
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
-import xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -112,6 +112,9 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     trailblazeLogger: TrailblazeLogger = TrailblazeLogger.createNoOp(),
     resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget? = null,
     appId: String? = null,
+    trailblazeToolRepo: xyz.block.trailblaze.toolcalls.TrailblazeToolRepo? = null,
+    reWarmTimeoutMs: Long = 50L,
+    reWarmPollIntervalMs: Long = 1L,
   ): HostOnDeviceRpcTrailblazeAgent {
     return HostOnDeviceRpcTrailblazeAgent(
       rpcClient = rpcClient,
@@ -134,6 +137,12 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         },
       resolvedTarget = resolvedTarget,
       appId = appId,
+      trailblazeToolRepo = trailblazeToolRepo,
+      // Collapse production's 10s re-warm budget + 500ms poll into ~50ms / 1ms so the
+      // circuit-breaker tests exercise the state machine without paying real-clock retry
+      // delays. Production callers keep the defaults from the constructor.
+      reWarmTimeoutMs = reWarmTimeoutMs,
+      reWarmPollIntervalMs = reWarmPollIntervalMs,
     )
   }
 
@@ -299,7 +308,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
-   * Regression for the host→device memory interpolation gap (SQATB-336): a value remembered
+   * Regression for the host→device memory interpolation gap: a value remembered
    * on the host (here via a `MemoryTrailblazeTool` short-circuited in `BaseTrailblazeAgent`)
    * lives in the host's `AgentMemory`. The on-device runner spins up a fresh, empty
    * `AgentMemory` per `RunYamlRequest`, so a subsequent `inputText { text: "{{var}}" }`
@@ -495,6 +504,37 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(failure).messageContains("Error while connecting UiAutomation")
   }
 
+  /** Disconnect-side analog of the connect-side wedge: `UiAutomation.disconnect()` throws a
+   *  bare `RuntimeException` (not `IllegalStateException`) on a half-connected handle with
+   *  `id=-1, flags=1`. The on-device recovery shim now widens its catch to cover this, but
+   *  if the recovery fails 3 times in a row the circuit breaker must still trip — same as
+   *  the connect side. */
+  @Test
+  fun `circuit breaker trips after 3 consecutive UiAutomation-disconnect-wedge GetScreenState failures`() {
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"UNKNOWN_ERROR","message":"GetScreenState failed",""" +
+        """"details":"java.lang.RuntimeException: Error while disconnecting UiAutomation@e035ae8""" +
+        """[id=-1, displayId=0, flags=1]"}"""
+    }
+
+    val agent = createAgent()
+    val failure: Throwable? = runBlocking {
+      assertThat(agent.captureScreenState()).isNull()
+      assertThat(agent.captureScreenState()).isNull()
+      try {
+        agent.captureScreenState()
+        null
+      } catch (t: Throwable) {
+        t
+      }
+    }
+    assertThat(failure).isNotNull()
+    assertThat(failure!!).isInstanceOf(TrailblazeException::class)
+    assertThat(failure).messageContains("Device unhealthy")
+    assertThat(failure).messageContains("Error while disconnecting UiAutomation")
+  }
+
   /** Reset on any successful capture: an unbroken streak of wedge-signature failures
    *  trips the breaker, but a clean success in between resets the counter. */
   @Test
@@ -546,6 +586,35 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
   }
 
+  /** Regression check: the `reWarmTimeoutMs` constructor param must actually flow to
+   *  `rpcClient.waitForReady`. Without this, a refactor that silently re-hard-codes
+   *  `10_000L` at the call site would only surface as the wedge tests above getting slower
+   *  again — which is easy to miss in code review. This test makes the contract explicit:
+   *  pass a tight 5ms budget, force the re-warm path, and bound the wall clock. If the
+   *  param is ignored, this test takes 10 seconds and fails the bound. */
+  @Test
+  fun `reWarmTimeoutMs constructor param is honored end-to-end`() {
+    // Permanently-500ing mock forces every captureScreenState into the re-warm path. The
+    // "random failure" detail intentionally does NOT match any DEVICE_WEDGE_SIGNATURES, so
+    // the breaker stays at 0 and a single call returns null (no exception).
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"UNKNOWN_ERROR","message":"GetScreenState failed",""" +
+        """"details":"random failure"}"""
+    }
+
+    val agent = createAgent(reWarmTimeoutMs = 5L, reWarmPollIntervalMs = 1L)
+    val elapsedMs = runBlocking {
+      val start = System.currentTimeMillis()
+      assertThat(agent.captureScreenState()).isNull()
+      System.currentTimeMillis() - start
+    }
+
+    // Generous upper bound — 5ms budget + JVM/test/HTTP-mock overhead. Production's 10_000L
+    // default would put this WAY over 500ms.
+    assertThat(elapsedMs).isLessThan(500L)
+  }
+
   @Test
   fun `host-local marker tool dispatches via host execute, not RPC`() {
     val executedOnHost = AtomicBoolean(false)
@@ -587,62 +656,271 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
-   * Regression net for the `prefersHostSideForCallback` allowlist. The whole `mcp_servers:`
-   * migration (PR #2344) relies on `mobile_listInstalledApps`, `android_sendBroadcast`, and
-   * `android_adbShell` taking the host-side branch in `executeTool` — the on-device-RPC return path
-   * silently drops `TrailblazeToolResult.Success.message`, so any tool whose return value is
-   * the contract MUST be host-routed. A future refactor (annotation rename, allowlist string
-   * typo, branch removal) could silently flip these back to RPC and re-introduce the
-   * `JSON.parse(undefined)` failure in TS scripted-tool handlers. This test fails loud the
-   * moment that happens.
+   * Regression net for the dual-mode composition primitive routing. Before the
+   * `RunYamlResponse.toolMessage` / `toolStructuredContent` wire-shape extension,
+   * `mobile_listInstalledApps`, `android_sendBroadcast`, and `android_adbShell` had to be
+   * short-circuited host-side because the RPC envelope discarded per-tool `Success.message`. The
+   * envelope now carries those payloads, so the three primitives route through RPC like any other
+   * tool — the host-side `toToolResult` reads `rpcResult.data.toolMessage` /
+   * `rpcResult.data.toolStructuredContent` and packages them back into
+   * `TrailblazeToolResult.Success`. This test pins that wiring against an on-device server stub.
    */
   @Test
-  fun `prefersHostSideForCallback routes the three composition primitives host-side`() {
-    val agent = createAgent()
-    // Positive cases — the three tools the migration's callback chain depends on.
-    assertThat(agent.prefersHostSideForCallback(ListInstalledAppsTrailblazeTool)).isEqualTo(true)
-    assertThat(
-      agent.prefersHostSideForCallback(
-        AndroidSendBroadcastTrailblazeTool(
-          action = "com.example.ACTION",
-          componentPackage = "com.example",
-          componentClass = "com.example.Receiver",
-        ),
-      ),
-    )
-      .isEqualTo(true)
-    assertThat(agent.prefersHostSideForCallback(AdbShellTrailblazeTool(command = listOf("id"))))
-      .isEqualTo(true)
-  }
-
-  @Test
-  fun `prefersHostSideForCallback returns false for tools that should still route via RPC`() {
-    val agent = createAgent()
-    // Negative case — an unrelated tool must still go through the RPC path so action-style
-    // tools (tap, swipe, inputText, etc.) keep their existing behaviour.
-    assertThat(agent.prefersHostSideForCallback(InputTextTrailblazeTool(text = "anything")))
-      .isEqualTo(false)
-  }
-
-  @Test
-  fun `prefersHostSideForCallback reads the annotation rather than a hard-coded allowlist`() {
-    // Pins the migration from a hard-coded set in this agent to the
-    // `@TrailblazeToolClass(prefersHostSideForCallback = true)` annotation. Adding a new
-    // dual-mode primitive should only require the annotation — the predicate must not need
-    // a parallel edit here. Sanity-check by reading the annotation directly on the three
-    // known primitives and asserting they all opt in.
-    val annotated = listOf(
-      ListInstalledAppsTrailblazeTool::class,
-      AndroidSendBroadcastTrailblazeTool::class,
-      AdbShellTrailblazeTool::class,
-    )
-    annotated.forEach { kClass ->
-      val annotation = kClass.java
-        .getAnnotation(xyz.block.trailblaze.toolcalls.TrailblazeToolClass::class.java)
-      assertThat(annotation).isNotNull()
-      assertThat(annotation!!.prefersHostSideForCallback)
-        .isEqualTo(true)
+  fun `RunYamlResponse toolMessage round-trips through executeToolViaRpc as Success message`() {
+    // Before the RunYamlResponse wire-shape extension, on-device RPC of `android_adbShell` /
+    // `android_sendBroadcast` / `mobile_listInstalledApps` silently dropped the per-tool
+    // Success.message — `prefersHostSideForCallback` was the workaround forcing them host-side.
+    // With `toolMessage` on the envelope, the host's `toToolResult` reads it and packages it back
+    // into `TrailblazeToolResult.Success.message`. This test pins that wiring.
+    val deviceStdout = "uid=2000(shell) gid=2000(shell) groups=2000(shell)"
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        "{\"sessionId\":\"test-session\",\"success\":true,\"toolMessage\":\"$deviceStdout\"}"
     }
+
+    val agent = createAgent()
+    val result = runBlocking {
+      agent.runTrailblazeTools(
+        tools = listOf(AdbShellTrailblazeTool(command = listOf("id"))),
+        elementComparator = NoopElementComparator,
+      )
+    }
+
+    val success = result.result as? TrailblazeToolResult.Success
+      ?: error("Expected Success, got ${result.result}")
+    assertThat(success.message).isEqualTo(deviceStdout)
+    // Confirm we actually went through the RPC dispatch path (not silently host-routed).
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(1)
+  }
+
+  @Test
+  fun `RunYamlResponse toolStructuredContent round-trips through executeToolViaRpc`() {
+    // Structured-content path mirrors message — when the on-device tool returns a typed JSON
+    // payload (today: MCP scripted tools / on-device QuickJS bundles), the host receives it on
+    // `Success.structuredContent` so the TS SDK's `client.tools.<name>` proxy can unwrap it.
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        """{"sessionId":"test-session","success":true,"toolStructuredContent":{"appIds":["com.example.a","com.example.b"]}}"""
+    }
+
+    val agent = createAgent()
+    val result = runBlocking {
+      agent.runTrailblazeTools(
+        tools = listOf(ListInstalledAppsTrailblazeTool),
+        elementComparator = NoopElementComparator,
+      )
+    }
+
+    val success = result.result as? TrailblazeToolResult.Success
+      ?: error("Expected Success, got ${result.result}")
+    val structured = success.structuredContent
+      ?: error("Expected structuredContent, got null")
+    // Cheap pin without re-deserializing: the JsonElement's textual form is byte-equal to the
+    // payload the mock server returned. If the value or the field ever stops round-tripping, this
+    // assertion shifts and the failure points at the wire mapping rather than a downstream parse.
+    assertThat(structured.toString())
+      .isEqualTo("""{"appIds":["com.example.a","com.example.b"]}""")
+  }
+
+  @Test
+  fun `RunYamlResponse round-trips both toolMessage and toolStructuredContent together`() {
+    // Pin: when an on-device tool's Success carries BOTH a `message` (human-readable string) AND
+    // a `structuredContent` (typed JSON payload) — which is the legitimate shape for MCP scripted
+    // tools whose handler returns a typed result alongside a textual narrative — the host's
+    // `toToolResult` must mirror both fields, not have one shadow the other in the wire mapping.
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        """{"sessionId":"test-session","success":true,"toolMessage":"Found 2 installed apps","toolStructuredContent":{"appIds":["com.example.a","com.example.b"]}}"""
+    }
+
+    val agent = createAgent()
+    val result = runBlocking {
+      agent.runTrailblazeTools(
+        tools = listOf(ListInstalledAppsTrailblazeTool),
+        elementComparator = NoopElementComparator,
+      )
+    }
+
+    val success = result.result as? TrailblazeToolResult.Success
+      ?: error("Expected Success, got ${result.result}")
+    assertThat(success.message).isEqualTo("Found 2 installed apps")
+    val structured = success.structuredContent
+      ?: error("Expected structuredContent, got null")
+    assertThat(structured.toString())
+      .isEqualTo("""{"appIds":["com.example.a","com.example.b"]}""")
+  }
+
+  // ── OtherTrailblazeTool repo-resolution coverage (PR #3541 lead-dev #3) ───────────────────
+  //
+  // `HostOnDeviceRpcTrailblazeAgent.executeTool` resolves `OtherTrailblazeTool` placeholders
+  // through the session's `trailblazeToolRepo` before the type-discriminating `when`. The
+  // tests below cover the three behavioral branches the resolution introduces:
+  //   1. Registered dynamic-tool name → repo lookup returns concrete tool → dispatched.
+  //   2. Unknown name → repo lookup throws → fall through to else-branch with improved error.
+  //   3. `trailblazeToolRepo == null` → early-return with original tool → unsupported-tool error.
+  // Drift in either the resolution try/catch or the else-branch error message surfaces here.
+
+  @Test
+  fun `executeTool resolves OtherTrailblazeTool via toolRepo when name is registered as dynamic tool`() {
+    // Pin: an OtherTrailblazeTool whose name matches a registered DynamicTrailblazeToolRegistration
+    // gets routed to that registration's decoded tool, which (because it's a HostLocalExecutableTool)
+    // dispatches host-local. Before #3541's fix, the OtherTrailblazeTool fell into the `else`
+    // branch and surfaced as "Unsupported tool type for RPC execution: OtherTrailblazeTool".
+    val executedOnHost = AtomicBoolean(false)
+    val registration = FakeDynamicToolRegistration(
+      registeredName = "fake_dynamic_tool",
+      decodedTool = FakeHostLocalTool(executedOnHost),
+    )
+    val toolRepo = xyz.block.trailblaze.toolcalls.TrailblazeToolRepo(
+      trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "test",
+        toolClasses = emptySet(),
+        yamlToolNames = emptySet(),
+      ),
+      toolSetCatalog = null,
+    ).apply { addDynamicTools(listOf(registration)) }
+
+    val agent = createAgent(trailblazeToolRepo = toolRepo)
+    val otherTool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+      toolName = "fake_dynamic_tool",
+      raw = kotlinx.serialization.json.JsonObject(emptyMap()),
+    )
+
+    val executeToolMethod = agent.javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+    val context = minimalExecutionContext(agent)
+    val result = executeToolMethod.invoke(agent, otherTool, context, mutableListOf<Any>())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(executedOnHost.get()).isEqualTo(true)
+    // No RPC traffic — the resolved tool was host-local, dispatched via `executeHostLocalWithLogging`.
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
+  }
+
+  @Test
+  fun `executeTool surfaces improved error with toolName when OtherTrailblazeTool name is unknown to repo`() {
+    // Pin: when repo lookup throws (`IllegalStateException` "Could not find Trailblaze tool for
+    // name: X" from `toolCallToTrailblazeTool`'s `error(...)` branch), the catch block falls
+    // through with the original `OtherTrailblazeTool`, the `when` lands in the `else` branch,
+    // and the FatalError message includes the unresolved tool's `toolName` plus the
+    // "not registered ... as a class-backed, YAML-defined, or dynamic scripted tool" hint.
+    // Drift on either the toolName surface or the prose would make CI K1-style failures
+    // harder to triage.
+    val toolRepo = xyz.block.trailblaze.toolcalls.TrailblazeToolRepo(
+      trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "test",
+        toolClasses = emptySet(),
+        yamlToolNames = emptySet(),
+      ),
+      toolSetCatalog = null,
+    )
+
+    val agent = createAgent(trailblazeToolRepo = toolRepo)
+    val otherTool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+      toolName = "totally_unknown_tool",
+      raw = kotlinx.serialization.json.JsonObject(emptyMap()),
+    )
+
+    val executeToolMethod = agent.javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+    val context = minimalExecutionContext(agent)
+    val result = executeToolMethod.invoke(agent, otherTool, context, mutableListOf<Any>())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    val message = (result as TrailblazeToolResult.Error.FatalError).errorMessage
+    // toolName visible (the K1-style triage signal a triager needs).
+    assertThat(message).contains("toolName='totally_unknown_tool'")
+    // Precise taxonomy (matches the parallel diagnostic in `MaestroTrailblazeAgent`).
+    assertThat(message).contains("class-backed, YAML-defined, or dynamic scripted tool")
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
+  }
+
+  @Test
+  fun `executeTool with null trailblazeToolRepo passes OtherTrailblazeTool through to else-branch error`() {
+    // Pin the `repo == null` early-return path. Without a configured tool repo, the agent
+    // can't resolve any OtherTrailblazeTool — but it must still surface a clear error
+    // rather than throw NPE or silently succeed. The else-branch diagnostic still includes
+    // the toolName so a developer running outside a fully-wired session (unit-test fixture,
+    // ad-hoc REPL) gets the same triage signal as a production failure.
+    val agent = createAgent(trailblazeToolRepo = null)
+    val otherTool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+      toolName = "would_resolve_in_real_session",
+      raw = kotlinx.serialization.json.JsonObject(emptyMap()),
+    )
+
+    val executeToolMethod = agent.javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+    val context = minimalExecutionContext(agent)
+    val result = executeToolMethod.invoke(agent, otherTool, context, mutableListOf<Any>())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    val message = (result as TrailblazeToolResult.Error.FatalError).errorMessage
+    assertThat(message).contains("toolName='would_resolve_in_real_session'")
+    assertThat(message).contains("Unsupported tool type for RPC execution")
+  }
+
+  /**
+   * Builds a minimal [TrailblazeToolExecutionContext] for direct `executeTool` invocation —
+   * mirrors the context shape the production runner threads through, just enough to satisfy
+   * `executeHostLocalWithLogging` and the `else`-branch fatal-error path.
+   */
+  private fun minimalExecutionContext(
+    agent: HostOnDeviceRpcTrailblazeAgent,
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+    screenState = null,
+    traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+    trailblazeDeviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = testDeviceId,
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      widthPixels = 1080,
+      heightPixels = 1920,
+    ),
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = SessionId("test-session"), startTime = Clock.System.now())
+    },
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    memory = agent.memory,
+    maestroTrailblazeAgent = agent,
+  )
+
+  /**
+   * Minimal [DynamicTrailblazeToolRegistration] for tests. `decodeToolCall` returns the
+   * pre-built [decodedTool] verbatim (ignoring the args JSON) so callers can plant a
+   * [HostLocalExecutableTrailblazeTool] under any name and assert dispatch.
+   */
+  private class FakeDynamicToolRegistration(
+    registeredName: String,
+    private val decodedTool: xyz.block.trailblaze.toolcalls.TrailblazeTool,
+  ) : xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration {
+    override val name: xyz.block.trailblaze.toolcalls.ToolName =
+      xyz.block.trailblaze.toolcalls.ToolName(registeredName)
+    override val trailblazeDescriptor: xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor =
+      xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor(
+        name = registeredName,
+        description = "fake test tool",
+        requiredParameters = emptyList(),
+        optionalParameters = emptyList(),
+      )
+
+    override fun buildKoogTool(
+      trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+    ): xyz.block.trailblaze.toolcalls.TrailblazeKoogTool<out xyz.block.trailblaze.toolcalls.TrailblazeTool> =
+      error("buildKoogTool not used in these tests — executeTool dispatches via decodeToolCall")
+
+    override fun decodeToolCall(argumentsJson: String): xyz.block.trailblaze.toolcalls.TrailblazeTool =
+      decodedTool
   }
 
   private class FakeHostLocalTool(
@@ -657,66 +935,14 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
   }
 
-  /**
-   * Test stand-in for the dual-mode composition primitive path. Annotated with
-   * `@TrailblazeToolClass(prefersHostSideForCallback = true)` so [HostOnDeviceRpcTrailblazeAgent
-   * .prefersHostSideForCallback]'s annotation-flag predicate matches and routes the dispatch
-   * through `executeHostLocalWithLogging` — exercising the same code path as the real
-   * `AdbShellTrailblazeTool` without touching `AndroidDeviceCommandExecutor` /
-   * `AndroidHostAdbUtils`. The real tool's `execute` reaches dadb over the wire on a host
-   * without a live ADB server, which would hang or flake unit tests in CI environments.
-   *
-   * Name is intentionally test-specific (`fake_prefers_host_side`) rather than matching one
-   * of the production primitives — the annotation flag is what the predicate reads, the
-   * tool name no longer participates in routing after the annotation-driven refactor.
-   */
-  @TrailblazeToolClass(name = "fake_prefers_host_side", prefersHostSideForCallback = true)
-  private class FakePrefersHostSideTool : xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool {
-    override suspend fun execute(
-      toolExecutionContext: TrailblazeToolExecutionContext,
-    ): TrailblazeToolResult = TrailblazeToolResult.Success()
-  }
-
   // ── Per-branch logging coverage (#2935 review follow-up) ──────────────────────────────────
   //
   // `BaseTrailblazeAgent` already pins the contract that every top-level
   // `HostLocalExecutableTrailblazeTool` emits a `TrailblazeToolLog`. These tests cover the
-  // *other* host-local paths this agent introduces — the `requiresHostInstance` branch and the
-  // `prefersHostSideForCallback` branch in `executeTool`, plus the `DelegatingTrailblazeTool`
-  // sub-tool host-local expansion — so a future refactor of `executeHostLocalWithLogging` can't
-  // silently regress logging for `cbot` / `dip-slot` / `requires_host: true` YAML tools or the
-  // dual-mode composition primitives.
-
-  @Test
-  fun `prefersHostSideForCallback branch emits a TrailblazeToolLog and bypasses RPC`() {
-    // Pin: a tool annotation-named `android_adbShell` (one of the three allowlisted composition
-    // primitives) dispatched at the top level routes through `executeHostLocalWithLogging` and
-    // produces a log entry with the correct tool name. The `RecordingRpcServer` would observe a
-    // `/rpc/RunYamlRequest` POST if we accidentally fell through to the RPC branch — the
-    // assertion that the request log is empty is what defends the routing.
-    //
-    // Uses [FakePrefersHostSideTool] (annotated `@TrailblazeToolClass(prefersHostSideForCallback
-    // = true)` so the annotation-flag predicate matches) instead of the real
-    // `AdbShellTrailblazeTool` — the real tool's `execute` reaches dadb over the wire, which
-    // would hang or flake on a host without a live ADB server. Codex P2 from the PR review.
-    val captured = mutableListOf<TrailblazeLog>()
-    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-
-    val result = runBlocking {
-      agent.runTrailblazeTools(
-        tools = listOf(FakePrefersHostSideTool()),
-        elementComparator = NoopElementComparator,
-      )
-    }
-
-    assertThat(result.result).isInstanceOf(TrailblazeToolResult::class)
-    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
-    assertThat(toolLogs).hasSize(1)
-    assertThat(toolLogs[0].toolName).isEqualTo("fake_prefers_host_side")
-    // Defense: no RPC dispatch happened — the routing actually went host-side, not "logged AND
-    // sent over the wire." A future change that double-dispatches would fail this assertion.
-    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
-  }
+  // *other* host-local paths this agent introduces — the `requiresHostInstance` branch in
+  // `executeTool` plus the `DelegatingTrailblazeTool` sub-tool host-local expansion — so a future
+  // refactor of `executeHostLocalWithLogging` can't silently regress logging for `cbot` /
+  // `dip-slot` / `requires_host: true` YAML tools.
 
   @Test
   fun `delegating sub-tool host-local branch emits a TrailblazeToolLog per dispatched sub-tool`() {
@@ -744,55 +970,6 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(toolLogs[0].toolName).isEqualTo("fake_host_local_tool")
     // The sub-tool ran host-side; nothing should have gone over RPC for this dispatch.
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
-  }
-
-  @Test
-  fun `delegating tool expanding to a prefersHostSideForCallback primitive routes host-side`() {
-    // Lead-dev review #3: the top-level dispatch path checks `prefersHostSideForCallback` but
-    // the delegating-subtool path also needs the check. Otherwise a delegating alias that
-    // expands to one of the dual-mode composition primitives (e.g. an alias delegating to
-    // `android_adbShell`) would silently RPC-route and lose `Success.message` — the on-device-RPC-
-    // strips-payload gotcha this whole flag exists to prevent.
-    val captured = mutableListOf<TrailblazeLog>()
-    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
-    val annotatedSubTool = FakePrefersHostSideTool()
-    val delegating = object : xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool {
-      override fun toExecutableTrailblazeTools(
-        executionContext: TrailblazeToolExecutionContext,
-      ): List<xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool> = listOf(annotatedSubTool)
-    }
-
-    runBlocking {
-      agent.runTrailblazeTools(tools = listOf(delegating), elementComparator = NoopElementComparator)
-    }
-
-    val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
-    assertThat(toolLogs).hasSize(1)
-    assertThat(toolLogs[0].toolName).isEqualTo("fake_prefers_host_side")
-    // Defense — no RPC dispatch fired. The whole point of the delegating-subtool fix is to
-    // catch annotated primitives BEFORE the RPC fallthrough.
-    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
-    // dispatchedHostSide=true confirms the routing actually went through
-    // `executeHostLocalWithLogging` and not some other host-local code path that happens to
-    // log without setting the flag.
-    assertThat(toolLogs[0].dispatchedHostSide).isEqualTo(true)
-  }
-
-  @Test
-  fun `prefersHostSideForCallback toolMetadata override wins over class annotation`() {
-    // Lead-dev review #2: a YAML-defined dual-mode tool should be able to opt in via its
-    // per-instance `toolMetadata` rather than requiring the class-level annotation (the
-    // class annotation can't carry per-instance data because YAML tools share one backing
-    // class across N configs). Pins that the metadata-override path works end-to-end.
-    val toolWithMetadataOverride = object : xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool {
-      override val toolMetadata =
-        xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata(prefersHostSideForCallback = true)
-      override suspend fun execute(
-        toolExecutionContext: TrailblazeToolExecutionContext,
-      ): TrailblazeToolResult = TrailblazeToolResult.Success()
-    }
-    val agent = createAgent()
-    assertThat(agent.prefersHostSideForCallback(toolWithMetadataOverride)).isEqualTo(true)
   }
 
   @Test

@@ -10,8 +10,8 @@ Match named app locations (waypoints) against captured screen state.
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
-  list              List all waypoint definitions from active packs (workspace
-                      + framework classpath)
+  list              List all waypoint definitions from active trailmaps
+                      (workspace + framework classpath)
   locate            Given a captured screen state, report which waypoint(s)
                       match.
   validate          Validate that a specific waypoint definition matches a

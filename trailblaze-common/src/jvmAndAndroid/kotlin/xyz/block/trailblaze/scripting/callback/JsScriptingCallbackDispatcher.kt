@@ -107,8 +107,18 @@ object JsScriptingCallbackDispatcher {
     // summary is a one-liner; detailed error branches already log above at the point of
     // failure (DESERIALIZE_FAILED, TIMEOUT, NON_EXECUTABLE).
     val resultSummary = when (result) {
-      is JsScriptingCallbackResult.CallToolResult ->
-        if (result.success) "call_tool_result success=true" else "call_tool_result success=false"
+      is JsScriptingCallbackResult.CallToolResult -> {
+        // Surface whether the producer populated a typed structured payload — an operator
+        // debugging "why did my caller get a string instead of the typed object?" can grep
+        // for `structured=true` to confirm the wire carried one. Presence only, no payload
+        // bytes, so cardinality stays low.
+        val structured = result.structuredContent != null
+        if (result.success) {
+          "call_tool_result success=true structured=$structured"
+        } else {
+          "call_tool_result success=false structured=$structured"
+        }
+      }
       is JsScriptingCallbackResult.Error -> "error"
     }
     Console.log(
@@ -240,6 +250,12 @@ object JsScriptingCallbackDispatcher {
               JsScriptingCallbackResult.CallToolResult(
                 success = true,
                 textContent = result.message.orEmpty(),
+                // Forward the producer's structured payload (set by MCP scripted tools whose
+                // handler returns a non-string typed value — see [CallToolResultMapper] /
+                // [QuickJsTrailblazeTool]). Null on producers that haven't migrated to the
+                // typed-result authoring pattern; the consumer (TS SDK) falls back to
+                // `textContent` in that case so existing tools keep working unchanged.
+                structuredContent = result.structuredContent,
               )
             is TrailblazeToolResult.Error ->
               JsScriptingCallbackResult.CallToolResult(

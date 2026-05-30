@@ -1,0 +1,28 @@
+# Library trailmap that owns the Revyl-native mobile primitives. Revyl uses
+# cloud-hosted devices with AI-powered visual grounding instead of the in-process
+# accessibility / instrumentation driver path the rest of the framework uses, so
+# its tool surface is deliberately separate from the generic `core_interaction` /
+# `verification` toolsets.
+#
+# This trailmap has no `target:` block, so it's not surfaced as a runnable target —
+# its sole job is to scope the `revyl_*` tools and toolsets under a trailmap id
+# the way the framework's authoring model expects. The `platforms:` block below
+# wires the toolsets up for runtime-registry dispatch on the Revyl drivers; any
+# trailmap declaring `dependencies: [revyl]` inherits them automatically.
+#
+# **Naming convention.** Module is `trailblaze-revyl`; trailmap id is `revyl`
+# matching the `revyl_*` prefix on every tool and toolset shipped here.
+id: revyl
+platforms:
+  android:
+    drivers:
+      - revyl-android
+    tool_sets:
+      - revyl_core
+      - revyl_verification
+  ios:
+    drivers:
+      - revyl-ios
+    tool_sets:
+      - revyl_core
+      - revyl_verification

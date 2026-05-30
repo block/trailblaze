@@ -22,20 +22,24 @@
     # Validation: UI elements should show the drafted contact info
     - assertVisibleBySelector:
         reason: "First name should be entered on the draft screen"
-        selector:
-          textRegex: "Bob"
+        nodeSelector:
+          androidMaestro:
+            textRegex: Bob
     - assertVisibleBySelector:
         reason: "Last name should be entered on the draft screen"
-        selector:
-          textRegex: "Smith"
+        nodeSelector:
+          androidMaestro:
+            textRegex: Smith
     - assertVisibleBySelector:
         reason: "Phone number should be entered on the draft screen"
-        selector:
-          textRegex: "555\\D*987\\D*6543"
+        nodeSelector:
+          androidMaestro:
+            textRegex: 555\D*987\D*6543
     - assertVisibleBySelector:
         reason: "Phone label should be set to Work"
-        selector:
-          textRegex: "Work"
+        nodeSelector:
+          androidMaestro:
+            textRegex: Work
 
 # --- Benchmark Run History ---
 # [2026-03-10] FAILED - "Work" phone label assertion.

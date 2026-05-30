@@ -30,7 +30,7 @@ data class RequiresHostAnalysis(
  * `--platform=neutral`. Pure-ES npm dependencies (lodash, zod, date-fns) bundle cleanly
  * into the on-device IIFE; `node:*` builtins do not. Today, the second case surfaces as a
  * cryptic "Could not resolve" esbuild error that aborts session start for every scripted
- * tool in the pack — even sibling tools that would have bundled fine on their own. This
+ * tool in the trailmap — even sibling tools that would have bundled fine on their own. This
  * analyzer lets the host runner short-circuit the bundle attempt for individual host-only
  * tools, log a clear breadcrumb, and continue with the on-device-viable siblings.
  *
@@ -76,7 +76,7 @@ class ScriptedToolImportAnalyzer(
   /**
    * Analyse [scriptPath]'s import closure and return a [RequiresHostAnalysis] verdict.
    *
-   * @param scriptPath The `.ts` (or `.js`) entry the user authored under `<pack>/tools/`.
+   * @param scriptPath The `.ts` (or `.js`) entry the user authored under `<trailmap>/tools/`.
    *   Must already exist on disk; a missing file collapses to `requiresHost = false` and
    *   defers to the real bundler's error path.
    */

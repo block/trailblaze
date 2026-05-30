@@ -9,7 +9,7 @@ package xyz.block.trailblaze.api
  *
  * @property appId The single device-resolved app id when the framework picked one at session
  *   start. Null in log-replay contexts and when no declared candidate is installed.
- * @property appIds The full declared candidate list from the pack manifest. Used as the
+ * @property appIds The full declared candidate list from the trailmap manifest. Used as the
  *   fallback when [appId] is null — the matcher substitutes a `(?:id1|id2|…)` alternation
  *   so a captured tree still matches any declared variant.
  */

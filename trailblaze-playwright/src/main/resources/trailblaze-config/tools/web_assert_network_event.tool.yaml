@@ -1,2 +1,0 @@
-id: web_assert_network_event
-class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeAssertNetworkEventTool

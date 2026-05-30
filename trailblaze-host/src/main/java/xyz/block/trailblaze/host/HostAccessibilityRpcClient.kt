@@ -58,6 +58,19 @@ class HostAccessibilityRpcClient(
    * see [interpolateMemoryInTool]. [AgentMemory] is concurrent-safe.
    */
   private val memory: AgentMemory,
+  /**
+   * Budget for mid-trail re-warm probes after a transient RPC failure. Mirrors the same knob
+   * on [HostOnDeviceRpcTrailblazeAgent] so wedge-recovery tests on this client (none today,
+   * but inevitable as the accessibility driver path grows) can collapse the real-clock retry
+   * delay the same way. Matches `OnDeviceRpcClient.waitForReady`'s production default.
+   */
+  private val reWarmTimeoutMs: Long = 10_000L,
+  /**
+   * Poll interval inside [OnDeviceRpcClient.waitForReady] during re-warm. Same role as
+   * [reWarmTimeoutMs]. Matches `OnDeviceRpcClient.waitForReady`'s production default — if you
+   * change one, audit the other.
+   */
+  private val reWarmPollIntervalMs: Long = 500L,
 ) : UiActionExecutor, AutoCloseable {
 
   private val trailblazeYaml = createTrailblazeYaml()
@@ -358,7 +371,11 @@ class HostAccessibilityRpcClient(
       // This client always drives the accessibility driver (V3 + on-host path), so the re-warm
       // must confirm the service is still bound — a UiAutomator fallback here would silently
       // break accessibility-specific tool semantics.
-      rpcClient.waitForReady(timeoutMs = 10_000L, requireAndroidAccessibilityService = true)
+      rpcClient.waitForReady(
+        timeoutMs = reWarmTimeoutMs,
+        pollIntervalMs = reWarmPollIntervalMs,
+        requireAndroidAccessibilityService = true,
+      )
     } catch (e: Exception) {
       Console.log("[HostAccessibilityRpcClient] Re-warm failed: ${e.message}")
       return null

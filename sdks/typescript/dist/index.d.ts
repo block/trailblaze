@@ -4484,6 +4484,64 @@ export interface TrailblazeLogger {
 	warn(message: string, fields?: Record<string, unknown>): void;
 	error(message: string, fields?: Record<string, unknown>): void;
 }
+/**
+ * The scripted-tool memory primitive. Authors read/write through the 8 methods; the SDK
+ * tracks the diff against an immutable inbound snapshot and flushes the buffered changes
+ * as `memoryDelta` / `memoryDeletions` on the tool result envelope when the handler
+ * returns successfully.
+ *
+ * **Read-your-own-writes.** `get`/`has`/`keys` reflect changes made earlier in the same
+ * handler invocation. A `set("k", "v")` immediately followed by `get("k")` returns
+ * `"v"`, even though the value hasn't been flushed back to the host yet.
+ *
+ * **Transactional.** Writes are committed to the host only when the handler returns a
+ * non-error result. Both failure shapes — a thrown exception AND an explicit
+ * `isError: true` result envelope — leave the host's memory exactly as it was before
+ * the call. The host-side guard sits at the dispatch boundary
+ * (`SubprocessTrailblazeTool.execute`), so the symmetric rollback is enforced
+ * regardless of which failure mode the handler picks.
+ */
+export interface TrailblazeMemory {
+	/** Returns the string value for [key], or undefined if absent. */
+	get(key: string): string | undefined;
+	/** Sets [key] to [value]. Overwrites any prior value. */
+	set(key: string, value: string): void;
+	/** Returns true if [key] is set (including by a prior `.set()` in this invocation). */
+	has(key: string): boolean;
+	/** Snapshot of every currently-visible key. Order is not guaranteed. */
+	keys(): readonly string[];
+	/** Removes [key]. No-op if absent. */
+	delete(key: string): void;
+	/**
+	 * Replaces `{{var}}` and `${var}` tokens in [template] with their current values.
+	 * Mirrors the Kotlin `AgentMemory.interpolateVariables` semantics: single-pass per
+	 * pattern, unknown tokens resolve to empty string, the resolved string is NOT
+	 * re-scanned for tokens that interpolate.
+	 */
+	interpolate(template: string): string;
+	/**
+	 * Convenience for storing a typed JSON value. Serializes with `JSON.stringify` and
+	 * stores the resulting string under [key]. The type parameter [T] is editor-time only;
+	 * the runtime accepts any value `JSON.stringify` accepts.
+	 *
+	 * **Non-serializable values route through [delete].** `JSON.stringify` returns the
+	 * runtime `undefined` for top-level `undefined`, functions, and symbols — writing
+	 * that into the string-only buffer would silently desync `has` / `get` / wire. For
+	 * those values [setJson] calls [delete] instead, so the host sees an explicit
+	 * deletion rather than a phantom write. `null` is distinct: `JSON.stringify(null)`
+	 * is the string `"null"`, which is stored verbatim.
+	 */
+	setJson<T>(key: string, value: T): void;
+	/**
+	 * Convenience for retrieving a typed JSON value. Reads the string at [key] and runs
+	 * `JSON.parse` on it. Returns undefined when the key is absent OR when the string
+	 * isn't valid JSON — gracefully degrading rather than throwing keeps tools that fall
+	 * back to a default value (`getJson<UserInfo>("user") ?? defaultUser`) terse.
+	 *
+	 * The type parameter [T] is editor-time only; no runtime schema validation.
+	 */
+	getJson<T = unknown>(key: string): T | undefined;
+}
 export interface TrailblazeDevice {
 	/**
 	 * Coarse platform; useful for branching in cross-platform tools. Lowercase by convention on
@@ -4498,7 +4556,7 @@ export interface TrailblazeDevice {
 	driverType: string;
 }
 /**
- * The session's resolved target — the pack manifest's `target.platforms.<platform>`
+ * The session's resolved target — the trailmap manifest's `target.platforms.<platform>`
  * data after the framework has consulted the connected device for which candidate
  * to actually use.
  *
@@ -4516,9 +4574,9 @@ export interface TrailblazeDevice {
  * priority order — see each method's kdoc.
  */
 export interface TrailblazeTarget {
-	/** Pack-defined target id (e.g. `"clock"`, `"wikipedia"`, `"square"`). */
+	/** Trailmap-defined target id (e.g. `"clock"`, `"wikipedia"`, `"square"`). */
 	id: string;
-	/** Human-readable display name from the pack manifest's `target.display_name`. */
+	/** Human-readable display name from the trailmap manifest's `target.display_name`. */
 	displayName?: string;
 	/**
 	 * All Android/iOS app id candidates declared in the manifest's
@@ -4531,7 +4589,7 @@ export interface TrailblazeTarget {
 	 * Framework-resolved app id — picked at session start by intersecting [appIds]
 	 * against the set of apps actually installed on the connected device. Undefined
 	 * when no candidate was installed at session start (or when [appIds] is empty).
-	 * Most well-configured packs running on a populated device will have this set
+	 * Most well-configured trailmaps running on a populated device will have this set
 	 * and authors should usually consume via [resolveAppId].
 	 */
 	appId?: string;
@@ -4556,7 +4614,7 @@ export interface TrailblazeTarget {
 	 * Resolves the Android/iOS app id to use, applying the priority:
 	 *
 	 *  1. `this.appId` (framework-resolved) — what callers will hit ~always
-	 *     in well-configured packs running on a device with one of the candidates
+	 *     in well-configured trailmaps running on a device with one of the candidates
 	 *     installed.
 	 *  2. `this.appIds[0]` (first declared candidate) — fallback when the framework
 	 *     couldn't resolve anyone (e.g. session started before any candidate was
@@ -4580,7 +4638,7 @@ export interface TrailblazeTarget {
 	 * [resolveAppId] but reading from `this.resolvedBaseUrl` and `this.baseUrls`.
 	 *
 	 * Note: until the framework wires `target.platforms.web.base_urls:` into the
-	 * pack manifest schema, the data layers are empty and this method falls
+	 * trailmap manifest schema, the data layers are empty and this method falls
 	 * through to `options.defaultBaseUrl` every time. Authors writing web tools
 	 * today can rely on the caller-default; future framework upgrades will
 	 * transparently start populating from the manifest without source changes.
@@ -4623,7 +4681,7 @@ export interface TrailblazeContext {
 	device: TrailblazeDevice;
 	/**
 	 * Resolved-target descriptor. Populated whenever the host session has a target
-	 * configured (the pack manifest's `target:` block resolved against the connected
+	 * configured (the trailmap manifest's `target:` block resolved against the connected
 	 * device's installed apps) — both the MCP-subprocess path and the in-process
 	 * QuickJS scripting path emit it. Absent for sessions with no target (web-only
 	 * scratch tools, unit-test fixtures) and for envelopes from older daemons that
@@ -4636,10 +4694,14 @@ export interface TrailblazeContext {
 	 */
 	target?: TrailblazeTarget;
 	/**
-	 * Agent memory snapshot. Values are strings on the Kotlin side today; typed as `unknown` here
-	 * so an author-facing upgrade to richer memory types doesn't break the SDK surface.
+	 * Per-tool-call agent memory surface. Reads consult the host's snapshot captured at
+	 * envelope build time, plus any writes made earlier in this handler invocation
+	 * (read-your-own-writes). Writes are buffered locally and flushed back to the host on
+	 * a successful tool return via `_meta.trailblaze.memoryDelta`; a handler that throws
+	 * produces no delta and the host's memory is left unchanged. See [TrailblazeMemory]
+	 * for the full surface and [memory.ts] for the wire-shape rationale.
 	 */
-	memory: Record<string, unknown>;
+	memory: TrailblazeMemory;
 	/**
 	 * Author-facing logger. Always present on the surface so scripted tools can write
 	 * `ctx.logger.info("...")` without null-checking — `fromMeta` defaults to a no-op logger
@@ -4677,29 +4739,42 @@ export declare function fromMeta(meta: unknown, logger?: TrailblazeLogger): Trai
  * `success` is redundant here — the client throws on any non-success response, so a value
  * returned from `callTool(...)` is always `success: true`. Keeping the field exposed anyway so
  * an author who reaches into the typed shape isn't surprised that it disappeared; costs nothing.
+ *
+ * `structuredContent` carries the tool's typed JSON return value when the producer populated
+ * one. Most authors never read this field directly — the public `client.tools.<name>(args)`
+ * proxy already unwraps it into the typed `result` declared in [TrailblazeToolMap]. It's
+ * exposed here for the rare consumer that drops down to the low-level `callTool` escape hatch
+ * (e.g. an SDK-internal site that needs both `textContent` and structured payload from the
+ * same response).
  */
 export interface TrailblazeCallToolResult {
 	success: true;
 	textContent: string;
 	errorMessage: string;
+	structuredContent?: unknown;
 }
 /**
- * Open type map of `tool name → arg shape`. Empty by default; augmented by:
+ * Open type map of `tool name → { args; result }`. Empty by default; augmented by:
  *
  *  - The vendored `built-in-tools.d.ts` shipped with this SDK (well-known framework tools
  *    like `tapOnElementWithText`, `inputText`).
- *  - Per-pack `.d.ts` files emitted by the `trailblaze.bundle` Gradle plugin
- *    (one entry per scripted tool declared in the pack's resolved target manifest).
+ *  - Per-trailmap `.d.ts` files emitted by the framework's `WorkspaceClientDtsGenerator`
+ *    (one entry per scripted tool declared in the trailmap's resolved target manifest).
  *
  * Augmentation pattern (declaration merging):
  *
  * ```ts
  * declare module "@trailblaze/scripting" {
  *   interface TrailblazeToolMap {
- *     myScriptedTool: { foo: string; bar?: number };
+ *     myScriptedTool: { args: { foo: string; bar?: number }; result: string };
  *   }
  * }
  * ```
+ *
+ * **`args` vs `result`.** `args` is the runtime-validated input shape (JSON-Schema-shaped
+ * properties — typed against the matchers the daemon dispatcher actually checks).
+ * `result` is the static-only typed return value — see the kdoc on
+ * [TrailblazeToolMethods] for the type lie this currently carries.
  *
  * A tool listed here lights up `client.tools.<name>(args)` with autocomplete on the name
  * and type-checked args. Tools NOT listed are not reachable through the public client
@@ -4710,34 +4785,116 @@ export interface TrailblazeCallToolResult {
  * **Single authoring surface.** `client.tools.<name>(args)` is the only call style
  * available to a `.ts` author. The runtime still dispatches everything through the
  * internal `callTool` method that the `tools` Proxy delegates to, but the type isn't
- * exposed publicly — every tool a pack can call must be declared in `TrailblazeToolMap`.
+ * exposed publicly — every tool a trailmap can call must be declared in `TrailblazeToolMap`.
  *
- * **Multi-pack collision risk.** Within a single pack the Gradle generator fails the build
- * if two scripted tools share a name. Across packs (a TS consumer that imports two pack
+ * **Multi-trailmap collision risk.** Within a single trailmap the codegen fails the build
+ * if two scripted tools share a name. Across trailmaps (a TS consumer that imports two trailmap
  * roots' generated `.d.ts` files), TypeScript declaration merging will silently pick one
  * shape for the colliding key — the static type passes, the runtime mismatches. Tool names
- * MUST be globally unique across every pack a single consumer installs. There is no
- * automated cross-pack enforcement today; conventions and code review carry the load until
- * a multi-pack consumer demands one.
+ * MUST be globally unique across every trailmap a single consumer installs. There is no
+ * automated cross-trailmap enforcement today; conventions and code review carry the load until
+ * a multi-trailmap consumer demands one.
  */
 export interface TrailblazeToolMap {
 }
 /**
+ * Per-entry shape of [TrailblazeToolMap]. Authoring tools (vendored or per-trailmap) write
+ * `{ args: <ArgsShape>; result: <ResultShape> }`; the `client.tools.<name>(args)` namespace
+ * derives method signatures from these entries.
+ *
+ * Use `result: void` for tools that meaningfully return nothing (e.g. `hideKeyboard`),
+ * `result: string` for tools whose result is a plain text payload (most current tools),
+ * or a structured interface for tools that return JSON-shaped data.
+ *
+ * **Why this is exported.** The type isn't usually named at user-augmentation sites
+ * (authors write the literal `{ args; result }` inline). It exists as a public hook for
+ * upcoming codegen consumers — the static analyzer pass that walks
+ * `trailblaze.tool<I, O>(handler)` declarations will assemble emitter output against
+ * this type so emitter and runtime stay in lockstep when the entry shape evolves. Hide
+ * with caution.
+ */
+export type TrailblazeToolEntry = {
+	args: unknown;
+	result: unknown;
+};
+/**
  * Method-style namespace derived from [TrailblazeToolMap]. Each augmented entry surfaces as
- * a typed method — e.g. given `interface TrailblazeToolMap { inputText: { text: string } }`,
- * the namespace exposes `inputText(args: { text: string }): Promise<TrailblazeCallToolResult>`.
+ * a typed method — given
+ * `interface TrailblazeToolMap { inputText: { args: { text: string }; result: void } }`,
+ * the namespace exposes `inputText(args: { text: string }): Promise<void>`.
  *
  * This is the sole authoring surface a `.ts` tool file has to compose other Trailblaze
  * tools: the IDE shows every available tool when you type `client.tools.`, hover gives
  * JSDoc on both the name and the args, and a wrong-keyed/missing-field args object errors
  * at compile time without any string-literal fiddling.
  *
- * Tools not represented in the map (dynamically-registered, packs without generated
- * bindings) are unreachable from a typed `.ts` author — every tool a pack can call must be
- * declared in `TrailblazeToolMap` via the SDK's vendored built-ins or per-pack codegen.
+ * **The `result` type matches the runtime value.** When the producer tool populates the
+ * wire's `structured_content` field (TS scripted tool whose handler returns a typed
+ * non-string value), the proxy unwraps that JSON value and returns it as `T[K]['result']`.
+ * When the producer doesn't (Kotlin tools that return text, legacy tools), the proxy
+ * returns `text_content` cast as `T[K]['result']` — correct when the declared `result` is
+ * `string` (the per-trailmap codegen default), and accepted-as-is when the declared `result` is
+ * `void` (the caller discards the return anyway). A producer that doesn't populate
+ * `structured_content` while the consumer's `TrailblazeToolMap` declares a non-string
+ * `result` is a static/runtime mismatch — surfaced as a typed string the consumer didn't
+ * expect, traceable to either a missing producer migration or a stale per-trailmap `.d.ts`.
+ *
+ * Tools not represented in the map (dynamically-registered, trailmaps without generated
+ * bindings) are unreachable from a typed `.ts` author — every tool a trailmap can call must be
+ * declared in `TrailblazeToolMap` via the SDK's vendored built-ins or per-trailmap codegen.
  */
 export type TrailblazeToolMethods = {
-	[K in keyof TrailblazeToolMap]: (args: TrailblazeToolMap[K]) => Promise<TrailblazeCallToolResult>;
+	[K in keyof TrailblazeToolMap]: K extends "web_evaluate" ? WebEvaluateMethod : (args: TrailblazeToolMap[K] extends {
+		args: infer A;
+	} ? A : never) => Promise<TrailblazeToolMap[K] extends {
+		result: infer R;
+	} ? R : never>;
+};
+/**
+ * Function-overload shape for `client.tools.web_evaluate(...)`. Borrowed from Playwright
+ * Java's `Page.evaluate(pageFunction, args)` ergonomic — lets a Trailblaze trailmap author
+ * write a JS expression as a TypeScript arrow function (with type-checked args!) instead
+ * of hand-stringifying it into the `{ script: "..." }` wire shape the Kotlin tool actually
+ * consumes.
+ *
+ * Three call styles, all dispatch to the same `web_evaluate` Kotlin tool:
+ *
+ *  1. `web_evaluate(fn, ...args)` — the ergonomic shape. The Proxy calls
+ *     `Function.prototype.toString()` on the arrow, JSON-serializes the args array, and
+ *     emits `(<fnSrc>).apply(null, <argsJson>)` as the script payload. The function
+ *     evaluates in the PAGE context (not the host runtime) with the deserialized args
+ *     bound positionally.
+ *  2. `web_evaluate(script)` — bare string expression. Compatibility surface for authors
+ *     who want full control over the script (e.g. multi-statement IIFE).
+ *  3. `web_evaluate({ script })` — the literal args-object shape that matches the Kotlin
+ *     tool's wire contract directly. Useful when the script is computed dynamically and
+ *     the caller already has it as a string field on a config object.
+ *
+ * **Closure caveat.** Functions cross the host→page boundary via `Function.prototype.toString()`,
+ * so closure variables from the calling scope DON'T survive serialization — pass them
+ * positionally via `...args` so they're JSON-encoded into the wire script. The function
+ * body must be self-contained (no Node-side imports, no references to outer-scope names).
+ *
+ * **Return type — type lie warning.** The function form preserves the inferred `TResult`
+ * at the typed surface, but the runtime always returns a string. Today's Kotlin
+ * `web_evaluate` populates `textContent` with the `toString()` of the JS result —
+ * primitives serialize as text (`"42"`, `"hi"`, `"true"`), objects collapse to
+ * `[object Object]`, arrays serialize as comma-joined elements. The Proxy returns that
+ * raw text verbatim; no JSON.parse heuristic is applied (a previous revision tried, but
+ * the heuristic corrupted legitimate string returns whose textual form happened to look
+ * like JSON literals — e.g. `"42"` would round-trip as the number `42`, breaking the
+ * declared string contract). Authors that need a typed value should `Number(...)` /
+ * `JSON.parse(...)` the result themselves, or wait for the structured-content path that
+ * populates `structured_content` from the Kotlin side. Until then, return shapes more
+ * complex than primitives need `JSON.stringify` on the page side and `JSON.parse` on
+ * the host.
+ */
+export type WebEvaluateMethod = {
+	<TArgs extends readonly unknown[], TResult>(fn: (...args: TArgs) => TResult | Promise<TResult>, ...args: TArgs): Promise<TResult>;
+	(script: string): Promise<string>;
+	(args: {
+		script: string;
+	}): Promise<string>;
 };
 /**
  * Internal client surface — includes the low-level `callTool(name, args)` dispatch
@@ -4753,8 +4910,13 @@ export interface TrailblazeClientImpl {
 	 * returns the result. Internal — see [TrailblazeClient] for the public surface.
 	 *
 	 * **Typed args via [TrailblazeToolMap].** `name` is constrained to `keyof TrailblazeToolMap`
-	 * (vendored built-ins + per-pack-generated entries); `args` must match the typed shape
-	 * exactly. Wrong keys / missing required fields error at compile time.
+	 * (vendored built-ins + per-trailmap-generated entries); `args` must match the entry's `args`
+	 * half (`TrailblazeToolMap[name]["args"]`). Wrong keys / missing required fields error at
+	 * compile time. The return type stays `TrailblazeCallToolResult` here — `callTool` is the
+	 * internal envelope-returning primitive that keeps `textContent` + `structuredContent`
+	 * separate. The public [tools] namespace is where the typed `result` half is exposed —
+	 * the Proxy unwraps the envelope internally (see [TrailblazeToolMethods] for the unwrap
+	 * semantics).
 	 *
 	 * **Transports.** Picked automatically from the envelope — callers never branch on this:
 	 *
@@ -4800,7 +4962,9 @@ export interface TrailblazeClientImpl {
 	 * concurrent-safe today). Serialize the access locally or avoid composed mutations when
 	 * correctness matters.
 	 */
-	callTool<K extends keyof TrailblazeToolMap>(name: K, args: TrailblazeToolMap[K]): Promise<TrailblazeCallToolResult>;
+	callTool<K extends keyof TrailblazeToolMap>(name: K, args: TrailblazeToolMap[K] extends {
+		args: infer A;
+	} ? A : never): Promise<TrailblazeCallToolResult>;
 	/**
 	 * Method-style namespace — `client.tools.inputText({ text: "hi" })`. Each property is a
 	 * typed method derived from a [TrailblazeToolMap] augmentation. `client.tools.<TAB>` in
@@ -4815,10 +4979,11 @@ export interface TrailblazeClientImpl {
 	tools: TrailblazeToolMethods;
 }
 /**
- * Third handler argument on `trailblaze.tool(name, spec, handler)`. Exposes the callback
- * channel so tools can compose other Trailblaze tools. Always provided (never `undefined`) —
- * when the envelope is missing, the client's preflight check still runs and throws a clear
- * error instead of silently no-op'ing.
+ * Third handler argument on the imperative `trailblaze.tool(name, spec, handler)` signature
+ * (and reachable via `ctx.tools` on the typed `trailblaze.tool<I, O>(handler)` surface
+ * via [ToolContext]). Exposes the callback channel so tools can compose other Trailblaze
+ * tools. Always provided (never `undefined`) — when the envelope is missing, the client's
+ * preflight check still runs and throws a clear error instead of silently no-op'ing.
  *
  * **Surface narrowing.** `callTool` is hidden from the public type via `Omit` — `.ts`
  * authors can only compose tools through `client.tools.<name>(args)`, which forces every
@@ -4835,9 +5000,19 @@ export interface TrailblazeClientImpl {
  */
 export type TrailblazeClient = Omit<TrailblazeClientImpl, "callTool">;
 /**
- * Spec for a Trailblaze-authored tool. Intentionally a shallow wrapper over the raw MCP SDK's
- * `registerTool` spec shape — anything you'd pass to `server.registerTool(name, spec, handler)`
- * still works, just without having to construct a `McpServer` yourself.
+ * Spec for a Trailblaze-authored tool authored via the **imperative**
+ * `trailblaze.tool(name, spec, handler)` overload — a shallow wrapper over the raw
+ * MCP SDK's `registerTool` spec shape. Carries `description` / `inputSchema` /
+ * `outputSchema` / raw `_meta` because the imperative path doesn't have access to
+ * `<I, O>` generics or TSDoc, so every piece of registration metadata is authored
+ * by hand.
+ *
+ * **For the typed declarative overload — `trailblaze.tool<I, O>(spec, handler)` —
+ * use [TrailblazeTypedToolSpec] instead.** The typed spec carries structured
+ * registration-gate fields (`supportedPlatforms`, `requiresContext`,
+ * `requiresHost`, `supportedDrivers`) but **no `description`** — descriptions
+ * for typed tools live in the TSDoc above the `export const`, where the analyzer
+ * reads them.
  *
  * The surface is intentionally narrow. Fields that aren't wired here can be added as authors
  * ask for them — nothing about `registerPendingTools` prevents forwarding additional keys.
@@ -4903,10 +5078,783 @@ export interface TrailblazeToolResult {
 	structuredContent?: unknown;
 }
 /**
- * Declare a Trailblaze tool. Buffers the registration until [run] connects the MCP server,
- * so authors can call this at module top-level in any order.
+ * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring
+ * surface. Exposes the cross-tool primitives a typed handler can reach today:
+ * [tools], [memory], and [target].
+ *
+ * Deliberately narrower than [TrailblazeClient] / [TrailblazeContext]. Per-need fields
+ * (device, logger) can still be added later when a concrete typed-authored tool needs
+ * them; the goal is to grow the surface in lockstep with real demand rather than
+ * blanket-mirroring every field a Kotlin handler sees.
+ *
+ * ## Inclusion policy
+ *
+ * The bar for adding a field here is intentionally higher than "it's on `TrailblazeContext`."
+ * A field gets added when (a) **multiple** typed tools in the repo have demonstrated demand
+ * (one-off needs are usually a sign the tool wants the imperative `tool(name, spec, handler)`
+ * form, not a permanent SDK expansion), and (b) the field's lifecycle matches the existing
+ * set — injected per-call by `defineTypedTool`, originated from the host envelope.
+ *
+ * Concrete deliberate exclusion: **`device`** (platform / driver / screen dimensions). It's
+ * on `TrailblazeContext` and the next obvious extension, but no typed tool in the repo today
+ * needs it (the few that branch on platform do so via the spec's `supportedPlatforms` gate
+ * instead). Open a PR-level discussion before adding it so the bar above is satisfied.
+ *
+ * **Memory on the bundle path.** When a typed tool runs in the on-device QuickJS bundle
+ * runtime, the host ctx envelope doesn't yet carry a memory snapshot — `ctx.memory`
+ * on that path is a no-op surface whose writes never flush back to the host. Subprocess
+ * sessions get a fully-wired memory; bundle-path support lands in a follow-up.
+ *
+ * **Target on the bundle path.** Same caveat: `ctx.target` is populated whenever the
+ * host envelope carries a resolved-target descriptor (both subprocess and on-device
+ * paths emit it via their respective envelope builders), but it can still be
+ * `undefined` for sessions with no target (web-only scratch tools, unit-test
+ * fixtures). Typed handlers should optional-chain (`ctx.target?.resolveAppId()`)
+ * when the surrounding tool ought to work outside a target-aware session.
  */
+export interface ToolContext {
+	/** Compose other Trailblaze tools through the typed `tools.<name>(args)` namespace. */
+	tools: TrailblazeToolMethods;
+	/**
+	 * Per-invocation memory surface mirroring [TrailblazeContext.memory]. Reads see the
+	 * host snapshot + this invocation's writes (read-your-own-writes); writes are flushed
+	 * back to the host on a successful return via the result envelope's
+	 * `_meta.trailblaze.memoryDelta`.
+	 */
+	memory: TrailblazeMemory;
+	/**
+	 * Resolved-target descriptor — the trailmap manifest's `target.platforms.<platform>`
+	 * data after the framework has consulted the connected device for which app id to
+	 * actually use. Provides [TrailblazeTarget.resolveAppId] (Android/iOS) and
+	 * [TrailblazeTarget.resolveBaseUrl] (web) for tools that need to compose
+	 * platform-specific package / URL references without hard-coding them.
+	 *
+	 * `undefined` when the session has no target configured (web-only scratch tools,
+	 * unit-test fixtures, envelopes from older daemons that predate the field).
+	 * Optional-chain when the tool should still degrade gracefully — typed handlers
+	 * that strictly require a target should throw a clear "no target" error on the
+	 * undefined branch rather than silently no-op.
+	 */
+	target?: TrailblazeTarget;
+}
+/**
+ * Structured-config spec for the typed `trailblaze.tool<I, O>(spec, handler)` overload.
+ *
+ * Carries the namespaced framework hints that, in the YAML-descriptor world, were authored
+ * under `_meta: { trailblaze/... }`. With the typed authoring surface, authors set them
+ * directly as typed object fields and the build-time analyzer
+ * (`ScriptedToolDefinitionAnalyzer`) extracts them from each `trailblaze.tool(...)` call
+ * site — the runtime `_meta` JSON is synthesized downstream, never hand-authored.
+ *
+ * **No `description` field.** Tool descriptions live in the TSDoc block above each
+ * `export const X = trailblaze.tool(...)` binding. The analyzer reads it via the
+ * TypeScript compiler's `getJSDocCommentsAndTags()`. Forcing prose into TSDoc keeps the
+ * IDE-hover text and the LLM-facing description as the same single source of truth and
+ * eliminates the dual-source-of-truth question by construction — the compiler refuses to
+ * accept a `description` field here, so there's no place else to put prose.
+ *
+ * Every field is optional; omitted means "use the framework default" (`false` for
+ * booleans, empty list for the platform/driver gates which the runtime treats as
+ * "unrestricted").
+ *
+ * ## Field roles — "registration gate" vs. "metadata hint"
+ *
+ * Fields on this spec fall into two categories. The categorization matters when
+ * adding a new field — picking the wrong path means the runtime either silently
+ * ignores the value or routes it through the wrong layer:
+ *
+ *  - **Registration gates** decide whether the tool is even registered for a
+ *    given session. The runtime consults these BEFORE the tool reaches the
+ *    LLM's tool list — a tool that fails its gate is invisible. Examples:
+ *    [supportedPlatforms], [requiresHost], [supportedDrivers]. The on-device
+ *    dispatch path reads `requiresHost` *before* `_meta` is loaded, so it's
+ *    additionally promoted to the typed `InlineScriptToolConfig.requiresHost`
+ *    slot at enrichment time.
+ *  - **Metadata hints** are informational — they flow into the runtime `_meta`
+ *    JSON and are surfaced in tool catalogs, agent warnings, and downstream
+ *    consumers, but they do NOT gate registration. Example: [requiresContext].
+ *    The runtime registers the tool either way; the hint just helps explain
+ *    *why* the tool needs a live session.
+ *
+ * Adding a new field: decide which bucket it belongs in first. Gates need
+ * coverage in `TrailblazeToolMeta.shouldRegister` and (when the gate is read
+ * before `_meta`) a typed `InlineScriptToolConfig` slot. Hints just need the
+ * namespaced `_meta` projection in `AnalyzerScriptedToolEnrichment`.
+ *
+ * @see TrailblazeToolSpec for the imperative `tool(name, spec, handler)` form's spec —
+ *   distinct shape because the imperative path doesn't have access to TSDoc or `<I, O>`
+ *   generics, so it carries `description` / `inputSchema` / `outputSchema` / raw `_meta`
+ *   directly.
+ */
+export interface TrailblazeTypedToolSpec {
+	/**
+	 * Platforms this tool may register on. Empty / omitted = all platforms. Lowercase
+	 * platform names — the runtime (`TrailblazeToolMeta.fromJsonObject`) normalizes to
+	 * uppercase before comparison against `TrailblazeDevicePlatform.name`.
+	 */
+	supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
+	/**
+	 * UX hint: this tool depends on a live driver context (a running target/session). The
+	 * agent surfaces this in tool catalogs and warnings. **Not a registration filter** —
+	 * the runtime registers the tool either way; the field is purely informational. See
+	 * `TrailblazeToolMeta.shouldRegister` for the filter set (drivers, platforms, host).
+	 */
+	requiresContext?: boolean;
+	/**
+	 * Host-only — skip registration on-device. Use for tools that need Node/Bun APIs
+	 * (`node:fs`, `node:child_process`, file locks) or otherwise can't run inside the
+	 * on-device QuickJS bundle. The on-device launcher passes `preferHostAgent=false` so a
+	 * `requiresHost: true` tool skips at registration without any extra branching.
+	 */
+	requiresHost?: boolean;
+	/**
+	 * Drivers this tool may register on. Empty / omitted = all drivers. Driver identifiers
+	 * as the runtime emits them — e.g. `"playwright-native"`, `"playwright-electron"`,
+	 * `"android-ondevice-accessibility"`. Finer-grained than [supportedPlatforms]; use this
+	 * when a tool depends on driver-specific capabilities that other drivers on the same
+	 * platform don't have.
+	 */
+	supportedDrivers?: readonly string[];
+	/**
+	 * Optional JSON Schema for the typed tool's input. When present, the runtime adapter
+	 * compiles it via ajv and validates the incoming `args` BEFORE invoking the handler;
+	 * a validation failure short-circuits dispatch by throwing a
+	 * `TypedToolValidationError` (`name = "ValidationError"`). The synthesized
+	 * host-side wrapper (`DaemonScriptedToolBundler.synthesizeWrapper` →
+	 * `QuickJsToolHost.callTool`) catches the throw and maps it onto the same
+	 * `isError: true` envelope shape any handler-thrown error rides through — so a
+	 * session-log reader sees one consistent error format regardless of failure
+	 * mode. (Direct callers of the returned `TypedToolDefinition` see the throw
+	 * unwrapped, useful for unit tests that pin the validation behavior — see the
+	 * tests in `tool.test.ts` that `await expect(...).rejects.toMatchObject(...)`.)
+	 * The envelope text content names the offending fields, so the LLM can
+	 * self-correct without crashing inside the handler.
+	 *
+	 * **Source of truth.** The canonical input type for a typed tool is the `<TInput>`
+	 * generic on the call (`trailblaze.tool<MyInput>(...)`), extracted at build time by
+	 * `ScriptedToolDefinitionAnalyzer`. The analyzer-derived schema is what populates
+	 * the runtime tool descriptor + MCP `_meta` advertisement, and it is what the LLM
+	 * sees. Setting `inputSchema:` here is an opt-in escape hatch for authors who want
+	 * the same schema reachable at the JS dispatch boundary — useful for catching the
+	 * "LLM sent malformed args" failure mode in environments where the static-analysis
+	 * pipeline hasn't injected the schema yet, OR for authors who want a narrower
+	 * runtime contract than the TS interface expresses.
+	 *
+	 * **Shape.** A JSON Schema object — e.g. `{ type: "object", properties: { q: { type:
+	 * "string" } }, required: ["q"] }`. Plain literal, not a zod schema; the typed
+	 * authoring surface intentionally does not depend on zod at the dispatch boundary
+	 * (zod's value lives in interface authoring, which the analyzer reads statically).
+	 *
+	 * **When to omit.** Bare-handler `trailblaze.tool<I, O>(handler)` form. No spec, no
+	 * runtime validation — relies on the analyzer + MCP advertisement to keep the LLM
+	 * honest.
+	 *
+	 * **NOT a SISTER-IMPL-TAG field.** Every other field on this spec
+	 * (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`)
+	 * is extracted by the analyzer's `RECOGNIZED_SPEC_FIELDS` set and projected
+	 * into namespaced `_meta` keys by the Kotlin side's `projectAnalyzerSpec`. This
+	 * field is deliberately the exception: the analyzer's job is to extract the
+	 * `<TInput>` interface into a JSON Schema for MCP advertisement, so flowing
+	 * `inputSchema:` *also* through the analyzer would either duplicate the
+	 * `<TInput>` schema (if both are present) or override it (if the author
+	 * intentionally narrowed). Today the field is consumed at the TS dispatch
+	 * boundary directly; the analyzer ignores it intentionally. If a future change
+	 * wants to surface this field in `_meta`, decide the precedence-vs-interface
+	 * rule first, then update `RECOGNIZED_SPEC_FIELDS` and `projectAnalyzerSpec` in
+	 * lockstep — see the SISTER-IMPL-TAG comment in
+	 * `sdks/typescript/tools/extract-tool-defs.mjs:RECOGNIZED_SPEC_FIELDS`.
+	 *
+	 * **Long-term plan.** Once the analyzer-injected sidecar lands (its schema
+	 * flows to the JS runtime via the synthesized QuickJS wrapper), this field
+	 * becomes redundant for typical tools — authors will get validation from the
+	 * `<TInput>` interface alone. The field will stick around as the narrower-
+	 * runtime-contract escape hatch but stops being the recommended way to wire
+	 * runtime validation.
+	 */
+	inputSchema?: Record<string, unknown>;
+}
+/**
+ * Public marker for "this tool takes no input." TypeScript generic defaults are
+ * positional, so an author who wants a typed result with NO input can't skip the
+ * first type argument; they have to spell it. `EmptyInput` is the readable form of
+ * that ceremony:
+ *
+ *   trailblaze.tool(async () => "ok")                                  // 0 args
+ *   trailblaze.tool<MyInput>(async (i, ctx) => "ok")                   // typed input + string
+ *   trailblaze.tool<EmptyInput, MyResult>(async (_, ctx) => ({...}))   // typed result + no input
+ *   trailblaze.tool<MyInput, MyResult>(async (i, ctx) => ({...}))      // fully typed
+ *
+ * Declared as an `interface` (not `type = Record<string, never>`) so the analyzer's
+ * `ts-json-schema-generator` walks it as a named object type and emits the expected
+ * `{"type":"object", "additionalProperties": false}` schema. Authoring-time, it's
+ * structurally equivalent to `Record<string, never>` for the no-properties case; the
+ * runtime handler receives an empty object on every call.
+ */
+export interface EmptyInput {
+}
+/**
+ * Carrier returned by the typed authoring surface. Today it's a 3-arg adapter shaped
+ * `(args, ctx, client) => Promise<TResult>` — the same call shape the existing scripted-tool
+ * wrapper synthesizer (`DaemonScriptedToolBundler.synthesizeWrapper`) invokes against every
+ * registered tool. The adapter unpacks `client.tools` into the typed [ToolContext] before
+ * forwarding to the author's `(input, ctx)` handler, so a `.ts` author can write the typed
+ * shape WITHOUT the runtime dispatcher having to learn about the alternative arity.
+ *
+ * The `<I, O>` type parameters remain the load-bearing part of the contract for codegen
+ * — `ScriptedToolDefinitionAnalyzer` walks each `trailblaze.tool<I, O>(handler)` call site
+ * via the TypeScript AST to derive [TrailblazeToolMap] entries. The runtime shape chosen
+ * here is decoupled from extraction; this 3-arg adapter just ensures the synthesized
+ * wrapper's `__userHandler(args, ctx, __client)` call site reaches the author's typed
+ * handler with the right arguments. If a future change wants a richer descriptor returned
+ * here (e.g. carrying metadata that the analyzer can't recover from the AST alone), update
+ * both sides in lockstep.
+ */
+export type TypedToolDefinition<TInput = Record<string, never>, TResult = string> = (args: TInput, ctx: TrailblazeContext | undefined, client: TrailblazeClient) => Promise<TResult>;
+/**
+ * Declare a Trailblaze tool.
+ *
+ * Three call styles share this name:
+ *
+ *  - **Imperative (MCP-registered).** `tool(name, spec, handler): void` — buffers a
+ *    registration until [run] connects the MCP server. Returns `void`. Used by tools
+ *    that go through the host-subprocess path (MCP-over-stdio transport). The `spec`
+ *    here is the legacy MCP-registration shape [TrailblazeToolSpec] (description,
+ *    inputSchema, outputSchema, raw `_meta`).
+ *  - **Typed declarative — bare handler.** `tool<I, O>(handler)` — returns the
+ *    handler as a [TypedToolDefinition], carrying `<I, O>` type information that
+ *    the analyzer extracts into JSON-Schema and [TrailblazeToolMap] entries. Both
+ *    type parameters have defaults so authors pick the lightest shape that fits:
+ *
+ *      trailblaze.tool(async (_, ctx) => "done")                              // <{}, string>
+ *      trailblaze.tool<MyInput>(async (i, ctx) => `hi ${i.name}`)             // <MyInput, string>
+ *      trailblaze.tool<MyInput, MyOutput>(async (i, ctx) => ({ ... }))        // fully typed
+ *
+ *  - **Typed declarative — with spec.** `tool<I, O>(spec, handler)` — same as the
+ *    bare-handler form, but the first positional arg is a [TrailblazeTypedToolSpec]
+ *    carrying structured config (`supportedPlatforms`, `requiresContext`,
+ *    `requiresHost`, `supportedDrivers`). The spec is captured by the build-time
+ *    analyzer for synthesizing `_meta` on the MCP tool advertisement; at runtime it's
+ *    discarded (the spec is a compile-time signal, not a runtime value). Use this
+ *    overload when a tool needs gating or driver/platform restriction; reach for the
+ *    bare-handler form when no metadata is needed.
+ *
+ *      trailblaze.tool<I, O>(
+ *        { supportedPlatforms: ["web"], requiresContext: true },
+ *        async (input, ctx) => { ... },
+ *      )
+ *
+ * Tool descriptions live in TSDoc on the `export const X = trailblaze.tool(...)`
+ * binding — there is intentionally no `description` field on [TrailblazeTypedToolSpec].
+ * The analyzer reads the binding's TSDoc and the input/output interface field TSDoc to
+ * synthesize the runtime tool description and per-property `description` keys.
+ *
+ * Dispatch is by first-arg type:
+ *  - function → typed bare-handler
+ *  - plain object + function second-arg → typed with-spec
+ *  - string → imperative
+ *  - anything else → falls through to imperative push (registration-side error)
+ */
+export declare function tool<TInput = Record<string, never>, TResult = string>(handler: (input: TInput, ctx: ToolContext) => Promise<TResult>): TypedToolDefinition<TInput, TResult>;
+export declare function tool<TInput = Record<string, never>, TResult = string>(spec: TrailblazeTypedToolSpec, handler: (input: TInput, ctx: ToolContext) => Promise<TResult>): TypedToolDefinition<TInput, TResult>;
 export declare function tool(name: string, spec: TrailblazeToolSpec, handler: TrailblazeToolHandler): void;
+/**
+ * Matches against [DriverNodeDetail.AndroidAccessibility] nodes.
+ *
+ * Only properties from [DriverNodeDetail.AndroidAccessibility.MATCHABLE_PROPERTIES]
+ * should be set here. All fields are optional — only non-null fields act as predicates.
+ * String fields support regex patterns.
+ */
+export interface DriverNodeMatchAndroidAccessibility {
+	classNameRegex?: string | null;
+	resourceIdRegex?: string | null;
+	uniqueId?: string | null;
+	composeTestTagRegex?: string | null;
+	textRegex?: string | null;
+	contentDescriptionRegex?: string | null;
+	hintTextRegex?: string | null;
+	labeledByTextRegex?: string | null;
+	stateDescriptionRegex?: string | null;
+	paneTitleRegex?: string | null;
+	roleDescriptionRegex?: string | null;
+	isEnabled?: boolean | null;
+	isClickable?: boolean | null;
+	isCheckable?: boolean | null;
+	isChecked?: boolean | null;
+	isSelected?: boolean | null;
+	isFocused?: boolean | null;
+	isEditable?: boolean | null;
+	isScrollable?: boolean | null;
+	isPassword?: boolean | null;
+	isHeading?: boolean | null;
+	isMultiLine?: boolean | null;
+	inputType?: number | null;
+	collectionItemRowIndex?: number | null;
+	collectionItemColumnIndex?: number | null;
+}
+/**
+ * Matches against [DriverNodeDetail.AndroidMaestro] nodes.
+ *
+ * This mirrors [TrailblazeElementSelector]'s matching capabilities but operates
+ * on [TrailblazeNode] trees rather than [ViewHierarchyTreeNode].
+ */
+export interface DriverNodeMatchAndroidMaestro {
+	textRegex?: string | null;
+	resourceIdRegex?: string | null;
+	accessibilityTextRegex?: string | null;
+	classNameRegex?: string | null;
+	hintTextRegex?: string | null;
+	clickable?: boolean | null;
+	enabled?: boolean | null;
+	focused?: boolean | null;
+	checked?: boolean | null;
+	selected?: boolean | null;
+}
+/**
+ * Matches against [DriverNodeDetail.Web] nodes.
+ */
+export interface DriverNodeMatchWeb {
+	ariaRole?: string | null;
+	ariaNameRegex?: string | null;
+	ariaDescriptorRegex?: string | null;
+	headingLevel?: number | null;
+	cssSelector?: string | null;
+	dataTestId?: string | null;
+	nthIndex?: number | null;
+}
+/**
+ * Matches against [DriverNodeDetail.Compose] nodes.
+ */
+export interface DriverNodeMatchCompose {
+	testTag?: string | null;
+	role?: string | null;
+	textRegex?: string | null;
+	editableTextRegex?: string | null;
+	contentDescriptionRegex?: string | null;
+	toggleableState?: string | null;
+	isEnabled?: boolean | null;
+	isFocused?: boolean | null;
+	isSelected?: boolean | null;
+	isPassword?: boolean | null;
+}
+/**
+ * Matches against [DriverNodeDetail.IosMaestro] nodes.
+ * Only includes properties that iOS natively provides. Excludes clickable, enabled,
+ * and checked which Maestro infers/defaults rather than reading from UIKit.
+ */
+export interface DriverNodeMatchIosMaestro {
+	textRegex?: string | null;
+	resourceIdRegex?: string | null;
+	accessibilityTextRegex?: string | null;
+	classNameRegex?: string | null;
+	hintTextRegex?: string | null;
+	focused?: boolean | null;
+	selected?: boolean | null;
+}
+/**
+ * Matches against [DriverNodeDetail.IosAxe] nodes using Apple-native AX vocabulary
+ * — `role` (AXButton/AXStaticText/…), `subrole`, `customActions`, etc. — rather than
+ * the Maestro-inferred shape in [IosMaestro].
+ *
+ * String fields support regex patterns (with literal case-insensitive fallback when
+ * the pattern is not valid regex, so selectors like `$0.00` still work). `uniqueId`
+ * is exact-match because app-assigned accessibility identifiers are identity, not text.
+ *
+ * Only properties in [DriverNodeDetail.IosAxe.MATCHABLE_PROPERTIES] are exposed here.
+ */
+export interface DriverNodeMatchIosAxe {
+	/** **Matchable.** Apple AX role (e.g. `AXButton`, `AXStaticText`, `AXApplication`). */
+	roleRegex?: string | null;
+	/** **Matchable.** Apple AX subrole (e.g. `AXSecureTextField`). Often null. */
+	subroleRegex?: string | null;
+	/** **Matchable.** AXLabel — primary accessibility label. */
+	labelRegex?: string | null;
+	/** **Matchable.** AXValue — current value/state string. */
+	valueRegex?: string | null;
+	/** **Matchable.** Exact match on `accessibilityIdentifier` set by the app. */
+	uniqueId?: string | null;
+	/** **Matchable.** Short element type (e.g. `Button`, `StaticText`). */
+	typeRegex?: string | null;
+	/** **Matchable.** AXTitle — section/window title. */
+	titleRegex?: string | null;
+	/** **Matchable.** The node's `custom_actions` list must contain this string. */
+	customAction?: string | null;
+	/** **Matchable.** Whether the element is enabled (from `AXEnabled`). */
+	enabled?: boolean | null;
+}
+/**
+ * Rich element selector for [TrailblazeNode] trees.
+ *
+ * This is the successor to [TrailblazeElementSelector] for non-Maestro drivers.
+ * Where [TrailblazeElementSelector] can only match on the limited properties that
+ * Maestro's Orchestra supports (text, id, enabled, selected, checked, focused),
+ * this selector can match on the full surface of each driver's native properties.
+ *
+ * ## Structure
+ * - **[driverMatch]**: Driver-specific property matching (className, inputType, etc.)
+ * - **Spatial relationships**: [above], [below], [leftOf], [rightOf]
+ * - **Hierarchy**: [childOf], [containsChild], [containsDescendants]
+ * - **Positioning**: [index] (last resort, applied after spatial sort)
+ *
+ * ## Recording flow
+ * 1. User taps on screen → coordinates identify the target [TrailblazeNode]
+ * 2. Selector generator examines the target and its context in the tree
+ * 3. Generator produces a [TrailblazeNodeSelector] using driver-specific properties
+ * 4. Selector is stored in the recording alongside fallback coordinates
+ *
+ * ## Playback flow
+ * 1. Resolver matches the [TrailblazeNodeSelector] against the live [TrailblazeNode] tree
+ * 2. If exactly one match → tap its center
+ * 3. If no match → fall back to recorded coordinates
+ *
+ * ## Compatibility
+ * [TrailblazeElementSelector] remains unchanged for Maestro-based paths.
+ * This selector is used only by drivers that produce [TrailblazeNode] trees.
+ *
+ * @see TrailblazeElementSelector for the legacy Maestro-compatible selector
+ */
+export interface TrailblazeNodeSelector {
+	/**
+	 * Android Accessibility driver matcher. Set this when matching against
+	 * [DriverNodeDetail.AndroidAccessibility] nodes.
+	 */
+	androidAccessibility?: DriverNodeMatchAndroidAccessibility | null;
+	/** Android Maestro driver matcher. */
+	androidMaestro?: DriverNodeMatchAndroidMaestro | null;
+	/** Web (Playwright) driver matcher. */
+	web?: DriverNodeMatchWeb | null;
+	/** Compose driver matcher. */
+	compose?: DriverNodeMatchCompose | null;
+	/** iOS Maestro accessibility hierarchy matcher. */
+	iosMaestro?: DriverNodeMatchIosMaestro | null;
+	/** iOS AXe (Apple Accessibility API) matcher — used when the tree is [DriverNodeDetail.IosAxe]. */
+	iosAxe?: DriverNodeMatchIosAxe | null;
+	/** Target must be below (lower Y) an element matching this selector. */
+	below?: TrailblazeNodeSelector | null;
+	/** Target must be above (higher Y) an element matching this selector. */
+	above?: TrailblazeNodeSelector | null;
+	/** Target must be left of an element matching this selector. */
+	leftOf?: TrailblazeNodeSelector | null;
+	/** Target must be right of an element matching this selector. */
+	rightOf?: TrailblazeNodeSelector | null;
+	/** Target must be a descendant of an element matching this selector. */
+	childOf?: TrailblazeNodeSelector | null;
+	/** Target must have a direct child matching this selector. */
+	containsChild?: TrailblazeNodeSelector | null;
+	/** Target must have descendants matching ALL of these selectors. */
+	containsDescendants?: TrailblazeNodeSelector[] | null;
+	/**
+	 * 0-based index among all matches, sorted top-to-bottom then left-to-right.
+	 * Applied after all other predicates. Last resort for disambiguation.
+	 */
+	index?: number | null;
+}
+/** Screen-coordinate bounding rectangle. */
+export interface Bounds {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
+}
+/**
+ * Lightweight identity + position record describing one match returned by the
+ * `findMatches` tool.
+ *
+ * Designed for scripted-tool authors who want to ask "is this element visible?",
+ * "is the selector unambiguous?", and "where is the match on screen?" without
+ * pulling the entire view subtree across the wire. The descriptor intentionally
+ * omits any reference to the matched node's children — carrying the subtree
+ * would defeat the snapshot-caching ROI, and opaque node handles would leak
+ * driver implementation details into the typed authoring surface.
+ *
+ * ## Bounds reuse
+ *
+ * Reuses [TrailblazeNode.Bounds] (`left` / `top` / `right` / `bottom` with
+ * computed `width` / `height` / `centerX` / `centerY`) rather than introducing
+ * a separate `Rect` type — every selector resolution path already speaks this
+ * shape, and the resolver hands back `TrailblazeNode` instances whose `bounds`
+ * field is the same type.
+ *
+ * ## Cross-driver field semantics
+ *
+ * - [matchedText] is the matched node's best-available text — per-driver
+ *   `resolveText()` for Android/iOS/Compose, `ariaName` for Web. Null when the
+ *   driver detail carried no text-shaped property.
+ * - [accessibilityId] is the accessibility-label / content-description / aria-
+ *   descriptor on the matched node, when the driver exposes one.
+ * - [resourceId] is the Android `resourceId` (or its iOS / Compose / Web
+ *   analogue: `accessibilityIdentifier`, Compose `testTag`, web `data-testid`)
+ *   when the driver exposes one.
+ *
+ * Drivers that don't expose a given property leave the corresponding field
+ * null — scripted authors should not assume any field is populated.
+ */
+export interface MatchDescriptor {
+	/**
+	 * Child-index path from the hierarchy root to this match.
+	 *
+	 * `[]` is the root, `[0, 2, 1, 4]` means "child 0 of root → child 2 → child 1
+	 * → child 4." Lets a caller re-identify a specific match against **the same
+	 * captured tree** without re-running the selector.
+	 *
+	 * ## Lifetime — frame-scoped, not durable
+	 *
+	 * The path is positional, so it is only stable for the lifetime of one
+	 * captured view-hierarchy snapshot. Any change to the tree shape between
+	 * capture and use — siblings added or removed, a RecyclerView item recycled,
+	 * a parent node re-mounting after a state change — invalidates the path:
+	 * the same physical pixels are now reached by a different index sequence.
+	 *
+	 * Treat descriptors as "immediate hand-offs to act on in this tool body"
+	 * rather than long-lived references. Re-querying via [findMatches] is the
+	 * right pattern after any device-mutating action, even if the matched
+	 * element is logically the same. For longer-lived identity, prefer
+	 * [accessibilityId] / [resourceId] when the driver populates them.
+	 */
+	indexPath: number[];
+	/**
+	 * Bounding rectangle of the matched node, in device pixels. `null` when the
+	 * driver couldn't compute bounds for the node (some Playwright nodes from
+	 * the parsed ARIA tree lack DOM-bounds enrichment; some Compose nodes
+	 * before first layout, etc.). Callers must treat `null` as "no coordinates
+	 * available" rather than tapping the origin — defaulting an unknown bounds
+	 * to `(0, 0, 0, 0)` would let a scripted tool accidentally tap the
+	 * top-left corner of the screen.
+	 */
+	bounds?: Bounds | null;
+	/**
+	 * Best-available text on the matched node, when the driver exposes one.
+	 * Per-driver: `text ?: hintText ?: contentDescription` on Android,
+	 * `text ?: hintText ?: accessibilityText` on iOS Maestro, `ariaName` on Web,
+	 * etc. Null when the matched node carried no text-shaped property.
+	 */
+	matchedText?: string | null;
+	/**
+	 * Accessibility label / content description on the matched node, when the
+	 * driver exposes one. Maps to `contentDescription` on Android accessibility,
+	 * `accessibilityText` on Android/iOS Maestro, `uniqueId` on iOS AXe,
+	 * `contentDescription` on Compose, `ariaDescriptor` on Web. Null otherwise.
+	 */
+	accessibilityId?: string | null;
+	/**
+	 * Stable identifier on the matched node, when the driver exposes one. Maps
+	 * to `resourceId` on Android, `accessibilityIdentifier` on iOS, `testTag` on
+	 * Compose, `data-testid` on Web. Null otherwise.
+	 */
+	resourceId?: string | null;
+}
+/**
+ * Ergonomic constructors for [TrailblazeNodeSelector] with scoped IDE autocomplete on
+ * each driver's match-field surface. Both forms below produce identical values:
+ *
+ * ```ts
+ * // Factory form — IDE narrows to the chosen driver's fields
+ * const a: TrailblazeNodeSelector = selectors.androidAccessibility({ textRegex: "Submit" });
+ *
+ * // Literal form — copy-paste compatible with the YAML serialization
+ * const b: TrailblazeNodeSelector = { androidAccessibility: { textRegex: "Submit" } };
+ * ```
+ *
+ * The factory is pure sugar — its implementation is `(args) => ({ <driverKey>: args })`
+ * — but it lets authors write a selector without remembering the exact wire-discriminator
+ * key, and scopes autocomplete to one driver at a time. Adding a new driver is a single
+ * Kotlin sealed-class branch + codegen regen; no parallel TypeScript edits to remember.
+ */
+export declare const selectors: {
+	androidAccessibility: (args: DriverNodeMatchAndroidAccessibility) => TrailblazeNodeSelector;
+	androidMaestro: (args: DriverNodeMatchAndroidMaestro) => TrailblazeNodeSelector;
+	web: (args: DriverNodeMatchWeb) => TrailblazeNodeSelector;
+	compose: (args: DriverNodeMatchCompose) => TrailblazeNodeSelector;
+	iosMaestro: (args: DriverNodeMatchIosMaestro) => TrailblazeNodeSelector;
+	iosAxe: (args: DriverNodeMatchIosAxe) => TrailblazeNodeSelector;
+};
+/**
+ * Sync, locally-evaluated view of a captured device snapshot. Predicate helpers
+ * query resolved matches without further round-trips so a synchronous predicate
+ * (e.g. a [ConditionalAction]'s `condition` / `postcondition`) can run inside a
+ * `.filter(...)` callback.
+ *
+ * **Shared with waypoint detection.** Per the #3455 "Convergence with
+ * waypoint detection" note, waypoint resolution is the same problem shape (N
+ * detector predicates against one snapshot). Whichever subsystem ships first
+ * defines the predicate surface; the other consumes it. Adding a method here is
+ * a cross-subsystem decision — if a new helper makes sense for both ConditionalAction
+ * and waypoint authors, add it; if it's specific to one, prefer a subsystem-local
+ * utility that takes a [ViewHierarchy] argument.
+ *
+ * **Backed by pre-resolved selectors in Phase 2.** [captureViewHierarchy] builds
+ * an instance from a declared list of selectors; queries for selectors not in
+ * that list throw. When the host-side full-tree snapshot tool ships (Phase 3+),
+ * the snapshot can be backed by the captured tree directly and arbitrary
+ * selectors will resolve without pre-declaration — the interface won't change,
+ * just the implementation.
+ *
+ * Naming note: TypeScript-side `ViewHierarchy` is a sync data carrier with
+ * predicate helpers. The Kotlin side's `ViewHierarchyTreeNode` is the actual
+ * captured tree. The shared word "ViewHierarchy" is intentional (both represent
+ * the same captured state); the shape differs because the consumer needs differ.
+ */
+export interface ViewHierarchy {
+	/** Returns `true` if at least one node in the snapshot matches `selector`. */
+	visible(selector: TrailblazeNodeSelector): boolean;
+	/** Returns the first matching node, or `null` if none match. */
+	find(selector: TrailblazeNodeSelector): MatchDescriptor | null;
+	/** Returns every matching node — empty array if none. */
+	findAll(selector: TrailblazeNodeSelector): MatchDescriptor[];
+}
+/**
+ * Pre-resolve a declared list of selectors against the live device and return a
+ * sync [ViewHierarchy] whose `visible` / `find` / `findAll` queries serve from
+ * in-memory results.
+ *
+ * Each selector is dispatched via `client.tools.findMatches({ selector })` in
+ * parallel. **Each callback re-captures the view hierarchy** (see this file's
+ * header) — Phase 2 has no single-frame multi-selector capture path. Parallel
+ * dispatch keeps the wall-clock window small, but the result is not strictly
+ * atomic; predicates should tolerate small inter-frame drift. Calling
+ * `snap.visible(selectorNotInList)` throws — the snapshot only knows about
+ * selectors it pre-resolved.
+ *
+ * **Selector identity.** The lookup key is the JSON serialization of the
+ * selector object — `{ androidAccessibility: { textRegex: "Submit" } }` and a
+ * separately-constructed `selectors.androidAccessibility({ textRegex: "Submit" })`
+ * resolve to the same key because the factory produces an identical literal
+ * shape. Field order matters to `JSON.stringify`; if two selectors differ only
+ * in key order they'll be treated as distinct (a no-op in practice — TS object
+ * literals serialize in insertion order and authors rarely construct the same
+ * selector twice with shuffled keys, but worth noting).
+ *
+ * **Immutability.** The returned [ViewHierarchy] takes ownership of an
+ * internal selector list (copied from the caller-provided array) and its
+ * resolved [MatchDescriptor] arrays (copied per-selector by `findAll`). Mutating
+ * the caller's `selectors` array after this call doesn't affect the snapshot,
+ * and mutating the array returned by `findAll(...)` doesn't affect later
+ * `findAll(...)` calls or the post-action verify refresh.
+ *
+ * Returns a [ViewHierarchy] with the internal [SELECTOR_REGISTRY] marker
+ * attached so consumers can refresh against the same selector set via
+ * [reCaptureViewHierarchy].
+ *
+ * @throws `Error` if any underlying `findMatches` call fails. Surfaces the
+ *   daemon's error message verbatim with the failing selector for diagnosis.
+ */
+export declare function captureViewHierarchy(client: TrailblazeClient, selectors: readonly TrailblazeNodeSelector[]): Promise<ViewHierarchy>;
+/**
+ * One entry in a ConditionalAction catalog. Each entry is a self-contained
+ * "if [condition] then [action] [verify postcondition]" rule.
+ *
+ *  - [id] — stable identifier; surfaces in [ConditionalActionFailedError] and in the
+ *    [runConditionalActions] return value's `handled` list. Authors pick the shape
+ *    (kebab-case, snake-case, whatever the catalog convention is).
+ *    **Uniqueness is a catalog-author obligation, NOT enforced by the framework.**
+ *    `runConditionalActions` does not deduplicate or validate ids; if two entries
+ *    share an id and both match, the returned `handled` array contains the id
+ *    twice and any failure throws with that id ambiguously pointing at either
+ *    entry. Author validation (a static analyzer, a startup-time assertion in the
+ *    adopting team's tool) is the right layer for the check.
+ *  - [description] — human-readable purpose; surfaces in LLM tool schemas when
+ *    an adopting team wraps the catalog into a Trailblaze tool.
+ *  - [condition] — pure synchronous predicate evaluated against a captured
+ *    [ViewHierarchy]. Returning `true` means this entry should run. Coerced to
+ *    boolean via `Boolean(...)` at the call site so accidental truthy-but-not-
+ *    boolean returns (`1`, `"x"`, etc.) behave per the declared `boolean` type.
+ *    A throw from this predicate is caught and re-raised as a
+ *    [ConditionalActionFailedError] carrying the entry's [id].
+ *  - [action] — async work that mutates device state, typically composing other
+ *    Trailblaze tools via the surrounding tool's `client.tools.<name>(...)` /
+ *    `ctx.tools.<name>(...)`. **Closure pattern:** the action receives no
+ *    arguments; the author closes over their `client` / `ctx` from the
+ *    surrounding tool body. This is intentional — the condition runs during
+ *    the bulk-filter phase against the captured snapshot, but the action runs
+ *    later (per entry, after applicable filtering) and the closure makes it
+ *    explicit which scope the side effects fire in. A throw or rejection from
+ *    the action is caught and re-raised as a [ConditionalActionFailedError] carrying
+ *    the entry's [id].
+ *  - [postcondition] — optional pure predicate that does **double duty**:
+ *      1. **Before [action]:** if already satisfied, skip the entry entirely
+ *         (fast-path short-circuit — covers "popup already dismissed").
+ *      2. **After [action]:** if not satisfied, raise
+ *         [ConditionalActionFailedError] with the entry's [id]. Surfaces catalog
+ *         drift / wrong-screen detection.
+ *    Coerced to boolean via `Boolean(...)` at each call site. A throw from
+ *    this predicate is caught and re-raised as a [ConditionalActionFailedError].
+ */
+export interface ConditionalAction {
+	readonly id: string;
+	readonly description: string;
+	readonly condition: (snap: ViewHierarchy) => boolean;
+	readonly action: () => Promise<void>;
+	readonly postcondition?: (snap: ViewHierarchy) => boolean;
+}
+/**
+ * Thrown when a [ConditionalAction] entry's execution fails. Three causes — all carry
+ * the offending entry's [conditionalActionId] so a catch-site can point at the
+ * specific catalog entry:
+ *
+ *  - **`postcondition` returned false after `action` ran** — the original
+ *    failure mode the primitive's design centers on. Surfaces catalog drift,
+ *    wrong-screen detection, or a race with an un-cataloged modal.
+ *  - **`action` threw / rejected** — wrapping the action's failure with the
+ *    entry id is more useful than a bare propagation; catch-sites that want
+ *    to handle action failures specifically can read [conditionalActionId].
+ *  - **`condition` or `postcondition` threw** — predicates are nominally pure
+ *    functions returning booleans, but TypeScript can't enforce that at
+ *    runtime. A predicate that throws is treated as a catalog-authoring bug;
+ *    the throw is wrapped with the entry id so the offending catalog entry is
+ *    immediately identifiable.
+ *
+ * The [cause] property carries the original error (per ES2022 `Error.cause`
+ * conventions) when the failure was an underlying throw — `null` when the
+ * failure was a `postcondition` returning false (no underlying error).
+ */
+export declare class ConditionalActionFailedError extends Error {
+	readonly conditionalActionId: string;
+	readonly cause: unknown;
+	constructor(conditionalActionId: string, message: string, cause?: unknown);
+}
+/**
+ * Walk `conditionalActions` against a captured snapshot and execute the entries that apply.
+ *
+ *  1. **Acquire the snapshot.** Use `presnapshot` if provided; otherwise throw
+ *     — Phase 2 has no auto-acquire path (see file header for the host-side
+ *     tool dependency).
+ *  2. **Bulk filter.** For each entry: skip if `postcondition` is already
+ *     satisfied (fast-path short-circuit), otherwise include if `condition`
+ *     matches. Pure local computation regardless of catalog size.
+ *  3. **Execute applicable entries in order.** For each: run `action`, then if
+ *     a `postcondition` was declared, refresh the snapshot and verify. Any
+ *     failure (predicate throw, action throw, postcondition returning false)
+ *     raises [ConditionalActionFailedError] carrying the offending entry's id.
+ *
+ * **Cost in the no-match case:** zero extra round-trips when `presnapshot` is
+ * passed (the common case — the caller has already built one via
+ * `captureViewHierarchy`). N predicate evaluations are pure local computation
+ * regardless of catalog size. Phase 2 has no built-in auto-acquire path, so
+ * "otherwise" the call throws — the cost of acquisition lives entirely in
+ * `captureViewHierarchy`, which pays one `findMatches` callback per declared
+ * selector (see this file's header for the acquisition-path caveat).
+ *
+ * **Cost in the all-match case:** one round-trip per applicable entry's
+ * `action`, plus M `findMatches` callbacks per declared `postcondition` for
+ * the post-action verify (where M is the size of the original presnapshot's
+ * selector set — the verify refreshes the full set via `reCaptureViewHierarchy`,
+ * since the implementation can't introspect which selectors a given
+ * `postcondition` will probe).
+ *
+ * **Verification snapshot** — for entries with a `postcondition`, the verify
+ * snapshot is captured against the same set of selectors as `presnapshot` (via
+ * `reCaptureViewHierarchy`). The implementation can't statically know which
+ * selectors a future `postcondition` will reference, so it reuses the
+ * pre-existing list — same coverage as the initial check.
+ *
+ * @throws [ConditionalActionFailedError] when an entry's `condition` /
+ *   `postcondition` predicate throws, `action` throws, or `postcondition`
+ *   returns false after action.
+ * @throws `Error` when `presnapshot` is undefined (Phase 2 limitation — see
+ *   file header).
+ */
+export declare function runConditionalActions(client: TrailblazeClient, conditionalActions: readonly ConditionalAction[], presnapshot?: ViewHierarchy): Promise<{
+	handled: string[];
+}>;
 export interface TrailblazeToolMap {
 	/**
 	 * Tap or long-press at absolute device coordinates. The runtime upgrades the *recorded*
@@ -4916,14 +5864,17 @@ export interface TrailblazeToolMap {
 	 * Source: `TapOnPointTrailblazeTool.kt`.
 	 */
 	tapOnPoint: {
-		/** The center X coordinate for the clickable element. */
-		x: number;
-		/** The center Y coordinate for the clickable element. */
-		y: number;
-		/** Default `false` (standard tap). Pass `true` for a long press. */
-		longPress?: boolean;
-		/** Optional rationale logged alongside the tool call. */
-		reasoning?: string;
+		args: {
+			/** The center X coordinate for the clickable element. */
+			x: number;
+			/** The center Y coordinate for the clickable element. */
+			y: number;
+			/** Default `false` (standard tap). Pass `true` for a long press. */
+			longPress?: boolean;
+			/** Optional rationale logged alongside the tool call. */
+			reasoning?: string;
+		};
+		result: string;
 	};
 	/**
 	 * Tap on an element by visible text (substring match). DEPRECATED upstream in favor of
@@ -4932,14 +5883,42 @@ export interface TrailblazeToolMap {
 	 * Source: `TapOnElementWithTextTrailblazeTool.kt`.
 	 */
 	tapOnElementWithText: {
-		/** Required. Text contained in the target element. */
-		text: string;
-		/** 0-based index of the view to select among matches. */
-		index?: number;
-		/** Regex for selecting by id when multiple elements share the text. */
-		id?: string;
-		enabled?: boolean;
-		selected?: boolean;
+		args: {
+			/** Required. Text contained in the target element. */
+			text: string;
+			/** 0-based index of the view to select among matches. */
+			index?: number;
+			/** Regex for selecting by id when multiple elements share the text. */
+			id?: string;
+			enabled?: boolean;
+			selected?: boolean;
+		};
+		result: string;
+	};
+	/**
+	 * Tap an Android accessibility node identified by its content description (plus optional
+	 * className and resourceId tiebreakers). Use for canvas widgets whose interactive regions
+	 * are virtual views of an `ExploreByTouchHelper` — PIN pads, drawing-app palettes,
+	 * custom map markers, etc. — where the buttons have a `contentDescription` but no `text`,
+	 * so `tapOnElementWithText` can't reach them.
+	 *
+	 * Routes through the same selector-resolved dispatch path the LLM `tap` tool uses, so
+	 * the per-tap `ACTION_CLICK` routing (see `AccessibilityDeviceManager.kt`) applies.
+	 *
+	 * Source: `TapOnAccessibilityNodeTrailblazeTool.kt`.
+	 */
+	tapOnAccessibilityNode: {
+		args: {
+			/** Required. Regex matched against the node's content description. */
+			contentDescriptionRegex: string;
+			/** Optional regex matched against the node's className. */
+			classNameRegex?: string;
+			/** Optional regex matched against the node's resourceId. */
+			resourceIdRegex?: string;
+			/** Set to true for a long press instead of a tap. */
+			longPress?: boolean;
+		};
+		result: string;
 	};
 	/**
 	 * Type characters into the currently-focused text field. The runtime auto-hides the
@@ -4948,25 +5927,34 @@ export interface TrailblazeToolMap {
 	 * Source: `InputTextTrailblazeTool.kt`.
 	 */
 	inputText: {
-		/** Required. Text to type into the focused field. */
-		text: string;
-		/** Optional rationale logged alongside the tool call. */
-		reasoning?: string;
+		args: {
+			/** Required. Text to type into the focused field. */
+			text: string;
+			/** Optional rationale logged alongside the tool call. */
+			reasoning?: string;
+		};
+		result: string;
 	};
 	/**
 	 * Dismiss the on-screen keyboard. No args (singleton tool object on the Kotlin side).
 	 *
 	 * Source: `HideKeyboardTrailblazeTool.kt`.
 	 */
-	hideKeyboard: Record<string, never>;
+	hideKeyboard: {
+		args: Record<string, never>;
+		result: string;
+	};
 	/**
 	 * Press a hardware/system key.
 	 *
 	 * Source: `PressKeyTrailblazeTool.kt`.
 	 */
 	pressKey: {
-		/** Required. One of the supported `PressKeyCode` values. */
-		keyCode: "BACK" | "ENTER" | "HOME";
+		args: {
+			/** Required. One of the supported `PressKeyCode` values. */
+			keyCode: "BACK" | "ENTER" | "HOME";
+		};
+		result: string;
 	};
 	/**
 	 * Swipe in a cardinal direction. Direction is the *finger* direction — to scroll the
@@ -4975,12 +5963,15 @@ export interface TrailblazeToolMap {
 	 * Source: `SwipeTrailblazeTool.kt`.
 	 */
 	swipe: {
-		/** Default `DOWN`. Direction of the finger gesture, not the scroll direction. */
-		direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
-		/** Element text to anchor the swipe on. Omit to swipe at screen center. */
-		swipeOnElementText?: string;
-		/** Optional rationale logged alongside the tool call. */
-		reasoning?: string;
+		args: {
+			/** Default `DOWN`. Direction of the finger gesture, not the scroll direction. */
+			direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
+			/** Element text to anchor the swipe on. Omit to swipe at screen center. */
+			swipeOnElementText?: string;
+			/** Optional rationale logged alongside the tool call. */
+			reasoning?: string;
+		};
+		result: string;
 	};
 	/**
 	 * Launch an app by id, with control over whether state is cleared and whether a running
@@ -4989,15 +5980,51 @@ export interface TrailblazeToolMap {
 	 * Source: `LaunchAppTrailblazeTool.kt`.
 	 */
 	launchApp: {
-		/** Required. Package id (Android) or bundle id (iOS). */
-		appId: string;
-		/**
-		 * Default `REINSTALL` (clean state). `RESUME` picks up an in-memory app; `FORCE_RESTART`
-		 * stops then relaunches without clearing state. The runtime silently upgrades
-		 * `REINSTALL` → `FORCE_RESTART` for iOS system apps (`com.apple.*`).
-		 */
-		launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
-		reasoning?: string;
+		args: {
+			/** Required. Package id (Android) or bundle id (iOS). */
+			appId: string;
+			/**
+			 * Default `REINSTALL` (clean state). `RESUME` picks up an in-memory app; `FORCE_RESTART`
+			 * stops then relaunches without clearing state. The runtime silently upgrades
+			 * `REINSTALL` → `FORCE_RESTART` for iOS system apps (`com.apple.*`).
+			 */
+			launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
+			reasoning?: string;
+		};
+		result: string;
+	};
+	/**
+	 * Resolve a [TrailblazeNodeSelector] against the current view hierarchy and return
+	 * every match as a [MatchDescriptor] list. Read-only — never mutates the device.
+	 *
+	 * Use the result length as a visibility / uniqueness gate:
+	 *
+	 * ```ts
+	 * const matches = await client.tools.findMatches({
+	 *   selector: { androidAccessibility: { textRegex: "Submit" } },
+	 * });
+	 * // matches.length === 0  -> not visible
+	 * // matches.length === 1  -> unique match, safe to act on
+	 * // matches.length > 1    -> ambiguous, narrow the selector
+	 * ```
+	 *
+	 * Each match carries enough identity + position info (indexPath, bounds, text,
+	 * accessibilityId, resourceId) to act on without re-querying.
+	 *
+	 * Snapshot reuse: calling `findMatches` multiple times within one tool invocation
+	 * shares the captured view hierarchy via the host-side snapshot cache — the
+	 * multi-second hierarchy fetch is paid at most once per invocation. An action
+	 * tool dispatched in the same batch (tap, swipe, inputText, …) invalidates the
+	 * cache so a follow-up `findMatches` reads the post-action tree.
+	 *
+	 * Source: `FindMatchesTrailblazeTool.kt`.
+	 */
+	findMatches: {
+		args: {
+			/** Selector to match against the current view hierarchy. */
+			selector: TrailblazeNodeSelector;
+		};
+		result: MatchDescriptor[];
 	};
 	/**
 	 * Assert an element with the given accessibility text is visible. DEPRECATED upstream
@@ -5007,14 +6034,17 @@ export interface TrailblazeToolMap {
 	 * Source: `AssertVisibleWithAccessibilityTextTrailblazeTool.kt`.
 	 */
 	assertVisibleWithAccessibilityText: {
-		/** Required. Accessibility text to assert is visible. */
-		accessibilityText: string;
-		/** Regex selector for disambiguating duplicates. */
-		id?: string;
-		/** 0-based index of the view to select among matches. */
-		index?: number;
-		enabled?: boolean;
-		selected?: boolean;
+		args: {
+			/** Required. Accessibility text to assert is visible. */
+			accessibilityText: string;
+			/** Regex selector for disambiguating duplicates. */
+			id?: string;
+			/** 0-based index of the view to select among matches. */
+			index?: number;
+			enabled?: boolean;
+			selected?: boolean;
+		};
+		result: string;
 	};
 }
 /**
@@ -5068,7 +6098,7 @@ export {
 export {};
 
 // Curated ambient declarations for runtime globals an author can reference from a
-// `.ts` tool file without a per-pack `globals.d.ts` shim. Appended to
+// `.ts` tool file without a per-trailmap `globals.d.ts` shim. Appended to
 // `dist/index.d.ts` by `bundleTrailblazeSdkDts` — see [TrailblazeSdkDtsBundlePlugin].
 //
 // Scope. Authors target two runtimes through the same `.ts` source: the host-side
@@ -5263,11 +6293,11 @@ declare global {
   // DOM lib.
   //
   // **Why hand-authored instead of pulled from `@types/node`.** `@types/node` is a
-  // devDependency of `@trailblaze/scripting` itself but is NOT visible to pack
-  // authors — the per-pack `tsconfig.json` has `lib: ["ES2022"]` only, with the
+  // devDependency of `@trailblaze/scripting` itself but is NOT visible to trailmap
+  // authors — the per-trailmap `tsconfig.json` has `lib: ["ES2022"]` only, with the
   // SDK declaration bundle as the `paths`-mapped source of `@trailblaze/scripting`.
-  // Pulling fetch types from `@types/node` would either force every pack to install
-  // it (bloating the pack-typing setup) or require the bundle to inline them via
+  // Pulling fetch types from `@types/node` would either force every trailmap to install
+  // it (bloating the trailmap-typing setup) or require the bundle to inline them via
   // dts-bundle-generator's `--external-inlines` (which works but conflates host-only
   // runtime types with the bundle's main mission of MCP-SDK + zod inlines). The
   // hand-authored declarations are a curated subset deliberately kept narrower than

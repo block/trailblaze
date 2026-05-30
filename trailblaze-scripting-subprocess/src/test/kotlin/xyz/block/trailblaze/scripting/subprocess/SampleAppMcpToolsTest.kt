@@ -27,7 +27,7 @@ import kotlin.test.Test
 
 /**
  * CI coverage for the **reference** subprocess MCP tools shipped with the
- * android-sample-app example (`examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp/tools.ts`).
+ * android-sample-app example (`examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/mcp/tools.ts`).
  *
  * `SubprocessRuntimeEndToEndTest` exercises the runtime via dedicated `fixture.js` / `fixture.ts`
  * under this module's own test resources — those catch regressions in the runtime, not in the
@@ -35,11 +35,11 @@ import kotlin.test.Test
  * actual `tools.ts` a Trailblaze user would copy, so CI notices the moment the reference
  * example stops working.
  *
- * Gating mirrors `fixture.ts` in the sibling test: skip when the runtime (bun/tsx) isn't on
+ * Gating mirrors `fixture.ts` in the sibling test: skip when bun isn't on
  * PATH or when `node_modules/` hasn't been installed. The Gradle `installSampleAppMcpTools`
- * task tries `bun install` then `npm install` in the sample-app's `mcp/` directory, so CI
- * with either runtime installed runs through — elsewhere the test skips cleanly instead of
- * blocking the build.
+ * task runs `bun install` in the sample-app's `mcp/` directory (bun-only; no npm fallback —
+ * see root CLAUDE.md / PR #3503), so CI with bun installed runs through — elsewhere the
+ * test skips cleanly instead of blocking the build.
  */
 class SampleAppMcpToolsTest {
 
@@ -69,11 +69,11 @@ class SampleAppMcpToolsTest {
 
   @Test fun `sample-app tools dot ts spawns and advertises the documented tool set`() {
     runBlocking {
-      // Runtime gating: bun/tsx absence is a legitimate "skip" even in CI — we can't
+      // Runtime gating: bun absence is a legitimate "skip" even in CI — we can't
       // install a TS runtime from inside a JUnit test. CI agents are expected to have
       // one on PATH; when they do, the test must run (not silently skip).
       assumeTrue(
-        "bun or tsx must be on PATH to exercise the sample-app MCP tool e2e path",
+        "bun must be on PATH to exercise the sample-app MCP tool e2e path",
         runtimeAvailable(),
       )
       // Deps gating: in CI the install task either succeeded (node_modules exists, pass)
@@ -94,10 +94,10 @@ class SampleAppMcpToolsTest {
         )
       } else {
         assumeTrue(
-          "Sample-app MCP tool deps not installed. Run from the repo root:\n" +
-            "  cd examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp && bun install\n" +
-            "(or `npm install`). CI installs these automatically via the " +
-            "`installSampleAppMcpTools` Gradle task.",
+          "Sample-app MCP tool deps not installed (looked for sentinel " +
+            "node_modules/.install-ok). Run from the repo root:\n" +
+            "  cd examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/mcp && bun install\n" +
+            "CI installs these automatically via the `installSampleAppMcpTools` Gradle task.",
           depsInstalled,
         )
       }
@@ -177,14 +177,18 @@ class SampleAppMcpToolsTest {
   }
 
   private fun runtimeAvailable(): Boolean = try {
-    NodeRuntimeDetector.cached
+    BunRuntimeDetector.cached
     true
-  } catch (_: NoCompatibleTsRuntimeException) {
+  } catch (_: NoBunRuntimeException) {
     false
   }
 
+  // A partial `bun install` (registry 404 mid-resolve, Ctrl-C, etc.) leaves an empty
+  // `node_modules/` behind — so checking `isDirectory` alone trusts a half-populated dir.
+  // The Gradle install task writes `node_modules/.install-ok` only after a clean install,
+  // so use it as the source of truth. Matches the up-to-date check on the task itself.
   private fun sampleAppDepsInstalled(): Boolean =
-    File(sampleAppToolsTs.parentFile, "node_modules").isDirectory
+    File(sampleAppToolsTs.parentFile, "node_modules/.install-ok").isFile
 
   /**
    * Whether the deps-installed gate should `assertTrue` (fail loud) instead of `assumeTrue`

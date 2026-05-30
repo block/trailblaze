@@ -2,6 +2,7 @@ package xyz.block.trailblaze.agent.model
 
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.utils.time.KoogClock
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -40,7 +41,7 @@ class PromptStepStatusTest {
   private fun userMessage(content: String) =
     Message.User(
       content = content,
-      metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
+      metaInfo = RequestMetaInfo.create(KoogClock.System),
     )
 
   @Test
@@ -58,8 +59,10 @@ class PromptStepStatusTest {
     }
 
     assertEquals(3, status.getLimitedHistory().size)
-    // The retained messages should be the last 3 added (indices 2, 3, 4)
-    val oldestRetained = (status.getLimitedHistory()[0] as Message.User).content
+    // The retained messages should be the last 3 added (indices 2, 3, 4).
+    // Koog 1.0.0: Message.User no longer exposes `.content` — text content lives in
+    // `parts: List<MessagePart>` and is accessed via `textContent()`.
+    val oldestRetained = (status.getLimitedHistory()[0] as Message.User).textContent()
     assert(oldestRetained.contains("result 2")) {
       "Expected oldest retained message to contain 'result 2', but was: $oldestRetained"
     }
@@ -92,7 +95,7 @@ class PromptStepStatusTest {
 
     // Should be trimmed to 3, keeping the last 3
     assertEquals(3, status.getLimitedHistory().size)
-    assertEquals("msg 10", (status.getLimitedHistory().last() as Message.User).content)
+    assertEquals("msg 10", (status.getLimitedHistory().last() as Message.User).textContent())
   }
 
   @Test

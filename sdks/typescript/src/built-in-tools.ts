@@ -26,11 +26,42 @@
 // public `TrailblazeClient` type omits `callTool`, so the only call path is
 // `client.tools.<name>(args)`, which requires a `TrailblazeToolMap` entry. Additional
 // framework tools (`android_adbShell`, `web_navigate`, etc.) land here as they're added to
-// the curated subset; pack-local scripted tools land in their pack's generated
-// `tools/.trailblaze/tools.d.ts` instead.
+// the curated subset; trailmap-local scripted tools land in their trailmap's generated
+// `tools/trailblaze-client.d.ts` instead.
+//
+// ## Entry shape: `{ args; result }`
+//
+// Each entry is `{ args: <argsShape>; result: <resultShape> }`. The `args` half is the
+// JSON-Schema-shaped tool input (the same shape the Kotlin dispatcher validates against).
+// The `result` half is the static-typing-only return type — uniformly `result: string`
+// today, matching what `WorkspaceClientDtsGenerator` emits for every Kotlin/scripted tool
+// per trailmap. The two surfaces declaration-merge into the same `TrailblazeToolMap`
+// interface, so they MUST declare identical `result` types for any tool name that appears
+// in both files (`tapOnPoint`, `inputText`, `hideKeyboard`, etc.) — TypeScript errors on a
+// mismatch.
+//
+// The wire-side `structured_content` field and the SDK's `client.tools.<name>(args)` unwrap
+// are both in place — a producer that populates structured content flows it through the
+// proxy as the typed `result`. What's still uniform here is the `result: string` declaration
+// on every entry: `WorkspaceClientDtsGenerator` doesn't yet read per-tool typed-result
+// schemas (the analyzer-driven follow-up will), so every built-in advertises `result: string`
+// regardless of whether the underlying handler returns text or a structured payload. When
+// the descriptor side ships, the entries below can declare richer `result` types and
+// consumers will see the unwrapped typed value automatically. See the kdoc on
+// `TrailblazeToolMethods` in `client.ts` and the matching note in `ToolMapEntryRenderer.kt`.
 //
 // Source-of-truth files for each entry below are linked next to the type. Changes to those
 // Kotlin files MUST be reflected here.
+
+// Selector-grammar types — `TrailblazeNodeSelector`, the six `DriverNodeMatch*` interfaces,
+// `Bounds`, and `MatchDescriptor` — are generated from the Kotlin sealed-class hierarchy
+// by `:trailblaze-models:generateSelectorsTs` and re-exported from `index.ts`. The shapes
+// the `findMatches` tool entry below references resolve through that re-export; this file
+// just imports the type names locally for the declaration-merging block at the bottom.
+import type {
+  MatchDescriptor,
+  TrailblazeNodeSelector,
+} from "./generated/selectors.js";
 
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
@@ -42,14 +73,17 @@ declare module "@trailblaze/scripting" {
      * Source: `TapOnPointTrailblazeTool.kt`.
      */
     tapOnPoint: {
-      /** The center X coordinate for the clickable element. */
-      x: number;
-      /** The center Y coordinate for the clickable element. */
-      y: number;
-      /** Default `false` (standard tap). Pass `true` for a long press. */
-      longPress?: boolean;
-      /** Optional rationale logged alongside the tool call. */
-      reasoning?: string;
+      args: {
+        /** The center X coordinate for the clickable element. */
+        x: number;
+        /** The center Y coordinate for the clickable element. */
+        y: number;
+        /** Default `false` (standard tap). Pass `true` for a long press. */
+        longPress?: boolean;
+        /** Optional rationale logged alongside the tool call. */
+        reasoning?: string;
+      };
+      result: string;
     };
 
     /**
@@ -59,14 +93,43 @@ declare module "@trailblaze/scripting" {
      * Source: `TapOnElementWithTextTrailblazeTool.kt`.
      */
     tapOnElementWithText: {
-      /** Required. Text contained in the target element. */
-      text: string;
-      /** 0-based index of the view to select among matches. */
-      index?: number;
-      /** Regex for selecting by id when multiple elements share the text. */
-      id?: string;
-      enabled?: boolean;
-      selected?: boolean;
+      args: {
+        /** Required. Text contained in the target element. */
+        text: string;
+        /** 0-based index of the view to select among matches. */
+        index?: number;
+        /** Regex for selecting by id when multiple elements share the text. */
+        id?: string;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap an Android accessibility node identified by its content description (plus optional
+     * className and resourceId tiebreakers). Use for canvas widgets whose interactive regions
+     * are virtual views of an `ExploreByTouchHelper` — PIN pads, drawing-app palettes,
+     * custom map markers, etc. — where the buttons have a `contentDescription` but no `text`,
+     * so `tapOnElementWithText` can't reach them.
+     *
+     * Routes through the same selector-resolved dispatch path the LLM `tap` tool uses, so
+     * the per-tap `ACTION_CLICK` routing (see `AccessibilityDeviceManager.kt`) applies.
+     *
+     * Source: `TapOnAccessibilityNodeTrailblazeTool.kt`.
+     */
+    tapOnAccessibilityNode: {
+      args: {
+        /** Required. Regex matched against the node's content description. */
+        contentDescriptionRegex: string;
+        /** Optional regex matched against the node's className. */
+        classNameRegex?: string;
+        /** Optional regex matched against the node's resourceId. */
+        resourceIdRegex?: string;
+        /** Set to true for a long press instead of a tap. */
+        longPress?: boolean;
+      };
+      result: string;
     };
 
     /**
@@ -76,10 +139,13 @@ declare module "@trailblaze/scripting" {
      * Source: `InputTextTrailblazeTool.kt`.
      */
     inputText: {
-      /** Required. Text to type into the focused field. */
-      text: string;
-      /** Optional rationale logged alongside the tool call. */
-      reasoning?: string;
+      args: {
+        /** Required. Text to type into the focused field. */
+        text: string;
+        /** Optional rationale logged alongside the tool call. */
+        reasoning?: string;
+      };
+      result: string;
     };
 
     /**
@@ -87,7 +153,10 @@ declare module "@trailblaze/scripting" {
      *
      * Source: `HideKeyboardTrailblazeTool.kt`.
      */
-    hideKeyboard: Record<string, never>;
+    hideKeyboard: {
+      args: Record<string, never>;
+      result: string;
+    };
 
     /**
      * Press a hardware/system key.
@@ -95,8 +164,11 @@ declare module "@trailblaze/scripting" {
      * Source: `PressKeyTrailblazeTool.kt`.
      */
     pressKey: {
-      /** Required. One of the supported `PressKeyCode` values. */
-      keyCode: "BACK" | "ENTER" | "HOME";
+      args: {
+        /** Required. One of the supported `PressKeyCode` values. */
+        keyCode: "BACK" | "ENTER" | "HOME";
+      };
+      result: string;
     };
 
     /**
@@ -106,12 +178,15 @@ declare module "@trailblaze/scripting" {
      * Source: `SwipeTrailblazeTool.kt`.
      */
     swipe: {
-      /** Default `DOWN`. Direction of the finger gesture, not the scroll direction. */
-      direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
-      /** Element text to anchor the swipe on. Omit to swipe at screen center. */
-      swipeOnElementText?: string;
-      /** Optional rationale logged alongside the tool call. */
-      reasoning?: string;
+      args: {
+        /** Default `DOWN`. Direction of the finger gesture, not the scroll direction. */
+        direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
+        /** Element text to anchor the swipe on. Omit to swipe at screen center. */
+        swipeOnElementText?: string;
+        /** Optional rationale logged alongside the tool call. */
+        reasoning?: string;
+      };
+      result: string;
     };
 
     /**
@@ -121,15 +196,52 @@ declare module "@trailblaze/scripting" {
      * Source: `LaunchAppTrailblazeTool.kt`.
      */
     launchApp: {
-      /** Required. Package id (Android) or bundle id (iOS). */
-      appId: string;
-      /**
-       * Default `REINSTALL` (clean state). `RESUME` picks up an in-memory app; `FORCE_RESTART`
-       * stops then relaunches without clearing state. The runtime silently upgrades
-       * `REINSTALL` → `FORCE_RESTART` for iOS system apps (`com.apple.*`).
-       */
-      launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
-      reasoning?: string;
+      args: {
+        /** Required. Package id (Android) or bundle id (iOS). */
+        appId: string;
+        /**
+         * Default `REINSTALL` (clean state). `RESUME` picks up an in-memory app; `FORCE_RESTART`
+         * stops then relaunches without clearing state. The runtime silently upgrades
+         * `REINSTALL` → `FORCE_RESTART` for iOS system apps (`com.apple.*`).
+         */
+        launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
+        reasoning?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Resolve a [TrailblazeNodeSelector] against the current view hierarchy and return
+     * every match as a [MatchDescriptor] list. Read-only — never mutates the device.
+     *
+     * Use the result length as a visibility / uniqueness gate:
+     *
+     * ```ts
+     * const matches = await client.tools.findMatches({
+     *   selector: { androidAccessibility: { textRegex: "Submit" } },
+     * });
+     * // matches.length === 0  -> not visible
+     * // matches.length === 1  -> unique match, safe to act on
+     * // matches.length > 1    -> ambiguous, narrow the selector
+     * ```
+     *
+     * Each match carries enough identity + position info (indexPath, bounds, text,
+     * accessibilityId, resourceId) to act on without re-querying.
+     *
+     * Snapshot reuse: calling `findMatches` multiple times within one tool invocation
+     * shares the captured view hierarchy via the host-side snapshot cache — the
+     * multi-second hierarchy fetch is paid at most once per invocation. An action
+     * tool dispatched in the same batch (tap, swipe, inputText, …) invalidates the
+     * cache so a follow-up `findMatches` reads the post-action tree.
+     *
+     * Source: `FindMatchesTrailblazeTool.kt`.
+     */
+    findMatches: {
+      args: {
+        /** Selector to match against the current view hierarchy. */
+        selector: TrailblazeNodeSelector;
+      };
+      result: MatchDescriptor[];
     };
 
     /**
@@ -140,14 +252,17 @@ declare module "@trailblaze/scripting" {
      * Source: `AssertVisibleWithAccessibilityTextTrailblazeTool.kt`.
      */
     assertVisibleWithAccessibilityText: {
-      /** Required. Accessibility text to assert is visible. */
-      accessibilityText: string;
-      /** Regex selector for disambiguating duplicates. */
-      id?: string;
-      /** 0-based index of the view to select among matches. */
-      index?: number;
-      enabled?: boolean;
-      selected?: boolean;
+      args: {
+        /** Required. Accessibility text to assert is visible. */
+        accessibilityText: string;
+        /** Regex selector for disambiguating duplicates. */
+        id?: string;
+        /** 0-based index of the view to select among matches. */
+        index?: number;
+        enabled?: boolean;
+        selected?: boolean;
+      };
+      result: string;
     };
   }
 }

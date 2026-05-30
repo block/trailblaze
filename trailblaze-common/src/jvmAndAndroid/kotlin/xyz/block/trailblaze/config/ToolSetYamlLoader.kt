@@ -86,20 +86,49 @@ object ToolSetYamlLoader {
     }
 
   /**
-   * Discovers and loads all `.toolset.yaml` files from `trailblaze-config/toolsets/`.
+   * Discovers and loads all `.yaml` toolset files under
+   * `trails/config/trailmaps/<id>/toolsets/`. This is the only authoring layout the
+   * framework supports — every framework module's toolsets live here, and workspaces
+   * drop their own at `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml`.
    *
-   * @param resourceSource where to discover YAML files; defaults to JVM classpath scanning
+   * On same-relPath collision between workspace and classpath the workspace wins —
+   * `CompositeConfigResourceSource` collapses that before discovery sees it.
+   *
+   * @param resourceSource where to discover YAML files; defaults to the platform default
+   *   (workspace-layered on JVM, AssetManager-backed on Android).
    */
   fun discoverAndLoadAll(
     toolNameResolver: ToolNameResolver,
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Map<String, ResolvedToolSet> {
-    val yamlContents =
-      resourceSource.discoverAndLoad(
-        directoryPath = TrailblazeConfigPaths.TOOLSETS_DIR,
+    // Walk every `trailmaps/<id>/toolsets/<name>.yaml` entry recursively. The resource-source
+    // contract strips the leading `trails/config/trailmaps/` prefix, so relPath starts at
+    // `<id>/...`. Filter to entries whose second segment is `toolsets` so we don't pick up
+    // `trailmap.yaml`, `tools/*.tool.yaml`, etc. from the same recursive walk.
+    val trailmapScopedContents = try {
+      resourceSource.discoverAndLoadRecursive(
+        directoryPath = TrailblazeConfigPaths.TRAILMAPS_DIR,
         suffix = ".yaml",
+      ).mapNotNull { (relPath, content) ->
+        val segments = relPath.split('/')
+        if (segments.size < 3 || segments[1] != "toolsets") return@mapNotNull null
+        // Key by the full relPath (e.g. `trailblaze/toolsets/core_interaction.yaml`) so two
+        // trailmaps shipping the same filename — `trailmaps/a/toolsets/core.yaml` and
+        // `trailmaps/b/toolsets/core.yaml` — both reach [loadAllFromYamlContents]. The id-level
+        // dedup happens there against the parsed `config.id`; keying by basename here would
+        // silently drop one of the two entries before it ever got the chance to be deduped
+        // (and "they're different toolsets if their ids differ" is the contract).
+        relPath to content
+      }.toMap()
+    } catch (e: Exception) {
+      Console.log(
+        "ToolSetYamlLoader: WARNING: failed to scan ${TrailblazeConfigPaths.TRAILMAPS_DIR} " +
+          "for trailmap-scoped toolsets (${e::class.simpleName}: ${e.message}). Toolset " +
+          "discovery will return empty for this pass.",
       )
-    return loadAllFromYamlContents(yamlContents, toolNameResolver)
+      emptyMap()
+    }
+    return loadAllFromYamlContents(trailmapScopedContents, toolNameResolver)
   }
 
   private fun resolve(

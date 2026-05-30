@@ -59,26 +59,14 @@ data class AppTargetYamlConfig(
   val platforms: Map<String, PlatformConfig>? = null,
   @SerialName("has_custom_ios_driver") val hasCustomIosDriver: Boolean = false,
   /**
-   * MCP server declarations that contribute tools to the Trailblaze tool
-   * registry for sessions targeting this app (Decision 038). Each entry
-   * is a [McpServerConfig] — currently only `script:` entries are
-   * implemented; `command:` entries are reserved for a follow-up per
-   * `docs/devlog/2026-04-21-scripted-tools-mcp-integration-patterns.md`.
-   *
-   * Spawning requires a resolved session (target + driver + agent-mode).
-   * Tool registration applies the standard filters (platform / driver /
-   * host-required) from annotations on each contributed tool.
-   */
-  @SerialName("mcp_servers") val mcpServers: List<McpServerConfig>? = null,
-  /**
    * Optional system-prompt template content for sessions targeting this app. When set, rules
    * for this target seed the LLM session with this content as the system prompt (additive to
    * the framework default). Use this to express target-specific guidance — what the app is,
    * what testers commonly want — without each test author having to re-pass a Kotlin resource.
    *
-   * **Post-resolution shape.** Authors don't write this field directly on a pack manifest. They
-   * set [PackTargetConfig.systemPromptFile][xyz.block.trailblaze.config.project.PackTargetConfig.systemPromptFile]
-   * (a relative file path); the build-time pack generator and runtime pack loader both read that
+   * **Post-resolution shape.** Authors don't write this field directly on a trailmap manifest. They
+   * set [TrailmapTargetConfig.systemPromptFile][xyz.block.trailblaze.config.project.TrailmapTargetConfig.systemPromptFile]
+   * (a relative file path); the build-time trailmap generator and runtime trailmap loader both read that
    * file and inline its content into this field on the generated / resolved [AppTargetYamlConfig].
    * Downstream consumers ([xyz.block.trailblaze.config.YamlBackedHostAppTarget] and Block-side
    * `BundledTargetYamlLookup`) read this field directly.
@@ -90,19 +78,18 @@ data class AppTargetYamlConfig(
    * [InlineScriptToolConfig.name].
    *
    * **Authoring surface differs depending on origin**:
-   *  - **Packs** (the recommended path): authors place each scripted tool in its own
-   *    `<pack>/tools/<tool-name>.yaml` file with the [PackScriptedToolFile][xyz.block.trailblaze.config.project.PackScriptedToolFile]
-   *    shape (flat `inputSchema`). The pack loader resolves each ref, translates the flat
+   *  - **Trailmaps** (the recommended path): authors place each scripted tool in its own
+   *    `<trailmap>/tools/<tool-name>.yaml` file with the [TrailmapScriptedToolFile][xyz.block.trailblaze.config.project.TrailmapScriptedToolFile]
+   *    shape (flat `inputSchema`). The trailmap loader resolves each ref, translates the flat
    *    schema into JSON Schema, and produces this list — authors never write the JSON
    *    Schema wrapper.
    *  - **Legacy flat targets** (preserved for backwards compatibility): authors inline the
    *    full [InlineScriptToolConfig] shape (incl. raw JSON Schema) directly in
-   *    `targets/<id>.yaml`. New code should use packs.
+   *    `targets/<id>.yaml`. New code should use trailmaps.
    *
-   * Unlike [mcpServers], these entries are synthesized into temporary MCP wrapper scripts by the
-   * host runner at session start. This is intentionally host-first: the current on-device bundle
-   * runtime only accepts pre-bundled JS artifacts, so raw inline author files are not wired there
-   * yet.
+   * These entries are synthesized into temporary MCP wrapper scripts by the host runner at
+   * session start. Host-first: the framework spawns a bun/node subprocess per tool and the
+   * subprocess speaks MCP STDIO back to the runner.
    */
   val tools: List<InlineScriptToolConfig>? = null,
 )
@@ -168,8 +155,8 @@ data class InlineScriptToolConfig(
 ) {
   init {
     // Enforce at the canonical runtime construction site so EVERY decode path is gated:
-    // - `PackScriptedToolFile.toInlineScriptToolConfig()` (per-file `<pack>/tools/<id>.yaml`)
-    // - direct YAML decode under `target.tools:` in pack manifests
+    // - `TrailmapScriptedToolFile.toInlineScriptToolConfig()` (per-file `<trailmap>/tools/<id>.yaml`)
+    // - direct YAML decode under `target.tools:` in trailmap manifests
     // - test fixtures and any future programmatic construction
     //
     // The regex is intentionally colocated with the type that owns the contract — every
@@ -179,7 +166,7 @@ data class InlineScriptToolConfig(
     // here means the data class itself is the source of truth.
     //
     // Authors who give a bad `name:` field in their YAML now see this error at YAML decode
-    // (when the host loads the pack manifest, not when the bundler later trips over it),
+    // (when the host loads the trailmap manifest, not when the bundler later trips over it),
     // pointing at the exact tool. Allowed: letters, digits, `_`, `-`, `.`, starting with
     // a letter or `_`. The shape covers `clock_android_launchApp`, hyphenated names, and
     // dotted namespaces while rejecting characters that would either break wrapper-TS

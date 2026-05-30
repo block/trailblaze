@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.shortcut
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -16,7 +18,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
  * Tests target `loadSessions` (skip-tracking + warnings) and `writeSidecars`
  * (per-proposal try/catch + `EMIT_FAILED` rejection routing) directly via
  * `internal` visibility so the integration overhead of standing up a full
- * workspace + classpath-pack-aware discovery doesn't dominate the test.
+ * workspace + classpath-trailmap-aware discovery doesn't dominate the test.
  *
  * `--fingerprint-agreement` boundary validation is exercised via the picocli
  * `call()` entry point since the validation runs before any I/O.
@@ -91,12 +93,12 @@ class WaypointShortcutProposeCommandTest {
     val outDir = File(tempDir, "proposals")
     val cmd = WaypointShortcutProposeCommand()
     cmd.outDir = outDir
-    cmd.targetId = "pack"
+    cmd.targetId = "trailmap"
 
-    val good1 = proposal("pack/from-a", "pack/to-a", "good-1")
+    val good1 = proposal("trailmap/from-a", "trailmap/to-a", "good-1")
     val bad = proposal(
-      from = "pack/from-b",
-      to = "pack/to-b",
+      from = "trailmap/from-b",
+      to = "trailmap/to-b",
       key = "bad",
       toolBody = ShortcutProposer.ToolBody.TapOnElementBySelector(
         // iosMaestro triggers requireSelectorIsEmittable inside the emitter.
@@ -106,7 +108,7 @@ class WaypointShortcutProposeCommandTest {
         selectorDescription = "iOS",
       ),
     )
-    val good2 = proposal("pack/from-c", "pack/to-c", "good-2")
+    val good2 = proposal("trailmap/from-c", "trailmap/to-c", "good-2")
 
     cmd.writeSidecars(
       survivors = listOf(good1, bad, good2),
@@ -120,54 +122,54 @@ class WaypointShortcutProposeCommandTest {
     val proposalDirs = outDir.listFiles { f -> f.isDirectory }?.sortedBy { it.name } ?: emptyList()
     val yamls = proposalDirs.mapNotNull { File(it, "draft.shortcut.yaml").takeIf { f -> f.exists() } }
     assertEquals(2, yamls.size, "two sibling sidecars should survive; got dirs=${proposalDirs.map { it.name }}")
-    assertTrue(yamls.any { it.readText().contains("pack/from-a") }, "good-1 sidecar must survive")
-    assertTrue(yamls.any { it.readText().contains("pack/from-c") }, "good-2 sidecar must survive")
+    assertTrue(yamls.any { it.readText().contains("trailmap/from-a") }, "good-1 sidecar must survive")
+    assertTrue(yamls.any { it.readText().contains("trailmap/from-c") }, "good-2 sidecar must survive")
 
     val rejectedJson = File(outDir, "rejected.json")
     assertTrue(rejectedJson.exists(), "rejected.json must be written")
     val body = rejectedJson.readText()
     assertTrue(body.contains("EMIT_FAILED"), "rejected.json must record the EMIT_FAILED kind; got: $body")
-    assertTrue(body.contains("pack/from-b"), "rejected.json must name the failed proposal's from id")
+    assertTrue(body.contains("trailmap/from-b"), "rejected.json must name the failed proposal's from id")
   }
 
-  // --- packRoot resolution / loadExistingShortcuts ---
+  // --- trailmapRoot resolution / loadExistingShortcuts ---
 
   @Test
-  fun `loadExistingShortcuts finds shortcut yamls under a pack root subdir`() {
-    // Pins the load-bearing packRoot resolution behavior described inline at the
-    // `packRoot = if (root.name == "waypoints" && ...) root.parentFile else root`
+  fun `loadExistingShortcuts finds shortcut yamls under a trailmap root subdir`() {
+    // Pins the load-bearing trailmapRoot resolution behavior described inline at the
+    // `trailmapRoot = if (root.name == "waypoints" && ...) root.parentFile else root`
     // branch in `call()`. Without that climb-to-parent step, the proposer scans only
-    // `packs/<id>/waypoints/` and silently misses everything under sibling
-    // `packs/<id>/shortcuts/`, re-proposing already-merged shortcuts every run.
+    // `trailmaps/<id>/waypoints/` and silently misses everything under sibling
+    // `trailmaps/<id>/shortcuts/`, re-proposing already-merged shortcuts every run.
     //
-    // Here we test `loadExistingShortcuts` directly with the *parent* pack root and
+    // Here we test `loadExistingShortcuts` directly with the *parent* trailmap root and
     // confirm it picks up the shortcut yaml sitting under `shortcuts/`. A complementary
     // test for the `--root` fallback (when name != "waypoints") sits below.
-    val packRoot = File(tempDir, "packs/sample").also { it.mkdirs() }
-    val shortcutsDir = File(packRoot, "shortcuts").also { it.mkdirs() }
+    val trailmapRoot = File(tempDir, "trailmaps/sample").also { it.mkdirs() }
+    val shortcutsDir = File(trailmapRoot, "shortcuts").also { it.mkdirs() }
     File(shortcutsDir, "auto-foo.shortcut.yaml").writeText(
       """
       id: auto-foo
       description: "test"
       shortcut:
-        from: pack/from
-        to: pack/to
+        from: trailmap/from
+        to: trailmap/to
       parameters: []
       tools:
         - pressBackButton: {}
       """.trimIndent(),
     )
     val cmd = WaypointShortcutProposeCommand()
-    val found = cmd.loadExistingShortcuts(packRoot)
+    val found = cmd.loadExistingShortcuts(trailmapRoot)
     assertEquals(1, found.size, "expected to discover the on-disk shortcut; got $found")
-    assertEquals("pack/from", found[0].from)
-    assertEquals("pack/to", found[0].to)
+    assertEquals("trailmap/from", found[0].from)
+    assertEquals("trailmap/to", found[0].to)
     assertEquals(null, found[0].variant)
   }
 
   @Test
   fun `loadExistingShortcuts returns empty when root is not a directory`() {
-    // Edge: `--root` pointing at a missing path (e.g. brand-new pack) must not blow
+    // Edge: `--root` pointing at a missing path (e.g. brand-new trailmap) must not blow
     // up — return an empty existing-shortcut set so every proposal is allowed through
     // the sibling-collision guard.
     val cmd = WaypointShortcutProposeCommand()
@@ -180,17 +182,17 @@ class WaypointShortcutProposeCommandTest {
   fun `loadExistingShortcuts skips unparseable shortcut yamls and keeps the rest`() {
     // Pins the lenient policy: a single broken `*.shortcut.yaml` must not abort
     // existing-shortcut discovery — the others should still be picked up. Without
-    // this, one bad file in the pack's shortcut tree would silently empty the
+    // this, one bad file in the trailmap's shortcut tree would silently empty the
     // collision set and cause every proposed (from, to) tuple to look "fresh."
-    val packRoot = File(tempDir, "packs/lenient").also { it.mkdirs() }
-    val shortcutsDir = File(packRoot, "shortcuts").also { it.mkdirs() }
+    val trailmapRoot = File(tempDir, "trailmaps/lenient").also { it.mkdirs() }
+    val shortcutsDir = File(trailmapRoot, "shortcuts").also { it.mkdirs() }
     File(shortcutsDir, "good.shortcut.yaml").writeText(
       """
       id: good
       description: "ok"
       shortcut:
-        from: pack/a
-        to: pack/b
+        from: trailmap/a
+        to: trailmap/b
       parameters: []
       tools:
         - pressBackButton: {}
@@ -198,34 +200,34 @@ class WaypointShortcutProposeCommandTest {
     )
     File(shortcutsDir, "broken.shortcut.yaml").writeText("{ not valid yaml")
     val cmd = WaypointShortcutProposeCommand()
-    val found = cmd.loadExistingShortcuts(packRoot)
+    val found = cmd.loadExistingShortcuts(trailmapRoot)
     assertEquals(1, found.size, "broken file must be skipped, good file retained; got $found")
-    assertEquals("pack/a", found[0].from)
+    assertEquals("trailmap/a", found[0].from)
   }
 
-  // --- resolvePackRoot branch matrix ---
+  // --- resolveTrailmapRoot branch matrix ---
 
   @Test
-  fun `resolvePackRoot climbs to the parent when rootOverride is null and root is a waypoints dir`() {
-    // Target-resolved path: resolveWaypointRoot returned `<workspace>/packs/X/waypoints/`
+  fun `resolveTrailmapRoot climbs to the parent when rootOverride is null and root is a waypoints dir`() {
+    // Target-resolved path: resolveWaypointRoot returned `<workspace>/trailmaps/X/waypoints/`
     // (because the user passed `--target X`), and we need to find sibling shortcuts
-    // under `<workspace>/packs/X/shortcuts/`. Climbing to the parent is correct.
-    val packDir = File(tempDir, "packs/sample").also { it.mkdirs() }
-    val waypointsDir = File(packDir, "waypoints").also { it.mkdirs() }
+    // under `<workspace>/trailmaps/X/shortcuts/`. Climbing to the parent is correct.
+    val trailmapDir = File(tempDir, "trailmaps/sample").also { it.mkdirs() }
+    val waypointsDir = File(trailmapDir, "waypoints").also { it.mkdirs() }
     val cmd = WaypointShortcutProposeCommand()
-    val resolved = cmd.resolvePackRoot(root = waypointsDir, rootOverride = null)
-    assertEquals(packDir.absolutePath, resolved.absolutePath, "target-resolved must climb to the pack root")
+    val resolved = cmd.resolveTrailmapRoot(root = waypointsDir, rootOverride = null)
+    assertEquals(trailmapDir.absolutePath, resolved.absolutePath, "target-resolved must climb to the trailmap root")
   }
 
   @Test
-  fun `resolvePackRoot does NOT climb when rootOverride is explicit even if root ends in waypoints`() {
+  fun `resolveTrailmapRoot does NOT climb when rootOverride is explicit even if root ends in waypoints`() {
     // Explicit-override path: the user passed `--root <some path ending in waypoints>`
     // and we must honor that. Climbing to the parent would silently scan a different
     // directory than the one they pointed at — surprising behavior that breaks
     // hand-invocations of the tool against non-standard layouts.
     val standalone = File(tempDir, "scratch/waypoints").also { it.mkdirs() }
     val cmd = WaypointShortcutProposeCommand()
-    val resolved = cmd.resolvePackRoot(root = standalone, rootOverride = standalone)
+    val resolved = cmd.resolveTrailmapRoot(root = standalone, rootOverride = standalone)
     assertEquals(
       standalone.absolutePath, resolved.absolutePath,
       "explicit --root must be authoritative; do not climb to the parent",
@@ -233,15 +235,15 @@ class WaypointShortcutProposeCommandTest {
   }
 
   @Test
-  fun `resolvePackRoot returns root unchanged when name is not waypoints`() {
+  fun `resolveTrailmapRoot returns root unchanged when name is not waypoints`() {
     // Any root that isn't named `waypoints` (because the user passed `--root` at a
-    // pack root directly, or a hand-shaped layout puts everything in one dir) is
+    // trailmap root directly, or a hand-shaped layout puts everything in one dir) is
     // returned unchanged. The climb only fires for the target-resolved
-    // `<pack>/waypoints/` convention.
+    // `<trailmap>/waypoints/` convention.
     val plain = File(tempDir, "scratch/some-other-name").also { it.mkdirs() }
     val cmd = WaypointShortcutProposeCommand()
-    assertEquals(plain.absolutePath, cmd.resolvePackRoot(root = plain, rootOverride = null).absolutePath)
-    assertEquals(plain.absolutePath, cmd.resolvePackRoot(root = plain, rootOverride = plain).absolutePath)
+    assertEquals(plain.absolutePath, cmd.resolveTrailmapRoot(root = plain, rootOverride = null).absolutePath)
+    assertEquals(plain.absolutePath, cmd.resolveTrailmapRoot(root = plain, rootOverride = plain).absolutePath)
   }
 
   // --- --fingerprint-agreement validation ---
@@ -255,14 +257,14 @@ class WaypointShortcutProposeCommandTest {
 
     val cmd = WaypointShortcutProposeCommand()
     cmd.sessionsDir = sessionsDir
-    cmd.targetId = "pack"
+    cmd.targetId = "trailmap"
     cmd.fingerprintAgreement = 1.5
     cmd.outDir = File(tempDir, "out-1")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call(), "agreement=1.5 must return USAGE")
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call(), "agreement=1.5 must return USAGE")
 
     cmd.fingerprintAgreement = -0.1
     cmd.outDir = File(tempDir, "out-2")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call(), "agreement=-0.1 must return USAGE")
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call(), "agreement=-0.1 must return USAGE")
   }
 
   // --- fixtures ---

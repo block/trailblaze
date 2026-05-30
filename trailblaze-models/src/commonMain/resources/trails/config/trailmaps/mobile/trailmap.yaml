@@ -1,0 +1,33 @@
+# Library trailmap — owns the cross-platform mobile primitives that were historically
+# scoped via the flat `mobile_*` name prefix (`mobile_clearAppData`, `mobile_listInstalledApps`,
+# `mobile_pasteClipboard`, `mobile_setClipboard`). Standing this up as a library trailmap makes
+# the prefix-equals-trailmap-id rule hold for these tools without renaming any of them.
+#
+# This trailmap has no `target:` block, so it's not surfaced as a runnable target — its sole
+# job is to declare the `mobile_primitives` toolset as ownership of these four primitives. The
+# toolset itself lives in the global `trails/config/toolsets/` pool (same discovery path
+# as `core_interaction`, `android_framework`, etc.); this manifest doesn't enumerate the
+# toolset files. See docs/devlog/2026-05-27-trailmap-scoped-tool-naming.md (PR #3435).
+#
+# The `platforms:` block below feeds the *runtime-registry* layer (see
+# [TrailblazeTrailmapManifest.platforms] kdoc): any future consumer that adds
+# `dependencies: [mobile]` will get `mobile_primitives` registered for callback dispatch
+# on Android and iOS. This is deliberately decoupled from the agent-toolbox layer —
+# consumers control what surfaces to the LLM via their own `target.platforms.tool_sets:`;
+# this `platforms:` block only governs what's dispatchable via `client.callTool(...)`.
+# Safe today because no consumer depends on `mobile` yet; the block puts the ownership
+# wiring in place ahead of the consumer-migration follow-up.
+#
+# Consumers do NOT yet depend on this trailmap. The existing toolset assignments
+# (`mobile_pasteClipboard` / `mobile_setClipboard` in `core_interaction`,
+# `mobile_listInstalledApps` in `android_framework`) are left untouched — additive
+# establishment only. Future PRs can switch consumers to depend on `mobile` once the
+# downstream migration is ready.
+id: mobile
+platforms:
+  android:
+    tool_sets:
+      - mobile_primitives
+  ios:
+    tool_sets:
+      - mobile_primitives

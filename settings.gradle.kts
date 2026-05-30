@@ -3,8 +3,8 @@
 // `includeBuild("build-logic")` makes ALL plugins registered in `build-logic/` available
 // to projects in this build. The plugins include:
 //
-//   - `trailblaze.bundle`         — per-pack TS bindings
-//   - `trailblaze.bundled-config` — flat-target generation from packs
+//   - `trailblaze.bundle`         — per-trailmap TS bindings
+//   - `trailblaze.bundled-config` — flat-target generation from trailmaps
 //   - `trailblaze.spotless`       — formatting
 //   - `trailblaze.multi-simulator`— iOS sim provisioning
 //
@@ -49,7 +49,7 @@ include(
   ":trailblaze-desktop",
   ":trailblaze-host",
   ":trailblaze-models",
-  ":trailblaze-pack-bundler",
+  ":trailblaze-trailmap-bundler",
   ":trailblaze-compose",
   ":trailblaze-playwright",
   ":trailblaze-quickjs-tools",

@@ -1,0 +1,2 @@
+id: web_requestDetails
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeRequestDetailsTool

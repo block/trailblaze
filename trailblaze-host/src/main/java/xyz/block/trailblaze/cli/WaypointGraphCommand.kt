@@ -31,10 +31,10 @@ class WaypointGraphCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered " +
+      "Trailmap id to scope the graph to (e.g. `myapp`, `clock`). Filters the rendered " +
         "graph to waypoints whose id starts with `<id>/` and drops shortcuts/trailheads " +
         "that cross out of that scope. Also resolves --root to " +
-        "<workspace>/packs/<id>/waypoints/ when no explicit --root is given.",
+        "<workspace>/trailmaps/<id>/waypoints/ when no explicit --root is given.",
     ],
   )
   var targetId: String? = null
@@ -57,7 +57,7 @@ class WaypointGraphCommand : Callable<Int> {
     description = [
       "Filesystem directory to scan for *.waypoint.yaml files (default: " +
         "$DEFAULT_WAYPOINT_ROOT, resolved against the current working directory). " +
-        "Overrides --target's root resolution. Pack-bundled waypoints from the classpath are always included regardless of this flag.",
+        "Overrides --target's root resolution. Trailmap-bundled waypoints from the classpath are always included regardless of this flag.",
     ],
   )
   var rootOverride: File? = null
@@ -80,7 +80,7 @@ class WaypointGraphCommand : Callable<Int> {
     if (root.exists() && !root.isDirectory) {
       Console.error(
         "Warning: --root is not a directory: ${root.absolutePath} " +
-          "(filesystem-walk waypoints will be empty; classpath-bundled packs still load)",
+          "(filesystem-walk waypoints will be empty; classpath-bundled trailmaps still load)",
       )
     }
 
@@ -101,7 +101,7 @@ class WaypointGraphCommand : Callable<Int> {
       // endpoint uses "live" for the same field.
       liveSourceLabel = "snapshot · $timestamp",
       // Use the caller's actual cwd (not the daemon's) when resolving the workspace
-      // anchor for pack-tool discovery — the standalone CLI runs server-side under
+      // anchor for trailmap-tool discovery — the standalone CLI runs server-side under
       // the daemon process, so `Paths.get("")` would point at the daemon's cwd and
       // miss the user's workspace tools.
       fromPath = CliCallerContext.callerCwd(),
@@ -116,7 +116,7 @@ class WaypointGraphCommand : Callable<Int> {
       Console.error(
         "Warning: no waypoints discovered. Output will render an empty-state page. " +
           "Check that --root points at a directory containing *.waypoint.yaml files, " +
-          "or that the trailblaze-config classpath packs are on the runtime classpath.",
+          "or that the trails/config classpath trailmaps are on the runtime classpath.",
       )
       maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
     }
@@ -133,7 +133,7 @@ class WaypointGraphCommand : Callable<Int> {
         "${data.trailheads.size} trailhead(s)",
     )
     Console.log("Open in a browser: file://${out.absolutePath}")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   companion object {

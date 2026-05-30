@@ -15,7 +15,7 @@ private val CORE_PROVIDERS = setOf(
 
 /**
  * Shared JVM/Android implementation: discovers and loads all provider YAML files
- * from `trailblaze-config/providers/` across the entire classpath. Any module can contribute
+ * from `trails/config/providers/` across the entire classpath. Any module can contribute
  * a `{provider_id}.yaml` file at that path and it will be picked up automatically.
  *
  * Falls back to loading only the core providers if classpath directory scanning

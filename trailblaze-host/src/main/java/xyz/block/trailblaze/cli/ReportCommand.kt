@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
+import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
@@ -46,11 +47,23 @@ class ReportCommand : Callable<Int> {
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
 
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<session-id>",
+    description = [
+      "Session ID to narrow the report to (positional form of --id). " +
+        "Prefix matching is supported. Mutually exclusive with --id and --current.",
+    ],
+  )
+  var positionalId: String? = null
+
   @Option(
     names = ["--id"],
     description = [
       "Narrow to a single session (defaults to all sessions). " +
-        "Use `trailblaze session list` to find IDs. Prefix matching is supported.",
+        "Use `trailblaze session list` to find IDs. Prefix matching is supported. " +
+        "Equivalent to passing the session ID positionally.",
     ],
   )
   var id: String? = null
@@ -218,18 +231,23 @@ class ReportCommand : Callable<Int> {
   var maxSize: String? = null
 
   override fun call(): Int {
-    if (id != null && current) {
-      Console.error("--id and --current are mutually exclusive.")
-      return CommandLine.ExitCode.USAGE
+    if (positionalId != null && id != null) {
+      Console.error("Positional <session-id> and --id are two ways to spell the same thing — pass only one.")
+      return TrailblazeExitCode.MISUSE.code
     }
+    if ((positionalId != null || id != null) && current) {
+      Console.error("--current is mutually exclusive with --id / positional <session-id>.")
+      return TrailblazeExitCode.MISUSE.code
+    }
+    val effectiveId = positionalId ?: id
     val resolvedId: String? = when {
-      id != null -> id
+      effectiveId != null -> effectiveId
       current -> resolveActiveSessionId() ?: run {
         Console.error(
           "--current: no active session found. Start a session with `trailblaze session start`, " +
             "or pass --id explicitly.",
         )
-        return CommandLine.ExitCode.SOFTWARE
+        return TrailblazeExitCode.INFRA_FAILED.code
       }
       else -> null
     }
@@ -240,34 +258,34 @@ class ReportCommand : Callable<Int> {
         "--video / --gif / --webp / --storyboard require --id or --current. The all-sessions " +
           "index has nothing to play, so the exporter has nothing to record.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     // --no-gif / --no-webp guards. The opt-outs only suppress *auto-emission* under the
     // shared-capture model; pairing them with the corresponding format (in any form) is
     // contradictory, and stacking both opt-outs leaves nothing to produce.
     if (noGif && noWebp) {
       Console.error("--no-gif --no-webp together leaves nothing to produce. Drop one.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (noGif && gifOutput != null) {
       Console.error("--no-gif contradicts --gif. Drop one of them.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (noWebp && webpOutput != null) {
       Console.error("--no-webp contradicts --webp. Drop one of them.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (noGif && gifOutput == null && webpOutput == null) {
       Console.error(
         "--no-gif only has an effect when --webp triggers auto-emission. Add --webp.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (noWebp && gifOutput == null && webpOutput == null) {
       Console.error(
         "--no-webp only has an effect when --gif triggers auto-emission. Add --gif.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (maxSize != null && videoOutput == null && gifOutput == null && webpOutput == null &&
       storyboardOutput == null
@@ -276,12 +294,12 @@ class ReportCommand : Callable<Int> {
         "--max-size has no effect without an artifact to cap. Add --gif, --video, --webp, " +
           "or --storyboard — e.g. `trailblaze report --id <id> --webp --max-size=$maxSize`.",
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     storyboardColumns?.let { cols ->
       if (cols !in 1..12) {
         Console.error("--storyboard-columns must be in 1..12, got $cols.")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
     // (No guard for --storyboard-yaml without --storyboard: with the default flipped to
@@ -294,7 +312,7 @@ class ReportCommand : Callable<Int> {
         MaxArtifactSize.parseSize(it)
       } catch (e: IllegalArgumentException) {
         Console.error("--max-size: ${e.message}")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
     return generateSessionReport(
@@ -379,18 +397,21 @@ internal fun generateSessionReport(
   val allIds = logsRepo.getSessionIds()
   if (allIds.isEmpty()) {
     Console.log("No sessions found in logs directory.")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   val sessionIds = if (sessionId != null) {
     val matches = allIds.filter { it.value == sessionId || it.value.startsWith(sessionId) }
     if (matches.isEmpty()) {
+      // No session matching the user-typed --id is a misuse (bad input), not an
+      // infra failure — the daemon, network, and logs repo all worked correctly.
       Console.error("Error: No session matching '$sessionId' found.")
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (matches.size > 1) {
+      // Ambiguous --id prefix is also misuse — the user needs to disambiguate.
       Console.error("Error: Session prefix '$sessionId' is ambiguous: ${matches.joinToString(", ") { it.value }}")
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.MISUSE.code
     }
     matches
   } else {
@@ -404,7 +425,7 @@ internal fun generateSessionReport(
   if (initialHtml == null) {
     Console.error("Failed to generate HTML report. No report template found.")
     Console.error("Ensure trailblaze_report_template.html is bundled or at the git root.")
-    return CommandLine.ExitCode.SOFTWARE
+    return TrailblazeExitCode.INFRA_FAILED.code
   }
   val initialJson = reportGenerator.generateJsonReport(logsRepo, sessionIds)
   if (initialJson == null) {
@@ -479,7 +500,7 @@ internal fun generateSessionReport(
     } catch (e: Exception) {
       Console.error("Failed to export report video: ${e.message}")
       cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
   }
 
@@ -499,7 +520,7 @@ internal fun generateSessionReport(
       } catch (e: IllegalStateException) {
         Console.error("Failed to export report WebP: ${e.message}")
         cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-        return CommandLine.ExitCode.SOFTWARE
+        return TrailblazeExitCode.INFRA_FAILED.code
       }
     }
     val ws = PlaywrightReportCapture.newFrameWorkspace("report")
@@ -522,7 +543,7 @@ internal fun generateSessionReport(
         // (if it ran) is in outputsToCleanupOnFailure and will be removed here.
         Console.error("Failed to capture report frames: ${e.message}")
         cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-        return CommandLine.ExitCode.SOFTWARE
+        return TrailblazeExitCode.INFRA_FAILED.code
       }
       if (gifFile != null) {
         try {
@@ -533,7 +554,7 @@ internal fun generateSessionReport(
         } catch (e: Exception) {
           Console.error("Failed to export report GIF: ${e.message}")
           cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-          return CommandLine.ExitCode.SOFTWARE
+          return TrailblazeExitCode.INFRA_FAILED.code
         }
       }
       if (webpFile != null) {
@@ -545,7 +566,7 @@ internal fun generateSessionReport(
         } catch (e: Exception) {
           Console.error("Failed to export report WebP: ${e.message}")
           cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-          return CommandLine.ExitCode.SOFTWARE
+          return TrailblazeExitCode.INFRA_FAILED.code
         }
       }
     } finally {
@@ -588,7 +609,7 @@ internal fun generateSessionReport(
     } catch (e: Exception) {
       Console.error("Failed to export storyboard: ${e.message}")
       cleanupOutputsOnFailure(outputsToCleanupOnFailure)
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
   }
 
@@ -598,7 +619,7 @@ internal fun generateSessionReport(
 
   // Background threads spawned by the report generator keep the JVM alive after
   // a successful run; force exit to match the prior `trailblaze report` behavior.
-  exitProcess(CommandLine.ExitCode.OK)
+  exitProcess(TrailblazeExitCode.SUCCESS.code)
 }
 
 private data class ExportDefaults(

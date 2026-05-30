@@ -94,11 +94,11 @@ dependencies {
   // YAML emit/quote utilities (`xyz.block.trailblaze.bundle.yaml.YamlEmitter`). The
   // bundler is otherwise build-time-only — this is the only runtime consumer today;
   // future `trailblaze bundle` CLI will be the second.
-  implementation(project(":trailblaze-pack-bundler"))
+  implementation(project(":trailblaze-trailmap-bundler"))
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-scripting-subprocess"))
-  // Inline scripted tools (under pack manifest `target.tools:`) now run their handlers
+  // Inline scripted tools (under trailmap manifest `target.tools:`) now run their handlers
   // in-process inside QuickJsToolHost rather than via an MCP subprocess detour — see
   // `LazyYamlScriptedToolRegistration` and #2749 for the swap. The dep is added here
   // (not in :trailblaze-scripting-subprocess) because the wire-in lives in
@@ -166,6 +166,10 @@ dependencies {
   implementation(libs.koog.prompt.executor.openai)
   implementation(libs.koog.prompt.executor.openrouter)
   implementation(libs.koog.agents.tools)
+  // Koog 1.0.0 stopped leaking Ktor types transitively through the LLM client modules; we
+  // construct `KtorKoogHttpClient.Factory` directly from our customized Ktor client so this
+  // module needs a direct dep on http-client-ktor.
+  implementation(libs.koog.http.client.ktor)
   implementation(libs.mcp.sdk)
 
   // We're not actually leveraging playwright now, so let's keep it out of the app
@@ -194,6 +198,11 @@ tasks.register<Test>("updateSystemPromptBaselines") {
   filter {
     includeTestsMatching("*.ComposedSystemPromptBaselineTest")
   }
+  // Always rerun: this task writes to source-controlled `.txt` baselines, and the
+  // source prompt `.md` is not a declared input — Gradle could otherwise mark the
+  // task UP-TO-DATE after a prior run and silently skip the regen, leaving stale
+  // baselines on disk.
+  outputs.upToDateWhen { false }
 }
 
 // Generate version.properties file with git version info
@@ -237,16 +246,16 @@ val generateVersionProperties by tasks.registering {
 }
 
 // Stage the TypeScript compiler (`_tsc.js` + standard-library `lib.*.d.ts` files) as JAR
-// resources at `trailblaze-config/typecheck/typescript/lib/...`, so `trailblaze typecheck`
+// resources at `trails/config/typecheck/typescript/lib/...`, so `trailblaze typecheck`
 // can extract the bundled tsc into each workspace's `<workspace>/.trailblaze/typecheck/`
-// at compile time without going through `bun install` per pack — which was the forcing
-// function (per-pack transitive npm closure failed to resolve through corporate npm
+// at compile time without going through `bun install` per trailmap — which was the forcing
+// function (per-trailmap transitive npm closure failed to resolve through corporate npm
 // mirrors in some environments).
 //
 // Source: `sdks/typescript/node_modules/typescript/lib/`, populated by `bun install` in
 // the SDK package (CI's static-checks pipeline runs this before any Gradle build does;
 // developers do the same once locally). Pinned to typescript@6.0.3 via the SDK package's
-// devDependency — matches the version `bun tsc --noEmit` would have used in the per-pack
+// devDependency — matches the version `bun tsc --noEmit` would have used in the per-trailmap
 // era, so authors see the same diagnostics they'd seen before this command existed.
 //
 // **Trimmed payload** — locale dirs (`cs/`, `de/`, `es/`, ..., `zh-tw/`), the `_tsserver.js`
@@ -278,7 +287,7 @@ val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
     include("lib/lib.*.d.ts")
     include("lib/diagnosticMessages.generated.json")
   }
-  into(layout.buildDirectory.dir("generated-resources/typecheck/trailblaze-config/typecheck/typescript"))
+  into(layout.buildDirectory.dir("generated-resources/typecheck/trails/config/typecheck/typescript"))
 }
 
 // Add generated resources to source sets

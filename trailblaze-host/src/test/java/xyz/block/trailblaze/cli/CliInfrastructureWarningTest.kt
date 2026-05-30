@@ -26,7 +26,7 @@ class CliInfrastructureWarningTest {
     val lines = buildAnchorMismatchBanner(
       daemonAnchor = "/repo/examples/playwright-native/trails/config/trailblaze.yaml",
       cwdAnchor = "/repo/examples/android-sample-app/trails/config/trailblaze.yaml",
-      daemonTargets = setOf("playwrightsample"),
+      daemonTargets = setOf("playwrightSample"),
       cwdTargets = setOf("sampleapp"),
     )
     val joined = lines.joinToString("\n")
@@ -55,7 +55,7 @@ class CliInfrastructureWarningTest {
 
   @Test
   fun `anchor mismatch banner explains the no-diff case when target sets are identical`() {
-    // Same targets but different anchors — packs/tools/toolsets may still resolve from
+    // Same targets but different anchors — trailmaps/tools/toolsets may still resolve from
     // different files. The banner should explicitly call this out instead of leaving a
     // confusingly-empty diff section.
     val lines = buildAnchorMismatchBanner(
@@ -115,9 +115,9 @@ class CliInfrastructureWarningTest {
     val joined = lines.joinToString("\n")
     assertTrue("WORKSPACE CONTENT DRIFT" in joined, "Headline missing.")
     assertTrue("/repo/examples/foo/trails/config/trailblaze.yaml" in joined, "Anchor missing.")
-    // The banner enumerates what's covered so users know edits to non-pack.yaml files
+    // The banner enumerates what's covered so users know edits to non-trailmap.yaml files
     // (tool YAMLs, scripts) are also caught — that distinction matters for muscle-memory.
-    listOf("packs", "tool YAMLs", "scripts", "toolsets", "providers").forEach { term ->
+    listOf("trailmaps", "tool YAMLs", "scripts", "toolsets", "providers").forEach { term ->
       assertTrue(term in joined, "Expected coverage term '$term' in body: $joined")
     }
   }

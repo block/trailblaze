@@ -59,6 +59,12 @@ class RevylTrailblazeAgent(
       screenStateProvider = effectiveScreenStateProvider,
       trailblazeLogger = trailblazeLogger,
       memory = memory,
+      // Threads the agent's tool repo through so Kotlin tools composing framework
+      // tools via `ctx.invokeFrameworkTool(...)` resolve them by name. See same
+      // wiring on the Maestro / Playwright / Compose agents — without it, the
+      // bridge throws "toolRepo not wired" on every Kotlin-side call site in a
+      // Revyl-driven session.
+      toolRepo = trailblazeToolRepo,
     )
   }
 

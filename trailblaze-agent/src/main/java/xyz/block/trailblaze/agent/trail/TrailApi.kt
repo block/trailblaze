@@ -62,7 +62,7 @@ import xyz.block.trailblaze.yaml.ToolRecording
  *   structural assertions to actually fire should wire this from the same provider that
  *   feeds the rest of the runner (Maestro driver, accessibility driver, etc.).
  * @param waypointResolver Lookup from waypoint id to [WaypointDefinition]. Typically backed
- *   by the loaded pack registry (see `TrailblazeProjectConfigLoader`). Like
+ *   by the loaded trailmap registry (see `TrailblazeProjectConfigLoader`). Like
  *   [screenStateProvider], omitting it makes postconditions a no-op.
  * @return Result containing success/failure status, final state, and timing
  */

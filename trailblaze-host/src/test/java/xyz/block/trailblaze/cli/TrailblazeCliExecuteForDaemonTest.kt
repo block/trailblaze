@@ -39,6 +39,35 @@ class TrailblazeCliExecuteForDaemonTest {
     assertTrue(response.stderr.isEmpty())
   }
 
+  @Test fun `tool subcommand is forwardable`() {
+    // Regression for the FTUX-validator-reported `tool --yaml` failure mode:
+    // before this PR, the daemon returned `forwarded = false` and the bash shim
+    // fell through to a fresh-JVM spawn, which then collided with the running
+    // daemon and bailed out with `failed to connect to Trailblaze daemon after
+    // starting it`. Bare `tool web_navigate` happened to work because the
+    // JVM-spawn fallback resolved the daemon connection a different way, but
+    // `tool --yaml` would not. Routing `tool` through `/cli/exec` like
+    // `snapshot` closes both paths consistently: `tool` is the same
+    // single-MCP-call shape as `snapshot` and shares `cliReusableWithDevice`,
+    // so there's no in-process-execution surprise.
+    //
+    // Asserts the same providers-null contract as the snapshot test below
+    // (exitCode=1 + diagnostic stderr) so a future regression that breaks the
+    // missing-providers branch specifically for `tool` would also fail here.
+    val response = TrailblazeCli.executeForDaemon(CliExecRequest(args = listOf("tool", "tap", "ref=p1", "-o", "test")))
+    assertTrue(
+      response.forwarded,
+      "`tool` must route through /cli/exec — without it, `tool --yaml` falls off the daemon path " +
+        "and the JVM-spawn fallback collides with the running daemon. Got forwarded=${response.forwarded}, " +
+        "stderr='${response.stderr}'",
+    )
+    assertEquals(1, response.exitCode, "missing-providers path must yield exitCode=1")
+    assertTrue(
+      response.stderr.contains("missing providers"),
+      "stderr should indicate providers were never captured, got: '${response.stderr}'",
+    )
+  }
+
   @Test fun `allowlisted subcommand without providers returns exit 1 and diagnostic stderr`() {
     // `TrailblazeCli.run()` is never called in this unit test, so the
     // `appProviderRef` / `configProviderRef` remain null. `executeForDaemon`

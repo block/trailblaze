@@ -29,10 +29,12 @@ them based on execution model:
 ## Status
 
 The inline `script: { source }` shape is being deprecated in favor of the
-subprocess MCP path (`mcp_servers:` on target YAML → `:trailblaze-scripting-subprocess`).
-This module remains because it's also the eventual home for the on-device bundle
-path: the same `.ts` source compiled/bundled and executed via QuickJS on the
-device itself (Decision 038 PR A5, not yet built).
+`tools:` declarative path on trailmap manifests, where each named tool resolves to
+a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime is selected per
+descriptor: `runtime: subprocess` (or a `.js`/`.mjs`/`.cjs` entrypoint) routes
+through `:trailblaze-scripting-subprocess` for full Node APIs; the default
+in-process runtime is QuickJS via `:trailblaze-quickjs-tools`. `requiresHost:
+true` is a separate on-device visibility gate, not a runtime selector.
 
 ## References
 

@@ -5,12 +5,13 @@ package xyz.block.trailblaze.agent
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
 import xyz.block.trailblaze.util.Console
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.runBlocking
-import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.util.ElementRetriever
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -120,17 +121,17 @@ class TrailblazeElementComparator(
       toolChoice = LLMParams.ToolChoice.Required,
     )
 
-    val koogLlmChatResponse: List<Message.Response> = runBlocking { koogLlmClientHelper.callLlm(koogRequestData) }
-    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
-    val assertionToolMessage: Message.Tool = toolCalls.firstOrNull() ?: return BooleanAssertionTrailblazeTool(
+    val koogLlmChatResponse: Message.Assistant = runBlocking { koogLlmClientHelper.callLlm(koogRequestData) }
+    val toolCalls = koogLlmChatResponse.parts.filterIsInstance<MessagePart.Tool.Call>()
+    val assertionToolCall: MessagePart.Tool.Call = toolCalls.firstOrNull() ?: return BooleanAssertionTrailblazeTool(
       result = false,
       reason = "Failed to get tool response from LLM",
     )
 
     try {
       val booleanCommand = booleanAssertionToolRepo.toolCallToTrailblazeTool(
-        toolName = assertionToolMessage.tool,
-        toolContent = assertionToolMessage.content,
+        toolName = assertionToolCall.tool,
+        toolContent = assertionToolCall.args,
       ) as? BooleanAssertionTrailblazeTool
         ?: return BooleanAssertionTrailblazeTool(
           result = false,
@@ -170,7 +171,7 @@ class TrailblazeElementComparator(
 
     val evaluationToolRepo = TrailblazeToolRepo(StringEvaluationTrailblazeToolSet)
 
-    val koogLlmChatResponse: List<Message.Response> = runBlocking {
+    val koogLlmChatResponse: Message.Assistant = runBlocking {
       koogLlmClientHelper.callLlm(
         KoogLlmRequestData(
           messages = koogAiRequestMessages,
@@ -179,7 +180,7 @@ class TrailblazeElementComparator(
         ),
       )
     }
-    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
+    val toolCalls = koogLlmChatResponse.parts.filterIsInstance<MessagePart.Tool.Call>()
 
     val evalToolCall = toolCalls.firstOrNull()
     if (evalToolCall == null) {
@@ -189,12 +190,12 @@ class TrailblazeElementComparator(
       )
     }
 
-    Console.log("Tool call found: ${evalToolCall.tool}, arguments: ${evalToolCall.content}")
+    Console.log("Tool call found: ${evalToolCall.tool}, arguments: ${evalToolCall.args}")
 
     try {
       val stringCommand = evaluationToolRepo.toolCallToTrailblazeTool(
         evalToolCall.tool,
-        evalToolCall.content,
+        evalToolCall.args,
       ) as? StringEvaluationTrailblazeTool
       if (stringCommand == null) {
         Console.log("ERROR: Failed to parse tool call as StringEvaluationCommand")
@@ -233,18 +234,18 @@ class TrailblazeElementComparator(
     Console.log("Identifying element locator for: $prompt")
     val viewHierarchyJson = Json.encodeToString(ViewHierarchyTreeNode.serializer(), screenState.viewHierarchy)
 
-    val koogRequestMessages: List<Message.Request> = buildList {
+    val koogRequestMessages: List<Message> = buildList {
       add(
         Message.System(
           content = systemPromptToolTemplate,
-          metaInfo = RequestMetaInfo.create(Clock.System),
+          metaInfo = RequestMetaInfo.create(KoogClock.System),
         ),
       )
       add(
         Message.User(
-          parts = buildList {
+          parts = buildList<MessagePart.RequestPart> {
             add(
-              ContentPart.Text(
+              MessagePart.Text(
                 TemplatingUtil.renderTemplate(
                   template = userPromptTemplate,
                   values = mapOf(
@@ -256,20 +257,22 @@ class TrailblazeElementComparator(
             )
             screenState.annotatedScreenshotBytes?.let { screenshotBytes ->
               add(
-                ContentPart.Image(
-                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                MessagePart.Attachment(
+                  source = AttachmentSource.Image(
+                    content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                    format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                  ),
                 ),
               )
             }
           },
-          metaInfo = RequestMetaInfo.create(Clock.System),
+          metaInfo = RequestMetaInfo.create(KoogClock.System),
         ),
       )
     }
 
     val elementRetrieverToolRepo = TrailblazeToolRepo(ElementRetrieverTrailblazeToolSet)
-    val koogLlmChatResponse: List<Message.Response> = runBlocking {
+    val koogLlmChatResponse: Message.Assistant = runBlocking {
       koogLlmClientHelper.callLlm(
         KoogLlmRequestData(
           messages = koogRequestMessages,
@@ -278,9 +281,9 @@ class TrailblazeElementComparator(
         ),
       )
     }
-    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
+    val toolCalls = koogLlmChatResponse.parts.filterIsInstance<MessagePart.Tool.Call>()
 
-    val locatorToolCall: Message.Tool = toolCalls.firstOrNull() ?: return LocatorResponse(
+    val locatorToolCall: MessagePart.Tool.Call = toolCalls.firstOrNull() ?: return LocatorResponse(
       success = false,
       locatorType = null,
       value = null,
@@ -320,27 +323,29 @@ class TrailblazeElementComparator(
     add(
       Message.System(
         content = systemPrompt,
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
     add(
       Message.User(
-        parts = buildList {
+        parts = buildList<MessagePart.RequestPart> {
           add(
-            ContentPart.Text("Evaluate this on the current screen: $prompt"),
+            MessagePart.Text("Evaluate this on the current screen: $prompt"),
           )
           // Use clean screenshot (no set-of-mark annotations) for evaluation requests.
           // Annotations can obscure text on screen, causing the LLM to misread values.
           screenState.screenshotBytes?.let { screenshotBytes ->
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               ),
             )
           }
         },
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }

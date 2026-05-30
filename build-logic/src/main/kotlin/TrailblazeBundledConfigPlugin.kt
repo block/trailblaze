@@ -13,8 +13,8 @@ class TrailblazeBundledConfigPlugin : Plugin<Project> {
       GenerateBundledTrailblazeConfigTask::class.java,
     ) { task ->
       task.group = "trailblaze"
-      task.description = "Generates checked-in flat target YAMLs from authored pack manifests."
-      task.packsDir.set(extension.packsDir)
+      task.description = "Generates checked-in flat target YAMLs from authored trailmap manifests."
+      task.trailmapsDir.set(extension.trailmapsDir)
       task.targetsDir.set(extension.targetsDir)
       task.scriptRootDir.set(extension.scriptRootDir)
       task.regenerateCommand.set(extension.regenerateCommand)
@@ -25,8 +25,8 @@ class TrailblazeBundledConfigPlugin : Plugin<Project> {
       VerifyBundledTrailblazeConfigTask::class.java,
     ) { task ->
       task.group = "verification"
-      task.description = "Verifies checked-in generated target YAMLs are up to date with pack manifests."
-      task.packsDir.set(extension.packsDir)
+      task.description = "Verifies checked-in generated target YAMLs are up to date with trailmap manifests."
+      task.trailmapsDir.set(extension.trailmapsDir)
       task.targetsDir.set(extension.targetsDir)
       task.scriptRootDir.set(extension.scriptRootDir)
       task.regenerateCommand.set(extension.regenerateCommand)
@@ -37,7 +37,7 @@ class TrailblazeBundledConfigPlugin : Plugin<Project> {
       it.dependsOn(verify)
     }
 
-    // The generator writes directly into `src/commonMain/resources/trailblaze-config/`,
+    // The generator writes directly into `src/commonMain/resources/trails/config/`,
     // which the consuming module declares as both `resources.srcDirs` (Java resources)
     // AND `assets.srcDirs` (so on-device instrumentation tests can discover YAML via
     // AssetManager). Gradle 8.x's strict implicit-dependency validation fails any

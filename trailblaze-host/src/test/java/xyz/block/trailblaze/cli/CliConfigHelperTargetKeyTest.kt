@@ -37,10 +37,18 @@ class CliConfigHelperTargetKeyTest {
   }
 
   @Test
-  fun `target setter normalizes uppercase to lowercase`() {
-    val updated = targetKey.set(baseConfig, "Myapp")
-    assertNotNull(updated)
-    assertEquals("myapp", updated.selectedTargetAppId)
+  fun `target setter preserves lowerCamelCase casing`() {
+    // The 2026-05-27 trailmap-scoped tool naming work widened the regex to accept uppercase
+    // letters so lowerCamelCase trailmap ids (`playwrightSample`, `googleCalendar`,
+    // `androidSettings`) round-trip correctly. The setter no longer forces `.lowercase()`,
+    // and case-insensitive lookup happens at the resolver layer (`findById`).
+    val camel = targetKey.set(baseConfig, "playwrightSample")
+    assertNotNull(camel)
+    assertEquals("playwrightSample", camel.selectedTargetAppId)
+
+    val mixed = targetKey.set(baseConfig, "Myapp")
+    assertNotNull(mixed)
+    assertEquals("Myapp", mixed.selectedTargetAppId)
   }
 
   @Test

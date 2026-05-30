@@ -147,7 +147,7 @@ class DesktopYamlRunner(
 
       // Per-session video / sprite / logcat capture used to be started here against a
       // temp dir and moved into the session log dir in the finally block. That worked
-      // for the CLI/daemon path but bypassed every MCP-driven session — the `blaze`,
+      // for the CLI/daemon path but bypassed every MCP-driven session — the `step`,
       // `ask`, `verify`, and individual-tool entry points create sessions through
       // `TrailblazeDeviceManager.getOrCreateSessionResolution` and never go through
       // this runner. Capture is now owned by [SessionCaptureCoordinator], which both

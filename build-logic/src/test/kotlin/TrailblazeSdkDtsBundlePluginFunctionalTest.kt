@@ -31,10 +31,11 @@ import org.junit.Assume.assumeTrue
  *
  * **dts-bundle-generator prerequisite.** The TS SDK's
  * `node_modules/.bin/dts-bundle-generator` must exist in the checkout. CI's
- * `pr_static_checks.sh` runs `bun install` (with npm fallback) before invoking the
- * verify task; local developers running `./gradlew :build-logic:test` need to have run
- * the same install. Tests skip via [assumeTrue] when the binary is absent — same pattern
- * [TrailblazeSdkBundlePluginFunctionalTest] uses for esbuild.
+ * `pr_static_checks.sh` runs `bun install --frozen-lockfile` before invoking the verify
+ * task; local developers running `./gradlew :build-logic:test` need to have run the same
+ * install (`source bin/activate-hermit` puts bun on PATH). Tests skip via [assumeTrue]
+ * when the binary is absent — same pattern [TrailblazeSdkBundlePluginFunctionalTest] uses
+ * for esbuild.
  */
 class TrailblazeSdkDtsBundlePluginFunctionalTest {
 
@@ -87,8 +88,8 @@ class TrailblazeSdkDtsBundlePluginFunctionalTest {
     assertTrue("missing regenerate command in: $output") {
       output.contains(":trailblaze-models:bundleTrailblazeSdkDts")
     }
-    assertTrue("missing npm ci lockfile-recovery suggestion in: $output") {
-      output.contains("npm ci")
+    assertTrue("missing bun install --frozen-lockfile recovery suggestion in: $output") {
+      output.contains("bun install --frozen-lockfile")
     }
     assertTrue("missing byte-size delta line in: $output") {
       output.contains("Committed bundle size: 15 bytes") &&
@@ -240,6 +241,113 @@ class TrailblazeSdkDtsBundlePluginFunctionalTest {
   }
 
   @Test
+  fun `verify task succeeds and logs is fresh when committed runtime bundle matches`() {
+    // Parallel to the `.d.ts`-bundle pass-path test, for the runtime ESM bundle wired
+    // through `sdkRuntimeBundleOutputFile`. Asserts the verify gate covers `dist/index.js`
+    // the same way it covers `dist/index.d.ts` — a regenerated-but-not-committed runtime
+    // bundle slipping past CI would silently re-introduce PR #3338's "bun crashes on
+    // declaration-file import" failure mode in any consumer that re-builds the JAR.
+    assumeTrue(
+      "esbuild not installed in sdks/typescript/node_modules — skipping",
+      esbuildAvailable(),
+    )
+    assumeTrue(
+      "dts-bundle-generator not installed in sdks/typescript/node_modules — skipping",
+      dtsBundleGeneratorAvailable(),
+    )
+    val projectDir = newFixtureProjectWithRuntime(
+      committedBundleRelPath = "committed-bundle.d.ts",
+      committedRuntimeRelPath = "committed-runtime.js",
+    )
+    val committedBundle = File(projectDir, "committed-bundle.d.ts")
+    val committedRuntime = File(projectDir, "committed-runtime.js")
+    primeCommittedBundle(projectDir, committedBundle)
+    assertTrue("priming should have produced the runtime bundle too") { committedRuntime.isFile }
+
+    val result = runner(projectDir, "verifyTrailblazeSdkDtsBundle").build()
+
+    assertEquals(TaskOutcome.SUCCESS, result.task(":verifyTrailblazeSdkDtsBundle")?.outcome)
+    assertTrue("expected 'dist/index.js is fresh' marker in output: ${result.output}") {
+      result.output.contains("dist/index.js is fresh")
+    }
+  }
+
+  @Test
+  fun `verify task fails with the directed error message when committed runtime bundle is stale`() {
+    assumeTrue(
+      "esbuild not installed in sdks/typescript/node_modules — skipping",
+      esbuildAvailable(),
+    )
+    assumeTrue(
+      "dts-bundle-generator not installed in sdks/typescript/node_modules — skipping",
+      dtsBundleGeneratorAvailable(),
+    )
+    val projectDir = newFixtureProjectWithRuntime(
+      committedBundleRelPath = "committed-bundle.d.ts",
+      committedRuntimeRelPath = "committed-runtime.js",
+    )
+    val committedBundle = File(projectDir, "committed-bundle.d.ts")
+    val committedRuntime = File(projectDir, "committed-runtime.js")
+    // Prime so the `.d.ts` matches; then deliberately corrupt the runtime bundle so the
+    // runtime-bundle byte-diff is the *only* gate failure surfaced — keeps the assertion
+    // free of cross-contamination from the dts-bundle path.
+    primeCommittedBundle(projectDir, committedBundle)
+    assertTrue("priming should have produced the runtime bundle too") { committedRuntime.isFile }
+    committedRuntime.writeText("// stale runtime bytes\n")
+
+    val result = runner(projectDir, "verifyTrailblazeSdkDtsBundle").buildAndFail()
+
+    val output = result.output
+    assertTrue("missing primary error phrase in: $output") {
+      output.contains("dist/index.js does not match a fresh esbuild ESM bundle output")
+    }
+    assertTrue("missing regenerate command in: $output") {
+      output.contains(":trailblaze-models:bundleTrailblazeSdkDts")
+    }
+    assertTrue("missing byte-size delta line for committed bundle in: $output") {
+      // The corrupted file is 23 bytes ("// stale runtime bytes\n").
+      output.contains("Committed size: 23 bytes")
+    }
+  }
+
+  @Test
+  fun `verify task fails with friendly missing-runtime-bundle error when no committed file exists`() {
+    // Needs dts-bundle-generator on disk: the verify task's first action against a
+    // present-but-stale `.d.ts` is to regenerate it for byte-diff (failing here would
+    // beat the runtime existence check to the punch). Gate the same way the other
+    // bundle-runs-required tests do.
+    assumeTrue(
+      "dts-bundle-generator not installed in sdks/typescript/node_modules — skipping",
+      dtsBundleGeneratorAvailable(),
+    )
+    assumeTrue(
+      "esbuild not installed in sdks/typescript/node_modules — skipping",
+      esbuildAvailable(),
+    )
+    val projectDir = newFixtureProjectWithRuntime(
+      committedBundleRelPath = "committed-bundle.d.ts",
+      committedRuntimeRelPath = "committed-runtime.js",
+    )
+    // Plant the dts bundle via the priming path so its bytes match a fresh
+    // dts-bundle-generator output (otherwise the `.d.ts` byte-diff fires first and
+    // we never reach the runtime-bundle existence check that's under test).
+    val committedBundle = File(projectDir, "committed-bundle.d.ts")
+    primeCommittedBundle(projectDir, committedBundle)
+    // Delete the runtime bundle that priming just produced — that's the exact
+    // condition this test exists to catch.
+    File(projectDir, "committed-runtime.js").delete()
+
+    val result = runner(projectDir, "verifyTrailblazeSdkDtsBundle").buildAndFail()
+
+    assertTrue("expected friendly 'missing runtime ESM bundle' error in: ${result.output}") {
+      result.output.contains("Committed runtime ESM bundle missing at")
+    }
+    assertTrue("expected the regenerate command in: ${result.output}") {
+      result.output.contains(":trailblaze-models:bundleTrailblazeSdkDts")
+    }
+  }
+
+  @Test
   fun `task fails with a directed error when trailblazeSdkDtsBundle extension is not configured`() {
     val projectDir = createTempDirectory("trailblaze-sdk-dts-bundle-unconfigured")
       .toFile().also(tempDirs::add)
@@ -283,6 +391,36 @@ class TrailblazeSdkDtsBundlePluginFunctionalTest {
   }
 
   /**
+   * Variant of [newFixtureProject] that also wires the optional runtime ESM bundle
+   * (`sdkRuntimeBundleOutputFile`). Used by the `dist/index.js` byte-diff gate tests.
+   * Kept as a separate fixture (rather than adding an optional parameter to the
+   * existing one) so the original tests' build.gradle.kts surface stays minimal —
+   * a future maintainer comparing the two test groups can see at a glance which
+   * extension properties each one exercises.
+   */
+  private fun newFixtureProjectWithRuntime(
+    committedBundleRelPath: String,
+    committedRuntimeRelPath: String,
+  ): File {
+    val dir = createTempDirectory("trailblaze-sdk-dts-bundle-runtime-functional").toFile()
+      .also(tempDirs::add)
+    File(dir, "settings.gradle.kts").writeText("""rootProject.name = "fixture"""")
+    File(dir, "build.gradle.kts").writeText(
+      """
+      plugins {
+        id("trailblaze.sdk-dts-bundle")
+      }
+      trailblazeSdkDtsBundle {
+        trailblazeSdkDir.set(file("${sdkDir.absolutePath.escapeForKotlinString()}"))
+        sdkDtsBundleOutputFile.set(file("$committedBundleRelPath"))
+        sdkRuntimeBundleOutputFile.set(file("$committedRuntimeRelPath"))
+      }
+      """.trimIndent(),
+    )
+    return dir
+  }
+
+  /**
    * Generates a fresh `.d.ts` bundle via `bundleTrailblazeSdkDts` into the fixture's
    * committed-bundle path. Doing this once per test (rather than checking in a static
    * fixture bundle) keeps the test resilient to dts-bundle-generator version drift —
@@ -308,6 +446,9 @@ class TrailblazeSdkDtsBundlePluginFunctionalTest {
 
   private fun dtsBundleGeneratorAvailable(): Boolean =
     File(sdkDir, "node_modules/.bin/dts-bundle-generator").exists()
+
+  private fun esbuildAvailable(): Boolean =
+    File(sdkDir, "node_modules/.bin/esbuild").exists()
 
   /**
    * Build a fixture project around a synthetic SDK layout. Used by the missing-file

@@ -112,7 +112,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap two points",
         tools =
           """
@@ -157,7 +157,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -184,7 +184,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -217,7 +217,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -248,7 +248,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -276,7 +276,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Do something",
         tools = "this is not valid yaml {{",
       )
@@ -305,7 +305,7 @@ class StepToolSetDirectToolsTest {
     // Valid trail YAML containing only a prompts item, no tools item.
     // decodeTrail will produce a PromptsTrailItem -- no ToolTrailItem.
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Do something",
         tools =
           """
@@ -334,7 +334,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Do something",
         tools = "",
       )
@@ -369,7 +369,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap three points",
         tools =
           """
@@ -426,7 +426,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective = "Tap on point",
         tools =
           """
@@ -464,7 +464,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective = "Open example.com",
         tools =
           """
@@ -500,7 +500,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective = "Open example.com",
         tools =
           """
@@ -514,6 +514,177 @@ class StepToolSetDirectToolsTest {
     assertContains(result, "not valid for the current device/target")
     assertContains(result, "openUrl")
     assertFalse(result.contains("web_navigate"), "Web hint must not leak when web_navigate is unavailable")
+  }
+
+  // -- 6e. Pre-validation: unknown / wrong-driver rejections short-circuit -----
+  //
+  // Regression coverage for the Web/Playwright bug where awaitScreenState could sit
+  // in a transient state long enough to outlast the CLI socket timeout, swallowing
+  // the canonical rejection inside executeDirectTools. The fix is to run the same
+  // rejection BEFORE awaitScreenState. These tests pin that ordering by counting
+  // screenStateProvider invocations and asserting they stay at zero.
+
+  @Test
+  fun `direct tools reject unknown tool name without invoking screenStateProvider`() = runTest {
+    var screenStateInvocations = 0
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "Tap nonexistent", tools = "- tap_on_text: {}")
+
+    // The CLI's MISUSE_MARKERS contains "Unknown tool"; without this marker the
+    // ToolCommand exit-code mapper would not produce EXIT=3.
+    assertContains(result, "Unknown tool")
+    assertContains(result, "tap_on_text")
+    assertContains(result, "toolbox()")
+    assertEquals(
+      0,
+      screenStateInvocations,
+      "screenStateProvider must not be invoked when an unknown tool short-circuits — this is what makes the rejection robust to drivers where captureScreenState can hang.",
+    )
+  }
+
+  @Test
+  fun `direct tools reject wrong-driver tool without invoking screenStateProvider`() = runTest {
+    var screenStateInvocations = 0
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        availableToolsProvider = {
+          listOf(
+            TrailblazeToolDescriptor(name = "web_navigate"),
+            TrailblazeToolDescriptor(name = "web_click"),
+          )
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Open example.com",
+        tools =
+          """
+          - tools:
+              - openUrl:
+                  url: https://example.com
+          """
+            .trimIndent(),
+      )
+
+    assertContains(result, "not valid for the current device/target")
+    assertContains(result, "openUrl")
+    assertContains(result, "web_navigate")
+    assertEquals(
+      0,
+      screenStateInvocations,
+      "screenStateProvider must not be invoked when the wrong-driver rejection fires.",
+    )
+  }
+
+  @Test
+  fun `direct tools reject malformed YAML without invoking screenStateProvider`() = runTest {
+    // Malformed YAML is the third rejection category surfaced by parseAndValidateDirectTools;
+    // pinning it here ensures the Web/Playwright fail-fast guarantee holds for parse errors
+    // too (previously the pre-pass returned null on parse failure and let awaitScreenState
+    // run, which could hang).
+    var screenStateInvocations = 0
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "garbage in", tools = "this is not valid yaml {{")
+
+    assertContains(result, "Failed to parse tools YAML")
+    assertEquals(
+      0,
+      screenStateInvocations,
+      "screenStateProvider must not be invoked when the YAML can't be parsed.",
+    )
+  }
+
+  @Test
+  fun `direct tools reject empty tool list without invoking screenStateProvider`() = runTest {
+    // A YAML that parses cleanly but produces zero tools (e.g., only a prompts item) is the
+    // fourth rejection category. Same Web/Playwright fail-fast guarantee.
+    var screenStateInvocations = 0
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "no tools",
+        tools =
+          """
+          - prompts:
+              - step: Just a prompt step
+          """
+            .trimIndent(),
+      )
+
+    assertContains(result, "No tools found")
+    assertEquals(
+      0,
+      screenStateInvocations,
+      "screenStateProvider must not be invoked when the YAML has no tool items.",
+    )
+  }
+
+  @Test
+  fun `takeSnapshot bypasses pre-validation and uses captured screen state`() = runTest {
+    // The pre-validation pass is intentionally skipped when `tools` contains the
+    // substring `takeSnapshot` because the snapshot short-circuit consumes the captured
+    // screen state directly. Pin that bypass: a `takeSnapshot` YAML must reach
+    // screenStateProvider (i.e. NOT short-circuit pre-validation), otherwise a future
+    // tightening of the substring condition would silently break the snapshot path.
+    var screenStateInvocations = 0
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        screenSummaryProvider = { "snapshot summary" },
+        rawToolExecutor = { _, _ -> "OK" },
+      )
+
+    val result = toolSet.step(objective = "snap", tools = "- takeSnapshot: {}")
+
+    assertContains(result, "Snapshot captured")
+    assertEquals(
+      1,
+      screenStateInvocations,
+      "takeSnapshot must consume the captured screen state — pre-validation should be skipped, awaitScreenState should run.",
+    )
   }
 
   @Test
@@ -534,7 +705,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective = "Tap on point",
         tools =
           """
@@ -563,7 +734,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -602,7 +773,7 @@ class StepToolSetDirectToolsTest {
           rawToolExecutor = { _, _ -> "tap executed" },
         )
 
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap the login button",
         tools =
           """
@@ -644,7 +815,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -674,7 +845,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -707,7 +878,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -751,7 +922,7 @@ class StepToolSetDirectToolsTest {
       )
 
     // tools=null means normal path -- analyzer gets called
-    val result = toolSet.blaze(objective ="Do something", tools = null)
+    val result = toolSet.step(objective ="Do something", tools = null)
 
     assertTrue(analyzerCalled, "ScreenAnalyzer should be called when tools parameter is null")
     assertContains(result, "Intentional test exception")
@@ -769,7 +940,7 @@ class StepToolSetDirectToolsTest {
         rawToolExecutor = { _, _ -> "OK" },
       )
 
-    val result = toolSet.blaze(objective ="Do something", tools = null)
+    val result = toolSet.step(objective ="Do something", tools = null)
 
     assertContains(result, "No AI provider configured")
     assertContains(result, "trailblaze tool")
@@ -792,7 +963,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -954,7 +1125,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """
@@ -985,7 +1156,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -1009,7 +1180,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
@@ -1077,7 +1248,7 @@ class StepToolSetDirectToolsTest {
       )
 
     val result =
-      toolSet.blaze(
+      toolSet.step(
         objective ="Tap a point",
         tools =
           """

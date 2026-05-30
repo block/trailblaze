@@ -27,6 +27,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
@@ -156,8 +157,21 @@ class BaseComposeTest(
         sessionUpdater = { loggingRule.setSession(it) },
       )
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = trailblazeDeviceInfo.classifiers,
+    )
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
+    // `planTrailExecution` planner. Compose tests drive this base class directly (not through
+    // the CLI), so without this short-circuit a skip-marked trail would run end-to-end here.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return loggingRule.session?.sessionId ?: SessionId("unknown")
+    }
 
     if (sendSessionStartLog) {
       val session = loggingRule.session

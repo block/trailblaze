@@ -3,6 +3,7 @@ package xyz.block.trailblaze.logs.client
 import kotlinx.serialization.KSerializer
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.util.Console
@@ -12,8 +13,8 @@ import kotlin.reflect.KClass
  * Produces the single tool map consumed by [TrailblazeJsonInstance] and
  * [TrailblazeYaml.Default].
  *
- * Every tool is registered via YAML files under `trailblaze-config/tools/` on the classpath — there
- * is no imperative registration API. YAML discovery uses a platform-aware
+ * Every tool is registered via YAML files under `trails/config/trailmaps/<id>/tools/` on the
+ * classpath — there is no imperative registration API. YAML discovery uses a platform-aware
  * [xyz.block.trailblaze.llm.config.ConfigResourceSource]:
  *
  * - JVM: classpath scanning (directories and JARs).
@@ -31,8 +32,8 @@ object TrailblazeSerializationInitializer {
   private val imperativeTools = mutableMapOf<ToolName, KClass<out TrailblazeTool>>()
 
   // Workspace-discovered `*.tool.yaml` configs (Mode.TOOLS) that don't ship on the JVM
-  // classpath — they live under `<workspace>/trails/config/tools/` or `<pack>/tools/` in a
-  // user-authored pack. Populated lazily from `AppTargetDiscovery` (host-side discovery
+  // classpath — they live under `<workspace>/trails/config/trailmaps/<id>/tools/` in a
+  // user-authored trailmap. Populated lazily from `AppTargetDiscovery` (host-side discovery
   // path) via [registerWorkspaceYamlTools]. Held in a separate field rather than mutating
   // [cachedYamlDefined] so the classpath cache keeps its set-once contract and so a future
   // workspace-rediscovery (CWD change in a long-running daemon) can replace the workspace
@@ -77,7 +78,16 @@ object TrailblazeSerializationInitializer {
       cachedYamlDefined ?: run {
         val configs =
           try {
-            ToolYamlLoader.discoverYamlDefinedTools()
+            // Pin to the BUNDLED view — the workspace overlay is layered on via
+            // `registerWorkspaceYamlTools()` below, and double-counting (workspace tools
+            // appearing in BOTH this cache and the overlay) would force-flip their
+            // `requires_host` flag, silently changing dispatch behavior. The JVM platform
+            // default is now workspace-aware, so callers that rely on it for *runtime*
+            // discovery still get layering — this snapshot is the bundled baseline only.
+            // `bundledConfigResourceSource()` is `ClasspathConfigResourceSource` on JVM and
+            // the AssetManager-backed platform source on Android (no workspace concept on
+            // device) — both correct, both no-workspace-overlay.
+            ToolYamlLoader.discoverYamlDefinedTools(bundledConfigResourceSource())
           } catch (e: Exception) {
             Console.error(
               "YAML-defined tool discovery failed: ${e.message}. " +
@@ -98,8 +108,8 @@ object TrailblazeSerializationInitializer {
       }
     }
     // Workspace tools overlay the classpath set. On a key collision the workspace wins —
-    // an end-user-authored `<workspace>/trails/config/tools/foo.tool.yaml` that happens
-    // to share a name with a classpath-bundled tool is a deliberate override (same
+    // an end-user-authored `<workspace>/trails/config/trailmaps/<id>/tools/foo.tool.yaml`
+    // that happens to share a name with a classpath-bundled tool is a deliberate override (same
     // contract as the filesystem resource source layering in `AppTargetDiscovery`,
     // where workspace files override bundled framework files on filename collision).
     return if (workspaceYamlDefined.isEmpty()) classpath else classpath + workspaceYamlDefined
@@ -107,8 +117,8 @@ object TrailblazeSerializationInitializer {
 
   /**
    * Registers workspace-discovered `Mode.TOOLS` YAML configs (e.g.
-   * `<workspace>/trails/config/tools/<id>.tool.yaml` or `<pack>/tools/<id>.tool.yaml` in a
-   * user pack) as an overlay on top of the cached classpath-discovered set. Idempotent for
+   * `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml` in a user trailmap)
+   * as an overlay on top of the cached classpath-discovered set. Idempotent for
    * identical inputs; subsequent calls with a different config set REPLACE the overlay
    * rather than appending — the host-side discovery pipeline is the single source of truth
    * for "what workspace tools should be visible right now."
@@ -166,8 +176,8 @@ object TrailblazeSerializationInitializer {
   /**
    * Builds and returns the tool map. Cached after first successful discovery. If discovery
    * yields an empty set, logs a loud warning with remediation hints — an empty tool set
-   * almost always means a module with `trailblaze-config/tools/` YAML resources isn't on
-   * the classpath / in the Android assets.
+   * almost always means a module with `trails/config/trailmaps/<id>/tools/` YAML resources
+   * isn't on the classpath / in the Android assets.
    */
   // Public so cross-module consumers (notably `TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered`
   // in `:trailblaze-common`) can fall back to the global class registry when scripted-tool
@@ -178,7 +188,16 @@ object TrailblazeSerializationInitializer {
       cached ?: run {
         val tools =
           try {
-            ToolYamlLoader.discoverAndLoadAll() + imperativeTools
+            // Bundled view by design — this is the serialization registry baseline, used
+            // by `TrailblazeJsonInstance` / `TrailblazeYaml.Default` for polymorphic decode.
+            // Workspace YAML tools (`Mode.TOOLS`) flow in via `registerWorkspaceYamlTools()`
+            // overlay; class-backed workspace tools are pulled in via the imperative
+            // registration path (`registerImperativeToolClasses`). Letting workspace bleed
+            // into THIS cache would force-flip dispatch flags on every tool that happens
+            // to share an id with a bundled one. `bundledConfigResourceSource()` is
+            // `ClasspathConfigResourceSource` on JVM and the AssetManager-backed platform
+            // source on Android — both no-workspace-overlay.
+            ToolYamlLoader.discoverAndLoadAll(bundledConfigResourceSource()) + imperativeTools
           } catch (e: Exception) {
             Console.error(
               "YAML tool discovery failed: ${e.message}. " +
@@ -191,11 +210,12 @@ object TrailblazeSerializationInitializer {
         if (tools.isEmpty()) {
           Console.error(
             "TrailblazeSerializationInitializer: no tools discovered via " +
-              "trailblaze-config/tools/ YAML files. Check that the module providing your tools " +
-              "(trailblaze-common, trailblaze-compose, trailblaze-playwright, " +
-              "trailblaze-android-world-benchmarks, or your own tool module) is on the " +
-              "classpath — on Android, verify commonMain/resources is wired as both " +
-              "Java resources AND Android assets in the module's build.gradle.kts.",
+              "trails/config/trailmaps/<id>/tools/ YAML files. Check that the module " +
+              "providing your tools (trailblaze-common, trailblaze-compose, " +
+              "trailblaze-playwright, trailblaze-android-world-benchmarks, or your own " +
+              "tool module) is on the classpath — on Android, verify commonMain/resources " +
+              "is wired as both Java resources AND Android assets in the module's " +
+              "build.gradle.kts.",
           )
         } else {
           val sampleNames = tools.keys.map { it.toolName }.sorted().take(6).joinToString(", ")

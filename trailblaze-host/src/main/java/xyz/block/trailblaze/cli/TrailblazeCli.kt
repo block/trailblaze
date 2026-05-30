@@ -4,6 +4,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.IVersionProvider
 import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigBootstrap
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.WorkspaceCompileBootstrap
@@ -48,13 +49,14 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  *   trailblaze config target myapp                                 - Set target app
  *   trailblaze app --stop          - Stop the daemon
  *   trailblaze app --status        - Check daemon status
- *   trailblaze blaze "objective"   - Take the next step toward an objective on a connected device
- *   trailblaze ask "question"      - Ask about what's visible on screen
- *   trailblaze trail <file>         - Run a .trail.yaml file
+ *   trailblaze run <file>          - Run a .trail.yaml file
+ *   trailblaze step "description"  - Run one step via the built-in AI agent (requires an LLM)
+ *   trailblaze ask "question"      - Ask the built-in agent about what's on screen (requires an LLM)
  *   trailblaze session end         - End the CLI session
  *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
  *   trailblaze report              - Generate HTML report for all sessions
  *   trailblaze device               - List connected devices
+ *   trailblaze show                - Open the multi-device live grid (/devices/all) in your default browser
  *   TRAILBLAZE_PORT=52900 trailblaze - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
  */
@@ -78,7 +80,7 @@ object TrailblazeCli {
    * One-shot guard for the daemon-init workspace compile bootstrap. Set on the first
    * `appProvider()` call so that subsequent CLI subcommands forwarded to the same JVM
    * (e.g., via the `/cli/exec` IPC fast path) skip the hash walk entirely. Edits to
-   * pack manifests while the daemon is running are out of scope per #2556 — the user
+   * trailmap manifests while the daemon is running are out of scope per #2556 — the user
    * restarts the daemon after manifest changes, just like any other config edit.
    */
   private val bootstrapHasRun = AtomicBoolean(false)
@@ -93,16 +95,22 @@ object TrailblazeCli {
     // surface a cryptic LibraryLoadException instead.
     TrailblazeDesktopUtil.assertSupportedPlatform()
 
+    // Install the workspace-config-dir resolver into the model-level holder so the
+    // default `platformConfigResourceSource()` layers workspace-on-disk over the
+    // classpath. Must run before any discovery — `WorkspaceCompileBootstrap` below
+    // triggers trailmap discovery on first appProvider() call.
+    TrailblazeWorkspaceConfigBootstrap.ensureInstalled()
+
     // Install thread-local stdout/stderr capture BEFORE any code references
     // `System.out` — Console.jvm.kt caches it into a field at class init time,
     // so the capture has to be in place before the first Console.log call.
     CliOutCapture.install()
 
-    // Wrap appProvider so a workspace-pack rebundle runs before the first
+    // Wrap appProvider so a workspace-trailmap rebundle runs before the first
     // TrailblazeDesktopApp instance is constructed. Constructor-time field initializers
     // (notably the desktop app's eager `desktopYamlRunner = DesktopYamlRunner(...)`)
     // force the lazy `availableAppTargets`, which calls `AppTargetDiscovery.discover()`
-    // — so any post-construction hook is too late to keep workspace pack edits visible
+    // — so any post-construction hook is too late to keep workspace trailmap edits visible
     // on the first discovery pass. The [bootstrapHasRun] guard memoizes the bootstrap
     // for the JVM lifetime so subsequent `appProvider()` calls (e.g. forwarded CLI
     // subcommands hitting the daemon-IPC fast path) don't repeat the hash walk.
@@ -140,6 +148,8 @@ object TrailblazeCli {
 
     val cli = TrailblazeCliCommand(bootstrappedAppProvider, configProvider)
     val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+    installTrailblazeExceptionHandlers(commandLine)
+    installPerToolHelpExecutionStrategy(commandLine)
 
     // Replace the default flat command list with grouped sections. The `--all` flag is
     // pre-scanned here (rather than read from the parsed `cli.showAll` field) because
@@ -179,7 +189,7 @@ object TrailblazeCli {
    * of the set must keep going through the existing JVM path because they either
    * directly touch desktop UI state (`app`), call `kotlin.system.exitProcess`
    * inside their `call()` (would kill the daemon), or need the caller's cwd/env
-   * (`trail` with relative paths).
+   * (`run` with relative paths).
    *
    * `snapshot` and `ask` are thin wrappers over MCP tool calls with no env-var
    * reads, so running them in-process is a pure win: we skip the JVM cold
@@ -193,13 +203,36 @@ object TrailblazeCli {
    * daemon and the file in sync. Show paths (`config`, `config show`) bail out
    * of `exitProcess` when running forwarded — see [ConfigCommand].
    *
-   * Some heavier commands (`blaze`, `verify`, `tool`) are not on this list
-   * either — they take longer than the cold-start savings would buy, and their
-   * device/session state is messier to reason about under in-process execution.
-   * They keep using the JVM-spawn path until we have a clearer reason to pull
-   * them in.
+   * `tool` is forwarded for the same shape-reason as `snapshot`: it makes a
+   * single MCP `step` call with a tool YAML and prints the agent-formatted
+   * result. The "device/session state" worry that originally excluded it doesn't
+   * apply — `tool` reuses the same `cliReusableWithDevice` infrastructure
+   * `snapshot` does, and the session reuse via `connectReusable` works
+   * identically over a loopback recursive call. Forwarding closes the
+   * `tool --yaml` failure mode where the JVM-spawn fallback would conflict
+   * with the running daemon and bail out with `failed to connect to Trailblaze
+   * daemon after starting it`. (FTUX validators caught this on web; bare
+   * `tool web_navigate` happened to work because the JVM-side resolution
+   * landed differently — the --yaml form did not.)
+   *
+   * Some heavier commands (`step`, `verify`) are not on this list — they take
+   * longer than the cold-start savings would buy, and their AI-loop state
+   * (multi-turn LLM calls, streaming progress) is messier to reason about
+   * under in-process execution. They keep using the JVM-spawn path until we
+   * have a clearer reason to pull them in.
+   *
+   * **Output-shape invariant.** Candidates added to this set must emit only
+   * line-terminated output (i.e. `Console.log/info/error` → `println`). The
+   * bash shim's `/cli/exec` replay (`ipc_try_forward` in
+   * `scripts/trailblaze`) restores the trailing newline that bash
+   * `$(jq -r …)` strips with `printf '%s\n'`. A subcommand that uses
+   * partial-line output (`Console.appendLog`/`Console.appendInfo` or a raw
+   * `print(...)` before exit) would render a phantom blank line in the
+   * forwarded path while looking fine on the JVM-spawn path — a confusing
+   * divergence. If a candidate truly needs partial-line output, fix the
+   * shim contract first (interleaved capture is the in-progress design).
    */
-  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config")
+  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config", "tool")
 
   /**
    * Serializes in-process CLI executions on the daemon. The thread-local
@@ -265,10 +298,30 @@ object TrailblazeCli {
       // the user's shell directory rather than the daemon's launch directory. Null
       // cwd is fine — `CliCallerContext.callerCwd()` falls back to `Paths.get("")`
       // which preserves the prior daemon-cwd behavior for older shims.
-      CliCallerContext.withCallerCwd(callerCwd) {
+      //
+      // Same shape for env vars: `withCallerEnv` pins TRAILBLAZE_DEVICE (and any
+      // future CLI-relevant vars the shim forwards) so device-resolution helpers
+      // see the user's shell env rather than the daemon's stale captured env.
+      // Without this, `eval $(trailblaze device connect <id>)` followed by a
+      // forwarded subcommand (`snapshot`, `ask`, `config`) silently ignored the
+      // shell pin — the bug that made `trailblaze snapshot` fail with "multiple
+      // devices connected" right after the user did exactly what the error's own
+      // hint told them to do. Null env is fine; `callerEnv` falls back to
+      // `System.getenv` which is the prior behavior for shims that don't forward.
+      CliCallerContext.withCallerEnv(request.env) {
+        CliCallerContext.withCallerCwd(callerCwd) {
         CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
           val cli = TrailblazeCliCommand(appProvider, configProvider)
           val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+          installTrailblazeExceptionHandlers(commandLine)
+          // `tool` is in FORWARDABLE_SUBCOMMANDS, so this branch DOES see
+          // `tool <name> --help` invocations — installing the per-tool help
+          // execution strategy here keeps the daemon `/cli/exec` fast path on
+          // identical wiring to the JVM-spawn path. Without this, a forwarded
+          // `tool tap_on_text --help` would fall through to picocli's default
+          // help renderer and miss the per-tool YAML-schema synopsis the
+          // JVM-spawn path produces.
+          installPerToolHelpExecutionStrategy(commandLine)
           commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
             GroupedCommandListRenderer(showHidden = args.contains("--all"))
           try {
@@ -276,11 +329,20 @@ object TrailblazeCli {
           } catch (e: CancellationException) {
             throw e
           } catch (e: Throwable) {
-            System.err.println("cli/exec: uncaught ${e::class.simpleName}: ${e.message}")
-            1
+            // Last-line-of-defense for anything the picocli exception handlers
+            // didn't catch (they handle parameter + execution exceptions; this
+            // catches whatever leaks past the handler chain itself). Always
+            // INFRA_FAILED (2) — uncaught at this depth means the daemon JVM
+            // hit an unexpected runtime error, not a user-input problem.
+            reportCliError(
+              verb = "cli/exec",
+              reason = describeThrowableForUser(e),
+            )
+            TrailblazeExitCode.INFRA_FAILED.code
           } finally {
             if (priorQuiet) Console.enableQuietMode() else Console.disableQuietMode()
           }
+        }
         }
       }
     }
@@ -352,7 +414,7 @@ class TrailblazeVersionProvider : IVersionProvider {
   description = ["Trailblaze - AI-powered device automation"],
   commandListHeading = "%n", // Suppress default "Commands:" — GroupedCommandListRenderer handles it
   subcommands = [
-    BlazeCommand::class,
+    StepCommand::class,
     AskCommand::class,
     VerifyCommand::class,
     SnapshotCommand::class,
@@ -365,10 +427,16 @@ class TrailblazeVersionProvider : IVersionProvider {
     ResultsCommand::class,
     ConfigCommand::class,
     DeviceCommand::class,
+    ShowCommand::class,
     AppCommand::class,
     McpCommand::class,
     CheckCommand::class,
-    TestCommand::class,
+    MigrateTrailsCommand::class,
+    // (No standalone `test` subcommand — bun unit tests run as part of `trailblaze
+    // check`'s third phase. `trailblaze test` collided with "Trailblaze runs trails"
+    // and was deleted in favor of the bundled-in-check flow. If a finer-grained
+    // invocation is ever needed, add it as `trailblaze check tests` rather than a
+    // top-level command.)
     // Hidden — see DesktopCommand. Resolves by name (`trailblaze desktop snapshot`)
     // but doesn't appear in `--help` or the GroupedCommandListRenderer's groups.
     DesktopCommand::class,
@@ -419,8 +487,16 @@ class TrailblazeCliCommand(
 
   override fun call(): Int {
     // No subcommand → show help. Use `trailblaze app` to launch the desktop GUI.
-    CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    //
+    // Mirror the renderer wiring that `TrailblazeCli.run` and `executeForDaemon` apply to
+    // their `CommandLine` instances. Without this, bare `trailblaze` (no args) would render
+    // help via the default picocli renderer — losing the grouped-section headings (Drive:,
+    // Trail:, Setup:, Built-in agent:) that `--help` already shows.
+    val cl = CommandLine(this).setCaseInsensitiveEnumValuesAllowed(true)
+    cl.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
+      GroupedCommandListRenderer(showHidden = showAll)
+    cl.usage(System.out)
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   /**
@@ -444,7 +520,7 @@ class TrailblazeCliCommand(
       val response = daemon.showWindowBlocking()
       if (response.success) {
         Console.log("Window shown.")
-        return CommandLine.ExitCode.OK
+        return TrailblazeExitCode.SUCCESS.code
       }
 
       // Daemon is running but has no window (e.g., started by `trailblaze mcp`).
@@ -461,7 +537,7 @@ class TrailblazeCliCommand(
 
     // Start the app (GUI or headless based on flag)
     app.startTrailblazeDesktopApp(headless = effectiveHeadless)
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }
 
@@ -482,19 +558,54 @@ internal class GroupedCommandListRenderer(
   private data class Group(val heading: String, val commands: List<String>)
 
   private val groups = listOf(
+    // Order matters. `Drive:` is first because the deterministic primitives are the
+    // recommended path — any AI coding agent (Claude Code, Codex, Goose, Cursor, ...)
+    // can drive a device by shelling out to these. `Trail:` and `Setup:` follow.
+    // `Built-in agent:` is last on purpose: `step`/`ask`/`verify` route through the
+    // bundled LLM agent and are slower + less deterministic than the primitives. They
+    // exist for users who want to use Trailblaze's own agent end-to-end, but we want
+    // the visual hierarchy to point new users at the primitives first. See
+    // [BUILT_IN_AGENT_GROUP_NAME] and the LLM-dependency footnote rendered alongside it.
     Group(
-      "Blaze:",
-      listOf("blaze", "ask", "verify", "snapshot", "tool", "toolbox"),
+      "Drive:",
+      listOf("snapshot", "tool", "toolbox"),
     ),
     Group(
       "Trail:",
-      listOf("trail", "session", "report", "results", "waypoint"),
+      // `migrate-trails` is listed so that when `--all` surfaces hidden subcommands it
+      // lands under Trail: (its natural home — it operates on trail YAML files) rather
+      // than the `Other:` catch-all. With #3385 making it `hidden = true` by default,
+      // the renderer's hidden-filter drops it from normal `--help` output anyway.
+      listOf("run", "session", "report", "results", "waypoint", "migrate-trails"),
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "app", "mcp", "check", "test"),
+      listOf("config", "device", "show", "app", "mcp", "check", "test"),
+    ),
+    Group(
+      BUILT_IN_AGENT_GROUP_NAME,
+      listOf("step", "ask", "verify"),
     ),
   )
+
+  companion object {
+    /**
+     * Heading printed above the `step`/`ask`/`verify` group. Pulled out as a constant so
+     * the renderer body and the LLM-dependency footnote agree on the wording, and so tests
+     * can assert against the exact string without copy-pasting it.
+     */
+    internal const val BUILT_IN_AGENT_GROUP_NAME: String = "Built-in agent:"
+
+    /**
+     * One-line note rendered immediately under the [BUILT_IN_AGENT_GROUP_NAME] group.
+     * Calls out the LLM dependency so users who default to `llm = none` understand why
+     * those commands fail before they're set up. Distributions that ship with a managed
+     * default provider already configured will see the note as informational rather than
+     * blocking — it's the same string in both cases.
+     */
+    internal const val BUILT_IN_AGENT_LLM_NOTE: String =
+      "  These commands require an LLM. Run `trailblaze config llm <provider/model>` to set one up."
+  }
 
   override fun render(help: CommandLine.Help): String {
     // Strip hidden subcommands once at the top so neither the named-group rendering
@@ -504,10 +615,14 @@ internal class GroupedCommandListRenderer(
     // filter explicitly here so commands like the Compose desktop driver demo command
     // stay reachable by name without showing up in the help output, unless the caller
     // passed `--all` (the flag flips [showHidden] true for that invocation).
+    // Drop alias entries (one map entry per `@Command(aliases = …)` value, all
+    // pointing at the same Help instance) so an aliased command is keyed only by
+    // its canonical name — otherwise the group lookup misses it AND the "Other:"
+    // tail picks the alias key up. See [canonicalSubcommands] for full details.
     val subcommands = if (showHidden) {
-      help.subcommands()
+      help.canonicalSubcommands()
     } else {
-      help.subcommands().filterValues { !it.commandSpec().usageMessage().hidden() }
+      help.canonicalSubcommands().filterValues { !it.commandSpec().usageMessage().hidden() }
     }
     if (subcommands.isEmpty()) return ""
 
@@ -525,6 +640,13 @@ internal class GroupedCommandListRenderer(
         val desc = cmd.commandSpec().usageMessage().description().firstOrNull() ?: ""
         sb.appendLine("  %-12s %s".format(name, desc))
       }
+      // The Built-in agent group gets a one-line LLM-dependency note inline (before the
+      // trailing blank line) so it's anchored visually to the rows it qualifies. Doing it
+      // here rather than as a separate footer keeps the note tied to the group — if the
+      // group is ever empty (all three commands removed) the note disappears with it.
+      if (group.heading == BUILT_IN_AGENT_GROUP_NAME) {
+        sb.appendLine(BUILT_IN_AGENT_LLM_NOTE)
+      }
       sb.appendLine()
     }
 
@@ -540,22 +662,11 @@ internal class GroupedCommandListRenderer(
       sb.appendLine()
     }
 
-    // Getting started footer
-    sb.appendLine("Users:")
-    sb.appendLine("  Explore a device:  trailblaze blaze \"Tap the Sign In button\"")
-    sb.appendLine("  Run a test:        trailblaze trail my-test.trail.yaml")
-    sb.appendLine("  First time?        trailblaze config show")
-    sb.appendLine()
-    sb.appendLine("  Use 'blaze' to drive a device interactively with AI, then")
-    sb.appendLine("  'session save' to turn your session into a replayable trail.")
-    sb.appendLine()
-    sb.appendLine("Agents:")
-    sb.appendLine("  Run a tool:        trailblaze --device android tool tap ref=p386 --objective \"Tap sign in\"")
-    sb.appendLine("  Browse tools:      trailblaze toolbox")
-    sb.appendLine()
-    sb.appendLine("  Use 'tool' to run Trailblaze tools directly. Always pass --objective (-o)")
-    sb.appendLine("  with a natural language intent so steps can self-heal if the UI changes.")
-    sb.appendLine()
+    // Intentionally NO "Users:" / "Agents:" footer here. Earlier versions split selected
+    // examples by audience, but the Trailblaze CLI serves both humans and AI agents with
+    // the *same* primitives — splitting the footer suggested two different surfaces when
+    // there's only one. The per-command `trailblaze <cmd> --help` carries the deeper
+    // documentation; the top-level index just lists what's available.
 
     return sb.toString()
   }

@@ -1,5 +1,5 @@
 # Workspace anchor for the Wikipedia example. The example's authored unit lives at
-# packs/wikipedia/pack.yaml; the Trailblaze daemon picks the target up by name when
+# trailmaps/wikipedia/trailmap.yaml; the Trailblaze daemon picks the target up by name when
 # this directory is set as TRAILBLAZE_CONFIG_DIR.
 targets:
   - wikipedia

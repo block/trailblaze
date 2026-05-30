@@ -3,17 +3,21 @@ package xyz.block.trailblaze.llm.config
 /**
  * Shared constants for Trailblaze configuration file paths.
  *
- * All classpath-bundled configuration lives under [CONFIG_DIR] (`trailblaze-config/`):
- * - `trailblaze-config/trailblaze.yaml` — project-level defaults
- * - `trailblaze-config/providers/{provider_id}.yaml` — LLM provider definitions
+ * Classpath and workspace use the **same path string** — [CONFIG_DIR] equals
+ * [WORKSPACE_CONFIG_DIR] (`trails/config/`). Bundled jars contribute entries at
+ * `trails/config/...`; users author files in `<workspace>/trails/config/...`. The
+ * two layers merge by stripped filename in [CompositeConfigResourceSource] with
+ * workspace winning on collision.
+ *
+ * - `trails/config/trailblaze.yaml` — project-level defaults
+ * - `trails/config/providers/{provider_id}.yaml` — LLM provider definitions
+ * - `trails/config/trailmaps/<id>/...` — trailmap-scoped tools, toolsets, shortcuts
  *
  * On desktop, the user-level config lives at `~/.trailblaze/trailblaze.yaml`.
  *
- * In a project workspace, Trailblaze now treats `trails/` as the anchor directory and
- * expects workspace config under `trails/config/trailblaze.yaml`.
- *
  * On Android, AGP strips dot-prefixed directories from both assets and Java resources,
- * so classpath resources use [CONFIG_DIR] instead of `.trailblaze`.
+ * so the classpath prefix is the non-dot [CONFIG_DIR] (`trails/config`) rather than
+ * something dot-prefixed like `.trailblaze`.
  */
 object TrailblazeConfigPaths {
 
@@ -35,17 +39,28 @@ object TrailblazeConfigPaths {
   /** Relative path from repo/workspace root to the project-local config file. */
   const val WORKSPACE_CONFIG_FILE = "$WORKSPACE_CONFIG_DIR/$CONFIG_FILENAME"
 
-  /** Relative directory under `trails/config/` that owns authored local packs. */
-  const val PACKS_SUBDIR = "packs"
+  /** Relative directory under `trails/config/` that owns authored local trailmaps. */
+  const val TRAILMAPS_SUBDIR = "trailmaps"
 
-  /** Relative path from repo/workspace root to the project-local pack directory. */
-  const val WORKSPACE_PACKS_DIR = "$WORKSPACE_CONFIG_DIR/$PACKS_SUBDIR"
+  /** Relative path from repo/workspace root to the project-local trailmap directory. */
+  const val WORKSPACE_TRAILMAPS_DIR = "$WORKSPACE_CONFIG_DIR/$TRAILMAPS_SUBDIR"
 
-  /** Canonical filename for a local pack manifest. */
-  const val PACK_MANIFEST_FILENAME = "pack.yaml"
+  /** Canonical filename for a local trailmap manifest. */
+  const val TRAILMAP_MANIFEST_FILENAME = "trailmap.yaml"
 
-  /** Classpath resource directory for on-device / bundled config. */
-  const val CONFIG_DIR = "trailblaze-config"
+  /**
+   * Classpath resource directory for on-device / bundled config.
+   *
+   * **Same string as [WORKSPACE_CONFIG_DIR]** — bundled jars contribute entries at
+   * `trails/config/...` so the framework's authoring layout matches what a user
+   * sees in their own workspace's `trails/config/`. The two layers (classpath +
+   * workspace filesystem) merge by stripped filename in `CompositeConfigResourceSource`;
+   * having one path eliminates the cognitive split prior naming imposed
+   * (the classpath bundle was historically `trailblaze-config/` because the
+   * original `.trailblaze/` was stripped by Android AGP; this path now matches
+   * the workspace convention since `trails/config/` is also non-dot-prefixed).
+   */
+  const val CONFIG_DIR = WORKSPACE_CONFIG_DIR
 
   /** Full classpath resource path to the bundled config. */
   const val CONFIG_RESOURCE_PATH = "$CONFIG_DIR/$CONFIG_FILENAME"
@@ -56,14 +71,8 @@ object TrailblazeConfigPaths {
   /** Classpath resource directory for app target YAML definitions. */
   const val TARGETS_DIR = "$CONFIG_DIR/targets"
 
-  /** Classpath resource directory for pack manifests. */
-  const val PACKS_DIR = "$CONFIG_DIR/packs"
-
-  /** Classpath resource directory for toolset YAML definitions. */
-  const val TOOLSETS_DIR = "$CONFIG_DIR/toolsets"
-
-  /** Classpath resource directory for per-tool YAML definitions. */
-  const val TOOLS_DIR = "$CONFIG_DIR/tools"
+  /** Classpath resource directory for trailmap manifests. */
+  const val TRAILMAPS_DIR = "$CONFIG_DIR/trailmaps"
 
   /**
    * Subpath under [WORKSPACE_CONFIG_DIR] that owns workspace compile outputs.
@@ -75,21 +84,21 @@ object TrailblazeConfigPaths {
   const val WORKSPACE_DIST_TARGETS_SUBPATH = "$WORKSPACE_DIST_SUBDIR/targets"
 
   /**
-   * Single source of truth for which pack subdirectory owns each operational tool YAML
-   * suffix. Each suffix lives under exactly one top-level pack dir; subdirectories below
+   * Single source of truth for which trailmap subdirectory owns each operational tool YAML
+   * suffix. Each suffix lives under exactly one top-level trailmap dir; subdirectories below
    * that are organizational only and walked recursively at any depth.
    *
-   * Both the classpath-bundled discovery path (`ToolYamlLoader.discoverPackBundledToolContents`
-   * in `trailblaze-models`) and the workspace filesystem-pack discovery path
-   * (`TrailblazeProjectConfigLoader.resolvePackSiblings` in `trailblaze-common`) read this
+   * Both the classpath-bundled discovery path (`ToolYamlLoader.discoverTrailmapBundledToolContents`
+   * in `trailblaze-models`) and the workspace filesystem-trailmap discovery path
+   * (`TrailblazeProjectConfigLoader.resolveTrailmapSiblings` in `trailblaze-common`) read this
    * list. Adding a fourth operational class is a single edit here — both loaders pick it up.
    */
-  val PACK_TOOL_LAYOUT: List<PackToolLayoutEntry> = listOf(
-    PackToolLayoutEntry(dir = "tools", suffix = ".tool.yaml"),
-    PackToolLayoutEntry(dir = "shortcuts", suffix = ".shortcut.yaml"),
-    PackToolLayoutEntry(dir = "trailheads", suffix = ".trailhead.yaml"),
+  val TRAILMAP_TOOL_LAYOUT: List<TrailmapToolLayoutEntry> = listOf(
+    TrailmapToolLayoutEntry(dir = "tools", suffix = ".tool.yaml"),
+    TrailmapToolLayoutEntry(dir = "shortcuts", suffix = ".shortcut.yaml"),
+    TrailmapToolLayoutEntry(dir = "trailheads", suffix = ".trailhead.yaml"),
   )
 
-  /** A (dir, suffix) pair from [PACK_TOOL_LAYOUT]. */
-  data class PackToolLayoutEntry(val dir: String, val suffix: String)
+  /** A (dir, suffix) pair from [TRAILMAP_TOOL_LAYOUT]. */
+  data class TrailmapToolLayoutEntry(val dir: String, val suffix: String)
 }

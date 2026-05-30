@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.model
 
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -116,7 +115,7 @@ abstract class TrailblazeHostAppTarget(
   /**
    * Toolset ids the target *declares* for the given driver — the positive list of toolset
    * names from `platforms.<key>.tool_sets:` in the target YAML, before any catalog
-   * resolution. Drives pack-positive LLM tool resolution: callers pass the result to
+   * resolution. Drives trailmap-positive LLM tool resolution: callers pass the result to
    * [xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog.resolveForDriver] instead of
    * dumping the entire driver-compatible catalog.
    *
@@ -126,18 +125,6 @@ abstract class TrailblazeHostAppTarget(
    * Targets that need richer surfaces declare them explicitly.
    */
   open fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> = emptyList()
-
-  /**
-   * MCP server declarations for this target (Decision 038 / `mcp_servers:` in target YAML).
-   *
-   * Returns the raw [McpServerConfig] entries declared at the target root. The session-startup
-   * wiring layer (in `:trailblaze-scripting-subprocess`) spawns each entry as a subprocess, runs
-   * the MCP handshake, and registers advertised tools into the session's tool repo.
-   *
-   * Default is empty — Kotlin-code targets don't contribute MCP servers. YAML-backed targets
-   * override to return [xyz.block.trailblaze.config.AppTargetYamlConfig.mcpServers].
-   */
-  open fun getMcpServers(): List<McpServerConfig> = emptyList()
 
   /**
    * Inline single-file scripted tools declared at the target root (`tools:` in target YAML).
@@ -342,7 +329,7 @@ abstract class TrailblazeHostAppTarget(
     getPossibleAppIdsForPlatform(platform)?.firstOrNull()
       ?: error(
         "Target '$id' declares no app ids for $platform — check " +
-          "`platforms.${platform.name.lowercase()}.app_ids` in trailblaze-config/targets/$id.yaml " +
+          "`platforms.${platform.name.lowercase()}.app_ids` in trails/config/targets/$id.yaml " +
           "(or the corresponding Kotlin getPossibleAppIdsForPlatform override).",
       )
 
@@ -413,19 +400,22 @@ abstract class TrailblazeHostAppTarget(
     /**
      * Validation regex for target IDs. Target IDs are internal identifiers — artifact names
      * in CI, YAML filenames, CLI config keys. They don't need to round-trip as LLM tool names,
-     * so hyphens and underscores are allowed alongside lowercase alphanumeric.
+     * so hyphens and underscores are allowed alongside alphanumeric, and uppercase letters are
+     * permitted to support lowerCamelCase multi-word trailmap ids (e.g. `playwrightSample`,
+     * `googleCalendar`, `androidSettings`) — the canonical id shape locked in by the
+     * 2026-05-27 trailmap-scoped tool naming devlog.
      *
      * Tool names that DO get registered with LLMs by exact string (see [ToolName] /
      * `@TrailblazeToolClass`) keep their own stricter constraints separately.
      */
-    private val ID_PATTERN = Regex("^[a-z0-9_-]+$")
+    private val ID_PATTERN = Regex("^[a-zA-Z0-9_-]+$")
 
     /** Returns `true` if [id] is a well-formed target identifier. */
     fun isValidId(id: String): Boolean = id.matches(ID_PATTERN)
 
     /** The error message produced when an invalid ID is supplied; shared across call sites. */
     fun invalidIdMessage(id: String, displayName: String): String =
-      "ID ($id) for $displayName must be lowercase alphanumeric, hyphens, or underscores only"
+      "ID ($id) for $displayName must be alphanumeric, hyphens, or underscores only"
   }
 }
 

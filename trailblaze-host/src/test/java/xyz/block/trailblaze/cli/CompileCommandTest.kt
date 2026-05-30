@@ -7,11 +7,14 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
+import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
 
 /**
  * Tests for [CompileCommand] — the user-facing `trailblaze compile` picocli
- * command. Covers: option defaults, the missing-`packs/` `EXIT_USAGE` path,
+ * command. Covers: option defaults, the missing-`trailmaps/` `EXIT_USAGE` path,
  * a successful end-to-end compile, the workspace-root walk-up that lets the
  * command run from any subdirectory of a workspace, and the fall-back when
  * no workspace marker is found.
@@ -31,7 +34,7 @@ class CompileCommandTest {
   @Test
   fun `findWorkspaceRoot returns the workspace itself when invoked from the root`() {
     val workspaceRoot = workDir
-    File(workspaceRoot, "trails/config/packs").mkdirs()
+    File(workspaceRoot, "trails/config/trailmaps").mkdirs()
 
     val command = CompileCommand()
     val found = command.findWorkspaceRoot(startPath = workspaceRoot.toPath())
@@ -39,32 +42,32 @@ class CompileCommandTest {
   }
 
   @Test
-  fun `findWorkspaceRoot walks up from a pack root to the workspace root`() {
+  fun `findWorkspaceRoot walks up from a trailmap root to the workspace root`() {
     val workspaceRoot = workDir
-    val packRoot = File(workspaceRoot, "trails/config/packs/wikipedia").apply { mkdirs() }
-    File(packRoot, "pack.yaml").writeText("id: wikipedia\n")
+    val trailmapRoot = File(workspaceRoot, "trails/config/trailmaps/wikipedia").apply { mkdirs() }
+    File(trailmapRoot, "trailmap.yaml").writeText("id: wikipedia\n")
 
     val command = CompileCommand()
-    val found = command.findWorkspaceRoot(startPath = packRoot.toPath())
+    val found = command.findWorkspaceRoot(startPath = trailmapRoot.toPath())
     assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
   }
 
   @Test
-  fun `findWorkspaceRoot walks up from a pack tools dir to the workspace root`() {
+  fun `findWorkspaceRoot walks up from a trailmap tools dir to the workspace root`() {
     // The canonical "deep dir" scenario — running `trailblaze compile` from
-    // inside a pack's tools/ directory should still find the workspace root
+    // inside a trailmap's tools/ directory should still find the workspace root
     // without the user counting `../` segments to construct an --input path.
     val workspaceRoot = workDir
-    val packToolsDir = File(workspaceRoot, "trails/config/packs/wikipedia/tools").apply { mkdirs() }
+    val trailmapToolsDir = File(workspaceRoot, "trails/config/trailmaps/wikipedia/tools").apply { mkdirs() }
 
     val command = CompileCommand()
-    val found = command.findWorkspaceRoot(startPath = packToolsDir.toPath())
+    val found = command.findWorkspaceRoot(startPath = trailmapToolsDir.toPath())
     assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
   }
 
   @Test
   fun `findWorkspaceRoot returns null when no workspace marker is found`() {
-    // workDir is /tmp/<random> with no `trails/config/packs/` anywhere up the tree,
+    // workDir is /tmp/<random> with no `trails/config/trailmaps/` anywhere up the tree,
     // so the helper returns null and the caller is expected to emit a usage error
     // rather than silently defaulting to a bogus root.
     val isolated = File(workDir, "isolated").apply { mkdirs() }
@@ -79,7 +82,7 @@ class CompileCommandTest {
     // No depth cap: a deeply-nested start (deeper than what monorepo CLIs would
     // typically encounter) must still walk all the way up to the marker. Pins
     // the "uncapped walk" contract so a future depth-limit regression fails here.
-    File(workDir, "trails/config/packs").mkdirs()
+    File(workDir, "trails/config/trailmaps").mkdirs()
     var deep = workDir
     repeat(20) { deep = File(deep, "level").apply { mkdirs() } }
 
@@ -91,12 +94,12 @@ class CompileCommandTest {
   @Test
   fun `compile from inside a workspace exits OK with no flags`() {
     // End-to-end coverage for the headline UX fix: cwd inside a workspace tree
-    // (here, the pack tools/ dir 4 levels deep), no flags → exits 0 and emits
+    // (here, the trailmap tools/ dir 4 levels deep), no flags → exits 0 and emits
     // the materialized target. Uses `CliCallerContext.withCallerCwd` to pin the
     // walk-up start dir without mutating the JVM-wide cwd.
     val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
-    val packToolsDir = File(workspaceRoot, "trails/config/packs/alpha/tools").apply { mkdirs() }
-    File(workspaceRoot, "trails/config/packs/alpha/pack.yaml").writeText(
+    val trailmapToolsDir = File(workspaceRoot, "trails/config/trailmaps/alpha/tools").apply { mkdirs() }
+    File(workspaceRoot, "trails/config/trailmaps/alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -107,7 +110,7 @@ class CompileCommandTest {
       """.trimIndent(),
     )
 
-    val exit = CliCallerContext.withCallerCwd(packToolsDir.toPath()) {
+    val exit = CliCallerContext.withCallerCwd(trailmapToolsDir.toPath()) {
       CommandLine(CompileCommand()).execute()
     }
 
@@ -128,14 +131,14 @@ class CompileCommandTest {
       CommandLine(CompileCommand()).execute()
     }
 
-    assertEquals(2, exit, "Expected EXIT_USAGE when run with no flags outside any workspace")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "Expected MISUSE when run with no flags outside any workspace")
   }
 
   @Test
   fun `compile emits target yaml when invoked with explicit input and output`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -158,8 +161,8 @@ class CompileCommandTest {
   }
 
   @Test
-  fun `compile returns EXIT_USAGE when no packs directory is present under input`() {
-    val emptyInput = File(workDir, "no-packs").apply { mkdirs() }
+  fun `compile returns EXIT_USAGE when no trailmaps directory is present under input`() {
+    val emptyInput = File(workDir, "no-trailmaps").apply { mkdirs() }
     val outputDir = File(workDir, "out")
 
     val command = CompileCommand()
@@ -168,19 +171,19 @@ class CompileCommandTest {
       "--output", outputDir.absolutePath,
     )
 
-    assertEquals(2, exit, "Expected EXIT_USAGE when --input has no packs/ dir")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "Expected MISUSE when --input has no trailmaps/ dir")
     assertTrue(!outputDir.exists(), "outputDir should not be created on usage error")
   }
 
   @Test
-  fun `compile returns EXIT_COMPILE_ERROR when a pack has a missing dependency`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "consumer").mkdirs()
-    File(packsDir, "consumer/pack.yaml").writeText(
+  fun `compile returns EXIT_COMPILE_ERROR when a trailmap has a missing dependency`() {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "consumer").mkdirs()
+    File(trailmapsDir, "consumer/trailmap.yaml").writeText(
       """
       id: consumer
       dependencies:
-        - missing-pack
+        - missing-trailmap
       target:
         display_name: Consumer
         platforms:
@@ -196,16 +199,16 @@ class CompileCommandTest {
       "--output", outputDir.absolutePath,
     )
 
-    assertEquals(1, exit, "Expected EXIT_COMPILE_ERROR on resolution failure")
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED.code, exit, "Expected ASSERTION_FAILED on resolution failure")
   }
 
   @Test
   fun `compile uses workspace-root defaults when --input and --output are omitted`() {
     // Mock a workspace at workDir/workspace with the standard layout.
     val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
-    val packsDir = File(workspaceRoot, "trails/config/packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workspaceRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -247,5 +250,41 @@ class CompileCommandTest {
     // `apply { commandLabel = "check" }`. A silent default rename here would break
     // the routing contract without surfacing in any other test.
     assertEquals("compile", CompileCommand().commandLabel)
+  }
+
+  @Test
+  fun `compile resolves a meta-only descriptor when analyzer is available`() {
+    // End-to-end integration test for the meta-only authoring shape's path through
+    // `CompileCommand`. The companion unit-level coverage in
+    // `TrailblazeCompilerTest.compile threads scriptedToolEnrichment into the loader for
+    // meta-only descriptors` already pins the loader contract with a stub enrichment;
+    // this test exercises the real wiring — `CompileCommand` must call
+    // `AnalyzerScriptedToolEnrichment.resolveFromEnvironment()` and pass it down — and
+    // therefore needs an actual Node + SDK install reachable on PATH / via
+    // `TRAILBLAZE_SDK_DIR`.
+    //
+    // `assumeTrue` skips on CI agents / dev machines that don't have the analyzer
+    // available, matching how the production code path handles the same gap
+    // (graceful null → clear diagnostic at the loader). The skip preserves CI green
+    // on minimal images while still pinning the contract whenever the prerequisites
+    // are present.
+    val enrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+    assumeTrue(MetaOnlyDescriptorTestFixture.ANALYZER_UNAVAILABLE_SKIP_MESSAGE, enrichment != null)
+
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    MetaOnlyDescriptorTestFixture.writeMetaOnlyTrailmap(trailmapsDir)
+
+    val outputDir = File(workDir, "out")
+    val command = CompileCommand()
+    val exit = CommandLine(command).execute(
+      "--input", workDir.absolutePath,
+      "--output", outputDir.absolutePath,
+    )
+
+    assertEquals(0, exit, "Expected EXIT_OK from a meta-only compile when analyzer is wired")
+    assertTrue(
+      File(outputDir, "metaonly.yaml").exists(),
+      "metaonly.yaml should be emitted — meta-only descriptor must resolve via analyzer",
+    )
   }
 }

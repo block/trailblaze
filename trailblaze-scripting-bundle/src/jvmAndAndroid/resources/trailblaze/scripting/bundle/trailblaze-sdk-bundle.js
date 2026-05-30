@@ -22706,9 +22706,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         },
         dependencies: ["format"]
       };
-      var formatLimitPlugin = (ajv) => {
-        ajv.addKeyword(exports.formatLimitDefinition);
-        return ajv;
+      var formatLimitPlugin = (ajv2) => {
+        ajv2.addKeyword(exports.formatLimitDefinition);
+        return ajv2;
       };
       exports.default = formatLimitPlugin;
     }
@@ -22724,17 +22724,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       var codegen_1 = require_codegen();
       var fullName = new codegen_1.Name("fullFormats");
       var fastName = new codegen_1.Name("fastFormats");
-      var formatsPlugin = (ajv, opts = { keywords: true }) => {
+      var formatsPlugin = (ajv2, opts = { keywords: true }) => {
         if (Array.isArray(opts)) {
-          addFormats(ajv, opts, formats_1.fullFormats, fullName);
-          return ajv;
+          addFormats(ajv2, opts, formats_1.fullFormats, fullName);
+          return ajv2;
         }
         const [formats, exportName] = opts.mode === "fast" ? [formats_1.fastFormats, fastName] : [formats_1.fullFormats, fullName];
         const list = opts.formats || formats_1.formatNames;
-        addFormats(ajv, list, formats, exportName);
+        addFormats(ajv2, list, formats, exportName);
         if (opts.keywords)
-          (0, limit_1.default)(ajv);
-        return ajv;
+          (0, limit_1.default)(ajv2);
+        return ajv2;
       };
       formatsPlugin.get = (name, mode = "full") => {
         const formats = mode === "fast" ? formats_1.fastFormats : formats_1.fullFormats;
@@ -22743,16 +22743,840 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           throw new Error(`Unknown format "${name}"`);
         return f;
       };
-      function addFormats(ajv, list, fs, exportName) {
+      function addFormats(ajv2, list, fs, exportName) {
         var _a2;
         var _b;
-        (_a2 = (_b = ajv.opts.code).formats) !== null && _a2 !== void 0 ? _a2 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
+        (_a2 = (_b = ajv2.opts.code).formats) !== null && _a2 !== void 0 ? _a2 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
         for (const f of list)
-          ajv.addFormat(f, fs[f]);
+          ajv2.addFormat(f, fs[f]);
       }
       module.exports = exports = formatsPlugin;
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.default = formatsPlugin;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js
+  var require_dynamicAnchor = __commonJS({
+    "node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      exports.dynamicAnchor = void 0;
+      var codegen_1 = require_codegen();
+      var names_1 = require_names();
+      var compile_1 = require_compile();
+      var ref_1 = require_ref();
+      var def = {
+        keyword: "$dynamicAnchor",
+        schemaType: "string",
+        code: (cxt) => dynamicAnchor(cxt, cxt.schema)
+      };
+      function dynamicAnchor(cxt, anchor) {
+        const { gen, it } = cxt;
+        it.schemaEnv.root.dynamicAnchors[anchor] = true;
+        const v = (0, codegen_1._)`${names_1.default.dynamicAnchors}${(0, codegen_1.getProperty)(anchor)}`;
+        const validate = it.errSchemaPath === "#" ? it.validateName : _getValidate(cxt);
+        gen.if((0, codegen_1._)`!${v}`, () => gen.assign(v, validate));
+      }
+      exports.dynamicAnchor = dynamicAnchor;
+      function _getValidate(cxt) {
+        const { schemaEnv, schema, self } = cxt.it;
+        const { root, baseId, localRefs, meta: meta3 } = schemaEnv.root;
+        const { schemaId } = self.opts;
+        const sch = new compile_1.SchemaEnv({ schema, schemaId, root, baseId, localRefs, meta: meta3 });
+        compile_1.compileSchema.call(self, sch);
+        return (0, ref_1.getValidate)(cxt, sch);
+      }
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js
+  var require_dynamicRef = __commonJS({
+    "node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      exports.dynamicRef = void 0;
+      var codegen_1 = require_codegen();
+      var names_1 = require_names();
+      var ref_1 = require_ref();
+      var def = {
+        keyword: "$dynamicRef",
+        schemaType: "string",
+        code: (cxt) => dynamicRef(cxt, cxt.schema)
+      };
+      function dynamicRef(cxt, ref) {
+        const { gen, keyword, it } = cxt;
+        if (ref[0] !== "#")
+          throw new Error(`"${keyword}" only supports hash fragment reference`);
+        const anchor = ref.slice(1);
+        if (it.allErrors) {
+          _dynamicRef();
+        } else {
+          const valid = gen.let("valid", false);
+          _dynamicRef(valid);
+          cxt.ok(valid);
+        }
+        function _dynamicRef(valid) {
+          if (it.schemaEnv.root.dynamicAnchors[anchor]) {
+            const v = gen.let("_v", (0, codegen_1._)`${names_1.default.dynamicAnchors}${(0, codegen_1.getProperty)(anchor)}`);
+            gen.if(v, _callRef(v, valid), _callRef(it.validateName, valid));
+          } else {
+            _callRef(it.validateName, valid)();
+          }
+        }
+        function _callRef(validate, valid) {
+          return valid ? () => gen.block(() => {
+            (0, ref_1.callRef)(cxt, validate);
+            gen.let(valid, true);
+          }) : () => (0, ref_1.callRef)(cxt, validate);
+        }
+      }
+      exports.dynamicRef = dynamicRef;
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js
+  var require_recursiveAnchor = __commonJS({
+    "node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dynamicAnchor_1 = require_dynamicAnchor();
+      var util_1 = require_util();
+      var def = {
+        keyword: "$recursiveAnchor",
+        schemaType: "boolean",
+        code(cxt) {
+          if (cxt.schema)
+            (0, dynamicAnchor_1.dynamicAnchor)(cxt, "");
+          else
+            (0, util_1.checkStrictMode)(cxt.it, "$recursiveAnchor: false is ignored");
+        }
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js
+  var require_recursiveRef = __commonJS({
+    "node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dynamicRef_1 = require_dynamicRef();
+      var def = {
+        keyword: "$recursiveRef",
+        schemaType: "string",
+        code: (cxt) => (0, dynamicRef_1.dynamicRef)(cxt, cxt.schema)
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/dynamic/index.js
+  var require_dynamic = __commonJS({
+    "node_modules/ajv/dist/vocabularies/dynamic/index.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dynamicAnchor_1 = require_dynamicAnchor();
+      var dynamicRef_1 = require_dynamicRef();
+      var recursiveAnchor_1 = require_recursiveAnchor();
+      var recursiveRef_1 = require_recursiveRef();
+      var dynamic = [dynamicAnchor_1.default, dynamicRef_1.default, recursiveAnchor_1.default, recursiveRef_1.default];
+      exports.default = dynamic;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/validation/dependentRequired.js
+  var require_dependentRequired = __commonJS({
+    "node_modules/ajv/dist/vocabularies/validation/dependentRequired.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dependencies_1 = require_dependencies();
+      var def = {
+        keyword: "dependentRequired",
+        type: "object",
+        schemaType: "object",
+        error: dependencies_1.error,
+        code: (cxt) => (0, dependencies_1.validatePropertyDeps)(cxt)
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js
+  var require_dependentSchemas = __commonJS({
+    "node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dependencies_1 = require_dependencies();
+      var def = {
+        keyword: "dependentSchemas",
+        type: "object",
+        schemaType: "object",
+        code: (cxt) => (0, dependencies_1.validateSchemaDeps)(cxt)
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/validation/limitContains.js
+  var require_limitContains = __commonJS({
+    "node_modules/ajv/dist/vocabularies/validation/limitContains.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var util_1 = require_util();
+      var def = {
+        keyword: ["maxContains", "minContains"],
+        type: "array",
+        schemaType: "number",
+        code({ keyword, parentSchema, it }) {
+          if (parentSchema.contains === void 0) {
+            (0, util_1.checkStrictMode)(it, `"${keyword}" without "contains" is ignored`);
+          }
+        }
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/next.js
+  var require_next = __commonJS({
+    "node_modules/ajv/dist/vocabularies/next.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var dependentRequired_1 = require_dependentRequired();
+      var dependentSchemas_1 = require_dependentSchemas();
+      var limitContains_1 = require_limitContains();
+      var next = [dependentRequired_1.default, dependentSchemas_1.default, limitContains_1.default];
+      exports.default = next;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js
+  var require_unevaluatedProperties = __commonJS({
+    "node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var codegen_1 = require_codegen();
+      var util_1 = require_util();
+      var names_1 = require_names();
+      var error48 = {
+        message: "must NOT have unevaluated properties",
+        params: ({ params }) => (0, codegen_1._)`{unevaluatedProperty: ${params.unevaluatedProperty}}`
+      };
+      var def = {
+        keyword: "unevaluatedProperties",
+        type: "object",
+        schemaType: ["boolean", "object"],
+        trackErrors: true,
+        error: error48,
+        code(cxt) {
+          const { gen, schema, data, errsCount, it } = cxt;
+          if (!errsCount)
+            throw new Error("ajv implementation error");
+          const { allErrors, props } = it;
+          if (props instanceof codegen_1.Name) {
+            gen.if((0, codegen_1._)`${props} !== true`, () => gen.forIn("key", data, (key) => gen.if(unevaluatedDynamic(props, key), () => unevaluatedPropCode(key))));
+          } else if (props !== true) {
+            gen.forIn("key", data, (key) => props === void 0 ? unevaluatedPropCode(key) : gen.if(unevaluatedStatic(props, key), () => unevaluatedPropCode(key)));
+          }
+          it.props = true;
+          cxt.ok((0, codegen_1._)`${errsCount} === ${names_1.default.errors}`);
+          function unevaluatedPropCode(key) {
+            if (schema === false) {
+              cxt.setParams({ unevaluatedProperty: key });
+              cxt.error();
+              if (!allErrors)
+                gen.break();
+              return;
+            }
+            if (!(0, util_1.alwaysValidSchema)(it, schema)) {
+              const valid = gen.name("valid");
+              cxt.subschema({
+                keyword: "unevaluatedProperties",
+                dataProp: key,
+                dataPropType: util_1.Type.Str
+              }, valid);
+              if (!allErrors)
+                gen.if((0, codegen_1.not)(valid), () => gen.break());
+            }
+          }
+          function unevaluatedDynamic(evaluatedProps, key) {
+            return (0, codegen_1._)`!${evaluatedProps} || !${evaluatedProps}[${key}]`;
+          }
+          function unevaluatedStatic(evaluatedProps, key) {
+            const ps = [];
+            for (const p in evaluatedProps) {
+              if (evaluatedProps[p] === true)
+                ps.push((0, codegen_1._)`${key} !== ${p}`);
+            }
+            return (0, codegen_1.and)(...ps);
+          }
+        }
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js
+  var require_unevaluatedItems = __commonJS({
+    "node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var codegen_1 = require_codegen();
+      var util_1 = require_util();
+      var error48 = {
+        message: ({ params: { len } }) => (0, codegen_1.str)`must NOT have more than ${len} items`,
+        params: ({ params: { len } }) => (0, codegen_1._)`{limit: ${len}}`
+      };
+      var def = {
+        keyword: "unevaluatedItems",
+        type: "array",
+        schemaType: ["boolean", "object"],
+        error: error48,
+        code(cxt) {
+          const { gen, schema, data, it } = cxt;
+          const items = it.items || 0;
+          if (items === true)
+            return;
+          const len = gen.const("len", (0, codegen_1._)`${data}.length`);
+          if (schema === false) {
+            cxt.setParams({ len: items });
+            cxt.fail((0, codegen_1._)`${len} > ${items}`);
+          } else if (typeof schema == "object" && !(0, util_1.alwaysValidSchema)(it, schema)) {
+            const valid = gen.var("valid", (0, codegen_1._)`${len} <= ${items}`);
+            gen.if((0, codegen_1.not)(valid), () => validateItems(valid, items));
+            cxt.ok(valid);
+          }
+          it.items = true;
+          function validateItems(valid, from) {
+            gen.forRange("i", from, len, (i) => {
+              cxt.subschema({ keyword: "unevaluatedItems", dataProp: i, dataPropType: util_1.Type.Num }, valid);
+              if (!it.allErrors)
+                gen.if((0, codegen_1.not)(valid), () => gen.break());
+            });
+          }
+        }
+      };
+      exports.default = def;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/unevaluated/index.js
+  var require_unevaluated = __commonJS({
+    "node_modules/ajv/dist/vocabularies/unevaluated/index.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var unevaluatedProperties_1 = require_unevaluatedProperties();
+      var unevaluatedItems_1 = require_unevaluatedItems();
+      var unevaluated = [unevaluatedProperties_1.default, unevaluatedItems_1.default];
+      exports.default = unevaluated;
+    }
+  });
+
+  // node_modules/ajv/dist/vocabularies/draft2020.js
+  var require_draft2020 = __commonJS({
+    "node_modules/ajv/dist/vocabularies/draft2020.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var core_1 = require_core2();
+      var validation_1 = require_validation();
+      var applicator_1 = require_applicator();
+      var dynamic_1 = require_dynamic();
+      var next_1 = require_next();
+      var unevaluated_1 = require_unevaluated();
+      var format_1 = require_format2();
+      var metadata_1 = require_metadata();
+      var draft2020Vocabularies = [
+        dynamic_1.default,
+        core_1.default,
+        validation_1.default,
+        (0, applicator_1.default)(true),
+        format_1.default,
+        metadata_1.metadataVocabulary,
+        metadata_1.contentVocabulary,
+        next_1.default,
+        unevaluated_1.default
+      ];
+      exports.default = draft2020Vocabularies;
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/schema.json
+  var require_schema = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/schema.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/schema",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/core": true,
+          "https://json-schema.org/draft/2020-12/vocab/applicator": true,
+          "https://json-schema.org/draft/2020-12/vocab/unevaluated": true,
+          "https://json-schema.org/draft/2020-12/vocab/validation": true,
+          "https://json-schema.org/draft/2020-12/vocab/meta-data": true,
+          "https://json-schema.org/draft/2020-12/vocab/format-annotation": true,
+          "https://json-schema.org/draft/2020-12/vocab/content": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Core and Validation specifications meta-schema",
+        allOf: [
+          { $ref: "meta/core" },
+          { $ref: "meta/applicator" },
+          { $ref: "meta/unevaluated" },
+          { $ref: "meta/validation" },
+          { $ref: "meta/meta-data" },
+          { $ref: "meta/format-annotation" },
+          { $ref: "meta/content" }
+        ],
+        type: ["object", "boolean"],
+        $comment: "This meta-schema also defines keywords that have appeared in previous drafts in order to prevent incompatible extensions as they remain in common use.",
+        properties: {
+          definitions: {
+            $comment: '"definitions" has been replaced by "$defs".',
+            type: "object",
+            additionalProperties: { $dynamicRef: "#meta" },
+            deprecated: true,
+            default: {}
+          },
+          dependencies: {
+            $comment: '"dependencies" has been split and replaced by "dependentSchemas" and "dependentRequired" in order to serve their differing semantics.',
+            type: "object",
+            additionalProperties: {
+              anyOf: [{ $dynamicRef: "#meta" }, { $ref: "meta/validation#/$defs/stringArray" }]
+            },
+            deprecated: true,
+            default: {}
+          },
+          $recursiveAnchor: {
+            $comment: '"$recursiveAnchor" has been replaced by "$dynamicAnchor".',
+            $ref: "meta/core#/$defs/anchorString",
+            deprecated: true
+          },
+          $recursiveRef: {
+            $comment: '"$recursiveRef" has been replaced by "$dynamicRef".',
+            $ref: "meta/core#/$defs/uriReferenceString",
+            deprecated: true
+          }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json
+  var require_applicator2 = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/applicator",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/applicator": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Applicator vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          prefixItems: { $ref: "#/$defs/schemaArray" },
+          items: { $dynamicRef: "#meta" },
+          contains: { $dynamicRef: "#meta" },
+          additionalProperties: { $dynamicRef: "#meta" },
+          properties: {
+            type: "object",
+            additionalProperties: { $dynamicRef: "#meta" },
+            default: {}
+          },
+          patternProperties: {
+            type: "object",
+            additionalProperties: { $dynamicRef: "#meta" },
+            propertyNames: { format: "regex" },
+            default: {}
+          },
+          dependentSchemas: {
+            type: "object",
+            additionalProperties: { $dynamicRef: "#meta" },
+            default: {}
+          },
+          propertyNames: { $dynamicRef: "#meta" },
+          if: { $dynamicRef: "#meta" },
+          then: { $dynamicRef: "#meta" },
+          else: { $dynamicRef: "#meta" },
+          allOf: { $ref: "#/$defs/schemaArray" },
+          anyOf: { $ref: "#/$defs/schemaArray" },
+          oneOf: { $ref: "#/$defs/schemaArray" },
+          not: { $dynamicRef: "#meta" }
+        },
+        $defs: {
+          schemaArray: {
+            type: "array",
+            minItems: 1,
+            items: { $dynamicRef: "#meta" }
+          }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json
+  var require_unevaluated2 = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/unevaluated",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/unevaluated": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Unevaluated applicator vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          unevaluatedItems: { $dynamicRef: "#meta" },
+          unevaluatedProperties: { $dynamicRef: "#meta" }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json
+  var require_content = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/content",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/content": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Content vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          contentEncoding: { type: "string" },
+          contentMediaType: { type: "string" },
+          contentSchema: { $dynamicRef: "#meta" }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json
+  var require_core3 = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/core",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/core": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Core vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          $id: {
+            $ref: "#/$defs/uriReferenceString",
+            $comment: "Non-empty fragments not allowed.",
+            pattern: "^[^#]*#?$"
+          },
+          $schema: { $ref: "#/$defs/uriString" },
+          $ref: { $ref: "#/$defs/uriReferenceString" },
+          $anchor: { $ref: "#/$defs/anchorString" },
+          $dynamicRef: { $ref: "#/$defs/uriReferenceString" },
+          $dynamicAnchor: { $ref: "#/$defs/anchorString" },
+          $vocabulary: {
+            type: "object",
+            propertyNames: { $ref: "#/$defs/uriString" },
+            additionalProperties: {
+              type: "boolean"
+            }
+          },
+          $comment: {
+            type: "string"
+          },
+          $defs: {
+            type: "object",
+            additionalProperties: { $dynamicRef: "#meta" }
+          }
+        },
+        $defs: {
+          anchorString: {
+            type: "string",
+            pattern: "^[A-Za-z_][-A-Za-z0-9._]*$"
+          },
+          uriString: {
+            type: "string",
+            format: "uri"
+          },
+          uriReferenceString: {
+            type: "string",
+            format: "uri-reference"
+          }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json
+  var require_format_annotation = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/format-annotation",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/format-annotation": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Format vocabulary meta-schema for annotation results",
+        type: ["object", "boolean"],
+        properties: {
+          format: { type: "string" }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json
+  var require_meta_data = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/meta-data",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/meta-data": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Meta-data vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          title: {
+            type: "string"
+          },
+          description: {
+            type: "string"
+          },
+          default: true,
+          deprecated: {
+            type: "boolean",
+            default: false
+          },
+          readOnly: {
+            type: "boolean",
+            default: false
+          },
+          writeOnly: {
+            type: "boolean",
+            default: false
+          },
+          examples: {
+            type: "array",
+            items: true
+          }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json
+  var require_validation2 = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json"(exports, module) {
+      module.exports = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "https://json-schema.org/draft/2020-12/meta/validation",
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/validation": true
+        },
+        $dynamicAnchor: "meta",
+        title: "Validation vocabulary meta-schema",
+        type: ["object", "boolean"],
+        properties: {
+          type: {
+            anyOf: [
+              { $ref: "#/$defs/simpleTypes" },
+              {
+                type: "array",
+                items: { $ref: "#/$defs/simpleTypes" },
+                minItems: 1,
+                uniqueItems: true
+              }
+            ]
+          },
+          const: true,
+          enum: {
+            type: "array",
+            items: true
+          },
+          multipleOf: {
+            type: "number",
+            exclusiveMinimum: 0
+          },
+          maximum: {
+            type: "number"
+          },
+          exclusiveMaximum: {
+            type: "number"
+          },
+          minimum: {
+            type: "number"
+          },
+          exclusiveMinimum: {
+            type: "number"
+          },
+          maxLength: { $ref: "#/$defs/nonNegativeInteger" },
+          minLength: { $ref: "#/$defs/nonNegativeIntegerDefault0" },
+          pattern: {
+            type: "string",
+            format: "regex"
+          },
+          maxItems: { $ref: "#/$defs/nonNegativeInteger" },
+          minItems: { $ref: "#/$defs/nonNegativeIntegerDefault0" },
+          uniqueItems: {
+            type: "boolean",
+            default: false
+          },
+          maxContains: { $ref: "#/$defs/nonNegativeInteger" },
+          minContains: {
+            $ref: "#/$defs/nonNegativeInteger",
+            default: 1
+          },
+          maxProperties: { $ref: "#/$defs/nonNegativeInteger" },
+          minProperties: { $ref: "#/$defs/nonNegativeIntegerDefault0" },
+          required: { $ref: "#/$defs/stringArray" },
+          dependentRequired: {
+            type: "object",
+            additionalProperties: {
+              $ref: "#/$defs/stringArray"
+            }
+          }
+        },
+        $defs: {
+          nonNegativeInteger: {
+            type: "integer",
+            minimum: 0
+          },
+          nonNegativeIntegerDefault0: {
+            $ref: "#/$defs/nonNegativeInteger",
+            default: 0
+          },
+          simpleTypes: {
+            enum: ["array", "boolean", "integer", "null", "number", "object", "string"]
+          },
+          stringArray: {
+            type: "array",
+            items: { type: "string" },
+            uniqueItems: true,
+            default: []
+          }
+        }
+      };
+    }
+  });
+
+  // node_modules/ajv/dist/refs/json-schema-2020-12/index.js
+  var require_json_schema_2020_12 = __commonJS({
+    "node_modules/ajv/dist/refs/json-schema-2020-12/index.js"(exports) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      var metaSchema = require_schema();
+      var applicator = require_applicator2();
+      var unevaluated = require_unevaluated2();
+      var content = require_content();
+      var core = require_core3();
+      var format = require_format_annotation();
+      var metadata = require_meta_data();
+      var validation = require_validation2();
+      var META_SUPPORT_DATA = ["/properties"];
+      function addMetaSchema2020($data) {
+        ;
+        [
+          metaSchema,
+          applicator,
+          unevaluated,
+          content,
+          core,
+          with$data(this, format),
+          metadata,
+          with$data(this, validation)
+        ].forEach((sch) => this.addMetaSchema(sch, void 0, false));
+        return this;
+        function with$data(ajv2, sch) {
+          return $data ? ajv2.$dataMetaSchema(sch, META_SUPPORT_DATA) : sch;
+        }
+      }
+      exports.default = addMetaSchema2020;
+    }
+  });
+
+  // node_modules/ajv/dist/2020.js
+  var require__ = __commonJS({
+    "node_modules/ajv/dist/2020.js"(exports, module) {
+      "use strict";
+      Object.defineProperty(exports, "__esModule", { value: true });
+      exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv2020 = void 0;
+      var core_1 = require_core();
+      var draft2020_1 = require_draft2020();
+      var discriminator_1 = require_discriminator();
+      var json_schema_2020_12_1 = require_json_schema_2020_12();
+      var META_SCHEMA_ID = "https://json-schema.org/draft/2020-12/schema";
+      var Ajv20202 = class extends core_1.default {
+        constructor(opts = {}) {
+          super({
+            ...opts,
+            dynamicRef: true,
+            next: true,
+            unevaluated: true
+          });
+        }
+        _addVocabularies() {
+          super._addVocabularies();
+          draft2020_1.default.forEach((v) => this.addVocabulary(v));
+          if (this.opts.discriminator)
+            this.addKeyword(discriminator_1.default);
+        }
+        _addDefaultMetaSchema() {
+          super._addDefaultMetaSchema();
+          const { $data, meta: meta3 } = this.opts;
+          if (!meta3)
+            return;
+          json_schema_2020_12_1.default.call(this, $data);
+          this.refs["http://json-schema.org/schema"] = META_SCHEMA_ID;
+        }
+        defaultMeta() {
+          return this.opts.defaultMeta = super.defaultMeta() || (this.getSchema(META_SCHEMA_ID) ? META_SCHEMA_ID : void 0);
+        }
+      };
+      exports.Ajv2020 = Ajv20202;
+      module.exports = exports = Ajv20202;
+      module.exports.Ajv2020 = Ajv20202;
+      Object.defineProperty(exports, "__esModule", { value: true });
+      exports.default = Ajv20202;
+      var validate_1 = require_validate();
+      Object.defineProperty(exports, "KeywordCxt", { enumerable: true, get: function() {
+        return validate_1.KeywordCxt;
+      } });
+      var codegen_1 = require_codegen();
+      Object.defineProperty(exports, "_", { enumerable: true, get: function() {
+        return codegen_1._;
+      } });
+      Object.defineProperty(exports, "str", { enumerable: true, get: function() {
+        return codegen_1.str;
+      } });
+      Object.defineProperty(exports, "stringify", { enumerable: true, get: function() {
+        return codegen_1.stringify;
+      } });
+      Object.defineProperty(exports, "nil", { enumerable: true, get: function() {
+        return codegen_1.nil;
+      } });
+      Object.defineProperty(exports, "Name", { enumerable: true, get: function() {
+        return codegen_1.Name;
+      } });
+      Object.defineProperty(exports, "CodeGen", { enumerable: true, get: function() {
+        return codegen_1.CodeGen;
+      } });
+      var validation_error_1 = require_validation_error();
+      Object.defineProperty(exports, "ValidationError", { enumerable: true, get: function() {
+        return validation_error_1.default;
+      } });
+      var ref_error_1 = require_ref_error();
+      Object.defineProperty(exports, "MissingRefError", { enumerable: true, get: function() {
+        return ref_error_1.default;
+      } });
     }
   });
 
@@ -22865,8 +23689,12 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   // src/index.ts
   var index_exports = {};
   __export(index_exports, {
+    ConditionalActionFailedError: () => ConditionalActionFailedError,
+    captureViewHierarchy: () => captureViewHierarchy,
     fromMeta: () => fromMeta,
     run: () => run,
+    runConditionalActions: () => runConditionalActions,
+    selectors: () => selectors,
     tool: () => tool,
     trailblaze: () => trailblaze,
     z: () => external_exports3
@@ -29253,15 +30081,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   var import_ajv = __toESM(require_ajv(), 1);
   var import_ajv_formats = __toESM(require_dist(), 1);
   function createDefaultAjvInstance() {
-    const ajv = new import_ajv.default({
+    const ajv2 = new import_ajv.default({
       strict: false,
       validateFormats: true,
       validateSchema: false,
       allErrors: true
     });
     const addFormats = import_ajv_formats.default;
-    addFormats(ajv);
-    return ajv;
+    addFormats(ajv2);
+    return ajv2;
   }
   var AjvJsonSchemaValidator = class {
     /**
@@ -29284,8 +30112,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
      * const validator = new AjvJsonSchemaValidator(ajv);
      * ```
      */
-    constructor(ajv) {
-      this._ajv = ajv ?? createDefaultAjvInstance();
+    constructor(ajv2) {
+      this._ajv = ajv2 ?? createDefaultAjvInstance();
     }
     /**
      * Create a validator for the given JSON Schema
@@ -30832,6 +31660,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
+  // src/tool.ts
+  var import__ = __toESM(require__(), 1);
+
   // src/client.ts
   var DEFAULT_CLIENT_FETCH_TIMEOUT_MS = 32e3;
   var CLIENT_FETCH_TIMEOUT_MS_ENV = "TRAILBLAZE_CLIENT_FETCH_TIMEOUT_MS";
@@ -30854,6 +31685,23 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       tools: createToolsProxy(dispatch)
     };
     return impl;
+  }
+  var SCRIPT_OVERLOAD_TOOLS = /* @__PURE__ */ new Set(["web_evaluate"]);
+  function buildScriptOverloadArgs(toolName, firstArg, rest) {
+    if (typeof firstArg === "function") {
+      const fnSrc = firstArg.toString();
+      const argsJson = JSON.stringify(rest);
+      return { script: `(${fnSrc}).apply(null, ${argsJson})` };
+    }
+    if (typeof firstArg === "string") {
+      return { script: firstArg };
+    }
+    if (firstArg !== null && typeof firstArg === "object") {
+      return firstArg;
+    }
+    throw new Error(
+      `client.tools.${toolName}: expected a function, script string, or { script } object as the first argument; got ${firstArg === null ? "null" : typeof firstArg}.`
+    );
   }
   var TOOLS_PROXY_RESERVED_PROPS = /* @__PURE__ */ new Set([
     // Thenable detection — the critical one. Without this, `await client.tools` (or any
@@ -30883,9 +31731,26 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             `client.tools[${JSON.stringify(prop)}]: tool name must not be empty or whitespace-only.`
           );
         }
-        return (args) => callToolImpl(prop, args ?? {});
+        if (SCRIPT_OVERLOAD_TOOLS.has(prop)) {
+          const toolName = prop;
+          return async (firstArg, ...rest) => {
+            const args = buildScriptOverloadArgs(toolName, firstArg, rest);
+            const envelope = await callToolImpl(toolName, args);
+            return _unwrapToolResult(envelope);
+          };
+        }
+        return async (args) => {
+          const envelope = await callToolImpl(prop, args ?? {});
+          return _unwrapToolResult(envelope);
+        };
       }
     });
+  }
+  function _unwrapToolResult(envelope) {
+    if (envelope.structuredContent !== void 0 && envelope.structuredContent !== null) {
+      return envelope.structuredContent;
+    }
+    return envelope.textContent;
   }
   async function callTool(ctx, name, args) {
     if (ctx === void 0) {
@@ -31019,7 +31884,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return {
       success: true,
       textContent: result.text_content,
-      errorMessage: result.error_message
+      errorMessage: result.error_message,
+      structuredContent: result.structured_content
     };
   }
   async function safeReadText(response) {
@@ -31066,12 +31932,122 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   }
 
+  // src/memory.ts
+  var DRAIN_DELTA = /* @__PURE__ */ Symbol.for("trailblaze.memory.drainDelta");
+  var META_KEY_TRAILBLAZE = "trailblaze";
+  var META_KEY_MEMORY = "memory";
+  var META_KEY_MEMORY_DELTA = "memoryDelta";
+  var META_KEY_MEMORY_DELETIONS = "memoryDeletions";
+  var INTERPOLATE_PATTERNS = [
+    /\$\{([^}]+)\}/g,
+    /\{\{([^}]+)\}\}/g
+  ];
+  function createMemory(snapshot) {
+    const frozenSnapshot = new Map(
+      snapshot ? Object.entries(snapshot).filter(
+        // Defensive — the snapshot is supposed to be `Record<string, string>` from the
+        // Kotlin side, but `fromMeta` receives raw JSON. Skip non-string values rather
+        // than coercing so a producer-side bug surfaces as a missing key instead of a
+        // silently corrupted value.
+        ([, v]) => typeof v === "string"
+      ) : []
+    );
+    const DELETED = /* @__PURE__ */ Symbol("deleted");
+    const buffer = /* @__PURE__ */ new Map();
+    const get = (key) => {
+      if (buffer.has(key)) {
+        const v = buffer.get(key);
+        return v === DELETED ? void 0 : v;
+      }
+      return frozenSnapshot.get(key);
+    };
+    const has = (key) => {
+      if (buffer.has(key)) return buffer.get(key) !== DELETED;
+      return frozenSnapshot.has(key);
+    };
+    const set2 = (key, value) => {
+      buffer.set(key, value);
+    };
+    const del = (key) => {
+      buffer.set(key, DELETED);
+    };
+    const keys = () => {
+      const visible = new Set(frozenSnapshot.keys());
+      buffer.forEach((v, k) => {
+        if (v === DELETED) visible.delete(k);
+        else visible.add(k);
+      });
+      return [...visible];
+    };
+    const interpolate = (template) => {
+      let result = template;
+      for (const pattern of INTERPOLATE_PATTERNS) {
+        const re = new RegExp(pattern.source, "g");
+        result = result.replace(re, (_match, name) => get(name) ?? "");
+      }
+      return result;
+    };
+    const setJson = (key, value) => {
+      const serialized = JSON.stringify(value);
+      if (serialized === void 0) {
+        del(key);
+        return;
+      }
+      set2(key, serialized);
+    };
+    const getJson = (key) => {
+      const raw = get(key);
+      if (raw === void 0) return void 0;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return void 0;
+      }
+    };
+    const drainDelta = () => {
+      const sets = /* @__PURE__ */ Object.create(null);
+      const deletions = [];
+      buffer.forEach((v, k) => {
+        if (v === DELETED) {
+          if (frozenSnapshot.has(k)) deletions.push(k);
+        } else if (frozenSnapshot.get(k) !== v) {
+          sets[k] = v;
+        }
+      });
+      return { sets, deletions };
+    };
+    const toJSON = () => {
+      const out = {};
+      frozenSnapshot.forEach((v, k) => {
+        out[k] = v;
+      });
+      buffer.forEach((v, k) => {
+        if (v === DELETED) delete out[k];
+        else out[k] = v;
+      });
+      return out;
+    };
+    const memory = {
+      get,
+      set: set2,
+      has,
+      keys,
+      delete: del,
+      interpolate,
+      setJson,
+      getJson,
+      [DRAIN_DELTA]: drainDelta,
+      toJSON
+    };
+    return memory;
+  }
+
   // src/context.ts
   var VALID_PLATFORMS = /* @__PURE__ */ new Set(["ios", "android", "web"]);
   function fromMeta(meta3, logger) {
     if (typeof meta3 !== "object" || meta3 === null) return void 0;
     const bag = meta3;
-    const envelope = bag["trailblaze"];
+    const envelope = bag[META_KEY_TRAILBLAZE];
     if (typeof envelope !== "object" || envelope === null) return void 0;
     const tb = envelope;
     const sessionId = tb["sessionId"];
@@ -31093,8 +32069,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (typeof widthPixels !== "number" || typeof heightPixels !== "number" || typeof driverType !== "string") {
       return void 0;
     }
-    const memoryBag = tb["memory"];
-    const memory = typeof memoryBag === "object" && memoryBag !== null ? memoryBag : {};
+    const memoryBag = tb[META_KEY_MEMORY];
+    const memorySnapshot = typeof memoryBag === "object" && memoryBag !== null ? memoryBag : void 0;
+    const memory = createMemory(memorySnapshot);
     const target = parseTarget(tb["target"]);
     return {
       baseUrl,
@@ -31152,24 +32129,133 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 
   // src/tool.ts
   var pendingTools = [];
+  function defineTypedTool(handler, inputSchema) {
+    if (typeof handler !== "function") {
+      throw new TypeError(
+        "trailblaze.tool<I, O>(handler): argument must be a function. Got: " + (handler == null ? String(handler) : typeof handler) + "."
+      );
+    }
+    let validator = null;
+    if (inputSchema != null) {
+      try {
+        validator = ajv.compile(inputSchema);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        console.warn(
+          `[trailblaze.tool] typed tool: ajv schema compile failed (${reason}). The tool will dispatch without input validation. Fix the inputSchema in the spec and re-run.`
+        );
+      }
+    }
+    return async (args, legacyCtx, client) => {
+      const validatedArgs = args != null && typeof args === "object" && !Array.isArray(args) ? args : {};
+      if (validator != null && !validator(validatedArgs)) {
+        throw new TypedToolValidationError(validator.errors ?? []);
+      }
+      const memory = legacyCtx?.memory ?? createMemory(void 0);
+      const toolContext = { tools: client.tools, memory, target: legacyCtx?.target };
+      return handler(validatedArgs, toolContext);
+    };
+  }
+  var TypedToolValidationError = class extends Error {
+    constructor(ajvErrors) {
+      super(`Invalid arguments: ${formatAjvErrors(ajvErrors)}`);
+      this.ajvErrors = ajvErrors;
+      this.name = "ValidationError";
+    }
+  };
   var MAX_STACK_LENGTH = 16384;
-  function tool(name, spec, handler) {
-    pendingTools.push({ name, spec, handler });
+  var ajv = new import__.Ajv2020({
+    allErrors: true,
+    strict: false,
+    useDefaults: true,
+    coerceTypes: false
+  });
+  function formatAjvErrors(errors) {
+    return errors.map((e) => {
+      const path = e.instancePath.length > 0 ? e.instancePath : "(root)";
+      return `${path}: ${e.message ?? "validation failed"}`;
+    }).join("; ");
+  }
+  function buildValidationErrorEnvelope(toolName, errors) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `ValidationError: tool '${toolName}' received invalid arguments \u2014 ${formatAjvErrors(errors)}`
+        }
+      ]
+    };
+  }
+  function specToJsonSchema(toolName, spec) {
+    const schema = spec.inputSchema;
+    if (schema == null) return null;
+    if (typeof schema.safeParse !== "function") return null;
+    try {
+      return external_exports3.toJSONSchema(schema);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.warn(
+        `[trailblaze.tool] tool '${toolName}': skipping ajv validation \u2014 zod schema could not be lowered to JSON Schema (${reason}). The tool will dispatch without input validation. To enable validation, replace the inputSchema with a shape zod's toJSONSchema can serialize.`
+      );
+      return null;
+    }
+  }
+  function tool(arg0, arg1, arg2) {
+    if (typeof arg0 === "function") {
+      return defineTypedTool(
+        arg0
+      );
+    }
+    if (typeof arg0 === "object" && arg0 !== null && !Array.isArray(arg0) && typeof arg1 === "function" && arg2 === void 0) {
+      const specObj = arg0;
+      const inlineSchema = specObj.inputSchema && typeof specObj.inputSchema === "object" && !Array.isArray(specObj.inputSchema) ? specObj.inputSchema : void 0;
+      return defineTypedTool(
+        arg1,
+        inlineSchema
+      );
+    }
+    pendingTools.push({
+      name: arg0,
+      spec: arg1,
+      handler: arg2
+    });
   }
   function registerPendingTools(server) {
     while (pendingTools.length > 0) {
       const pending = pendingTools.shift();
       const preparedSpec = withPassthroughInputSchema(pending.spec);
+      const jsonSchema = specToJsonSchema(pending.name, preparedSpec);
+      let validator = null;
+      if (jsonSchema != null) {
+        try {
+          validator = ajv.compile(jsonSchema);
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          console.warn(
+            `[trailblaze.tool] tool '${pending.name}': ajv schema compile failed (${reason}). The tool will dispatch without input validation. Fix the schema and restart the daemon to re-enable validation.`
+          );
+        }
+      }
       server.registerTool(
         pending.name,
         preparedSpec,
         (async (args, extra) => {
           const logger = createLogger(server, pending.name);
           try {
+            const validatedArgs = args != null && typeof args === "object" && !Array.isArray(args) ? args : {};
+            if (validator != null && !validator(validatedArgs)) {
+              const errs = validator.errors ?? [];
+              logger.warn(
+                `input validation failed: ${formatAjvErrors(errs)}`
+              );
+              return buildValidationErrorEnvelope(pending.name, errs);
+            }
             const meta3 = extractMeta(extra);
             const ctx = fromMeta(meta3, logger);
             const client = createClient(ctx);
-            return await Promise.resolve(pending.handler(args, ctx, client));
+            const result = await Promise.resolve(pending.handler(validatedArgs, ctx, client));
+            return attachMemoryDelta(result, ctx);
           } catch (e) {
             const isErrorObj = e instanceof Error;
             let errName = "Error";
@@ -31218,6 +32304,32 @@ ${framesOnly}` : envelopeText;
         })
       );
     }
+  }
+  function attachMemoryDelta(result, ctx) {
+    if (ctx === void 0) return result;
+    const drainable = ctx.memory;
+    if (typeof drainable[DRAIN_DELTA] !== "function") return result;
+    const delta = drainable[DRAIN_DELTA]();
+    const setKeys = Object.keys(delta.sets);
+    if (setKeys.length === 0 && delta.deletions.length === 0) return result;
+    const trailblaze2 = {};
+    if (setKeys.length > 0) trailblaze2[META_KEY_MEMORY_DELTA] = delta.sets;
+    if (delta.deletions.length > 0) trailblaze2[META_KEY_MEMORY_DELETIONS] = delta.deletions;
+    if (typeof result !== "object" || result === null) {
+      const wrapped = {
+        content: result === void 0 || result === null ? [] : [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
+        _meta: { [META_KEY_TRAILBLAZE]: trailblaze2 }
+      };
+      return wrapped;
+    }
+    const resultRecord = result;
+    const existingMeta = typeof resultRecord["_meta"] === "object" && resultRecord["_meta"] !== null ? resultRecord["_meta"] : {};
+    const existingTrailblaze = typeof existingMeta[META_KEY_TRAILBLAZE] === "object" && existingMeta[META_KEY_TRAILBLAZE] !== null ? existingMeta[META_KEY_TRAILBLAZE] : {};
+    const merged = { ...existingTrailblaze, ...trailblaze2 };
+    return {
+      ...resultRecord,
+      _meta: { ...existingMeta, [META_KEY_TRAILBLAZE]: merged }
+    };
   }
   function extractMeta(extra) {
     if (typeof extra !== "object" || extra === null) return void 0;
@@ -31284,6 +32396,167 @@ ${framesOnly}` : envelopeText;
     registerPendingTools(server);
     await server.connect(await pickTransport());
   }
+
+  // src/view-hierarchy.ts
+  var SELECTOR_REGISTRY = /* @__PURE__ */ Symbol("trailblaze.viewHierarchy.selectorRegistry");
+  async function captureViewHierarchy(client, selectors2) {
+    const ownedSelectors = selectors2.slice();
+    const resolved = await resolveSelectors(client, ownedSelectors);
+    return buildSnapshot(resolved, ownedSelectors);
+  }
+  async function reCaptureViewHierarchy(client, base) {
+    const tagged = base;
+    const selectors2 = tagged[SELECTOR_REGISTRY];
+    if (!selectors2) {
+      throw new Error(
+        "reCaptureViewHierarchy: cannot refresh this snapshot \u2014 it wasn't built via captureViewHierarchy(). The refresh path is only used by callers that need a verify snapshot AFTER a state-mutating action (e.g. runConditionalActions's postcondition check). Either build the snapshot via captureViewHierarchy(client, [...selectors]) so the framework can refresh it, or skip postcondition-style verification."
+      );
+    }
+    return captureViewHierarchy(client, selectors2);
+  }
+  async function resolveSelectors(client, selectors2) {
+    const entries = await Promise.all(
+      selectors2.map(async (selector) => {
+        const key = selectorKey(selector);
+        const matches = await client.tools.findMatches({ selector });
+        return [key, matches];
+      })
+    );
+    const map2 = /* @__PURE__ */ new Map();
+    for (const [key, matches] of entries) {
+      map2.set(key, matches);
+    }
+    return map2;
+  }
+  function buildSnapshot(resolved, selectors2) {
+    const matchesFor = (selector) => {
+      const key = selectorKey(selector);
+      const matches = resolved.get(key);
+      if (matches === void 0) {
+        throw new Error(
+          `ViewHierarchy: selector ${JSON.stringify(selector)} was not pre-resolved. Add it to the selectors list passed to captureViewHierarchy(client, [...]).`
+        );
+      }
+      return matches;
+    };
+    const snap = {
+      visible(selector) {
+        return matchesFor(selector).length > 0;
+      },
+      find(selector) {
+        const matches = matchesFor(selector);
+        return matches.length > 0 ? matches[0] : null;
+      },
+      findAll(selector) {
+        return matchesFor(selector).slice();
+      },
+      [SELECTOR_REGISTRY]: selectors2
+    };
+    return snap;
+  }
+  function selectorKey(selector) {
+    return JSON.stringify(selector);
+  }
+
+  // src/conditional-action.ts
+  var ConditionalActionFailedError = class _ConditionalActionFailedError extends Error {
+    constructor(conditionalActionId, message, cause = null) {
+      super(message);
+      this.name = "ConditionalActionFailedError";
+      this.conditionalActionId = conditionalActionId;
+      this.cause = cause;
+      if (typeof Error.captureStackTrace === "function") {
+        Error.captureStackTrace(this, _ConditionalActionFailedError);
+      }
+    }
+  };
+  async function runConditionalActions(client, conditionalActions, presnapshot) {
+    if (conditionalActions.length === 0) {
+      return { handled: [] };
+    }
+    const snap = presnapshot ?? throwNoSnapshot();
+    const applicable = conditionalActions.filter(
+      (c) => !evalPostcondition(c, snap) && evalCondition(c, snap)
+    );
+    if (applicable.length === 0) {
+      return { handled: [] };
+    }
+    const handled = [];
+    for (const c of applicable) {
+      await runAction(c);
+      if (c.postcondition) {
+        const verifySnap = await reCaptureViewHierarchy(client, snap);
+        if (!evalPostcondition(c, verifySnap)) {
+          throw new ConditionalActionFailedError(
+            c.id,
+            `postcondition not satisfied after action for ${describe3(c)}`
+          );
+        }
+      }
+      handled.push(c.id);
+    }
+    return { handled };
+  }
+  function describe3(c) {
+    if (c.description && c.description.length > 0) {
+      return `conditional "${c.id}" (${c.description})`;
+    }
+    return `conditional "${c.id}"`;
+  }
+  function evalCondition(c, snap) {
+    try {
+      return Boolean(c.condition(snap));
+    } catch (e) {
+      throw new ConditionalActionFailedError(
+        c.id,
+        `condition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  function evalPostcondition(c, snap) {
+    if (!c.postcondition) return false;
+    try {
+      return Boolean(c.postcondition(snap));
+    } catch (e) {
+      throw new ConditionalActionFailedError(
+        c.id,
+        `postcondition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  async function runAction(c) {
+    try {
+      await c.action();
+    } catch (e) {
+      if (e instanceof ConditionalActionFailedError) throw e;
+      throw new ConditionalActionFailedError(
+        c.id,
+        `action threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  function formatError2(e) {
+    if (e instanceof Error) return e.message;
+    return String(e);
+  }
+  function throwNoSnapshot() {
+    throw new Error(
+      "runConditionalActions: presnapshot is required in Phase 2. Build one via `await captureViewHierarchy(client, [...selectors])` and pass it in, where the selectors are the ones your condition / postcondition predicates probe. See the `wikipedia_conditional_action_demo` example tool in the wikipedia trailmap for an end-to-end usage. The auto-acquire fallback lands when the host-side full-tree snapshot tool ships."
+    );
+  }
+
+  // src/generated/selectors.ts
+  var selectors = {
+    androidAccessibility: (args) => ({ androidAccessibility: args }),
+    androidMaestro: (args) => ({ androidMaestro: args }),
+    web: (args) => ({ web: args }),
+    compose: (args) => ({ compose: args }),
+    iosMaestro: (args) => ({ iosMaestro: args }),
+    iosAxe: (args) => ({ iosAxe: args })
+  };
 
   // src/index.ts
   var trailblaze = {

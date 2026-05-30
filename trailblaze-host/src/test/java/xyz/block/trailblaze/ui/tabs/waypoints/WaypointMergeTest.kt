@@ -13,13 +13,13 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.ui.waypoints.WaypointExample
 
 /**
- * Locks down the pack-vs-filesystem provenance rule that
- * [WaypointDiscovery]'s pack-first dedup leaves to the merge step:
+ * Locks down the trailmap-vs-filesystem provenance rule that
+ * [WaypointDiscovery]'s trailmap-first dedup leaves to the merge step:
  *
- * if a definition's id appears in [PackContents.ids], the def we got back from discovery
- * is the pack's. The matching same-id filesystem file under `root` is *shadowed* and
+ * if a definition's id appears in [TrailmapContents.ids], the def we got back from discovery
+ * is the trailmap's. The matching same-id filesystem file under `root` is *shadowed* and
  * must NOT contribute its source label or example — otherwise the visualizer would
- * describe a pack waypoint with a screenshot that doesn't belong to it.
+ * describe a trailmap waypoint with a screenshot that doesn't belong to it.
  *
  * That bug was caught manually in review. This test exists so a future refactor can't
  * silently regress it.
@@ -29,21 +29,21 @@ class WaypointMergeTest {
   @Rule @JvmField val tempFolder = TemporaryFolder()
 
   @Test
-  fun packProvenance_winsOverShadowedFilesystemFile() {
+  fun trailmapProvenance_winsOverShadowedFilesystemFile() {
     val root = tempFolder.newFolder("root")
     val shadowedFile = File(root, "ready.waypoint.yaml").apply { writeText("ignored") }
-    val packExample = exampleWith(testTag = "pack")
+    val trailmapExample = exampleWith(testTag = "trailmap")
     val filesystemExample = exampleWith(testTag = "filesystem")
 
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "shared/ready")),
       idToFile = mapOf("shared/ready" to shadowedFile),
-      packContents = PackContents(
+      trailmapContents = TrailmapContents(
         ids = setOf("shared/ready"),
         examples = mapOf(
-          "shared/ready" to PackExample(
-            sourceLabel = "pack:shared — ready.waypoint.yaml",
-            example = packExample,
+          "shared/ready" to TrailmapExample(
+            sourceLabel = "trailmap:shared — ready.waypoint.yaml",
+            example = trailmapExample,
           ),
         ),
       ),
@@ -54,78 +54,78 @@ class WaypointMergeTest {
     val item = items.single()
     assertEquals("shared/ready", item.definition.id)
     assertEquals(
-      "pack:shared — ready.waypoint.yaml",
+      "trailmap:shared — ready.waypoint.yaml",
       item.sourceLabel,
       "Shadowed filesystem file must not surface its path as the source label.",
     )
-    // Reference equality — the pack's example must be reused, not the loader's filesystem result.
+    // Reference equality — the trailmap's example must be reused, not the loader's filesystem result.
     assertTrue(
-      item.example === packExample,
-      "Shadowed filesystem example must not be loaded for a pack-provided id.",
+      item.example === trailmapExample,
+      "Shadowed filesystem example must not be loaded for a trailmap-provided id.",
     )
   }
 
   @Test
-  fun packOnlyDefinition_usesPackExampleAndLabel() {
+  fun trailmapOnlyDefinition_usesTrailmapExampleAndLabel() {
     val root = tempFolder.newFolder("root")
-    val packExample = exampleWith(testTag = "pack-only")
+    val trailmapExample = exampleWith(testTag = "trailmap-only")
 
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "clock/alarm-tab")),
       idToFile = emptyMap(),
-      packContents = PackContents(
+      trailmapContents = TrailmapContents(
         ids = setOf("clock/alarm-tab"),
         examples = mapOf(
-          "clock/alarm-tab" to PackExample(
-            sourceLabel = "pack:clock — clock-tab.waypoint.yaml",
-            example = packExample,
+          "clock/alarm-tab" to TrailmapExample(
+            sourceLabel = "trailmap:clock — clock-tab.waypoint.yaml",
+            example = trailmapExample,
           ),
         ),
       ),
       root = root,
-      loadFilesystemExample = { _, _ -> error("filesystem loader must not be called for pack-only ids") },
+      loadFilesystemExample = { _, _ -> error("filesystem loader must not be called for trailmap-only ids") },
     )
 
     val item = items.single()
-    assertEquals("pack:clock — clock-tab.waypoint.yaml", item.sourceLabel)
-    assertTrue(item.example === packExample)
+    assertEquals("trailmap:clock — clock-tab.waypoint.yaml", item.sourceLabel)
+    assertTrue(item.example === trailmapExample)
   }
 
   @Test
-  fun packOnlyWithoutExample_usesIdToPackPathLabel() {
+  fun trailmapOnlyWithoutExample_usesIdToTrailmapPathLabel() {
     val root = tempFolder.newFolder("root")
 
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "myapp/home")),
       idToFile = emptyMap(),
-      packContents = PackContents(
+      trailmapContents = TrailmapContents(
         ids = setOf("myapp/home"),
         examples = emptyMap(),
-        idToPackPath = mapOf("myapp/home" to "pack:myapp — waypoints/android/home.waypoint.yaml"),
+        idToTrailmapPath = mapOf("myapp/home" to "trailmap:myapp — waypoints/android/home.waypoint.yaml"),
       ),
       root = root,
       loadFilesystemExample = { _, _ -> error("must not be called") },
     )
 
     val item = items.single()
-    // Even without a captured example, pack-provided ids surface their manifest path so
+    // Even without a captured example, trailmap-provided ids surface their manifest path so
     // platform derivation (which splits the source label on `/` and matches `android` /
     // `ios` / `web` as a path *segment*, not a substring) still works.
     assertEquals(
-      "pack:myapp — waypoints/android/home.waypoint.yaml",
+      "trailmap:myapp — waypoints/android/home.waypoint.yaml",
       item.sourceLabel,
     )
     assertNull(item.example)
   }
 
   @Test
-  fun packOnlyWithoutExample_orPathFallsBackToBundledLabel() {
+  fun trailmapOnlyWithoutExample_orPathFallsBackToBundledLabel() {
     val root = tempFolder.newFolder("root")
 
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "clock/no-example")),
       idToFile = emptyMap(),
-      packContents = PackContents(
+      trailmapContents = TrailmapContents(
         ids = setOf("clock/no-example"),
         examples = emptyMap(),
       ),
@@ -135,7 +135,7 @@ class WaypointMergeTest {
 
     val item = items.single()
     assertEquals(
-      "(pack-bundled)",
+      "(trailmap-bundled)",
       item.sourceLabel,
       "When neither example nor manifest path is available, the bundled-label fallback still kicks in.",
     )
@@ -151,7 +151,7 @@ class WaypointMergeTest {
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "local/only")),
       idToFile = mapOf("local/only" to file),
-      packContents = PackContents(ids = emptySet(), examples = emptyMap()),
+      trailmapContents = TrailmapContents(ids = emptySet(), examples = emptyMap()),
       root = root,
       loadFilesystemExample = { f, id ->
         // Sanity-check: loader is invoked with the right pair, then returns our fixture.
@@ -180,7 +180,7 @@ class WaypointMergeTest {
     val items = mergeWaypointSources(
       definitions = listOf(WaypointDefinition(id = "local/bare")),
       idToFile = mapOf("local/bare" to file),
-      packContents = PackContents(ids = emptySet(), examples = emptyMap()),
+      trailmapContents = TrailmapContents(ids = emptySet(), examples = emptyMap()),
       root = root,
       loadFilesystemExample = { f, id ->
         loaderCalls += f to id

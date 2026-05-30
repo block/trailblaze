@@ -264,8 +264,22 @@ open class BasePlaywrightNativeTest(
     // up the new dir (or drops recording on the next trail if capture is disabled).
     (browserManager as? PlaywrightBrowserManager)?.syncRecordingWithRegistry()
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = trailblazeDeviceInfo.classifiers,
+    )
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Honor `config.skip:` before SessionStarted is logged or web network capture is started —
+    // matches the CLI's pre-flight `planTrailExecution` planner. The Playwright JUnit-eval
+    // path drives this class directly (not through the CLI), so without this short-circuit a
+    // skip-marked trail would run end-to-end here even though `trailblaze trail` would skip it.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return@withContext loggingRule.session?.sessionId ?: SessionId("unknown")
+    }
 
     if (sendSessionStartLog) {
       val session = loggingRule.session

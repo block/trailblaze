@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.config
 
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -141,8 +143,9 @@ class ToolNameResolver(
      */
     fun fromBuiltInAndCustomTools(
       customToolClasses: Map<ToolName, KClass<out TrailblazeTool>> = emptyMap(),
+      resourceSource: ConfigResourceSource = platformConfigResourceSource(),
     ): ToolNameResolver = ToolNameResolver(
-      knownTools = ToolYamlLoader.discoverAndLoadAll() + customToolClasses,
+      knownTools = ToolYamlLoader.discoverAndLoadAll(resourceSource) + customToolClasses,
       knownYamlToolNames = TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
     )
 

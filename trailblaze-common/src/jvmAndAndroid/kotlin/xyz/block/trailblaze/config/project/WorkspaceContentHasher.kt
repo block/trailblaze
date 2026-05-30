@@ -12,7 +12,7 @@ import xyz.block.trailblaze.util.toLowerHex
  * started" drift to the CLI.
  *
  * Distinct from [WorkspaceCompileBootstrap]'s `.bundle.hash`, which only covers
- * `<id>/pack.yaml` files because that hash decides whether the compile-cache (`dist/`)
+ * `<id>/trailmap.yaml` files because that hash decides whether the compile-cache (`dist/`)
  * needs invalidation. Tool YAMLs, scripted JS/TS, and trailblaze.yaml itself can change
  * the daemon's runtime view without invalidating the bundle, so they're missed by the
  * bundle hash but caught here.

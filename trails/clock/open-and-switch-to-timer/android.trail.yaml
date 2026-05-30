@@ -1,6 +1,6 @@
 # Demo trail: open the Google Clock app and navigate to the Timer tab.
 # Authored to validate the runtime-YAML-config path: the `clock` target is
-# declared in trails/config/packs/clock/pack.yaml as a workspace pack — the
+# declared in trails/config/trailmaps/clock/trailmap.yaml as a workspace trailmap — the
 # framework JAR ships no `clock` target, so this trail can only resolve via
 # the workspace anchor at trails/config/trailblaze.yaml.
 - config:

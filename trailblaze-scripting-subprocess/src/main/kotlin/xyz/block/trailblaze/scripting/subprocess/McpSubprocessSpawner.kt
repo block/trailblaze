@@ -16,7 +16,7 @@ data class SpawnedProcess(
 )
 
 /**
- * Spawns a bun/tsx subprocess for an `mcp_servers: { script: ... }` entry and hands back a
+ * Spawns a bun subprocess for an `mcp_servers: { script: ... }` entry and hands back a
  * [SpawnedProcess]. Handshake, tool registration, and teardown belong to later commits; this
  * object only handles the "turn an [McpServerConfig] plus [McpSpawnContext] into a running
  * subprocess" step.
@@ -66,13 +66,13 @@ object McpSubprocessSpawner {
    * Builds a [ProcessBuilder] primed with argv, working directory, and [envVars] for the
    * given config + context. Does **not** call [ProcessBuilder.start] — that's [spawn]'s job.
    *
-   * Separated so tests can assert on env inheritance, argv, and cwd without needing bun/tsx
+   * Separated so tests can assert on env inheritance, argv, and cwd without needing bun
    * available in the test environment.
    */
   fun configure(
     config: McpServerConfig,
     context: McpSpawnContext,
-    runtime: NodeRuntime,
+    runtime: BunRuntime,
     anchor: File = File(System.getProperty("user.dir")),
   ): Configured {
     val script = requireNotNull(config.script) {
@@ -95,7 +95,7 @@ object McpSubprocessSpawner {
   fun spawn(
     config: McpServerConfig,
     context: McpSpawnContext,
-    runtime: NodeRuntime = NodeRuntimeDetector.cached,
+    runtime: BunRuntime = BunRuntimeDetector.cached,
     anchor: File = File(System.getProperty("user.dir")),
   ): SpawnedProcess {
     val (builder, scriptFile) = configure(config, context, runtime, anchor)

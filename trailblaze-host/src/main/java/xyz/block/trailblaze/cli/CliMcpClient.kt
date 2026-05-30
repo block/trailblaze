@@ -14,6 +14,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +30,7 @@ import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -157,7 +159,7 @@ class CliMcpClient(
   /**
    * Calls an MCP tool by name with the given arguments.
    *
-   * @param name Tool name (e.g., "blaze", "ask", "device")
+   * @param name Tool name (e.g., "step", "ask", "device")
    * @param arguments Map of argument name to value
    * @return Tool result
    */
@@ -188,6 +190,149 @@ class CliMcpClient(
     )
     if (result.isError) return "Error setting session target: ${result.content}"
     return null
+  }
+
+  /**
+   * Snapshot of the effective target on the MCP session's bound device — the
+   * value the daemon would resolve right now if a tool call ran, plus the
+   * source it came from. Returned by [getSessionTargetInfo]. Both fields are
+   * nullable so callers can distinguish three distinct shapes: a populated
+   * snapshot (the normal case), a probe that succeeded but found no target
+   * configured anywhere (both null), and a probe that failed (also both null
+   * — callers that need to distinguish must inspect via [callTool] directly).
+   */
+  data class SessionTargetSnapshot(
+    /**
+     * Effective target id (e.g. `"sampleapp"`, `"default"`), or null if no
+     * target was resolvable on the bound device — either because no session
+     * exists yet, no device is bound, or the daemon has neither a per-device
+     * override nor a daemon-wide default configured.
+     */
+    val target: String?,
+    /**
+     * Where [target] came from: `"session-override"` (per-device override
+     * set by `setSessionTargetForBoundDevice`), `"daemon-wide"` (the
+     * daemon-process default), or null when [target] is null. Matches the
+     * `targetSource` field on the daemon-side SessionResult envelope —
+     * specifically `SessionToolSet.TARGET_SOURCE_SESSION_OVERRIDE` /
+     * `…TARGET_SOURCE_DAEMON_WIDE`.
+     */
+    val source: String?,
+  )
+
+  /**
+   * The current effective target for this MCP session's bound device, plus the
+   * source it was resolved from. Reads `session(action=INFO)` and parses the
+   * JSON envelope — returns a snapshot whose [SessionTargetSnapshot.target]
+   * and [SessionTargetSnapshot.source] are both null if no active Trailblaze
+   * session exists, no device is bound, or the call fails for any reason.
+   *
+   * Companion to [setSessionTargetForBoundDevice]: callers that want a
+   * before-state read (so they can announce a real target change vs. a no-op
+   * re-pin) probe with this first. The daemon-side INFO returns
+   * `target = effectiveTarget` per `SessionToolSet.handleInfo` — same field
+   * shape as the SessionResult class.
+   */
+  suspend fun getSessionTargetInfo(): SessionTargetSnapshot {
+    return try {
+      val result = callTool(SESSION_TOOL_NAME, mapOf(ACTION_KEY to SESSION_ACTION_INFO))
+      if (result.isError) return SessionTargetSnapshot(target = null, source = null)
+      val parsed = Json.parseToJsonElement(result.content).jsonObject
+      SessionTargetSnapshot(
+        target = parsed.stringField("target"),
+        source = parsed.stringField("targetSource"),
+      )
+    } catch (_: Exception) {
+      SessionTargetSnapshot(target = null, source = null)
+    }
+  }
+
+  /**
+   * Set the per-device target like [setSessionTargetForBoundDevice], but emit
+   * a stderr-routed transition line on a *real* target swap so warm
+   * `device connect ... --target X` reconnects don't silently change the
+   * target while only printing "Reusing session …".
+   *
+   * Behavior matrix (probe via [getSessionTargetInfo] first, then set):
+   *  - prior source = `"session-override"`, prior value != [appTargetId]:
+   *    emit `Target app changed (<prev> -> <new>) -- pinned on existing
+   *    session.` to stderr. Same em-dash/arrow-free + ASCII contract as the
+   *    other transition emissions in this file (see PR #3490).
+   *  - prior source = `"daemon-wide"` (no per-device override yet): silent
+   *    first-time pin. The user just typed `--target X` and gets the
+   *    `Reusing session …` line plus the daemon-side target binding; no
+   *    "changed" notice because the per-device override was unset before.
+   *  - prior == [appTargetId] (re-applying the same pin, e.g. env-tier
+   *    re-application from `cliReusableWithDevice`): silent.
+   *  - probe failed for any reason (no session, no device, daemon down):
+   *    silent — fall through to the underlying set.
+   *
+   * Stays a separate method (rather than baked into
+   * [setSessionTargetForBoundDevice]) so callers that don't want the
+   * announcement — `cliReusableWithDevice` re-applies the env-pin on every
+   * action command and would otherwise emit the line on first apply — stay
+   * on the original method.
+   */
+  suspend fun setSessionTargetForBoundDeviceAnnouncingChange(
+    appTargetId: String,
+  ): String? {
+    val prior = getSessionTargetInfo()
+    val error = setSessionTargetForBoundDevice(appTargetId)
+    if (error != null) return error
+    val shouldAnnounce = prior.target != null &&
+      prior.source == TARGET_SOURCE_SESSION_OVERRIDE &&
+      prior.target != appTargetId
+    if (shouldAnnounce) {
+      // stderr (not stdout) — see the "Switching device" comment in
+      // [ensureDevice] for the eval-safety rationale. ASCII only ("-> " and
+      // "-- ") so a future regression that puts this on stdout doesn't trip
+      // zsh on em-dashes or Unicode arrows.
+      Console.error("Target app changed (${prior.target} -> $appTargetId) -- pinned on existing session.")
+    }
+    return null
+  }
+
+  /**
+   * Result of [pinMostRecentUnboundMcpSession]. Decoded from the MCP tool's
+   * text response with the same pattern [setSessionTargetForBoundDevice] uses
+   * — non-error returns are the success / no-op case, `isError=true` returns
+   * are converted to [PinMcpSessionResult.Failed] with the daemon's message.
+   */
+  sealed class PinMcpSessionResult {
+    /** A real MCP-client session was pinned. [message] is the daemon's one-line confirmation. */
+    data class Pinned(val message: String) : PinMcpSessionResult()
+
+    /** No unbound real-MCP-client sessions found. CLI stays silent. */
+    data object NoCandidates : PinMcpSessionResult()
+
+    /** Daemon-side error (device-spec lookup failed, etc). */
+    data class Failed(val message: String) : PinMcpSessionResult()
+  }
+
+  /**
+   * Tell the daemon to pin its most-recently-active unbound real-MCP-client
+   * session to [deviceSpec] (and optionally [target] / [explicitSessionId]).
+   *
+   * The daemon-side tool returns an empty string for the "no candidates"
+   * case, a one-line description for the "pinned" case, and throws (mapped
+   * to MCP `isError=true`) for unresolved device specs. The CLI uses this
+   * to give MCP clients (Claude Desktop, Cursor, …) the same OOBE that
+   * `eval $(trailblaze device connect)` gives a shell.
+   */
+  suspend fun pinMostRecentUnboundMcpSession(
+    deviceSpec: String,
+    target: String? = null,
+    explicitSessionId: String? = null,
+  ): PinMcpSessionResult {
+    val args = buildMap<String, Any?> {
+      put("deviceSpec", deviceSpec)
+      if (!target.isNullOrBlank()) put("target", target)
+      if (!explicitSessionId.isNullOrBlank()) put("mcpSessionId", explicitSessionId)
+    }
+    val result = callTool("pinMostRecentUnboundMcpSession", args)
+    if (result.isError) return PinMcpSessionResult.Failed(result.content)
+    val text = result.content.trim()
+    return if (text.isEmpty()) PinMcpSessionResult.NoCandidates else PinMcpSessionResult.Pinned(text)
   }
 
   /**
@@ -233,10 +378,12 @@ class CliMcpClient(
         append("Accept", "application/json, text/event-stream")
         sessionId?.let { append("mcp-session-id", it) }
         // Set tool profile on initialization: trail mode → MINIMAL, blaze mode → FULL
+        // (cliMode value `"blaze"` is the persisted user-config key — out of scope for
+        // the wire-tool rename; kept for back-compat with on-disk settings.)
         if (sessionId == null) {
           append("X-Tool-Profile", toolProfile)
           // X-Trailblaze-Origin: tells the daemon what command opened this
-          // session ("snapshot -d android", "blaze", …). Surfaced in the
+          // session ("snapshot -d android", "step", …). Surfaced in the
           // device-busy error so users know which CLI command is currently
           // driving the device. Only sent on the first request because the
           // server reads it once at session creation.
@@ -367,9 +514,9 @@ class CliMcpClient(
     // When reusing a session that already has a device, we still issue a lightweight
     // device(action=PLATFORM, deviceId=ID) call via [rebindDeviceQuiet] to refresh the
     // daemon's per-session `associatedDeviceId`. A previous CLI invocation in the same
-    // MCP session (e.g. `tool` before `blaze`) leaves `selectedDeviceId` set on the
+    // MCP session (e.g. `tool` before `step`) leaves `selectedDeviceId` set on the
     // bridge, but the per-session `associatedDeviceId` — which the screen-state provider
-    // reads — can drift out of sync. When that happens, the next `blaze` call sees
+    // reads — can drift out of sync. When that happens, the next `step` call sees
     // "No device connected" from inside the daemon even though INFO still reports the
     // device as bound. The rebind is a single MCP roundtrip (no LIST, no banners) and
     // is cheap on the daemon side when a persistent driver already exists.
@@ -402,7 +549,12 @@ class CliMcpClient(
           return rebindDeviceQuiet(currentPlatform, currentInstanceId, webHeadless = webHeadless)
         }
       }
-      Console.info("Switching device — starting new session.")
+      // Routed to stderr (not stdout) so it doesn't poison `eval $(trailblaze device connect …)`:
+      // any non-`export` byte on stdout before the export lines makes the shell try to execute
+      // it as a command. Also: em-dashes get replaced with `--` and Unicode `→` with `->` so a
+      // future regression that puts this on stdout doesn't trip zsh on the non-ASCII characters
+      // (the iOS FTUX validator hit `zsh: unmatched '` on the em-dash before the routing fix).
+      Console.error("Switching device -- starting new session.")
     }
 
     if (deviceSpec != null) {
@@ -504,6 +656,32 @@ class CliMcpClient(
     return null
   }
 
+  /**
+   * Re-establish the per-session `associatedDeviceId` binding for [deviceId] without
+   * the user-facing banners that [ensureDevice] emits. Used by `device rebind` after
+   * stopping the active session: `SessionToolSet.handleStop` clears the MCP session's
+   * `associatedDeviceId` as part of cleanup, so a follow-up `setSessionTargetForBoundDevice`
+   * would otherwise fail with "No device is bound" even though the daemon still owns
+   * the underlying driver / browser slot. This call issues a single `device(action=PLATFORM,
+   * deviceId=ID)` round-trip which re-runs `setAssociatedDevice` on the daemon side
+   * (see [DeviceManagerToolSet.connectToDeviceUnified]) — for an already-selected device
+   * the persistent driver is reused so there's no re-launch cost.
+   *
+   * For WEB this passes the historical `headless = true` default, matching the implicit
+   * value [DeviceManagerToolSet.handleDeviceAction]'s WEB branch falls back to when the
+   * caller omits the parameter. `device rebind` doesn't take a `--headless` flag (the
+   * browser is already open — the binding is being refreshed, not re-launched), so the
+   * preference is left to whatever the slot already had.
+   *
+   * Returns null on success or a user-facing error message on failure.
+   */
+  suspend fun rebindBoundDevice(deviceId: TrailblazeDeviceId): String? =
+    rebindDeviceQuiet(
+      platform = deviceId.trailblazeDevicePlatform,
+      instanceId = deviceId.instanceId,
+      webHeadless = true,
+    )
+
   private suspend fun connectToDevice(
     platform: TrailblazeDevicePlatform,
     instanceId: String? = null,
@@ -549,9 +727,14 @@ class CliMcpClient(
       }
     }
 
-    Console.info("Connecting to ${platform.displayName} device${if (instanceId != null) " ($instanceId)" else ""}...")
+    // Status messages go to stderr (via Console.error) because `device connect`
+    // is designed to be wrapped in `eval $(...)` — stdout is reserved for the
+    // single `export TRAILBLAZE_DEVICE='...'` line. Without this, the shell
+    // chokes on "Connecting to …" with `command not found: Connecting` and
+    // never reaches the export line. See `printShellExport` for the convention.
+    Console.error("Connecting to ${platform.displayName} device${if (instanceId != null) " ($instanceId)" else ""}...")
     if (platform == TrailblazeDevicePlatform.IOS) {
-      Console.info("First connection may take 10–30s while the driver is set up on the device. The driver is cached and immediately available for subsequent connections.")
+      Console.error("First connection may take 10–30s while the driver is set up on the device. The driver is cached and immediately available for subsequent connections.")
     }
     val args = mutableMapOf<String, Any?>("action" to platform.name)
     if (instanceId != null) args[DeviceManagerToolSet.PARAM_DEVICE_ID] = instanceId
@@ -568,7 +751,17 @@ class CliMcpClient(
     ) {
       return result.content
     }
-    if (result.isError) return "Error connecting to device: ${result.content}"
+    if (result.isError) {
+      // Map transport-level failures (HTTP 4xx/5xx surfacing through the JSON-RPC
+      // error envelope at [sendRequest]) to human-actionable reasons before
+      // handing the string up to `reportCliError`. The previous behavior was
+      // to dump the raw `HTTP 404: <body>` into the envelope's `reason:` line,
+      // which is technically accurate but useless to a first-time user under
+      // contention (the iOS FTUX validator's exact complaint: "exit 2 but
+      // nothing actionable in the output"). Friendlier mapping lets the user
+      // know what to try next without reading source.
+      return "Error connecting to device: ${decodeTransportError(result.content)}"
+    }
 
     // Per-platform post-connect setup. Each branch is the hook point for any
     // async install/warmup a platform grows; today only Web needs one.
@@ -587,23 +780,30 @@ class CliMcpClient(
     }
 
     // Echo the full device spec so the agent knows what was connected
+    // stderr — same eval-safety reason as the "Connecting to …" line above.
     val connectedId = parseConnectedInstanceId(result) ?: instanceId
     hasConnectedDevice = true
     val sessionId = getTrailblazeSessionId()
     val sessionSuffix = sessionId?.let { " (session $it)" } ?: ""
-    Console.info("Connected: ${platform.name.lowercase()}/${connectedId ?: "default"}$sessionSuffix")
+    Console.error("Connected: ${platform.name.lowercase()}/${connectedId ?: "default"}$sessionSuffix")
     if (sessionId != null) printSessionCommandMenu(sessionId)
     printDeviceSessionInfo(result)
     return null
   }
 
   private fun printSessionCommandMenu(sessionId: String) {
-    Console.info("Session commands:")
-    Console.info("  trailblaze session info      --id $sessionId   # recorded steps so far")
-    Console.info("  trailblaze session save      --id $sessionId   # write *.trail.yaml you can replay")
-    Console.info("  trailblaze report            --id $sessionId   # generate HTML report for this session")
-    Console.info("  trailblaze session artifacts --id $sessionId   # video, logs, screenshots")
-    Console.info("  trailblaze session end       --id $sessionId   # end the session")
+    // stderr — same eval-safety reason as the "Connecting to …" / "Connected: …"
+    // lines in [connectToDevice]. `device connect` is wrapped in `eval $(...)`
+    // and stdout is reserved for the single `export TRAILBLAZE_DEVICE='...'`
+    // line. Without this, the six follow-up tips below would break the eval
+    // on every connect that has an active session (i.e. almost every warm
+    // connect) with `command not found: Session` before the export ran.
+    Console.error("Session commands:")
+    Console.error("  trailblaze session info      --id $sessionId   # recorded steps so far")
+    Console.error("  trailblaze session save      --id $sessionId   # write *.trail.yaml you can replay")
+    Console.error("  trailblaze report            --id $sessionId   # generate HTML report for this session")
+    Console.error("  trailblaze session artifacts --id $sessionId   # video, logs, screenshots")
+    Console.error("  trailblaze session end       --id $sessionId   # end the session")
   }
 
   /**
@@ -630,16 +830,22 @@ class CliMcpClient(
 
   private fun printDeviceSessionInfo(result: ToolResult) {
     val sessionInfo = parseEndedSessionInfo(result.content) ?: return
-    Console.info("Ended previous session ($sessionInfo) to claim device.")
+    // stderr — same eval-safety reason as the "Connecting to …" / "Connected: …"
+    // lines above. The export line is the only thing on stdout for device connect.
+    Console.error("Ended previous session ($sessionInfo) to claim device.")
   }
 
   private suspend fun logSessionReuse(currentSpec: String?) {
     val sessionId = getTrailblazeSessionId()
     val on = currentSpec?.let { " on $it" } ?: ""
+    // stderr — this fires on re-invocation of `device connect` and was the line
+    // that broke `eval $(trailblaze device connect …)` on a warm session:
+    // stdout had "Reusing session 2026_… on …" printed before the export, so
+    // `eval` errored with "command not found: Reusing" and the export never ran.
     if (sessionId != null) {
-      Console.info("Reusing session $sessionId$on")
+      Console.error("Reusing session $sessionId$on")
     } else if (currentSpec != null) {
-      Console.info("Reusing existing session$on")
+      Console.error("Reusing existing session$on")
     }
   }
 
@@ -731,7 +937,12 @@ class CliMcpClient(
 
   companion object {
     const val PROTOCOL_VERSION = "2025-11-25"
-    const val CLIENT_NAME = "TrailblazeCLI"
+    // Single source of truth lives next to TrailblazeMcpSessionContext (server
+    // module). The server-side filter for "is this a real MCP client?" reads
+    // that constant, and the CLI's initialize handshake must send the same
+    // string. Re-exported here for source-compat with existing callers; a
+    // unit-test asserts the two values still match.
+    const val CLIENT_NAME: String = xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
     const val CONNECT_TIMEOUT_MS = 10_000L
     const val DEFAULT_REQUEST_TIMEOUT_MS = 180_000L // 3 minutes for agent operations
     const val CLEANUP_TIMEOUT_MS = 5_000L
@@ -762,6 +973,7 @@ class CliMcpClient(
         .take(200)
         .takeIf { it.isNotEmpty() }
     }
+
     private const val SESSION_FILE_PREFIX = "trailblaze-cli-session"
     private const val JSON_RPC_VERSION = "2.0"
     private const val TOOLS_CALL_METHOD = "tools/call"
@@ -773,12 +985,36 @@ class CliMcpClient(
     private const val ACTION_KEY = "action"
     private const val TMP_DIR_PROPERTY = "java.io.tmpdir"
 
+    /**
+     * Mirrors `SessionToolSet.TARGET_SOURCE_SESSION_OVERRIDE` — the string the
+     * daemon writes into a session-INFO response's `targetSource` field when
+     * the effective target came from a per-device override (set by
+     * `setSessionTargetForBoundDevice`). Used by
+     * [setSessionTargetForBoundDeviceAnnouncingChange] to distinguish "first-
+     * time pin" (daemon-wide fallback, silent) from "swap of an existing
+     * pin" (announce the change).
+     */
+    internal const val TARGET_SOURCE_SESSION_OVERRIDE = "session-override"
+
+    /**
+     * Safely read [key] from a JSON object as a string. Returns null if the
+     * field is absent, JsonNull, or not a JsonPrimitive (defensive — the
+     * session-INFO envelope is JSON-typed but we don't want a server-side
+     * shape regression to throw here).
+     */
+    private fun JsonObject.stringField(key: String): String? {
+      val el = this[key] ?: return null
+      if (el is JsonNull) return null
+      val prim = el as? JsonPrimitive ?: return null
+      return prim.content
+    }
+
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
     /**
      * Returns a CLI state file under the temp directory. The optional [sessionScope]
      * disambiguates otherwise-shared state when one logical workflow needs its own
-     * reusable MCP session, such as `blaze` keeping per-device history for `--save`.
+     * reusable MCP session, such as `step` keeping per-device history for `--save`.
      */
     internal fun scopedStateFile(prefix: String, port: Int, sessionScope: String? = null): File {
       val fileName = buildString {
@@ -873,12 +1109,12 @@ class CliMcpClient(
 
     /**
      * Connects to the daemon for a **stateful/reusable CLI workflow**
-     * (`blaze`, `blaze --save`, `session …`).
+     * (`step`, `blaze --save`, `session …`).
      *
      * The MCP session is persisted in `/tmp/trailblaze-cli-session-{port}[-scope]`
      * so that follow-up commands (in this terminal or another) can reattach to
      * the same daemon-side state — that's how `blaze --save` finds the steps
-     * recorded by earlier `blaze` calls and how `session info/save/stop` reach
+     * recorded by earlier `step` calls and how `session info/save/stop` reach
      * the session opened by `session start`.
      *
      * Flow:
@@ -923,7 +1159,9 @@ class CliMcpClient(
         // Target app changed — different targets use different drivers and tool sets,
         // so the entire session must be recreated (not just a driver reconnect).
         if (effectiveTargetAppId != null && savedTargetAppId != null && effectiveTargetAppId != savedTargetAppId) {
-          Console.info("Target app changed ($savedTargetAppId → $effectiveTargetAppId) — creating new session.")
+          // stderr (not stdout) — see the "Switching device" comment above for why. Same
+          // em-dash/Unicode-arrow stripping to harden against future stdout regressions.
+          Console.error("Target app changed ($savedTargetAppId -> $effectiveTargetAppId) -- creating new session.")
         } else {
           client.sessionId = savedSessionId
           try {
@@ -935,10 +1173,10 @@ class CliMcpClient(
               return client
             }
             // Daemon responded but doesn't recognize our session — it was restarted
-            Console.info("Daemon doesn't recognize the saved session — starting a new one.")
+            Console.error("Daemon doesn't recognize the saved session -- starting a new one.")
           } catch (_: Exception) {
             // Daemon probe failed mid-call — recreate below
-            Console.info("Daemon probe failed — starting a new session.")
+            Console.error("Daemon probe failed -- starting a new session.")
           }
           client.sessionId = null
         }
@@ -1030,6 +1268,28 @@ class CliMcpClient(
           DeviceListEntry(instanceId, platform, description)
         }
     }
+
+    /**
+     * Drops the always-present `web/playwright-native` virtual entry from a
+     * device list. The Playwright web driver is registered as a virtual device
+     * regardless of whether a browser is actually running, so it shows up in
+     * every `device LIST` response. Single-device autodetect logic (both the
+     * CLI's [autodetectSingleConnectedDevice] in `CliInfrastructure` and the
+     * MCP proxy's parallel autodetect) treats it as noise: counting it would
+     * mis-classify the common "1 emulator + 0 browsers" case as `Multiple`,
+     * and "0 emulators" as `Resolved(web)` — neither matches user intent.
+     * Authoring a web trail explicitly via `--device web` / `TRAILBLAZE_DEVICE=web`
+     * still works; we just don't pick it implicitly.
+     *
+     * Centralized here (next to [parseDeviceList]) so the CLI and MCP-proxy
+     * autodetect paths stay in lock-step. Adding a new virtual entry in the
+     * future means one edit, not two.
+     */
+    internal fun List<DeviceListEntry>.filterRealDevices(): List<DeviceListEntry> =
+      filterNot {
+        it.platform == TrailblazeDevicePlatform.WEB &&
+          it.instanceId == WebInstanceIds.PLAYWRIGHT_NATIVE
+      }
 
     /** Extracts the connected instance ID from device tool response text. */
     internal fun parseConnectedInstanceId(text: String): String? {

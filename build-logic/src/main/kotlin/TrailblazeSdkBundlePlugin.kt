@@ -123,7 +123,7 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
               "Likely causes (in order of frequency):\n" +
               "  1. You edited sdks/typescript/src/ without regenerating the bundle.\n" +
               "  2. A transitive dep (e.g. esbuild) drifted via registry resolution since the\n" +
-              "     bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install)`\n" +
+              "     bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
               "     and re-run.\n" +
               "Regenerate the bundle and commit the result:\n" +
               "  ./gradlew :trailblaze-scripting-bundle:bundleTrailblazeSdk\n" +
@@ -143,7 +143,7 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
 // Directed-error check for the consumer-facing failure mode where the plugin is applied but
 // the extension is never configured. Without this, an unconfigured consumer hits Gradle's
 // generic "no value has been specified" snapshot error which doesn't name the extension
-// block. Mirrors the pattern `BundleTrailblazePackTask.generate()` uses for `packsDir`.
+// block. Mirrors the pattern `BundleTrailblazeTrailmapTask.generate()` uses for `trailmapsDir`.
 private fun requireExtensionConfigured(ext: TrailblazeSdkBundleExtension) {
   if (!ext.trailblazeSdkDir.isPresent || !ext.sdkBundleOutputFile.isPresent) {
     throw GradleException(
@@ -159,12 +159,13 @@ private fun requireExtensionConfigured(ext: TrailblazeSdkBundleExtension) {
 // Shared bundle-source input declarations used by both `bundleTrailblazeSdk` and
 // `verifyTrailblazeSdkBundle`. Keeping these in one place is load-bearing: if a future
 // input (e.g. `tsconfig.json`) is added to one task and forgotten on the other, the verify
-// gate silently stops protecting against that input's drift. Lock files use a filtered
-// collection because either, both, or neither may exist on disk (bun vs npm depending on
-// contributor setup). Every input is wrapped in `project.provider { if isPresent ... }` so
-// the snapshotter tolerates an unconfigured extension — the directed-error message from
-// `requireExtensionConfigured` then fires from doFirst instead of Gradle's generic
-// "no value has been specified" snapshot error.
+// gate silently stops protecting against that input's drift. The canonical (and only)
+// lockfile is `bun.lock` — Bun's text-based JSONC format, default since Bun 1.2 (Jan
+// 2025) and now floor-pinned via Hermit. Every input is wrapped in
+// `project.provider { if isPresent ... }` so the snapshotter tolerates an unconfigured
+// extension — the directed-error message from `requireExtensionConfigured` then fires
+// from doFirst instead of Gradle's generic "no value has been specified" snapshot
+// error.
 private fun declareSdkBundleInputs(
   task: Task,
   ext: TrailblazeSdkBundleExtension,
@@ -189,9 +190,7 @@ private fun declareSdkBundleInputs(
     project.provider {
       if (!ext.trailblazeSdkDir.isPresent) return@provider emptyList<File>()
       val dir = ext.trailblazeSdkDir.get()
-      listOf("bun.lock", "bun.lockb", "package-lock.json")
-        .map { dir.file(it).asFile }
-        .filter { it.exists() }
+      listOf(dir.file("bun.lock").asFile).filter { it.exists() }
     },
   ).withPropertyName("sdkLockFiles")
 }
@@ -208,8 +207,9 @@ private fun runEsbuildBundle(sdkDir: File, outputFile: File, logFile: File) {
   if (!esbuildBin.exists()) {
     throw GradleException(
       "esbuild not found at ${esbuildBin.absolutePath}. Run `(cd ${sdkDir.absolutePath} && " +
-        "bun install)` (or `npm install`) to pull the TS SDK's devDependencies before " +
-        "regenerating the bundle.",
+        "bun install --frozen-lockfile)` to pull the TS SDK's devDependencies before " +
+        "regenerating the bundle. Trailblaze is bun-only — activate the repo's Hermit env " +
+        "(`source bin/activate-hermit`) or install bun from https://bun.sh/.",
     )
   }
   val entry = File(sdkDir, "src/index.ts")

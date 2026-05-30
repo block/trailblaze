@@ -1,0 +1,36 @@
+# Core Playwright web interaction tools.
+id: web_core
+description: "Click, type, navigate, scroll, and other web interactions via Playwright."
+drivers:
+  - playwright-native
+  - playwright-electron
+tools:
+  - web_click
+  - web_type
+  - web_navigate
+  - web_scroll
+  - web_hover
+  - web_pressKey
+  - web_selectOption
+  - web_wait
+  - web_snapshot
+  - web_requestDetails
+  - web_resize
+  # Read-only / wait primitives — safe for LLM use.
+  - web_currentUrl
+  - web_waitForUrl
+  # Storage-state + secret-injection primitives. Intended primarily for scripted-tool
+  # composition (e.g. session-cache replay), but listed in this toolset because the
+  # session toolRepo is built from member toolsets — a tool that isn't in any toolset can't
+  # be `client.tools.<name>(...)`'d from a scripted tool either (per-pack codegen reads
+  # from resolved toolset membership). The LLM-facing concern is bounded: `web_fillSecret`
+  # requires a known value to fill; the storage-state primitives are session-cache plumbing.
+  #
+  - web_applyCookies
+  - web_getStorageState
+  - web_fillSecret
+  # `web_evaluate` is registered separately in `web_framework.yaml` — the sibling-to-
+  # `android_framework.yaml` toolset for arbitrary-string-execution utilities that need
+  # to be reachable from scripted-tool composition (`client.tools.web_evaluate(...)`) but
+  # must never land in the LLM's tool catalog. Class-level `surfaceToLlm = false` +
+  # `isRecordable = false` enforce both properties.

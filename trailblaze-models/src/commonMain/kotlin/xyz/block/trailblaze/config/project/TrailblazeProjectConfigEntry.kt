@@ -31,7 +31,7 @@ import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
  * through unchanged.
  *
  * Targets do **not** use this inline-or-ref shape — `TrailblazeProjectConfig.targets`
- * is a list of target-pack ids (`List<String>`). Each id resolves to a `pack.yaml`
+ * is a list of target-trailmap ids (`List<String>`). Each id resolves to a `trailmap.yaml`
  * by convention; targets are no longer authored inline at the workspace level.
  */
 @Serializable(with = ToolsetEntrySerializer::class)

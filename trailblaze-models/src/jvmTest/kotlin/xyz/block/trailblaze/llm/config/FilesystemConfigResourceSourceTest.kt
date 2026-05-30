@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Regression coverage for the filesystem side of `trailblaze-config/` discovery.
+ * Regression coverage for the filesystem side of `trails/config/` discovery.
  *
  * These are pure-logic tests — they don't spawn Trailblaze or touch the classpath. The
  * value is pinning the layout convention (`<rootDir>/targets/foo.yaml` → key `"foo"`) and
@@ -107,9 +107,9 @@ class FilesystemConfigResourceSourceTest {
   }
 
   @Test
-  fun `paths without the trailblaze-config prefix resolve against rootDir directly`() {
+  fun `paths without the config-dir prefix resolve against rootDir directly`() {
     // The prefix-stripping logic in resolveSubDir applies only when the path starts with
-    // `trailblaze-config/`. A bare path like `"providers"` should still resolve under the
+    // `trails/config/`. A bare path like `"providers"` should still resolve under the
     // root — useful for callers that pre-strip the prefix themselves.
     File(rootDir, "providers").apply { mkdir() }
       .let { File(it, "openai.yaml").writeText("id: openai") }

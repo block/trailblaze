@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigBootstrap
 import xyz.block.trailblaze.util.Console
 import kotlin.system.exitProcess
 
@@ -9,7 +10,7 @@ import kotlin.system.exitProcess
  *
  * The bootstrap runs the same compile chain the CLI's `trailblaze compile` and the daemon
  * startup path run: workspace SDK extraction (`<workspace>/.trailblaze/sdk/` plus
- * `tsconfig.base.json`), per-pack `client.d.ts` codegen, per-pack `tsconfig.json` /
+ * `tsconfig.base.json`), per-trailmap `client.d.ts` codegen, per-trailmap `tsconfig.json` /
  * `.gitignore` emission, and `TrailblazeCompiler.compile`. Wiring it into `:check` (via the
  * convention plugin's `tasks.matching { it.name == "check" }` configureEach) means a fresh
  * clone's first `./gradlew build` materializes the typed bindings that authors otherwise
@@ -34,18 +35,22 @@ object WorkspaceCompileMain {
   fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     // Resolve the working directory once up-front so every log line below can attribute
     // its output to a specific workspace. Without this prefix, a `./gradlew build` that
-    // runs the JavaExec across four example packs back-to-back produces four
+    // runs the JavaExec across four example trailmaps back-to-back produces four
     // indistinguishable `Recompiled(emitted=1)` lines — useless when CI logs need
     // correlation. `Paths.get("").toAbsolutePath()` is the same resolution
     // `WorkspaceCompileBootstrap` does internally for workspace discovery.
     val workspacePath = java.nio.file.Paths.get("").toAbsolutePath().normalize()
+    // Install the workspace-config-dir resolver so the default `platformConfigResourceSource()`
+    // layers workspace-on-disk over the classpath. The bootstrap path below triggers discovery,
+    // so this has to run before bootstrap().
+    TrailblazeWorkspaceConfigBootstrap.ensureInstalled()
     try {
       val result = WorkspaceCompileBootstrap.bootstrap()
       Console.log("trailblaze workspace compile ($workspacePath): $result")
     } catch (e: WorkspaceCompileBootstrap.WorkspaceCompileException) {
       // Typed compile failure — message is already directed (lists each resolver error).
       Console.error("trailblaze workspace compile ($workspacePath) failed:")
-      Console.error(e.message ?: "Workspace pack compilation failed.")
+      Console.error(e.message ?: "Workspace trailmap compilation failed.")
       exitProcess(1)
     } catch (e: Throwable) {
       // Anything else — `IOException` from SDK extraction, `RuntimeException` from a

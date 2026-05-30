@@ -159,7 +159,32 @@ class TrailblazeSettingsRepo(
       serverStateFlow
         .distinctUntilChangedBy { newState -> newState }
         .collect { newState ->
-          saveConfig(newState.appConfig)
+          // Defensive: the launched scope is unstructured (no parent
+          // cancellation tied to this repo's lifetime), so the collector
+          // outlives instances whose `settingsFile` may have disappeared —
+          // e.g. JUnit's `TemporaryFolder` cleaning up a per-test temp dir
+          // before this dispatcher fires. Without the catch, the resulting
+          // `FileNotFoundException` propagates as an uncaught exception on
+          // a `DefaultDispatcher` thread, which Gradle's test runner reports
+          // as a test-level failure (observed on `TrailblazeSettingsRepo
+          // ConfigDirTest` in PR CI despite the affected test having no
+          // functional relationship to the write).
+          //
+          // `runCatching` swallows ONLY the persistence-side error; the
+          // in-memory state-flow update has already succeeded by the time
+          // we got here, and the `setEffectiveDefault` below is safe to run
+          // independently. The proper fix is a structured scope tied to a
+          // `dispose()` lifecycle hook on the repo — deferred (callers
+          // would need updates).
+          runCatching {
+            saveConfig(newState.appConfig)
+          }.onFailure { e ->
+            Console.log(
+              "[TrailblazeSettingsRepo] saveConfig from state-flow collector failed " +
+                "(${settingsFile.absolutePath}): ${e.message}. Continuing — most likely " +
+                "a stale collector firing after a test's temp dir was cleaned up.",
+            )
+          }
           EffectiveScreenshotScalingConfig.setEffectiveDefault(
             newState.appConfig.screenshotScalingConfig(),
           )

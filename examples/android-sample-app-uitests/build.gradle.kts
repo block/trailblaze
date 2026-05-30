@@ -10,8 +10,6 @@ plugins {
 
 val installSampleAppMcpTools =
   project(":trailblaze-scripting-subprocess").tasks.named("installSampleAppMcpTools")
-val installSampleAppMcpSdkTools =
-  project(":trailblaze-scripting-subprocess").tasks.named("installSampleAppMcpSdkTools")
 
 // Stage the sample-app trails into a build-output directory, filtering out `node_modules/`
 // (and any sibling `install/` artifacts written by bun/npm). Two reasons:
@@ -22,8 +20,7 @@ val installSampleAppMcpSdkTools =
 //      directory the install tasks write to, so the validator has nothing to flag —
 //      regardless of which AGP task family is added next.
 //   2) `node_modules/` would bloat the test APK with megabytes of npm packages that
-//      runFromAsset() never opens (the on-device runtime loads its JS via the
-//      `:trailblaze-scripting-bundle` resource path, not from android-sample-app assets).
+//      runFromAsset() never opens.
 //
 // The copy depends on the install tasks so any consumer of the staged dir transitively
 // gets the dependency, replacing the per-task `dependsOn` whack-a-mole that the matcher
@@ -35,7 +32,6 @@ val stageTrailAssets =
     from("../android-sample-app/trails") { exclude("**/node_modules/**", "**/install/**") }
     into(stagedTrailAssets)
     dependsOn(installSampleAppMcpTools)
-    dependsOn(installSampleAppMcpSdkTools)
   }
 
 // Stage the repo-root `trails/eval/android/sample-app/` directory under the same
@@ -79,12 +75,6 @@ android {
   sourceSets {
     getByName("androidTest") {
       // Bundle sample-app trails as assets in the test APK so runFromAsset() can read them.
-      // `src/androidTest/assets/` is added so A5's fixture bundle JS
-      // (`fixtures/bundle-roundtrip-fixture.js`) ships alongside the trails — the
-      // on-device round-trip test loads it via `AndroidAssetBundleJsSource` to exercise
-      // the same asset-path resolution production `AndroidTrailblazeRule.mcpServers`
-      // consumers will use.
-      //
       // The trails dir is sourced from the staged copy (see [stageTrailAssets]) rather than
       // the live tree so AGP asset consumers don't walk into the install tasks' npm output.
       assets.srcDirs(
@@ -139,10 +129,6 @@ tasks
 dependencies {
   androidTestImplementation(project(":trailblaze-common"))
   androidTestImplementation(project(":trailblaze-android"))
-  // PR A5: the on-device bundle runtime. Tests here exercise `McpBundleSession.connect`
-  // directly from an instrumentation context to prove QuickJS + the in-process MCP
-  // transport work on a real device — a step up from the JVM-side fixture round-trip.
-  androidTestImplementation(project(":trailblaze-scripting-bundle"))
   // The MCP-free QuickJS-tool runtime. Tests here exercise `QuickJsToolHost` and the
   // launcher path on-device through the new `AndroidAssetBundleSource` resolver.
   androidTestImplementation(project(":trailblaze-quickjs-tools"))

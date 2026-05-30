@@ -31,7 +31,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
  * the MCP-shaped runtime.
  *
  * Loads two bundles staged into the test APK assets:
- * 1. `config/packs/sampleapp/tools/quickjs-tools/pure.js` — the pure-JS sample, copied via
+ * 1. `config/trailmaps/sampleapp/tools/quickjs-tools/pure.js` — the pure-JS sample, copied via
  *    `stageTrailAssets`.
  * 2. `fixtures/quickjs/typed.bundle.js` — the typed `@trailblaze/tools` bundle produced by
  *    `:trailblaze-quickjs-tools:bundleSampleAppTypedAuthorTool` and staged via
@@ -72,7 +72,7 @@ class QuickJsToolBundleOnDeviceTest {
   @Test
   fun pureJsBundleLoadsAndDispatchesOnDevice() = runBlocking {
     val source =
-      AndroidAssetBundleSource(assetPath = "config/packs/sampleapp/tools/quickjs-tools/pure.js")
+      AndroidAssetBundleSource(assetPath = "config/trailmaps/sampleapp/tools/quickjs-tools/pure.js")
     val host = QuickJsToolHost.connect(bundleJs = source.read(), bundleFilename = source.filename)
     hosts.add(host)
 
@@ -133,7 +133,7 @@ class QuickJsToolBundleOnDeviceTest {
 
     val bundles =
       listOf(
-        McpServerConfig(script = "config/packs/sampleapp/tools/quickjs-tools/pure.js"),
+        McpServerConfig(script = "config/trailmaps/sampleapp/tools/quickjs-tools/pure.js"),
         McpServerConfig(script = "fixtures/quickjs/typed.bundle.js"),
       )
     val runtime =

@@ -186,10 +186,6 @@ class YamlBackedHostAppTarget(
     return ids.distinct()
   }
 
-  // --- MCP server declarations (Decision 038) ---
-
-  override fun getMcpServers(): List<McpServerConfig> = config.mcpServers ?: emptyList()
-
   override fun getInlineScriptTools(): List<InlineScriptToolConfig> = config.tools ?: emptyList()
 
   override fun getSystemPromptTemplate(): String? = config.systemPrompt

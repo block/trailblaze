@@ -85,7 +85,7 @@ class ReportCommandMaxSizeWiringTest {
     // silently dropping the value.
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--max-size", "10MB")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
@@ -94,7 +94,7 @@ class ReportCommandMaxSizeWiringTest {
     // runtime stack trace once generateSessionReport starts the export.
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--gif", "--max-size", "garbage")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
@@ -104,7 +104,7 @@ class ReportCommandMaxSizeWiringTest {
     // multiplier picking up an unexpected default.
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--webp", "--max-size", "10TB")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test
@@ -115,7 +115,7 @@ class ReportCommandMaxSizeWiringTest {
     // produce an "infinite" cap and effectively turn --max-size into a no-op).
     val cmd = ReportCommand()
     CommandLine(cmd).parseArgs("--id", "abc", "--webp", "--max-size", "99999999999G")
-    assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   /**

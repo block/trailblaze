@@ -7,7 +7,7 @@ import kotlin.test.assertEquals
  * Pins the "later source wins on filename collision" contract for
  * [CompositeConfigResourceSource]. That rule is load-bearing: it's how user-contributed
  * filesystem config overrides framework-shipped classpath config (e.g. a user pinning a
- * different `trailblaze-config/targets/my-app.yaml` wins against a stale classpath copy).
+ * different `trails/config/targets/my-app.yaml` wins against a stale classpath copy).
  */
 class CompositeConfigResourceSourceTest {
 

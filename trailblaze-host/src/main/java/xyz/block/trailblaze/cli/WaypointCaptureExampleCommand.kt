@@ -82,11 +82,11 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/ — the " +
-        "canonical workspace-pack location. Warns if no such pack exists. Mutually exclusive " +
-        "with --root (--root wins if both given). Also supplies the pack's declared " +
+      "Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/ — the " +
+        "canonical workspace-trailmap location. Warns if no such trailmap exists. Mutually exclusive " +
+        "with --root (--root wins if both given). Also supplies the trailmap's declared " +
         "`app_ids:` to expand `{{target.appId}}` placeholders during matching; exits with " +
-        "a usage error if the named pack can't be resolved or declares no `app_ids:`.",
+        "a usage error if the named trailmap can't be resolved or declares no `app_ids:`.",
     ],
   )
   var targetId: String? = null
@@ -113,27 +113,27 @@ class WaypointCaptureExampleCommand : Callable<Int> {
 
   override fun call(): Int {
     // Resolve --target / --root to the effective waypoint root. See [resolveWaypointRoot] for
-    // the precedence rules; in short, --root wins, then --target → workspace pack convention,
+    // the precedence rules; in short, --root wins, then --target → workspace trailmap convention,
     // then a default with a "no target specified" warning.
     val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
     val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(r.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> r.context
       is TargetContextResolution.NoTarget -> null
     }
     // We need the waypoint definition early — both for the search (so the matcher can
     // identify a matching step) and for the eventual write. Resolve it once up front.
-    val (def, defFile) = findWaypointFile(root) ?: return CommandLine.ExitCode.USAGE
-    val logFile = resolveLogFile(def, target) ?: return CommandLine.ExitCode.USAGE
+    val (def, defFile) = findWaypointFile(root) ?: return TrailblazeExitCode.MISUSE.code
+    val logFile = resolveLogFile(def, target) ?: return TrailblazeExitCode.MISUSE.code
 
     // Parse the source log into a JsonObject so we can copy fields verbatim
     val rawJson = logFile.readText()
     val sourceJson = Json.parseToJsonElement(rawJson) as? JsonObject ?: run {
       Console.error("Source log is not a JSON object: ${logFile.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     // Pick the raw screenshot. On Android the framework writes a paired (raw + annotated)
@@ -142,8 +142,12 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     // that file when no twin exists. Anything that looks like an annotated screenshot
     // without a raw twin would be caught here and warrant a warning.
     val rawScreenshot = findRawScreenshot(logFile, sourceJson) ?: run {
-      Console.error("Could not locate any screenshot for ${logFile.name} in ${logFile.parentFile}.")
-      return 1
+      reportCliError(
+        verb = "Capture example",
+        target = logFile.name,
+        reason = "could not locate any screenshot in ${logFile.parentFile}",
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     // Compute output paths next to the waypoint YAML.
@@ -165,7 +169,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
       Console.error("Example files already exist. Use --force to overwrite:")
       Console.error("  ${exampleJsonFile.name}")
       Console.error("  ${screenshotFile.name}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     rawScreenshot.copyTo(screenshotFile, overwrite = true)
@@ -183,18 +187,22 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     val screen = SessionLogScreenState.loadStep(exampleJsonFile)
     val matchResult = WaypointMatcher.match(def, screen, target)
     if (!matchResult.matched) {
-      Console.error("Waypoint did not match its own example — deleting partial files.")
+      reportCliError(
+        verb = "Capture example",
+        target = def.id,
+        reason = "waypoint did not match its own example — deleting partial files",
+      )
       Console.error(formatResult(matchResult))
       exampleJsonFile.delete()
       screenshotFile.delete()
-      return 1
+      return TrailblazeExitCode.ASSERTION_FAILED.code
     }
 
     Console.log("Wrote example pair for ${def.id}:")
     Console.log("  ${exampleJsonFile.absolutePath}")
     Console.log("  ${screenshotFile.absolutePath}")
     Console.log("Self-validation: MATCH (${matchResult.matchedRequired.size} required satisfied)")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   /**
@@ -365,11 +373,11 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    *
    * `capture-example` writes its example pair (`<base>.example.json` + screenshot) NEXT TO
    * the resolved YAML on disk. That requires a writable file path, which classpath-bundled
-   * YAMLs (loaded from JAR resources via the pack manifest) don't have. So this lookup is
-   * deliberately filesystem-only. When the id IS declared in a classpath-bundled pack but
+   * YAMLs (loaded from JAR resources via the trailmap manifest) don't have. So this lookup is
+   * deliberately filesystem-only. When the id IS declared in a classpath-bundled trailmap but
    * not on the filesystem, we surface a targeted error pointing the user at `--root` rather
    * than the generic "not found" — that distinguishes "you need to point me at the on-disk
-   * pack source" from "this id doesn't exist anywhere."
+   * trailmap source" from "this id doesn't exist anywhere."
    */
   private fun findWaypointFile(root: File): Pair<WaypointDefinition, File>? {
     val candidates = WaypointLoader.discover(root)
@@ -389,7 +397,7 @@ class WaypointCaptureExampleCommand : Callable<Int> {
         // Filesystem walk turned up nothing. Before giving the generic "not found" error,
         // probe the classpath via WaypointDiscovery — if the id IS bundled there, the user
         // hit the most common foot-gun (`capture-example --target <id>` against a
-        // classpath-only pack) and deserves a pointed error rather than confusion.
+        // classpath-only trailmap) and deserves a pointed error rather than confusion.
         val discoveredOnClasspath = WaypointDiscovery.discover(root)
           .definitions
           .any { it.id == waypointId }
@@ -397,8 +405,8 @@ class WaypointCaptureExampleCommand : Callable<Int> {
           Console.error(
             "Waypoint id '$waypointId' is bundled on the classpath only — capture-example " +
               "writes its example pair next to the on-disk *.waypoint.yaml, which JAR-bundled " +
-              "definitions don't have. Pass --root <pack-source-dir> pointing at the on-disk " +
-              "pack source so the example file can be written next to the YAML there.",
+              "definitions don't have. Pass --root <trailmap-source-dir> pointing at the on-disk " +
+              "trailmap source so the example file can be written next to the YAML there.",
           )
         } else {
           Console.error("Waypoint id not found: $waypointId (searched ${root.absolutePath})")

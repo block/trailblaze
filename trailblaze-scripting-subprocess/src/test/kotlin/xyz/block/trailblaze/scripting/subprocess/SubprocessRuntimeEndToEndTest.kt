@@ -35,13 +35,13 @@ import kotlin.test.Test
  * Two fixtures live side-by-side at `src/test/resources/mcp-fixture/`:
  *
  * - `fixture.js` — hand-rolled JSON-RPC over stdio. No `node_modules`, no install step. Always
- *   runs in CI (as long as bun/tsx is on PATH) and catches Kotlin-client-side wire regressions
+ *   runs in CI (as long as bun is on PATH) and catches Kotlin-client-side wire regressions
  *   cheaply.
  * - `fixture.ts` — real `@modelcontextprotocol/sdk` server. Opt-in: the test only runs when
  *   `node_modules/` exists next to `fixture.ts` (or env `TRAILBLAZE_E2E_TYPESCRIPT=true`).
  *   Catches drift on the SDK author surface Trailblaze tool authors will actually use.
  *
- * Skipped entirely when bun/tsx isn't on PATH — there's no practical way to exercise the spawn
+ * Skipped entirely when bun isn't on PATH — there's no practical way to exercise the spawn
  * path without them. Unit tests cover the pure-function filter/parser logic regardless.
  */
 class SubprocessRuntimeEndToEndTest {
@@ -78,7 +78,7 @@ class SubprocessRuntimeEndToEndTest {
   @Test fun `vanilla-JS fixture spawn connect list-filter dispatch and shutdown`() {
     runBlocking {
       assumeTrue(
-        "bun or tsx must be on PATH to exercise the e2e runtime",
+        "bun must be on PATH to exercise the e2e runtime",
         runtimeAvailable(),
       )
       runFixtureScenario(jsFixture)
@@ -97,7 +97,7 @@ class SubprocessRuntimeEndToEndTest {
   @Test fun `TypeScript fixture spawn connect list-filter dispatch and shutdown`() {
     runBlocking {
       assumeTrue(
-        "bun or tsx must be on PATH to exercise the e2e runtime",
+        "bun must be on PATH to exercise the e2e runtime",
         runtimeAvailable(),
       )
       assumeTrue(
@@ -182,9 +182,9 @@ class SubprocessRuntimeEndToEndTest {
   }
 
   private fun runtimeAvailable(): Boolean = try {
-    NodeRuntimeDetector.cached
+    BunRuntimeDetector.cached
     true
-  } catch (_: NoCompatibleTsRuntimeException) {
+  } catch (_: NoBunRuntimeException) {
     false
   }
 

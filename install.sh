@@ -39,6 +39,44 @@ optional_dependency() {
   fi
 }
 
+# Ensure bun is available. Unlike esbuild/ffmpeg (truly optional), bun is the sole
+# supported JS runtime behind the @trailblaze/scripting build path, so we install it
+# automatically — the no-package-manager equivalent of what `brew install bun` would
+# do — rather than only warning. Uses bun's official installer (macOS + Linux). Stays
+# non-fatal: a download failure or restricted environment still leaves a working JAR
+# for pre-recorded trails. Set TRAILBLAZE_SKIP_BUN_INSTALL=1 to opt out entirely.
+ensure_bun() {
+  if command -v bun > /dev/null 2>&1; then
+    info "bun found ($(bun --version 2>/dev/null))"
+    return 0
+  fi
+
+  if [ "${TRAILBLAZE_SKIP_BUN_INSTALL:-}" = "1" ]; then
+    echo "WARNING: 'bun' is not on PATH and TRAILBLAZE_SKIP_BUN_INSTALL=1 was set —" >&2
+    echo "         scripted-tool authoring/dispatch will be unavailable. Install from" >&2
+    echo "         https://bun.sh/ to enable it." >&2
+    return 0
+  fi
+
+  info "bun not found — installing via https://bun.sh/install ..."
+  if curl -fsSL https://bun.sh/install | bash; then
+    # bun's installer drops the binary in $BUN_INSTALL/bin (default ~/.bun/bin) and
+    # appends a PATH line to the user's shell rc. Mirror that into this script's PATH
+    # so downstream steps (and the post-install hints) see bun immediately.
+    export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+    if command -v bun > /dev/null 2>&1; then
+      info "bun installed ($(bun --version 2>/dev/null))"
+    else
+      echo "WARNING: bun installer completed but 'bun' is still not on PATH. Open a new" >&2
+      echo "         shell, or add \"$BUN_INSTALL/bin\" to PATH manually." >&2
+    fi
+  else
+    echo "WARNING: Failed to auto-install bun. Scripted-tool authoring/dispatch will be" >&2
+    echo "         unavailable until you install it from https://bun.sh/." >&2
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -54,11 +92,13 @@ fi
 # Optional runtime tools — surface a warning rather than aborting the install so users who
 # only run pre-recorded trails (no scripted tool authoring, no video capture) aren't blocked.
 optional_dependency esbuild \
-  "scripted-tool authoring (\`.ts\` pack tools) won't bundle. Required only if you run trails that exercise pack-defined scripted tools."
+  "scripted-tool authoring (\`.ts\` trailmap tools) won't bundle. Required only if you run trails that exercise trailmap-defined scripted tools."
 optional_dependency ffmpeg \
   "trail video capture / sprite extraction will be skipped. Trails still run; only the visual playback artifacts are unavailable."
-optional_dependency bun \
-  "the TypeScript SDK build path is unavailable. Required only when authoring scripted tools that compose via @trailblaze/scripting."
+
+# bun is the sole supported JS runtime for scripted tools — auto-install it rather
+# than just warning (see ensure_bun above).
+ensure_bun
 
 # ---------------------------------------------------------------------------
 # Resolve version

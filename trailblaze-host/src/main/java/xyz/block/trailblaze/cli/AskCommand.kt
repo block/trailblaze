@@ -36,8 +36,7 @@ class AskCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required."]
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."]
   )
   var device: String? = null
 
@@ -51,19 +50,18 @@ class AskCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    val deviceArg = device
-    if (deviceArg.isNullOrBlank()) {
-      Console.error("Error: --device is required for this command.")
-      return CommandLine.ExitCode.USAGE
-    }
+    // Trim to match `tool` / `step`'s normalization: whitespace-only positional
+    // (`trailblaze ask "   "`) records as empty and trips `require-steps` the
+    // same way a missing step would. Without this, the gate would let blank
+    // questions through here while rejecting them on `tool`.
+    val question = questionWords.joinToString(" ").trim()
+    requireStepIfConfigured(question, verb = "ask")?.let { return it }
     return cliReusableWithDevice(
       verbose = verbose,
-      device = deviceArg,
-      sessionScope = cliDeviceSessionScope(deviceArg),
+      device = device,
       webHeadless = headlessOption.resolve(),
     ) { client ->
       val isNewDevice = !client.hasExistingDevice
-      val question = questionWords.joinToString(" ")
       val result = client.callTool("ask", mapOf("question" to question))
 
       formatAskResult(result)
@@ -78,7 +76,7 @@ class AskCommand : Callable<Int> {
       } catch (_: Exception) {
         false
       }
-      if (hasError) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
+      if (hasError) TrailblazeExitCode.INFRA_FAILED.code else TrailblazeExitCode.SUCCESS.code
     }
   }
 

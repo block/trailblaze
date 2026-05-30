@@ -11,10 +11,14 @@ Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open] [--
                          [=<videoOutput>]] [--webp[=<webpOutput>]] [--id=<id>]
                          [--max-size=<maxSize>] [--output-dir=<outputDir>]
                          [--storyboard-columns=<storyboardColumns>]
+                         [<session-id>]
 Generate an HTML report for session recordings, plus a best-effort JSON
 summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only
 failures log a warning and still exit 0 — HTML is the primary artifact and is
 what gates the exit code.
+      [<session-id>]         Session ID to narrow the report to (positional
+                               form of --id). Prefix matching is supported.
+                               Mutually exclusive with --id and --current.
       --current              Narrow to the currently active session (resolved
                                via the running daemon). Mutually exclusive with
                                --id.
@@ -35,7 +39,8 @@ what gates the exit code.
   -h, --help                 Show this help message and exit.
       --id=<id>              Narrow to a single session (defaults to all
                                sessions). Use `trailblaze session list` to find
-                               IDs. Prefix matching is supported.
+                               IDs. Prefix matching is supported. Equivalent to
+                               passing the session ID positionally.
       --max-size=<maxSize>   Cap each exported timeline artifact (--gif /
                                --video / --webp) at the given byte size.
                                Accepts plain bytes (1024000) or human-readable

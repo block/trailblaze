@@ -239,6 +239,13 @@ class IosVideoCapture : CaptureStream {
       )
     }
 
+    // If the sprite extractor flagged the mp4 as broken-beyond-recovery (a truncated mp4
+    // or bad moov atom would be the iOS analogue of the Android raw-H.264-wrap pathology),
+    // skip the VIDEO fallback so report-generation doesn't re-process the same broken file.
+    if (VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(file.parentFile, "IosVideoCapture")) {
+      return null
+    }
+
     // Fallback: keep original video (no ffmpeg available)
     return CaptureArtifact(
       file = file,

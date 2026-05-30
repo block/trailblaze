@@ -19,6 +19,7 @@ import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
@@ -32,7 +33,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.prefersHostSideForCallbackInstance
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -68,6 +68,20 @@ class HostOnDeviceRpcTrailblazeAgent(
    * fallback can't silently take over; false for instrumentation-driver flows.
    */
   private val requireAndroidAccessibilityServiceOnRewarm: Boolean = false,
+  /**
+   * Budget for mid-trail re-warm probes after a transient RPC failure. Bounds the wall-clock
+   * cost of the recovery path so a permanently-broken connection fails fast rather than
+   * stalling each tool call for the full default budget. Tests override to ~50ms so the
+   * circuit-breaker state machine can be exercised without paying real-clock retry delays.
+   */
+  private val reWarmTimeoutMs: Long = 10_000L,
+  /**
+   * Poll interval inside [OnDeviceRpcClient.waitForReady] during re-warm. Tests override to
+   * ~1ms so the loop body runs quickly when the test wants to force the timeout to fire;
+   * production stays at the readiness-probe default. Matches `OnDeviceRpcClient.waitForReady`'s
+   * default — if you change one, audit the other.
+   */
+  private val reWarmPollIntervalMs: Long = 500L,
   /**
    * Session tool repo — threaded to [MaestroTrailblazeAgent] (and then [BaseTrailblazeAgent])
    * so an [OtherTrailblazeTool] naming a subprocess MCP tool in a trail YAML resolves to its
@@ -159,7 +173,8 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
     try {
       rpcClient.waitForReady(
-        timeoutMs = 10_000L,
+        timeoutMs = reWarmTimeoutMs,
+        pollIntervalMs = reWarmPollIntervalMs,
         requireAndroidAccessibilityService = requireAndroidAccessibilityServiceOnRewarm,
       )
     } catch (e: Exception) {
@@ -212,10 +227,15 @@ class HostOnDeviceRpcTrailblazeAgent(
   companion object {
     private const val MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES = 3
 
-    /** Substrings identifying a wedged-device failure vs a recoverable transient
-     *  (daemon log: `Error while connecting UiAutomation` / `DeadObjectException`). */
+    /** Substrings identifying a wedged-device failure vs a recoverable transient.
+     *  Both `connect` and `disconnect` throw `RuntimeException` from the platform's
+     *  `UiAutomation` lifecycle when the inner remote object is gone (`id=-1`); the
+     *  on-device recovery shim should normally heal these, but if 3 in a row escape,
+     *  trip the breaker and recycle the emulator rather than fail a trail after
+     *  ~30s of futile re-warms against a dead `system_server`. */
     private val DEVICE_WEDGE_SIGNATURES = listOf(
       "Error while connecting UiAutomation",
+      "Error while disconnecting UiAutomation",
       "DeadObjectException",
     )
   }
@@ -225,68 +245,112 @@ class HostOnDeviceRpcTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
     toolsExecuted: MutableList<TrailblazeTool>,
   ): TrailblazeToolResult {
-    return when (tool) {
+    // Resolve `OtherTrailblazeTool` placeholders through the session's tool repo BEFORE the
+    // `when` below. Static YAML deserialization (`TrailblazeToolJsonSerializer.deserialize`)
+    // always produces `OtherTrailblazeTool` for tool names the static catalog doesn't know —
+    // and "doesn't know" includes every dynamically-registered scripted tool registered via
+    // `LazyYamlScriptedToolRegistration.addDynamicTools` (the #2749 inline scripted tools
+    // declared on the trailmap's `target.tools:` list).
+    //
+    // Without this resolution, an OtherTrailblazeTool whose name maps to a registered
+    // scripted tool fell into the `else` branch below and surfaced as
+    // `"Unsupported tool type for RPC execution: OtherTrailblazeTool"`, even though the
+    // session's `toolRepo` knew exactly how to dispatch it. Mirrors the resolution pattern
+    // [HostAccessibilityRpcClient.execute] and `.executePreAction` use on the V3 path —
+    // resolution is the contract every host-driver dispatcher must honor (and the docstring
+    // on `MaestroTrailblazeAgent.trailblazeToolRepo` already promises this).
+    //
+    // [BaseTrailblazeAgent.runTrailblazeTools] also resolves at its loop boundary via
+    // `resolveDynamicTool`, but `executeTool` is reachable independently — e.g. from the
+    // `runTrailblazeTools` `else` branch when the resolution there returns the original
+    // (toolRepo returned the tool but it didn't match `HostLocalExecutableTrailblazeTool`),
+    // and from any future caller that dispatches a tool without going through the batch
+    // loop. Resolving here defends in depth.
+    // Two senses of "resolved" appear in this method — disambiguated by name so a reader
+    // (or grep) can tell them apart:
+    //  - `repoResolvedTool` (this binding) = `OtherTrailblazeTool` → concrete tool, via the
+    //    session's `trailblazeToolRepo.toolCallToTrailblazeTool(...)` (dynamic-tool dispatch).
+    //  - `memoryResolvedTool` (below, inside the `when` branch) = string-interpolated args via
+    //    `interpolateMemoryInTool(...)` (replaces `{{var}}`/`${var}` in scalar fields).
+    // The two operations are independent; both fire per dispatch on this path.
+    val repoResolvedTool: TrailblazeTool = if (tool is OtherTrailblazeTool) {
+      val repo = trailblazeToolRepo
+      if (repo == null) {
+        tool
+      } else {
+        try {
+          repo.toolCallToTrailblazeTool(tool.toolName, tool.raw.toString())
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          // Unknown name in this repo (`IllegalStateException` from the `error(...)` branch
+          // of `toolCallToTrailblazeTool`) or serializer mismatch (`SerializationException`).
+          // Fall through with the original — the `else` branch below produces the
+          // unsupported-tool error with the actual toolName visible for diagnostics.
+          //
+          // **Use `Console.info` (not `Console.log`)** so this diagnostic survives the
+          // default CLI quiet mode (`CliInfrastructure.enableQuietMode()`). Without this,
+          // an operator triaging a CI-mode "Unsupported tool type" failure would lose the
+          // underlying repo-lookup exception — exactly the breadcrumb needed to
+          // distinguish "tool genuinely not registered" from "registered but arg-schema
+          // mismatch surfaced as SerializationException". See lead-dev review #1.
+          Console.info(
+            "[HostOnDeviceRpcTrailblazeAgent] Could not resolve '${tool.toolName}' via repo: " +
+              "${e::class.simpleName}: ${e.message}",
+          )
+          tool
+        }
+      }
+    } else {
+      tool
+    }
+    return when (repoResolvedTool) {
       is ExecutableTrailblazeTool -> {
-        toolsExecuted.add(tool)
+        toolsExecuted.add(repoResolvedTool)
         // Pre-resolve memory tokens once, before deciding host-only vs RPC, so both branches
         // see the same resolved args — same pattern as HostAccessibilityRpcClient.execute.
         // Cast is safe: interpolation only mutates string scalars, not the concrete tool type.
-        val resolvedTool = interpolateMemoryInTool(tool, memory) as ExecutableTrailblazeTool
-        if (resolvedTool is HostLocalExecutableTrailblazeTool) {
-          executeHostLocalWithLogging(resolvedTool, context)
-        } else if (resolvedTool.requiresHostInstance()) {
+        val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory) as ExecutableTrailblazeTool
+        if (memoryResolvedTool is HostLocalExecutableTrailblazeTool) {
+          executeHostLocalWithLogging(memoryResolvedTool, context)
+        } else if (memoryResolvedTool.requiresHostInstance()) {
           // Host-only tools (cbot, dip-slot) run locally — they need ADB/USB on the Mac.
           // Instance-level so YAML-defined tools can opt in via `requires_host: true`.
-          executeHostLocalWithLogging(resolvedTool, context)
-        } else if (prefersHostSideForCallback(resolvedTool)) {
-          // Dual-mode composition primitives (`mobile_listInstalledApps`, `android_sendBroadcast`,
-          // `android_adbShell`) have both host-side and on-device actuals, but the on-device-RPC return
-          // path (`RunYamlResponse`) only carries `success`/`errorMessage` — it doesn't carry a
-          // per-tool `Success.message` payload. That's fine for action-style tools (tap, swipe)
-          // where the message is just informational, but for these primitives the message IS
-          // the contract: scripted-tool handlers running in a host-side bun subprocess compose
-          // them via `client.callTool(...)` specifically to read the returned data (installed
-          // app ids, command stdout, etc.). Routing through RPC would silently discard that
-          // data and surface as `JSON.parse(undefined)` in the TS handler several frames down.
-          //
-          // Host-side dispatch uses the dadb-backed `AndroidDeviceCommandExecutor` actual, which
-          // produces identical output to the on-device actual for these tools. The on-device
-          // QuickJS bundle path is unaffected because it doesn't go through this agent at all.
-          // Remove this branch once the on-device-RPC contract is extended to carry per-tool
-          // result payloads (tracked separately — needs `RunYamlResponse`, the on-device tool
-          // dispatch loop, and the host-side `toToolResult` mapping all to grow the field).
-          executeHostLocalWithLogging(resolvedTool, context)
+          executeHostLocalWithLogging(memoryResolvedTool, context)
         } else {
-          executeToolViaRpc(resolvedTool, context.traceId)
+          executeToolViaRpc(memoryResolvedTool, context.traceId)
         }
       }
       is DelegatingTrailblazeTool -> {
-        executeDelegatingTool(tool, context, toolsExecuted) { expandedTool ->
+        executeDelegatingTool(repoResolvedTool, context, toolsExecuted) { expandedTool ->
           // Same boundary contract for the DelegatingTrailblazeTool path — pre-resolve once
           // before the host-local vs RPC fork, so subtools that don't self-interpolate (e.g.
           // RunCommandTrailblazeTool) still see resolved args on the host-local branch.
-          val resolvedExpanded = interpolateMemoryInTool(expandedTool, memory)
-          if (resolvedExpanded is HostLocalExecutableTrailblazeTool) {
+          // Expanded subtools inherit any `OtherTrailblazeTool` → repo resolution from the
+          // parent delegating tool — the base's `runTrailblazeTools` loop resolved the
+          // parent before dispatching here, so we don't re-run repo resolution on each
+          // expanded subtool. Only memory interpolation runs per-subtool.
+          val memoryResolvedExpanded = interpolateMemoryInTool(expandedTool, memory)
+          if (memoryResolvedExpanded is HostLocalExecutableTrailblazeTool) {
             // Host-local subtools must not be RPCed to the device — they read/write
             // host-side files and credentials that have no meaning on the device JVM.
-            executeHostLocalWithLogging(resolvedExpanded, context)
-          } else if (prefersHostSideForCallback(resolvedExpanded)) {
-            // Same on-device-RPC-strips-Success.message rationale as the top-level dispatch
-            // branch above — a delegating tool that expands to one of the dual-mode
-            // composition primitives (e.g. an alias delegating to `android_adbShell`) must still
-            // route host-side, otherwise the `Success.message` payload scripted-tool
-            // composers depend on gets silently discarded by the RPC return path.
-            // Cast safe: `resolvedExpanded` was an `ExecutableTrailblazeTool` before
-            // `interpolateMemoryInTool` (which only mutates string scalars, not the type) —
-            // same reasoning as the top-level executeTool cast on line 208.
-            executeHostLocalWithLogging(resolvedExpanded as ExecutableTrailblazeTool, context)
+            executeHostLocalWithLogging(memoryResolvedExpanded, context)
           } else {
-            executeToolViaRpc(resolvedExpanded, context.traceId)
+            executeToolViaRpc(memoryResolvedExpanded, context.traceId)
           }
         }
       }
       else -> TrailblazeToolResult.Error.FatalError(
-        errorMessage = "Unsupported tool type for RPC execution: ${tool::class.simpleName}",
+        // Diagnostic detail: when the unresolved tool was an `OtherTrailblazeTool`, surface
+        // its `toolName` so a triager doesn't see a meaningless `OtherTrailblazeTool` token
+        // and has to dig through the trail YAML to find which tool call failed.
+        errorMessage = buildString {
+          append("Unsupported tool type for RPC execution: ${repoResolvedTool::class.simpleName}")
+          if (repoResolvedTool is OtherTrailblazeTool) {
+            append(" (toolName='${repoResolvedTool.toolName}' — not registered in this session's ")
+            append("tool repo as a class-backed, YAML-defined, or dynamic scripted tool)")
+          }
+        },
       )
     }
   }
@@ -385,7 +449,7 @@ class HostOnDeviceRpcTrailblazeAgent(
 
   private fun executeToolViaRpc(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult {
     val timeBeforeExecution = Clock.System.now()
-    return runBlocking {
+    val result: TrailblazeToolResult = runBlocking {
       try {
         // Memory tokens are pre-resolved by callers (`executeTool`'s outer dispatch and
         // `executeMaestroCommands`); no second pass needed here.
@@ -433,7 +497,8 @@ class HostOnDeviceRpcTrailblazeAgent(
             )
             try {
               rpcClient.waitForReady(
-                timeoutMs = 10_000L,
+                timeoutMs = reWarmTimeoutMs,
+                pollIntervalMs = reWarmPollIntervalMs,
                 requireAndroidAccessibilityService = requireAndroidAccessibilityServiceOnRewarm,
               )
             } catch (e: Exception) {
@@ -475,6 +540,28 @@ class HostOnDeviceRpcTrailblazeAgent(
         )
       }
     }
+
+    // Emit a host-side TrailblazeToolLog for every RPC-routed dispatch. The on-device
+    // `BaseTrailblazeAgent.runTrailblazeTools` loop emits its own log for the sub-tool when
+    // its dispatch path runs `logToolExecution`, but at least one path bypasses that on
+    // Android — `TapOnByElementSelector.execute` short-circuits straight to
+    // `agent.executeNodeSelectorTap` for accessibility nodeSelectors, routing around the
+    // device's emit site. Without a host-side log, `TrailblazeRecordingGenerator` sees zero
+    // `TrailblazeToolLog` files in the host's session dir (only the unrecordable
+    // `DelegatingTrailblazeToolLog`) and emits empty recordings. The host emit closes that
+    // gap. `dispatchedHostSide = false` is the correct semantic — the actual dispatch ran
+    // on device. A follow-up will centralize this emit into `BaseTrailblazeAgent` so every
+    // dispatcher branch logs uniformly and the per-driver logging duplication goes away.
+    if (traceId != null) {
+      logToolExecution(
+        tool = tool,
+        timeBeforeExecution = timeBeforeExecution,
+        traceId = traceId,
+        result = result,
+        dispatchedHostSide = false,
+      )
+    }
+    return result
   }
 
   private fun toToolResult(
@@ -487,7 +574,16 @@ class HostOnDeviceRpcTrailblazeAgent(
     return when (rpcResult.data.success) {
       true -> {
         Console.log("[HostOnDeviceRpcAgent] '$name' completed in ${durationMs}ms")
-        TrailblazeToolResult.Success()
+        // Mirror the on-device tool's `Success.message` / `structuredContent` back through the
+        // host-side result so scripted-tool authors composing this tool via `client.callTool(...)`
+        // observe the same payload regardless of whether dispatch routed host-side or via RPC.
+        // Before the response envelope grew these fields, the message/structuredContent were
+        // silently discarded here — that gap is what `prefersHostSideForCallback` used to paper
+        // over for `android_adbShell` / `android_sendBroadcast` / `mobile_listInstalledApps`.
+        TrailblazeToolResult.Success(
+          message = rpcResult.data.toolMessage,
+          structuredContent = rpcResult.data.toolStructuredContent,
+        )
       }
       false -> TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = rpcResult.data.errorMessage ?: "Tool '$name' execution failed on-device",
@@ -498,19 +594,6 @@ class HostOnDeviceRpcTrailblazeAgent(
       )
     }
   }
-
-  /**
-   * Thin alias for [prefersHostSideForCallbackInstance] kept on the agent for two reasons:
-   *   1. Discoverability — the call site in [executeTool] reads `prefersHostSideForCallback`
-   *      adjacent to `requiresHostInstance`, matching the local naming.
-   *   2. `internal` visibility — `HostOnDeviceRpcTrailblazeAgentTest` invokes this directly
-   *      to pin the predicate without exercising the full RPC machinery; promoting it to
-   *      `internal` here keeps the test's call shape unchanged after the migration to a
-   *      shared helper. The actual reflection + metadata-override logic lives in
-   *      `TrailblazeTools.kt` so all five sibling predicates stay co-located.
-   */
-  internal fun prefersHostSideForCallback(tool: TrailblazeTool): Boolean =
-    tool.prefersHostSideForCallbackInstance()
 
   /** Replaces this agent's [memory] with the device's post-execution snapshot. */
   private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>) {

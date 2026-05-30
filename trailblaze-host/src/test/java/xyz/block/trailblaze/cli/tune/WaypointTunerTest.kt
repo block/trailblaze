@@ -222,11 +222,11 @@ class WaypointTunerTest {
     assertTrue(keyA.endsWith("|DROP_REQUIRED"), "key suffixed by proposal kind: was $keyA")
   }
 
-  // ---------------- composeMutatedPack ----------------
+  // ---------------- composeMutatedTrailmap ----------------
 
   @Test
-  fun `composeMutatedPack folds multiple proposals on the same waypoid in order`() {
-    // Two synthetic proposals on the same waypoid, different entries. composeMutatedPack
+  fun `composeMutatedTrailmap folds multiple proposals on the same waypoid in order`() {
+    // Two synthetic proposals on the same waypoid, different entries. composeMutatedTrailmap
     // must apply both — the previous `associateBy { waypointId }` path silently kept
     // only one, the bug that round-1 finding #1 and Codex P1 flagged.
     val def = waypoint(
@@ -247,14 +247,14 @@ class WaypointTunerTest {
         required = listOf(def.required[0].copy(minCount = 1), def.required[1]),
       ),
     )
-    val joint = WaypointTuner.composeMutatedPack(listOf(p1, p2))
+    val joint = WaypointTuner.composeMutatedTrailmap(listOf(p1, p2))
     val mutated = joint["myapp/home"] ?: error("expected joint mutation for myapp/home")
     assertEquals(1, mutated.required.size, "StaleLabel dropped")
     assertEquals(1, mutated.required.single().minCount, "Home's minCount lowered")
   }
 
   @Test
-  fun `composeMutatedPack rejects mixed definitionBefore in the same waypoid group`() {
+  fun `composeMutatedTrailmap rejects mixed definitionBefore in the same waypoid group`() {
     // Two proposals on the same waypoid whose definitionBefores diverge. Shouldn't
     // happen in practice (all proposals from one analyzer run share the unmutated
     // source) but the `require` is the assertion guarding that invariant.
@@ -273,12 +273,12 @@ class WaypointTunerTest {
       mutated = defV2.copy(required = emptyList()),
     )
     assertFailsWith<IllegalArgumentException> {
-      WaypointTuner.composeMutatedPack(listOf(p1, p2))
+      WaypointTuner.composeMutatedTrailmap(listOf(p1, p2))
     }
   }
 
   @Test
-  fun `composeMutatedPack on disjoint waypoids preserves both edits`() {
+  fun `composeMutatedTrailmap on disjoint waypoids preserves both edits`() {
     val home = waypoint(id = "myapp/home", required = listOf(literalText("Home")))
     val settings = waypoint(id = "myapp/settings", required = listOf(literalText("Settings")))
     val pHome = syntheticProposal(
@@ -293,15 +293,15 @@ class WaypointTunerTest {
       affected = settings.required.single(),
       mutated = settings.copy(required = emptyList()),
     )
-    val joint = WaypointTuner.composeMutatedPack(listOf(pHome, pSettings))
+    val joint = WaypointTuner.composeMutatedTrailmap(listOf(pHome, pSettings))
     assertEquals(2, joint.size, "both waypoids should appear in the joint mutation")
     assertTrue(joint["myapp/home"]?.required?.isEmpty() == true)
     assertTrue(joint["myapp/settings"]?.required?.isEmpty() == true)
   }
 
   @Test
-  fun `composeMutatedPack on empty input is empty`() {
-    assertTrue(WaypointTuner.composeMutatedPack(emptyList()).isEmpty())
+  fun `composeMutatedTrailmap on empty input is empty`() {
+    assertTrue(WaypointTuner.composeMutatedTrailmap(emptyList()).isEmpty())
   }
 
   // ---------------- parameter guards ----------------
@@ -382,7 +382,7 @@ class WaypointTunerTest {
 
   /**
    * Build a synthetic [WaypointTuner.Proposal] directly from a definition + mutated
-   * definition pair, bypassing the analyzer. Used by the `composeMutatedPack` tests
+   * definition pair, bypassing the analyzer. Used by the `composeMutatedTrailmap` tests
    * where the analyzer's gating semantics aren't under test — just the fold.
    */
   private fun syntheticProposal(

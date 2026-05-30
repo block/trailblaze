@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.shortcut
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -13,7 +15,7 @@ import picocli.CommandLine
 /**
  * Tests pinning the internal helpers `WaypointShortcutVerifyCommand` uses to build the
  * generated trail YAML. The empirical-replay subprocess invocation itself isn't unit-
- * tested here (it shells out to `./trailblaze trail` against a live device), but the
+ * tested here (it shells out to `./trailblaze run` against a live device), but the
  * pure helpers — `extractToolsBlock` and `reindent` — drive what the inner trail
  * actually executes, and a bug there silently changes the shape of every replay.
  */
@@ -25,8 +27,8 @@ class WaypointShortcutVerifyCommandTest {
     val yaml = """
       id: auto-foo
       shortcut:
-        from: pack/from
-        to: pack/to
+        from: trailmap/from
+        to: trailmap/to
       tools:
         - tapOnElementBySelector:
             reason: ""
@@ -47,8 +49,8 @@ class WaypointShortcutVerifyCommandTest {
       id: auto-foo
       description: "test"
       shortcut:
-        from: pack/from
-        to: pack/to
+        from: trailmap/from
+        to: trailmap/to
     """.trimIndent()
     assertNull(cmd.extractToolsBlock(yaml))
   }
@@ -77,7 +79,7 @@ class WaypointShortcutVerifyCommandTest {
         description: "blank from"
         shortcut:
           from: ""
-          to: "pack/to"
+          to: "trailmap/to"
         parameters: []
         tools:
           - pressBackButton: {}
@@ -88,7 +90,7 @@ class WaypointShortcutVerifyCommandTest {
       cmd.deviceId = "emulator-test"
       cmd.trailOut = File(tmpDir, "out.trail.yaml")
       val exit = cmd.call()
-      assertEquals(CommandLine.ExitCode.USAGE, exit, "blank `from:` must return USAGE; got $exit")
+      assertEquals(TrailblazeExitCode.MISUSE.code, exit, "blank `from:` must return USAGE; got $exit")
       assertNotEquals(0, exit, "cfg.validate failure must NOT report success")
     } finally {
       tmpDir.deleteRecursively()
@@ -114,6 +116,32 @@ class WaypointShortcutVerifyCommandTest {
     val cmd = WaypointShortcutVerifyCommand()
     val exit = cmd.runSubprocessWithTimeout(listOf("sh", "-c", "exit 7"), timeoutSecs = 30)
     assertEquals(7, exit, "clean-exit subprocess must report its own exit code, not the timeout sentinel")
+  }
+
+  @Test
+  fun `picocli leaves deviceId null when --device not passed`() {
+    // Deterministic pin for the env-var-fallback contract — picocli MUST leave
+    // [deviceId] null when `--device` is absent from argv, so the call()-time
+    // `resolveCliDevice(deviceId)` branch actually runs against env. A regression
+    // that re-introduced `required = true` would parse-fail here (picocli would
+    // refuse to construct the command) instead of slipping through to the
+    // smoke-test-only path. Doesn't depend on TRAILBLAZE_DEVICE being set —
+    // orthogonal to the env-aware path itself, which is pinned by
+    // DeviceConnectCommandTest::`resolveCliDevice falls back to TRAILBLAZE_DEVICE`.
+    val cmd = WaypointShortcutVerifyCommand()
+    CommandLine(cmd).parseArgs("--yaml", "any.shortcut.yaml")
+    assertNull(cmd.deviceId, "--device must remain null when not explicitly passed")
+  }
+
+  @Test
+  fun `picocli parses --device when passed explicitly`() {
+    // Sister pin to the null-default test: when `--device` IS supplied, picocli
+    // stores it verbatim so the resolver's first-tier branch is reachable. The
+    // earlier `lateinit var deviceId: String` would have crashed at access; the
+    // new `var deviceId: String? = null` lets us assert directly.
+    val cmd = WaypointShortcutVerifyCommand()
+    CommandLine(cmd).parseArgs("--yaml", "any.shortcut.yaml", "--device", "android/emulator-5554")
+    assertEquals("android/emulator-5554", cmd.deviceId)
   }
 
   @Test

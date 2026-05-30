@@ -228,6 +228,61 @@ class QuickJsTrailblazeToolTest {
       assertTrue("expected CancellationException to be thrown") { caught }
     }
 
+  @Test
+  fun `execute threads handler structuredContent onto Success structuredContent`() = runBlocking {
+    // On-device counterpart to the subprocess `CallToolResultMapperTest` structured-content
+    // case. The dispatcher requires the two transports to stay symmetric — a regression
+    // that only hits one would let a TS scripted tool's typed `result` silently flatten to
+    // text on whichever path was missed. Pin the on-device path here.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["typedDemo"] = {
+        name: "typedDemo",
+        spec: {},
+        handler: async () => ({
+          content: [{ type: "text", text: "(structured)" }],
+          structuredContent: { formatted: "prefix:msg", inputLength: 3 },
+        }),
+      };
+      """.trimIndent(),
+    )
+    val tool = QuickJsTrailblazeTool(host, ToolName("typedDemo"), buildJsonObject {})
+    val result = tool.execute(buildContext())
+    val success = result as? TrailblazeToolResult.Success
+      ?: fail("expected Success, got $result")
+    val structured = success.structuredContent?.jsonObject
+      ?: fail("expected structuredContent on Success, got null")
+    assertEquals("prefix:msg", structured["formatted"]!!.jsonPrimitive.content)
+    assertEquals("3", structured["inputLength"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun `execute leaves structuredContent null when handler returns text only`() = runBlocking {
+    // Negative companion: a handler that doesn't populate `structuredContent` must not have
+    // a stub synthesized onto Success — otherwise every legacy text-only tool would start
+    // tripping the TS SDK's "unwrap structured payload" branch and surface null/empty
+    // objects in place of the expected string.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["textOnly"] = {
+        name: "textOnly",
+        spec: {},
+        handler: async () => ({
+          content: [{ type: "text", text: "plain text" }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val tool = QuickJsTrailblazeTool(host, ToolName("textOnly"), buildJsonObject {})
+    val result = tool.execute(buildContext())
+    val success = result as? TrailblazeToolResult.Success
+      ?: fail("expected Success, got $result")
+    assertEquals("plain text", success.message)
+    assertEquals(null, success.structuredContent)
+  }
+
   private suspend fun connect(
     bundleJs: String,
     bundleFilename: String = "tools.bundle.js",

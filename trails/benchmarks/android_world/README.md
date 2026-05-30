@@ -6,7 +6,7 @@ Trailblaze test definitions adapted from [Google Research Android World](https:/
 
 ```bash
 # Run a single benchmark
-./trailblaze trail trails/benchmarks/android_world/clock/timer_entry/android.trail.yaml
+./trailblaze run trails/benchmarks/android_world/clock/timer_entry/android.trail.yaml
 
 # Run all benchmarks
 bash trails/benchmarks/android_world/benchmark.sh
@@ -88,7 +88,7 @@ Any MP3 files with these names will work — the benchmarks only check playlist 
 ## CLI Options
 
 ```bash
-./trailblaze trail <path> [--device emulator-5554] [--verbose] [--headless]
+./trailblaze run <path> [--device emulator-5554] [--verbose] [--headless]
 ```
 
 ## References

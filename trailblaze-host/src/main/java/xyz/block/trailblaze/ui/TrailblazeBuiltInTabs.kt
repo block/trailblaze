@@ -121,7 +121,7 @@ object TrailblazeBuiltInTabs {
 
   /**
    * Creates the Waypoints tab which browses [WaypointDefinition]s discovered from the
-   * configured trails directory plus pack-bundled framework waypoints. Same loader used
+   * configured trails directory plus trailmap-bundled framework waypoints. Same loader used
    * by the `trailblaze waypoint` CLI.
    */
   fun waypointsTab(

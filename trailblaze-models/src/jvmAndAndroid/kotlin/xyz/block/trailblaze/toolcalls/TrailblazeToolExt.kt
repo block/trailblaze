@@ -22,7 +22,7 @@ fun KClass<out TrailblazeTool>.requiresHost(): Boolean = this.trailblazeToolClas
 
 /**
  * Whether this tool is a read-only verification (assertion) tool whose successful execution
- * is itself the verify verdict (e.g. `assertVisible`, `web_verify_text_visible`). Used by
+ * is itself the verify verdict (e.g. `assertVisible`, `web_verifyTextVisible`). Used by
  * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute.
  */
 fun KClass<out TrailblazeTool>.isVerification(): Boolean = this.trailblazeToolClassAnnotation().isVerification

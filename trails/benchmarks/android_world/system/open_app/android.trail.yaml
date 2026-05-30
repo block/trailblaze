@@ -13,8 +13,9 @@
     # Validation: camera app should be in the foreground
     - assertVisibleBySelector:
         reason: "Camera app should be open and visible"
-        selector:
-          textRegex: ".*"
+        nodeSelector:
+          androidMaestro:
+            textRegex: .*
     - androidworldbenchmarks_assertAdbShellOutput:
         command: "dumpsys window windows"
         expectedOutput: "com.android.camera2"

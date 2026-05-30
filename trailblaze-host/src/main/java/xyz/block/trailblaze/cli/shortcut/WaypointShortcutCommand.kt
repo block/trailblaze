@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.shortcut
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import java.util.concurrent.Callable
@@ -10,7 +12,7 @@ import java.util.concurrent.Callable
  * replay on a connected emulator).
  *
  * Sits under `waypoint` (the parent of `tune`, `propose`, …) rather than as a
- * standalone top-level so the noun stays consistent: shortcuts are pack-relative
+ * standalone top-level so the noun stays consistent: shortcuts are trailmap-relative
  * artifacts in the same world as waypoints. See
  * `docs/internal/devlog/2026-05-19-waypoint-pack-shortcuts.md` for the design.
  */
@@ -30,6 +32,6 @@ import java.util.concurrent.Callable
 class WaypointShortcutCommand : Callable<Int> {
   override fun call(): Int {
     CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

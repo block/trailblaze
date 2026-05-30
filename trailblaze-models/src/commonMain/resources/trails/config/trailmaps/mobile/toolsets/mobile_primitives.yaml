@@ -1,0 +1,42 @@
+# Cross-platform mobile composition primitives owned by the `mobile` library trailmap (see
+# trailmaps/mobile/trailmap.yaml). These are the same four `mobile_*` tools that historically
+# carried the flat name prefix; this toolset makes the prefix-equals-trailmap-id rule hold by
+# grouping them under a trailmap-aligned name.
+#
+# Mixed LLM surfacing — `mobile_pasteClipboard` / `mobile_setClipboard` are LLM-facing
+# (recordable interaction primitives), while `mobile_clearAppData` / `mobile_listInstalledApps`
+# are declared `surfaceToLlm = false` (callback-only composition primitives). The toolset
+# groups them together because they share the same `mobile_*` prefix and live behind the same
+# library trailmap; the per-tool `surfaceToLlm` flag still controls catalog visibility, so a
+# consumer that pulls in this toolset surfaces only the two LLM-facing entries to its agent
+# while still registering all four for `client.callTool(...)` dispatch.
+#
+# `always_enabled: true` is load-bearing for the two `surfaceToLlm = false` tools — they're
+# invisible to `setActiveToolSets`, so they have to be active from session start or the first
+# callback dispatching `mobile_clearAppData` / `mobile_listInstalledApps` fails. The LLM-facing
+# entries piggy-back on the same flag, matching how `core_interaction` (which currently owns
+# the clipboard tools) is also `always_enabled: true`.
+#
+# Driver scope mirrors where each primitive actually has a working on-device path today:
+#  - Android on-device drivers cover all four primitives (clearAppData / listInstalledApps via
+#    on-device executors, paste/setClipboard via UiAutomator).
+#  - `ios-host` covers `mobile_clearAppData` (via `xcrun simctl`) and the clipboard tools
+#    (the iOS clipboard accessibility-label path). `mobile_listInstalledApps` has no working
+#    iOS implementation today and would surface as a runtime error if invoked on iOS — that's
+#    a tool-level concern, not a toolset-scope concern.
+#
+# NOTE: this toolset is additive. The existing `core_interaction` (paste/setClipboard) and
+# `android_framework` (listInstalledApps) assignments are intentionally untouched in this
+# PR — future PRs can migrate consumers once the downstream migration is ready. See PR #3435.
+id: mobile_primitives
+description: "Cross-platform mobile composition primitives (clearAppData, listInstalledApps, paste/setClipboard). LLM-facing entries (paste/setClipboard) appear in the agent catalog; the surfaceToLlm=false entries (clearAppData, listInstalledApps) are dispatch-only via `client.callTool(...)`."
+always_enabled: true
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+  - ios-host
+tools:
+  - mobile_clearAppData
+  - mobile_listInstalledApps
+  - mobile_pasteClipboard
+  - mobile_setClipboard

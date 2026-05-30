@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.capture.logcat.LogcatParser
+import xyz.block.trailblaze.capture.video.VideoSpriteExtractor
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
@@ -1093,6 +1094,20 @@ object WasmReport {
     val videoEndMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
     val videoFile = File(sessionDir, videoFilename)
     if (!videoFile.exists()) return
+
+    // Don't re-process a video the capture-time sprite extractor already declared broken.
+    // The marker file is the canonical signal; without this guard we'd extract a few sparse
+    // frames from a truncated mp4 and re-introduce the "tiny video stretched across many
+    // seconds" timeline the marker exists to prevent. The timeline falls back to the
+    // per-step screenshot slideshow when no frames are embedded.
+    if (VideoSpriteExtractor.isMp4DetectedAsBroken(sessionDir)) {
+      Console.log(
+        "  Skipping frame extraction for ${sessionId.value}: " +
+          "${VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME} present — " +
+          "underlying mp4 is known to be broken; timeline will fall back to screenshots.",
+      )
+      return
+    }
 
     val logs = logsRepo.getLogsForSession(sessionId)
     val sortedLogs = logs.sortedBy { it.timestamp }

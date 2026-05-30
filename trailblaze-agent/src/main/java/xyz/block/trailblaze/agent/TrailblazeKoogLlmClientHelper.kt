@@ -4,20 +4,20 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolRegistry
-import ai.koog.agents.core.tools.ToolResult
 import ai.koog.serialization.kotlinx.KotlinxSerializer
 import ai.koog.serialization.kotlinx.toKoogJSONObject
 import xyz.block.trailblaze.util.Console
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.delay
-import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
@@ -151,8 +151,8 @@ class TrailblazeKoogLlmClientHelper(
     val toolRegistry = this
 
     @Suppress("UNCHECKED_CAST")
-    val koogTool: Tool<TrailblazeTool, ToolResult> =
-      toolRegistry.getTool(toolName) as Tool<TrailblazeTool, ToolResult>
+    val koogTool: Tool<TrailblazeTool, *> =
+      toolRegistry.getTool(toolName) as Tool<TrailblazeTool, *>
     @Suppress("UNCHECKED_CAST")
     val trailblazeTool: TrailblazeTool = koogTool.decodeArgs(
       toolArgs.toKoogJSONObject(),
@@ -163,7 +163,7 @@ class TrailblazeKoogLlmClientHelper(
 
   fun handleLlmResponse(
     llmMessage: String?,
-    tool: Message.Tool,
+    tool: MessagePart.Tool.Call,
     traceId: TraceId,
     step: PromptStepStatus,
     agent: TrailblazeAgent,
@@ -186,7 +186,7 @@ class TrailblazeKoogLlmClientHelper(
     val toolName = tool.tool
     val toolArgs = TrailblazeJsonInstance.decodeFromString(
       JsonObject.serializer(),
-      tool.content,
+      tool.args,
     )
     val toolExecutionResult = try {
       val trailblazeTool = toolRegistry.getTrailblazeToolFromToolRegistry(
@@ -243,17 +243,16 @@ class TrailblazeKoogLlmClientHelper(
       executedTool.getToolNameFromAnnotation() to executedTool.toLogPayload().raw
     }
 
-    // Pass the original Message.Tool.Call so PromptStepStatus can emit a paired
-    // Message.Tool.Call + Message.Tool.Result in history. This is what the koog
+    // Pass the original MessagePart.Tool.Call so PromptStepStatus can emit a paired
+    // MessagePart.Tool.Call + MessagePart.Tool.Result in history. This is what the koog
     // Anthropic adapter needs to produce `tool_use` / `tool_result` content blocks.
     // Without it, Claude sees no completion for its prior tool call and re-issues it
     // (50× verify-loop observed on every Claude run in a reproduction).
-    val originalToolCall = tool as? Message.Tool.Call
     step.addCompletedToolCallToChatHistory(
       llmResponseContent = llmMessage,
       toolsWithArgs = executedToolsWithArgs,
       commandResult = toolExecutionResult.result,
-      toolCall = originalToolCall,
+      toolCall = tool,
     )
 
     // Auto-termination for verify steps: feed every executed tool through the ledger; when
@@ -289,7 +288,7 @@ class TrailblazeKoogLlmClientHelper(
 
   suspend fun callLlm(
     llmRequestData: KoogLlmRequestData,
-  ): List<Message.Response> {
+  ): Message.Assistant {
     var lastException: Exception? = null
     val maxRetries = 3
 
@@ -302,7 +301,7 @@ class TrailblazeKoogLlmClientHelper(
         @OptIn(ExperimentalUuidApi::class)
         val promptId = Uuid.random().toString()
 
-        val koogLlmResponse: List<Message.Response> = llmClient.execute(
+        val koogLlmResponse: Message.Assistant = llmClient.execute(
           prompt = Prompt(
             messages = llmRequestData.messages,
             id = promptId,
@@ -336,6 +335,7 @@ class TrailblazeKoogLlmClientHelper(
   fun createNextChatRequest(
     stepStatus: PromptStepStatus,
     previouslyCompletedStepDescriptions: List<String> = emptyList(),
+    rememberedValues: Map<String, String> = emptyMap(),
   ): List<Message> = buildList {
     add(
       Message.System(
@@ -345,7 +345,7 @@ class TrailblazeKoogLlmClientHelper(
             "device_description" to buildDeviceDescription(stepStatus.currentScreenState),
           ),
         ),
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
     // Standalone objective message — keeps the current task prominent and easy for the LLM
@@ -353,7 +353,7 @@ class TrailblazeKoogLlmClientHelper(
     add(
       Message.User(
         content = "**Objective**\n\n${stepStatus.promptStep.prompt}",
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
     add(
@@ -363,8 +363,10 @@ class TrailblazeKoogLlmClientHelper(
           completedObjectiveDescriptions = previouslyCompletedStepDescriptions,
           latestObjectiveStatus = stepStatus.getLatestObjectiveStatus(),
           cycleWarning = stepStatus.consumePendingCycleWarning(),
+          rememberedValues = rememberedValues,
+          staleRefRecovery = stepStatus.consumePendingStaleRefRecovery(),
         ),
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
 
@@ -380,9 +382,9 @@ class TrailblazeKoogLlmClientHelper(
       )
     add(
       Message.User(
-        parts = buildList {
+        parts = buildList<MessagePart.RequestPart> {
           add(
-            ContentPart.Text(
+            MessagePart.Text(
               text = buildString {
                 appendLine("Here is the view hierarchy of the user interface at this moment:")
                 appendLine("```")
@@ -400,14 +402,16 @@ class TrailblazeKoogLlmClientHelper(
           ) {
             Console.log("[SCREENSHOT] Size: ${screenshotBytes.size} bytes (${screenshotBytes.size / 1024}KB)")
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               ),
             )
           }
         },
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(KoogClock.System),
       ),
     )
   }

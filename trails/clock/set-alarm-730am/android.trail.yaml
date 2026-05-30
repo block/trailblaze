@@ -1,16 +1,16 @@
 # End-to-end accessibility-driver trail: create a 7:30 alarm and delete it.
 # Demonstrates the new authored-tool format (`clock_android_launchApp` defined in
-# the workspace `clock` pack at trails/config/packs/clock/tools/clock_android_launchApp.ts)
+# the workspace `clock` trailmap at trails/config/trailmaps/clock/tools/clock_android_launchApp.ts)
 # as the launch primitive, combined with the on-device accessibility driver for
 # all subsequent UI interactions.
 - config:
     id: "clock/set-alarm-730am"
     driver: ANDROID_ONDEVICE_ACCESSIBILITY
-    # Bind the trail to the workspace `clock` pack so its inline scripted tools
+    # Bind the trail to the workspace `clock` trailmap so its inline scripted tools
     # (clock_android_launchApp) get loaded into the session repo.
     target: clock
 
-# Host-side setup. Custom scripted tool defined by the workspace `clock` pack.
+# Host-side setup. Custom scripted tool defined by the workspace `clock` trailmap.
 # Force-stops + relaunches the Google Clock app via the dual-mode `android_adbShell`
 # primitive (composed in `clock_android_launchApp.ts`) so each session starts from a
 # clean app state without needing a Maestro `launchApp` agent.

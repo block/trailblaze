@@ -1,0 +1,22 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze migrate-trails [-hV] [-o=<outputPath>] <input-dir>
+Migrate a directory of legacy *.trail.yaml files (plus optional blaze.yaml)
+into a single unified trail.yaml file. Does NOT delete the input files. Hidden
+from `--help` because almost no one has v1 trails — this is a one-shot
+migration utility, not part of the public surface. Still callable via
+`trailblaze migrate-trails <input-dir>` when needed.
+      <input-dir>   Directory containing one or more `<classifier>.trail.yaml`
+                      files. The filename minus `.trail.yaml` is the device
+                      classifier (e.g. `android-phone.trail.yaml` →
+                      `android-phone`).
+  -h, --help        Show this help message and exit.
+  -o, --output=<outputPath>
+                    Path to write the unified file. Defaults to
+                      `<input-dir>/trail.yaml`.
+  -V, --version     Print version information and exit.

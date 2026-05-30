@@ -49,7 +49,14 @@ data class RunTrailTool(
     }
 
     val trailblazeYaml = createTrailblazeYaml()
-    val items = trailblazeYaml.decodeTrail(trailFile.readText())
+    // Sub-trail execution: pass through this device's classifiers so v3 sub-trails
+    // lower to the right closest-wins recording. The guard in decodeTrail will throw
+    // on v3 + recordings without classifiers — that would otherwise silently degrade
+    // to LLM mode here.
+    val items = trailblazeYaml.decodeTrail(
+      trailFile.readText(),
+      deviceClassifiers = toolExecutionContext.trailblazeDeviceInfo.classifiers,
+    )
 
     val recordedSteps =
       items

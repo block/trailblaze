@@ -185,15 +185,26 @@ object TrailblazeDesktopUtil {
     }
   }
 
-  fun openInDefaultBrowser(url: String) {
-    try {
-      if (Desktop.isDesktopSupported()) {
+  /**
+   * Open [url] in the OS default browser. Returns `true` on success, `false` if the
+   * platform doesn't support the BROWSE action or the underlying call threw (malformed
+   * URL, missing X server on Linux, etc.). Callers that care about the outcome — e.g.
+   * [xyz.block.trailblaze.cli.ShowCommand], which must distinguish "browser opened" from
+   * "browser failed silently" for its exit code — should branch on the return value.
+   * UI fire-and-forget callers can keep ignoring the return without a behavior change.
+   */
+  fun openInDefaultBrowser(url: String): Boolean {
+    return try {
+      if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
         Desktop.getDesktop().browse(URI(url))
+        true
       } else {
-        Console.log("Desktop is not supported on this platform.")
+        Console.log("[TrailblazeDesktopUtil] Desktop.BROWSE not supported on this platform.")
+        false
       }
     } catch (e: Exception) {
-      e.printStackTrace()
+      Console.log("[TrailblazeDesktopUtil] openInDefaultBrowser failed for $url: ${e.message}")
+      false
     }
   }
 

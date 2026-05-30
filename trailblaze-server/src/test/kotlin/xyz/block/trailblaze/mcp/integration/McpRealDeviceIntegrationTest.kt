@@ -126,14 +126,14 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     Console.log("[$tag] Agent set: ${agentResult.content.take(200)}")
     assertTrue(agentResult.isSuccess, "[$tag] Setting agent should succeed: ${agentResult.content}")
 
-    // 4. Run a simple blaze objective (retry while driver is still initializing)
-    val blazeResult = callToolWithDriverRetry(tag, "blaze", mapOf("objective" to "Press the home button"))
-    Console.log("[$tag] Blaze result: ${blazeResult.content.take(500)}")
-    assertFalse(blazeResult.isError, "[$tag] Blaze should not error: ${blazeResult.content.take(500)}")
+    // 4. Run a simple step (retry while driver is still initializing)
+    val stepResult = callToolWithDriverRetry(tag, "step", mapOf("objective" to "Press the home button"))
+    Console.log("[$tag] Step result: ${stepResult.content.take(500)}")
+    assertFalse(stepResult.isError, "[$tag] Step should not error: ${stepResult.content.take(500)}")
 
     // 5. Verify the result
     val verifyResult = client.callTool(
-      "blaze",
+      "step",
       mapOf("objective" to "The home screen or launcher is visible", "hint" to "VERIFY"),
     )
     Console.log("[$tag] Verify result: ${verifyResult.content.take(500)}")

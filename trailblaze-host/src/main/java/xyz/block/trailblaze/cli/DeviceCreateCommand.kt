@@ -39,7 +39,7 @@ class DeviceCreateCommand : Callable<Int> {
     // No subcommand passed — show help and exit USAGE so scripts that forget to
     // pass `web` (etc.) surface the right diagnostic rather than silently no-op.
     CommandLine.usage(this, System.err)
-    return CommandLine.ExitCode.USAGE
+    return TrailblazeExitCode.MISUSE.code
   }
 }
 
@@ -137,7 +137,7 @@ class DeviceCreateWebCommand : Callable<Int> {
   override fun call(): Int {
     if (emulate != null && viewport != null) {
       Console.error("Error: --emulate and --viewport are mutually exclusive. Pick one.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val spec = emulate?.takeIf { it.isNotBlank() } ?: viewport?.takeIf { it.isNotBlank() }
@@ -150,7 +150,7 @@ class DeviceCreateWebCommand : Callable<Int> {
         WebViewportSpec.parse(spec)
       } catch (e: IllegalArgumentException) {
         Console.error("Error: ${e.message}")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
 
@@ -169,10 +169,10 @@ class DeviceCreateWebCommand : Callable<Int> {
       val result = client.callTool("device", args)
       if (result.isError) {
         Console.error(result.content.ifBlank { "Failed to create web device." })
-        return@cliWithDaemon CommandLine.ExitCode.SOFTWARE
+        return@cliWithDaemon TrailblazeExitCode.INFRA_FAILED.code
       }
       Console.info(result.content)
-      CommandLine.ExitCode.OK
+      TrailblazeExitCode.SUCCESS.code
     }
   }
 }

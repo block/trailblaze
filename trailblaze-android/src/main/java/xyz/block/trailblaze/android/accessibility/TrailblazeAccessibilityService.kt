@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.graphics.Path
 import android.graphics.Point
+import android.graphics.Rect
 import android.hardware.HardwareBuffer
 import android.os.Bundle
 import android.os.Looper
@@ -83,7 +84,10 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
       AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
       AccessibilityEvent.TYPE_VIEW_SCROLLED,
-      AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+      AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+      AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+        // TYPE_VIEW_CLICKED is the only settle signal canvas widgets emit on the ACTION_CLICK
+        // route (ExploreByTouchHelper virtual views) — gesture-path clicks emit nothing.
         lastUiEventTimestampMs = Clock.System.now().toEpochMilliseconds()
       }
     }
@@ -560,6 +564,102 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
           .build()
       return internalDispatchGesture(gesture)
+    }
+
+    /**
+     * Dispatches `ACTION_CLICK` on the live accessibility node whose screen bounds equal
+     * [targetBounds], whose `className` matches [targetClassName] (when supplied), whose
+     * `viewIdResourceName` matches [targetResourceId] (when supplied), and which advertises
+     * `ACTION_CLICK` in its action list. Returns `true` when such a node was located AND
+     * `performAction` returned true; `false` otherwise (caller should fall back to coordinate
+     * gesture dispatch).
+     *
+     * Identity matching is by exact bounds + className + resourceId, not by coordinate
+     * hit-test: callers pass the identity of the already-resolved selector node, so this
+     * routine looks up that same node by identity rather than re-running a "what's at (x, y)"
+     * walk. The className tiebreaker disambiguates merged-semantics trees where a clickable
+     * wrapper and a non-clickable child share bounds (e.g. `android.view.View` clickable
+     * wrapper over an `android.widget.Button` inner — same rect, different classes); the
+     * resourceId tiebreaker disambiguates the equivalent in Compose merged-semantics trees.
+     */
+    fun tapByActionClickOnBounds(
+      targetBounds: Rect,
+      targetClassName: String? = null,
+      targetResourceId: String? = null,
+    ): Boolean {
+      val root = getRootNodeInfo()
+      if (root == null) {
+        // Service has no active window root (transient — service rebinding, permission
+        // hiccup, or the window we resolved against has been torn down). Log so an oncall
+        // can grep for repeated occurrences without drowning normal runs.
+        Console.log("[tapByActionClickOnBounds] no live root, caller will gesture-fall-back")
+        return false
+      }
+      return root.useRecycling { rootNode ->
+        findClickableNodeWithBounds(rootNode, targetBounds, targetClassName, targetResourceId)
+          ?.useRecycling { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+          ?: false
+      }
+    }
+
+    /**
+     * DFS for a node whose `getBoundsInScreen` equals [targetBounds], whose `className`
+     * matches [targetClassName] (when supplied), whose `viewIdResourceName` matches
+     * [targetResourceId] (when supplied), and which advertises `ACTION_CLICK`. Returns null
+     * when no such node exists in the subtree rooted at [node].
+     *
+     * Returns an independent [AccessibilityNodeInfo.obtain] copy on success so the caller
+     * owns a handle that's lifecycle-independent from [node] and its descendants — the
+     * recursive frames can then unconditionally recycle every `getChild` reference,
+     * including the one whose subtree contained the match, without invalidating the returned
+     * handle. This sidesteps both the leaked-ancestor and the double-recycle failure modes
+     * the must-recycle contract is prone to with tree-walk patterns.
+     *
+     * Matching policy:
+     * - Bounds equality is **exact** by design. A 1px shift between resolve and dispatch
+     *   (mid-scroll, animation tick) means the resolved identity is stale and we want to
+     *   miss + fall back to gesture rather than tap a different node whose bounds happen
+     *   to overlap.
+     * - `(bounds, className, resourceId)` is not strictly unique in Compose merged-semantics
+     *   trees (a `Row { Button(); Button() }` layout could theoretically produce overlapping
+     *   siblings with identical class+id+rect). DFS pre-order wins on collision, which
+     *   matches the selector's own first-match semantic.
+     */
+    private fun findClickableNodeWithBounds(
+      node: AccessibilityNodeInfo,
+      targetBounds: Rect,
+      targetClassName: String?,
+      targetResourceId: String?,
+    ): AccessibilityNodeInfo? {
+      val nodeBounds = Rect().also(node::getBoundsInScreen)
+      val classMatches = targetClassName == null || node.className?.toString() == targetClassName
+      val resourceMatches = targetResourceId == null || node.viewIdResourceName == targetResourceId
+      val advertisesClick =
+        node.actionList?.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } == true
+      if (nodeBounds == targetBounds && classMatches && resourceMatches && advertisesClick) {
+        return AccessibilityNodeInfo.obtain(node)
+      }
+      return (0 until node.childCount).firstNotNullOfOrNull { i ->
+        node.getChild(i)?.useRecycling { child ->
+          findClickableNodeWithBounds(child, targetBounds, targetClassName, targetResourceId)
+        }
+      }
+    }
+
+    /**
+     * Runs [block] with this node, then recycles it. The node must not be referenced after
+     * this returns. Mirrors `AutoCloseable.use()` semantics — [AccessibilityNodeInfo] does
+     * not implement `AutoCloseable`, so this gives us the same "scoped resource" idiom
+     * without the nested try/finally noise.
+     */
+    private inline fun <R> AccessibilityNodeInfo.useRecycling(
+      block: (AccessibilityNodeInfo) -> R,
+    ): R {
+      try {
+        return block(this)
+      } finally {
+        recycle()
+      }
     }
 
     fun pressBack() {

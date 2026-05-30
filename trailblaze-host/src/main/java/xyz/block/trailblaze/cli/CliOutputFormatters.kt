@@ -7,12 +7,20 @@ import picocli.CommandLine
 import xyz.block.trailblaze.util.Console
 
 // ---------------------------------------------------------------------------
-// Agent-optimized output formatters (used by ./blaze commands)
+// Agent-optimized output formatters (shared across CLI verbs that dispatch to
+// the agent-loop MCP tool: `step`, `tool`, `snapshot`)
 // ---------------------------------------------------------------------------
 
 /**
- * Format blaze tool result with structured sections (### Page, ### Screen).
+ * Format the MCP `step` tool's result with structured sections (### Page, ### Screen).
  * Agent-optimized: AI coding agents parse this output format.
+ *
+ * The function name's `Blaze` prefix is **lineage** — this helper predates the
+ * `blaze → step` rename and is shared today by three verbs (`step`, `tool`,
+ * `snapshot`), all of which dispatch to the same MCP tool (now named `step`).
+ * Renaming the helper to `formatStepResult*` would imply it's step-verb-specific,
+ * which is wrong. A future rename to a verb-agnostic name (`formatActionResult*`,
+ * `formatAgentToolResult*`) is the better cleanup; tracked as deferred housekeeping.
  */
 internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
   if (result.isError) {
@@ -97,13 +105,16 @@ internal fun formatAskResultAgent(result: CliMcpClient.ToolResult) {
 
 /**
  * Format verify result with ### Passed / ### Failed.
- * Returns exit code: OK if passed, SOFTWARE if failed.
+ * Returns exit code: [TrailblazeExitCode.SUCCESS] if the assertion passed,
+ * [TrailblazeExitCode.ASSERTION_FAILED] if the assertion's verdict was false,
+ * [TrailblazeExitCode.INFRA_FAILED] if the daemon/tool returned a transport-level
+ * error before any verdict could be computed.
  */
 internal fun formatVerifyResultAgent(result: CliMcpClient.ToolResult): Int {
   if (result.isError) {
     Console.info("### Error")
     Console.error(result.content)
-    return CommandLine.ExitCode.SOFTWARE
+    return TrailblazeExitCode.INFRA_FAILED.code
   }
   try {
     val json = Json.parseToJsonElement(result.content).jsonObject
@@ -111,25 +122,25 @@ internal fun formatVerifyResultAgent(result: CliMcpClient.ToolResult): Int {
     if (error != null) {
       Console.info("### Error")
       Console.error(error)
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
     val passed = json["passed"]?.jsonPrimitive?.content?.toBoolean() ?: false
     val resultText = json["result"]?.jsonPrimitive?.content ?: ""
     if (passed) {
       Console.info("### Passed")
       Console.info(resultText)
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     } else {
       Console.info("### Failed")
       Console.info(resultText)
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.ASSERTION_FAILED.code
     }
   } catch (_: Exception) {
     // Not JSON — parse markdown format from daemon (e.g., "**✅ PASSED** — reason")
     val text = result.content
     val passed = parseVerifyPassedFromMarkdown(text)
     formatBlazeResultAgent(result)
-    return if (passed) CommandLine.ExitCode.OK else CommandLine.ExitCode.SOFTWARE
+    return if (passed) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   }
 }
 
@@ -243,21 +254,52 @@ internal fun extractJsonError(content: String): String? {
 }
 
 /**
- * Determine exit code from a blaze tool result.
+ * Substring markers that classify a tool-result body as user-input misuse
+ * (MISUSE = 3 per [TrailblazeExitCode]) rather than infrastructure failure
+ * (INFRA_FAILED = 2). Single source of truth for both [blazeExitCode] and
+ * [ToolCommand]'s rejection intercept — duplicating the strings risks a
+ * silent two-layer drift if a new marker is added in one site but not the
+ * other.
+ *
+ * - `"Unknown tool"` matches both the singular `Unknown tool: foo` (emitted
+ *   by `AgentUiActionExecutor`) and the plural `Unknown tools: a, b, c`
+ *   (emitted by `StepToolSet` when a batch contains multiple unknown names).
+ * - `"not valid for the current device/target"` matches both `Tool not valid …`
+ *   (singular) and `Tools not valid …` (plural) — `StepToolSet` pluralizes
+ *   the noun based on count.
+ */
+internal val MISUSE_MARKERS = listOf("Unknown tool", "not valid for the current device/target")
+
+/**
+ * Determine exit code from a `step` MCP tool result.
+ *
+ * Name kept as `blazeExitCode` for lineage — shared by every verb that
+ * dispatches to the agent-loop tool. See [formatBlazeResultAgent] for the
+ * full deferral note.
  */
 internal fun blazeExitCode(result: CliMcpClient.ToolResult): Int {
-  if (result.isError) return CommandLine.ExitCode.SOFTWARE
+  if (result.isError) return TrailblazeExitCode.INFRA_FAILED.code
   return try {
     val json = Json.parseToJsonElement(result.content).jsonObject
     val error = json["error"]?.jsonPrimitive?.content
-    if (!error.isNullOrBlank()) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
+    if (!error.isNullOrBlank()) TrailblazeExitCode.INFRA_FAILED.code else TrailblazeExitCode.SUCCESS.code
   } catch (_: Exception) {
     // Not JSON — check markdown for error markers
     val text = result.content
-    if ("❌ Error" in text || "❌ FAILED" in text) {
-      CommandLine.ExitCode.SOFTWARE
+    // The daemon's `StepResult.toMarkdown()` always prefixes these with
+    // `**❌ Error**`, but `ToolCommand` intercepts the rejection path before
+    // this fallback — checking the substring here is defense in depth for any
+    // future caller of `blazeExitCode` (or a daemon-side format drift) so we
+    // don't silently return SUCCESS on a typo. Order matters: check the
+    // [MISUSE_MARKERS] BEFORE the generic error markers, otherwise the broad
+    // "❌ Error" / "❌ FAILED" catch would mask the more-specific
+    // input-mistake verdict.
+    if (MISUSE_MARKERS.any { it in text }) {
+      TrailblazeExitCode.MISUSE.code
+    } else if ("❌ Error" in text || "❌ FAILED" in text) {
+      TrailblazeExitCode.INFRA_FAILED.code
     } else {
-      CommandLine.ExitCode.OK
+      TrailblazeExitCode.SUCCESS.code
     }
   }
 }

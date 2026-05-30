@@ -66,6 +66,25 @@ class McpCommand : Callable<Int> {
   )
   var toolProfile: String? = null
 
+  @Option(
+    names = ["-d", "--device"],
+    description = [
+      "Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). " +
+        "Defaults to \$TRAILBLAZE_DEVICE.",
+    ],
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["-t", "--target"],
+    description = [
+      "Pin this MCP session to a target app on startup (e.g. default, sampleapp). " +
+        "Only meaningful with --device or \$TRAILBLAZE_DEVICE. " +
+        "Defaults to \$TRAILBLAZE_TARGET.",
+    ],
+  )
+  var target: String? = null
+
   override fun call(): Int {
     // If running in an interactive terminal (not piped by an AI agent), show setup
     // instructions instead of starting a raw STDIO server that would spew JSON-RPC.
@@ -78,7 +97,7 @@ class McpCommand : Callable<Int> {
       Console.info("  Windsurf:     Add to MCP config with command 'trailblaze mcp'")
       Console.info("")
       Console.info("For a standalone HTTP server:  trailblaze mcp --http")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     // Resolve tool profile: env var > CLI flag > transport-based default
@@ -88,12 +107,12 @@ class McpCommand : Callable<Int> {
     val resolvedProfile = System.getenv("TRAILBLAZE_TOOL_PROFILE")?.let { env ->
       try { McpToolProfile.valueOf(env.uppercase()) } catch (_: IllegalArgumentException) {
         Console.error("Invalid TRAILBLAZE_TOOL_PROFILE '$env'. Allowed: $allowedProfiles")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     } ?: toolProfile?.let { flag ->
       try { McpToolProfile.valueOf(flag.uppercase()) } catch (_: IllegalArgumentException) {
         Console.error("Invalid --tool-profile '$flag'. Allowed: $allowedProfiles")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     } ?: transportDefault
 
@@ -210,9 +229,32 @@ class McpCommand : Callable<Int> {
     } else {
       // Default: STDIO-to-HTTP proxy mode — lightweight proxy that forwards JSON-RPC
       // to the Trailblaze daemon. Reconnects transparently on daemon restarts.
-      return McpProxy(port = parent.getEffectivePort()).run()
+      //
+      // Pre-bind a device + target on startup when the shell exported TRAILBLAZE_DEVICE
+      // (typically via `eval $(trailblaze device connect ...)`) or the agent's MCP
+      // server registration passed --device / --target explicitly. The proxy turns
+      // these into synthetic `tools/call` requests injected after `initialize` so the
+      // first request the LLM issues sees a device already bound — no need to teach
+      // every agent to call the `device` tool first.
+      // Normalize target the same way DeviceCommand / SessionCommand do
+      // (lowercase + blank→null) so `mcp --target SampleApp` matches the
+      // daemon's case-insensitive lookup. Keeps behavior consistent with
+      // the comment on synthesizeTargetBindCall about caller-side normalization.
+      // Falls through to TRAILBLAZE_TARGET when --target is omitted — symmetric
+      // with TRAILBLAZE_DEVICE for [device], so an MCP-server registration that
+      // inherits the shell's `eval $(trailblaze device connect ... --target X)`
+      // env picks up the target without the user re-typing it in their MCP
+      // config. Routed through [resolveCliTargetPin] (NOT the four-tier
+      // [resolveCliTarget]) because workspace-config / built-in-default
+      // targets are already the daemon-wide fallback — synthesizing a
+      // `setSessionTargetForBoundDevice` for them would be redundant noise.
+      return McpProxy(
+        port = parent.getEffectivePort(),
+        initialDeviceSpec = resolveCliDevice(device),
+        initialTarget = resolveCliTargetPin(target),
+      ).run()
     }
 
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

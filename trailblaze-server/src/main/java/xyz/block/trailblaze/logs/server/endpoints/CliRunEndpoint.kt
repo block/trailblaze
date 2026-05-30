@@ -75,6 +75,19 @@ data class CliRunRequest(
    * runner's built-in default.
    */
   val maxLlmCalls: Int? = null,
+  /**
+   * CLI `--memory KEY=VAL` entries forwarded into [RunYamlRequest.initialMemorySeeds].
+   * Applied AFTER the trail YAML's `config.memory:` block so CLI overrides YAML on the
+   * same key. Empty by default. Values are logged in cleartext — use
+   * [initialMemorySensitiveSeeds] for secrets.
+   */
+  val initialMemorySeeds: Map<String, String> = emptyMap(),
+  /**
+   * CLI `--secret KEY=VAL` entries forwarded into
+   * [RunYamlRequest.initialMemorySensitiveSeeds]. Values are redacted in logs and excluded
+   * from the session-start snapshot.
+   */
+  val initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
 ) {
   /**
    * Validates that at least one execution mode is specified:

@@ -21,6 +21,25 @@ sealed interface SessionStatus {
     val trailblazeDeviceInfo: TrailblazeDeviceInfo,
     val trailblazeDeviceId: TrailblazeDeviceId? = null,
     val rawYaml: String? = null,
+    /**
+     * Memory state seeded into [xyz.block.trailblaze.AgentMemory] at session start —
+     * `trailConfig.memory` (YAML defaults) merged with CLI `--memory KEY=VAL` overrides
+     * applied on top (CLI wins). Captured here so replay is self-contained: the recording
+     * carries the resolved values without needing the original CLI invocation or YAML
+     * re-read. Empty when no seeding occurred.
+     *
+     * Sensitive seeds (CLI `--secret KEY=VAL`) are intentionally NOT carried here — only
+     * their KEYS appear in [sensitiveMemoryKeys] so replay knows which values it must
+     * re-supply. This keeps passwords / tokens out of session-log artifacts.
+     */
+    val resolvedInitialMemory: Map<String, String> = emptyMap(),
+    /**
+     * Keys that were seeded as SENSITIVE at session start (via CLI `--secret KEY=VAL`).
+     * Values are deliberately omitted — replay must re-supply them through the same
+     * channel. Empty when no sensitive seeding occurred. Disjoint with the keys of
+     * [resolvedInitialMemory] by construction.
+     */
+    val sensitiveMemoryKeys: Set<String> = emptySet(),
   ) : SessionStatus
 
   @Serializable

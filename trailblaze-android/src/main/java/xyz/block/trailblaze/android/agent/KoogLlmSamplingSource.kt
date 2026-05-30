@@ -4,10 +4,11 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.asToolType
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
@@ -63,12 +64,7 @@ class KoogLlmSamplingSource(
         tools = emptyList(), // No tools for text sampling
       )
 
-      val responseText = responses.firstOrNull()?.let { response ->
-        when (response) {
-          is Message.Assistant -> response.content
-          else -> response.toString()
-        }
-      } ?: ""
+      val responseText = responses.textContent()
 
       SamplingResult.Text(
         completion = responseText,
@@ -112,15 +108,15 @@ class KoogLlmSamplingSource(
         tools = koogTools,
       )
 
-      // Extract the tool call from response
-      val toolCall = responses.filterIsInstance<Message.Tool>().firstOrNull()
+      // Extract the tool call from response (Tool.Call is now a MessagePart inside Assistant)
+      val toolCall = responses.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
         ?: return SamplingResult.Error(
-          "LLM did not return a tool call. Response: ${responses.firstOrNull()}"
+          "LLM did not return a tool call. Response: ${responses.textContent()}"
         )
 
       // Parse the tool arguments as JsonObject
       val arguments = try {
-        Json.decodeFromString<JsonObject>(toolCall.content)
+        Json.decodeFromString<JsonObject>(toolCall.args)
       } catch (e: Exception) {
         JsonObject(emptyMap())
       }
@@ -161,14 +157,16 @@ class KoogLlmSamplingSource(
     )
     add(
       Message.User(
-        parts = buildList {
-          add(ContentPart.Text(text = userMessage))
+        parts = buildList<MessagePart.RequestPart> {
+          add(MessagePart.Text(text = userMessage))
           val supportsVision = llmModel.capabilities.contains(LLMCapability.Vision.Image)
           if (screenshotBytes != null && screenshotBytes.isNotEmpty() && supportsVision) {
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               ),
             )
           }

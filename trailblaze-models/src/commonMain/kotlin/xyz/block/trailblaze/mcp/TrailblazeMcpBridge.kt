@@ -214,9 +214,18 @@ interface TrailblazeMcpBridge {
    * Returns the ID of the currently selected target app, or null if none is selected.
    *
    * Daemon-wide — does NOT consult per-device session targets. Callers with a
-   * device context should prefer [getSessionTargetAppIdForDevice] (or whatever
-   * the impl exposes via the device-scoped resolver) so they pick up `--target
-   * --device=Y` writes.
+   * device context should prefer [getSessionTargetAppIdForDevice], which
+   * routes through the per-device session override set by `--target` /
+   * [setSessionTargetForDevice] before falling back to this daemon-wide value.
+   *
+   * Reading the daemon-wide value from a tool-list / tool-availability path
+   * is the bug behind "Tool not valid for the current device/target" being
+   * raised for YAML-defined tools (`pressBack`, `eraseText`, …) on a bound
+   * device whose `--target` wasn't promoted to the daemon-wide setting.
+   * Those tools only land in the available set when the resolved target's
+   * trailmap declares the toolset that defines them; without a device-scoped
+   * resolver the daemon-wide value drives the gate and any per-device
+   * override silently no-ops.
    */
   fun getCurrentAppTargetId(): String?
 
@@ -232,6 +241,26 @@ interface TrailblazeMcpBridge {
    * Default impl is a no-op so test stubs don't need to override.
    */
   fun setSessionTargetForDevice(deviceId: TrailblazeDeviceId, appTargetId: String?): String? = null
+
+  /**
+   * Resolves the effective target app id for [deviceId] — the per-device
+   * session override (set via `--target` / [setSessionTargetForDevice])
+   * wins, falling back to the daemon-wide [getCurrentAppTargetId].
+   *
+   * This is what tool dispatch, tool-availability gates, and any other
+   * surface that builds a per-device tool list should call when a device-
+   * bound context is in scope. Reading [getCurrentAppTargetId] directly
+   * from those paths is the bug that drops YAML-defined tools from the
+   * gate when the daemon-wide setting doesn't match the device's
+   * `--target` (they only show up when the resolved target's trailmap
+   * declares the toolset that owns them).
+   *
+   * Default impl falls back to [getCurrentAppTargetId] so test stubs that
+   * don't model per-device overrides keep their existing single-source
+   * behavior.
+   */
+  fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =
+    getCurrentAppTargetId()
 
   /**
    * Returns the per-session target override stored against [sessionId], or

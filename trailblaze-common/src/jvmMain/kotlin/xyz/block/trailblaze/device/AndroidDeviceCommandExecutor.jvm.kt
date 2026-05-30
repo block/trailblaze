@@ -90,76 +90,62 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   }
 
   /**
-   * Writes a file to Downloads via the MediaStore content provider.
+   * Writes a file to the device Downloads directory via `adb push` (sync protocol).
    *
-   * Uses `adb shell content insert/write` to go through the same MediaStore APIs that
-   * the on-device Android implementation uses via ContentResolver. This ensures the file
-   * is properly registered in MediaStore and accessible to all apps through scoped storage,
-   * without requiring root or special permissions. Works on both emulators and physical devices.
+   * This is the JVM/host transport for the cross-platform contract documented on the
+   * `expect` declaration: "On Android, this uses MediaStore/ContentResolver for Q+
+   * compatibility. On JVM, this uses adb to push the file." `adb push` is the sync-protocol
+   * primitive — it bypasses the device shell entirely.
+   *
+   * **Why not match the on-device MediaStore semantics through `adb shell content
+   * insert/query/write`?** That shell-pipe path goes through dadb's shell-v2 stream and
+   * the `readAll()` blocks indefinitely when the host ADB server never sends an EXIT
+   * packet — a class of hang we hit when piping the file body to `content write` via
+   * stdin. The push primitive does not touch the shell service, so it isn't subject to
+   * that hang.
+   *
+   * The pushed file lands at `/storage/emulated/0/Download/<fileName>` — the same path
+   * MediaStore would write to. Apps with `MANAGE_EXTERNAL_STORAGE` (granted by the
+   * trailhead before any file is written) can read it via `FileReadWriteUtil`'s
+   * filesystem-fallback branch, even though no MediaStore row exists.
    */
   actual fun writeFileToDownloads(fileName: String, content: ByteArray) {
-    // Remove any stale entry with the same name first
-    deleteFileFromDownloads(fileName)
-
-    // Step 1: Insert a MediaStore entry directly into the Downloads collection.
-    // This matches what the on-device Android implementation does via
-    // MediaStore.Downloads.getContentUri(VOLUME_EXTERNAL_PRIMARY).
-    // Note: using the "file" collection with relative_path=Download does NOT make
-    // entries visible in the "downloads" collection that apps query.
-    shellCommand(
-      "content", "insert",
-      "--uri", MEDIASTORE_DOWNLOADS_URI,
-      "--bind", "_display_name:s:$fileName",
-      "--bind", "mime_type:s:application/json",
-    )
-
-    // Step 2: Get the content:// URI ID for the newly created entry
-    val mediaStoreId = queryMediaStoreId(fileName)
-      ?: error("Failed to create MediaStore entry for $fileName in Downloads")
-
-    // Step 3: Write the actual file content through the content provider.
-    // Piping content via stdin to `adb shell content write` is the equivalent
-    // of ContentResolver.openOutputStream(uri) on device.
-    val result = AndroidHostAdbUtils.shellWithStdin(
-      deviceId = deviceId,
-      command = "content write --uri $MEDIASTORE_DOWNLOADS_URI/$mediaStoreId",
-      stdin = content,
-    )
-    if (result.exitCode != 0) {
-      error("Failed to write content to MediaStore entry $mediaStoreId: ${result.errorOutput}")
+    val remotePath = "/storage/emulated/0/Download/$fileName"
+    shellCommand("rm", "-f", remotePath)
+    val tempFile = File.createTempFile("trailblaze-dl-", ".tmp")
+    try {
+      tempFile.writeBytes(content)
+      val pushed = AndroidHostAdbUtils.pushFile(deviceId, tempFile, remotePath)
+      if (!pushed) {
+        error("Failed to push $fileName to $remotePath")
+      }
+      Console.log("Wrote ${content.size} bytes to $remotePath via adb push")
+    } finally {
+      tempFile.delete()
     }
-
-    Console.log("Wrote ${content.size} bytes to MediaStore Downloads: $fileName (id=$mediaStoreId)")
   }
 
   actual fun deleteFileFromDownloads(fileName: String) {
+    // writeFileToDownloads pushes to the raw filesystem path (no MediaStore row), so the
+    // primary cleanup is `rm -f` on that path. The `content delete` call is a best-effort
+    // backstop for any MediaStore rows left by earlier framework versions that wrote
+    // through the content provider — without it, those legacy rows would remain after a
+    // delete on hosts that have been upgraded mid-run.
+    val remotePath = "/storage/emulated/0/Download/$fileName"
     try {
-      // Delete via MediaStore content provider — this removes both the MediaStore entry
-      // and the underlying file on the filesystem. Works across all API levels with
-      // scoped storage (no root required).
+      shellCommand("rm", "-f", remotePath)
+    } catch (e: Exception) {
+      Console.log("Warning: could not rm $remotePath: ${e.message}")
+    }
+    try {
       shellCommand(
         "content", "delete",
         "--uri", MEDIASTORE_DOWNLOADS_URI,
         "--where", whereDisplayName(fileName),
       )
     } catch (e: Exception) {
-      // Best-effort cleanup
       Console.log("Warning: could not delete MediaStore entry for $fileName: ${e.message}")
     }
-  }
-
-  /**
-   * Queries MediaStore for a file's _id by display name in the Downloads collection.
-   */
-  private fun queryMediaStoreId(fileName: String): String? {
-    val output = shellCommand(
-      "content", "query",
-      "--uri", MEDIASTORE_DOWNLOADS_URI,
-      "--projection", "_id",
-      "--where", whereDisplayName(fileName),
-    )
-    // Output format: "Row: 0 _id=123"
-    return ID_PATTERN.find(output)?.groupValues?.get(1)
   }
 
   /**
@@ -204,7 +190,12 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       "--bind", "account_name:s:${contact.accountName.orEmpty()}",
     )
 
-    // Query for the newly inserted raw contact ID
+    // Resolve the newly-inserted raw contact's ID. `parseInsertedContentId` extracts it from the
+    // `content insert` shell output (same call that just ran — exact, no race window).
+    // `queryLastRawContactId` is a fallback that does a separate `content query ORDER BY _id DESC
+    // LIMIT 1`; it's only correct under the assumption that no other process inserted a raw contact
+    // between the insert above and the query below — true for typical single-threaded-per-device
+    // test runs but worth knowing if this method ever gets called concurrently in the future.
     val rawContactId = parseInsertedContentId(rawContactInsertOutput)
       ?: queryLastRawContactId()
       ?: error("Failed to insert raw contact for '${contact.displayName}'")
@@ -332,7 +323,19 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     private const val MEDIASTORE_DOWNLOADS_URI = "content://media/external_primary/downloads"
     private const val CONTACTS_RAW_URI = "content://com.android.contacts/raw_contacts"
     private const val CONTACTS_DATA_URI = "content://com.android.contacts/data"
-    private val INSERTED_CONTENT_ID_PATTERN = Regex("""content://[^\\s]+/(\\d+)""")
+    // Matches the URI in `adb shell content insert ...` output, e.g.
+    //   "Inserted as content://com.android.contacts/raw_contacts/42"
+    // Inside a Kotlin raw string the backslashes pass through verbatim, so `\s` and `\d`
+    // reach the regex engine as the shorthand classes. The historical value here used
+    // `\\s` / `\\d`, which made the regex try to match literal backslash characters and
+    // never matched any real insert output — callers in `addContact` silently fell through
+    // to the slower `queryLastRawContactId` fallback. Visibility is `internal` so the
+    // matching contract is testable from `jvmTest` within this module; this codebase has
+    // no Java callers (and `trailblaze-common` is consumed only by other Kotlin modules),
+    // so the Kotlin-internal scope is the appropriate level — though strictly speaking
+    // `internal` compiles to mangled-name `public` at the JVM bytecode level, that
+    // surface isn't part of any public Kotlin API consumers see.
+    internal val INSERTED_CONTENT_ID_PATTERN = Regex("""content://[^\s]+/(\d+)""")
 
     private val ID_PATTERN = Regex("""_id=(\d+)""")
   }

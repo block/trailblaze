@@ -1,0 +1,43 @@
+# The Trailblaze framework trailmap — the conventional dependency for every consumer trailmap.
+# Like the JDK in a Gradle build, this trailmap is "the standard library." Consumers add
+# `dependencies: [trailblaze]` to inherit the per-platform `defaults:` declared below.
+#
+# This trailmap has no `target:` block, so it's not surfaced as a runnable target — its sole
+# job is to publish defaults and serve as the canonical anchor for `dependencies:` refs.
+# Built-in toolsets (core_interaction, navigation, etc.) ship from their owning modules
+# (trailblaze-models, trailblaze-playwright, trailblaze-compose) via the existing
+# classpath toolset discovery, not from this trailmap — the toolset references in `defaults:`
+# below resolve against that global pool.
+#
+# A workspace can override these defaults by declaring its own trailmap with `id: trailblaze`
+# in `trailblaze.yaml` — the workspace trailmap wholesale shadows this bundled one (see the
+# trailmap-id collision rule on TrailblazeResolvedConfig).
+id: trailblaze
+defaults:
+  android:
+    tool_sets:
+      - core_interaction
+      - navigation
+      - observation
+      - verification
+      - memory
+  ios:
+    tool_sets:
+      - core_interaction
+      - navigation
+      - observation
+      - verification
+      - memory
+  web:
+    drivers:
+      - playwright-native
+      - playwright-electron
+    tool_sets:
+      - web_core
+      - web_verification
+      - memory
+  compose:
+    tool_sets:
+      - compose_core
+      - compose_verification
+      - memory

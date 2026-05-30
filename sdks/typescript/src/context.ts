@@ -26,7 +26,14 @@
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import { noopLogger, type TrailblazeLogger } from "./logger.js";
+import {
+  createMemory,
+  META_KEY_MEMORY,
+  META_KEY_TRAILBLAZE,
+  type TrailblazeMemory,
+} from "./memory.js";
 export type { TrailblazeLogger, TrailblazeLogLevel } from "./logger.js";
+export type { TrailblazeMemory } from "./memory.js";
 
 export interface TrailblazeDevice {
   /**
@@ -43,7 +50,7 @@ export interface TrailblazeDevice {
 }
 
 /**
- * The session's resolved target — the pack manifest's `target.platforms.<platform>`
+ * The session's resolved target — the trailmap manifest's `target.platforms.<platform>`
  * data after the framework has consulted the connected device for which candidate
  * to actually use.
  *
@@ -61,9 +68,9 @@ export interface TrailblazeDevice {
  * priority order — see each method's kdoc.
  */
 export interface TrailblazeTarget {
-  /** Pack-defined target id (e.g. `"clock"`, `"wikipedia"`, `"square"`). */
+  /** Trailmap-defined target id (e.g. `"clock"`, `"wikipedia"`, `"square"`). */
   id: string;
-  /** Human-readable display name from the pack manifest's `target.display_name`. */
+  /** Human-readable display name from the trailmap manifest's `target.display_name`. */
   displayName?: string;
 
   /**
@@ -78,7 +85,7 @@ export interface TrailblazeTarget {
    * Framework-resolved app id — picked at session start by intersecting [appIds]
    * against the set of apps actually installed on the connected device. Undefined
    * when no candidate was installed at session start (or when [appIds] is empty).
-   * Most well-configured packs running on a populated device will have this set
+   * Most well-configured trailmaps running on a populated device will have this set
    * and authors should usually consume via [resolveAppId].
    */
   appId?: string;
@@ -106,7 +113,7 @@ export interface TrailblazeTarget {
    * Resolves the Android/iOS app id to use, applying the priority:
    *
    *  1. `this.appId` (framework-resolved) — what callers will hit ~always
-   *     in well-configured packs running on a device with one of the candidates
+   *     in well-configured trailmaps running on a device with one of the candidates
    *     installed.
    *  2. `this.appIds[0]` (first declared candidate) — fallback when the framework
    *     couldn't resolve anyone (e.g. session started before any candidate was
@@ -129,7 +136,7 @@ export interface TrailblazeTarget {
    * [resolveAppId] but reading from `this.resolvedBaseUrl` and `this.baseUrls`.
    *
    * Note: until the framework wires `target.platforms.web.base_urls:` into the
-   * pack manifest schema, the data layers are empty and this method falls
+   * trailmap manifest schema, the data layers are empty and this method falls
    * through to `options.defaultBaseUrl` every time. Authors writing web tools
    * today can rely on the caller-default; future framework upgrades will
    * transparently start populating from the manifest without source changes.
@@ -176,7 +183,7 @@ export interface TrailblazeContext {
 
   /**
    * Resolved-target descriptor. Populated whenever the host session has a target
-   * configured (the pack manifest's `target:` block resolved against the connected
+   * configured (the trailmap manifest's `target:` block resolved against the connected
    * device's installed apps) — both the MCP-subprocess path and the in-process
    * QuickJS scripting path emit it. Absent for sessions with no target (web-only
    * scratch tools, unit-test fixtures) and for envelopes from older daemons that
@@ -190,10 +197,14 @@ export interface TrailblazeContext {
   target?: TrailblazeTarget;
 
   /**
-   * Agent memory snapshot. Values are strings on the Kotlin side today; typed as `unknown` here
-   * so an author-facing upgrade to richer memory types doesn't break the SDK surface.
+   * Per-tool-call agent memory surface. Reads consult the host's snapshot captured at
+   * envelope build time, plus any writes made earlier in this handler invocation
+   * (read-your-own-writes). Writes are buffered locally and flushed back to the host on
+   * a successful tool return via `_meta.trailblaze.memoryDelta`; a handler that throws
+   * produces no delta and the host's memory is left unchanged. See [TrailblazeMemory]
+   * for the full surface and [memory.ts] for the wire-shape rationale.
    */
-  memory: Record<string, unknown>;
+  memory: TrailblazeMemory;
 
   /**
    * Author-facing logger. Always present on the surface so scripted tools can write
@@ -230,7 +241,7 @@ const VALID_PLATFORMS: ReadonlySet<TrailblazeDevice["platform"]> = new Set(["ios
 export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeContext | undefined {
   if (typeof meta !== "object" || meta === null) return undefined;
   const bag = meta as Record<string, unknown>;
-  const envelope = bag["trailblaze"];
+  const envelope = bag[META_KEY_TRAILBLAZE];
   if (typeof envelope !== "object" || envelope === null) return undefined;
   const tb = envelope as Record<string, unknown>;
 
@@ -269,11 +280,16 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
     return undefined;
   }
 
-  const memoryBag = tb["memory"];
-  const memory =
+  // `_meta.trailblaze.memory` is a `Record<string, string>` snapshot of the host's
+  // `AgentMemory.variables` at envelope build time. Wrap it in a `TrailblazeMemory` so
+  // the handler sees the full 8-method surface — `createMemory` filters out non-string
+  // values defensively in case a producer-side bug leaks a non-string into the snapshot.
+  const memoryBag = tb[META_KEY_MEMORY];
+  const memorySnapshot: Record<string, string> | undefined =
     typeof memoryBag === "object" && memoryBag !== null
-      ? (memoryBag as Record<string, unknown>)
-      : {};
+      ? (memoryBag as Record<string, string>)
+      : undefined;
+  const memory = createMemory(memorySnapshot);
 
   // Target block — absent on older daemons (and sessions with no target). Strictness mirrors
   // the device block: a malformed `target` (wrong shape, missing required keys, non-string

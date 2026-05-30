@@ -2,6 +2,7 @@ package xyz.block.trailblaze.llm.config
 
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Builds a [ConfigResourceSource] that layers the classpath under a workspace's
@@ -13,9 +14,9 @@ import java.io.File
  *     toolset / tool YAMLs the user edits directly under `trails/config/`.
  *  3. `FilesystemConfigResourceSource(rootDir = configDir/dist)` — materialized YAMLs
  *     emitted by `trailblaze compile` (and the daemon-init `WorkspaceCompileBootstrap`).
- *     LAST so generated targets win on filename collisions — packs are the
- *     authoritative source for any pack-backed target, and a stale hand-authored copy
- *     from before the pack migration shouldn't shadow the freshly-compiled output.
+ *     LAST so generated targets win on filename collisions — trailmaps are the
+ *     authoritative source for any trailmap-backed target, and a stale hand-authored copy
+ *     from before the trailmap migration shouldn't shadow the freshly-compiled output.
  *
  * `configDir` MUST be the already-resolved workspace `trails/config/` directory — pass
  * what `TrailblazeWorkspaceConfigResolver.resolve(...).configDir` (or
@@ -37,9 +38,16 @@ fun workspaceLayeredConfigResourceSource(
   logPrefix: String = "[WorkspaceLayeredConfigResourceSource]",
 ): ConfigResourceSource {
   if (configDir == null || !configDir.isDirectory) return ClasspathConfigResourceSource
-  // Logged so an empty `toolbox trailheads` result has an observable trail back to "did we
-  // even find your workspace?" — without it, an unresolved config dir is silently invisible.
-  Console.log("$logPrefix Layering user config from: ${configDir.absolutePath}")
+  // Log once per (logPrefix, configDir) pair so an empty `toolbox trailheads` result has an
+  // observable trail back to "did we even find your workspace?" — but DON'T log on every
+  // discovery call. Since PR #3518 routed every discovery default through this factory, the
+  // unconditional log produced one line per `ToolYamlLoader.discoverAndLoadAll(...)` and per
+  // role-listing in the MCP daemon. Logging once per call-site/configDir keeps the original
+  // diagnostic signal (one line per fresh layering decision) without the per-call noise.
+  val logKey = "$logPrefix:${configDir.absolutePath}"
+  if (layeringLogged.add(logKey)) {
+    Console.log("$logPrefix Layering user config from: ${configDir.absolutePath}")
+  }
   return CompositeConfigResourceSource(
     sources = listOf(
       ClasspathConfigResourceSource,
@@ -50,3 +58,11 @@ fun workspaceLayeredConfigResourceSource(
     ),
   )
 }
+
+/**
+ * Set-once-per-process dedup key store for the layering log line above. Sized to the
+ * realistic upper bound — a process talks to a small handful of call-site prefixes
+ * (`[platformConfigResourceSource]`, `[AppTargetDiscovery]`, `[ToolDiscoveryToolSet]`, …)
+ * crossed with at most one workspace at a time.
+ */
+private val layeringLogged: MutableSet<String> = ConcurrentHashMap.newKeySet()

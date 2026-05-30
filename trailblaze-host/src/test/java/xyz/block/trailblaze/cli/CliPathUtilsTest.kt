@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 /**
  * Tests for [CliPathUtils] — the shared workspace-walk-up + PATH-lookup primitives
- * used by both [CompileCommand] and [TypecheckCommand].
+ * used by both [CompileCommand] and [CheckCommand].
  *
  * The walk-up tests pin the same contract `CompileCommandTest` exercises against
  * `CompileCommand.findWorkspaceRoot` — only now the contract lives in one place. The
@@ -29,7 +29,7 @@ class CliPathUtilsTest {
   @Test
   fun `findWorkspaceRoot returns the workspace itself when called at the root`() {
     val workspaceRoot = workDir
-    File(workspaceRoot, "trails/config/packs").mkdirs()
+    File(workspaceRoot, "trails/config/trailmaps").mkdirs()
 
     val found = CliPathUtils.findWorkspaceRoot(workspaceRoot.toPath())
     assertEquals(workspaceRoot.canonicalFile.toPath(), found?.toRealPath())
@@ -37,7 +37,7 @@ class CliPathUtilsTest {
 
   @Test
   fun `findWorkspaceRoot walks up from a deeply-nested subdir to the workspace root`() {
-    File(workDir, "trails/config/packs").mkdirs()
+    File(workDir, "trails/config/trailmaps").mkdirs()
     var deep = workDir
     repeat(15) { deep = File(deep, "level").apply { mkdirs() } }
 
@@ -47,7 +47,7 @@ class CliPathUtilsTest {
 
   @Test
   fun `findWorkspaceRoot returns null when no marker is found before the filesystem root`() {
-    // workDir is /tmp/<random> with no `trails/config/packs/` anywhere up the tree.
+    // workDir is /tmp/<random> with no `trails/config/trailmaps/` anywhere up the tree.
     val isolated = File(workDir, "isolated").apply { mkdirs() }
 
     val found = CliPathUtils.findWorkspaceRoot(isolated.toPath())

@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.cli.shortcut
 
+import xyz.block.trailblaze.cli.DeviceResolution
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+import xyz.block.trailblaze.cli.resolveDeviceOrErrorBlocking
+
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -13,7 +17,7 @@ import java.util.concurrent.Callable
 /**
  * `trailblaze waypoint shortcut verify` — empirical replay of a proposed shortcut on a
  * connected emulator. Generates a throwaway trail YAML from the shortcut definition,
- * invokes `./trailblaze trail` on it, and returns the trail's exit code.
+ * invokes `./trailblaze run` on it, and returns the trail's exit code.
  *
  * The generated trail's shape:
  *
@@ -47,7 +51,7 @@ import java.util.concurrent.Callable
   mixinStandardHelpOptions = true,
   description = [
     "Empirical replay of a proposed shortcut against a connected emulator.",
-    "Generates a throwaway trail YAML and runs it via `trailblaze trail`.",
+    "Generates a throwaway trail YAML and runs it via `trailblaze run`.",
     "Returns 0 if the post-condition waypoint matches, non-zero otherwise.",
   ],
 )
@@ -64,10 +68,12 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
   @Option(
     names = ["--device"],
     paramLabel = "<id>",
-    description = ["Device id to run against (forwarded to `trailblaze trail --device`)."],
-    required = true,
+    description = [
+      "Device id to run against (forwarded to `trailblaze run --device`).",
+      "Defaults to \$TRAILBLAZE_DEVICE.",
+    ],
   )
-  lateinit var deviceId: String
+  var deviceId: String? = null
 
   @Option(
     names = ["--driver"],
@@ -118,7 +124,7 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
     names = ["--timeout-seconds"],
     paramLabel = "<s>",
     description = [
-      "Per-attempt timeout in seconds for the inner `trailblaze trail` subprocess.",
+      "Per-attempt timeout in seconds for the inner `trailblaze run` subprocess.",
       "Default: 600 (10 min). A wedged trail run (device disconnect, ADB hung, runtime",
       "stuck on settle) is destroyed and returns exit code 124 so the outer bootstrap can",
       "move on. Without a timeout, a single stuck replay would block the rest of v1's",
@@ -128,24 +134,35 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
   var timeoutSeconds: Int = 600
 
   override fun call(): Int {
+    // Resolve --device through the shared four-tier chain so the inner `trailblaze run`
+    // subprocess gets a real device id rather than an empty arg + cryptic "Device ''
+    // not found" failure mid-pipeline. The chain (flag → TRAILBLAZE_DEVICE env →
+    // autodetect-single-connected-device → error envelope) is the same one every other
+    // CLI device command uses. `resolveDeviceOrErrorBlocking` emits the right envelope
+    // on miss; we propagate the matching exit code (MISUSE for 0/multiple-devices,
+    // INFRA_FAILED for daemon-unreachable).
+    val resolvedDeviceId = when (val r = resolveDeviceOrErrorBlocking(flag = deviceId, verb = "Shortcut verify")) {
+      is DeviceResolution.Resolved -> r.deviceSpec
+      else -> return r.exitCodeFallback()
+    }
     if (!yamlPath.isFile) {
       Console.error("--yaml must be an existing file: ${yamlPath.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (maxAttempts < 1) {
       Console.error("--max-attempts must be >= 1, got $maxAttempts")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (timeoutSeconds < 1) {
       Console.error("--timeout-seconds must be >= 1, got $timeoutSeconds")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val raw = yamlPath.readText()
     val cfg = try {
       WaypointLoader.yaml.decodeFromString(ToolYamlConfig.serializer(), raw)
     } catch (e: Exception) {
       Console.error("Failed to parse shortcut YAML ${yamlPath.absolutePath}: ${e.message}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     // Run the schema validator the runtime would otherwise apply at load time. Catches
     // malformed `from`/`to` shapes, missing required fields, mode conflicts, etc., with
@@ -155,16 +172,16 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
       cfg.validate()
     } catch (e: Exception) {
       Console.error("Shortcut YAML failed schema validation: ${e.message}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val shortcut = cfg.shortcut ?: run {
       Console.error("File ${yamlPath.absolutePath} is not a shortcut yaml (no `shortcut:` block).")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val toolsBlock = extractToolsBlock(raw) ?: run {
       Console.error("Could not locate `tools:` block in ${yamlPath.absolutePath}.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val trailYaml = buildTrailYaml(
@@ -183,7 +200,7 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
       // parent-dir race would otherwise crash the verify command with a raw stack
       // trace — surface a clear message instead.
       Console.error("Failed to write generated trail YAML to ${trailFile.absolutePath}: ${e.message}")
-      return CommandLine.ExitCode.SOFTWARE
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
     Console.log("Wrote generated trail to ${trailFile.absolutePath}.")
 
@@ -197,7 +214,7 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
     while (attempt < maxAttempts) {
       attempt++
       Console.log("Verify attempt $attempt/$maxAttempts...")
-      val exit = runTrail(trailFile)
+      val exit = runTrail(trailFile, resolvedDeviceId)
       lastExit = exit
       if (exit == 0) {
         Console.log("Verify PASSED on attempt $attempt.")
@@ -209,8 +226,8 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
     return lastExit
   }
 
-  private fun runTrail(trailFile: File): Int {
-    val cmd = listOf(trailblazeBin, "trail", "--device", deviceId, trailFile.absolutePath)
+  private fun runTrail(trailFile: File, resolvedDeviceId: String): Int {
+    val cmd = listOf(trailblazeBin, "run", "--device", resolvedDeviceId, trailFile.absolutePath)
     Console.log("Running: ${cmd.joinToString(" ")} (timeout ${timeoutSeconds}s)")
     return runSubprocessWithTimeout(cmd, timeoutSeconds)
   }
@@ -232,7 +249,7 @@ class WaypointShortcutVerifyCommand : Callable<Int> {
       .start()
     val finished = process.waitFor(timeoutSecs.toLong(), java.util.concurrent.TimeUnit.SECONDS)
     if (!finished) {
-      // A wedged inner `trailblaze trail` (device disconnect, ADB hung, runtime stuck on
+      // A wedged inner `trailblaze run` (device disconnect, ADB hung, runtime stuck on
       // settle) would otherwise block the whole pipeline. Destroy the process, give it a
       // brief grace period, then escalate to destroyForcibly() so the JVM doesn't keep
       // a zombie around. Return a non-zero exit so the bootstrap moves on to the next

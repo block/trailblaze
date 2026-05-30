@@ -5,26 +5,45 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze check [-hV] [--all] [--no-typecheck]
-                        [--workspace=<workspaceDir>] [<pack-id>]
-Materialize pack manifests + type-check pack TypeScript/JavaScript sources
-      [<pack-id>]      Name of the pack to scope the type-check to (directory
-                         name under <workspace>/trails/config/packs/). Omit
-                         when running from inside a pack tree (auto-detected)
-                         or pass --all to type-check every pack. Mutually
-                         exclusive with --all.
-      --all            Type-check every pack in the discovered workspace, even
-                         when running from inside a specific pack tree.
-                         Mutually exclusive with the positional <pack-id>.
-  -h, --help           Show this help message and exit.
-      --no-typecheck   Skip the bundled-tsc typecheck pass — only materialize
-                         the workspace's SDK + per-pack typed bindings.
-                         Intended for CI scripts that run tsc with custom
-                         settings (e.g., excluding legacy embedded
-                         sub-projects); interactive users should leave this off.
-  -V, --version        Print version information and exit.
+Usage: trailblaze check [-hV] [--all] [--no-typecheck] [--show-typed-tools]
+                        [--workspace=<workspaceDir>] [<trailmap-id>]
+Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript
+sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds
+a minimal package.json at the workspace root if absent so `bun install` can be
+used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze
+check`).
+      [<trailmap-id>]      Name of the trailmap to scope the type-check to
+                             (directory name under
+                             <workspace>/trails/config/trailmaps/). Omit when
+                             running from inside a trailmap tree
+                             (auto-detected) or pass --all to type-check every
+                             trailmap. Mutually exclusive with --all.
+      --all                Type-check every trailmap in the discovered
+                             workspace, even when running from inside a
+                             specific trailmap tree. Mutually exclusive with
+                             the positional <trailmap-id>.
+  -h, --help               Show this help message and exit.
+      --no-typecheck       Skip the bundled-tsc typecheck pass — materialize
+                             the workspace's SDK + per-trailmap typed bindings
+                             and still run `*.test.ts` unit tests via bun.
+                             Intended for CI scripts that run tsc with custom
+                             settings (e.g., excluding legacy embedded
+                             sub-projects); interactive users should leave this
+                             off.
+      --show-typed-tools   Print the typed scripted tools (`trailblaze.tool<I,
+                             O>({...})`) discovered in each trailmap, with a
+                             compact one-line schema summary per tool. Useful
+                             as a diagnostic when authoring a new tool or
+                             chasing a missing-tool / wrong-schema bug; off by
+                             default because the per-trailmap subprocess spawn
+                             it requires adds noticeable latency to `check`.
+                             Has no effect when node, the SDK shim, or the
+                             SDK's `ts-json-schema-generator` install are
+                             missing — the analyzer skips cleanly with an
+                             explanatory log line.
+  -V, --version            Print version information and exit.
       --workspace=<workspaceDir>
-                       Pin the workspace root explicitly (the directory
-                         containing `trails/config/packs/`). Used by CI scripts
-                         that run with a fixed cwd; interactive users should
-                         rely on the cwd walk-up instead.
+                           Pin the workspace root explicitly (the directory
+                             containing `trails/config/trailmaps/`). Used by CI
+                             scripts that run with a fixed cwd; interactive
+                             users should rely on the cwd walk-up instead.

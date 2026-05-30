@@ -1,0 +1,29 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./wikipedia_web_switchArticleLanguage.ts
+name: wikipedia_web_switchArticleLanguage
+description: |
+  Open the same Wikipedia article in a different language. Use this
+  whenever the task is to switch language, view in another language, or
+  read the Spanish/French/German/Japanese/etc. version of a Wikipedia
+  article. Routes directly to the matching language subdomain
+  (`es.wikipedia.org`, `fr.wikipedia.org`, …) rather than driving through
+  the in-page language picker (which varies a lot across skins). Verifies
+  the destination article's first heading is visible.
+supportedPlatforms:
+  - web
+inputSchema:
+  title:
+    type: string
+    description: "English article title."
+    required: false
+  languageCode:
+    type: string
+    description: "Wikipedia language code (`es`, `fr`, `zh-min-nan`, …)."
+    required: false
+  expectedHeading:
+    type: string
+    description: "Visible heading text in the localized article."
+    required: false

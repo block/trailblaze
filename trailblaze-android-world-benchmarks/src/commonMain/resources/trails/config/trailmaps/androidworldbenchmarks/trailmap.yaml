@@ -1,0 +1,16 @@
+# Library trailmap that owns the Android World benchmark setup primitives —
+# adb-shell exec, SQLite read/write, file push/clear/assert, contact + SMS
+# seeding. These tools wire the simulator into the precise pre-state each
+# Android World benchmark trail expects before its NL prompt runs.
+#
+# This trailmap has no `target:` block (it's not a runnable target on its own)
+# and no `platforms:` block (the tools are referenced directly by name from the
+# benchmark trail YAMLs under `trails/benchmarks/android_world/`, not via a
+# toolset). Its sole job is to scope the `androidworldbenchmarks_*` tools under
+# a trailmap id so the framework's layout matches the user authoring model
+# where every tool lives under `trailmaps/<id>/tools/`.
+#
+# **Naming convention.** Module is `trailblaze-android-world-benchmarks`;
+# trailmap id is `androidworldbenchmarks` matching the
+# `androidworldbenchmarks_*` prefix on every tool shipped here.
+id: androidworldbenchmarks

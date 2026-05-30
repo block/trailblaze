@@ -6,9 +6,9 @@ title: External Config
 
 # External Config for Binary Users
 
-Trailblaze's desktop/CLI binary currently builds the effective app-target config from three layers, in order: framework-bundled `trailblaze-config/**` resources, an optional workspace `trails/config/` directory, and the current workspace's `trails/config/trailblaze.yaml` entries. Later layers override earlier ones by id / filename.
+Trailblaze's desktop/CLI binary currently builds the effective app-target config from three layers, in order: framework-bundled `trails/config/**` resources, an optional workspace `trails/config/` directory, and the current workspace's `trails/config/trailblaze.yaml` entries. Later layers override earlier ones by id / filename.
 
-The intended split is now the live split: `trails/` is the workspace anchor, `trails/config/trailblaze.yaml` is the workspace manifest, and `trails/config/` is the artifact directory that holds concrete pack, target, toolset, and tool files, plus the reserved location for provider YAMLs.
+The intended split is now the live split: `trails/` is the workspace anchor, `trails/config/trailblaze.yaml` is the workspace manifest, and `trails/config/` is the artifact directory that holds concrete trailmap, target, toolset, and tool files, plus the reserved location for provider YAMLs.
 
 ## Lookup Order for Filesystem Config
 
@@ -20,7 +20,7 @@ The binary resolves the external `trails/config/` directory in this order:
 
 ## Recommended Alignment
 
-The coherent model is to keep `trails/` as the workspace anchor, `trails/config/trailblaze.yaml` as the project entry point, and `trails/config/` as the directory that holds concrete pack, target, toolset, and tool files, plus the reserved provider location.
+The coherent model is to keep `trails/` as the workspace anchor, `trails/config/trailblaze.yaml` as the project entry point, and `trails/config/` as the directory that holds concrete trailmap, target, toolset, and tool files, plus the reserved provider location.
 
 That gives you a clean split:
 
@@ -40,15 +40,15 @@ your-workspace/
 └── trails/
     ├── config/
     │   ├── trailblaze.yaml
-    │   ├── packs/
-    │   │   └── your-pack/
-    │   │       └── pack.yaml
+    │   ├── trailmaps/
+    │   │   └── your-trailmap/
+    │   │       ├── trailmap.yaml
+    │   │       ├── toolsets/
+    │   │       │   └── your-toolset.yaml
+    │   │       └── tools/
+    │   │           └── your-tool.tool.yaml
     │   ├── targets/
     │   │   └── your-target.yaml
-    │   ├── toolsets/
-    │   │   └── your-toolset.yaml
-    │   ├── tools/
-    │   │   └── your-tool.yaml
     │   ├── providers/
     │   │   └── your-provider.yaml
     │   └── mcp/
@@ -56,34 +56,32 @@ your-workspace/
     └── login.trail.yaml
 ```
 
-The binary auto-discovers `trails/config/targets`, `toolsets/`, and `tools/`. `packs:` entries in `trails/config/trailblaze.yaml` pull pack manifests through the same loader path. `mcp/` is just a convention for the JS/TS files you reference from pack or target YAML. `providers/` remains the reserved location for provider YAMLs; today provider loading still comes from the `llm:` block in `trails/config/trailblaze.yaml` plus built-in classpath metadata.
+The binary auto-discovers `trails/config/targets` and every `trails/config/trailmaps/<id>/{tools,toolsets,shortcuts,trailheads}/` tree. `trailmaps:` entries in `trails/config/trailblaze.yaml` pull trailmap manifests through the same loader path. `mcp/` is just a convention for the JS/TS files you reference from trailmap or target YAML. `providers/` remains the reserved location for provider YAMLs; today provider loading still comes from the `llm:` block in `trails/config/trailblaze.yaml` plus built-in classpath metadata.
 
-## Pack Discovery Sources
+## Trailmap Discovery Sources
 
-Pack manifests can reach the runtime via two sources, in precedence order **base → override**:
+Trailmap manifests can reach the runtime via two sources, in precedence order **base → override**:
 
-1. **Classpath-bundled packs** under `trailblaze-config/packs/<id>/pack.yaml`. Auto-discovered from JAR or compiled-resources entries by the framework — users get framework-shipped packs (`clock`, `wikipedia`, `contacts`) without writing any `packs:` entry.
-2. **Workspace `packs:` entries** in `trailblaze.yaml`. Anchor-relative filesystem paths to your own pack manifests.
+1. **Classpath-bundled trailmaps** under `trails/config/trailmaps/<id>/trailmap.yaml`. Auto-discovered from JAR or compiled-resources entries by the framework — users get framework-shipped trailmaps (`clock`, `wikipedia`, `contacts`) without writing any `trailmaps:` entry.
+2. **Workspace `trailmaps:` entries** in `trailblaze.yaml`. Anchor-relative filesystem paths to your own trailmap manifests.
 
-### Pack-id Collision
+### Trailmap-id Collision
 
-When the same pack `id` appears in both sources, **the workspace pack wholesale shadows the classpath pack**. Workspace authors can locally override framework-shipped packs without having to fork them — useful when you want a different `target.platforms` block, a tweaked toolset list, or an overridden waypoint set for a bundled pack.
+When the same trailmap `id` appears in both sources, **the workspace trailmap wholesale shadows the classpath trailmap**. Workspace authors can locally override framework-shipped trailmaps without having to fork them — useful when you want a different `target.platforms` block, a tweaked toolset list, or an overridden waypoint set for a bundled trailmap.
 
-If you re-author a framework pack id locally, **all** of its bundled contributions are dropped — the override is wholesale, not per-field. To extend rather than replace, wait for `extend:` semantics (reserved schema field today, runtime semantics deferred).
+If you re-author a framework trailmap id locally, **all** of its bundled contributions are dropped — the override is wholesale, not per-field. To extend rather than replace, wait for `extend:` semantics (reserved schema field today, runtime semantics deferred).
 
-This precedence is intentional and is documented in code on `TrailblazeResolvedConfig`. If the framework ever ships packs with non-overridable invariants, we'd revisit by adding a sealed/locked flag on the manifest rather than changing this default.
+This precedence is intentional and is documented in code on `TrailblazeResolvedConfig`. If the framework ever ships trailmaps with non-overridable invariants, we'd revisit by adding a sealed/locked flag on the manifest rather than changing this default.
 
 ## What Works Today
 
 | Contribution | Filesystem Overlay | Notes |
 | --- | --- | --- |
-| `packs/<id>/pack.yaml` via `trails/config/trailblaze.yaml` `packs:` | Yes | Pack-first authored unit. Flattens nested `target:` plus referenced toolsets/tools back into the existing runtime model. |
-| `targets/*.yaml` | Yes | Defines target ids, per-platform app ids, tool selection, driver scoping, and target-root `mcp_servers:`. Still supported as the legacy compatibility path. |
-| `toolsets/*.yaml` | Yes | Groups tools and can scope them with `platforms:` or `drivers:`. |
-| `tools/*.yaml` with `class:` | Yes | The class must already be on the JVM classpath. |
-| `tools/*.yaml` with `tools:` | Not yet | YAML-defined tool composition is currently classpath-backed, not loaded as a new filesystem contribution. |
-| `mcp_servers: [{ script: ... }]` at target root | Yes | JS/TS MCP servers are supported today from target YAML. |
-| Toolset-level MCP server declarations | Not yet | `mcp_servers:` is currently a target feature, not a toolset feature. |
+| `trailmaps/<id>/trailmap.yaml` via `trails/config/trailblaze.yaml` `trailmaps:` | Yes | Trailmap-first authored unit. Flattens nested `target:` plus referenced toolsets/tools back into the existing runtime model. |
+| `targets/*.yaml` | Yes | Defines target ids, per-platform app ids, tool selection, and driver scoping. Still supported as the legacy compatibility path. |
+| `trailmaps/<id>/toolsets/*.yaml` | Yes | Groups tools and can scope them with `platforms:` or `drivers:`. |
+| `trailmaps/<id>/tools/*.tool.yaml` with `class:` | Yes | The class must already be on the JVM classpath. |
+| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | Yes | YAML-defined tool composition. Workspace-authored entries register through `AppTargetDiscovery` and resolve via the toolset → tool dispatch chain the same way classpath-bundled tools do. |
 | `trailblaze.yaml` targets / toolsets / tools | Partially | Targets and toolsets are live today, and class-backed `tools:` entries participate in discovery. Provider refs and external YAML-defined (`tools:` mode) project tools are still follow-up work. |
 
 ## Authoring a Target
@@ -98,7 +96,6 @@ Targets are declared in `targets/*.yaml`. Each target has an `id`, a `display_na
 | `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |
 | `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |
 | `platforms.<platform>.min_build_version` | Optional minimum build gate. |
-| `mcp_servers` | Target-specific JS/TS MCP servers. Current support is `script:` entries. |
 
 ### Platform Section Keys
 
@@ -109,9 +106,9 @@ Targets are declared in `targets/*.yaml`. Each target has an `id`, a `display_na
 
 `compose` currently rides on the `web` platform bucket and is selected with `drivers: [compose]`.
 
-### Reference Pack in This Repo
+### Reference Trailmap in This Repo
 
-The sample app ships a filesystem-backed pack at `examples/android-sample-app/trails/config/packs/sampleapp/pack.yaml`:
+The sample app ships a filesystem-backed trailmap at `examples/android-sample-app/trails/config/trailmaps/sampleapp/trailmap.yaml`:
 
 ```yaml
 id: sampleapp
@@ -121,22 +118,16 @@ target:
     android:
       app_ids:
         - xyz.block.trailblaze.examples.sampleapp
-  # Preferred authoring surface for new packs: pack scripted tools — flat-schema, one tool
-  # per file under tools/. No `bun install` required, no subprocess. The host runner
-  # synthesizes a small wrapper at session start.
+  # Authoring surface: trailmap scripted tools — flat-schema, one tool per file under tools/.
+  # No `bun install` required, no subprocess. The host runner synthesizes a small wrapper at
+  # session start.
   tools:
-    - host_writeArtifact
-  # Subprocess MCP servers — kept for capability coverage so the path doesn't bitrot. The
-  # framework supports this if a consumer needs it (deal-breaker scenarios), but prefer the
-  # `tools:` block above for new authoring: zero install step, smaller dependency surface.
-  mcp_servers:
-    - script: ./tools/mcp/tools.ts
-    - script: ./tools/mcp-sdk/tools.ts
+    - sampleapp_writeArtifact
 ```
 
 ## Authoring Toolsets
 
-Toolsets are declared in `toolsets/*.yaml`. They are pure YAML groupings: `id`, `description`, optional `platforms:` / `drivers:` filters, optional `always_enabled`, and a `tools:` list.
+Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML groupings: `id`, `description`, optional `platforms:` / `drivers:` filters, optional `always_enabled`, and a `tools:` list.
 
 ### Driver / Platform Keys for Toolsets
 
@@ -162,26 +153,29 @@ Toolsets are declared in `toolsets/*.yaml`. They are pure YAML groupings: `id`, 
 | Toolset | Always Enabled | Compatible Drivers | Tool Count |
 | --- | --- | --- | ---: |
 | `android_framework` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 3 |
+| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 5 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 2 |
 | `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 15 |
 | `memory` | No | `all drivers` | 8 |
 | `meta` | Yes | `all drivers` | 2 |
+| `mobile_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 4 |
 | `navigation` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 4 |
 | `observation` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 1 |
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
 | `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 2 |
-| `web_core` | No | `playwright-electron`, `playwright-native` | 17 |
+| `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
+| `web_framework` | Yes | `playwright-electron`, `playwright-native` | 1 |
 | `web_verification` | No | `playwright-electron`, `playwright-native` | 5 |
 
 ## Authoring Tools
 
 Tool definitions have three current shapes:
 
-1. **Class-backed YAML** in `tools/*.yaml`.
-2. **YAML-defined composition** in `tools/*.yaml` with a `tools:` block.
-3. **JS/TS MCP tools** referenced from a target's `mcp_servers:` block.
+1. **Class-backed YAML** in `trailmaps/<id>/tools/*.tool.yaml`.
+2. **YAML-defined composition** in `trailmaps/<id>/tools/*.tool.yaml` with a `tools:` block.
+3. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).
 
 ### Class-Backed YAML
 
@@ -210,30 +204,32 @@ tools:
 
 This authoring mode is part of the tool schema today, but new filesystem contributions of this kind are not yet wired into the binary's global tool resolver.
 
-### JS / TS MCP Tools
+### JS / TS Scripted Tools
 
-For binary users, JS/TS tools are the path that does **not** require rebuilding Trailblaze. Put the script anywhere in your workspace, then reference it from the target YAML with `mcp_servers:`.
+For binary users, JS/TS tools are the path that does **not** require rebuilding Trailblaze. Put each tool's `<name>.ts` (or `.js`) file plus a sibling `<name>.yaml` descriptor under `<trailmap>/tools/`, and list the tool's `name:` under the trailmap's `target.tools:` block.
 
 ```yaml
-mcp_servers:
-  - script: ./trails/config/mcp/your-tools.ts
+# trailmaps/<your-trailmap>/trailmap.yaml
+target:
+  tools:
+    - yourTool
 ```
 
-Current path resolution for `script:` is against the JVM's current working directory (where you launched `trailblaze`), not the YAML file's directory. Use a repo-relative path that works from your launch directory.
+Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime selection happens per descriptor: set `runtime: subprocess` (or use a `.js` / `.mjs` / `.cjs` entrypoint) to dispatch through a host bun/node subprocess for full Node APIs; the default routes through the in-process QuickJS runtime. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
 
-## Distribution Pattern for Pre-Vetted Target Packs
+## Distribution Pattern for Pre-Vetted Target Trailmaps
 
-The current loader already supports a good packaging model for app-specific bundles such as a Gmail web pack or a pre-vetted enterprise app pack:
+The current loader already supports a good packaging model for app-specific bundles such as a Gmail web trailmap or a pre-vetted enterprise app trailmap:
 
-1. Ship a self-contained `trails/config/` directory with one or more targets, app-specific toolsets, and JS/TS MCP tools.
+1. Ship a self-contained `trails/config/` directory with one or more targets, app-specific toolsets, and JS/TS scripted tools.
 2. Point the binary at that directory with `TRAILBLAZE_CONFIG_DIR=/path/to/trails/config` or place it at `<workspace>/trails/config/` under the `trails/` anchor.
-3. Keep target-specific capabilities inside the pack's nested target block so the agent only sees the extra tools when that target is active.
+3. Keep target-specific capabilities inside the trailmap's nested target block so the agent only sees the extra tools when that target is active.
 4. Use toolsets to keep high-value actions coarse-grained. That lets the LLM solve common website/app tasks with fewer tool calls.
 
-What is still missing for a full remote-download story is install/update UX, toolset-level MCP sources, and filesystem discovery for YAML-defined `tools:` compositions. The directory shape above is still the right place to put those contributions as the wiring lands.
+What is still missing for a full remote-download story is install/update UX and filesystem discovery for YAML-defined `tools:` compositions. The directory shape above is still the right place to put those contributions as the wiring lands.
 
 ---
 
-**Source**: `xyz.block.trailblaze.ui.TrailblazeSettingsRepo`, `xyz.block.trailblaze.host.AppTargetDiscovery`, `xyz.block.trailblaze.config.AppTargetYamlConfig`, `xyz.block.trailblaze.config.ToolSetYamlConfig`, `xyz.block.trailblaze.config.ToolYamlConfig`, `xyz.block.trailblaze.config.McpServerConfig`, `xyz.block.trailblaze.config.project.TrailblazeProjectConfig`, `xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader`, `examples/android-sample-app/trails/config/packs/sampleapp/pack.yaml`
+**Source**: `xyz.block.trailblaze.ui.TrailblazeSettingsRepo`, `xyz.block.trailblaze.host.AppTargetDiscovery`, `xyz.block.trailblaze.config.AppTargetYamlConfig`, `xyz.block.trailblaze.config.ToolSetYamlConfig`, `xyz.block.trailblaze.config.ToolYamlConfig`, `xyz.block.trailblaze.config.project.TrailblazeProjectConfig`, `xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader`, `examples/android-sample-app/trails/config/trailmaps/sampleapp/trailmap.yaml`
 
 **Regenerate**: `./gradlew :docs:generator:run`

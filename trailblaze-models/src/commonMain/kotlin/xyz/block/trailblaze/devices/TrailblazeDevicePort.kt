@@ -68,9 +68,23 @@ object TrailblazeDevicePort {
    * (currently 52530-59529, 7000 unique ports).
    * The same device ID will always generate the same port number.
    * Reserved ports are automatically skipped.
+   *
+   * The optional [namespace] disambiguates daemons that are talking to *different* physical
+   * devices that nonetheless report the same `instanceId` — the common case being two emulators
+   * each named `emulator-5554` reachable via independent ADB-server tunnels (e.g. one local +
+   * one remote workstation). The default reads from [HostPortNamespace.current]: on JVM hosts
+   * that is `ANDROID_ADB_SERVER_PORT` (so two daemons with distinct ADB ports get distinct
+   * hashes); on Android (on-device APK) and wasmJs it is `""` (the on-device runner reads its
+   * port from an instrumentation arg, not from this hash). Single-daemon deployments with the
+   * default ADB port get `""` and the historical hash is preserved.
    */
-  fun getPortForDevice(trailblazeDeviceId: TrailblazeDeviceId, suffix: String): Int {
-    val instanceId = trailblazeDeviceId.instanceId + trailblazeDeviceId.trailblazeDevicePlatform.name + suffix
+  fun getPortForDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    suffix: String,
+    namespace: String = HostPortNamespace.current,
+  ): Int {
+    val instanceId = trailblazeDeviceId.instanceId +
+      trailblazeDeviceId.trailblazeDevicePlatform.name + suffix + namespace
 
     // Use the absolute value of hashCode to ensure positive number
     val hash = instanceId.hashCode().let { if (it < 0) -it else it }
@@ -95,13 +109,17 @@ object TrailblazeDevicePort {
 
   /**
    * Extension function to get a device-specific port.
-   * Delegates to [TrailblazeDevicePort.getPortForDevice].
+   * Delegates to [TrailblazeDevicePort.getPortForDevice]. See that function for [namespace].
    */
-  fun TrailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(): Int = getPortForDevice(this, "trailblaze")
+  fun TrailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(
+    namespace: String = HostPortNamespace.current,
+  ): Int = getPortForDevice(this, "trailblaze", namespace)
 
   /**
    * The port that the on-device Maestro RPC server should run on
    */
-  fun TrailblazeDeviceId.getMaestroOnDeviceSpecificPort(): Int = getPortForDevice(this, "maestro")
+  fun TrailblazeDeviceId.getMaestroOnDeviceSpecificPort(
+    namespace: String = HostPortNamespace.current,
+  ): Int = getPortForDevice(this, "maestro", namespace)
 
 }

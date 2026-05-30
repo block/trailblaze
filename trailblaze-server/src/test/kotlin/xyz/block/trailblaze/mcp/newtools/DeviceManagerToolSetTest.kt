@@ -17,6 +17,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.full.valueParameters
 import kotlin.test.assertContains
@@ -327,6 +328,70 @@ class DeviceManagerToolSetTest {
       "Available ${TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.displayName} tools" !in result,
       "Default target should not produce an 'Available Default tools' block. Got:\n$result",
     )
+  }
+
+  @Test
+  fun `device INFO SUMMARY uses per-device session target over daemon-wide for tool summary`() = runTest {
+    // Regression for the YAML-tool dispatch bug surfaced when `--target X` was
+    // set on a bound device but the daemon-wide setting still pointed at a
+    // different target (or the no-tools default sentinel). `buildAvailableToolsSummary`
+    // used to read `getCurrentAppTargetId()` — daemon-wide — so the resolved
+    // target on the summary path didn't match what tool dispatch actually
+    // used for that device, and YAML-defined tools from the per-device
+    // target's trailmap got silently dropped from the gate.
+    //
+    // After the fix, the summary calls `getSessionTargetAppIdForDevice(deviceId)`,
+    // which prefers the per-device override and only falls back to daemon-wide.
+    val androidDeviceId = TrailblazeDeviceId(
+      instanceId = androidDevice.instanceId,
+      trailblazeDevicePlatform = androidDevice.platform,
+    )
+    val perDeviceTarget = object : TrailblazeHostAppTarget(
+      id = "perdeviceapp",
+      displayName = "Per Device App",
+    ) {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.example.perdevice") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getCustomYamlToolNamesForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<ToolName> =
+        if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
+          setOf(ToolName("pressBack"), ToolName("eraseText"))
+        } else emptySet()
+    }
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      availableAppTargets = setOf(
+        TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
+        perDeviceTarget,
+      ),
+      // Daemon-wide is the no-tools sentinel — would suppress the summary block.
+      currentAppTargetId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+      // Per-device override is the real custom target — the device's tool
+      // dispatch sees these YAML tools, so the summary block must reflect that.
+      sessionTargetsByDevice = mapOf(androidDeviceId to perDeviceTarget.id),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+
+    // Before the fix this block would be omitted (daemon-wide resolved to
+    // the Default sentinel, which short-circuits the summary). After the
+    // fix the per-device override resolves to `perdeviceapp`, the summary
+    // block is emitted, and the YAML-defined tools land in it.
+    assertContains(result, "Available ${perDeviceTarget.displayName} tools")
+    assertContains(result, "pressBack")
+    assertContains(result, "eraseText")
   }
 
   @Test
@@ -903,6 +968,78 @@ class DeviceManagerToolSetTest {
       "CREATE_WEB without deviceId must target the singleton so the desktop app's Launch Browser button sees it",
     )
   }
+
+  // ── setActiveToolSets driver-aware branch ──────────────────────────────────
+  //
+  // Pins the driver-awareness on the server-side callsite of `setActiveToolSets`. The
+  // shared resolver path (`TrailblazeToolSetCatalog.resolveForSession`) takes the bridge's
+  // current driver and filters out toolsets whose `compatibleDriverTypes` excludes it.
+  // Pre-fix, this path used the non-driver-aware resolver and the acknowledgement string
+  // listed Android-only tools (`tap`, `swipe`, `launchApp`) for a Playwright-driven
+  // session — see `2026-05-22-agent-toolbox-report-driver-leak.md`. Without a direct
+  // server-side test, future drift here would silently regress the leak without any
+  // test bell.
+
+  @Test
+  fun `setActiveToolSets under PLAYWRIGHT_NATIVE driver excludes Android-only tools and labels with driver`() = runTest {
+    val webDevice = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      instanceId = "playwright-chromium",
+      description = "Playwright Chromium",
+    )
+    val bridge = DeviceTestBridge(
+      devices = setOf(webDevice),
+      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+    // Driver is reported as null until a device is selected (mirrors prod bridge). Stamp
+    // lastSelectedDeviceId so getDriverType() returns the driver — without this, the
+    // driver-aware filter would short-circuit to "no driver, use the legacy resolver"
+    // and the leak guard wouldn't fire.
+    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+      instanceId = webDevice.instanceId,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.setActiveToolSets(toolSetIds = listOf("core_interaction"))
+
+    // Android-bound `core_interaction` tools must NOT appear when the active driver is
+    // Playwright. These are the canonical leak names from the original bug.
+    val mustNotLeak = listOf("tap", "swipe", "launchApp", "tapOnPoint", "inputText", "hideKeyboard")
+    for (leaked in mustNotLeak) {
+      assertTrue(
+        "`$leaked` must NOT appear in the setActiveToolSets ack under a Playwright driver " +
+          "(driver-incompatible core_interaction tool). Got:\n$result",
+      ) {
+        // Match at a word boundary so `web_wait` doesn't false-positive a search for `wait`.
+        // The ack string formats tools as a Kotlin-list `[tap, swipe, ...]`, so we look
+        // for the bare token surrounded by `, ` / `[` / `]` boundaries.
+        !Regex("[\\[, ]$leaked[,\\]]").containsMatchIn(result)
+      }
+    }
+    // Driver label must be on the ack so a reader can confirm the filter actually fired.
+    assertContains(result, "[driver=PLAYWRIGHT_NATIVE]")
+  }
+
+  @Test
+  fun `setActiveToolSets without a connected driver falls back to driver-unaware resolution and labels driver=none`() = runTest {
+    // When no driver is selected yet, the bridge returns null. `setActiveToolSets` must
+    // still produce a coherent acknowledgement — the fallback resolver returns the
+    // catalog's full set for the requested toolsets — and label the ack with
+    // `[driver=none]` so the LLM can tell why mobile-only tools showed up if it asks.
+    val bridge = DeviceTestBridge()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.setActiveToolSets(toolSetIds = listOf("core_interaction"))
+
+    assertContains(result, "[driver=none]")
+  }
 }
 
 /**
@@ -915,6 +1052,15 @@ class DeviceTestBridge(
   var driverConnectionStatus: String? = null,
   private val availableAppTargets: Set<TrailblazeHostAppTarget> = emptySet(),
   private val currentAppTargetId: String? = null,
+  /**
+   * Per-device session target overrides — mirrors the production bridge's
+   * [TrailblazeMcpBridge.getSessionTargetAppIdForDevice], which resolves the
+   * per-device override before falling back to the daemon-wide
+   * [getCurrentAppTargetId]. Tests that need to exercise the per-device
+   * resolution path (e.g. daemon-wide target unresolvable, device bound to
+   * a real target via `--target`) should populate this map.
+   */
+  private val sessionTargetsByDevice: Map<TrailblazeDeviceId, String> = emptyMap(),
   /**
    * Mirrors the production bridge's behavior of provisioning a Playwright browser
    * for any WEB instance ID on demand. Tests that target a virtual web ID not in
@@ -1010,6 +1156,9 @@ class DeviceTestBridge(
   override fun cancelAutomation(deviceId: TrailblazeDeviceId) {}
   override fun selectAppTarget(appTargetId: String): String? = null
   override fun getCurrentAppTargetId(): String? = currentAppTargetId
+
+  override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =
+    sessionTargetsByDevice[deviceId] ?: currentAppTargetId
 
   // Records every setSessionTargetForDevice call so tests can assert wiring.
   val sessionTargetSetCalls = mutableListOf<Pair<TrailblazeDeviceId, String?>>()

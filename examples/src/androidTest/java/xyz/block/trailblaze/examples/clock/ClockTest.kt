@@ -9,9 +9,9 @@ import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
  *
  * Drives `clock/launch-smoke` rather than the richer `clock/set-alarm-730am` trail because
  * the on-device path (this `connectedDebugAndroidTest`) doesn't pre-bundle the workspace
- * pack's TypeScript scripted tools (`clock_android_launchApp.ts`) into the APK — the
+ * trailmap's TypeScript scripted tools (`clock_android_launchApp.ts`) into the APK — the
  * scripted-tool runtime there can only execute pre-bundled JS, not raw `.ts` sources.
- * Host-rpc CI exercises `set-alarm-730am` via `./trailblaze trail`, where the daemon
+ * Host-rpc CI exercises `set-alarm-730am` via `./trailblaze run`, where the daemon
  * bundles those scripted tools through esbuild at session start.
  */
 class ClockTest {

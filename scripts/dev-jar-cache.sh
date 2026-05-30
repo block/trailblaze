@@ -22,14 +22,14 @@
 #    these get baked into the JAR (e.g. `trailblaze-compose/src/main/resources/
 #    .../*.tool.yaml` tool descriptors, `trailblaze-models/src/commonMain/
 #    resources/.../providers/*.yaml` provider configs, the bundled framework
-#    pack at `trailblaze-models/.../resources/.../packs/trailblaze/pack.yaml`,
+#    trailmap at `trailblaze-models/.../resources/.../trailmaps/trailblaze/trailmap.yaml`,
 #    `trailblaze-host/.../waypoint-graph-template.html`).
 #
-# Everything not matched above is excluded by default — including pack-author
-# content under `trails/config/packs/**` and `examples/**` (`pack.yaml`,
+# Everything not matched above is excluded by default — including trailmap-author
+# content under `trails/config/trailmaps/**` and `examples/**` (`trailmap.yaml`,
 # `.ts`/`.js`/`.mjs`/`.cjs` tools, `.md` system prompts, `*.example.json`
 # waypoint snapshots) and top-level `.md` READMEs. These are inputs to the
-# *running daemon*, not the JAR build, and rebuilding for every pack-author
+# *running daemon*, not the JAR build, and rebuilding for every trailmap-author
 # save killed the edit-test loop (60s per touch → sub-second).
 #
 # Framework-generated artifacts under `.trailblaze/` (both repo-root and nested)
@@ -95,7 +95,13 @@ dev_ensure_jar() {
     pids=$(lsof -ti "tcp:$http_port" 2>/dev/null || true)
     if [ -n "$pids" ]; then
       echo "Stopping daemon (stale code)..." >&2
-      curl -sf -X POST "http://localhost:$http_port/shutdown" > /dev/null 2>&1 || true
+      # Path must match CliEndpoints.SHUTDOWN ("/cli/shutdown"). Posting to the
+      # bare "/shutdown" lands on the daemon's catchall 404 route — daemon logs
+      # `Unhandled route: /shutdown [POST]` and the graceful path silently fails,
+      # which then forces us into the `kill -9` fallback below. That SIGKILL'd
+      # the daemon mid-Compose-shutdown (the `Killed: 9` line in the wrapper
+      # script's stdout). See test DaemonClientShutdownTest for the pin.
+      curl -sf -X POST "http://localhost:$http_port/cli/shutdown" > /dev/null 2>&1 || true
       sleep 1
       # Force-kill anything still on the port
       pids=$(lsof -ti "tcp:$http_port" 2>/dev/null || true)

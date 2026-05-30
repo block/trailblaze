@@ -7,9 +7,10 @@ import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.config.project.ToolEntry
 import xyz.block.trailblaze.config.project.ToolsetEntry
-import xyz.block.trailblaze.config.project.TrailblazePackManifestLoader
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
@@ -20,14 +21,14 @@ import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 
 /**
- * Compiles Trailblaze pack manifests into resolved per-id target YAMLs.
+ * Compiles Trailblaze trailmap manifests into resolved per-id target YAMLs.
  *
- * The mental model is `javac` for packs: source pack manifests
- * (`packs/<id>/pack.yaml`) declare libraries and entrypoints; the compiler
+ * The mental model is `javac` for trailmaps: source trailmap manifests
+ * (`trailmaps/<id>/trailmap.yaml`) declare libraries and entrypoints; the compiler
  * walks the dependency graph, runs closest-wins inheritance via
  * [TrailblazeProjectConfigLoader], and emits one materialized
- * `targets/<id>.yaml` per app pack — a pack with a `target:` block. Library
- * packs (no `target:`) contribute defaults but produce no output.
+ * `targets/<id>.yaml` per app trailmap — a trailmap with a `target:` block. Library
+ * trailmaps (no `target:`) contribute defaults but produce no output.
  *
  * Output `AppTargetYamlConfig` shape mirrors what consumers already see today
  * via flat target authoring: toolset and tool **names** stay as references
@@ -39,18 +40,18 @@ import xyz.block.trailblaze.util.Console
  *
  * The compiler enforces three classes of static checks the runtime resolver
  * intentionally does not:
- * - **App-pack gap detection.** Any pack that declared `target:` but failed
+ * - **App-trailmap gap detection.** Any trailmap that declared `target:` but failed
  *   dependency resolution is reported by name, not silently dropped.
  * - **Reference validation.** Every `tool_sets:`, `drivers:`, `tools:`, and
  *   `excluded_tools:` entry on every resolved platform is checked against the
  *   discovered pool. Typos surface at compile time, not at runtime as a
  *   silently-missing capability.
  * - **Orphan cleanup.** Files in the output directory that this compiler
- *   wrote on a previous run but no longer correspond to any current pack are
- *   deleted, mirroring the build-logic [PackTargetGenerator]'s behavior so
+ *   wrote on a previous run but no longer correspond to any current trailmap are
+ *   deleted, mirroring the build-logic [TrailmapTargetGenerator]'s behavior so
  *   build-time and runtime paths produce the same output tree.
  *
- * Tracked follow-ups: daemon-init lazy rebundle of workspace packs, and
+ * Tracked follow-ups: daemon-init lazy rebundle of workspace trailmaps, and
  * scripted-tool TS typecheck/bundle as part of the compile step. Both live
  * as issues in the project tracker.
  */
@@ -64,7 +65,7 @@ object TrailblazeCompiler {
    *
    * [resolvedTargets] carries the typed in-memory shape of every target the
    * compiler emitted to disk in this run. Empty on failure (errors populated)
-   * and on no-op runs (no app packs found). Exposed primarily for downstream
+   * and on no-op runs (no app trailmaps found). Exposed primarily for downstream
    * codegen callers (notably `WorkspaceClientDtsGenerator`) so they can feed
    * each target's resolved tool closure into the typed-bindings emitter
    * without round-tripping through the on-disk YAML files.
@@ -79,14 +80,43 @@ object TrailblazeCompiler {
   }
 
   /**
-   * Compiles every pack under [packsDir] into resolved target YAMLs in
+   * Binary-compatible shim for the pre-enrichment public signature.
+   *
+   * The 5-arg overload below is the canonical form; this 4-arg form delegates with
+   * `scriptedToolEnrichment = null`. Keeping the original signature live preserves the
+   * Kotlin metadata + JVM bytecode contract for any external consumer compiled against an
+   * earlier `:trailblaze-common` jar — without this, adding a 5th defaulted parameter
+   * would silently break `NoSuchMethodError` for those callers (Kotlin default-args
+   * generate a `compile$default(...)` synthetic that includes every positional slot,
+   * so its descriptor changes shape when a slot is added even with a default).
+   *
+   * Internal callers (`CompileCommand`, `WorkspaceCompileBootstrap`, the tests in
+   * `TrailblazeCompilerTest`) should pass enrichment explicitly via the 5-arg overload;
+   * this shim exists for the binary-compat surface and can be removed in a future major
+   * version that's willing to break consumers.
+   */
+  fun compile(
+    trailmapsDir: File,
+    outputDir: File,
+    referenceSource: ConfigResourceSource? = ClasspathConfigResourceSource,
+    commandLabel: String = "compile",
+  ): CompileResult = compile(
+    trailmapsDir = trailmapsDir,
+    outputDir = outputDir,
+    referenceSource = referenceSource,
+    commandLabel = commandLabel,
+    scriptedToolEnrichment = null,
+  )
+
+  /**
+   * Compiles every trailmap under [trailmapsDir] into resolved target YAMLs in
    * [outputDir].
    *
-   * @param packsDir directory whose immediate subdirectories each contain a
-   *   `pack.yaml`. Subdirectories without a `pack.yaml` are silently skipped.
+   * @param trailmapsDir directory whose immediate subdirectories each contain a
+   *   `trailmap.yaml`. Subdirectories without a `trailmap.yaml` are silently skipped.
    * @param outputDir directory to write `<id>.yaml` files into. Created if
    *   missing. Stale `<id>.yaml` files written by a previous compile but no
-   *   longer corresponding to a current pack are deleted (orphan cleanup).
+   *   longer corresponding to a current trailmap are deleted (orphan cleanup).
    *   Files NOT bearing the [GENERATED_BANNER] header are left alone — the
    *   compiler only manages files it owns.
    * @param referenceSource where to look up the available pool for reference
@@ -95,6 +125,16 @@ object TrailblazeCompiler {
    *   can pass a synthetic source. Pass `null` to skip reference validation
    *   entirely (used by callers that can't see the full multi-module
    *   classpath, e.g. cross-module build-logic bridges).
+   * @param commandLabel verb spliced into user-facing error messages (e.g.
+   *   `trailblaze compile: ...`). Defaults to `"compile"`; [CheckCommand]
+   *   passes `"check"` when delegating so the user sees a single CLI verb.
+   * @param scriptedToolEnrichment optional analyzer-backed enrichment passed
+   *   through to [TrailblazeProjectConfigLoader.resolveRuntime] so meta-only
+   *   scripted-tool descriptors (`script:` + `_meta:` only, with `name:` /
+   *   `description:` / `inputSchema:` derived from the typed `.ts` source)
+   *   resolve correctly at compile time. Host call sites pass
+   *   `AnalyzerScriptedToolEnrichment.resolveFromEnvironment()`; tests and
+   *   callers that don't ship meta-only descriptors pass null.
    *
    * Driver-name validation does not consult [referenceSource]; drivers are an
    * enum-defined set and use [DriverTypeKey.knownKeys]. Driver validation IS
@@ -103,44 +143,45 @@ object TrailblazeCompiler {
    * ## Classpath dependency
    *
    * The internal call to [TrailblazeProjectConfigLoader.resolveRuntime] passes
-   * `includeClasspathPacks = true`, so workspace packs that declare
-   * `dependencies: [trailblaze]` (or any other classpath-shipped pack) resolve
+   * `includeClasspathTrailmaps = true`, so workspace trailmaps that declare
+   * `dependencies: [trailblaze]` (or any other classpath-shipped trailmap) resolve
    * against the JVM classpath at compile time. This matches runtime behavior:
-   * a pack that compiles cleanly here also loads cleanly when the daemon
+   * a trailmap that compiles cleanly here also loads cleanly when the daemon
    * starts.
    *
-   * **Caller contract**: the framework `trailblaze` stdlib pack must be
+   * **Caller contract**: the framework `trailblaze` stdlib trailmap must be
    * reachable on the calling JVM's classpath. The CLI and daemon entry points
    * always satisfy this; if you're invoking the compiler from a sandbox or an
-   * on-device runtime where framework JARs aren't loaded, expect "Pack
-   * 'trailblaze' not found" failures for any workspace pack with
+   * on-device runtime where framework JARs aren't loaded, expect "Trailmap
+   * 'trailblaze' not found" failures for any workspace trailmap with
    * `dependencies: [trailblaze]`. Consider exposing a parameter here if a
    * sandboxed call site appears.
    */
   fun compile(
-    packsDir: File,
+    trailmapsDir: File,
     outputDir: File,
-    referenceSource: ConfigResourceSource? = ClasspathConfigResourceSource,
-    commandLabel: String = "compile",
+    referenceSource: ConfigResourceSource?,
+    commandLabel: String,
+    scriptedToolEnrichment: ScriptedToolEnrichment?,
   ): CompileResult {
-    require(packsDir.isDirectory) {
-      "Input directory does not exist or is not a directory: ${packsDir.absolutePath}"
+    require(trailmapsDir.isDirectory) {
+      "Input directory does not exist or is not a directory: ${trailmapsDir.absolutePath}"
     }
 
-    val packsListing = packsDir.listFiles { f -> f.isDirectory }
+    val trailmapsListing = trailmapsDir.listFiles { f -> f.isDirectory }
       ?: return CompileResult(
         emittedTargets = emptyList(),
         deletedOrphans = emptyList(),
         errors = listOf(
-          "Failed to list contents of input directory ${packsDir.absolutePath}; " +
+          "Failed to list contents of input directory ${trailmapsDir.absolutePath}; " +
             "check permissions / I/O.",
         ),
       )
-    val packDirs = packsListing
-      .filter { File(it, "pack.yaml").isFile }
+    val trailmapDirs = trailmapsListing
+      .filter { File(it, "trailmap.yaml").isFile }
       .sortedBy { it.name }
 
-    if (packDirs.isEmpty()) {
+    if (trailmapDirs.isEmpty()) {
       return CompileResult(
         emittedTargets = emptyList(),
         deletedOrphans = emptyList(),
@@ -148,20 +189,20 @@ object TrailblazeCompiler {
       )
     }
 
-    // Pre-pass: parse each pack manifest directly so we can identify app packs (those
+    // Pre-pass: parse each trailmap manifest directly so we can identify app trailmaps (those
     // with a `target:` block) by their structured shape, not by a fragile text scan
     // for `target:` line prefixes. This makes the gap-detection below name-aware
-    // (errors say WHICH pack failed) and immune to comments / nested keys / future
+    // (errors say WHICH trailmap failed) and immune to comments / nested keys / future
     // schema additions where `target:` appears at non-root depth.
-    val expectedAppPackIds = mutableSetOf<String>()
+    val expectedAppTrailmapIds = mutableSetOf<String>()
     val parseErrors = mutableListOf<String>()
-    for (packDir in packDirs) {
-      val packFile = File(packDir, "pack.yaml")
+    for (trailmapDir in trailmapDirs) {
+      val trailmapFile = File(trailmapDir, "trailmap.yaml")
       try {
-        val manifest = TrailblazePackManifestLoader.load(packFile).manifest
-        if (manifest.target != null) expectedAppPackIds += manifest.id
+        val manifest = TrailblazeTrailmapManifestLoader.load(trailmapFile).manifest
+        if (manifest.target != null) expectedAppTrailmapIds += manifest.id
       } catch (e: TrailblazeProjectConfigException) {
-        parseErrors += "pack '${packDir.name}' failed to parse: ${e.message ?: e.javaClass.simpleName}"
+        parseErrors += "trailmap '${trailmapDir.name}' failed to parse: ${e.message ?: e.javaClass.simpleName}"
       }
     }
     if (parseErrors.isNotEmpty()) {
@@ -172,28 +213,32 @@ object TrailblazeCompiler {
       )
     }
 
-    // Build a synthetic workspace config that names every app-pack id as a target. The
-    // loader resolves each id via the `<anchor>/packs/<id>/pack.yaml` convention, so
-    // `anchor` must equal `packsDir.parentFile` for those resolutions to land at the
-    // actual on-disk paths. Library packs without a `target:` block reach scope only
-    // through transitive `dependencies:` from one of these app packs; that's how a
+    // Build a synthetic workspace config that names every app-trailmap id as a target. The
+    // loader resolves each id via the `<anchor>/trailmaps/<id>/trailmap.yaml` convention, so
+    // `anchor` must equal `trailmapsDir.parentFile` for those resolutions to land at the
+    // actual on-disk paths. Library trailmaps without a `target:` block reach scope only
+    // through transitive `dependencies:` from one of these app trailmaps; that's how a
     // workspace's library content surfaces in the compiled output.
-    val anchorParent = packsDir.parentFile
-      ?: error("packsDir has no parent: ${packsDir.absolutePath}")
+    val anchorParent = trailmapsDir.parentFile
+      ?: error("trailmapsDir has no parent: ${trailmapsDir.absolutePath}")
     val loaded = LoadedTrailblazeProjectConfig(
-      raw = TrailblazeProjectConfig(targets = expectedAppPackIds.sorted()),
+      raw = TrailblazeProjectConfig(targets = expectedAppTrailmapIds.sorted()),
       sourceFile = File(anchorParent, ANCHOR_FILE_NAME),
     )
 
-    // Include the JAR's classpath-bundled framework `trailblaze` stdlib pack so workspace
-    // packs that declare `dependencies: [trailblaze]` resolve at compile time the same way
-    // they do at runtime. Without this, any workspace pack that inherits the standard
-    // per-platform defaults fails compile with "Pack 'trailblaze' not found" — the JDK
-    // analogy in PackDependencyResolver's kdoc only holds if the JDK is actually on the
-    // classpath. Any user-named pack that isn't in the workspace nor on classpath still
-    // surfaces as a missing-dep failure (`compile names the failing pack...` test).
+    // Include the JAR's classpath-bundled framework `trailblaze` stdlib trailmap so workspace
+    // trailmaps that declare `dependencies: [trailblaze]` resolve at compile time the same way
+    // they do at runtime. Without this, any workspace trailmap that inherits the standard
+    // per-platform defaults fails compile with "Trailmap 'trailblaze' not found" — the JDK
+    // analogy in TrailmapDependencyResolver's kdoc only holds if the JDK is actually on the
+    // classpath. Any user-named trailmap that isn't in the workspace nor on classpath still
+    // surfaces as a missing-dep failure (`compile names the failing trailmap...` test).
     val resolved = try {
-      TrailblazeProjectConfigLoader.resolveRuntime(loaded, includeClasspathPacks = true)
+      TrailblazeProjectConfigLoader.resolveRuntime(
+        loaded,
+        includeClasspathTrailmaps = true,
+        scriptedToolEnrichment = scriptedToolEnrichment,
+      )
     } catch (e: TrailblazeProjectConfigException) {
       return CompileResult(
         emittedTargets = emptyList(),
@@ -202,19 +247,19 @@ object TrailblazeCompiler {
       )
     }
 
-    // The runtime loader's "atomic-per-pack failure-isolation" contract logs a warning
-    // and drops a broken pack's target rather than throwing — graceful for runtime
+    // The runtime loader's "atomic-per-trailmap failure-isolation" contract logs a warning
+    // and drops a broken trailmap's target rather than throwing — graceful for runtime
     // discovery, wrong for a compile step. Detect the gap by diffing expected app
-    // pack ids against what the resolver actually emitted; any pack in the gap failed
+    // trailmap ids against what the resolver actually emitted; any trailmap in the gap failed
     // dependency resolution and the user gets named guidance.
     val resolvedTargetIds = resolved.projectConfig.targets.toSet()
-    val missingAppPacks = (expectedAppPackIds - resolvedTargetIds).toSortedSet()
-    if (missingAppPacks.isNotEmpty()) {
+    val missingAppTrailmaps = (expectedAppTrailmapIds - resolvedTargetIds).toSortedSet()
+    if (missingAppTrailmaps.isNotEmpty()) {
       return CompileResult(
         emittedTargets = emptyList(),
         deletedOrphans = emptyList(),
-        errors = missingAppPacks.map { id ->
-          "pack '$id' declared a `target:` block but failed dependency resolution " +
+        errors = missingAppTrailmaps.map { id ->
+          "trailmap '$id' declared a `target:` block but failed dependency resolution " +
             "(likely missing or cyclic dependencies — check the runtime loader's " +
             "warnings above for the offending dependency)."
         },
@@ -245,7 +290,7 @@ object TrailblazeCompiler {
       val outFile = File(outputDir, "${target.id}.yaml")
       val rendered = buildString {
         appendLine(GENERATED_BANNER)
-        appendLine("# Source pack: packs/${target.id}/pack.yaml")
+        appendLine("# Source trailmap: trailmaps/${target.id}/trailmap.yaml")
         appendLine("# Regenerate with: trailblaze check")
         appendLine()
         append(yaml.encodeToString(AppTargetYamlConfig.serializer(), target))
@@ -287,32 +332,40 @@ object TrailblazeCompiler {
     commandLabel: String,
   ): List<String> {
     val toolsetPool: Set<String>? = referenceSource?.let {
-      val packToolsets = resolved.projectConfig.toolsets
+      val trailmapToolsets = resolved.projectConfig.toolsets
         .map { (it as ToolsetEntry.Inline).config.id }
         .toSet()
-      val classpathToolsets = discoverIdsFromClasspath(
-        it,
-        TrailblazeConfigPaths.TOOLSETS_DIR,
-        ToolSetYamlConfig.serializer(),
+      // Walk trailmap-scoped toolsets at `trails/config/trailmaps/<id>/toolsets/<name>.yaml`.
+      // That's the only authoring layout — workspaces and framework jars both ship at this
+      // shape; the composite source has already collapsed same-relPath collisions before we
+      // get here.
+      val classpathTrailmapToolsets = discoverTrailmapScopedIds(
+        source = it,
+        operationalDir = "toolsets",
+        suffix = ".yaml",
+        serializer = ToolSetYamlConfig.serializer(),
         idExtractor = ToolSetYamlConfig::id,
         kindLabel = "toolset",
         commandLabel = commandLabel,
       )
-      packToolsets + classpathToolsets
+      trailmapToolsets + classpathTrailmapToolsets
     }
     val toolPool: Set<String>? = referenceSource?.let {
-      val packTools = resolved.projectConfig.tools
+      val trailmapTools = resolved.projectConfig.tools
         .map { (it as ToolEntry.Inline).config.id }
         .toSet()
-      val classpathTools = discoverIdsFromClasspath(
-        it,
-        TrailblazeConfigPaths.TOOLS_DIR,
-        ToolYamlConfig.serializer(),
+      // Symmetric with the toolset walker above — tools live at
+      // `trails/config/trailmaps/<id>/tools/<name>.tool.yaml`.
+      val classpathTrailmapTools = discoverTrailmapScopedIds(
+        source = it,
+        operationalDir = "tools",
+        suffix = ".tool.yaml",
+        serializer = ToolYamlConfig.serializer(),
         idExtractor = ToolYamlConfig::id,
         kindLabel = "tool",
         commandLabel = commandLabel,
       )
-      packTools + classpathTools
+      trailmapTools + classpathTrailmapTools
     }
     val driverPool: Set<String> = DriverTypeKey.knownKeys
 
@@ -357,45 +410,67 @@ object TrailblazeCompiler {
     kindLabel: String,
   ): String =
     "target '$targetId': platforms.$platform.$field references unknown $kindLabel '$name' " +
-      "(no $kindLabel with this id is declared in the workspace packs or available on the " +
-      "classpath under trailblaze-config/${kindLabel}s/)."
+      "(no $kindLabel with this id is declared in the workspace trailmaps or available on the " +
+      "classpath under trails/config/trailmaps/<id>/${kindLabel}s/)."
 
   /**
-   * Lightweight name-only listing of artifacts reachable through [source] under
-   * [directoryPath]. Logs at warning level when a YAML fails to parse so the
-   * user has signal that their classpath state is degraded — silently
-   * returning empty would let typo'd references pass validation against an
-   * empty pool, masking the real failure.
+   * Name-only listing of trailmap-scoped artifacts reachable through [source]. Walks every
+   * `trails/config/trailmaps/<id>/<operationalDir>/<name><suffix>` entry, parses each as [T],
+   * extracts the id, and returns the deduplicated set.
+   *
+   * Used by reference validation for tool names and toolset names. Without this walk, target
+   * YAMLs whose `tools:` / `tool_sets:` lists reference a framework tool or toolset would
+   * fail compile validation.
+   *
+   * Soft-fails on parse / resource errors with [Console.log] warnings — missing/broken files
+   * don't fail compile validation, they just don't enter the pool.
+   *
+   * @param operationalDir the per-trailmap subdirectory to filter on (e.g. `tools`, `toolsets`).
+   *   Mirrors the `dir` field of [TrailblazeConfigPaths.TrailmapToolLayoutEntry].
+   * @param suffix the file-suffix the resource source walks for (e.g. `.tool.yaml`, `.yaml`).
+   *   Note: this is the suffix passed to [ConfigResourceSource.discoverAndLoadRecursive]; the
+   *   segment filter below still gates on `operationalDir` so an unrelated `.yaml` elsewhere
+   *   under `trailmaps/` doesn't sneak in.
    */
-  private fun <T : Any> discoverIdsFromClasspath(
+  private fun <T : Any> discoverTrailmapScopedIds(
     source: ConfigResourceSource,
-    directoryPath: String,
+    operationalDir: String,
+    suffix: String,
     serializer: kotlinx.serialization.KSerializer<T>,
     idExtractor: (T) -> String,
     kindLabel: String,
     commandLabel: String,
   ): Set<String> {
     val yaml = TrailblazeConfigYaml.instance
-    val yamlContents = try {
-      source.discoverAndLoad(directoryPath = directoryPath, suffix = ".yaml")
+    val all = try {
+      source.discoverAndLoadRecursive(
+        directoryPath = TrailblazeConfigPaths.TRAILMAPS_DIR,
+        suffix = suffix,
+      )
     } catch (e: Exception) {
       Console.log(
-        "trailblaze $commandLabel: WARNING: failed to scan $directoryPath for $kindLabel " +
-          "definitions (${e::class.simpleName}: ${e.message}). Reference validation for " +
-          "$kindLabel names will only check against pack-declared ids; classpath ${kindLabel}s " +
-          "won't be in the pool.",
+        "trailblaze $commandLabel: WARNING: failed to scan ${TrailblazeConfigPaths.TRAILMAPS_DIR} " +
+          "for trailmap-scoped $kindLabel definitions (${e::class.simpleName}: ${e.message}). " +
+          "Reference validation for $kindLabel names will only check against the flat global pool " +
+          "and trailmap-declared ids; trailmap-scoped ${kindLabel}s won't be in the pool.",
       )
       return emptySet()
     }
-    return yamlContents.entries
-      .mapNotNull { (filename, content) ->
+    return all.entries
+      .mapNotNull { (relPath, content) ->
+        // relPath shape: `<trailmap-id>/<operationalDir>/[<subdir>/...]<name><suffix>`.
+        // Require segments[1] == operationalDir so we don't pick up sibling dirs from the
+        // recursive walk (e.g. when listing toolsets, skip tools/shortcuts/trailheads, and
+        // the trailmap manifest itself which lives one level up).
+        val segments = relPath.split('/')
+        if (segments.size < 3 || segments[1] != operationalDir) return@mapNotNull null
         try {
           idExtractor(yaml.decodeFromString(serializer, content))
         } catch (e: Exception) {
           Console.log(
-            "trailblaze $commandLabel: WARNING: failed to parse $directoryPath/$filename.yaml " +
-              "(${e::class.simpleName}: ${e.message}). This file will not contribute to the " +
-              "$kindLabel pool used for reference validation.",
+            "trailblaze $commandLabel: WARNING: failed to parse trailmap-scoped $kindLabel " +
+              "$relPath (${e::class.simpleName}: ${e.message}). This file will not contribute " +
+              "to the $kindLabel pool used for reference validation.",
           )
           null
         }
@@ -412,7 +487,7 @@ object TrailblazeCompiler {
    * previous run (identified by the [GENERATED_BANNER] header) but are not in
    * [keepNames]. Hand-authored YAMLs without the banner are left alone — the
    * compiler only manages files it owns. Mirrors build-logic
-   * [PackTargetGenerator.deleteStaleGeneratedTargets] so build-time and runtime
+   * [TrailmapTargetGenerator.deleteStaleGeneratedTargets] so build-time and runtime
    * paths converge on the same output tree.
    */
   private fun deleteOrphanOutputs(outputDir: File, keepNames: Set<String>): List<File> {
@@ -430,7 +505,7 @@ object TrailblazeCompiler {
       // shipped before the command was unified into `trailblaze check`. Without this,
       // a working tree carrying generated targets from the old command would silently
       // leak stale `dist/targets/<id>.yaml` files: `AppTargetDiscovery` prefers
-      // `dist/` outputs over hand-authored targets, so a removed-pack's old file
+      // `dist/` outputs over hand-authored targets, so a removed-trailmap's old file
       // would shadow the user's intended state. Migration window is open-ended on
       // purpose — the cost of recognizing one extra string is essentially zero, and
       // we have no signal for when the last old artifact has been overwritten.

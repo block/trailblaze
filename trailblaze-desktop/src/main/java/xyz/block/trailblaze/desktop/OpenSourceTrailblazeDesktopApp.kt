@@ -101,9 +101,6 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       logsRepo = desktopAppConfig.logsRepo,
       mcpBridge = mcpBridge,
       trailsDirProvider = { desktopAppConfig.trailblazeSettingsRepo.getCurrentTrailsDir() },
-      trailblazeConfigDirProvider = {
-        desktopAppConfig.trailblazeSettingsRepo.getCurrentTrailblazeConfigDir()
-      },
       targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
       // Wire up LLM client/model for Koog agent's local sampling fallback
       llmClientProvider = {

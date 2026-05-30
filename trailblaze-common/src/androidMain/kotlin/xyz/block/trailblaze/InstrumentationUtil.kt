@@ -47,7 +47,14 @@ object InstrumentationUtil {
 
   private val uiDevice: UiDevice get() = UiDevice.getInstance(instrumentation)
 
-  private val uiAutomation: UiAutomation get() = instrumentation.uiAutomation
+  // Always request FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES so that every withUiAutomation
+  // call — including the stale-handle recovery path — reconnects with flags=1 rather than the
+  // default flags=0 that would suppress accessibility services and collapse the Compose semantic
+  // tree in any app process (AccessibilityManager.isEnabled() goes false, Compose stops exposing
+  // its tree to UiAutomator2). getUiAutomation(flags) returns the cached connection when flags
+  // match, so there is no reconnect cost on the hot path.
+  private val uiAutomation: UiAutomation
+    get() = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
 
   fun <T> withInstrumentation(work: Instrumentation.() -> T): T = with(instrumentation) {
     work(instrumentation)
@@ -75,8 +82,8 @@ object InstrumentationUtil {
    * the same.
    *
    * Recovery: on the first hit we clear the cached handle via reflection on [Instrumentation]'s
-   * private `mUiAutomation` field, force a fresh `getUiAutomation()` (which constructs a new
-   * handle and calls `connect()`), and retry once. If the retry also fails — most likely the
+   * private `mUiAutomation` field, force a fresh `getUiAutomation(FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)`
+   * (which constructs a new handle and calls `connect()`), and retry once. If the retry also fails — most likely the
    * underlying system service is genuinely gone — we re-throw with a wrapped message that points
    * the operator at the actual recovery (restart the on-device server / test APK).
    *
@@ -87,12 +94,20 @@ object InstrumentationUtil {
   private inline fun <T> runWithStaleUiAutomationRecovery(work: () -> T): T {
     return try {
       work()
-    } catch (e: IllegalStateException) {
+    } catch (e: RuntimeException) {
       val msg = e.message.orEmpty()
+      // `Error while disconnecting UiAutomation` is a bare `RuntimeException` (not
+      // `IllegalStateException`) the platform throws when the inner remote object is
+      // already gone but the local handle hasn't been cleared yet — handle field reads
+      // `id=-1`, which is the stale-handle signature. The three pre-existing messages
+      // are all `IllegalStateException`-flavored. Both classes go through the same
+      // cache-clear-and-retry path; widening the catch to `RuntimeException` covers
+      // both. A non-stale `RuntimeException` falls through via the `throw e` below.
       val isStaleHandleSignature =
         msg.contains("UiAutomation not connected") ||
           msg.contains("Cannot call disconnect()") ||
-          msg.contains("Already connected")
+          msg.contains("Already connected") ||
+          msg.contains("Error while disconnecting UiAutomation")
       if (!isStaleHandleSignature) throw e
       Console.log(
         "[InstrumentationUtil] UiAutomation handle was stale (likely from a cancelled prior " +
@@ -119,7 +134,7 @@ object InstrumentationUtil {
             "operations should be healthy until the next instrumentation lifecycle event."
         )
         result
-      } catch (retry: IllegalStateException) {
+      } catch (retry: RuntimeException) {
         throw IllegalStateException(
           "UiAutomation reconnect retry also failed. The on-device server's instrumentation is " +
             "in a non-recoverable state — kill the test APK process (`adb shell am force-stop " +

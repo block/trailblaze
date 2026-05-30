@@ -91,31 +91,76 @@ object PlaywrightDriverManager {
     (Files.exists(driverDir.resolve("node")) || Files.exists(driverDir.resolve("node.exe"))) &&
       Files.exists(driverDir.resolve("package").resolve("cli.js"))
 
+  private const val MAVEN_CENTRAL_BASE_URL = "https://repo1.maven.org/maven2"
+
   /**
-   * Downloads the `driver-bundle` JAR from Maven Central and extracts only the current platform's
-   * driver files into [driverDir].
+   * Ordered list of Maven repository base URLs to try when downloading
+   * `com.microsoft.playwright:driver-bundle`. The first entry, if any, is whatever the operator
+   * configured via the `TRAILBLAZE_PLAYWRIGHT_DRIVER_REPO` env var (useful for routing through an
+   * internal Maven mirror with a higher availability guarantee than Maven Central). Maven Central
+   * is always included as the canonical final fallback so a flaky or misconfigured override never
+   * permanently breaks driver download — at worst the download takes one extra round-trip.
+   * Trailing slashes on the override are tolerated. The env var is read on every download attempt;
+   * no restart needed.
+   */
+  private fun driverBundleRepoBaseUrls(): List<String> {
+    val override = System.getenv("TRAILBLAZE_PLAYWRIGHT_DRIVER_REPO")?.trim()?.trimEnd('/')
+    return buildList {
+      if (!override.isNullOrEmpty() && override != MAVEN_CENTRAL_BASE_URL) {
+        add(override)
+      }
+      add(MAVEN_CENTRAL_BASE_URL)
+    }
+  }
+
+  /**
+   * Downloads the `driver-bundle` JAR from a Maven-layout repository and extracts only the current
+   * platform's driver files into [driverDir]. Tries each base URL from [driverBundleRepoBaseUrls]
+   * in order, falling through to the next on any download failure. Maven Central is always the
+   * last entry, so a broken override (auth issue, wrong path, transient outage) self-heals.
    */
   private fun downloadAndExtractDriver(version: String, driverDir: Path) {
     val platform = detectPlatform()
-    val mavenUrl =
-      "https://repo1.maven.org/maven2/com/microsoft/playwright/" +
-        "driver-bundle/$version/driver-bundle-$version.jar"
+    val urls =
+      driverBundleRepoBaseUrls().map { base ->
+        "$base/com/microsoft/playwright/driver-bundle/$version/driver-bundle-$version.jar"
+      }
 
     println("[Playwright] Driver not found — downloading for $platform (one-time)...")
+    println("[Playwright] Will try ${urls.size} source(s) in order:")
+    urls.forEachIndexed { i, u -> println("[Playwright]   [${i + 1}/${urls.size}] $u") }
 
     val tempJar = Files.createTempFile("playwright-driver-bundle-", ".jar")
+    val failures = mutableListOf<String>()
     try {
-      downloadFile(mavenUrl, tempJar)
-      extractPlatformDriver(tempJar, driverDir, platform)
-      println("[Playwright] Driver $version installed at $driverDir")
-    } catch (e: Exception) {
-      // Clean up partial extraction so the next run retries cleanly.
+      for ((index, url) in urls.withIndex()) {
+        println("[Playwright] [${index + 1}/${urls.size}] Attempting download from $url")
+        try {
+          downloadFile(url, tempJar)
+          extractPlatformDriver(tempJar, driverDir, platform)
+          println("[Playwright] Driver $version installed at $driverDir (from $url)")
+          return
+        } catch (e: Exception) {
+          // Clean up the partial tempJar so the next attempt starts from scratch.
+          Files.deleteIfExists(tempJar)
+          val detail = "${e.javaClass.simpleName}: ${e.message}"
+          failures += "$url -> $detail"
+          println("[Playwright] [${index + 1}/${urls.size}] Failed: $detail")
+          if (index < urls.size - 1) {
+            println("[Playwright] Falling through to next source")
+          }
+        }
+      }
+      // Every source failed — clean up the destination so the next run retries cleanly, and
+      // surface every failure (each URL + the exception type/message) so the caller can see
+      // exactly which source rejected the request and why.
       driverDir.toFile().deleteRecursively()
       throw RuntimeException(
-        "Failed to download Playwright driver from $mavenUrl. " +
-          "You can manually place the driver at $driverDir or add " +
-          "com.microsoft.playwright:driver-bundle:$version to the classpath.",
-        e,
+        "Failed to download Playwright driver after trying ${urls.size} source(s). " +
+          "You can manually place the driver at $driverDir, add " +
+          "com.microsoft.playwright:driver-bundle:$version to the classpath, " +
+          "or point TRAILBLAZE_PLAYWRIGHT_DRIVER_REPO at a different Maven mirror. " +
+          "Per-source failures: ${failures.joinToString(" | ")}"
       )
     } finally {
       Files.deleteIfExists(tempJar)
@@ -126,7 +171,18 @@ object PlaywrightDriverManager {
     val connection = URI(url).toURL().openConnection() as HttpURLConnection
     connection.connectTimeout = 30_000
     connection.readTimeout = 60_000
+    // Follow Maven-mirror redirects (some mirrors 30x to a different host/path before serving).
+    connection.instanceFollowRedirects = true
     try {
+      // Eager-check the response code so a 4xx/5xx surfaces as a clear "HTTP NNN: …" message
+      // instead of a generic IOException from .inputStream. The previous code silently dropped
+      // the response code, making CI failures look like the host was unreachable when it was
+      // really just a 401/403/404.
+      val responseCode = connection.responseCode
+      if (responseCode !in 200..299) {
+        val responseMessage = connection.responseMessage ?: ""
+        throw java.io.IOException("HTTP $responseCode $responseMessage")
+      }
       val totalBytes = connection.contentLengthLong
       connection.inputStream.use { input ->
         Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)

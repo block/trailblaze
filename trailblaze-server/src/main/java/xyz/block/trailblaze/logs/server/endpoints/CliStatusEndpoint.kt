@@ -36,7 +36,7 @@ data class CliStatusResponse(
   /**
    * Hex SHA-256 over every non-excluded file under the daemon's resolved
    * `<configDir>/`, captured in-memory at daemon startup
-   * (`WorkspaceContentHasher.lastCapturedHash`). Covers `pack.yaml`, tool YAMLs,
+   * (`WorkspaceContentHasher.lastCapturedHash`). Covers `trailmap.yaml`, tool YAMLs,
    * scripted JS/TS, `trailblaze.yaml` itself, toolsets, providers — anything the
    * daemon would read at session start. `null` if the daemon's running scratch
    * (no workspace) or bootstrap hasn't run.

@@ -1,0 +1,266 @@
+package xyz.block.trailblaze.config.project
+
+import java.io.File
+import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
+
+/**
+ * Where a [LoadedTrailblazeTrailmapManifest] came from, and how to read its sibling resources.
+ *
+ * A trailmap's `trailmap.yaml` may live on the filesystem (workspace-declared via `trailmaps:` in
+ * `trailblaze.yaml`) or be classpath-bundled (e.g. `trailblaze-models` ships `clock` /
+ * `wikipedia` / `contacts`). Either way the trailmap manifest references sibling files by
+ * relative path — `waypoints/<name>.waypoint.yaml`, `tools/<name>.tool.yaml`, etc. — and
+ * those references must resolve consistently regardless of origin. This sealed type is
+ * the abstraction the loader uses to read those siblings without caring which path the
+ * trailmap took to get loaded.
+ *
+ * ## Containment guarantee
+ *
+ * [readSibling] enforces two layers of defense to ensure a trailmap manifest cannot escape
+ * its own directory and read other resources on the classpath or filesystem:
+ *
+ *  1. **Textual rejection** of obviously-suspect path forms before any I/O — `..`
+ *     segments, absolute paths, URL-encoded escape vectors (`%`), backslash-rooted
+ *     paths, etc. Same rule for both source variants.
+ *  2. **Canonical-path containment check** on the [Filesystem] variant — after
+ *     resolving the relative path against the trailmap directory, the canonical form must
+ *     still live under the canonical trailmap directory. This catches escapes the textual
+ *     check can't see, e.g. a sibling symlink that resolves outside the trailmap tree, or
+ *     filesystem normalization quirks (Windows short-name paths, case-folding).
+ *
+ * Trailmap manifests are commit-owned today and thus trusted, so both layers are
+ * defense-in-depth — but the abstraction has to resist future use cases (remote trailmap
+ * distribution, untrusted authors) without re-litigating the decision.
+ *
+ * ## Closed dispatch
+ *
+ * The read logic for each variant lives directly inside [readSibling]'s `when` block
+ * rather than being an abstract method that subclasses override. The seal already
+ * prevents external implementers; expressing the dispatch inline keeps the public API
+ * surface to a single function and lets the containment check sit at one obvious site
+ * for both variants.
+ */
+sealed class TrailmapSource {
+  /**
+   * Reads a trailmap-relative file/resource as text, or returns null if it does not exist.
+   *
+   * @throws IllegalArgumentException if [relativePath] fails containment validation —
+   *   contains `..` or `%` segments, is absolute, blank, or (for [Filesystem] sources)
+   *   resolves to a canonical path outside [Filesystem.trailmapDir]. See the containment
+   *   guarantee in the class kdoc.
+   */
+  fun readSibling(relativePath: String): String? {
+    requireTrailmapRelativePath(relativePath)
+    return when (this) {
+      is Filesystem -> readFilesystemSibling(relativePath)
+      is Classpath -> ClasspathResourceDiscovery.loadResource("$resourceDir/$relativePath")
+    }
+  }
+
+  /**
+   * Lists trailmap-relative file paths inside [relativeDir] whose name ends with one of
+   * [suffixes]. Direct children only — does not recurse. Returns paths relative to the
+   * trailmap root (e.g. `tools/foo.tool.yaml`), suitable for passing back to [readSibling].
+   *
+   * Used by the trailmap loader to auto-discover operational tool YAMLs from `<trailmap>/tools/`
+   * without requiring the manifest to enumerate them. Returns an empty list when
+   * [relativeDir] doesn't exist (a trailmap with no `tools/` dir is fine — it just contributes
+   * no auto-discovered tools).
+   *
+   * Same containment guarantee as [readSibling]: [relativeDir] is validated through the
+   * same path-rejection rules ([requireTrailmapRelativePath]) so a manifest cannot escape its
+   * own directory via a poisoned directory path.
+   *
+   * @throws IllegalArgumentException if [relativeDir] fails containment validation.
+   */
+  fun listSiblings(relativeDir: String, suffixes: List<String>): List<String> {
+    requireTrailmapRelativePath(relativeDir)
+    return when (this) {
+      is Filesystem -> listFilesystemSiblings(relativeDir, suffixes)
+      is Classpath -> listClasspathSiblings(relativeDir, suffixes)
+    }
+  }
+
+  /**
+   * Like [listSiblings] but recurses into subdirectories. Returns trailmap-relative paths
+   * (e.g. `waypoints/web/dashboard/home.waypoint.yaml`) for every file under [relativeDir]
+   * — at any depth — whose name matches one of [suffixes].
+   *
+   * Used by the trailmap loader to auto-discover waypoint YAMLs from `<trailmap>/waypoints/`
+   * without requiring the manifest to enumerate them. The Square trailmap organizes its
+   * ~120 waypoints under `waypoints/{android,ios,web}/...` subdirs (web/dashboard/items/
+   * categories.waypoint.yaml is four levels deep), so the discovery path has to walk the
+   * whole tree — same shape `ToolYamlLoader.discoverTrailmapBundledToolContents` already uses
+   * for tools.
+   *
+   * Same containment guarantee as [listSiblings]. Returns an empty list when [relativeDir]
+   * doesn't exist (a trailmap with no `waypoints/` dir is fine).
+   *
+   * @throws IllegalArgumentException if [relativeDir] fails containment validation.
+   */
+  fun listSiblingsRecursive(relativeDir: String, suffixes: List<String>): List<String> {
+    requireTrailmapRelativePath(relativeDir)
+    return when (this) {
+      is Filesystem -> listFilesystemSiblingsRecursive(relativeDir, suffixes)
+      is Classpath -> listClasspathSiblingsRecursive(relativeDir, suffixes)
+    }
+  }
+
+  /** Human-readable identifier used in log messages and error reporting. */
+  abstract fun describe(): String
+
+  /** Filesystem-backed trailmap — `trailmap.yaml` lives on disk. Sibling reads use [File]. */
+  data class Filesystem(val trailmapDir: File) : TrailmapSource() {
+    override fun describe(): String = trailmapDir.absolutePath
+  }
+
+  /**
+   * Classpath-backed trailmap — the trailmap manifest lives at `<resourceDir>/trailmap.yaml` inside
+   * a JAR or compiled-resources directory. Sibling reads go through
+   * [ClasspathResourceDiscovery.loadResource] so the same call works for both `file:`
+   * and `jar:` classpath entries.
+   */
+  data class Classpath(val resourceDir: String) : TrailmapSource() {
+    override fun describe(): String = "classpath:$resourceDir"
+  }
+
+  private fun Filesystem.listFilesystemSiblings(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val target = File(trailmapDir, relativeDir)
+    if (!target.isDirectory) return emptyList()
+    val canonicalTarget = target.canonicalFile
+    val canonicalTrailmapDir = trailmapDir.canonicalFile
+    // Same containment check as the read path — a malicious symlink at <trailmapDir>/<relativeDir>
+    // resolving outside trailmapDir must be rejected, not silently followed. See the
+    // containment-guarantee section in the class kdoc.
+    require(canonicalTarget.toPath().startsWith(canonicalTrailmapDir.toPath())) {
+      "Trailmap-relative directory resolved outside trailmapDir: '$relativeDir' -> $canonicalTarget " +
+        "(trailmapDir=${canonicalTrailmapDir.path})"
+    }
+    return target.listFiles()
+      .orEmpty()
+      .asSequence()
+      .filter { it.isFile }
+      .filter { file -> suffixes.any { file.name.endsWith(it) } }
+      .map { "$relativeDir/${it.name}" }
+      .sorted() // stable, deterministic ordering across filesystems
+      .toList()
+  }
+
+  private fun Classpath.listClasspathSiblings(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val resourceDirPath = "$resourceDir/$relativeDir"
+    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
+      directoryPath = resourceDirPath,
+      suffix = "", // we filter by suffix manually below — recursive walk returns relative paths
+    )
+    return matches.asSequence()
+      // Direct children only: relative path inside `relativeDir` must contain no `/`.
+      .filter { !it.contains('/') }
+      .filter { name -> suffixes.any { name.endsWith(it) } }
+      .map { "$relativeDir/$it" }
+      .sorted()
+      .toList()
+  }
+
+  private fun Filesystem.listFilesystemSiblingsRecursive(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val target = File(trailmapDir, relativeDir)
+    if (!target.isDirectory) return emptyList()
+    val canonicalTarget = target.canonicalFile
+    val canonicalTrailmapDir = trailmapDir.canonicalFile
+    require(canonicalTarget.toPath().startsWith(canonicalTrailmapDir.toPath())) {
+      "Trailmap-relative directory resolved outside trailmapDir: '$relativeDir' -> $canonicalTarget " +
+        "(trailmapDir=${canonicalTrailmapDir.path})"
+    }
+    val targetPath = target.toPath()
+    return target.walkTopDown()
+      .filter { it.isFile }
+      .filter { file -> suffixes.any { file.name.endsWith(it) } }
+      .map { file ->
+        val rel = targetPath.relativize(file.toPath()).toString()
+          .replace(File.separatorChar, '/')
+        "$relativeDir/$rel"
+      }
+      .sorted() // stable, deterministic ordering across filesystems
+      .toList()
+  }
+
+  private fun Classpath.listClasspathSiblingsRecursive(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val resourceDirPath = "$resourceDir/$relativeDir"
+    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
+      directoryPath = resourceDirPath,
+      suffix = "", // suffix filter applied per-entry below
+    )
+    return matches.asSequence()
+      .filter { name -> suffixes.any { name.endsWith(it) } }
+      .map { "$relativeDir/$it" }
+      .sorted()
+      .toList()
+  }
+
+  private fun Filesystem.readFilesystemSibling(relativePath: String): String? {
+    val target = File(trailmapDir, relativePath)
+    val canonicalTarget = target.canonicalFile
+    val canonicalTrailmapDir = trailmapDir.canonicalFile
+    // Containment via NIO `Path.startsWith` — element-wise (not character-wise) so we don't
+    // need to append `File.separator` and reason about prefix-overlap escapes ourselves
+    // (`<trailmapDir-evil>/x` would textually match `<trailmapDir>` under naïve string-prefix
+    // matching, but NIO compares path elements). NB: `Path.startsWith` returns false when
+    // the two paths are equal, so the equality check below is load-bearing — without it,
+    // a relativePath that resolves exactly to the trailmap directory itself would slip through
+    // (the trailmap dir isn't a regular file, but the read attempt would give an unhelpful
+    // error rather than the directed one here).
+    val canonicalTargetPath = canonicalTarget.toPath()
+    val canonicalTrailmapDirPath = canonicalTrailmapDir.toPath()
+    require(canonicalTargetPath != canonicalTrailmapDirPath) {
+      "Trailmap-relative path must not resolve to the trailmap directory itself (got '$relativePath')"
+    }
+    require(canonicalTargetPath.startsWith(canonicalTrailmapDirPath)) {
+      "Trailmap-relative path resolved outside trailmapDir: '$relativePath' -> $canonicalTarget " +
+        "(trailmapDir=${canonicalTrailmapDir.path})"
+    }
+    return if (target.isFile) target.readText() else null
+  }
+
+  private companion object {
+    // The runtime path-containment rules below apply to every trailmap-relative sibling reference
+    // the loader resolves (waypoints, toolsets, system_prompt_file, etc.). Scripted-tool
+    // descriptors no longer go through a path-based ref — `target.tools:` is a list of tool
+    // names auto-discovered from `<trailmap>/tools/` — so the path-validation surface narrowed,
+    // but the rules still gate every other sibling read.
+    fun requireTrailmapRelativePath(relativePath: String) {
+      require(relativePath.isNotBlank()) {
+        "Trailmap-relative path must not be blank"
+      }
+      require(!relativePath.startsWith("/") && !relativePath.startsWith("\\")) {
+        "Trailmap-relative path must not start with '/' or '\\\\' (got '$relativePath')"
+      }
+      require(!File(relativePath).isAbsolute) {
+        "Trailmap-relative path must not be absolute (got '$relativePath')"
+      }
+      // Reject URL-encoded escape vectors. Trailmap-relative refs are commit-owned strings
+      // pointing at sibling files; legitimate filenames have no reason to contain `%`.
+      // Banning them at the textual layer forecloses %2e%2e/ traversal even before the
+      // canonical-path check on the filesystem variant.
+      require(!relativePath.contains('%')) {
+        "Trailmap-relative path must not contain '%' — URL encoding is not allowed (got '$relativePath')"
+      }
+      // Reject any path segment equal to ".." regardless of separator. Splitting on
+      // both '/' and '\' covers Windows-style refs in the manifest.
+      val segments = relativePath.split('/', '\\')
+      require(segments.none { it == ".." }) {
+        "Trailmap-relative path must not contain '..' segments (got '$relativePath')"
+      }
+    }
+  }
+}

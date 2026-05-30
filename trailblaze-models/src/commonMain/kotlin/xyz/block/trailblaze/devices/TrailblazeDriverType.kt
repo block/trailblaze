@@ -9,7 +9,7 @@ enum class TrailblazeDriverType(
    */
   val requiresHost: Boolean,
   /**
-   * The YAML key used to reference this specific driver type in `trailblaze-config/` YAML files
+   * The YAML key used to reference this specific driver type in `trails/config/` YAML files
    * (targets, toolsets). Case-insensitive. Matches the keys in [DriverTypeKey].
    */
   val yamlKey: String,

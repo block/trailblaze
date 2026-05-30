@@ -7,8 +7,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.config.AppTargetYamlConfig
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
+import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 
 class TrailblazeCompilerTest {
@@ -20,15 +23,15 @@ class TrailblazeCompilerTest {
   }
 
   @Test
-  fun `compile resolves dependencies and writes one yaml per app pack`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "framework").mkdirs()
+  fun `compile resolves dependencies and writes one yaml per app trailmap`() {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "framework").mkdirs()
     // Toolset names used here (`core_interaction`, `memory`, `verification`) are real
     // toolsets shipped on `:trailblaze-models`, so they're reachable via the default
     // `ClasspathConfigResourceSource` and the unresolved-reference validation passes.
     // Tests exercising validation specifically use a synthetic ConfigResourceSource
     // (see the validation tests below).
-    File(packsDir, "framework/pack.yaml").writeText(
+    File(trailmapsDir, "framework/trailmap.yaml").writeText(
       """
       id: framework
       defaults:
@@ -43,8 +46,8 @@ class TrailblazeCompilerTest {
             - core_interaction
       """.trimIndent(),
     )
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       dependencies:
@@ -62,10 +65,10 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+    val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir)
 
     assertTrue(result.isSuccess, "Expected success, got errors: ${result.errors}")
-    assertEquals(1, result.emittedTargets.size, "Library pack should not produce target output")
+    assertEquals(1, result.emittedTargets.size, "Library trailmap should not produce target output")
     val out = result.emittedTargets.single()
     assertEquals("myapp.yaml", out.name)
     assertTrue(
@@ -93,17 +96,17 @@ class TrailblazeCompilerTest {
   }
 
   @Test
-  fun `compile names the failing pack when a dependency is missing`() {
-    // Gap-detection upgrade: the error message must name WHICH pack failed instead of
-    // a generic "N pack(s) failed" — so authors can jump straight to the offending
+  fun `compile names the failing trailmap when a dependency is missing`() {
+    // Gap-detection upgrade: the error message must name WHICH trailmap failed instead of
+    // a generic "N trailmap(s) failed" — so authors can jump straight to the offending
     // manifest. A generic count is correct but useless for triage.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "consumer").mkdirs()
-    File(packsDir, "consumer/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "consumer").mkdirs()
+    File(trailmapsDir, "consumer/trailmap.yaml").writeText(
       """
       id: consumer
       dependencies:
-        - missing-pack
+        - missing-trailmap
       target:
         display_name: Consumer
         platforms:
@@ -113,23 +116,23 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+    val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir)
 
     assertTrue(!result.isSuccess, "Expected compile to fail on missing dep")
     assertTrue(
-      result.errors.any { "consumer" in it && "missing-pack" in it },
-      "Expected error message to name the failing pack 'consumer' and the missing dep " +
-        "'missing-pack'; got: ${result.errors}",
+      result.errors.any { "consumer" in it && "missing-trailmap" in it },
+      "Expected error message to name the failing trailmap 'consumer' and the missing dep " +
+        "'missing-trailmap'; got: ${result.errors}",
     )
     assertTrue(result.emittedTargets.isEmpty(), "No targets should be emitted on error")
   }
 
   @Test
-  fun `compile is a no-op when no packs are present`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
+  fun `compile is a no-op when no trailmaps are present`() {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
     val outputDir = File(workDir, "out")
 
-    val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+    val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir)
 
     assertTrue(result.isSuccess)
     assertTrue(result.emittedTargets.isEmpty())
@@ -138,9 +141,9 @@ class TrailblazeCompilerTest {
 
   @Test
   fun `compile errors on unknown toolset reference`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       target:
@@ -156,7 +159,7 @@ class TrailblazeCompilerTest {
     val outputDir = File(workDir, "out")
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = staticReferenceSource(toolsets = setOf("core_interaction")),
     )
@@ -171,9 +174,9 @@ class TrailblazeCompilerTest {
 
   @Test
   fun `compile errors on unknown tool reference at the platform level`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       target:
@@ -189,7 +192,7 @@ class TrailblazeCompilerTest {
     val outputDir = File(workDir, "out")
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = staticReferenceSource(tools = setOf("tap_with_text")),
     )
@@ -206,9 +209,9 @@ class TrailblazeCompilerTest {
     // Typos in `excluded_tools:` are easy to miss — the runtime tolerates exclusions
     // for unknown tools (they're not present anyway) so the intended exclusion
     // silently doesn't apply. Compile-time validation surfaces the typo.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       target:
@@ -224,7 +227,7 @@ class TrailblazeCompilerTest {
     val outputDir = File(workDir, "out")
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = staticReferenceSource(tools = setOf("tap_with_text")),
     )
@@ -241,9 +244,9 @@ class TrailblazeCompilerTest {
     // Drivers are an enum-defined set (DriverTypeKey.knownKeys), not classpath-discovered.
     // A typo like `playwright-nativ` would resolve to no drivers at runtime and silently
     // cripple the platform. Compile-time validation against the enum surfaces it.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       target:
@@ -257,7 +260,7 @@ class TrailblazeCompilerTest {
     val outputDir = File(workDir, "out")
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       // Drivers are validated even with a null reference source — they don't depend on
       // classpath I/O. This proves the driver pool is enum-driven.
@@ -272,13 +275,13 @@ class TrailblazeCompilerTest {
   }
 
   @Test
-  fun `compile accepts toolsets declared in workspace packs`() {
-    // Pack-declared toolsets should be in the validation pool so consumer packs
+  fun `compile accepts toolsets declared in workspace trailmaps`() {
+    // Trailmap-declared toolsets should be in the validation pool so consumer trailmaps
     // referencing them by name don't false-positive. This covers workspace authors
     // who define toolsets next to their target without going through the classpath.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       toolsets:
@@ -293,8 +296,8 @@ class TrailblazeCompilerTest {
               - custom_set
       """.trimIndent(),
     )
-    File(packsDir, "myapp/toolsets").mkdirs()
-    File(packsDir, "myapp/toolsets/custom_set.yaml").writeText(
+    File(trailmapsDir, "myapp/toolsets").mkdirs()
+    File(trailmapsDir, "myapp/toolsets/custom_set.yaml").writeText(
       """
       id: custom_set
       tools: []
@@ -302,14 +305,14 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    // Empty classpath pool — `custom_set` only resolves because the pack declared it.
+    // Empty classpath pool — `custom_set` only resolves because the trailmap declared it.
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = staticReferenceSource(),
     )
 
-    assertTrue(result.isSuccess, "Expected pack-declared toolset to satisfy reference, got: ${result.errors}")
+    assertTrue(result.isSuccess, "Expected trailmap-declared toolset to satisfy reference, got: ${result.errors}")
   }
 
   @Test
@@ -317,9 +320,9 @@ class TrailblazeCompilerTest {
     // Cross-classpath callers (build-logic / future bridges) opt out of toolset+tool
     // validation by passing null. Drivers are still validated because they're enum-
     // defined and don't depend on classpath state.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "myapp").mkdirs()
-    File(packsDir, "myapp/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "myapp").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
       """
       id: myapp
       target:
@@ -337,7 +340,7 @@ class TrailblazeCompilerTest {
     val outputDir = File(workDir, "out")
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = null,
     )
@@ -351,9 +354,9 @@ class TrailblazeCompilerTest {
 
   @Test
   fun `compile deletes orphan generated files from a previous run`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -363,8 +366,8 @@ class TrailblazeCompilerTest {
             app_ids: [com.example.alpha]
       """.trimIndent(),
     )
-    File(packsDir, "beta").mkdirs()
-    File(packsDir, "beta/pack.yaml").writeText(
+    File(trailmapsDir, "beta").mkdirs()
+    File(trailmapsDir, "beta/trailmap.yaml").writeText(
       """
       id: beta
       target:
@@ -376,14 +379,14 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    // Compile both packs first.
-    val first = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir, referenceSource = null)
+    // Compile both trailmaps first.
+    val first = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir, referenceSource = null)
     assertTrue(first.isSuccess)
     assertEquals(setOf("alpha.yaml", "beta.yaml"), first.emittedTargets.map { it.name }.toSet())
 
     // Remove `beta` and recompile. The previous `beta.yaml` should be cleaned up.
-    File(packsDir, "beta").deleteRecursively()
-    val second = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir, referenceSource = null)
+    File(trailmapsDir, "beta").deleteRecursively()
+    val second = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir, referenceSource = null)
     assertTrue(second.isSuccess)
     assertEquals(listOf("alpha.yaml"), second.emittedTargets.map { it.name })
     assertEquals(
@@ -403,11 +406,11 @@ class TrailblazeCompilerTest {
     // Working trees built before the rename carry generated files starting with the
     // OLD banner. Recognizing only the new banner would silently strand those as
     // orphans: AppTargetDiscovery prefers `dist/targets/` over hand-authored ones, so
-    // a removed-pack's old file would shadow the user's intent. This test pins the
+    // a removed-trailmap's old file would shadow the user's intent. This test pins the
     // backward-compat behavior.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -419,13 +422,13 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out").apply { mkdirs() }
     // Pre-seed the output dir with a file bearing the old banner — simulating a
-    // generated artifact from a pre-#3236 compile run for a pack that's been removed.
+    // generated artifact from a pre-#3236 compile run for a trailmap that's been removed.
     val staleLegacyFile = File(outputDir, "gamma.yaml").apply {
       writeText("# GENERATED BY trailblaze compile. DO NOT EDIT.\nid: gamma\n")
     }
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = null,
     )
@@ -446,9 +449,9 @@ class TrailblazeCompilerTest {
     // Orphan cleanup is gated on the GENERATED_BANNER signature so the compiler
     // only deletes files it owns. A hand-authored YAML the user dropped into the
     // output dir survives recompilation.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText(
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
       """
       id: alpha
       target:
@@ -464,7 +467,7 @@ class TrailblazeCompilerTest {
     }
 
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = outputDir,
       referenceSource = null,
     )
@@ -475,10 +478,10 @@ class TrailblazeCompilerTest {
   }
 
   @Test
-  fun `compile skips library packs that have no target block`() {
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "lib").mkdirs()
-    File(packsDir, "lib/pack.yaml").writeText(
+  fun `compile skips library trailmaps that have no target block`() {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "lib").mkdirs()
+    File(trailmapsDir, "lib/trailmap.yaml").writeText(
       """
       id: lib
       defaults:
@@ -488,24 +491,24 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir)
+    val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir)
 
     assertTrue(result.isSuccess)
     assertTrue(
       result.emittedTargets.isEmpty(),
-      "Library pack (no target:) should not produce target output",
+      "Library trailmap (no target:) should not produce target output",
     )
   }
 
   @Test
-  fun `compile reports parse errors with the offending pack ref named`() {
-    // Malformed YAML in a pack manifest used to surface only as "N packs failed
-    // dependency resolution" via the resolver's atomic-per-pack soft-fail. The
+  fun `compile reports parse errors with the offending trailmap ref named`() {
+    // Malformed YAML in a trailmap manifest used to surface only as "N trailmaps failed
+    // dependency resolution" via the resolver's atomic-per-trailmap soft-fail. The
     // compiler now pre-parses each manifest and surfaces the parse error directly
-    // with the pack ref so authors can jump to the broken file.
-    val packsDir = File(workDir, "packs").apply { mkdirs() }
-    File(packsDir, "broken").mkdirs()
-    File(packsDir, "broken/pack.yaml").writeText(
+    // with the trailmap ref so authors can jump to the broken file.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "broken").mkdirs()
+    File(trailmapsDir, "broken/trailmap.yaml").writeText(
       """
       id: broken
       target:
@@ -514,13 +517,166 @@ class TrailblazeCompilerTest {
     )
     val outputDir = File(workDir, "out")
 
-    val result = TrailblazeCompiler.compile(packsDir = packsDir, outputDir = outputDir, referenceSource = null)
+    val result = TrailblazeCompiler.compile(trailmapsDir = trailmapsDir, outputDir = outputDir, referenceSource = null)
 
     assertTrue(!result.isSuccess, "Expected compile to fail on parse error")
     assertTrue(
       result.errors.any { "broken" in it && "failed to parse" in it },
-      "Expected parse error to name the offending pack ref; got: ${result.errors}",
+      "Expected parse error to name the offending trailmap ref; got: ${result.errors}",
     )
+  }
+
+  @Test
+  fun `compile fails with named diagnostic when meta-only descriptor lacks enrichment`() {
+    // Regression guard for the wire-up that landed alongside the ios-contacts typed-authoring
+    // migration. A meta-only descriptor (`script:` + `_meta:` only, no top-level `name:`)
+    // is unresolvable without an analyzer-backed enrichment; before this wiring, compile()
+    // silently passed null and the loader's diagnostic surfaced only as a generic
+    // "dependency resolution failed" message. Now compile() accepts an explicit enrichment
+    // parameter — verify that the no-enrichment path still raises the expected diagnostic so
+    // a future refactor that drops the parameter doesn't silently regress.
+    val (trailmapsDir, outputDir) = writeMetaOnlyTrailmapFixture()
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = outputDir,
+      referenceSource = null,
+      commandLabel = "compile",
+      scriptedToolEnrichment = null,
+    )
+
+    assertTrue(!result.isSuccess, "Expected compile to fail without enrichment, got: ${result.errors}")
+    assertTrue(
+      result.errors.any { "metapack" in it && "failed dependency resolution" in it },
+      "Expected gap-detection to name the offending trailmap with a meta-only descriptor; got: ${result.errors}",
+    )
+  }
+
+  @Test
+  fun `compile succeeds when a stub enrichment resolves meta-only descriptors`() {
+    // Companion to the negative case above — same fixture, but with a stub enrichment that
+    // mimics what `AnalyzerScriptedToolEnrichment` would produce for the descriptor. Asserts
+    // the success path the host call sites (`CompileCommand`, `WorkspaceCompileBootstrap`)
+    // depend on. Without this test, a future refactor that breaks the enrichment threading
+    // through `compile()` would only fail at daemon-init time on a workspace that happens
+    // to ship meta-only descriptors.
+    val (trailmapsDir, outputDir) = writeMetaOnlyTrailmapFixture()
+    val stubEnrichment = object : ScriptedToolEnrichment {
+      override fun enrich(
+        trailmapId: String,
+        trailmapDir: File,
+        trailmapToolsDir: File,
+        deferredDescriptors: List<ScriptedToolEnrichment.DeferredDescriptor>,
+      ): List<ScriptedToolEnrichment.EnrichmentResult> = deferredDescriptors.map { d ->
+        ScriptedToolEnrichment.EnrichmentResult.Resolved(
+          relativePath = d.relativePath,
+          configs = listOf(
+            InlineScriptToolConfig(
+              script = File(trailmapsDir, "metapack/tools/example_tool.ts").absolutePath,
+              name = "example_tool",
+              description = "stub tool surfaced by the enrichment double for testing.",
+              meta = JsonObject(emptyMap()),
+            ),
+          ),
+        )
+      }
+    }
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = outputDir,
+      referenceSource = null,
+      commandLabel = "compile",
+      scriptedToolEnrichment = stubEnrichment,
+    )
+
+    assertTrue(result.isSuccess, "Expected compile to succeed with stub enrichment, got: ${result.errors}")
+    assertEquals(1, result.emittedTargets.size, "Expected exactly one target.yaml emitted")
+    assertEquals("metapack.yaml", result.emittedTargets.single().name)
+  }
+
+  @Test
+  fun `compile surfaces enrichment Failed result with reason and trailmap name`() {
+    // The third branch of the contract that the two tests above leave uncovered:
+    // enrichment IS wired AND runs, but the analyzer couldn't extract a typed
+    // declaration from the descriptor's `.ts` source (file missing, no
+    // `trailblaze.tool<...>` call, schema extraction error). The loader must
+    // propagate the failure as a clear diagnostic citing the descriptor path AND
+    // the analyzer's reason. Without this test, a future refactor that silently
+    // drops the Failed result (or strips the reason from the diagnostic) would
+    // leave authors with an opaque trailmap-level "dependency resolution" error.
+    val (trailmapsDir, outputDir) = writeMetaOnlyTrailmapFixture()
+    val analyzerReason = "synthetic: no trailblaze.tool<...> export found"
+    val failingEnrichment = object : ScriptedToolEnrichment {
+      override fun enrich(
+        trailmapId: String,
+        trailmapDir: File,
+        trailmapToolsDir: File,
+        deferredDescriptors: List<ScriptedToolEnrichment.DeferredDescriptor>,
+      ): List<ScriptedToolEnrichment.EnrichmentResult> = deferredDescriptors.map { d ->
+        ScriptedToolEnrichment.EnrichmentResult.Failed(
+          relativePath = d.relativePath,
+          reason = analyzerReason,
+        )
+      }
+    }
+
+    val result = TrailblazeCompiler.compile(
+      trailmapsDir = trailmapsDir,
+      outputDir = outputDir,
+      referenceSource = null,
+      commandLabel = "compile",
+      scriptedToolEnrichment = failingEnrichment,
+    )
+
+    assertTrue(!result.isSuccess, "Expected compile to fail when enrichment returns Failed")
+    val joined = result.errors.joinToString("\n")
+    assertTrue("metapack" in joined, "Error must name the offending trailmap; got: $joined")
+    assertTrue(result.emittedTargets.isEmpty(), "No targets should be emitted when enrichment fails")
+    // Note: the full descriptor path + analyzer reason are emitted via `Console.log` as a
+    // warning by `TrailblazeTrailmapArtifact.tryResolve` (the atomic-per-trailmap failure-isolation
+    // pattern) and don't surface in `result.errors`. That's the existing resolver
+    // contract, not something this PR changed. If a future change starts threading the
+    // analyzer's reason into `result.errors`, expand this test to assert on both
+    // `example_tool.yaml` and the analyzer reason string.
+  }
+
+  /**
+   * Writes a minimal trailmap fixture with one meta-only scripted-tool descriptor under
+   * `<trailmapsDir>/metapack/tools/example_tool.{yaml,ts}`. Returns the (trailmaps, output) pair
+   * for the caller to pass into `compile(...)`. Used by the meta-only enrichment tests so
+   * each side (no-enrichment vs. stubbed-enrichment) exercises the same on-disk shape.
+   */
+  private fun writeMetaOnlyTrailmapFixture(): Pair<File, File> {
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    val trailmapDir = File(trailmapsDir, "metapack").apply { mkdirs() }
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: metapack
+      target:
+        display_name: Meta Trailmap
+        tools:
+          - example_tool
+        platforms:
+          android:
+            app_ids:
+              - com.example.metapack
+      """.trimIndent(),
+    )
+    File(toolsDir, "example_tool.yaml").writeText(
+      """
+      script: ./example_tool.ts
+      _meta:
+        trailblaze/supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    File(toolsDir, "example_tool.ts").writeText(
+      """
+      import { trailblaze } from "@trailblaze/scripting";
+      export const example_tool = trailblaze.tool(async () => "ok");
+      """.trimIndent(),
+    )
+    return trailmapsDir to File(workDir, "out")
   }
 
   /**

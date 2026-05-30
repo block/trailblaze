@@ -96,7 +96,7 @@ with, the toolset YAML becomes the right home. The toolset owns the
 source, filters by `tools:`, and overlays annotations:
 
 ```yaml
-# trailblaze-config/toolsets/slack.yaml
+# trails/config/toolsets/slack.yaml
 id: slack
 description: Slack integration (curated subset of @mcp/slack)
 

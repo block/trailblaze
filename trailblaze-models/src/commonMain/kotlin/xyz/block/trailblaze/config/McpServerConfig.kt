@@ -39,10 +39,10 @@ data class McpServerConfig(
    * future on-device bundle). Mutually exclusive with [command].
    *
    * **Path resolution:**
-   *  - For pack-loaded manifests (`pack.yaml`), relative paths resolve against
-   *    the pack manifest's directory. The pack loader rewrites them to absolute
-   *    paths before they reach the runtime, so a pack is self-contained.
-   *  - For legacy non-pack target YAMLs, relative paths resolve against the
+   *  - For trailmap-loaded manifests (`trailmap.yaml`), relative paths resolve against
+   *    the trailmap manifest's directory. The trailmap loader rewrites them to absolute
+   *    paths before they reach the runtime, so a trailmap is self-contained.
+   *  - For legacy non-trailmap target YAMLs, relative paths resolve against the
    *    JVM's current working directory (the directory `./trailblaze` was
    *    invoked from). This is the original `McpSubprocessSpawner` contract.
    *  - Absolute paths pass through unchanged in either case.

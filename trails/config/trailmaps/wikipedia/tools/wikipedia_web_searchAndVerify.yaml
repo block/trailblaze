@@ -1,0 +1,30 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./wikipedia_web_searchAndVerify.ts
+name: wikipedia_web_searchAndVerify
+description: |
+  Search Wikipedia for a topic AND verify the resulting article is
+  well-formed — heading + body, optionally References — in a single tool
+  call. Use this whenever the task combines "search for X" with "verify
+  the article rendered correctly", e.g. "search Wikipedia for Python and
+  confirm the article loaded with a body and References section". Composes
+  the existing `wikipedia_web_searchAndOpenFirstResult` and
+  `wikipedia_web_verifyArticleStructure` tools so callers get both behaviors
+  with one round-trip.
+supportedPlatforms:
+  - web
+inputSchema:
+  query:
+    type: string
+    description: "Query to type into the header search box."
+    required: false
+  expectedHeading:
+    type: string
+    description: "Heading text to assert on the opened article. Defaults to `query`, which works for exact-match articles like \"Python (programming language)\"."
+    required: false
+  requireReferences:
+    type: boolean
+    description: "Whether to also scroll-and-assert the References section is present. Defaults to false because not every article has one."
+    required: false

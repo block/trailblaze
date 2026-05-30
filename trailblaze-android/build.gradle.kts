@@ -32,18 +32,11 @@ android {
 
 dependencies {
   api(project(":trailblaze-common"))
-  // PR A5: on-device MCP bundle runtime. `AndroidTrailblazeRule` launches declared
-  // `mcp_servers:` bundles at session start via `McpBundleRuntimeLauncher`, registering the
-  // advertised tools into the session's `TrailblazeToolRepo`. `api` because the rule's
-  // public constructor takes `McpServerConfig` — callers constructing the rule need the
-  // model class on their compile classpath.
-  api(project(":trailblaze-scripting-bundle"))
-  // MCP-free on-device tool runtime. Same surface shape as the legacy bundle runtime
-  // above — `AndroidTrailblazeRule.quickjsToolBundles` takes `McpServerConfig` and the
-  // launcher reads `script:` paths via the supplied resolver. `api` exposes
-  // `BundleSource` / `AndroidAssetBundleSource` so consumers wiring custom resolvers can
-  // reach those types without a separate declaration. See the `:trailblaze-quickjs-tools`
-  // README for the runtime overview.
+  // On-device QuickJS tool runtime. `AndroidTrailblazeRule.quickjsToolBundles` takes
+  // `McpServerConfig` and the launcher reads `script:` paths via the supplied resolver.
+  // `api` exposes `BundleSource` / `AndroidAssetBundleSource` so consumers wiring custom
+  // resolvers can reach those types without a separate declaration. See the
+  // `:trailblaze-quickjs-tools` README for the runtime overview.
   api(project(":trailblaze-quickjs-tools"))
 
   api(libs.androidx.uiautomator)
@@ -76,6 +69,10 @@ dependencies {
   implementation(libs.koog.prompt.executor.openai)
   implementation(libs.koog.prompt.executor.openrouter)
   implementation(libs.koog.prompt.executor.ollama)
+  // Koog 1.0.0 stopped leaking Ktor types through the LLM client modules. On-device code
+  // wraps our customized Ktor `HttpClient` (TLS / reverse-proxy / token-capture interceptor)
+  // in `KtorKoogHttpClient.Factory`, so we need an explicit dep here.
+  implementation(libs.koog.http.client.ktor)
   implementation(libs.kotlinx.datetime)
 
   implementation(libs.ktor.http)

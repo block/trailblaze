@@ -22,8 +22,7 @@ class SnapshotCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = ["Device: platform (android, ios, web) or platform/id. Required."],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
   var device: String? = null
 
@@ -52,15 +51,9 @@ class SnapshotCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    val deviceArg = device
-    if (deviceArg.isNullOrBlank()) {
-      Console.error("Error: --device is required for this command.")
-      return CommandLine.ExitCode.USAGE
-    }
     return cliReusableWithDevice(
       verbose = verbose,
-      device = deviceArg,
-      sessionScope = cliDeviceSessionScope(deviceArg),
+      device = device,
       webHeadless = headlessOption.resolve(),
     ) { client ->
       val yaml = "- takeSnapshot:\n    screenName: \"snap\""
@@ -79,7 +72,7 @@ class SnapshotCommand : Callable<Int> {
       )
       if (details != null) args["snapshotDetails"] = details
       if (screenshot) args["screenshot"] = true
-      val result = client.callTool("blaze", args)
+      val result = client.callTool("step", args)
       formatBlazeResultAgent(result)
       blazeExitCode(result)
     }

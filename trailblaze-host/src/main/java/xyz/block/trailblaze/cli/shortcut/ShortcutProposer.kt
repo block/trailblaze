@@ -219,7 +219,7 @@ object ShortcutProposer {
    * Returns the single waypoint id that uniquely matches [step]'s screen, or null if
    * zero or two-plus waypoints match. The runtime contract assumes the matched-waypoint
    * set has at most one entry at any point in time (see `WaypointDefinition` kdoc); two
-   * matches is an authoring bug for the pack, but it shouldn't surface here as a false
+   * matches is an authoring bug for the trailmap, but it shouldn't surface here as a false
    * (A→B) transition.
    */
   private fun labelStep(
@@ -423,7 +423,7 @@ object ShortcutProposer {
     "shortcut|$from|$to|$actionFingerprint"
 
   /**
-   * Slug-only id generation. The waypoint ids are already namespaced under the pack;
+   * Slug-only id generation. The waypoint ids are already namespaced under the trailmap;
    * the shortcut id encodes both endpoints so reviewers can read the file name and see
    * what edge it covers without opening the file.
    */

@@ -5,17 +5,12 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] -d=<device>
+Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] [-d=<device>]
                                 [--headless=<headless>] [--mode=<mode>]
                                 [--target=<target>] [--title=<title>]
 Start a new session with automatic video and log capture
-  -d, --device=<device>   Device to bind the session to: platform (android,
-                            ios, web) or platform/id (e.g., ios/DEVICE-UUID).
-                            Required — the CLI doesn't durably track an
-                            "active" session across single-shot MCP calls, so
-                            every device-acting command takes the device
-                            explicitly. Examples: --device android, --device
-                            ios/DEVICE-UUID, --device web.
+  -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
+                            Defaults to $TRAILBLAZE_DEVICE.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser
@@ -33,7 +28,9 @@ Start a new session with automatic video and log capture
       --no-video          Disable video capture
       --target=<target>   Target app ID for this session's bound device. Scoped
                             to the device as a daemon-process override (dies on
-                            daemon restart or device release). Pass
+                            daemon restart or device release). Defaults to
+                            `$TRAILBLAZE_TARGET` — typically set via `eval
+                            $(trailblaze device connect ... --target X)`. Pass
                             `--target=clear` to remove a previously-set
                             override. To set a persistent default, use
                             `trailblaze config target`.

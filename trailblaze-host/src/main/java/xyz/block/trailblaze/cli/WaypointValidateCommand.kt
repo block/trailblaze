@@ -54,8 +54,8 @@ class WaypointValidateCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/ — the " +
-        "canonical workspace-pack location. Warns if no such pack exists. Mutually exclusive " +
+      "Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/ — the " +
+        "canonical workspace-trailmap location. Warns if no such trailmap exists. Mutually exclusive " +
         "with --root (--root wins if both given).",
     ],
   )
@@ -64,7 +64,7 @@ class WaypointValidateCommand : Callable<Int> {
   @Option(
     names = ["--root"],
     paramLabel = "<path>",
-    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
+    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Trailmap waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
   )
   var rootOverride: File? = null
 
@@ -80,21 +80,21 @@ class WaypointValidateCommand : Callable<Int> {
     val discovery = WaypointDiscovery.discover(root)
     reportLoadFailures(discovery.rootFailures)
     val def = discovery.definitions.firstOrNull { it.id == waypointId } ?: run {
-      val suffix = if (discovery.packLoadFailed) {
-        " (some packs failed to load — see warnings above; the missing waypoint may live in a broken pack)"
+      val suffix = if (discovery.trailmapLoadFailed) {
+        " (some trailmaps failed to load — see warnings above; the missing waypoint may live in a broken trailmap)"
       } else {
         ""
       }
-      Console.error("Waypoint id not found: $waypointId (searched active packs and ${root.absolutePath}).$suffix")
+      Console.error("Waypoint id not found: $waypointId (searched active trailmaps and ${root.absolutePath}).$suffix")
       maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
-    val logFile = resolveScreenStateFile(root) ?: return CommandLine.ExitCode.USAGE
+    val logFile = resolveScreenStateFile(root) ?: return TrailblazeExitCode.MISUSE.code
     val screen = SessionLogScreenState.loadStep(logFile)
     val target = when (val res = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(res.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> res.context
       is TargetContextResolution.NoTarget -> null
@@ -105,7 +105,7 @@ class WaypointValidateCommand : Callable<Int> {
     Console.log("Screen state: ${logFile.name}")
     Console.log("")
     Console.log(formatResult(r))
-    return if (r.matched) CommandLine.ExitCode.OK else 1
+    return if (r.matched) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   }
 
   /**
@@ -170,13 +170,13 @@ class WaypointValidateCommand : Callable<Int> {
    * callers can validate against the committed example pair without remembering
    * its filename.
    *
-   * Walks `--root` plus the conventional pack roots in this repo. Pack-bundled
-   * waypoints live in source-controlled `src/commonMain/resources/trailblaze-config/packs/`
+   * Walks `--root` plus the conventional trailmap roots in this repo. Trailmap-bundled
+   * waypoints live in source-controlled `src/commonMain/resources/trails/config/trailmaps/`
    * trees under `trailblaze-models/`; their example sidecars sit next to the YAML.
    */
   private fun resolveSiblingExample(root: File): File? {
     val candidateRoots = (
-      sequenceOf(root) + SIBLING_EXAMPLE_PACK_ROOTS.asSequence().map(::File)
+      sequenceOf(root) + SIBLING_EXAMPLE_TRAILMAP_ROOTS.asSequence().map(::File)
     ).distinct()
     for (rootDir in candidateRoots) {
       for (yamlFile in WaypointLoader.discover(rootDir)) {
@@ -200,13 +200,13 @@ class WaypointValidateCommand : Callable<Int> {
 
   companion object {
     /**
-     * Conventional pack-source roots in this repo. Walked alongside `--root` when
+     * Conventional trailmap-source roots in this repo. Walked alongside `--root` when
      * resolving a sibling `<base>.example.json` for the zero-arg validate path so
-     * pack-bundled waypoints can be validated against their own committed examples
-     * without callers having to specify each pack root by hand.
+     * trailmap-bundled waypoints can be validated against their own committed examples
+     * without callers having to specify each trailmap root by hand.
      */
-    private val SIBLING_EXAMPLE_PACK_ROOTS = listOf(
-      "trailblaze-models/src/commonMain/resources/trailblaze-config/packs",
+    private val SIBLING_EXAMPLE_TRAILMAP_ROOTS = listOf(
+      "trailblaze-models/src/commonMain/resources/trails/config/trailmaps",
     )
   }
 }

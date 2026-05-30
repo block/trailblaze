@@ -7,7 +7,7 @@ import kotlin.test.Test
  * Walks the picocli command tree rooted at [TrailblazeCliCommand] and writes one baseline
  * file per command path under `cli-output-baselines/help-<command-path>.txt`, where the
  * path is the chain from the root joined with hyphens (e.g. `help-trailblaze.txt`,
- * `help-trailblaze-config.txt`, `help-trailblaze-config-show.txt`).
+ * `help-trails/config.txt`, `help-trails/config-show.txt`).
  *
  * After all files are written, [BaselineHarness.assertNoDrift] runs `git status` over
  * the entire baseline directory so a single failure surfaces every dirty path together
@@ -61,9 +61,21 @@ class CliHelpBaselineTest {
     val filename = "help-${path.joinToString("-")}.txt"
     BaselineHarness.write(filename, rendered)
 
-    for ((subName, subCommandLine) in cl.subcommands) {
+    // [canonicalSubcommands] drops alias entries — picocli's `subcommands` map exposes
+    // one entry per alias pointing at the same CommandLine, but the baseline should
+    // cover each logical subcommand once under its canonical name.
+    for ((subName, subCommandLine) in cl.canonicalSubcommands()) {
       // Skip the implicit `help` mixin — picocli auto-adds it to every command and its
       // baseline duplicates the parent's content with one paragraph swapped.
+      //
+      // Assumes `"help"` is only ever the picocli-mixin name, never an explicit
+      // `@Command(name = "help", …)` declared by a real subcommand AND never an
+      // `aliases = ["help"]` value. The `canonicalSubcommands` filter would already
+      // strip an alias key, so the explicit name check below only protects against the
+      // canonical-name case. If a future subcommand intentionally claims `"help"` as
+      // its canonical name, this skip would mask it from the baseline — that's a
+      // deliberate-by-omission state, not a bug, and the test should be revisited
+      // alongside whatever PR introduces that subcommand.
       if (subName == "help") continue
       walkAndWriteHelp(subCommandLine, path + subName)
     }

@@ -12,7 +12,7 @@ package xyz.block.trailblaze.segment
  * underlying sources: legacy [xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog]
  * entries (older direct-tool sessions) and modern
  * [xyz.block.trailblaze.logs.client.TrailblazeLog.McpSamplingLog] completions (today's
- * `blaze` flow, where the action is encoded in the LLM's structured response). A future
+ * `step` flow, where the action is encoded in the LLM's structured response). A future
  * aggregator can use the string as a dedup key without reaching back into the source log type.
  *
  * Self-loops (`from == to`) are filtered out by [SessionSegmentExtractor] — when a tap

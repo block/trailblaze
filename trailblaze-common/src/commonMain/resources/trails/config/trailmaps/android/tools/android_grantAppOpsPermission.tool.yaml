@@ -1,0 +1,2 @@
+id: android_grantAppOpsPermission
+class: xyz.block.trailblaze.mobile.tools.AndroidGrantAppOpsPermissionTrailblazeTool

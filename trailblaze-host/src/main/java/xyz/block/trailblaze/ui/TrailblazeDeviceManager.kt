@@ -186,7 +186,7 @@ class TrailblazeDeviceManager(
   /**
    * Per-Trailblaze-session target overrides, keyed by [SessionId]. Populated
    * by [setTargetForActiveSession] when the CLI passes `--target X` on an
-   * action command (`tool`, `blaze`, `snapshot`, `ask`, `verify`, `session
+   * action command (`tool`, `step`, `snapshot`, `ask`, `verify`, `session
    * start`). Cleared automatically when the session ends — see
    * [endSessionForDevice], [cancelSessionForDevice], and the
    * [clearEndedSessionFromDevice] hook.

@@ -11,7 +11,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * Registry of all built-in (shipped) LLM models.
  *
- * Models are loaded from YAML resource files at `trailblaze-config/providers/{provider_id}.yaml` on the
+ * Models are loaded from YAML resource files at `trails/config/providers/{provider_id}.yaml` on the
  * classpath. Individual lookups via [find] lazy-load a single provider file on demand —
  * no classpath scanning required, works on JVM and Android. Full catalog methods like
  * [allModelLists] use classpath discovery (JVM) with a core-provider fallback (Android).
@@ -104,8 +104,8 @@ object BuiltInLlmModelRegistry {
       if (loaded == null) {
         error(
           "Provider '$providerId' not found. " +
-            "No YAML resource at trailblaze-config/providers/$providerId.yaml on the classpath. " +
-            "Add a $providerId.yaml file to src/main/resources/trailblaze-config/providers/ in your module."
+            "No YAML resource at trails/config/providers/$providerId.yaml on the classpath. " +
+            "Add a $providerId.yaml file to src/main/resources/trails/config/providers/ in your module."
         )
       }
       val available = loaded.modelList.entries.map { it.modelId }

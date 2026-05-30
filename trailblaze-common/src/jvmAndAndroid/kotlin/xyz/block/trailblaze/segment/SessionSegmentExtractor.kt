@@ -338,7 +338,7 @@ object SessionSegmentExtractor {
       // waypoints are added. Better to skip and surface the count so the author can
       // tighten selectors.
       //
-      // Short-circuit on the second match: large packs (100+ waypoints) used to call
+      // Short-circuit on the second match: large trailmaps (100+ waypoints) used to call
       // WaypointMatcher.match for every entry even after the second match, which is
       // wasted work — the conclusion ("ambiguous, skip") is already determined.
       var firstMatchedId: String? = null

@@ -30,8 +30,8 @@ class ShortcutProposerTest {
 
   @Test
   fun `analyze emits one proposal per (A,B) edge meeting min-support`() {
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
     val sessions = (1..3).map { idx ->
       listOf(
         stepAt(sessionId = "s$idx", screen = screenWith("com.example:id/from_btn"), action = AgentDriverAction.Scroll(forward = true)),
@@ -44,8 +44,8 @@ class ShortcutProposerTest {
     )
     assertEquals(1, analysis.proposals.size, "expected one proposal for the single edge")
     val p = analysis.proposals.first()
-    assertEquals("pack/from", p.fromWaypointId)
-    assertEquals("pack/to", p.toWaypointId)
+    assertEquals("trailmap/from", p.fromWaypointId)
+    assertEquals("trailmap/to", p.toWaypointId)
     assertEquals(3, p.supportSessions)
     assertTrue(p.toolBody is ShortcutProposer.ToolBody.Scroll)
     assertEquals(true, (p.toolBody as ShortcutProposer.ToolBody.Scroll).forward)
@@ -53,8 +53,8 @@ class ShortcutProposerTest {
 
   @Test
   fun `analyze skips edges below min-support`() {
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
     // Only two supporting sessions → below default min-support of 3.
     val sessions = (1..2).map { idx ->
       listOf(
@@ -78,8 +78,8 @@ class ShortcutProposerTest {
   fun `analyze skips edges where action fingerprints disagree`() {
     // 4 sessions: 2 do Scroll(forward=true), 2 do BackPress. 50/50 split fails the
     // default 2/3 agreement floor.
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
     val sessions = listOf(
       listOf(
         stepAt("s1", screenWith("com.example:id/from_btn"), AgentDriverAction.Scroll(forward = true)),
@@ -112,15 +112,15 @@ class ShortcutProposerTest {
 
   @Test
   fun `proposalKey is stable across runs`() {
-    val a = ShortcutProposer.proposalKey("pack/from", "pack/to", "abc123")
-    val b = ShortcutProposer.proposalKey("pack/from", "pack/to", "abc123")
+    val a = ShortcutProposer.proposalKey("trailmap/from", "trailmap/to", "abc123")
+    val b = ShortcutProposer.proposalKey("trailmap/from", "trailmap/to", "abc123")
     assertEquals(a, b)
-    assertEquals("shortcut|pack/from|pack/to|abc123", a)
+    assertEquals("shortcut|trailmap/from|trailmap/to|abc123", a)
   }
 
   @Test
   fun `generateShortcutId encodes from-to in slug`() {
-    val id = ShortcutProposer.generateShortcutId("pack/android/drawer_open", "pack/android/settings_screen")
+    val id = ShortcutProposer.generateShortcutId("trailmap/android/drawer_open", "trailmap/android/settings_screen")
     assertEquals("auto-drawer_open__to__settings_screen", id)
   }
 
@@ -197,9 +197,9 @@ class ShortcutProposerTest {
     // The proposer's docstring claims deterministic v1; pin it explicitly so a future
     // refactor that accidentally uses Map-iteration ordering or Set-based grouping
     // shows up as a test failure here.
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
-    val waypointC = waypointById("pack/other", resourceId = "com.example:id/other_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
+    val waypointC = waypointById("trailmap/other", resourceId = "com.example:id/other_btn")
     val sessions = (1..3).flatMap { idx ->
       listOf(
         listOf(
@@ -220,10 +220,10 @@ class ShortcutProposerTest {
   @Test
   fun `re-analyzing with surviving proposals applied yields zero new proposals`() {
     // Idempotence invariant on the analyzer + guard chain — applying surviving
-    // proposals to a virtual pack must make the second pass empty. If this fails,
+    // proposals to a virtual trailmap must make the second pass empty. If this fails,
     // the analyzer isn't stable on its own output and we'd see auto-PR loops.
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
     val sessions = (1..4).map { idx ->
       listOf(
         stepAt("s$idx", screenWith("com.example:id/from_btn"), AgentDriverAction.Scroll(forward = true)),
@@ -236,7 +236,7 @@ class ShortcutProposerTest {
       proposals = first.proposals,
       existingShortcuts = emptyList(),
     )
-    val virtualPack = firstVerdict.survived.map {
+    val virtualTrailmap = firstVerdict.survived.map {
       ShortcutSiblingCollisionGuard.ExistingShortcut(
         from = it.fromWaypointId, to = it.toWaypointId, variant = null,
       )
@@ -244,7 +244,7 @@ class ShortcutProposerTest {
     val second = ShortcutProposer.analyze(sessions, listOf(waypointA, waypointB))
     val secondVerdict = ShortcutSiblingCollisionGuard.check(
       proposals = second.proposals,
-      existingShortcuts = virtualPack,
+      existingShortcuts = virtualTrailmap,
     )
     assertTrue(
       secondVerdict.survived.isEmpty(),
@@ -339,7 +339,7 @@ class ShortcutProposerTest {
 
   @Test
   fun `analyze returns empty Analysis for empty sessions list`() {
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
     val analysis = ShortcutProposer.analyze(sessions = emptyList(), waypoints = listOf(waypointA))
     assertTrue(analysis.proposals.isEmpty())
     assertTrue(analysis.skipped.isEmpty())
@@ -360,7 +360,7 @@ class ShortcutProposerTest {
 
   @Test
   fun `analyze emits no proposals for single-step sessions (loop bound returns immediately)`() {
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
     val sessions = (1..5).map { idx ->
       // Only one step per session — `for (i in 0 until session.size - 1)` immediately
       // exits, no transition pairs to examine.
@@ -375,8 +375,8 @@ class ShortcutProposerTest {
   fun `analyze emits proposal when agreement exactly meets the floor`() {
     // 3 sessions agree on Scroll, 0 disagree → 100% > 66.7%. Also test the boundary
     // case where exactly 2/3 sessions agree (the default floor).
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
-    val waypointB = waypointById("pack/to", resourceId = "com.example:id/to_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
+    val waypointB = waypointById("trailmap/to", resourceId = "com.example:id/to_btn")
     val sessions = listOf(
       listOf(
         stepAt("s1", screenWith("com.example:id/from_btn"), AgentDriverAction.Scroll(forward = true)),
@@ -505,7 +505,7 @@ class ShortcutProposerTest {
   fun `analyze drops transitions where label changes are spurious`() {
     // A single session with stepN matching A and stepN+1 matching A also (no transition)
     // should not produce a proposal.
-    val waypointA = waypointById("pack/from", resourceId = "com.example:id/from_btn")
+    val waypointA = waypointById("trailmap/from", resourceId = "com.example:id/from_btn")
     val sessions = (1..5).map { idx ->
       listOf(
         stepAt("s$idx", screenWith("com.example:id/from_btn"), AgentDriverAction.BackPress),

@@ -1487,21 +1487,46 @@ class ToolDiscoveryToolSetTest {
   // -- Role grouping (trailheadTools / shortcutTools) -------------------------
 
   /**
-   * Stub source returning a flat map of `<key> -> <yaml-content>` for the `tools/` discovery
-   * call. Recursive (pack-bundled) discovery returns empty so the test only exercises the flat
-   * path. Keys here are the filename minus the `.yaml` suffix — `tap.trailhead` becomes the
-   * discovered name for a `tap.trailhead.yaml`. The YAML content's `id:` is the authoritative
-   * tool identifier used by the intersection guard.
+   * Stub source returning a trailmap-scoped map of `<key> -> <yaml-content>` for the
+   * recursive trailmap walk that backs every `.tool.yaml` / `.shortcut.yaml` /
+   * `.trailhead.yaml` discovery. Input keys are the filename minus the `.yaml` suffix —
+   * `tap.trailhead` becomes a `<stub-trailmap>/trailheads/tap.trailhead.yaml` entry served
+   * to `discoverAndLoadRecursive(TRAILMAPS_DIR, ".trailhead.yaml")`. The YAML content's
+   * `id:` is the authoritative tool identifier used by the intersection guard.
+   *
+   * The stub also serves a `trailmap.yaml` with a `target:` block so the loader's
+   * library-trailmap-trailhead guard doesn't reject the trailheads at discovery time.
    */
-  private fun stubRoleYamlSource(entries: Map<String, String>): ConfigResourceSource =
-    object : ConfigResourceSource {
-      override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> {
-        if (directoryPath == TrailblazeConfigPaths.TOOLS_DIR && suffix == ".yaml") return entries
-        return emptyMap()
-      }
-
-      override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> = emptyMap()
+  private fun stubRoleYamlSource(entries: Map<String, String>): ConfigResourceSource {
+    val trailmapId = "stubRoleTrailmap"
+    val trailmapManifest = """
+      id: $trailmapId
+      target:
+        display_name: Stub Role Trailmap
+    """.trimIndent()
+    fun dirForKey(key: String): String? = when {
+      key.endsWith(".tool") -> "tools"
+      key.endsWith(".shortcut") -> "shortcuts"
+      key.endsWith(".trailhead") -> "trailheads"
+      else -> null
     }
+    return object : ConfigResourceSource {
+      override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> = emptyMap()
+
+      override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> {
+        if (directoryPath != TrailblazeConfigPaths.TRAILMAPS_DIR) return emptyMap()
+        return when (suffix) {
+          "/trailmap.yaml" -> mapOf("$trailmapId/trailmap.yaml" to trailmapManifest)
+          ".tool.yaml", ".shortcut.yaml", ".trailhead.yaml" -> {
+            val targetKind = suffix.removePrefix(".").removeSuffix(".yaml") // tool / shortcut / trailhead
+            entries.filterKeys { it.endsWith(".$targetKind") }
+              .mapKeys { (key, _) -> "$trailmapId/${dirForKey(key)}/$key.yaml" }
+          }
+          else -> emptyMap()
+        }
+      }
+    }
+  }
 
   @Test
   fun `INDEX mode trailheadTools and shortcutTools intersect with in-scope toolset names`() = runTest {
@@ -1670,6 +1695,136 @@ class ToolDiscoveryToolSetTest {
     assertContains(
       trailheadTools, "web_inline_script_tool",
       "TARGET mode must now populate trailheadTools so `toolbox trailheads --target <non-default>` returns a non-empty list when role tools exist. Got: $trailheadTools",
+    )
+  }
+
+  // -- 12. systemPrompt field -------------------------------------------------
+  //
+  // The `toolbox` response carries the resolved target's curated LLM-facing prose so the
+  // CLI can surface it under a `## System prompt` section above the tool catalog. The
+  // contract has three branches and one defense-in-depth case worth pinning:
+  //
+  //   - INDEX mode with a non-default current target → `systemPrompt` populated.
+  //   - INDEX mode with `--target default` (suppressTargetTools=true) → `systemPrompt` null,
+  //     so a platform-only listing is never paired with app-specific guidance.
+  //   - TARGET mode with a non-default target → `systemPrompt` populated.
+  //   - TARGET mode dispatched directly with `target="default"` (which today the CLI never
+  //     emits because the dispatcher routes that through INDEX, but a future MCP caller
+  //     could bypass) → `systemPrompt` null, per the same suppression rule.
+
+  /** Helper: a target with a fixed system prompt template. */
+  private class PromptedTestTarget(
+    id: String,
+    displayName: String,
+    private val prompt: String?,
+    private val androidAppIds: List<String> = listOf("com.test.app"),
+  ) : TrailblazeHostAppTarget(id, displayName) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.ANDROID) androidAppIds else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getSystemPromptTemplate(): String? = prompt
+  }
+
+  @Test
+  fun `INDEX mode populates systemPrompt from current target`() = runTest {
+    val promptedTarget =
+      PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Test prompt.")
+    val toolSet = createToolSet(
+      allTargets = setOf(promptedTarget),
+      currentTarget = promptedTarget,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals(
+      "Test prompt.",
+      obj["systemPrompt"]?.jsonPrimitive?.contentOrNull,
+      "Index-mode response must inline the current target's system prompt for the CLI to surface.",
+    )
+  }
+
+  @Test
+  fun `INDEX mode with target=default suppresses systemPrompt even when current target has one`() = runTest {
+    // Reproduces the Codex review concern on PR #3498: a CLI agent (or RecordingToolDiscovery)
+    // that scopes its listing to platform-only tools via `--target default` must not see the
+    // bound target's app-specific guidance. The bug: prompt scope wider than catalog scope.
+    val promptedTarget =
+      PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Would mislead.")
+    val toolSet = createToolSet(
+      allTargets = setOf(promptedTarget),
+      currentTarget = promptedTarget,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(target = "default")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertNull(
+      obj["systemPrompt"],
+      "`target=default` requests a platform-only listing; surfacing the current target's " +
+        "prompt would put app-specific guidance above a catalog from which app-specific tools " +
+        "were intentionally excluded.",
+    )
+  }
+
+  @Test
+  fun `TARGET mode populates systemPrompt for non-default target`() = runTest {
+    val promptedTarget =
+      PromptedTestTarget(id = "prompted", displayName = "Prompted", prompt = "Target-mode prompt.")
+    val toolSet = createToolSet(
+      allTargets = setOf(promptedTarget),
+      currentTarget = promptedTarget,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(target = "prompted")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertEquals(
+      "Target-mode prompt.",
+      obj["systemPrompt"]?.jsonPrimitive?.contentOrNull,
+      "Target-mode response must also inline the prompt — both modes are target-wide.",
+    )
+  }
+
+  @Test
+  fun `systemPromptForTarget returns null for the default sentinel (defense-in-depth)`() {
+    // The dispatcher's `isDefaultTarget` check in `toolbox()` routes `target="default"`
+    // through index mode, so today this branch is unreachable from the public surface.
+    // Pin it as a unit test against the helper directly — a future refactor of the
+    // dispatcher (or a direct MCP caller bypassing it) must not produce a result whose
+    // `systemPrompt` field carries app-specific guidance for the platform-only sentinel.
+    val defaultLookalike = PromptedTestTarget(
+      id = "default",
+      displayName = "Default Lookalike",
+      prompt = "WOULD MISLEAD — must be dropped by the helper.",
+    )
+    val toolSet = createToolSet()
+
+    assertNull(
+      toolSet.systemPromptForTarget(defaultLookalike),
+      "The helper MUST drop the prompt when the target's id matches DefaultTrailblazeHostAppTarget.id — " +
+        "this is the only thing keeping a direct `handleTargetMode(target=default)` callsite from " +
+        "leaking a stale prompt.",
+    )
+  }
+
+  @Test
+  fun `systemPromptForTarget passes through for any non-default target`() {
+    val promptedTarget =
+      PromptedTestTarget(id = "nondefault", displayName = "Non-default", prompt = "Non-default prompt.")
+    val toolSet = createToolSet()
+
+    assertEquals(
+      "Non-default prompt.",
+      toolSet.systemPromptForTarget(promptedTarget),
+      "The helper only suppresses the default sentinel — every other target's prompt flows through unchanged.",
     )
   }
 }

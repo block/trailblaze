@@ -4,6 +4,7 @@ import kotlin.reflect.KClass
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 
 /**
  * A single entry in the toolset catalog that the LLM can browse and enable.
@@ -43,9 +44,10 @@ data class ResolvedToolSet(
 /**
  * Catalog of available TrailblazeTool sets that can be dynamically enabled/disabled.
  *
- * Entries are discovered from `.yaml` files under `trailblaze-config/toolsets/` on the classpath.
- * YAML is the single source of truth — there are no Kotlin-declared toolsets here. Authoring a
- * new toolset is a matter of dropping a YAML file into the correct resources directory.
+ * Entries are discovered from `.yaml` files under `trails/config/trailmaps/<id>/toolsets/` on
+ * the classpath. YAML is the single source of truth — there are no Kotlin-declared toolsets
+ * here. Authoring a new toolset is a matter of dropping a YAML file into the correct
+ * trailmap's `toolsets/` directory.
  *
  * The LLM starts with only the `alwaysEnabled` toolsets and can request additional ones via the
  * `setActiveToolSets` MCP tool. Each entry carries an id, description, and tool list so the LLM
@@ -57,9 +59,9 @@ object TrailblazeToolSetCatalog {
    * Returns the catalog entries — classpath-discovered + workspace overlay merged. The classpath
    * set is lazy-cached on first call (discovery is not free); the workspace overlay is registered
    * by `AppTargetDiscovery.discover()` via [registerWorkspaceToolSets] after walking the
-   * workspace's `trails/config/toolsets/` directory. On id collision the workspace overlay
-   * wins — same precedence rule as the filesystem resource source layering in `AppTargetDiscovery`
-   * and the YAML-tool overlay in `TrailblazeSerializationInitializer`.
+   * workspace's `trails/config/trailmaps/<id>/toolsets/` directories. On id collision the
+   * workspace overlay wins — same precedence rule as the filesystem resource source layering
+   * in `AppTargetDiscovery` and the YAML-tool overlay in `TrailblazeSerializationInitializer`.
    */
   fun defaultEntries(): List<ToolSetCatalogEntry> {
     val classpath = defaultEntriesCache
@@ -73,15 +75,30 @@ object TrailblazeToolSetCatalog {
   }
 
   private val defaultEntriesCache: List<ToolSetCatalogEntry> by lazy {
-    val resolver = ToolNameResolver.fromBuiltInAndCustomTools()
-    ToolSetYamlLoader.discoverAndLoadAll(resolver).values
+    // Pin to the BUNDLED view: this cache is the classpath snapshot that the
+    // `workspaceCatalogEntries` overlay is layered on top of. With the JVM platform default
+    // now workspace-aware (PR #3518), letting these calls inherit the default would bake
+    // workspace toolsets into the cache, then `registerWorkspaceToolSets` would register
+    // them again as the overlay — `getClasspathEntries()` would lose its "classpath-only"
+    // KDoc guarantee, and `defaultEntries()` would produce different results depending on
+    // whether the cache was warmed before or after `registerWorkspaceToolSets` ran.
+    //
+    // `bundledConfigResourceSource()` is platform-aware: `ClasspathConfigResourceSource`
+    // on JVM, the AssetManager-backed source on Android (where there is no workspace
+    // concept on device, so the bundled view IS the platform default). Same pinning shape
+    // applied to `TrailblazeSerializationInitializer.buildYamlDefinedTools` / `buildAllTools`
+    // for the same reason.
+    val bundled = bundledConfigResourceSource()
+    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = bundled)
+    ToolSetYamlLoader.discoverAndLoadAll(resolver, resourceSource = bundled)
+      .values
       .map { it.toCatalogEntry() }
       .sortedBy { it.id }
   }
 
   // Workspace-discovered toolset entries that don't ship on the JVM classpath — they live in
-  // a user's `<workspace>/trails/config/toolsets/<id>.yaml` (or a workspace pack's bundled
-  // toolset). Populated lazily from `AppTargetDiscovery` via [registerWorkspaceToolSets].
+  // a user's `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml`. Populated
+  // lazily from `AppTargetDiscovery` via [registerWorkspaceToolSets].
   // Held in a separate field rather than mutating [defaultEntriesCache] so the classpath
   // cache keeps its set-once contract and so a workspace-rediscovery can replace the
   // workspace overlay without invalidating the classpath cache.
@@ -97,7 +114,7 @@ object TrailblazeToolSetCatalog {
    * Registers workspace-discovered toolset entries as an overlay on top of the cached
    * classpath-discovered set. Called from `AppTargetDiscovery.discover()` once per discovery
    * pass with every toolset the workspace pipeline resolved (including workspace files,
-   * workspace pack toolsets, and any other source the discovery's composite resource source
+   * workspace trailmap toolsets, and any other source the discovery's composite resource source
    * picked up).
    *
    * Idempotent for identical inputs; subsequent calls REPLACE the overlay rather than
@@ -199,6 +216,29 @@ object TrailblazeToolSetCatalog {
     requestedIds: List<String>,
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): ResolvedToolSet = resolve(requestedIds, compatibleEntries(driverType, catalog))
+
+  /**
+   * Conditional resolver used by session-attached callsites (`setActiveToolSets` on the
+   * MCP server, the device-manager tool, and the tool repo) that may or may not know the
+   * driver yet. Routes through [resolveForDriver] when [driverType] is non-null —
+   * `always_enabled` entries that declare incompatible `drivers:` are filtered out — and
+   * falls back to the driver-agnostic [resolve] otherwise.
+   *
+   * Centralizes the `if (driver != null) resolveForDriver else resolve` conditional that
+   * used to be duplicated across three callsites. Drift between them is the same risk
+   * class that caused the report/runtime mismatch fixed in
+   * `docs/internal/devlog/2026-05-22-agent-toolbox-report-driver-leak.md`.
+   */
+  fun resolveForSession(
+    driverType: TrailblazeDriverType?,
+    requestedIds: List<String>,
+    catalog: List<ToolSetCatalogEntry> = defaultEntries(),
+  ): ResolvedToolSet =
+    if (driverType != null) {
+      resolveForDriver(driverType, requestedIds, catalog)
+    } else {
+      resolve(requestedIds, catalog)
+    }
 
   /**
    * Returns every class-backed tool class from the catalog compatible with [driverType].

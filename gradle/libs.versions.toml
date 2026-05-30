@@ -26,7 +26,16 @@ jsoup = "1.21.2"
 junit = "4.13.2"
 junit5 = "5.11.4"
 kaml = "0.104.0"
-koog = "0.8.0"
+koog = "1.0.0"
+# Koog ships beta-stream modules on a parallel version with strict-compat deps on stable 1.0.0.
+# Beta = modules wrapping something JetBrains doesn't control: Google Gemini SDK (`prompt-executor-google-client`),
+# the MCP protocol (`agents-mcp`), the experimental agents surface (`agents-ext`), and the umbrella aggregator
+# (`prompt-executor-llms-all`) which is transitively beta because it depends on `google-client`. See
+# https://github.com/JetBrains/koog/pull/2011 for the deliberate stable/beta split rationale.
+# When bumping `koog`, re-check by browsing https://repo1.maven.org/maven2/ai/koog/agents-mcp/ for stable
+# `1.0.x` (no `-beta` suffix) directory listings — the maven-metadata `<latest>` field is unreliable.
+# Expect API breakage between beta-minor bumps; non-beta-stream modules promise backwards-compat in 1.x.
+koog-beta = "1.0.0-beta"
 kotlin-csv = "1.10.0"
 kotlin = "2.3.20"
 kotlinpoet = "2.2.0"
@@ -56,6 +65,15 @@ vanniktech-maven-publish = "0.35.0"
 dependency-guard = "0.5.0"
 wire = "5.3.3"
 quickjs-kt = "1.0.5"
+# JetBrains' Kotlin API-surface validator. Generates per-target `.api` baseline files
+# under `<module>/api/` from the public Kotlin declarations, and the `apiCheck` task
+# (automatically wired into `:check`) fails if the committed baseline drifts from the
+# current code. Locks down `:trailblaze-models`'s public surface so changes that would
+# silently invalidate the TypeScript selector codegen surface in
+# `opensource/sdks/typescript/src/generated/selectors.ts` show up loud at PR time. When
+# bumping, verify the new version still supports the active Kotlin compiler — KMP
+# support landed in 0.13+; Kotlin 2.3.x requires 0.17+.
+binary-compatibility-validator = "0.18.1"
 
 [libraries]
 differ-jvm = { group = "com.dropbox.differ", name = "differ-jvm", version.ref = "differ" }
@@ -128,13 +146,14 @@ ktor-server-jetty-jakarta = { module = "io.ktor:ktor-server-jetty-jakarta", vers
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 ktor-network-tls-certificates = { module = "io.ktor:ktor-network-tls-certificates", version.ref = "ktor" }
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
-koog-agents-mcp = { module = "ai.koog:agents-mcp", version.ref = "koog" }
+koog-http-client-ktor = { module = "ai.koog:http-client-ktor", version.ref = "koog" }
+koog-agents-mcp = { module = "ai.koog:agents-mcp", version.ref = "koog-beta" }
 koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
-koog-agents-ext = { module = "ai.koog:agents-ext", version.ref = "koog" }
+koog-agents-ext = { module = "ai.koog:agents-ext", version.ref = "koog-beta" }
 koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
-koog-prompt-executor-llms-all = { module = "ai.koog:prompt-executor-llms-all", version.ref = "koog" }
+koog-prompt-executor-model = { module = "ai.koog:prompt-executor-model", version.ref = "koog" }
 koog-prompt-executor-anthropic = { module = "ai.koog:prompt-executor-anthropic-client", version.ref = "koog" }
-koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog" }
+koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog-beta" }
 koog-prompt-executor-openai = { module = "ai.koog:prompt-executor-openai-client", version.ref = "koog" }
 koog-prompt-executor-openrouter = { module = "ai.koog:prompt-executor-openrouter-client", version.ref = "koog" }
 koog-prompt-executor-ollama = { module = "ai.koog:prompt-executor-ollama-client", version.ref = "koog" }
@@ -194,3 +213,4 @@ paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 dagp = { id = "com.autonomousapps.dependency-analysis", version.ref = "dagp" }
 wire = { id = "com.squareup.wire", version.ref = "wire" }
+binary-compatibility-validator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "binary-compatibility-validator" }

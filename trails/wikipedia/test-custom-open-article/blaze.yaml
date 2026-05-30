@@ -1,9 +1,9 @@
 # Demonstrates the `wikipedia_web_openArticle` scripted trailhead. Requires the
-# Trailblaze daemon to be running with this pack's config dir set:
+# Trailblaze daemon to be running with this trailmap's config dir set:
 #
 #   export TRAILBLAZE_CONFIG_DIR=$PWD/examples/wikipedia/trails/config
 #   ./trailblaze app --stop && ./trailblaze app --headless & disown
-#   ./trailblaze trail trails/wikipedia/test-custom-open-article --device web
+#   ./trailblaze run trails/wikipedia/test-custom-open-article --device web
 - config:
     id: "wikipedia/test-custom-open-article"
     title: "Wikipedia (scripted): open Albert Einstein via wikipedia_web_openArticle"

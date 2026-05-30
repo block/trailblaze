@@ -231,7 +231,10 @@ class TrailStepPlanner(
 
     var currentState = state
     var attempts = 0
-    val maxAttempts = config.maxRetries + 1
+    // Per-step override takes precedence over the global config. Steps that
+    // legitimately need many tool calls (e.g. 6-digit keypad entry needs 6+) can
+    // declare `maxRetries: 10` in YAML; everything else uses config.maxRetries.
+    val maxAttempts = (step.maxRetries ?: config.maxRetries) + 1
     val actionHistory = initialActionHistory.toMutableList()
 
     while (attempts < maxAttempts) {

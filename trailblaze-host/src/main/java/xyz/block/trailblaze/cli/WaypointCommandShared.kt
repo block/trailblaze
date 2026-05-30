@@ -94,7 +94,7 @@ internal fun reportLoadFailures(result: WaypointLoader.LoadResult) {
 /**
  * Validates that [file] (a positional or `--file`-supplied log path) exists and is a
  * regular file. Returns the file on success, or null after writing a `Console.error`
- * message — callers should return [picocli.CommandLine.ExitCode.USAGE] in that case.
+ * message — callers should return [TrailblazeExitCode.MISUSE].code in that case.
  */
 internal fun validateLogFile(file: File, label: String = "Log file"): File? {
   if (!file.exists()) {
@@ -130,22 +130,22 @@ internal fun validateSessionDir(dir: File): File? {
  * Precedence:
  *  1. **`--root <path>`** — explicit override, used as-is, no warnings.
  *  2. **`--target <id>`** — convention shortcut. Resolves to
- *     `<workspace.configDir>/packs/<id>/waypoints/` (the canonical workspace pack location
- *     per the 2026-04-27 pack-manifest devlog). Warns if no such directory exists — packs
- *     bundled only on the framework classpath (e.g. the OSS `clock`/`contacts` packs, or
- *     packs that ship from a downstream Kotlin module's resources) are not found this way;
+ *     `<workspace.configDir>/trailmaps/<id>/waypoints/` (the canonical workspace trailmap location
+ *     per the 2026-04-27 trailmap-manifest devlog). Warns if no such directory exists — trailmaps
+ *     bundled only on the framework classpath (e.g. the OSS `clock`/`contacts` trailmaps, or
+ *     trailmaps that ship from a downstream Kotlin module's resources) are not found this way;
  *     users authoring against those should pass `--root` explicitly. Note this does NOT
- *     auto-create the target — bootstrapping a new pack is intentionally a documented
+ *     auto-create the target — bootstrapping a new trailmap is intentionally a documented
  *     manual process, not a CLI command.
  *  3. **Neither given** — silently falls back to [DEFAULT_WAYPOINT_ROOT]. Commands that
- *     pull in classpath-bundled packs via [WaypointDiscovery] will still find their
+ *     pull in classpath-bundled trailmaps via [WaypointDiscovery] will still find their
  *     waypoints; commands that don't (or that produce no results) should call
  *     [maybeWarnNoTarget] AFTER discovery to surface the `--target` hint only when it
  *     would actually have helped.
  *
  * Returns the resolved [File]. Only a real user error (invalid `--target`) is logged
  * during resolution; the no-flags case is silent because the warning would fire on
- * every successful `waypoint list` (where classpath packs supply 100+ results), which
+ * every successful `waypoint list` (where classpath trailmaps supply 100+ results), which
  * would be a daily-flow regression.
  */
 internal fun resolveWaypointRoot(
@@ -157,13 +157,13 @@ internal fun resolveWaypointRoot(
   if (targetId != null) {
     val workspace = TrailblazeWorkspaceConfigResolver.resolve(fromPath)
     val configDir = workspace.configDir
-    val candidate = configDir?.let { File(it, "packs/$targetId/waypoints") }
+    val candidate = configDir?.let { File(it, "trailmaps/$targetId/waypoints") }
     if (candidate != null && candidate.isDirectory) return candidate
-    val expected = candidate?.absolutePath ?: "<no workspace anchor>/packs/$targetId/waypoints"
+    val expected = candidate?.absolutePath ?: "<no workspace anchor>/trailmaps/$targetId/waypoints"
     Console.error(
-      "Warning: --target $targetId did not resolve to a workspace pack at $expected. " +
-        "If the pack is bundled on the classpath (framework or downstream modules), pass " +
-        "--root <pack-source-dir> instead. Falling back to default --root $DEFAULT_WAYPOINT_ROOT.",
+      "Warning: --target $targetId did not resolve to a workspace trailmap at $expected. " +
+        "If the trailmap is bundled on the classpath (framework or downstream modules), pass " +
+        "--root <trailmap-source-dir> instead. Falling back to default --root $DEFAULT_WAYPOINT_ROOT.",
     )
     return File(DEFAULT_WAYPOINT_ROOT)
   }
@@ -173,10 +173,10 @@ internal fun resolveWaypointRoot(
 /**
  * Emits the "no --target specified" hint, but only when [resultIsEmpty] AND the user
  * passed neither flag — i.e. the empty result might actually be because they didn't
- * scope to the right pack.
+ * scope to the right trailmap.
  *
  * Don't fire from within [resolveWaypointRoot] unconditionally: `waypoint list` /
- * `locate` / `graph` / `validate` all merge classpath-bundled packs in regardless of
+ * `locate` / `graph` / `validate` all merge classpath-bundled trailmaps in regardless of
  * `--root`, so the "no flags" case typically returns 100+ waypoints and the warning
  * would be misleading noise. Calling this after discovery means the hint only appears
  * when it's actually actionable.
@@ -189,14 +189,14 @@ internal fun maybeWarnNoTarget(
   if (!resultIsEmpty) return
   if (rootOverride != null || targetId != null) return
   Console.error(
-    "Hint: no --target or --root specified. Pass --target <pack-id> " +
-      "(resolves to <workspace>/packs/<id>/waypoints/) or --root <path> for an " +
+    "Hint: no --target or --root specified. Pass --target <trailmap-id> " +
+      "(resolves to <workspace>/trailmaps/<id>/waypoints/) or --root <path> for an " +
       "explicit override if you expected to find waypoints here.",
   )
 }
 
 /**
- * Three-way outcome for [resolveTargetTemplateContext]. The pack manifest is the single
+ * Three-way outcome for [resolveTargetTemplateContext]. The trailmap manifest is the single
  * source of truth for a target's declared `app_ids:`; the CLI must either find them and
  * supply a template context to the matcher, or fail loudly with a clear message — there
  * is no override flag, because every legitimate use case ("validate this waypoint against
@@ -207,11 +207,11 @@ internal sealed class TargetContextResolution {
   /** No `--target` supplied. The matcher gets null and templated selectors won't expand. */
   data object NoTarget : TargetContextResolution()
 
-  /** `--target` resolved to a pack with declared appIds. */
+  /** `--target` resolved to a trailmap with declared appIds. */
   data class Resolved(val context: TargetTemplateContext) : TargetContextResolution()
 
   /**
-   * `--target` was supplied but the pack couldn't be resolved or declared no `app_ids:`.
+   * `--target` was supplied but the trailmap couldn't be resolved or declared no `app_ids:`.
    * Callers should print [message] and exit non-zero — silently no-matching templated
    * selectors would just confuse the author.
    */
@@ -221,15 +221,15 @@ internal sealed class TargetContextResolution {
 /**
  * Resolves the [TargetTemplateContext] for waypoint matching from `--target <id>` alone.
  *
- * The pack manifest's `target.platforms.<platform>.app_ids:` is the single source of truth.
+ * The trailmap manifest's `target.platforms.<platform>.app_ids:` is the single source of truth.
  * Returns:
  *  - [TargetContextResolution.NoTarget] when no `--target` was supplied — the matcher
  *    receives a null context. Templated selectors won't expand; literal selectors work fine.
- *  - [TargetContextResolution.Resolved] when the pack was found and declares appIds.
- *  - [TargetContextResolution.Error] when `--target` named a pack that can't be loaded or
+ *  - [TargetContextResolution.Resolved] when the trailmap was found and declares appIds.
+ *  - [TargetContextResolution.Error] when `--target` named a trailmap that can't be loaded or
  *    declares no `app_ids:` for any platform. Callers exit non-zero with the message.
  *
- * No override flag — the pack-authoring side is the right place to fix a missing app id,
+ * No override flag — the trailmap-authoring side is the right place to fix a missing app id,
  * not a CLI argument that drifts from the runtime's actual session-start lookup.
  */
 internal fun resolveTargetTemplateContext(
@@ -241,28 +241,28 @@ internal fun resolveTargetTemplateContext(
     loadResolvedConfig(fromPath)
   } catch (e: TrailblazeProjectConfigException) {
     return TargetContextResolution.Error(
-      "--target $targetId: failed to load pack manifest: ${e.message}",
+      "--target $targetId: failed to load trailmap manifest: ${e.message}",
     )
   }
   val targetCfg = resolved?.targets?.firstOrNull { it.id == targetId }
     ?: return TargetContextResolution.Error(
-      "--target $targetId: no such target in the resolved workspace + classpath packs. " +
-        "Check the spelling, or that the pack is on the workspace's `packs:` list / framework classpath.",
+      "--target $targetId: no such target in the resolved workspace + classpath trailmaps. " +
+        "Check the spelling, or that the trailmap is on the workspace's `trailmaps:` list / framework classpath.",
     )
-  val packAppIds = targetCfg.platforms?.values
+  val trailmapAppIds = targetCfg.platforms?.values
     ?.flatMap { it.appIds.orEmpty() }
     ?.distinct()
     .orEmpty()
-  if (packAppIds.isEmpty()) {
+  if (trailmapAppIds.isEmpty()) {
     return TargetContextResolution.Error(
-      "--target $targetId: pack manifest declares no `app_ids:` for any platform. " +
+      "--target $targetId: trailmap manifest declares no `app_ids:` for any platform. " +
         "Templated waypoint selectors (`{{target.appId}}`) can't be expanded without at " +
         "least one declared candidate. Add `app_ids:` under `target.platforms.<platform>:` " +
-        "in the pack's manifest.",
+        "in the trailmap's manifest.",
     )
   }
   return TargetContextResolution.Resolved(
-    TargetTemplateContext(appId = null, appIds = packAppIds),
+    TargetTemplateContext(appId = null, appIds = trailmapAppIds),
   )
 }
 
@@ -270,14 +270,14 @@ private fun loadResolvedConfig(fromPath: java.nio.file.Path) =
   TrailblazeWorkspaceConfigResolver.resolve(fromPath).configFile?.let { configFile ->
     TrailblazeProjectConfigLoader.loadResolvedRuntime(
       configFile = configFile,
-      includeClasspathPacks = true,
+      includeClasspathTrailmaps = true,
     )
   } ?: TrailblazeProjectConfigLoader.resolveRuntime(
     loaded = LoadedTrailblazeProjectConfig(
       raw = TrailblazeProjectConfig(),
       sourceFile = File(".").absoluteFile,
     ),
-    includeClasspathPacks = true,
+    includeClasspathTrailmaps = true,
   )
 
 /** Renders a [WaypointMatchResult] into a multi-line, human-friendly string. */

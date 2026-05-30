@@ -60,7 +60,7 @@ import xyz.block.trailblaze.ui.models.AppIconProvider
  * the right. Keeps no JVM-specific dependencies so the same composable backs the Desktop
  * tab today and the Compose Web (WASM) target as a fast follower.
  *
- * Loading concerns (filesystem walks, pack discovery) live in JVM-only callers; this
+ * Loading concerns (filesystem walks, trailmap discovery) live in JVM-only callers; this
  * composable just renders whatever items it is given plus a small empty/error surface.
  */
 /**
@@ -117,7 +117,7 @@ fun WaypointVisualizer(
   var selectedTarget: String? by remember(items) { mutableStateOf(null) }
   var selectedPlatform: String? by remember(items, selectedTarget) { mutableStateOf(null) }
 
-  // Pack/target prefix is the segment before the first '/'. Sorted list (not Map) because
+  // Trailmap/target prefix is the segment before the first '/'. Sorted list (not Map) because
   // Map.toSortedMap() is JVM-only — visualizer must compile for wasmJs.
   val targetCounts: List<Pair<String, Int>> = remember(items) {
     items.groupingBy { it.definition.id.substringBefore('/') }
@@ -127,7 +127,7 @@ fun WaypointVisualizer(
   }
 
   // Platform = second '/' segment within the selected target. Only meaningful for
-  // three-part ids like `myapp/android/splash`; two-part `pack/local-name` ids
+  // three-part ids like `myapp/android/splash`; two-part `trailmap/local-name` ids
   // (clock-style) have no platform segment, so the dropdown stays hidden.
   val platformCounts: List<Pair<String, Int>> = remember(items, selectedTarget) {
     val target = selectedTarget ?: return@remember emptyList()
@@ -346,7 +346,7 @@ private fun DefaultEmptyState() {
     )
     SelectableText(
       text = "Point this view at a directory containing *.waypoint.yaml files, " +
-        "or load a pack that bundles them.",
+        "or load a trailmap that bundles them.",
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
   }
@@ -1093,7 +1093,7 @@ private fun TrailblazeNodeSelector.toFieldRows(): List<Pair<String, String>> {
  * Pulls the second segment from a slash-separated id (e.g. `"myapp/android/splash"` →
  * `"android"`). Returns null for ids with fewer than three segments — the platform
  * dropdown only makes sense for three-part `<target>/<platform>/<local-name>` ids, not
- * two-part `<pack>/<local-name>` shapes like `clock/alarm-tab`.
+ * two-part `<trailmap>/<local-name>` shapes like `clock/alarm-tab`.
  *
  * `internal` so the unit tests in `:trailblaze-ui` jvmTest can pin the parsing rules
  * without going through a Compose harness.

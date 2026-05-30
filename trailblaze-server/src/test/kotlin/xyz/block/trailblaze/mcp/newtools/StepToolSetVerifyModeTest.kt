@@ -94,7 +94,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "A pizza emoji is visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "A pizza emoji is visible", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertContains(result, "Assertion not confirmed")
@@ -111,7 +111,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Sign In button is visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "Sign In button is visible", hint = "VERIFY")
 
     assertContains(result, "PASSED")
     assertEquals(1, executor.calls, "verification tool should run once")
@@ -126,7 +126,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Hidden button is visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "Hidden button is visible", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertContains(result, "element not visible")
@@ -142,7 +142,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Anything", hint = "VERIFY")
+    val result = toolSet.step(objective = "Anything", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertFalse(executor.calls > 0, "Unknown tools must not execute under verify")
@@ -157,7 +157,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Already on home screen", hint = "VERIFY")
+    val result = toolSet.step(objective = "Already on home screen", hint = "VERIFY")
 
     assertContains(result, "PASSED")
     assertFalse(executor.calls > 0, "Verify with achieved=true must not execute any tool")
@@ -172,7 +172,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "A pizza emoji is visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "A pizza emoji is visible", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertContains(result, "Assertion failed")
@@ -190,7 +190,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Sign In button is visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "Sign In button is visible", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertContains(result, "Action failed")
@@ -211,7 +211,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Something maybe visible", hint = "VERIFY")
+    val result = toolSet.step(objective = "Something maybe visible", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertContains(result, "low confidence")
@@ -228,7 +228,7 @@ class StepToolSetVerifyModeTest {
       screenStateProvider = { _, _, _ -> dummyScreenState },
     )
 
-    val result = toolSet.blaze(objective = "Anything", hint = "VERIFY")
+    val result = toolSet.step(objective = "Anything", hint = "VERIFY")
 
     assertContains(result, "FAILED")
     assertFalse(executor.calls > 0, "Blank tool name must not be treated as verification")

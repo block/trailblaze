@@ -175,9 +175,21 @@ object InlineScriptToolServerSynthesizer {
           return { content: [{ type: "text", text: "" }] };
         }
         if (typeof result === "object" && Array.isArray(result.content)) {
+          // Author hand-rolled an MCP envelope (legacy / advanced path) — pass through
+          // unchanged. If they want structured content they populate it themselves.
           return result;
         }
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        // Typed-overload return: the handler gave us a structured TS value directly. Send
+        // it BOTH as the JSON-stringified text content (so legacy/raw-MCP consumers that
+        // only read text get a value) AND as structuredContent (so the Trailblaze SDK's
+        // client proxy unwraps it as the typed `result` declared in TrailblazeToolMap).
+        // Without the structuredContent half, a typed-overload tool's caller silently
+        // receives the JSON STRING cast as the structured type — accessing `.field` on it
+        // returns undefined. Closes the typed-result-on-callsite chain end-to-end.
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
       }
 
       function jsonSchemaToInputSchema(schema) {

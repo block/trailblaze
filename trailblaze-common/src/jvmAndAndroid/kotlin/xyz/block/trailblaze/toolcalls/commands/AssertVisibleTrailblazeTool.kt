@@ -2,6 +2,7 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.describe
@@ -56,8 +57,12 @@ data class AssertVisibleTrailblazeTool(
     // here: its traversal doesn't skip offscreen/dedup the same way and will mismatch on iOS.
     val targetNode = tree.findFirst { it.ref == ref }
       ?: throw TrailblazeToolExecutionException(
+        // See TapTrailblazeTool for why the "Element ref 'X' not found on current screen"
+        // prefix is load-bearing (matched by StaleRefRecovery.STALE_REF_REGEX) and why we
+        // dropped the "use 'snapshot'" pointer.
         message = "assertVisible: Element ref '$ref' not found on current screen. " +
-          "The screen may have changed — use 'snapshot' to get updated refs.",
+          "The screen has changed since this ref was last visible. Re-read the view " +
+          "hierarchy appended to this request and pick a ref that is actually shown.",
         tool = this,
       )
 
@@ -70,6 +75,22 @@ data class AssertVisibleTrailblazeTool(
     Console.log(
       "### assertVisible: Resolved '$ref' → ${targetNode.describe()} at (${center.first}, ${center.second})",
     )
+
+    // Accessibility-driver path: emit nodeSelector-only, mirroring [TapTrailblazeTool]'s
+    // forward-only recording shape (see that file for the full rationale).
+    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) {
+      val accessibilityHitTestNode = tree.hitTest(center.first, center.second) ?: targetNode
+      val accessibilityNodeSelector = TrailblazeNodeSelectorGenerator.findBestSelector(
+        tree,
+        accessibilityHitTestNode,
+      )
+      return listOf(
+        AssertVisibleBySelectorTrailblazeTool(
+          reason = reasoning,
+          nodeSelector = accessibilityNodeSelector,
+        ),
+      )
+    }
 
     val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) { node ->
       node.centerPoint?.let {

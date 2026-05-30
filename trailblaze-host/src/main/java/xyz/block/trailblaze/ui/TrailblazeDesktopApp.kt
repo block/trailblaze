@@ -49,7 +49,7 @@ abstract class TrailblazeDesktopApp(
   abstract fun startTrailblazeDesktopApp(headless: Boolean = false)
 
   /**
-   * Creates the CLI report generator used by `trailblaze trail`.
+   * Creates the CLI report generator used by `trailblaze run`.
    *
    * The base implementation uses [CliReportGenerator] backed by `trailblaze-report`.
    * Subclasses can override this to return a customized report generator.
@@ -209,12 +209,8 @@ abstract class TrailblazeDesktopApp(
     // to defer to daemon-side auto-detect via `hasRecordedSteps`. CLI's
     // `--no-use-recorded-steps` sends `false` and MUST be honored here — an earlier
     // version used `||` and silently re-resolved false back to true via auto-detect.
-    val effectiveUseRecordedSteps = request.useRecordedSteps ?: try {
-      val trailItems = TrailblazeYaml().decodeTrail(resolvedYaml)
-      TrailblazeYaml().hasRecordedSteps(trailItems)
-    } catch (_: Exception) {
-      false
-    }
+    val effectiveUseRecordedSteps = request.useRecordedSteps
+      ?: TrailblazeYaml().hasRecordedSteps(resolvedYaml)
 
     val agentImpl = request.agentImplementation?.let {
       try { AgentImplementation.valueOf(it.uppercase()) } catch (_: IllegalArgumentException) { null }
@@ -257,6 +253,8 @@ abstract class TrailblazeDesktopApp(
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
       maxLlmCalls = request.maxLlmCalls,
+      initialMemorySeeds = request.initialMemorySeeds,
+      initialMemorySensitiveSeeds = request.initialMemorySensitiveSeeds,
     )
 
     // Execute and wait for completion

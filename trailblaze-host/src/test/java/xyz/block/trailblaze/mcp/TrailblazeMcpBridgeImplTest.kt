@@ -22,7 +22,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
  *
  * The recursive per-child dispatch in `expandDelegatingToolAndDispatch` is covered
  * end-to-end via the OSS smoke (`trailblaze tool wikipedia_back_safe` against the
- * wikipedia reproducer pack). This file pins the expansion math.
+ * wikipedia reproducer trailmap). This file pins the expansion math.
  */
 class TrailblazeMcpBridgeImplTest {
 

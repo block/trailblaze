@@ -2,7 +2,7 @@
   "name": "@trailblaze/scripting",
   "version": "0.1.0",
   "private": true,
-  "description": "TypeScript SDK for authoring Trailblaze MCP tools — wraps @modelcontextprotocol/sdk with the Trailblaze `_meta.trailblaze` envelope reader and a `trailblaze.tool`/`trailblaze.run` authoring surface. The host-side type surface that ships in the framework JAR is `./dist/index.d.ts` — a self-contained declaration bundle (zod types inlined via dts-bundle-generator) that the framework extracts into `<workspace>/.trailblaze/sdk/dist/` so per-pack tsconfigs can point at it without any `node_modules/` step. The bundle is committed under `dist/` and CI's `verifyTrailblazeSdkDtsBundle` re-runs the generator and byte-diffs to catch source drift. `package.json` `main`/`types` still point at `./src/index.ts` — that's both the runtime entry point AND the input dts-bundle-generator resolves `declare module \"@trailblaze/scripting\"` self-augmentations against. Authors who actually want to RUN the SDK (e.g. the sample-app example) consume `./src/index.ts` via a TS-capable runtime (bun/tsx) through a `file:` link.",
+  "description": "TypeScript SDK for authoring Trailblaze MCP tools — wraps @modelcontextprotocol/sdk with the Trailblaze `_meta.trailblaze` envelope reader and a `trailblaze.tool`/`trailblaze.run` authoring surface. The host-side type surface that ships in the framework JAR is `./dist/index.d.ts` — a self-contained declaration bundle (zod types inlined via dts-bundle-generator) that the framework extracts into `<workspace>/.trailblaze/sdk/dist/` so per-trailmap tsconfigs can point at it without any `node_modules/` step. The bundle is committed under `dist/` and CI's `verifyTrailblazeSdkDtsBundle` re-runs the generator and byte-diffs to catch source drift. `package.json` `main`/`types` still point at `./src/index.ts` — that's both the runtime entry point AND the input dts-bundle-generator resolves `declare module \"@trailblaze/scripting\"` self-augmentations against. Authors who actually want to RUN the SDK (e.g. the sample-app example) consume `./src/index.ts` via a TS-capable runtime (bun/tsx) through a `file:` link.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -25,12 +25,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "ajv": "8.20.0",
     "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/node": "25.6.0",
     "dts-bundle-generator": "9.5.1",
     "esbuild": "0.27.2",
+    "ts-json-schema-generator": "2.9.0",
     "typescript": "6.0.3"
   }
 }

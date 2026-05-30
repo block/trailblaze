@@ -1,6 +1,6 @@
 # Open the new-contact form and type a name into the First-name field. Exercises
 # the custom `contacts_android_launchApp` scripted tool (declared by the `contacts`
-# workspace pack) for setup, then drives the agent through form interaction.
+# workspace trailmap) for setup, then drives the agent through form interaction.
 - config:
     id: "contacts/enter-name-in-create-form"
     driver: ANDROID_ONDEVICE_INSTRUMENTATION

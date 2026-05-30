@@ -546,6 +546,216 @@ class GenerateTestResultsCliCommandTest {
     }
   }
 
+  @Test
+  fun `host_ci_context sidecar without logs_zip_url field still decodes`() {
+    // Back-compat guard: the sidecar shape grew a `logs_zip_url` field for #3388, but
+    // any zip that was uploaded before that change carries the older two-field shape.
+    // The report generator must still decode those without dropping ci_job_id /
+    // logs_zip_filename — only the URL is allowed to be null.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_05_26_session_no_url")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "smokeTest",
+            testClassName = "WebSmokeTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:10:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:10:04Z"),
+        ),
+      )
+      // Old-shape sidecar — no logs_zip_url. Strict decoders that don't tolerate missing
+      // fields would throw and the report generator's fallback would mask the bug; this
+      // assertion catches that regression.
+      File(logsDir, sessionId.value).resolve(GenerateTestResultsCliCommand.HOST_CI_CONTEXT_FILENAME)
+        .writeText(
+          """
+          {
+            "ci_job_id": "job-uuid-abc",
+            "logs_zip_filename": "logs_smoke_0__${sessionId.value}.zip"
+          }
+          """.trimIndent(),
+        )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val row = report.results.single { it.session_id == sessionId }
+      assertEquals("job-uuid-abc", row.ci_job_id)
+      assertEquals("logs_smoke_0__${sessionId.value}.zip", row.logs_zip_filename)
+      assertEquals(null, row.logs_zip_url)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `host_ci_context sidecar with unknown keys still decodes (forward-compat)`() {
+    // Forward-compat guard: a future upload-script revision may add keys this reader
+    // hasn't been taught about yet. The sidecar decoder is configured with
+    // `ignoreUnknownKeys = true` so the new key is dropped and the existing fields
+    // still propagate. Without that, the strict default would throw inside the try /
+    // catch and the report generator would silently fall back to env vars — losing the
+    // CI provenance the sidecar was supposed to carry.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_05_26_session_future_key")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "smokeTest",
+            testClassName = "WebSmokeTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:12:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 2_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:12:02Z"),
+        ),
+      )
+      // Sidecar contains an unknown `future_field` AND a normal `logs_zip_filename`.
+      // Strict decoding would throw; lenient should accept the known fields.
+      File(logsDir, sessionId.value).resolve(GenerateTestResultsCliCommand.HOST_CI_CONTEXT_FILENAME)
+        .writeText(
+          """
+          {
+            "ci_job_id": "job-future",
+            "logs_zip_filename": "logs_future_0__${sessionId.value}.zip",
+            "future_field": "something a later writer added"
+          }
+          """.trimIndent(),
+        )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val row = report.results.single { it.session_id == sessionId }
+      assertEquals("job-future", row.ci_job_id)
+      assertEquals("logs_future_0__${sessionId.value}.zip", row.logs_zip_filename)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `host_ci_context sidecar populates logs_zip_url through to SessionResult`() {
+    // Forward-shape check: when the upload script's batched URL-resolution pass stamps
+    // logs_zip_url into the sidecar, the report generator must read it and propagate
+    // the value onto SessionResult.logs_zip_url so the uploaded JSON test report carries
+    // a clickable deep link per session (PR #3388 — additive on the JSON contract).
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_05_26_session_with_url")
+      val deviceInfo = webDeviceInfo()
+      val expectedUrl = "https://buildkite.com/organizations/example-org/pipelines/example-pipeline/builds/42/jobs/job-uuid-xyz/artifacts/artifact-uuid-123"
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/login.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "loginTest",
+            testClassName = "WebLoginTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:11:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 3_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:11:03Z"),
+        ),
+      )
+      File(logsDir, sessionId.value).resolve(GenerateTestResultsCliCommand.HOST_CI_CONTEXT_FILENAME)
+        .writeText(
+          """
+          {
+            "ci_job_id": "job-uuid-xyz",
+            "logs_zip_filename": "logs_login_0__${sessionId.value}.zip",
+            "logs_zip_url": "$expectedUrl"
+          }
+          """.trimIndent(),
+        )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val row = report.results.single { it.session_id == sessionId }
+      assertEquals("job-uuid-xyz", row.ci_job_id)
+      assertEquals("logs_login_0__${sessionId.value}.zip", row.logs_zip_filename)
+      assertEquals(expectedUrl, row.logs_zip_url)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
   private fun writeLog(
     logsDir: File,
     sessionId: SessionId,

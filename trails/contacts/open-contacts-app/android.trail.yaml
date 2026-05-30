@@ -1,7 +1,7 @@
 # Demo trail: launch Google Contacts and verify the main screen loads.
 # Authored to validate the runtime-YAML-config path: the `contacts` target is
-# declared in trails/config/packs/contacts/pack.yaml as a workspace
-# pack — the framework JAR ships no `contacts` target, so this trail can only
+# declared in trails/config/trailmaps/contacts/trailmap.yaml as a workspace
+# trailmap — the framework JAR ships no `contacts` target, so this trail can only
 # resolve via the workspace anchor.
 - config:
     id: "contacts/open-contacts-app"

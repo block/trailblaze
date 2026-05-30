@@ -33,7 +33,7 @@ The script builds for `iphonesimulator` and installs the resulting `.app` onto t
 
 ```bash
 ./examples/ios-sample-app/build-and-install.sh
-./trailblaze trail trails/eval/ios/sample-app/clipboard-round-trip.trail.yaml --device ios
+./trailblaze run trails/eval/ios/sample-app/clipboard-round-trip.trail.yaml --device ios
 ```
 
 ## Adding new screens

@@ -1,0 +1,12 @@
+# Playwright web assertion tools.
+id: web_verification
+description: "Verify text, elements, values, and lists are visible on the web page."
+drivers:
+  - playwright-native
+  - playwright-electron
+tools:
+  - web_verifyTextVisible
+  - web_verifyElementVisible
+  - web_verifyValue
+  - web_verifyListVisible
+  - web_assertNetworkEvent

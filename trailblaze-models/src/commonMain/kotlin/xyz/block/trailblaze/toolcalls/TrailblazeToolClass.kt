@@ -9,8 +9,8 @@ package xyz.block.trailblaze.toolcalls
  *   or that we don't want the LLM picking spontaneously (e.g., text-based selectors that are
  *   brittle when authored by the LLM but fine when authored explicitly by a scripted-tool
  *   author). Independent of [surfaceToScriptedTools] — a tool can be hidden from the LLM agent
- *   yet still emitted into per-pack `client.d.ts` for typed scripted-tool authoring.
- * @property surfaceToScriptedTools Whether per-pack `client.d.ts` codegen emits a typed binding
+ *   yet still emitted into per-trailmap `client.d.ts` for typed scripted-tool authoring.
+ * @property surfaceToScriptedTools Whether per-trailmap `client.d.ts` codegen emits a typed binding
  *   for this tool (i.e. whether scripted-tool TS authors can call `client.tools.<name>(...)`).
  *   Set to false for tools that should remain invisible to scripted-tool authoring — typically
  *   internal dispatcher implementation details. Independent of [surfaceToLlm]: hiding a tool
@@ -21,7 +21,7 @@ package xyz.block.trailblaze.toolcalls
  *   USB hardware access like cbot). Tools with requiresHost=true are excluded from on-device
  *   agents and can only run from a host JVM process.
  * @property isVerification Whether this tool is read-only and self-validates a condition (e.g.,
- *   `assertVisible`, `web_verify_text_visible`). Verification tools never mutate the device, and
+ *   `assertVisible`, `web_verifyTextVisible`). Verification tools never mutate the device, and
  *   their successful execution is the assertion verdict. Used by `blaze(hint=VERIFY)` to decide
  *   whether the LLM-recommended tool may be executed: only verification tools are allowed,
  *   anything else short-circuits to a failed assertion (its success would be unrelated to whether
@@ -34,17 +34,6 @@ package xyz.block.trailblaze.toolcalls
  *   metadata can also live in a sibling `*.trailhead.yaml` file pairing the class with a `to:`
  *   block — discovery merges both sources, so a class can self-declare here without a
  *   companion YAML, or the YAML can stay authoritative if the trailhead is YAML-only.
- * @property prefersHostSideForCallback Dual-mode composition primitive whose `Success.message`
- *   payload is the contract for scripted-tool authors that compose this tool via
- *   `client.callTool(...)`. The on-device-RPC return path (`RunYamlResponse`) doesn't carry
- *   per-tool `Success.message`, so routing through RPC would silently discard the message a
- *   TS author's handler reads several frames down (`JSON.parse(undefined)` failure mode).
- *   When this is `true`, `HostOnDeviceRpcTrailblazeAgent` short-circuits the dispatch to the
- *   host-side actual (e.g. dadb-backed `AndroidDeviceCommandExecutor`) instead of routing
- *   over RPC. Mutually independent from [requiresHost]: a tool can have an on-device actual
- *   AND a host-side actual, and this flag picks the host one for callback paths only.
- *   Replaces the prior hard-coded allowlist in `HostOnDeviceRpcTrailblazeAgent` so adding a
- *   new dual-mode primitive only requires the annotation, not a parallel edit to the agent.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -56,5 +45,4 @@ annotation class TrailblazeToolClass(
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,
   val trailheadTo: String = "",
-  val prefersHostSideForCallback: Boolean = false,
 )

@@ -26,6 +26,21 @@ import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.util.Console
 
 /**
+ * The MCP `clientInfo.name` value the Trailblaze CLI sends on its initialize
+ * handshake. Constant lives here (next to [TrailblazeMcpSessionContext.mcpClientName]
+ * which it filters against) rather than in the `host` module so server-side
+ * code can reference it without a `server -> host` dependency. The CLI's own
+ * `CliMcpClient.CLIENT_NAME` is held to match this value via a unit-test
+ * assertion that would fail on drift.
+ *
+ * `mcpClientName != TRAILBLAZE_CLI_CLIENT_NAME` is the discriminator
+ * [xyz.block.trailblaze.logs.server.TrailblazeMcpServer.pinMostRecentUnboundMcpSession]
+ * uses to pick "real" MCP clients (Claude Desktop, Cursor, Goose) over the
+ * CLI's own short-lived one-shot sessions.
+ */
+const val TRAILBLAZE_CLI_CLIENT_NAME: String = "TrailblazeCLI"
+
+/**
  * Controls which tools are exposed to MCP clients.
  *
  * - [FULL]: All tools registered (device management, TestRail, Buildkite, primitive tools, etc.)
@@ -37,13 +52,13 @@ enum class McpToolProfile {
   /** All tools — internal use, test authoring, full access. */
   FULL,
 
-  /** Only device, blaze, verify, ask, trail, trailEdit — for external MCP clients. */
+  /** Only device, step, verify, ask, trail, trailEdit — for external MCP clients. */
   MINIMAL;
 
   companion object {
     // Tool name constants — referenced by @Tool annotations in their respective ToolSets.
     const val TOOL_DEVICE = "device"
-    const val TOOL_BLAZE = "blaze"
+    const val TOOL_STEP = "step"
     const val TOOL_ASK = "ask"
     const val TOOL_TRAIL = "trail"
     const val TOOL_TRAIL_EDIT = "trailEdit"
@@ -51,12 +66,24 @@ enum class McpToolProfile {
     const val TOOL_SESSION = "session"
     const val TOOL_TOOLS = "toolbox"
     const val TOOL_LOGCAT = "logcat"
+    // Per-device target override — paired with TOOL_DEVICE in the device-binding
+    // flow. The CLI's `device connect --target` / `device rebind --target` paths
+    // call this tool to scope a target to the bound device. The CLI defaults to
+    // MINIMAL, so excluding it here breaks those commands with
+    // "Tool setSessionTargetForBoundDevice not found".
+    const val TOOL_SET_SESSION_TARGET = "setSessionTargetForBoundDevice"
+    // Paired with TOOL_DEVICE in the device-binding flow. The CLI's
+    // `device connect` calls this tool right after binding so a co-resident
+    // real-MCP-client session (Claude Desktop / Cursor / etc.) gets pinned
+    // to the same device. CLI defaults to MINIMAL — excluding here would
+    // break that call with "Tool pinMostRecentUnboundMcpSession not found".
+    const val TOOL_PIN_MCP_SESSION = "pinMostRecentUnboundMcpSession"
 
     /** Tool names exposed in MINIMAL mode. */
     val MINIMAL_TOOL_NAMES =
       setOf(
         TOOL_DEVICE,
-        TOOL_BLAZE,
+        TOOL_STEP,
         TOOL_ASK,
         TOOL_TRAIL,
         TOOL_TRAIL_EDIT,
@@ -64,6 +91,8 @@ enum class McpToolProfile {
         TOOL_SESSION,
         TOOL_TOOLS,
         TOOL_LOGCAT,
+        TOOL_SET_SESSION_TARGET,
+        TOOL_PIN_MCP_SESSION,
       )
   }
 }
@@ -202,8 +231,15 @@ class TrailblazeMcpSessionContext(
    * a CLI-only concern, fixing it here (e.g. repopulating from the bridge in
    * the `addTool` handler when null but `selectedDeviceId` is non-null) would
    * let the CLI drop the rebind.
+   *
+   * `@Volatile` for cross-thread visibility: writes can come from the per-
+   * session request handler (normal `device()` flow) AND from the daemon's
+   * `pinMostRecentUnboundMcpSession` running on a different connect-command
+   * coroutine, while reads happen on yet another thread when the pinned
+   * client's next tool call enters `addTool`. Without volatility a freshly
+   * pinned value can sit invisible in another core's cache.
    */
-  var associatedDeviceId: TrailblazeDeviceId? = null,
+  @Volatile var associatedDeviceId: TrailblazeDeviceId? = null,
 
   /**
    * The MCP client name from the initialize handshake.
@@ -223,6 +259,24 @@ class TrailblazeMcpSessionContext(
    * `mcpClientName` is enough identification for those.
    */
   var origin: String? = null,
+
+  /**
+   * Wall-clock timestamp of the most recent inbound HTTP touch for this
+   * session — refreshed on every POST /mcp and SSE GET /mcp handler entry.
+   *
+   * Used by [xyz.block.trailblaze.logs.server.TrailblazeMcpServer.pinMostRecentUnboundMcpSession]
+   * to pick the "most-recent unbound real-MCP-client session" when a shell
+   * `trailblaze device connect` wants to also pin a co-resident MCP client
+   * (Claude Desktop / Cursor / etc.) that hasn't called `device()` yet.
+   *
+   * Initialized to the construction timestamp so a session that hasn't yet
+   * processed a request (race against the very first POST) still has a
+   * comparable value. `@Volatile` for visibility under reads from a different
+   * thread than the request handler — see TrailblazeMcpServer where pinning
+   * may run on the connect-command coroutine while the request loop on
+   * another thread is also writing.
+   */
+  @Volatile var lastActive: Instant = Clock.System.now(),
 
   /**
    * Configuration for the two-tier agent architecture.
@@ -643,7 +697,7 @@ class TrailblazeMcpSessionContext(
  * "fail with details so the user knows what's actually running."
  *
  * [argsSummary] is a short, human-readable description (the `objective` for
- * `blaze`/`ask`, the trail name for `trail`, etc.). It's surfaced verbatim in
+ * `step`/`ask`, the trail name for `trail`, etc.). It's surfaced verbatim in
  * the busy-error message, so keep it concise.
  */
 data class InFlightToolCall(

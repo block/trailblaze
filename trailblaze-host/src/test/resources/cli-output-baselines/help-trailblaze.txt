@@ -10,29 +10,43 @@ Trailblaze - AI-powered device automation
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 
-  blaze     Drive a device with AI — describe what to do in plain English
-  ask       Ask a question about what's on screen (uses AI vision, no actions
-              taken)
-  verify    Check a condition on screen and pass/fail (exit code 0/1, ideal for
-              CI)
-  snapshot  Capture the current screen's UI tree (fast, no AI, no actions)
-  tool      Run a Trailblaze tool by name (e.g., tap, inputText)
-  toolbox   Browse available tools by target app and platform
-  trail     Run a trail file (.trail.yaml) — execute a scripted test on a
-              device.
-  session   Every blaze records a session — save it as a replayable trail
-  report    Generate an HTML report for session recordings, plus a best-effort
-              JSON summary, and optionally MP4/GIF/WebP exports for a single
-              session. JSON-only failures log a warning and still exit 0 — HTML
-              is the primary artifact and is what gates the exit code.
-  waypoint  Match named app locations (waypoints) against captured screen state.
-  results   Query the persisted test-result index for a TestRail case
-  config    View and set configuration (target app, device defaults, AI
-              provider)
-  device    List and connect devices (Android, iOS, Web)
-  app       Start or stop the Trailblaze daemon (background service that drives
-              devices)
-  mcp       Start a Model Context Protocol (MCP) server for AI agent integration
-  check     Materialize pack manifests + type-check pack TypeScript/JavaScript
-              sources
-  test      Run scripted-tool unit tests (*.test.ts) via bun test
+  step, blaze  Run one step — describe what you want, the built-in agent picks
+                 the tools.
+  ask          Ask a question about what's on screen (uses AI vision, no
+                 actions taken)
+  verify       Check a condition on screen and pass/fail (exit code 0/1, ideal
+                 for CI)
+  snapshot     Capture the current screen's UI tree (fast, no AI, no actions)
+  tool         Run a Trailblaze tool by name (e.g., tap, inputText)
+  toolbox      Browse available tools by target app and platform
+  run, trail   Run a trail file (.trail.yaml) — execute a scripted test on a
+                 device.
+  session      Manage the current device session — save it as a replayable
+                 trail, inspect steps, end it
+  report       Generate an HTML report for session recordings, plus a
+                 best-effort JSON summary, and optionally MP4/GIF/WebP exports
+                 for a single session. JSON-only failures log a warning and
+                 still exit 0 — HTML is the primary artifact and is what gates
+                 the exit code.
+  waypoint     Match named app locations (waypoints) against captured screen
+                 state.
+  results      Query the persisted test-result index for a TestRail case.
+                 Passing a positional `<case-id>` (e.g. `trailblaze results
+                 C12345 --device android-phone`) is equivalent to the explicit
+                 `trailblaze results show <case-id>` form — picocli routes the
+                 bare case-id straight to the `show` subcommand.
+  config       View and set configuration (target app, device defaults, AI
+                 provider)
+  device       List and connect devices (Android, iOS, Web)
+  show         Open the multi-device live grid (/devices/all) in your default
+                 browser
+  app          Start or stop the Trailblaze daemon (background service that
+                 drives devices)
+  mcp          Start a Model Context Protocol (MCP) server for AI agent
+                 integration
+  check        Validate a trailmap: materialize manifests, type-check
+                 TypeScript/JavaScript sources, and run `*.test.ts` unit tests
+                 via `bun test`. On first run, scaffolds a minimal package.json
+                 at the workspace root if absent so `bun install` can be used
+                 as the canonical bootstrap (its `postinstall` hook re-runs
+                 `trailblaze check`).

@@ -29,8 +29,8 @@ pipeline's auto-PR step to materialize as one PR per proposal.
                               session; *_AgentDriverLog.json (or any
                               screen-state log) inside is treated as a step.
                               Required.
-      --target=<id>         Pack id. Resolves --root to
-                              <workspace>/packs/<id>/waypoints/. Also supplies
-                              the pack's app_ids for templated selector
-                              expansion.
+      --target=<id>         Trailmap id. Resolves --root to
+                              <workspace>/trailmaps/<id>/waypoints/. Also
+                              supplies the trailmap's app_ids for templated
+                              selector expansion.
   -V, --version             Print version information and exit.

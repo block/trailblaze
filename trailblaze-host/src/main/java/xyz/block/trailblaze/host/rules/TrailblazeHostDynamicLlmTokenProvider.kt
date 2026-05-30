@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.rules
 
+import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
@@ -65,9 +66,20 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
     trailblazeLlmProvider: TrailblazeLlmProvider,
     baseClient: HttpClient,
   ): LLMClient? {
+    // Koog 1.0.0 LLM client constructors no longer accept a raw Ktor HttpClient — wrap our
+    // existing client in a KtorKoogHttpClient.Factory so its config (interceptors, TLS,
+    // reverse-proxy plugin) flows through into every created KoogHttpClient. Built once
+    // here so every provider branch below shares the same wrapped factory (Ollama included —
+    // a prior version of this code path constructed OllamaClient without `httpClientFactory`
+    // and silently bypassed our customized HTTP config).
+    val httpClientFactory = KtorKoogHttpClient.Factory(baseClient = baseClient)
+
     if (trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA) {
       return if (JvmLLMProvidersUtil.isOllamaInstalled) {
-        OllamaClient(baseUrl = ollamaBaseUrl ?: "http://localhost:11434")
+        OllamaClient(
+          baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
+          httpClientFactory = httpClientFactory,
+        )
       } else {
         null
       }
@@ -88,23 +100,23 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
     return if (apiKey != null) {
       when (trailblazeLlmProvider) {
         TrailblazeLlmProvider.ANTHROPIC -> AnthropicLLMClient(
-          baseClient = baseClient,
           apiKey = apiKey,
+          httpClientFactory = httpClientFactory,
         )
 
         TrailblazeLlmProvider.GOOGLE -> GoogleLLMClient(
-          baseClient = baseClient,
           apiKey = apiKey,
+          httpClientFactory = httpClientFactory,
         )
 
         TrailblazeLlmProvider.OPENAI -> OpenAILLMClient(
-          baseClient = baseClient,
           apiKey = apiKey,
+          httpClientFactory = httpClientFactory,
         )
 
         TrailblazeLlmProvider.OPEN_ROUTER -> OpenRouterLLMClient(
-          baseClient = baseClient,
           apiKey = apiKey,
+          httpClientFactory = httpClientFactory,
         )
 
         else -> null

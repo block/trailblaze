@@ -1,5 +1,5 @@
 // Curated ambient declarations for runtime globals an author can reference from a
-// `.ts` tool file without a per-pack `globals.d.ts` shim. Appended to
+// `.ts` tool file without a per-trailmap `globals.d.ts` shim. Appended to
 // `dist/index.d.ts` by `bundleTrailblazeSdkDts` — see [TrailblazeSdkDtsBundlePlugin].
 //
 // Scope. Authors target two runtimes through the same `.ts` source: the host-side
@@ -194,11 +194,11 @@ declare global {
   // DOM lib.
   //
   // **Why hand-authored instead of pulled from `@types/node`.** `@types/node` is a
-  // devDependency of `@trailblaze/scripting` itself but is NOT visible to pack
-  // authors — the per-pack `tsconfig.json` has `lib: ["ES2022"]` only, with the
+  // devDependency of `@trailblaze/scripting` itself but is NOT visible to trailmap
+  // authors — the per-trailmap `tsconfig.json` has `lib: ["ES2022"]` only, with the
   // SDK declaration bundle as the `paths`-mapped source of `@trailblaze/scripting`.
-  // Pulling fetch types from `@types/node` would either force every pack to install
-  // it (bloating the pack-typing setup) or require the bundle to inline them via
+  // Pulling fetch types from `@types/node` would either force every trailmap to install
+  // it (bloating the trailmap-typing setup) or require the bundle to inline them via
   // dts-bundle-generator's `--external-inlines` (which works but conflates host-only
   // runtime types with the bundle's main mission of MCP-SDK + zod inlines). The
   // hand-authored declarations are a curated subset deliberately kept narrower than

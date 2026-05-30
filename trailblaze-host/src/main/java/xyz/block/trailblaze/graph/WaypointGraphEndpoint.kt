@@ -98,11 +98,11 @@ object WaypointGraphEndpoint {
       File(trimmed).also {
         if (!it.exists() || !it.isDirectory) {
           // Don't fail the request — the discovery layer is robust to bad roots and
-          // will emit an empty filesystem-walk while still loading classpath packs.
+          // will emit an empty filesystem-walk while still loading classpath trailmaps.
           // Surface it to the operator's log so a typo isn't invisible.
           Console.error(
             "[WaypointGraphEndpoint] ?root=$trimmed is not a directory. " +
-              "Filesystem-walk waypoints will be empty; classpath-bundled packs still load.",
+              "Filesystem-walk waypoints will be empty; classpath-bundled trailmaps still load.",
           )
         }
       }

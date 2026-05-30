@@ -552,6 +552,265 @@ class BaseTrailblazeAgentTest {
     assertThat(toolLogs[0].exceptionMessage).isEqualTo("subprocess transport died")
   }
 
+  // ── SnapshotCache integration (PR adding findMatches) ──
+
+  // Query-shaped stub: invokes [xyz.block.trailblaze.toolcalls.SnapshotCache.snapshot] using the
+  // context's provider and records the returned state. Implements
+  // [xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool] so the dispatcher's default-
+  // invalidate gate skips invalidation — query tools should leave the cache valid for
+  // follow-up queries in the same batch.
+  @Serializable
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass(
+    name = "stub_snapshot_query",
+    isRecordable = false,
+  )
+  private class StubSnapshotQueryTool :
+    ExecutableTrailblazeTool, xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      val provider = toolExecutionContext.screenStateProvider
+        ?: return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "no provider")
+      xyz.block.trailblaze.toolcalls.SnapshotCache.snapshot(provider)
+      return TrailblazeToolResult.Success()
+    }
+  }
+
+  // Action-shaped stub: recordable (the default), non-verification. The dispatcher should
+  // invalidate the cache after a successful dispatch of this tool.
+  @Serializable
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass("stub_action")
+  private class StubActionTool : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
+
+  // Non-recordable mutating stub — the shape `TapTrailblazeTool` has in production
+  // (`isRecordable = false` because it delegates to a recorded form, but it still
+  // mutates device state). The dispatcher MUST invalidate the cache after this tool
+  // even though the annotation flag suggests "not recordable", because nothing about
+  // the annotation declares the tool read-only.
+  @Serializable
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass("stub_non_recordable_action", isRecordable = false)
+  private class StubNonRecordableActionTool : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
+
+  // Verification-shaped stub: recordable AND isVerification=true. The dispatcher must NOT
+  // invalidate the cache after a verification, since verifications are read-only.
+  @Serializable
+  @xyz.block.trailblaze.toolcalls.TrailblazeToolClass(
+    name = "stub_verification",
+    isVerification = true,
+  )
+  private class StubVerificationTool : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
+  }
+
+  // ScreenState fixture with a counting provider so tests can prove how many times the
+  // multi-second hierarchy fetch fires across a batch.
+  private class CountingScreenStateProvider {
+    var calls = 0
+      private set
+    private val state = object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth: Int = 1080
+      override val deviceHeight: Int = 1920
+      override val viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode =
+        xyz.block.trailblaze.api.ViewHierarchyTreeNode()
+      override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
+        TrailblazeDevicePlatform.ANDROID
+      override val deviceClassifiers: List<xyz.block.trailblaze.devices.TrailblazeDeviceClassifier> =
+        emptyList()
+    }
+    val provider: () -> ScreenState = {
+      calls++
+      state
+    }
+  }
+
+  // Agent that exposes the counting provider on its context. Routes any other tool through
+  // the same handlers as TestAgent.
+  private class CountingTestAgent(val counting: CountingScreenStateProvider) : TestAgent() {
+    override fun buildExecutionContext(
+      traceId: TraceId,
+      screenState: ScreenState?,
+      screenStateProvider: (() -> ScreenState)?,
+    ) = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      sessionProvider = sessionProvider,
+      screenStateProvider = counting.provider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+    )
+
+    override fun executeTool(
+      tool: TrailblazeTool,
+      context: TrailblazeToolExecutionContext,
+      toolsExecuted: MutableList<TrailblazeTool>,
+    ): TrailblazeToolResult {
+      toolsExecuted.add(tool)
+      return when (tool) {
+        is StubSnapshotQueryTool -> kotlinx.coroutines.runBlocking { tool.execute(context) }
+        is StubActionTool -> kotlinx.coroutines.runBlocking { tool.execute(context) }
+        is StubNonRecordableActionTool -> kotlinx.coroutines.runBlocking { tool.execute(context) }
+        is StubVerificationTool -> kotlinx.coroutines.runBlocking { tool.execute(context) }
+        else -> TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "Unsupported tool",
+          command = tool,
+          stackTrace = "",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `snapshot cache reuses the same capture across sibling query tools in one batch`() {
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(StubSnapshotQueryTool(), StubSnapshotQueryTool(), StubSnapshotQueryTool()),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // Provider called exactly once across three queries — the snapshot is captured on the
+    // first query and reused for the next two.
+    assertThat(counting.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `action tool invalidates the cache so a follow-up query re-captures`() {
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(StubSnapshotQueryTool(), StubActionTool(), StubSnapshotQueryTool()),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // First query captures, action invalidates, second query re-captures.
+    assertThat(counting.calls).isEqualTo(2)
+  }
+
+  @Test
+  fun `memory tool does NOT invalidate the cache (MemoryTrailblazeTool is ReadOnly)`() {
+    // The dispatcher's invalidation gate runs for ALL three `when` branches (Memory,
+    // HostLocal, else). MemoryTrailblazeTool now extends ReadOnlyTrailblazeTool so the
+    // gate skips invalidation — the cached view-hierarchy survives a memory tool.
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(
+        StubSnapshotQueryTool(),
+        DumpMemoryTrailblazeTool,
+        StubSnapshotQueryTool(),
+      ),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // Both queries reuse the same captured snapshot — memory dispatch left the cache valid.
+    assertThat(counting.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `host-local mutating tool invalidates the cache`() {
+    // HostLocal tools (subprocess MCP) are NOT marked ReadOnly — they could mutate the
+    // device (run arbitrary subprocess code), so the dispatcher invalidates the cache
+    // after them. Pin that contract.
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(
+        StubSnapshotQueryTool(),
+        StubHostLocalTool(),
+        StubSnapshotQueryTool(),
+      ),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // First query captures, HostLocal invalidates (not ReadOnly, not Verification),
+    // second query re-captures.
+    assertThat(counting.calls).isEqualTo(2)
+  }
+
+  @Test
+  fun `non-recordable mutating tool still invalidates the cache`() {
+    // Regression for the Codex P2 finding on #3334: `TapTrailblazeTool` has
+    // `isRecordable = false` (delegation marker) while still mutating the device.
+    // A naive "invalidate when isRecordable" gate would let a stale snapshot
+    // survive across it. The correct gate is "invalidate unless ReadOnly or
+    // Verification" — pin that here.
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(
+        StubSnapshotQueryTool(),
+        StubNonRecordableActionTool(),
+        StubSnapshotQueryTool(),
+      ),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // First query captures, non-recordable action invalidates anyway (no
+    // ReadOnlyTrailblazeTool marker, no isVerification), second query re-captures.
+    assertThat(counting.calls).isEqualTo(2)
+  }
+
+  @Test
+  fun `verification tool does not invalidate the cache`() {
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val result = agent.runTrailblazeTools(
+      tools = listOf(StubSnapshotQueryTool(), StubVerificationTool(), StubSnapshotQueryTool()),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // Verification is read-only; the cache survives. The second query reuses the first
+    // query's capture.
+    assertThat(counting.calls).isEqualTo(1)
+  }
+
+  @Test
+  fun `snapshot cache frame is popped even when the batch fails`() {
+    val counting = CountingScreenStateProvider()
+    val agent = CountingTestAgent(counting)
+
+    val initialDepth = xyz.block.trailblaze.toolcalls.SnapshotCache.frameDepth()
+
+    agent.runTrailblazeTools(
+      tools = listOf(
+        StubTool(
+          result = TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "boom",
+            command = StubTool(),
+            stackTrace = "",
+          ),
+        ),
+      ),
+      elementComparator = noOpComparator,
+    )
+
+    assertThat(xyz.block.trailblaze.toolcalls.SnapshotCache.frameDepth()).isEqualTo(initialDepth)
+  }
+
   @Test
   fun `failed host-local dispatch still emits a TrailblazeToolLog with successful=false`() {
     val captured = mutableListOf<TrailblazeLog>()

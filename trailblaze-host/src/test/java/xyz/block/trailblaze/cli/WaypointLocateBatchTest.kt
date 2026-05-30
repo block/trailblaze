@@ -20,7 +20,7 @@ import xyz.block.trailblaze.waypoint.WaypointMatcher
 
 /**
  * Idempotence pin and contract pins for `trailblaze waypoint locate --session <dir>`
- * (batch mode), introduced as phase (4) of the waypoint-pack maintenance loop
+ * (batch mode), introduced as phase (4) of the waypoint-trailmap maintenance loop
  * (devlog 2026-05-18). The pipeline shard depends on the TSV stream being
  * machine-readable: one row per outcome, tab-delimited, no banner chatter.
  *
@@ -74,7 +74,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, batchExit, "batch run must exit OK; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, batchExit, "batch run must exit OK; stderr=${stderr()}")
     val batchByStep = parseTsv(stdout())
     assertTrue(batchByStep.isNotEmpty(), "batch mode must emit at least one row; got: ${stdout()}")
 
@@ -136,7 +136,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val rows = stdout().lines().filter { '\t' in it }
     assertEquals(2, rows.size, "expected one NONE row per step; got: $rows")
     assertTrue(rows.all { it.endsWith("\tNONE") }, "all rows should be NONE; got: $rows")
@@ -162,7 +162,7 @@ class WaypointLocateBatchTest {
         "--file", stepFile.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "--file mode must still exit OK; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "--file mode must still exit OK; stderr=${stderr()}")
   }
 
   @Test
@@ -184,7 +184,7 @@ class WaypointLocateBatchTest {
       )
     }
     // Partial failure stays OK; pipeline sees the ERROR row but the shard isn't aborted.
-    assertEquals(CommandLine.ExitCode.OK, exit, "partial failure must keep exit OK; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "partial failure must keep exit OK; stderr=${stderr()}")
     val rows = stdout().lines().filter { '\t' in it }
     val errorRows = rows.filter { it.endsWith("\tERROR") }
     val matchRows = rows.filter { !it.endsWith("\tERROR") && !it.endsWith("\tNONE") }
@@ -210,7 +210,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.SOFTWARE, exit, "single bad step must surface SOFTWARE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, exit, "single bad step must surface SOFTWARE; stderr=${stderr()}")
   }
 
   @Test
@@ -229,7 +229,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.SOFTWARE, exit, "all-errored multi-step must exit SOFTWARE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.INFRA_FAILED.code, exit, "all-errored multi-step must exit SOFTWARE; stderr=${stderr()}")
   }
 
   @Test
@@ -268,7 +268,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val matchedIds = stdout().lines()
       .filter { '\t' in it }
       .map { it.substringAfter('\t') }
@@ -295,7 +295,7 @@ class WaypointLocateBatchTest {
         "--rel-base", sessionDir.absolutePath, // use session dir itself → step filename only
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val paths = stdout().lines().filter { '\t' in it }.map { it.substringBefore('\t') }.toSet()
     assertEquals(
       setOf("001_step_AgentDriverLog.json"),
@@ -319,7 +319,7 @@ class WaypointLocateBatchTest {
         "--rel-base", unrelated.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val paths = stdout().lines().filter { '\t' in it }.map { it.substringBefore('\t') }
     assertTrue(
       paths.all { it.startsWith("/") },
@@ -340,7 +340,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "empty session must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "empty session must be USAGE; stderr=${stderr()}")
     assertTrue(
       "No screen-state log files" in stderr(),
       "stderr should explain why; got: ${stderr()}",
@@ -362,7 +362,7 @@ class WaypointLocateBatchTest {
         "--file", stepFile.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "should reject mutex flags; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "should reject mutex flags; stderr=${stderr()}")
     assertTrue(
       "mutually exclusive" in stderr(),
       "stderr should call out the conflict; got: ${stderr()}",
@@ -377,7 +377,7 @@ class WaypointLocateBatchTest {
     val exit = runCapturing {
       execute("waypoint", "locate", "--root", waypointRoot.absolutePath)
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "missing-required-args must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "missing-required-args must be USAGE; stderr=${stderr()}")
     assertTrue(
       "Provide either --file or --session" in stderr(),
       "stderr should ask for one of the flags; got: ${stderr()}",
@@ -399,7 +399,7 @@ class WaypointLocateBatchTest {
         "--rel-base", workspace.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "--rel-base outside batch mode must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "--rel-base outside batch mode must be USAGE; stderr=${stderr()}")
     assertTrue(
       "--rel-base is only valid in batch mode" in stderr(),
       "stderr should explain; got: ${stderr()}",
@@ -420,7 +420,7 @@ class WaypointLocateBatchTest {
         "--rel-base", File(workspace, "does-not-exist").absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "bad --rel-base must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "bad --rel-base must be USAGE; stderr=${stderr()}")
     assertTrue(
       "--rel-base must be an existing directory" in stderr(),
       "stderr should explain; got: ${stderr()}",
@@ -447,7 +447,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val tsvRows = stdout().lines().filter { '\t' in it }
     assertEquals(2, tsvRows.size, "expected one TSV row per step (batch mode); got: $tsvRows")
     assertNotEquals(
@@ -518,7 +518,7 @@ class WaypointLocateBatchTest {
         "--log-suffix", "_AgentDriverLog.json",
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val paths = stdout().lines().filter { '\t' in it }.map { it.substringBefore('\t') }.toSet()
     assertEquals(
       setOf("20260519_mixed/001_step_AgentDriverLog.json"),
@@ -542,7 +542,7 @@ class WaypointLocateBatchTest {
         "--log-suffix", "_AgentDriverLog.json",
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "--log-suffix outside batch must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "--log-suffix outside batch must be USAGE; stderr=${stderr()}")
     assertTrue(
       "--log-suffix is only valid in batch mode" in stderr(),
       "stderr should explain; got: ${stderr()}",
@@ -563,7 +563,7 @@ class WaypointLocateBatchTest {
         "--log-suffix", "_NoSuchType.json",
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "stderr=${stderr()}")
     assertTrue(
       "No log files matching --log-suffix" in stderr(),
       "stderr should mention the filter; got: ${stderr()}",
@@ -588,7 +588,7 @@ class WaypointLocateBatchTest {
         "--log-suffix", "",
       )
     }
-    assertEquals(CommandLine.ExitCode.USAGE, exit, "empty --log-suffix must be USAGE; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "empty --log-suffix must be USAGE; stderr=${stderr()}")
     assertTrue(
       "--log-suffix must be non-empty" in stderr(),
       "stderr should call out the empty-suffix misuse; got: ${stderr()}",
@@ -614,7 +614,7 @@ class WaypointLocateBatchTest {
         "--log-suffix", "_AgentDriverLog.json", // SnapshotLog filtered out
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "combined flags must compose; stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "combined flags must compose; stderr=${stderr()}")
     val paths = stdout().lines().filter { '\t' in it }.map { it.substringBefore('\t') }.toSet()
     assertEquals(
       setOf("001_step_AgentDriverLog.json"),
@@ -646,7 +646,7 @@ class WaypointLocateBatchTest {
           "--session", sessionDir.absolutePath,
         )
       }
-      assertEquals(CommandLine.ExitCode.OK, exit1, "first batch run must exit OK; stderr=${stderr()}")
+      assertEquals(TrailblazeExitCode.SUCCESS.code, exit1, "first batch run must exit OK; stderr=${stderr()}")
       assertEquals(
         false,
         Console.isQuietMode(),
@@ -663,7 +663,7 @@ class WaypointLocateBatchTest {
           "--session", sessionDir.absolutePath,
         )
       }
-      assertEquals(CommandLine.ExitCode.OK, exit2, "second batch run must exit OK; stderr=${stderr()}")
+      assertEquals(TrailblazeExitCode.SUCCESS.code, exit2, "second batch run must exit OK; stderr=${stderr()}")
       assertEquals(
         false,
         Console.isQuietMode(),
@@ -698,7 +698,7 @@ class WaypointLocateBatchTest {
         "--session", sessionDir.absolutePath,
       )
     }
-    assertEquals(CommandLine.ExitCode.OK, exit, "stderr=${stderr()}")
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "stderr=${stderr()}")
     val paths = stdout().lines().filter { '\t' in it }.map { it.substringBefore('\t') }.toSet()
     assertEquals(
       setOf(

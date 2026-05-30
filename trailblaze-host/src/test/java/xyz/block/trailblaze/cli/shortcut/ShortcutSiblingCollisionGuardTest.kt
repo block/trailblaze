@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 /**
  * Unit tests for the set-membership shortcut collision guard. Confirms:
  *  1. Self-edges (from == to) are rejected as "not a useful shortcut."
- *  2. Pre-existing shortcuts in the pack take precedence over auto-proposed duplicates.
+ *  2. Pre-existing shortcuts in the trailmap take precedence over auto-proposed duplicates.
  *  3. Two new proposals sharing a (from, to) → higher-support wins, lower dropped.
  *  4. Empty existing-shortcut set + non-colliding proposals → all survive.
  */
@@ -15,7 +15,7 @@ class ShortcutSiblingCollisionGuardTest {
 
   @Test
   fun `self-edges are rejected`() {
-    val p = proposal("pack/foo", "pack/foo", supportSessions = 5, key = "k1")
+    val p = proposal("trailmap/foo", "trailmap/foo", supportSessions = 5, key = "k1")
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(p),
       existingShortcuts = emptyList(),
@@ -27,9 +27,9 @@ class ShortcutSiblingCollisionGuardTest {
 
   @Test
   fun `pre-existing shortcut blocks new proposal on same (from,to)`() {
-    val p = proposal("pack/from", "pack/to", supportSessions = 8, key = "k1")
+    val p = proposal("trailmap/from", "trailmap/to", supportSessions = 8, key = "k1")
     val existing = ShortcutSiblingCollisionGuard.ExistingShortcut(
-      from = "pack/from", to = "pack/to", variant = null,
+      from = "trailmap/from", to = "trailmap/to", variant = null,
     )
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(p),
@@ -42,8 +42,8 @@ class ShortcutSiblingCollisionGuardTest {
 
   @Test
   fun `cross-proposal collision keeps higher-support proposal`() {
-    val winner = proposal("pack/from", "pack/to", supportSessions = 10, key = "k-winner")
-    val loser = proposal("pack/from", "pack/to", supportSessions = 4, key = "k-loser")
+    val winner = proposal("trailmap/from", "trailmap/to", supportSessions = 10, key = "k-winner")
+    val loser = proposal("trailmap/from", "trailmap/to", supportSessions = 4, key = "k-loser")
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(loser, winner), // intentionally reverse-ordered
       existingShortcuts = emptyList(),
@@ -57,8 +57,8 @@ class ShortcutSiblingCollisionGuardTest {
 
   @Test
   fun `cross-proposal ties broken by proposalKey for determinism`() {
-    val a = proposal("pack/from", "pack/to", supportSessions = 5, key = "a")
-    val b = proposal("pack/from", "pack/to", supportSessions = 5, key = "b")
+    val a = proposal("trailmap/from", "trailmap/to", supportSessions = 5, key = "a")
+    val b = proposal("trailmap/from", "trailmap/to", supportSessions = 5, key = "b")
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(b, a),
       existingShortcuts = emptyList(),
@@ -70,8 +70,8 @@ class ShortcutSiblingCollisionGuardTest {
 
   @Test
   fun `non-colliding proposals all survive`() {
-    val p1 = proposal("pack/a", "pack/b", supportSessions = 5, key = "k1")
-    val p2 = proposal("pack/c", "pack/d", supportSessions = 6, key = "k2")
+    val p1 = proposal("trailmap/a", "trailmap/b", supportSessions = 5, key = "k1")
+    val p2 = proposal("trailmap/c", "trailmap/d", supportSessions = 6, key = "k2")
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(p1, p2),
       existingShortcuts = emptyList(),
@@ -88,14 +88,14 @@ class ShortcutSiblingCollisionGuardTest {
     // Documents the contract: if the existing set ALREADY lists (from, to, variant=null),
     // the proposal collides and is rejected. This is the same path as the basic
     // pre-existing test but explicitly pins behavior for the "shortcut already exists in
-    // the pack from a prior auto-PR that landed" scenario, distinguishing it from
+    // the trailmap from a prior auto-PR that landed" scenario, distinguishing it from
     // cross-proposal collisions inside the same run.
-    val p = proposal("pack/from", "pack/to", supportSessions = 5, key = "k1")
+    val p = proposal("trailmap/from", "trailmap/to", supportSessions = 5, key = "k1")
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(p),
       existingShortcuts = listOf(
         ShortcutSiblingCollisionGuard.ExistingShortcut(
-          from = "pack/from", to = "pack/to", variant = null,
+          from = "trailmap/from", to = "trailmap/to", variant = null,
         ),
       ),
     )
@@ -108,9 +108,9 @@ class ShortcutSiblingCollisionGuardTest {
   fun `existing variant non-null does not block variant-null proposal`() {
     // An existing shortcut with variant="manual" is distinct from a new variant=null
     // proposal — the runtime can disambiguate by variant, so we let the new one through.
-    val p = proposal("pack/from", "pack/to", supportSessions = 5, key = "k1")
+    val p = proposal("trailmap/from", "trailmap/to", supportSessions = 5, key = "k1")
     val existing = ShortcutSiblingCollisionGuard.ExistingShortcut(
-      from = "pack/from", to = "pack/to", variant = "manual",
+      from = "trailmap/from", to = "trailmap/to", variant = "manual",
     )
     val verdict = ShortcutSiblingCollisionGuard.check(
       proposals = listOf(p),

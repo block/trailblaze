@@ -28,7 +28,7 @@ class SegmentListCommand : Callable<Int> {
 
   @Option(
     names = ["--root"],
-    description = ["Additional directory to scan for *.waypoint.yaml files (default: $DEFAULT_WAYPOINT_ROOT, resolved against the current working directory). Pack waypoints are always included regardless of --root."],
+    description = ["Additional directory to scan for *.waypoint.yaml files (default: $DEFAULT_WAYPOINT_ROOT, resolved against the current working directory). Trailmap waypoints are always included regardless of --root."],
   )
   var root: File = File(DEFAULT_WAYPOINT_ROOT)
 
@@ -36,7 +36,7 @@ class SegmentListCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id whose declared `app_ids:` expand `{{target.appId}}` placeholders in " +
+      "Trailmap id whose declared `app_ids:` expand `{{target.appId}}` placeholders in " +
         "waypoint selectors during matching. Match `--target` on `waypoint locate/validate` " +
         "if the session was captured against that target's app.",
     ],
@@ -44,24 +44,24 @@ class SegmentListCommand : Callable<Int> {
   var targetId: String? = null
 
   override fun call(): Int {
-    val validatedSession = validateSessionDir(session) ?: return CommandLine.ExitCode.USAGE
+    val validatedSession = validateSessionDir(session) ?: return TrailblazeExitCode.MISUSE.code
 
     val discovery = WaypointDiscovery.discover(root)
     reportLoadFailures(discovery.rootFailures)
     if (discovery.definitions.isEmpty()) {
-      val suffix = if (discovery.packLoadFailed) {
-        " (some packs failed to load — see warnings above)"
+      val suffix = if (discovery.trailmapLoadFailed) {
+        " (some trailmaps failed to load — see warnings above)"
       } else {
         ""
       }
-      Console.error("No waypoint definitions found in active packs or under ${root.absolutePath}.$suffix")
-      return CommandLine.ExitCode.USAGE
+      Console.error("No waypoint definitions found in active trailmaps or under ${root.absolutePath}.$suffix")
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(r.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> r.context
       is TargetContextResolution.NoTarget -> null
@@ -74,7 +74,7 @@ class SegmentListCommand : Callable<Int> {
       // rather than letting picocli print a stack trace, so the user sees the actionable
       // message instead of the framework noise.
       Console.error("Failed to read session directory: ${e.message}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     Console.log("Session: ${validatedSession.absolutePath}")
     Console.log("Waypoints: ${discovery.definitions.size}")
@@ -102,7 +102,7 @@ class SegmentListCommand : Callable<Int> {
     if (segments.isEmpty()) {
       Console.log("No segments observed.")
       Console.log(noSegmentsHint(analysis, validatedSession.absolutePath))
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
     Console.log("Segments observed: ${segments.size}")
     Console.log("")
@@ -121,7 +121,7 @@ class SegmentListCommand : Callable<Int> {
         }
       }
     }
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }
 

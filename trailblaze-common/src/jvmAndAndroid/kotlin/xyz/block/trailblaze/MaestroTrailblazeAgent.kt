@@ -58,7 +58,7 @@ abstract class MaestroTrailblazeAgent(
    */
   val captureNetworkTraffic: Boolean = false,
   /**
-   * The session's active target (pack manifest + device pair). Propagated to every
+   * The session's active target (trailmap manifest + device pair). Propagated to every
    * [TrailblazeToolExecutionContext] this agent builds so the `_meta.trailblaze.target`
    * envelope block populates, which is what makes `ctx.target?.resolveAppId()` work for
    * scripted tools dispatched through this agent.
@@ -70,7 +70,7 @@ abstract class MaestroTrailblazeAgent(
    *
    * **Why this exists.** Scripted tools that run in-process on-device (via the QuickJS
    * bundle path, no host fallback) have no other way to learn which app to act on — they
-   * can't probe the device themselves, and a hardcoded app-id list both duplicates pack.yaml
+   * can't probe the device themselves, and a hardcoded app-id list both duplicates trailmap.yaml
    * and turns into a per-call `mobile_listInstalledApps` round-trip. Surfacing the resolved
    * target on every context replaces that pattern with a data field the framework
    * populates once at session start. Square card-reader broadcast tools are the canonical
@@ -88,7 +88,7 @@ abstract class MaestroTrailblazeAgent(
    *
    * **Naming note.** This is the *device-resolved* id and is nullable. The unrelated
    * `xyz.block.trailblaze.model.ResolvedTarget.appId` getter is the *declared-first*
-   * id from the pack manifest and is non-null (throws if none declared). Don't confuse
+   * id from the trailmap manifest and is non-null (throws if none declared). Don't confuse
    * `agent.appId` (this) with `resolvedTarget.appId` (declared-first) — they answer
    * different questions.
    */
@@ -220,6 +220,11 @@ abstract class MaestroTrailblazeAgent(
           screenStateProvider = context.screenStateProvider,
         ).result
       },
+      // Threads the agent's tool repo through so Kotlin tools composing framework
+      // tools via `ctx.invokeFrameworkTool(...)` can resolve them by name. Without
+      // this, the bridge throws "toolRepo not wired" on every Kotlin-side call site
+      // in a Maestro-driven session even though the repo exists on the agent.
+      toolRepo = trailblazeToolRepo,
       nodeSelectorMode = nodeSelectorMode,
       captureNetworkTraffic = captureNetworkTraffic,
       resolvedTarget = resolvedTarget,
@@ -233,27 +238,88 @@ abstract class MaestroTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
     toolsExecuted: MutableList<TrailblazeTool>,
   ): TrailblazeToolResult {
-    return when (tool) {
+    // Resolve `OtherTrailblazeTool` placeholders through the session's tool repo BEFORE the
+    // type-discriminating `when` below. Static YAML deserialization always lands on
+    // `OtherTrailblazeTool` for tool names the static catalog doesn't know, which includes
+    // every dynamically-registered scripted tool (#2749 inline scripted tools registered by
+    // `LazyYamlScriptedToolRegistration`, subprocess MCP tools registered by
+    // `SubprocessToolRegistration`, etc.). Without this resolution, those tools landed in the
+    // `is OtherTrailblazeTool ->` branch below and threw "Unknown tool '<name>' is not
+    // registered" even when the session's repo had a valid registration for them.
+    //
+    // The base class's `runTrailblazeTools` already calls `resolveDynamicTool` once per
+    // batch, so most callers hit this method with the resolved tool already. This second
+    // resolution is the defense-in-depth contract `MaestroTrailblazeAgent.trailblazeToolRepo`'s
+    // docstring promises: "threaded to the base so `OtherTrailblazeTool` instances can
+    // resolve through `TrailblazeToolRepo` before driver dispatch." Direct callers of
+    // `executeTool` (and subclass overrides that bypass `runTrailblazeTools`) need the same
+    // resolution to honor the contract.
+    // Two senses of "resolved" appear in this method — disambiguated by name so a reader
+    // (or grep) can tell them apart:
+    //  - `repoResolvedTool` (this binding) = `OtherTrailblazeTool` → concrete tool, via the
+    //    session's `trailblazeToolRepo.toolCallToTrailblazeTool(...)` (dynamic-tool dispatch).
+    //  - Future memory-interpolation locals in the dispatch branches should be named
+    //    `memoryResolvedTool` / `memoryResolvedExpanded` if added — see the parallel naming in
+    //    `HostOnDeviceRpcTrailblazeAgent.executeTool`.
+    val repoResolvedTool: TrailblazeTool = if (tool is OtherTrailblazeTool) {
+      val repo = trailblazeToolRepo
+      if (repo == null) {
+        tool
+      } else {
+        try {
+          repo.toolCallToTrailblazeTool(tool.toolName, tool.raw.toString())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          // Fall through with the original `OtherTrailblazeTool` — the `is OtherTrailblazeTool`
+          // branch below produces the contextual "Unknown tool" error with toolName + raw
+          // args + the suggested fix (register via `getCustomToolsForDriver`).
+          tool
+        }
+      }
+    } else {
+      tool
+    }
+    return when (repoResolvedTool) {
       is ExecutableTrailblazeTool -> {
-        toolsExecuted.add(tool)
-        handleExecutableToolBlocking(tool, context)
+        toolsExecuted.add(repoResolvedTool)
+        handleExecutableToolBlocking(repoResolvedTool, context)
       }
       is DelegatingTrailblazeTool -> {
-        executeDelegatingTool(tool, context, toolsExecuted) { mappedTool ->
+        executeDelegatingTool(repoResolvedTool, context, toolsExecuted) { mappedTool ->
           handleExecutableToolBlocking(mappedTool, context)
         }
       }
       is OtherTrailblazeTool -> throw TrailblazeException(
+        // Align prose with `HostOnDeviceRpcTrailblazeAgent.executeTool`'s else-branch
+        // diagnostic so an operator triaging a failed trail sees the same precise
+        // taxonomy ("class-backed, YAML-defined, or dynamic scripted tool") regardless
+        // of which agent fired. Drift between the two messages would make triage
+        // depend on which dispatcher the trail's driver routes through — confusing
+        // for a debugger who doesn't know that detail.
         message = buildString {
-          appendLine("Unknown tool '${tool.toolName}' is not registered and cannot be executed.")
-          appendLine("This usually means the tool's class is not in the custom tool classes for this app target.")
-          appendLine("Ensure the app target is selected (e.g., in the UI or via CLI) and that it registers this tool via getCustomToolsForDriver().")
-          appendLine("Raw parameters: ${tool.raw}")
+          appendLine(
+            "Unknown tool '${repoResolvedTool.toolName}' is not registered in this session's " +
+              "tool repo as a class-backed, YAML-defined, or dynamic scripted tool, and cannot " +
+              "be executed.",
+          )
+          appendLine(
+            "This usually means the tool's class is not in the custom tool classes for this app " +
+              "target, OR the dynamic registration (#2749 inline scripted tools, subprocess MCP) " +
+              "failed at session start (check earlier daemon log for a `Could not resolve` " +
+              "breadcrumb).",
+          )
+          appendLine(
+            "Ensure the app target is selected (e.g., in the UI or via CLI) and that it " +
+              "registers this tool via getCustomToolsForDriver(), or that its scripted-tool " +
+              "descriptor under <trailmap>/tools/ loaded cleanly.",
+          )
+          appendLine("Raw parameters: ${repoResolvedTool.raw}")
         },
       )
       else -> throw TrailblazeException(
         message = buildString {
-          appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - ${tool}.")
+          appendLine("Unhandled Trailblaze tool ${repoResolvedTool::class.java.simpleName} - ${repoResolvedTool}.")
           appendLine("Supported Trailblaze Tools must implement one of the following:")
           appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
           appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")

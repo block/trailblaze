@@ -98,10 +98,10 @@ data class LlmRequestUsageAndCost(
      * Calculates cost from LLM response without token breakdown.
      * Use this when you don't have access to the original request data.
      */
-    fun List<Message.Response>.calculateCost(
+    fun Message.Assistant.calculateCost(
       trailblazeLlmModel: TrailblazeLlmModel,
     ): LlmRequestUsageAndCost {
-      val usage = this.last().metaInfo
+      val usage = this.metaInfo
       val promptTokens = usage.inputTokensCount?.toLong() ?: 0L
       val completionTokens = usage.outputTokensCount?.toLong() ?: 0L
       val cachedTokens = CachedTokenExtractor.extractCacheReadTokens(usage.metadata)

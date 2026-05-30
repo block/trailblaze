@@ -1,0 +1,26 @@
+# Demo trailmap for the Google Clock target. Loaded as a workspace trailmap from the opensource
+# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
+# adopters running outside this repo do not see this target unless they declare a workspace
+# trailmap with the same id.
+#
+# Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
+# framework trailmap via `dependencies: [trailblaze]`. Platforms that only need defaults are
+# declared as empty maps (`{}`) — the explicit signal "this platform exists, fill in
+# everything from defaults."
+id: clock
+dependencies:
+  - trailblaze
+target:
+  display_name: Google Clock
+  tools:
+    - clock_android_launchApp
+    - clock_clearAlarms
+  platforms:
+    android:
+      app_ids:
+        - com.google.android.deskclock
+        - com.android.deskclock
+    ios: {}
+    web: {}
+    compose: {}
+# Waypoint YAMLs are auto-discovered from `waypoints/**.waypoint.yaml` (any depth).

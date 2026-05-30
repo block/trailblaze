@@ -8,11 +8,31 @@
 #   ./trailblaze "command"        - Runs from uber JAR, rebuilding only when source changes (default)
 #   ./trailblaze --gradle "cmd"   - Always runs via Gradle (slower but guaranteed fresh)
 #   BLAZE_JAR=0 ./trailblaze      - Same as --gradle, via environment variable
+#
+# Environment variables:
+#   TRAILBLAZE_SDK_DIR            - Auto-pinned to $SCRIPT_DIR/sdks/typescript when that
+#                                   path exists, so the analyzer-backed enrichment for
+#                                   meta-only scripted-tool descriptors resolves from
+#                                   any CWD. Override to point at a different SDK tree
+#                                   (e.g., installed-CLI setups, tests against a fixture).
 
 TRAILBLAZE_MODULE="${TRAILBLAZE_MODULE:-:trailblaze-desktop}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TRAILBLAZE_LAUNCHER="${TRAILBLAZE_LAUNCHER:-$SCRIPT_DIR/trailblaze}"
+
+# Auto-pin TRAILBLAZE_SDK_DIR to this repo's `sdks/typescript` when launching from a
+# source checkout. The analyzer's walk-up resolver finds the SDK from any CWD under the
+# repo tree, but breaks down when the user invokes from the repo root (the walk-up only
+# climbs to ancestors, never descends), so meta-only scripted-tool descriptors fail to
+# enrich. Pinning here means a user running `./trailblaze check --workspace …/some/trailmap`
+# from the repo root gets the same SDK resolution as one running from inside the trailmap.
+# Honors a caller-set override so explicit values (installed-CLI setups, tests pointing
+# at a fixture SDK) still take precedence.
+if [ -z "${TRAILBLAZE_SDK_DIR:-}" ] && [ -f "$SCRIPT_DIR/sdks/typescript/tools/extract-tool-defs.mjs" ]; then
+  export TRAILBLAZE_SDK_DIR="$SCRIPT_DIR/sdks/typescript"
+fi
+
 source "$SCRIPT_DIR/scripts/dev-jar-cache.sh"
 
 # ---------------------------------------------------------------------------

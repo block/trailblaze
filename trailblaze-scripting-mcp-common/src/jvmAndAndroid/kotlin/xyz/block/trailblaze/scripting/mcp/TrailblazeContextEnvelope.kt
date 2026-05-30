@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.scripting.mcp
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
@@ -18,7 +19,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *
  *  1. **Legacy arg envelope** under the reserved `_trailblazeContext` argument key — shape
  *     frozen by the conventions devlog (§ 2): `{ memory, device }`. Existing raw-SDK tools
- *     (e.g. `examples/android-sample-app/trails/config/packs/sampleapp/tools/mcp/tools.ts`) read from
+ *     (e.g. `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/mcp/tools.ts`) read from
  *     this key directly. Must stay backwards-compatible.
  *
  *  2. **`_meta.trailblaze` envelope** — richer shape the scripting SDK consumes, per the
@@ -69,6 +70,14 @@ object TrailblazeContextEnvelope {
   /** Top-level `_meta` bucket holding the Trailblaze envelope. */
   const val META_KEY: String = "trailblaze"
 
+  // Wire-key constants for the `_meta.trailblaze.{memory,memoryDelta,memoryDeletions}`
+  // sub-fields. Mirrored on the TS side as `META_KEY_MEMORY` / `META_KEY_MEMORY_DELTA` /
+  // `META_KEY_MEMORY_DELETIONS` in [./sdks/typescript/src/memory.ts]; a rename must
+  // happen on both sides in lockstep or the inbound/outbound parsers silently drift.
+  internal const val META_KEY_MEMORY: String = "memory"
+  internal const val META_KEY_MEMORY_DELTA: String = "memoryDelta"
+  internal const val META_KEY_MEMORY_DELETIONS: String = "memoryDeletions"
+
   /**
    * Runtime tag stamped onto `_meta.trailblaze.runtime` for invocations dispatched through
    * the on-device QuickJS bundle runtime (`:trailblaze-scripting-bundle`). TS SDK consumers
@@ -92,7 +101,7 @@ object TrailblazeContextEnvelope {
   /** Lower-level entry point so tests can construct an envelope without a full context. */
   fun buildLegacyArgEnvelope(memory: AgentMemory, device: TrailblazeDeviceInfo): JsonObject =
     buildJsonObject {
-      putJsonObject("memory") {
+      putJsonObject(META_KEY_MEMORY) {
         memory.variables.forEach { (k, v) ->
           if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
         }
@@ -160,12 +169,66 @@ object TrailblazeContextEnvelope {
       put("invocationId", invocationId)
       putDeviceObject(device)
       if (target != null) putTargetObject(target)
-      putJsonObject("memory") {
+      putJsonObject(META_KEY_MEMORY) {
         memory.variables.forEach { (k, v) ->
           if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
         }
       }
     }
+  }
+
+  /**
+   * Apply a tool-result memory delta to [memory]. Reads `_meta.trailblaze.memoryDelta`
+   * (a `Record<String, String>` of sets) and `_meta.trailblaze.memoryDeletions` (a
+   * `List<String>` of removed keys) from the [resultMeta] block emitted by the TS SDK's
+   * `attachMemoryDelta`. Symmetric counterpart to [buildMetaTrailblaze]'s `memory`
+   * snapshot — that one carries host-to-handler reads, this one carries
+   * handler-to-host writes.
+   *
+   * No-op when [resultMeta] is null, has no `trailblaze` envelope, or has neither
+   * `memoryDelta` nor `memoryDeletions` set. Malformed entries (non-string values, a
+   * non-string key in deletions) are skipped individually rather than failing the
+   * apply — a producer-side bug that emits a single bad entry shouldn't sabotage the
+   * other writes in the same delta.
+   *
+   * Returns true when at least one set or deletion was applied; useful for tests and
+   * for callers that want to log whether a delta arrived.
+   */
+  fun applyResultMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): Boolean {
+    if (resultMeta == null) return false
+    val trailblaze = resultMeta[META_KEY] as? JsonObject ?: return false
+    var applied = false
+    (trailblaze[META_KEY_MEMORY_DELTA] as? JsonObject)?.forEach { (k, v) ->
+      val prim = v as? JsonPrimitive ?: return@forEach
+      if (!prim.isString) return@forEach
+      // Preserve redaction on overwrites: if the host already marked this key sensitive
+      // (e.g. `rememberSensitive("pin", ...)`), the TS-side scripted tool can't see the
+      // sensitive flag through the snapshot, but the LOG it emits via `remember` would
+      // leak the new value in plain text. Route the apply through `rememberSensitive`
+      // when the key carries an existing sensitive marker so the log stays `[REDACTED]`.
+      if (k in memory.sensitiveKeys) {
+        memory.rememberSensitive(k, prim.content)
+      } else {
+        memory.remember(k, prim.content)
+      }
+      applied = true
+    }
+    (trailblaze[META_KEY_MEMORY_DELETIONS] as? JsonArray)?.forEach { entry ->
+      val prim = entry as? JsonPrimitive ?: return@forEach
+      if (!prim.isString) return@forEach
+      val k = prim.content
+      if (k in memory.sensitiveKeys) {
+        // Symmetric to the sensitive-preserve guard on the set path: a TS scripted tool
+        // can clear a sensitive value, but it shouldn't be able to UNMARK the key — the
+        // host owns the sensitivity lifecycle. Drop the value only; keep the marker so a
+        // future `rememberSensitive`/delta-write through this key still redacts logs.
+        memory.variables.remove(k)
+      } else {
+        memory.delete(k)
+      }
+      applied = true
+    }
+    return applied
   }
 
   /**

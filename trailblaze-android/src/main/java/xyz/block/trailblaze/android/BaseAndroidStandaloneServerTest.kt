@@ -14,9 +14,11 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.CustomTrailblazeTools
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
  * Base standalone runner test for On-Device Android Trailblaze Tests
@@ -46,8 +48,17 @@ abstract class BaseAndroidStandaloneServerTest {
    * here. Implementations should thread it into the constructed agent via
    * `AndroidTrailblazeRule(agentMemoryOverride = ...)` so writes from on-device tools
    * land in the same instance the caller reads from after this returns.
+   *
+   * Returns the last successfully-executed tool's
+   * [TrailblazeToolResult.Success] (or `null` if the trail's items produced no Success — every
+   * tool errored, the trail had no actionable steps, etc.). The callback wrapper
+   * ([createRunTrailblazeYamlCallback]) bundles this into the [RunYamlCallbackResult] the
+   * upstream handler propagates onto [xyz.block.trailblaze.llm.RunYamlResponse.toolMessage] /
+   * [xyz.block.trailblaze.llm.RunYamlResponse.toolStructuredContent], so a host-side scripted-tool
+   * author composing dual-mode primitives over RPC receives the same payload the host-side actual
+   * would have produced.
    */
-  abstract fun handleRunRequest(runYamlRequest: RunYamlRequest, agentMemory: AgentMemory)
+  abstract fun handleRunRequest(runYamlRequest: RunYamlRequest, agentMemory: AgentMemory): TrailblazeToolResult.Success?
 
   protected var runTestCoroutineScope: CoroutineScope? = null
 
@@ -98,18 +109,20 @@ abstract class BaseAndroidStandaloneServerTest {
    * This callback handles session lifecycle management around [handleRunRequest].
    * Use this when constructing an [OnDeviceRpcServer] in subclasses.
    */
-  fun createRunTrailblazeYamlCallback(): suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession =
+  fun createRunTrailblazeYamlCallback(): suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult =
     { runYamlRequest: RunYamlRequest, session: TrailblazeSession, agentMemory: AgentMemory ->
       // Set the session on the logging rule so it's available to all components
       // that use sessionProvider (AndroidTrailblazeRule and its subcomponents)
       trailblazeLoggingRule.setSession(session)
-      try {
+      val lastToolSuccess: TrailblazeToolResult.Success? = try {
         handleRunRequest(runYamlRequest, agentMemory)
       } finally {
         // Clear the session after execution to prevent stale sessions
         trailblazeLoggingRule.setSession(null)
       }
-      session // Return the session unchanged; memory writes flow through the shared instance.
+      // Session passes through unchanged; memory writes flow through the shared instance.
+      // Tool payload is mirrored into the response envelope by the handler.
+      RunYamlCallbackResult(session = session, lastToolSuccess = lastToolSuccess)
     }
 
 }

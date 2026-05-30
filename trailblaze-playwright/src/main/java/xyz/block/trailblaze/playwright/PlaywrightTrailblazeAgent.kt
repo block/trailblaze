@@ -116,6 +116,12 @@ class PlaywrightTrailblazeAgent(
       workingDirectory = workingDirectory,
       sessionDirProvider = sessionDirProvider,
       inflightRequestTracker = inflightRequestTracker,
+      // Threads the agent's tool repo through so Kotlin tools composing framework
+      // tools via `ctx.invokeFrameworkTool(...)` resolve them by name. See the same
+      // wiring on `MaestroTrailblazeAgent.buildExecutionContext` — without it, the
+      // bridge throws "toolRepo not wired" on every Kotlin-side call site in a
+      // Playwright-driven session.
+      toolRepo = trailblazeToolRepo,
     )
     return context
   }

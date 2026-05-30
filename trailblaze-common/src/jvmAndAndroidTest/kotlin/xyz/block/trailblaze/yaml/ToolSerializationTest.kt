@@ -287,7 +287,7 @@ class ToolSerializationTest {
 
   @Test
   fun deserializePressBackTool() {
-    // `pressBack` is now a YAML-defined tool (see trailblaze-config/tools/pressBack.yaml).
+    // `pressBack` is now a YAML-defined tool (see trails/config/tools/pressBack.yaml).
     // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
     val yaml = """
 - tools:

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+  <!-- Koog 1.0.0 raised minSdkVersion to 35 on its Android variants. This androidTest APK
+       only uses JVM-portable Koog surface (LLM client constructors, message types,
+       HttpClient setup); override the library minSdk so it can still target API 26. -->
+  <uses-sdk tools:overrideLibrary="
+      ai.koog.agents.core,
+      ai.koog.agents.ext,
+      ai.koog.agents.features.event.handler,
+      ai.koog.agents.features.trace,
+      ai.koog.agents.tools,
+      ai.koog.agents.utils,
+      ai.koog.embeddings.base,
+      ai.koog.http.client.core,
+      ai.koog.http.client.ktor,
+      ai.koog.prompt.executor.anthropic.client,
+      ai.koog.prompt.executor.clients,
+      ai.koog.prompt.executor.google.client,
+      ai.koog.prompt.executor.model,
+      ai.koog.prompt.executor.ollama.client,
+      ai.koog.prompt.executor.openai.client,
+      ai.koog.prompt.executor.openai.client.base,
+      ai.koog.prompt.executor.openrouter.client,
+      ai.koog.prompt.llm,
+      ai.koog.prompt.markdown,
+      ai.koog.prompt.model,
+      ai.koog.prompt.processor,
+      ai.koog.prompt.structure,
+      ai.koog.prompt.tokenizer,
+      ai.koog.rag.base,
+      ai.koog.serialization.core,
+      ai.koog.utils
+  " />
+</manifest>

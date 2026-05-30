@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * The two helpers split a single concern that used to live in `resolveWaypointRoot`
  * alone: the original always emitted "Warning: no --target specified" when neither
  * flag was given, which fired on every successful `waypoint list` (where classpath
- * packs supply 100+ results) and was a daily-flow noise regression. The fix split
+ * trailmaps supply 100+ results) and was a daily-flow noise regression. The fix split
  * that into:
  *
  *  - `resolveWaypointRoot` — silent unless the user explicitly passed `--target` and
@@ -75,9 +75,9 @@ class WaypointCommandSharedTest {
   }
 
   @Test
-  fun `--target resolves to workspace pack when one exists`() {
+  fun `--target resolves to workspace trailmap when one exists`() {
     val workspaceRoot = newTempDir()
-    val packDir = File(workspaceRoot, "trails/config/packs/myapp/waypoints").apply {
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/myapp/waypoints").apply {
       mkdirs()
     }
     // Workspace anchor must exist for TrailblazeWorkspaceConfigResolver to find it.
@@ -91,7 +91,7 @@ class WaypointCommandSharedTest {
       )
     }
 
-    assertEquals(packDir.canonicalFile, resolved.canonicalFile)
+    assertEquals(trailmapDir.canonicalFile, resolved.canonicalFile)
     assertEquals(
       "",
       capturedErr.toString(),
@@ -100,16 +100,16 @@ class WaypointCommandSharedTest {
   }
 
   @Test
-  fun `--target with no matching workspace pack warns and falls back to default`() {
+  fun `--target with no matching workspace trailmap warns and falls back to default`() {
     val workspaceRoot = newTempDir()
     val configDir = File(workspaceRoot, "trails/config").apply { mkdirs() }
     File(configDir, "trailblaze.yaml").writeText("")
-    // No packs/missing-pack/ directory created.
+    // No trailmaps/missing-trailmap/ directory created.
 
     val resolved = withCapture {
       resolveWaypointRoot(
         rootOverride = null,
-        targetId = "missing-pack",
+        targetId = "missing-trailmap",
         fromPath = workspaceRoot.toPath(),
       )
     }
@@ -117,12 +117,12 @@ class WaypointCommandSharedTest {
     assertEquals(File(DEFAULT_WAYPOINT_ROOT), resolved)
     val err = capturedErr.toString()
     assertTrue(
-      "Warning: --target missing-pack did not resolve" in err,
+      "Warning: --target missing-trailmap did not resolve" in err,
       "expected target-not-resolved warning, got: $err",
     )
     assertTrue(
       "pass --root" in err,
-      "expected --root hint for classpath-bundled packs, got: $err",
+      "expected --root hint for classpath-bundled trailmaps, got: $err",
     )
   }
 
@@ -134,7 +134,7 @@ class WaypointCommandSharedTest {
     // exercises the full default-arg path: NO fromPath argument supplied, so
     // resolveWaypointRoot must consult the thread-local.
     val workspaceRoot = newTempDir()
-    val packDir = File(workspaceRoot, "trails/config/packs/myapp/waypoints").apply { mkdirs() }
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/myapp/waypoints").apply { mkdirs() }
     File(workspaceRoot, "trails/config/trailblaze.yaml").writeText("")
 
     val resolved = withCapture {
@@ -143,7 +143,7 @@ class WaypointCommandSharedTest {
       }
     }
 
-    assertEquals(packDir.canonicalFile, resolved.canonicalFile)
+    assertEquals(trailmapDir.canonicalFile, resolved.canonicalFile)
     assertEquals(
       "",
       capturedErr.toString(),
@@ -188,7 +188,7 @@ class WaypointCommandSharedTest {
     assertEquals(
       "",
       capturedErr.toString(),
-      "the no-flags case must be silent — classpath packs typically supply results, " +
+      "the no-flags case must be silent — classpath trailmaps typically supply results, " +
         "so warning during resolution would fire on every successful 'waypoint list'",
     )
   }
@@ -212,7 +212,7 @@ class WaypointCommandSharedTest {
   @Test
   fun `maybeWarnNoTarget stays silent when --target was given even if results are empty`() {
     // The user already scoped via --target; if it came up empty, the resolveWaypointRoot
-    // warning has already fired (or it found the right pack and just had no waypoints).
+    // warning has already fired (or it found the right trailmap and just had no waypoints).
     // Don't double-warn.
     withCapture {
       maybeWarnNoTarget(rootOverride = null, targetId = "myapp", resultIsEmpty = true)

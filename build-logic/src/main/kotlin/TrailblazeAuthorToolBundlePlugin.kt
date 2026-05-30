@@ -12,7 +12,7 @@ import org.gradle.api.Project
  *
  * trailblazeAuthorToolBundles {
  *   register("squareCardReader") {
- *     sourceDir.set(layout.projectDirectory.dir("trailblaze-config/quickjs-tools"))
+ *     sourceDir.set(layout.projectDirectory.dir("trails/config/quickjs-tools"))
  *     autoInstall.set(false) // when another task already manages this node_modules/
  *   }
  * }
@@ -76,6 +76,11 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
         // alone still triggers a rebuild — the install task would otherwise skip (its only
         // input is `package.json`) and bundling would run against a `node_modules/` that no
         // longer matches the checked-out lock state.
+        //
+        // Unlike the framework's own TypeScript SDK — which is bun-canonical only (see
+        // `TrailblazeSdkBundlePlugin`) — author-provided tool projects can use whichever
+        // package manager the team already standardized on, so this allowlist tolerates
+        // every lockfile shape `bun`, `npm`, `yarn`, and `pnpm` emit.
         task.inputSources.from(
           spec.sourceDir.map { srcDir ->
             srcDir.asFileTree.matching {
@@ -101,7 +106,7 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
         val installTask = project.tasks.register(installTaskName, InstallAuthorToolDepsTask::class.java) { task ->
           task.group = "trailblaze"
           task.description =
-            "Installs npm deps (`bun install` with `npm install` fallback) for author tool bundle `${spec.name}`."
+            "Installs npm deps (`bun install`) for author tool bundle `${spec.name}`."
           task.bundleName.set(spec.name)
           task.packageJson.set(spec.sourceDir.file("package.json"))
           task.installSentinel.set(spec.sourceDir.file("node_modules/.install-ok"))

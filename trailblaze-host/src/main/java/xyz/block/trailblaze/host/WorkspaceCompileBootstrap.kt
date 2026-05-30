@@ -1,12 +1,16 @@
 package xyz.block.trailblaze.host
 
 import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.compile.TrailblazeCompiler
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
 import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
@@ -21,16 +25,16 @@ import java.nio.file.Paths
 import java.security.MessageDigest
 
 /**
- * Lazy daemon-init rebundle of workspace pack manifests.
+ * Lazy daemon-init rebundle of workspace trailmap manifests.
  *
  * The framework JAR ships its bundled `targets/<id>.yaml` pre-compiled at build time
  * via the `:trailblaze-models` build-logic generator, so a vanilla checkout has working
- * targets before `trailblaze compile` is ever run. Workspace-authored packs under
- * `trails/config/packs/<id>/pack.yaml` are NOT covered by that build-time pass, though,
+ * targets before `trailblaze compile` is ever run. Workspace-authored trailmaps under
+ * `trails/config/trailmaps/<id>/trailmap.yaml` are NOT covered by that build-time pass, though,
  * so until this bootstrap ran the user had to manually invoke `trailblaze compile` after
  * each manifest edit. This is the same pain `cargo run` saves Rust users from.
  *
- * On daemon startup, [bootstrap] computes a hash of the workspace pack manifests plus
+ * On daemon startup, [bootstrap] computes a hash of the workspace trailmap manifests plus
  * the running framework version and compares it against the hash stored from the last
  * successful compile. If they match, the existing `dist/targets/` is fresh and we skip;
  * if they don't (or the hash file is absent), [TrailblazeCompiler.compile] runs in-process
@@ -74,11 +78,11 @@ object WorkspaceCompileBootstrap {
     data object NoWorkspace : BootstrapResult
 
     /**
-     * Workspace exists but has no `packs/` directory or no pack manifests
+     * Workspace exists but has no `trailmaps/` directory or no trailmap manifests
      * inside it — nothing to compile. Distinguished from [NoWorkspace] only for
      * test legibility; downstream code treats both identically.
      */
-    data object NoWorkspacePacks : BootstrapResult
+    data object NoWorkspaceTrailmaps : BootstrapResult
 
     /** Stored hash matched and `dist/targets/` exists; compile was skipped. */
     data object UpToDate : BootstrapResult
@@ -97,9 +101,9 @@ object WorkspaceCompileBootstrap {
   ) : RuntimeException(buildErrorMessage(errors))
 
   /**
-   * Discovers the workspace from CWD and rebundles workspace packs if their hash has
+   * Discovers the workspace from CWD and rebundles workspace trailmaps if their hash has
    * changed since the last successful compile. Safe to call from any process that's
-   * about to initialize the daemon — the cost is one SHA-256 walk over `pack.yaml` files
+   * about to initialize the daemon — the cost is one SHA-256 walk over `trailmap.yaml` files
    * when the bundle is fresh.
    *
    * @throws WorkspaceCompileException if the compile fails. Daemon startup should let
@@ -112,8 +116,8 @@ object WorkspaceCompileBootstrap {
     // Capture the load-time content hash before the compile dance below so it reflects
     // exactly the on-disk state the daemon is about to load — any edit that lands after
     // this line will diverge from the captured hash and trip the drift warning. Done at
-    // every bootstrap call (NoWorkspacePacks/UpToDate/Recompiled all reach this) so a
-    // packs-less workspace still gets drift coverage for its tool/toolset/provider YAMLs.
+    // every bootstrap call (NoWorkspaceTrailmaps/UpToDate/Recompiled all reach this) so a
+    // trailmaps-less workspace still gets drift coverage for its tool/toolset/provider YAMLs.
     xyz.block.trailblaze.config.project.WorkspaceContentHasher
       .captureForDaemon(configDir, TrailblazeVersion.version)
     return bootstrap(configDir = configDir, version = TrailblazeVersion.version)
@@ -129,7 +133,7 @@ object WorkspaceCompileBootstrap {
   fun bootstrapOrExit(): BootstrapResult = try {
     bootstrap()
   } catch (e: WorkspaceCompileException) {
-    Console.error(e.message ?: "Workspace pack compilation failed.")
+    Console.error(e.message ?: "Workspace trailmap compilation failed.")
     kotlin.system.exitProcess(1)
   }
 
@@ -139,49 +143,49 @@ object WorkspaceCompileBootstrap {
    * baked-in [TrailblazeVersion].
    */
   internal fun bootstrap(configDir: File, version: String): BootstrapResult {
-    val packsDir = File(configDir, TrailblazeConfigPaths.PACKS_SUBDIR)
+    val trailmapsDir = File(configDir, TrailblazeConfigPaths.TRAILMAPS_SUBDIR)
 
-    // Typed-bindings + SDK extraction live OUTSIDE the workspace-packs gate below and
+    // Typed-bindings + SDK extraction live OUTSIDE the workspace-trailmaps gate below and
     // OUTSIDE the hash-skip gate inside it. Two regeneration invariants ride on this:
-    //   1. A deleted `<packDir>/tools/.trailblaze/client.d.ts` regenerates on the next
+    //   1. A deleted `<trailmapDir>/tools/trailblaze-client.d.ts` regenerates on the next
     //      daemon start without needing the input hash to invalidate first.
     //   2. The workspace SDK declaration bundle exists as soon as the daemon sees a
-    //      workspace, even when there are no workspace packs yet (a fresh clone or a
-    //      classpath-only consumer). Without this, the very first pack a user authors
+    //      workspace, even when there are no workspace trailmaps yet (a fresh clone or a
+    //      classpath-only consumer). Without this, the very first trailmap a user authors
     //      would point at a non-existent `.trailblaze/sdk/dist/index.d.ts`.
     //
     // Both helpers are idempotent (skip-write-if-content-matches) so re-running them
     // every bootstrap is sub-millisecond on the common case. Failures downgrade to
     // `Console.error` rather than aborting the daemon; the CLI path (`trailblaze
     // compile`) elevates the same failures to non-zero exit.
-    // Order matters: per-pack codegen asserts the SDK bundle exists (so it
-    // doesn't write per-pack tsconfigs pointing at a missing `paths` target), and
+    // Order matters: per-trailmap codegen asserts the SDK bundle exists (so it
+    // doesn't write per-trailmap tsconfigs pointing at a missing `paths` target), and
     // that file is written by `runWorkspaceTypeScriptSetup`. If setup fails,
-    // skip per-pack codegen with a single explanatory line — running it anyway
+    // skip per-trailmap codegen with a single explanatory line — running it anyway
     // would produce a misleading second "codegen failed" diagnostic that masks
     // the SDK-extraction root cause.
     val workspaceSetupOk = runWorkspaceTypeScriptSetup(configDir)
     if (workspaceSetupOk) {
-      runPerPackTypedBindingsCodegen(configDir)
+      runPerTrailmapTypedBindingsCodegen(configDir)
     } else {
       Console.error(
-        "Per-pack typed-bindings codegen skipped because workspace TypeScript setup " +
+        "Per-trailmap typed-bindings codegen skipped because workspace TypeScript setup " +
           "failed above (see prior error). Restart the daemon after fixing the SDK " +
-          "extraction failure to regenerate per-pack client.d.ts / tsconfig.json / .gitignore.",
+          "extraction failure to regenerate per-trailmap trailblaze-client.d.ts / tsconfig.json / .gitignore.",
       )
     }
 
-    if (!packsDir.isDirectory) return BootstrapResult.NoWorkspacePacks
+    if (!trailmapsDir.isDirectory) return BootstrapResult.NoWorkspaceTrailmaps
 
-    val packManifests = listPackManifests(packsDir)
-    if (packManifests.isEmpty()) return BootstrapResult.NoWorkspacePacks
+    val trailmapManifests = listTrailmapManifests(trailmapsDir)
+    if (trailmapManifests.isEmpty()) return BootstrapResult.NoWorkspaceTrailmaps
 
     val outputDir = File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH)
     val distDir = File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR)
     val hashFile = File(distDir, HASH_FILENAME)
 
-    val expectedHash = computeWorkspaceHash(packManifests, version)
-    val expectedTargetIds = packManifests.map { it.id }
+    val expectedHash = computeWorkspaceHash(trailmapManifests, version)
+    val expectedTargetIds = trailmapManifests.map { it.id }
 
     // Cross-process serialization. Two daemons starting at once in the same workspace
     // would both observe a stale hash, both call TrailblazeCompiler.compile() against
@@ -200,24 +204,46 @@ object WorkspaceCompileBootstrap {
       // Console.log for explicit `trailblaze compile` invocations, but those are
       // already a foregrounded operation the user opted into; the daemon-init
       // rebundle is implicit and hiding it in quiet mode would look like a hang.
-      Console.info("Recompiling workspace packs...")
+      Console.info("Recompiling workspace trailmaps...")
       // Reference validation needs to see workspace-authored toolsets and tools that live
       // on the filesystem under the user's `trails/config/`, not only classpath-bundled
       // ids. Pass a composite source layered like `AppTargetDiscovery.buildResourceSource`
-      // (classpath + workspace filesystem) so a workspace `trails/config/toolsets/<id>.yaml`
-      // or `trails/config/tools/<id>.tool.yaml` resolves cleanly. Without this layering, a
-      // pack that references its own workspace toolset would fail compile with "unknown
-      // toolset" even though the toolset is right there on disk.
+      // (classpath + workspace filesystem) so a workspace
+      // `trails/config/trailmaps/<id>/toolsets/<name>.yaml` or
+      // `trails/config/trailmaps/<id>/tools/<name>.tool.yaml` resolves cleanly. Without
+      // this layering, a trailmap that references its own workspace toolset would fail
+      // compile with "unknown toolset" even though the toolset is right there on disk.
       val referenceSource = CompositeConfigResourceSource(
         sources = listOf(
           ClasspathConfigResourceSource,
           FilesystemConfigResourceSource(rootDir = configDir),
         ),
       )
+      // Wire enrichment so meta-only scripted-tool descriptors (`script:` + `_meta:`
+      // with `name:` / `description:` / `inputSchema:` derived from the typed `.ts`
+      // source) resolve at daemon-init recompile time. Without this, a workspace
+      // that's adopted the typed-authoring shape fails the bootstrap compile and the
+      // daemon refuses to come up, even though the per-trailmap codegen path below would
+      // resolve it correctly.
+      //
+      // When the resolver returns null (no `bun` on PATH, missing TRAILBLAZE_SDK_DIR,
+      // ts-json-schema-generator not installed), log a one-line breadcrumb so the
+      // downstream "enrichment not wired" loader error has a root cause sitting next
+      // to it in the same log instead of arriving with no context.
+      val scriptedToolEnrichment = resolveScriptedToolEnrichment()
+      if (scriptedToolEnrichment == null) {
+        Console.info(
+          "Workspace recompile: scripted-tool analyzer unavailable — meta-only " +
+            "descriptors will fail to load. Ensure `bun` is on PATH and the SDK at " +
+            "TRAILBLAZE_SDK_DIR carries node_modules/ts-json-schema-generator.",
+        )
+      }
       val result = TrailblazeCompiler.compile(
-        packsDir = packsDir,
+        trailmapsDir = trailmapsDir,
         outputDir = outputDir,
         referenceSource = referenceSource,
+        commandLabel = "compile",
+        scriptedToolEnrichment = scriptedToolEnrichment,
       )
       if (!result.isSuccess) {
         // Drop a stale hash file so a subsequent edit-and-retry doesn't accidentally pass
@@ -234,13 +260,13 @@ object WorkspaceCompileBootstrap {
   /**
    * Extract the bundled `@trailblaze/scripting` declaration bundle to
    * `<workspaceRoot>/.trailblaze/sdk/dist/index.d.ts`. No `bun install` — the SDK type
-   * surface is delivered as a single self-contained `.d.ts` consumed via the per-pack
+   * surface is delivered as a single self-contained `.d.ts` consumed via the per-trailmap
    * tsconfig's `paths` mapping. Failures are non-fatal: the daemon comes up regardless
    * because trail execution doesn't depend on IDE typing.
    *
    * Returns `true` when setup completed (or there was nothing to do), `false` when an
    * exception was caught. The caller uses this to decide whether to run downstream
-   * per-pack codegen (which would otherwise hit the missing-bundle assert and produce a
+   * per-trailmap codegen (which would otherwise hit the missing-bundle assert and produce a
    * confusing second error).
    */
   private fun runWorkspaceTypeScriptSetup(configDir: File): Boolean = try {
@@ -256,62 +282,89 @@ object WorkspaceCompileBootstrap {
   }
 
   /**
-   * Re-resolve the pack pool from [configDir] and emit per-pack `client.d.ts` files
-   * plus framework-managed `tools/tsconfig.json` + pack-root `.gitignore` artifacts.
-   * Zero-pack pools no-op cleanly inside the emitters. Failures downgrade to a
+   * Re-resolve the trailmap pool from [configDir] and emit per-trailmap `trailblaze-client.d.ts` files
+   * plus framework-managed `tools/tsconfig.json` + trailmap-root `.gitignore` artifacts.
+   * Zero-trailmap pools no-op cleanly inside the emitters. Failures downgrade to a
    * warning for the same daemon-must-come-up reason as [runWorkspaceTypeScriptSetup].
    */
-  private fun runPerPackTypedBindingsCodegen(configDir: File) {
+  private fun runPerTrailmapTypedBindingsCodegen(configDir: File) {
     try {
       val loaded = LoadedTrailblazeProjectConfig(
         raw = TrailblazeProjectConfig(),
         sourceFile = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME),
       )
-      val resolvedPacks = TrailblazeProjectConfigLoader
-        .resolveRuntime(loaded, includeClasspathPacks = true)
-        .resolvedPacks
-      PerPackClientDtsEmitter.emit(resolvedPacks = resolvedPacks)
-      PerPackTsconfigEmitter.emit(
+      val resolvedTrailmaps = TrailblazeProjectConfigLoader
+        .resolveRuntime(
+          loaded,
+          includeClasspathTrailmaps = true,
+          scriptedToolEnrichment = resolveScriptedToolEnrichment(),
+        )
+        .resolvedTrailmaps
+      PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
+      PerTrailmapTsconfigEmitter.emit(
         workspaceRoot = configDir.parentFile.toPath(),
-        resolvedPacks = resolvedPacks,
+        resolvedTrailmaps = resolvedTrailmaps,
       )
     } catch (e: TrailblazeProjectConfigException) {
       Console.error(
-        "Typed-bindings codegen skipped — pack re-resolution failed " +
-          "(daemon will continue without per-pack client.d.ts / tsconfig.json / .gitignore files): " +
+        "Typed-bindings codegen skipped — trailmap re-resolution failed " +
+          "(daemon will continue without per-trailmap trailblaze-client.d.ts / tsconfig.json / .gitignore files): " +
           "${e.message ?: e.javaClass.simpleName}",
       )
     } catch (e: Exception) {
       Console.error(
-        "Typed-bindings codegen failed (daemon will continue without per-pack " +
-          "client.d.ts / tsconfig.json / .gitignore files): ${e.message ?: e.javaClass.simpleName}",
+        "Typed-bindings codegen failed (daemon will continue without per-trailmap " +
+          "trailblaze-client.d.ts / tsconfig.json / .gitignore files): ${e.message ?: e.javaClass.simpleName}",
       )
     }
   }
 
   /**
-   * Hashes every `<id>/pack.yaml` referenced by [manifests], plus [version], in
-   * deterministic order. Including the version covers the "framework upgrade ⇒ stale
-   * compile output" case: framework-bundled packs that the workspace transitively
-   * depends on can change shape across releases, so a bundle compiled against v1.2 is
-   * not necessarily valid against v1.3. Tying the hash to the running CLI version
-   * forces a recompile across upgrades regardless of whether any workspace `pack.yaml`
-   * was edited.
+   * Delegates to [AnalyzerScriptedToolEnrichment.Companion.resolveFromEnvironment] —
+   * the shared resolver every host call site uses. Kept as a local one-liner so the
+   * call-site at line ~276 reads cleanly without dragging the companion's fully-qualified
+   * name through the resolver chain.
+   */
+  private fun resolveScriptedToolEnrichment(): ScriptedToolEnrichment? =
+    AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+
+  /**
+   * Hashes every `<id>/trailmap.yaml` referenced by [manifests], plus [version] and the
+   * sibling `tools/` subtree content, in deterministic order. Including the version
+   * covers the "framework upgrade ⇒ stale compile output" case: framework-bundled
+   * trailmaps that the workspace transitively depends on can change shape across releases,
+   * so a bundle compiled against v1.2 is not necessarily valid against v1.3. Tying
+   * the hash to the running CLI version forces a recompile across upgrades regardless
+   * of whether any workspace `trailmap.yaml` was edited.
    *
-   * Pack files outside `<id>/pack.yaml` (like authored tool YAMLs under `tools/` or
-   * inline scripts) are intentionally not hashed — they're consumed by
-   * [TrailblazeCompiler] only via the `pack.yaml` ref, so a manifest edit is the
-   * canonical signal that the bundle needs a refresh. If we ever start materializing
-   * tool YAMLs at compile time, expand the hash here in lockstep.
+   * **Tools/ subtree inclusion (meta-only authoring).** Each trailmap's `tools/<id>.yaml`
+   * (the per-tool descriptor) AND each `tools/<id>.ts` (the typed-authoring source)
+   * are hashed alongside `trailmap.yaml`. With the meta-only authoring shape introduced
+   * by PR #3338, the `.ts` file's `trailblaze.tool<I, O>(handler)` declaration is
+   * the source of truth for the tool's `name:` / `inputSchema:` / `description:` —
+   * the analyzer reads it during compile and bakes the extracted metadata into the
+   * resolved target YAML. An author who edits only the `.ts` (e.g., adds an input
+   * field or changes the TSDoc description) now has their change reflected in
+   * `dist/targets/<trailmap>.yaml`, so a recompile must run. Without this, the daemon's
+   * hash-skip would silently keep the stale compile until the user touches
+   * `trailmap.yaml`.
+   *
+   * Files under `tools/` outside the `<name>.yaml` / `<name>.ts` pair (subdirs,
+   * `.gitignore`, generated `.trailblaze/` artifacts, framework-written
+   * `tsconfig.json`) are NOT hashed — those are either build-time-managed by the
+   * framework itself or unrelated to compile output. Files are listed
+   * lexicographically by name so the hash is stable across filesystems with
+   * different directory-listing orders.
    *
    * Manifest content is normalized to LF before hashing so a workspace with CRLF
    * line endings (Windows checkout, mixed-EOL editor) doesn't produce a different
    * hash than the same workspace on macOS / Linux. Without this, switching machines
-   * would force a spurious recompile.
+   * would force a spurious recompile. The same LF-normalization applies to tool
+   * descriptors and `.ts` sources hashed below.
    *
    * Visible for testing.
    */
-  internal fun computeWorkspaceHash(manifests: List<PackManifest>, version: String): String {
+  internal fun computeWorkspaceHash(manifests: List<TrailmapManifest>, version: String): String {
     val md = MessageDigest.getInstance("SHA-256")
     md.update(version.toByteArray(Charsets.UTF_8))
     md.update(SEPARATOR)
@@ -323,37 +376,86 @@ object WorkspaceCompileBootstrap {
         manifest.file.readText(Charsets.UTF_8).replace("\r\n", "\n")
       } catch (e: IOException) {
         throw WorkspaceCompileException(
-          listOf("Cannot read pack manifest at ${manifest.file.absolutePath}: ${e.message}"),
+          listOf("Cannot read trailmap manifest at ${manifest.file.absolutePath}: ${e.message}"),
         )
       }
       md.update(normalized.toByteArray(Charsets.UTF_8))
       md.update(SEPARATOR)
+
+      // Fold the trailmap's `tools/` content into the hash so meta-only authoring edits
+      // (a `.ts`-only change to a tool's TSDoc / type parameters) invalidate the
+      // bundle. Listed lexicographically for cross-filesystem determinism. We hash
+      // both `.yaml` (file-level _meta + script:) and `.ts` (analyzer source) so
+      // either-side edits land — full-YAML descriptors get their .ts ignored at
+      // compile time but the hash still fires (cheap, and avoids growing the hash
+      // logic with a "is this descriptor meta-only?" branch the compiler will
+      // happily skip anyway).
+      //
+      // String literal "tools" mirrors `TRAILMAP_SCRIPTED_TOOLS_DIR` in
+      // `TrailblazeProjectConfigLoader` (private there, intentionally not exported —
+      // the convention is stable and matches the analyzer + bundler's hard-coded
+      // path).
+      val toolsDir = File(manifest.file.parentFile, "tools")
+      if (toolsDir.isDirectory) {
+        // Framework-generated `trailblaze-client.d.ts` lives at the same depth as
+        // author-owned `.ts` source but is NOT input — it's a downstream codegen
+        // artifact. Including it would make every regen invalidate the hash and
+        // force a spurious recompile on the next boot. Filter by exact filename
+        // (sourced from the codegen constant so a future rename stays in sync).
+        //
+        // Assumption: the codegen pipeline writes exactly ONE such file per trailmap.
+        // If a future generator drops additional framework artifacts into `tools/`
+        // (e.g., a sibling `.d.ts`, or a structured-data file), this filter MUST be
+        // widened — otherwise those new artifacts would silently re-enter the hash
+        // and re-introduce the cache-thrash this filter was added to prevent.
+        val toolFiles = toolsDir
+          .listFiles { f ->
+            f.isFile &&
+              (f.name.endsWith(".yaml") || f.name.endsWith(".ts")) &&
+              f.name != WorkspaceClientDtsGenerator.GENERATED_FILE_NAME
+          }
+          ?.sortedBy { it.name }
+          .orEmpty()
+        for (toolFile in toolFiles) {
+          md.update(toolFile.name.toByteArray(Charsets.UTF_8))
+          md.update(SEPARATOR)
+          val toolNormalized = try {
+            toolFile.readText(Charsets.UTF_8).replace("\r\n", "\n")
+          } catch (e: IOException) {
+            throw WorkspaceCompileException(
+              listOf("Cannot read trailmap tool file at ${toolFile.absolutePath}: ${e.message}"),
+            )
+          }
+          md.update(toolNormalized.toByteArray(Charsets.UTF_8))
+          md.update(SEPARATOR)
+        }
+      }
     }
     return md.digest().toLowerHex()
   }
 
   /**
-   * Test convenience overload. Walks [packsDir] for `pack.yaml` files and forwards
+   * Test convenience overload. Walks [trailmapsDir] for `trailmap.yaml` files and forwards
    * to the manifest-list overload above. Production callers use the manifest list
    * directly so the listing happens once per [bootstrap] invocation.
    */
-  internal fun computeWorkspaceHash(packsDir: File, version: String): String =
-    computeWorkspaceHash(listPackManifests(packsDir), version)
+  internal fun computeWorkspaceHash(trailmapsDir: File, version: String): String =
+    computeWorkspaceHash(listTrailmapManifests(trailmapsDir), version)
 
   /**
-   * A workspace pack manifest discovered under `packs/`. Carries both the pack id
+   * A workspace trailmap manifest discovered under `trailmaps/`. Carries both the trailmap id
    * (the directory name) and the manifest file so the hash and the per-target
    * existence check can both reference the same source of truth without relisting
    * the directory.
    */
-  internal data class PackManifest(val id: String, val file: File)
+  internal data class TrailmapManifest(val id: String, val file: File)
 
-  private fun listPackManifests(packsDir: File): List<PackManifest> =
-    packsDir.listFiles { f -> f.isDirectory }
+  private fun listTrailmapManifests(trailmapsDir: File): List<TrailmapManifest> =
+    trailmapsDir.listFiles { f -> f.isDirectory }
       ?.sortedBy { it.name }
       ?.mapNotNull { dir ->
-        val manifest = File(dir, TrailblazeConfigPaths.PACK_MANIFEST_FILENAME)
-        if (manifest.isFile) PackManifest(id = dir.name, file = manifest) else null
+        val manifest = File(dir, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)
+        if (manifest.isFile) TrailmapManifest(id = dir.name, file = manifest) else null
       }
       .orEmpty()
 
@@ -364,8 +466,8 @@ object WorkspaceCompileBootstrap {
    * even though the input hash matches. We don't try to distinguish "user-deleted the
    * file" from "compile never produced it"; either way the right answer is recompile.
    *
-   * Note: [TrailblazeCompiler] only writes a YAML file for *app* packs (those with a
-   * `target:` block). Library packs contribute defaults but produce no output. We can't
+   * Note: [TrailblazeCompiler] only writes a YAML file for *app* trailmaps (those with a
+   * `target:` block). Library trailmaps contribute defaults but produce no output. We can't
    * tell the two apart cheaply here — and adding the parse step would defeat the
    * point of the hash-skip — so we err on the side of running compile when ANY expected
    * id is missing. The compile itself is fast on an unchanged input set.
@@ -412,10 +514,10 @@ object WorkspaceCompileBootstrap {
 
   private fun buildErrorMessage(errors: List<String>): String =
     if (errors.isEmpty()) {
-      "Workspace pack compilation failed."
+      "Workspace trailmap compilation failed."
     } else {
       buildString {
-        append("Workspace pack compilation failed:")
+        append("Workspace trailmap compilation failed:")
         for (error in errors) {
           append('\n')
           append("  - ")

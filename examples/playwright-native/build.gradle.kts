@@ -5,7 +5,19 @@ plugins {
 }
 
 trailblazeBundle {
-  packsDir.set(layout.projectDirectory.dir("trails/config/packs"))
+  trailmapsDir.set(layout.projectDirectory.dir("trails/config/trailmaps"))
+  // Disable the per-trailmap `bundleTrailblazeTrailmap` half. The playwright-native
+  // trailmap now uses the partial-descriptor authoring shape (each tool YAML carries
+  // `name:` + `script:` + `supportedPlatforms:` shortcut only — description /
+  // inputSchema / `_meta` gates come from the typed `.ts`'s
+  // `trailblaze.tool<I>(spec, handler)` declaration via the runtime analyzer
+  // enrichment in `AnalyzerScriptedToolEnrichment`). The standalone bundler
+  // library can't run the AST analyzer (deliberate classpath isolation — see the
+  // matching comment on `:examples:ios-contacts`'s build.gradle.kts and on
+  // `:examples:wikipedia` for the canonical rationale). `compileTrailblazeWorkspace`
+  // — the other half of this plugin — already runs analyzer-backed compile and
+  // emits the per-trailmap `client.d.ts` the IDE consumes.
+  bundleEnabled.set(false)
 }
 
 dependencies {

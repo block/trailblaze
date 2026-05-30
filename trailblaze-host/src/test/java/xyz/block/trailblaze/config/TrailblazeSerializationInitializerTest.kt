@@ -104,11 +104,11 @@ class TrailblazeSerializationInitializerTest {
   companion object {
     private val EXPECTED_PLAYWRIGHT_TOOLS = listOf(
       "web_click", "web_type", "web_navigate",
-      "web_scroll", "web_hover", "web_press_key",
-      "web_select_option", "web_wait", "web_snapshot",
-      "web_request_details", "web_verify_element_visible",
-      "web_verify_text_visible", "web_verify_value",
-      "web_verify_list_visible", "playwright_desktop_launchGoose",
+      "web_scroll", "web_hover", "web_pressKey",
+      "web_selectOption", "web_wait", "web_snapshot",
+      "web_requestDetails", "web_verifyElementVisible",
+      "web_verifyTextVisible", "web_verifyValue",
+      "web_verifyListVisible", "playwright_desktop_launchGoose",
     )
     private val EXPECTED_COMPOSE_TOOLS = listOf(
       "compose_click", "compose_type", "compose_scroll", "compose_wait",

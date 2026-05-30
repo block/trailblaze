@@ -56,6 +56,9 @@ dependencies {
   implementation(libs.ktor.server.content.negotiation)
   implementation(libs.koog.prompt.executor.openai)
   implementation(libs.koog.prompt.executor.ollama)
+  // Koog 1.0.0: LLM clients no longer accept a raw Ktor `HttpClient`; the androidTest source
+  // wraps the cached client in `KtorKoogHttpClient.Factory` so its config flows through.
+  androidTestImplementation(libs.koog.http.client.ktor)
   implementation(libs.androidx.test.monitor)
 
   androidTestImplementation(libs.androidx.test.runner)

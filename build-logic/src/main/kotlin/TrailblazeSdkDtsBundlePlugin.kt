@@ -46,6 +46,31 @@ interface TrailblazeSdkDtsBundleExtension {
    * production wiring sets both.
    */
   val sdkTestingRuntimeOutputFile: RegularFileProperty
+
+  /**
+   * Path to the committed `dist/index.js` — the runtime ESM module bun resolves when
+   * a scripted tool authored against the typed surface does
+   * `import { trailblaze } from "@trailblaze/scripting"`. Without this artifact the
+   * `paths` mapping in the per-trailmap tsconfig resolves only to `dist/index.d.ts`
+   * (types), bun loads that declaration file as a runtime module, and the value
+   * import fails with `SyntaxError: Export named 'trailblaze' not found in module
+   * '<...>/dist/index.d.ts'` — the failure mode PR #3338's
+   * `contacts_ios_searchContacts` documented.
+   *
+   * Unlike [sdkTestingRuntimeOutputFile] (a plain transpile of a type-only-importing
+   * source), this is a full esbuild ESM bundle: `src/index.ts` re-exports from
+   * sibling modules (`./run`, `./tool`, `./client`, `./context`, `./built-in-tools`)
+   * which themselves pull in `zod` and `@modelcontextprotocol/sdk` runtime, so a
+   * transpile-only output would dangle on those imports at load time. The bundle
+   * inlines every transitive runtime dep so a workspace receives one self-contained
+   * file and the workspace SDK directory needs no `node_modules/`.
+   *
+   * Optional for backward compatibility — when unset, only the `.d.ts` bundles are
+   * regenerated / verified. Production wiring in `:trailblaze-models` sets it
+   * alongside [sdkDtsBundleOutputFile] so the type surface and runtime surface ship
+   * together.
+   */
+  val sdkRuntimeBundleOutputFile: RegularFileProperty
 }
 
 /**
@@ -96,6 +121,15 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           }
         },
       ).withPropertyName("sdkTestingRuntime")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkRuntimeBundleOutputFile.isPresent) {
+            project.files(ext.sdkRuntimeBundleOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkRuntimeBundle")
 
       task.doFirst { requireExtensionConfigured(ext) }
       task.doLast {
@@ -158,6 +192,24 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
               "(${testingRuntimeFile.length() / 1024} KiB).",
           )
         }
+
+        if (ext.sdkRuntimeBundleOutputFile.isPresent) {
+          val runtimeBundleFile = ext.sdkRuntimeBundleOutputFile.get().asFile
+          task.logger.lifecycle(
+            "Regenerating SDK runtime ESM bundle → ${runtimeBundleFile.relativeTo(project.projectDir)}",
+          )
+          runEsbuildEsmBundle(
+            sdkDir = ext.trailblazeSdkDir.get().asFile,
+            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
+            outputFile = runtimeBundleFile,
+            logFile = project.layout.buildDirectory
+              .file("tmp/bundle-trailblaze-sdk-runtime.log").get().asFile,
+          )
+          task.logger.lifecycle(
+            "Regenerated ${runtimeBundleFile.relativeTo(project.projectDir)} " +
+              "(${runtimeBundleFile.length() / 1024} KiB).",
+          )
+        }
       }
     }
 
@@ -170,6 +222,7 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       val tempBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-dts-bundle.d.ts")
       val tempTestingBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-dts-testing-bundle.d.ts")
       val tempTestingRuntime = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-testing-runtime.js")
+      val tempRuntimeBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-runtime-bundle.js")
 
       declareSdkDtsBundleInputs(task, ext, project)
       // Same conditional-collection pattern as `verifyTrailblazeSdkBundle` — keeps
@@ -197,6 +250,13 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           if (committed.exists()) listOf(committed) else emptyList()
         },
       ).withPropertyName("committedSdkTestingRuntime")
+      task.inputs.files(
+        project.provider {
+          if (!ext.sdkRuntimeBundleOutputFile.isPresent) return@provider emptyList<File>()
+          val committed = ext.sdkRuntimeBundleOutputFile.get().asFile
+          if (committed.exists()) listOf(committed) else emptyList()
+        },
+      ).withPropertyName("committedSdkRuntimeBundle")
       task.outputs.file(tempBundle).withPropertyName("regeneratedDtsBundle")
       task.outputs.files(
         project.provider {
@@ -216,6 +276,15 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           }
         },
       ).withPropertyName("regeneratedSdkTestingRuntime")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkRuntimeBundleOutputFile.isPresent) {
+            project.files(tempRuntimeBundle)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("regeneratedSdkRuntimeBundle")
 
       task.doFirst { requireExtensionConfigured(ext) }
       task.doLast {
@@ -246,17 +315,17 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
               "  1. You edited sdks/typescript/src/ (or sdks/typescript/runtime-globals.d.ts)\n" +
               "     without regenerating the bundle.\n" +
               "  2. A transitive dep (e.g. typescript, zod) drifted via registry resolution since\n" +
-              "     the bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install)`\n" +
+              "     the bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
               "     and re-run.\n" +
-              "  3. Your local node_modules drifted from package-lock.json. Try\n" +
-              "     `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && npm ci)` to restore exact lockfile\n" +
-              "     versions before regenerating.\n" +
+              "  3. Your local node_modules drifted from bun.lock. Try\n" +
+              "     `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)` to restore exact\n" +
+              "     lockfile versions before regenerating.\n" +
               "Regenerate the bundle and commit the result:\n" +
               "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
               "  git add ${committed.relativeTo(project.rootDir)} && git commit -m \"chore(sdk): regenerate dts bundle\"\n" +
               "After regenerating, sanity-check the bundle end-to-end with:\n" +
-              "  ./trailblaze check PACK_ID    # e.g. playwrightsample\n" +
-              "(runs the bundled tsc against the pack's generated tsconfig — using an\n" +
+              "  ./trailblaze check TRAILMAP_ID    # e.g. playwrightSample\n" +
+              "(runs the bundled tsc against the trailmap's generated tsconfig — using an\n" +
               "ALL_CAPS placeholder rather than the angle-bracket form so a developer\n" +
               "who copies the line verbatim doesn't trip bash's stdin-redirection on the\n" +
               "`<...>` characters).\n" +
@@ -308,7 +377,7 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
 
         // Optional sibling testing runtime (`dist/testing.js`). Verified the same
         // byte-diff way as the `.d.ts` bundles. `bun test` consumes this file via
-        // the per-pack tsconfig's `paths` mapping at runtime; the `.d.ts` covers
+        // the per-trailmap tsconfig's `paths` mapping at runtime; the `.d.ts` covers
         // tsc's typing path.
         if (ext.sdkTestingRuntimeOutputFile.isPresent) {
           val committedRuntime = ext.sdkTestingRuntimeOutputFile.get().asFile
@@ -343,6 +412,51 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
             "✓ dist/testing.js is fresh (${committedRuntimeBytes.size} bytes match).",
           )
         }
+
+        // Optional runtime ESM bundle (`dist/index.js`) — the value-import companion to
+        // `dist/index.d.ts`. Same byte-diff gate as the other artifacts. Bundled (not
+        // transpiled) because `src/index.ts` re-exports from sibling modules + pulls in
+        // zod / MCP-SDK runtime, so a transpile-only output would dangle on those
+        // imports at load time. See [runEsbuildEsmBundle] for the argv decisions.
+        if (ext.sdkRuntimeBundleOutputFile.isPresent) {
+          val committedRuntime = ext.sdkRuntimeBundleOutputFile.get().asFile
+          if (!committedRuntime.exists()) {
+            throw GradleException(
+              "Committed runtime ESM bundle missing at ${committedRuntime.absolutePath}. " +
+                "Run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` and commit the result.",
+            )
+          }
+          val tempRuntimeFile = tempRuntimeBundle.get().asFile
+          runEsbuildEsmBundle(
+            sdkDir = ext.trailblazeSdkDir.get().asFile,
+            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
+            outputFile = tempRuntimeFile,
+            logFile = project.layout.buildDirectory
+              .file("tmp/verify-trailblaze-sdk-runtime-bundle.log").get().asFile,
+          )
+          val committedRuntimeBytes = committedRuntime.readBytes()
+          val regeneratedRuntimeBytes = tempRuntimeFile.readBytes()
+          if (!committedRuntimeBytes.contentEquals(regeneratedRuntimeBytes)) {
+            throw GradleException(
+              "dist/index.js does not match a fresh esbuild ESM bundle output.\n" +
+                "Likely causes (in order of frequency):\n" +
+                "  1. You edited sdks/typescript/src/ without regenerating the bundle.\n" +
+                "  2. A transitive runtime dep (e.g. zod, @modelcontextprotocol/sdk) drifted\n" +
+                "     since the bundle was last committed. Try\n" +
+                "     `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
+                "     and re-run.\n" +
+                "Regenerate and commit:\n" +
+                "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
+                "  git add ${committedRuntime.relativeTo(project.rootDir)} && " +
+                "git commit -m \"chore(sdk): regenerate runtime bundle\"\n" +
+                "Committed size: ${committedRuntimeBytes.size} bytes\n" +
+                "Regenerated size: ${regeneratedRuntimeBytes.size} bytes",
+            )
+          }
+          task.logger.lifecycle(
+            "✓ dist/index.js is fresh (${committedRuntimeBytes.size} bytes match).",
+          )
+        }
       }
     }
   }
@@ -361,7 +475,7 @@ private fun requireExtensionConfigured(ext: TrailblazeSdkDtsBundleExtension) {
   // Enforce the "both testing outputs or neither" invariant the kdoc claims. Without
   // this check, a consumer that wires only `sdkDtsTestingBundleOutputFile` (or only the
   // runtime) silently ships an incomplete pair — the missing artifact only surfaces at
-  // pack-author time as a `bun test` module-resolution failure or a tsc unresolved-import
+  // trailmap-author time as a `bun test` module-resolution failure or a tsc unresolved-import
   // error, which is failure-far-from-cause. Better to fail loud at Gradle configure time.
   val testingDtsSet = ext.sdkDtsTestingBundleOutputFile.isPresent
   val testingRuntimeSet = ext.sdkTestingRuntimeOutputFile.isPresent
@@ -412,9 +526,7 @@ private fun declareSdkDtsBundleInputs(
     project.provider {
       if (!ext.trailblazeSdkDir.isPresent) return@provider emptyList<File>()
       val dir = ext.trailblazeSdkDir.get()
-      listOf("bun.lock", "bun.lockb", "package-lock.json")
-        .map { dir.file(it).asFile }
-        .filter { it.exists() }
+      listOf(dir.file("bun.lock").asFile).filter { it.exists() }
     },
   ).withPropertyName("sdkLockFiles")
   // Treat `runtime-globals.d.ts` as a MANDATORY input rather than a conditional one —
@@ -465,16 +577,16 @@ private fun requireRuntimeGlobalsFile(sdkDir: File): File {
  * **What inlines.** `--external-inlines zod @modelcontextprotocol/sdk` pulls every `zod`
  * type the SDK transitively re-exports AND the small set of MCP-SDK types that surface
  * in the SDK's public type positions (e.g. `TrailblazeToolSpec.inputSchema:
- * ZodRawShapeCompat | AnySchema`) into the bundle. Consumer packs then have a fully
+ * ZodRawShapeCompat | AnySchema`) into the bundle. Consumer trailmaps then have a fully
  * self-contained `.d.ts` — `lib: ["ES2022"]` is enough, no `node_modules/zod` or
  * `node_modules/@modelcontextprotocol/sdk` required on disk. Dropping either inline
  * makes the bundle reference symbols whose definitions live in unresolvable external
- * `.d.ts` files at the consumer's perspective and per-pack `tsc` fails with
+ * `.d.ts` files at the consumer's perspective and per-trailmap `tsc` fails with
  * `Cannot find module`.
  *
  * **`--no-check`** disables dts-bundle-generator's tsc validation of the generated bundle.
  * The validation is duplicative — `verifyTrailblazeSdkDtsBundle` already byte-compares
- * against a committed file, and per-pack `tsc --noEmit` in CI is the real consumer-side
+ * against a committed file, and per-trailmap `tsc --noEmit` in CI is the real consumer-side
  * gate. Running validation would also force this Gradle plugin onto the slower path of
  * spinning up a tsc instance per build for no incremental safety.
  */
@@ -489,8 +601,9 @@ private fun runDtsBundleGenerator(
   if (!dtsBin.exists()) {
     throw GradleException(
       "dts-bundle-generator not found at ${dtsBin.absolutePath}. Run `(cd ${sdkDir.absolutePath} && " +
-        "bun install)` (or `npm install`) to pull the TS SDK's devDependencies before " +
-        "regenerating the bundle.",
+        "bun install --frozen-lockfile)` to pull the TS SDK's devDependencies before " +
+        "regenerating the bundle. Trailblaze is bun-only — activate the repo's Hermit env " +
+        "(`source bin/activate-hermit`) or install bun from https://bun.sh/.",
     )
   }
   outputFile.parentFile.mkdirs()
@@ -554,8 +667,9 @@ private fun runEsbuildTranspile(sdkDir: File, entryFile: File, outputFile: File,
   if (!esbuildBin.exists()) {
     throw GradleException(
       "esbuild not found at ${esbuildBin.absolutePath}. Run `(cd ${sdkDir.absolutePath} && " +
-        "bun install)` (or `npm install`) to pull the TS SDK's devDependencies before " +
-        "regenerating the testing runtime.",
+        "bun install --frozen-lockfile)` to pull the TS SDK's devDependencies before " +
+        "regenerating the testing runtime. Trailblaze is bun-only — activate the repo's " +
+        "Hermit env (`source bin/activate-hermit`) or install bun from https://bun.sh/.",
     )
   }
   outputFile.parentFile.mkdirs()
@@ -599,6 +713,106 @@ private fun runEsbuildTranspile(sdkDir: File, entryFile: File, outputFile: File,
 }
 
 /**
+ * Bundle a TypeScript entry to an ESM JavaScript module via esbuild — runtime
+ * companion to the `.d.ts` rollup that `dts-bundle-generator` produces. Used for the
+ * `dist/index.js` artifact that bun resolves at runtime when a scripted tool does
+ * `import { trailblaze } from "@trailblaze/scripting"`.
+ *
+ * **Why bundle (not transpile).** Unlike [runEsbuildTranspile] (which serves
+ * `dist/testing.js`, a pure type-only-importer), `src/index.ts` re-exports from
+ * sibling modules that pull in `zod` and `@modelcontextprotocol/sdk` runtime. A
+ * transpile-only output would dangle on those imports at load time because the
+ * workspace SDK directory has no `node_modules/`. Inlining every transitive runtime
+ * dep into one file means a workspace receives a self-contained module that resolves
+ * cleanly under bun (or any ES-compatible runtime).
+ *
+ * **Argv shape.** `--platform=neutral` keeps the output free of Node-only resolution
+ * shortcuts so the bundle stays portable across runtimes (bun, the on-device runner,
+ * a future browser-side consumer). `--external:node:process` mirrors the IIFE
+ * bundle's stance: the SDK doesn't itself import `node:process`, but a transitive
+ * dep that does should resolve through the host environment rather than fail at
+ * bundle time. `--target=es2020` matches the per-trailmap tsconfig's `target: ES2022`
+ * minus the small set of ES2022 features esbuild can't downlevel (top-level await
+ * is fine in ESM at es2020 already). The `--banner:js=` is a hand-edit deterrent
+ * the verify byte-diff gate naturally protects.
+ *
+ * The verify task byte-diffs the regenerated output against the committed file, so
+ * the argv must be stable across regenerations. Don't add timestamped banners or
+ * hash-based suffixes — they would invalidate the gate.
+ */
+private fun runEsbuildEsmBundle(sdkDir: File, entryFile: File, outputFile: File, logFile: File) {
+  val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
+  if (!esbuildBin.exists()) {
+    throw GradleException(
+      "esbuild not found at ${esbuildBin.absolutePath}. Run `(cd ${sdkDir.absolutePath} && " +
+        "bun install --frozen-lockfile)` to pull the TS SDK's devDependencies before " +
+        "regenerating the runtime bundle. Trailblaze is bun-only — activate the repo's " +
+        "Hermit env (`source bin/activate-hermit`) or install bun from https://bun.sh/.",
+    )
+  }
+  outputFile.parentFile.mkdirs()
+  val bannerJs =
+    "/* GENERATED FILE — do not hand-edit. " +
+      "Source: sdks/typescript/src/. " +
+      "Regenerate with ./gradlew :trailblaze-models:bundleTrailblazeSdkDts */"
+  val argv = listOf(
+    esbuildBin.absolutePath,
+    entryFile.absolutePath,
+    "--bundle",
+    "--platform=neutral",
+    "--format=esm",
+    "--target=es2020",
+    "--main-fields=module,main",
+    "--external:node:process",
+    // The MCP SDK's stdio transport (`StdioServerTransport`) statically imports
+    // `node:process` at module top-level — esbuild's `--external:node:process` above keeps
+    // the import call literal but still hoists it to the bundle's top scope. The IIFE
+    // wrapper produced by `DaemonScriptedToolBundler` then turns that into a top-level
+    // `__require("node:process")` that throws on QuickJS load — breaking every Square
+    // (and other scripted-tool-using) trail at session start.
+    //
+    // `run.ts` already uses `await import(...)` to keep the stdio path dynamic at source
+    // level, but esbuild's `--bundle` walks dynamic imports it can statically resolve and
+    // inlines them. Externalizing the stdio entry point here leaves the dynamic import as
+    // a literal `import("@modelcontextprotocol/sdk/server/stdio.js")` in the produced
+    // ESM. On bun/node the dynamic resolver picks it up at runtime; on QuickJS the early
+    // return on `globalThis.__trailblazeInProcessTransport` means the import is never hit.
+    // The sibling external in `DaemonScriptedToolBundler.runEsbuild` ensures the per-tool
+    // IIFE bundler doesn't re-walk into the SDK and re-introduce the same eager `require`.
+    "--external:@modelcontextprotocol/sdk/server/stdio.js",
+    "--banner:js=$bannerJs",
+    "--outfile=${outputFile.absolutePath}",
+  )
+  logFile.parentFile.mkdirs()
+  logFile.writeText("")
+  val proc = ProcessBuilder(argv)
+    .directory(sdkDir)
+    .redirectErrorStream(true)
+    .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+    .start()
+  try {
+    if (!proc.waitFor(2, TimeUnit.MINUTES)) {
+      throw GradleException(
+        "esbuild did not finish within 2 minutes — stuck or deadlocked. See ${logFile.absolutePath}.",
+      )
+    }
+    if (proc.exitValue() != 0) {
+      throw GradleException(
+        "esbuild failed (exit ${proc.exitValue()}). See ${logFile.absolutePath}.",
+      )
+    }
+    if (!outputFile.exists() || outputFile.length() == 0L) {
+      throw GradleException(
+        "esbuild reported success but ${outputFile.absolutePath} is missing or empty. " +
+          "See ${logFile.absolutePath}.",
+      )
+    }
+  } finally {
+    if (proc.isAlive) proc.destroyForcibly()
+  }
+}
+
+/**
  * Constant filename of the hand-authored ambient-globals declaration file appended to
  * the bundled `.d.ts`. Lives at the package root (sibling of `src/` and `dist/`) so
  * the SDK's own `tsc --noEmit` (whose `include` is `src/**/*.ts`) doesn't pick it up
@@ -609,8 +823,8 @@ internal const val RUNTIME_GLOBALS_FILENAME: String = "runtime-globals.d.ts"
 
 /**
  * Append the curated runtime-globals ambient declarations to the bundled `.d.ts` so
- * pack authors can reference `URL` / `fetch` / `setTimeout` / `console` / etc. from a
- * `.ts` tool file without a per-pack `globals.d.ts` shim. See the kdoc on
+ * trailmap authors can reference `URL` / `fetch` / `setTimeout` / `console` / etc. from a
+ * `.ts` tool file without a per-trailmap `globals.d.ts` shim. See the kdoc on
  * [RUNTIME_GLOBALS_FILENAME] and the file's own header for the scope decisions and
  * the host-vs-on-device runtime caveats.
  *

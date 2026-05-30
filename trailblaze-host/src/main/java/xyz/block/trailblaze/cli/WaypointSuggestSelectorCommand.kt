@@ -170,15 +170,19 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
   var anchor: String? = null
 
   override fun call(): Int {
-    val logFile = resolveLogFile() ?: return CommandLine.ExitCode.USAGE
+    val logFile = resolveLogFile() ?: return TrailblazeExitCode.MISUSE.code
     val screen = SessionLogScreenState.loadStep(logFile)
     val tree = screen.trailblazeNodeTree ?: run {
-      Console.error("Log has no trailblazeNodeTree: ${logFile.name}")
-      Console.error("Pick a log file from a step that captured an accessibility tree.")
-      return 1
+      reportCliError(
+        verb = "Suggest selector",
+        target = logFile.name,
+        reason = "log has no trailblazeNodeTree",
+        hint = "pick a log file from a step that captured an accessibility tree",
+      )
+      return TrailblazeExitCode.MISUSE.code
     }
 
-    val target = resolveTarget(tree, screen, logFile) ?: return 1
+    val target = resolveTarget(tree, screen, logFile) ?: return TrailblazeExitCode.MISUSE.code
 
     val sourceDesc = ref?.let { "ref: $it" }
       ?: at?.let { "at: $it" }
@@ -200,8 +204,11 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
       // findAllValidSelectors guarantees at least the index fallback, so this
       // path is mostly defensive — but we want the failure mode to be loud rather
       // than emitting silently-empty output.
-      Console.error("No selectors generated for target. This shouldn't happen.")
-      return 1
+      reportCliError(
+        verb = "Suggest selector",
+        reason = "no selectors generated for target — this shouldn't happen",
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     Console.log("# ${candidates.size} candidate selector(s), best-first.")
@@ -240,7 +247,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
       emitAnchorSelector(tree, target)
     }
 
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun emitAnchorSelector(tree: TrailblazeNode, target: TrailblazeNode) {

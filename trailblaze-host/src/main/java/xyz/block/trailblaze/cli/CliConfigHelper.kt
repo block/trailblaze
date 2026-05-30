@@ -98,10 +98,14 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     validValues = "App target ID. Run 'trailblaze config target' to see all.",
     get = { config -> config.selectedTargetAppId ?: "(not set)" },
     set = { config, value ->
-      if (!TrailblazeHostAppTarget.isValidId(value.lowercase())) {
+      // Preserve caller-supplied casing so lowerCamelCase trailmap ids (e.g. `playwrightSample`)
+      // round-trip correctly. The validator widened to accept uppercase letters in the
+      // 2026-05-27 trailmap-scoped tool naming work — forcing `.lowercase()` here would defeat
+      // that by silently flattening the id before lookup.
+      if (!TrailblazeHostAppTarget.isValidId(value)) {
         null
       } else {
-        config.copy(selectedTargetAppId = value.lowercase())
+        config.copy(selectedTargetAppId = value)
       }
     },
   ),
@@ -155,6 +159,19 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     get = { config -> config.selfHealEnabled.toString() },
     set = { config, value ->
       value.toBooleanStrictOrNull()?.let { config.copy(selfHealEnabled = it) }
+    },
+  ),
+  ConfigKey(
+    // Per-step natural-language description is what self-heal retries against
+    // when a recorded selector goes stale. Permissive default keeps ad-hoc
+    // tire-kicking unblocked; flip to true for serious authoring so every
+    // recorded tool call captures intent.
+    name = "require-steps",
+    description = "Require -s/--step on every tool / step / ask / verify call (default: false)",
+    validValues = "true, false",
+    get = { config -> config.requireSteps.toString() },
+    set = { config, value ->
+      value.toBooleanStrictOrNull()?.let { config.copy(requireSteps = it) }
     },
   ),
   ConfigKey(

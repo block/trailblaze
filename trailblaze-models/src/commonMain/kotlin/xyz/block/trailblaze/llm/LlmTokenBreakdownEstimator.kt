@@ -1,8 +1,9 @@
 package xyz.block.trailblaze.llm
 
 import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 
 /**
  * Estimates token usage breakdown by category.
@@ -58,31 +59,45 @@ object LlmTokenBreakdownEstimator {
           systemPromptChars += estimateMessageCharCount(message)
         }
         is Message.User -> {
-          userMessageCount++
-          val (chars, images) = estimateUserMessageCharCountAndImages(message)
-          totalImageCount += images
-          if (initialPhase && !seenFirstUser) {
-            // First few user messages are considered part of the initial prompt
-            userPromptChars += chars
-            seenFirstUser = true
-          } else if (initialPhase && seenFirstUser) {
-            // Still in initial phase, but after first user message
-            userPromptChars += chars
-            // Transition to history after second user message with view hierarchy
-            if (hasViewHierarchy(message)) {
-              initialPhase = false
+          // Tool results now live as MessagePart.Tool.Result inside Message.User. Treat user
+          // messages whose only request parts are tool results as the legacy Message.Tool bucket.
+          val hasToolResult = message.parts.any { it is MessagePart.Tool.Result }
+          val hasNonToolPart = message.parts.any { it !is MessagePart.Tool.Result }
+          if (hasToolResult && !hasNonToolPart) {
+            toolMessageCount++
+            initialPhase = false
+          } else {
+            userMessageCount++
+            val (chars, images) = estimateUserMessageCharCountAndImages(message)
+            totalImageCount += images
+            if (initialPhase && !seenFirstUser) {
+              // First few user messages are considered part of the initial prompt
+              userPromptChars += chars
+              seenFirstUser = true
+            } else if (initialPhase && seenFirstUser) {
+              // Still in initial phase, but after first user message
+              userPromptChars += chars
+              // Transition to history after second user message with view hierarchy
+              if (hasViewHierarchy(message)) {
+                initialPhase = false
+              }
             }
           }
         }
         is Message.Assistant -> {
-          assistantMessageCount++
-          initialPhase = false
-        }
-        is Message.Tool -> {
-          toolMessageCount++
-          initialPhase = false
-        }
-        is Message.Reasoning -> {
+          // Tool calls now live as MessagePart.Tool.Call parts inside Message.Assistant
+          // (Koog 1.0.0 demoted them from the pre-1.0 top-level Message.Tool.Call). Preserve
+          // the pre-1.0 `toolMessageCount` semantics by counting Assistant messages whose
+          // parts are entirely Tool.Call under `toolMessageCount` rather than
+          // `assistantMessageCount`. Mixed messages (e.g. Text + Tool.Call) stay under
+          // `assistantMessageCount` since they carry assistant-side content too.
+          val hasToolCall = message.parts.any { it is MessagePart.Tool.Call }
+          val hasNonToolCallPart = message.parts.any { it !is MessagePart.Tool.Call }
+          if (hasToolCall && !hasNonToolCallPart) {
+            toolMessageCount++
+          } else {
+            assistantMessageCount++
+          }
           initialPhase = false
         }
       }
@@ -147,27 +162,20 @@ object LlmTokenBreakdownEstimator {
   }
 
   private fun estimateMessageCharCount(message: Message): Long {
-    return when (message) {
-      is Message.System -> message.content.length.toLong()
-      is Message.User -> {
-        message.parts.filterIsInstance<ContentPart.Text>()
-          .sumOf { it.text.length.toLong() }
-      }
-      is Message.Assistant -> message.content?.length?.toLong() ?: 0L
-      is Message.Tool -> message.content.length.toLong()
-      is Message.Reasoning -> message.content?.length?.toLong() ?: 0L
-    }
+    return message.parts.filterIsInstance<MessagePart.Text>()
+      .sumOf { it.text.length.toLong() }
   }
 
   private fun estimateUserMessageCharCountAndImages(message: Message.User): Pair<Long, Int> {
-    val chars = message.parts.filterIsInstance<ContentPart.Text>()
+    val chars = message.parts.filterIsInstance<MessagePart.Text>()
       .sumOf { it.text.length.toLong() }
-    val images = message.parts.filterIsInstance<ContentPart.Image>().size
+    val images = message.parts.filterIsInstance<MessagePart.Attachment>()
+      .count { it.source is AttachmentSource.Image }
     return Pair(chars, images)
   }
 
   private fun hasViewHierarchy(message: Message.User): Boolean {
-    return message.parts.filterIsInstance<ContentPart.Text>()
+    return message.parts.filterIsInstance<MessagePart.Text>()
       .any { it.text.contains("view_hierarchy") || it.text.contains("ViewHierarchy") }
   }
 }

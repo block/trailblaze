@@ -4,8 +4,9 @@ import ai.koog.agents.core.agent.AIAgent
 import ai.koog.agents.core.agent.singleRunStrategy
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.mcp.McpToolRegistryProvider
+import ai.koog.agents.mcp.metadata.McpServerInfo
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.executor.llms.SingleLLMPromptExecutor
+import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -115,13 +116,16 @@ Call tools to interact with the UI until the objective is complete."""
       val transport = McpToolRegistryProvider.defaultSseTransport(mcpServerUrl)
       val toolRegistry = McpToolRegistryProvider.fromTransport(
         transport = transport,
+        serverInfo = McpServerInfo(url = mcpServerUrl),
         name = DEFAULT_CLIENT_NAME,
         version = "1.0.0",
       )
 
-      // Create Koog AI Agent with single-run strategy (tool calling)
+      // Create Koog AI Agent with single-run strategy (tool calling).
+      // Koog 1.0.0 removed SingleLLMPromptExecutor — use MultiLLMPromptExecutor with one
+      // (provider, client) entry instead (functionally equivalent for the single-client case).
       val koogModel = llmModel.toKoogLlmModel()
-      val promptExecutor = SingleLLMPromptExecutor(llmClient)
+      val promptExecutor = MultiLLMPromptExecutor(llmClient.llmProvider() to llmClient)
       val agent = AIAgent(
         promptExecutor = promptExecutor,
         llmModel = koogModel,
@@ -148,6 +152,7 @@ Call tools to interact with the UI until the objective is complete."""
       val transport = McpToolRegistryProvider.defaultSseTransport(mcpServerUrl)
       return McpToolRegistryProvider.fromTransport(
         transport = transport,
+        serverInfo = McpServerInfo(url = mcpServerUrl),
         name = DEFAULT_CLIENT_NAME,
         version = "1.0.0",
       )

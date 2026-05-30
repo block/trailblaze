@@ -17,6 +17,6 @@ import java.util.concurrent.Callable
 class SegmentCommand : Callable<Int> {
   override fun call(): Int {
     CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

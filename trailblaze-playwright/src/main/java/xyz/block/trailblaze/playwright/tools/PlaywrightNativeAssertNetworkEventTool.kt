@@ -17,7 +17,7 @@ import xyz.block.trailblaze.util.Console
 import java.io.File
 
 @Serializable
-@TrailblazeToolClass("web_assert_network_event", isVerification = true)
+@TrailblazeToolClass("web_assertNetworkEvent", isVerification = true)
 @LLMDescription(
   """
 Assert that a specific event name appeared in the network traffic captured during this session.
@@ -72,7 +72,7 @@ class PlaywrightNativeAssertNetworkEventTool(
     val capture = WebNetworkCapture.get(page.context())
       ?: return TrailblazeToolResult.Error.ExceptionThrown(
         "No network capture is active for this session. " +
-          "Network capture must be started before running trails that use web_assert_network_event.",
+          "Network capture must be started before running trails that use web_assertNetworkEvent.",
       )
 
     val ndjsonFile = capture.ndjsonPath()
@@ -132,7 +132,7 @@ class PlaywrightNativeAssertNetworkEventTool(
 
     if (totalParseErrors > 0) {
       Console.log(
-        "### web_assert_network_event: $totalParseErrors line(s) could not be parsed from network log.",
+        "### web_assertNetworkEvent: $totalParseErrors line(s) could not be parsed from network log.",
       )
     }
 

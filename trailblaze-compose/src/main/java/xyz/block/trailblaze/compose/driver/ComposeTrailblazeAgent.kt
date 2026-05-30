@@ -94,6 +94,11 @@ class ComposeTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = null,
+      // Threads the agent's tool repo through so Kotlin tools composing framework
+      // tools via `ctx.invokeFrameworkTool(...)` resolve them by name. See same
+      // wiring on the Maestro / Playwright agents — without it, the bridge throws
+      // "toolRepo not wired" on every Kotlin-side call site in a Compose session.
+      toolRepo = trailblazeToolRepo,
     )
   }
 

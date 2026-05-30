@@ -125,11 +125,11 @@ class WaypointMigrateTrailCommand : Callable<Int> {
   override fun call(): Int {
     if (!trailFile.exists() || !trailFile.isFile) {
       Console.error("Trail file not found: ${trailFile.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (!sessionDir.isDirectory) {
       Console.error("Session log directory not found: ${sessionDir.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val originalYaml = trailFile.readText()
@@ -137,8 +137,12 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     val items = try {
       trailblazeYaml.decodeTrail(originalYaml)
     } catch (e: Exception) {
-      Console.error("Could not decode trail YAML ${trailFile.name}: ${e.message}")
-      return 1
+      reportCliError(
+        verb = "Trail decode",
+        target = trailFile.name,
+        reason = describeThrowableForUser(e),
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     // Pass 1 — collect the legacy Maestro selectors in YAML order. The list index doubles
@@ -146,7 +150,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     val maestroSelectors = collectMaestroSelectors(items)
     if (maestroSelectors.isEmpty()) {
       Console.log("# No selector-bearing tools found in ${trailFile.name}; nothing to migrate.")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     // Pass 2 — drive the deterministic two-tree resolution per (selector, log) pair. The
@@ -155,14 +159,13 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // corresponding tool unchanged.
     val logs = listSnapshotLogs(sessionDir)
     if (logs.isEmpty()) {
-      Console.error(
-        "No usable session logs in ${sessionDir.absolutePath}. " +
-          "Need *_TrailblazeLlmRequestLog.json or *_TrailblazeSnapshotLog.json files that " +
-          "contain both `viewHierarchy` and `trailblazeNodeTree`. Pre-tool snapshot logs " +
-          "are written when the recording-mode runner is started with " +
-          "`-e trailblaze.captureSecondaryTree true` (the migration capture mode).",
+      reportCliError(
+        verb = "Trail migrate",
+        target = sessionDir.absolutePath,
+        reason = "no usable session logs in the directory — need *_TrailblazeLlmRequestLog.json or *_TrailblazeSnapshotLog.json files containing both `viewHierarchy` and `trailblazeNodeTree`",
+        hint = "rerun the trail with `-e trailblaze.captureSecondaryTree true` to capture the snapshot logs the migrator needs",
       )
-      return 1
+      return TrailblazeExitCode.MISUSE.code
     }
     Console.log(
       "# Scanning ${logs.size} logs for ${maestroSelectors.size} selector-bearing tools",
@@ -293,7 +296,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
       Console.log("# === Unified diff (run with --write to apply) ===")
       printUnifiedDiff(trailFile.name, originalYaml, migratedYaml)
     }
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   /** Cursor that walks the trail YAML in deterministic order — same traversal as collect. */

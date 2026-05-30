@@ -7,10 +7,10 @@ import kotlinx.serialization.Serializable
  * hierarchy. Composed of a list of [required] selector entries (all must match) and a
  * list of [forbidden] selector entries (none may match).
  *
- * ## Pack-scoped id convention (URL-style)
+ * ## Trailmap-scoped id convention (URL-style)
  *
- * Waypoint [id]s follow URL conventions: `<pack-id>/<segment>[/<segment>...]`. The slash
- * is both the pack-namespace separator and the IA hierarchy separator within the pack.
+ * Waypoint [id]s follow URL conventions: `<trailmap-id>/<segment>[/<segment>...]`. The slash
+ * is both the trailmap-namespace separator and the IA hierarchy separator within the trailmap.
  * Use `-` for multi-word atoms within a single segment.
  *
  * Examples:
@@ -23,20 +23,20 @@ import kotlinx.serialization.Serializable
  * the conceptual "MyApp home screen" regardless of platform. Today each waypoint YAML
  * is platform-specific (its selectors are tagged with `androidAccessibility:` or
  * `iosAccessibility:`), and the file lives under
- * `packs/<pack-id>/waypoints/<platform>/...` for disk-level organization. When iOS adds
+ * `trailmaps/<trailmap-id>/waypoints/<platform>/...` for disk-level organization. When iOS adds
  * its own home, both files share `id: myapp/home` and the matcher dispatches by
  * current device platform — a `platforms:` field on this schema is the planned dispatch
  * mechanism, not yet implemented (no platform-collision exists in the current dataset).
  *
- * On disk, waypoint descriptors live under `trailblaze-config/packs/<pack-id>/waypoints/`
+ * On disk, waypoint descriptors live under `trails/config/trailmaps/<trailmap-id>/waypoints/`
  * with `<platform>/...` subdirectories for platform-specific variants. Filenames mirror
- * the id's post-pack-segment portion (e.g. id `myapp/withdraw/compose` →
- * `packs/myapp/waypoints/android/withdraw/compose.waypoint.yaml`).
+ * the id's post-trailmap-segment portion (e.g. id `myapp/withdraw/compose` →
+ * `trailmaps/myapp/waypoints/android/withdraw/compose.waypoint.yaml`).
  *
  * This intentionally diverges from the older underscore tool-naming convention
  * (`2026-01-14-tool-naming-convention.md`), which was driven by serialization needing to
  * look up backing Kotlin classes from the tool name — a constraint that no longer holds
- * now that YAML descriptors carry fully-qualified class names directly. New pack-scoped
+ * now that YAML descriptors carry fully-qualified class names directly. New trailmap-scoped
  * artifacts (routes, trails, waypoints) should follow the slash convention; legacy flat
  * runtime tool ids stay on underscore for back-compat with the existing namespace.
  *
@@ -57,7 +57,7 @@ import kotlinx.serialization.Serializable
  *
  * **Do include:**
  *  - One sentence on what is on screen.
- *  - Disambiguation against same-pack siblings when relevant ("Distinct from X").
+ *  - Disambiguation against same-trailmap siblings when relevant ("Distinct from X").
  *
  * Bad (mixes hint with implementation):
  * ```

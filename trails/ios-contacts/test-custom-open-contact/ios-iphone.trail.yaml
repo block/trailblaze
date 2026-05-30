@@ -1,0 +1,31 @@
+- config:
+    title: 'Contacts (iOS) (scripted): direct open by name'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: |
+      Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+    recording:
+      tools:
+      - contacts_ios_openApp:
+          dismissKeyboard: true
+      - tapOnElementBySelector:
+          reason: The objective is to open the Contacts app. The Contacts app icon is visible in the current view hierarchy with ref 'z698'. Tapping this app icon will open the Contacts app, achieving the objective.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+  - step: |
+      Call the `contacts_ios_openContact` tool with name="John Appleseed",
+      expectedHeading="John Appleseed".
+    recording:
+      tools:
+      - contacts_ios_openContact:
+          name: John Appleseed
+          expectedHeading: John Appleseed
+      - tapOnElementBySelector:
+          reason: The current screen displays a list of contacts and 'John Appleseed' is visible with a tappable region. Tapping this contact should open the contact details, fulfilling the objective.
+          nodeSelector:
+            iosMaestro:
+              textRegex: John Appleseed
+            index: 1

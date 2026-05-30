@@ -37,12 +37,13 @@ For a live, refresh-on-edit view from the running daemon, point your browser at
       --root=<path>     Filesystem directory to scan for *.waypoint.yaml files
                           (default: ./trails, resolved against the current
                           working directory). Overrides --target's root
-                          resolution. Pack-bundled waypoints from the classpath
-                          are always included regardless of this flag.
-      --target=<id>     Pack id to scope the graph to (e.g. `myapp`, `clock`).
-                          Filters the rendered graph to waypoints whose id
-                          starts with `<id>/` and drops shortcuts/trailheads
-                          that cross out of that scope. Also resolves --root to
-                          <workspace>/packs/<id>/waypoints/ when no explicit
-                          --root is given.
+                          resolution. Trailmap-bundled waypoints from the
+                          classpath are always included regardless of this flag.
+      --target=<id>     Trailmap id to scope the graph to (e.g. `myapp`,
+                          `clock`). Filters the rendered graph to waypoints
+                          whose id starts with `<id>/` and drops
+                          shortcuts/trailheads that cross out of that scope.
+                          Also resolves --root to
+                          <workspace>/trailmaps/<id>/waypoints/ when no
+                          explicit --root is given.
   -V, --version         Print version information and exit.

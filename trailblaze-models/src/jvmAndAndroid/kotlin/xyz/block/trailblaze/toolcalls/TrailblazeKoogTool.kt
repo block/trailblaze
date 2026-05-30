@@ -5,6 +5,8 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.serialization.JSONSerializer
+import ai.koog.serialization.KSerializerTypeToken
+import ai.koog.serialization.annotations.InternalKoogSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.serializer
@@ -20,13 +22,14 @@ import kotlin.reflect.full.starProjectedType
  * serializer-based descriptor generation which recursively introspects the serial descriptor
  * and causes [StackOverflowError] on self-referencing types like [TrailblazeNodeSelector][xyz.block.trailblaze.api.TrailblazeNodeSelector].
  */
+@OptIn(InternalKoogSerializationApi::class)
 open class TrailblazeKoogTool<T : TrailblazeTool>(
   argsSerializer: KSerializer<T>,
   descriptor: ToolDescriptor,
   private val executeTool: suspend (args: T) -> String,
 ) : Tool<T, String>(
-  argsSerializer = argsSerializer,
-  resultSerializer = String.serializer(),
+  argsType = KSerializerTypeToken(argsSerializer),
+  resultType = KSerializerTypeToken(String.serializer()),
   descriptor = descriptor,
 ) {
 

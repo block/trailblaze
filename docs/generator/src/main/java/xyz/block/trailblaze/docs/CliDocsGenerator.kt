@@ -6,6 +6,7 @@ import picocli.CommandLine.Model.OptionSpec
 import picocli.CommandLine.Model.PositionalParamSpec
 import xyz.block.trailblaze.cli.CONFIG_KEYS
 import xyz.block.trailblaze.cli.TrailblazeCliCommand
+import xyz.block.trailblaze.cli.canonicalSubcommands
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -54,7 +55,7 @@ class CliDocsGenerator(
       appendLine()
       appendLine("# Trailblaze CLI")
       appendLine()
-      appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli())
+      appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls())
       appendLine()
       appendLine("## Usage")
       appendLine()
@@ -73,9 +74,11 @@ class CliDocsGenerator(
 
       // Commands summary table. Skip subcommands marked `hidden = true` — they're
       // intentionally absent from `trailblaze --help` (and the GroupedCommandListRenderer
-      // filters them too); leaking them into the public CLI.md mirror would defeat the
+      // filters them too); leaking them into the public CLI.md would defeat the
       // hidden flag. Same filter is applied to the detailed-section pass below.
-      val visibleSubcommands = commandLine.subcommands
+      // [canonicalSubcommands] drops alias entries so a deprecated alias (e.g.
+      // `trail` → `run`) doesn't get its own section.
+      val visibleSubcommands = commandLine.canonicalSubcommands()
         .filterValues { !it.commandSpec.usageMessage().hidden() }
       appendLine("## Commands")
       appendLine()
@@ -83,7 +86,7 @@ class CliDocsGenerator(
       appendLine("|---------|-------------|")
       visibleSubcommands.forEach { (name, subCommand) ->
         val desc = subCommand.commandSpec.usageMessage().description().firstOrNull()
-          ?.stripPicocli() ?: ""
+          ?.stripPicocli()?.escapeMdxUnsafeUrls() ?: ""
         appendLine("| `$name` | $desc |")
       }
       appendLine()
@@ -118,11 +121,11 @@ class CliDocsGenerator(
     appendLine("- **One-shot commands** — `ask`, `verify`, `snapshot`, `tool`. Each invocation")
     appendLine("  opens a fresh MCP session, binds the requested device, runs once, and tears")
     appendLine("  the session down. Different-device parallel one-shots are fully isolated.")
-    appendLine("- **Reusable workflows** — `blaze`, `blaze --save`, `session start/info/save/recording/stop/end/artifacts/delete`,")
+    appendLine("- **Reusable workflows** — `step`, `step --save`, `session start/info/save/recording/stop/end/artifacts/delete`,")
     appendLine("  `device connect`. These persist an MCP session under `/tmp/trailblaze-cli-session-{port}[-scope]`")
-    appendLine("  so follow-up commands can reattach. `blaze --save` is the canonical reason —")
-    appendLine("  each `blaze` invocation records steps into a per-device scoped session that")
-    appendLine("  `blaze --save` later exports as a trail YAML.")
+    appendLine("  so follow-up commands can reattach. `step --save` is the canonical reason —")
+    appendLine("  each `step` invocation records steps into a per-device scoped session that")
+    appendLine("  `step --save` later exports as a trail YAML.")
     appendLine()
     appendLine("### Device-claim conflicts (yield-unless-busy)")
     appendLine()
@@ -135,22 +138,22 @@ class CliDocsGenerator(
     appendLine("  is busy.` block naming the holder, the running tool, and how long it has been")
     appendLine("  running. Wait for it to finish, or stop the holder before retrying.")
     appendLine()
-    appendLine("Same-session re-claims are always allowed, so a `blaze` workflow that keeps")
+    appendLine("Same-session re-claims are always allowed, so a `step` workflow that keeps")
     appendLine("calling into its own scope never trips on this — only cross-session contention")
     appendLine("with a busy holder does.")
     appendLine()
-    appendLine("### When a `blaze` scope leaks across commands")
+    appendLine("### When a `step` scope leaks across commands")
     appendLine()
-    appendLine("`blaze --device android \"…\"` opens a `blaze-android` scoped MCP session that")
+    appendLine("`step --device android \"…\"` opens a `cli-android` scoped MCP session that")
     appendLine("stays alive on the daemon after the CLI exits, holding the device claim until")
-    appendLine("`blaze --save` (or another `blaze --device android`) reattaches. The session")
+    appendLine("`step --save` (or another `step --device android`) reattaches. The session")
     appendLine("is idle while it waits, so a subsequent one-shot like `ask --device android`")
     appendLine("just yields and proceeds — the leaked scope no longer blocks unrelated commands.")
     appendLine("If you want to clear it explicitly, `trailblaze app --stop` recycles the daemon")
     appendLine("and drops all in-memory sessions.")
     appendLine()
     appendLine("Note: `session stop` ends the **global** CLI session created by `session start`.")
-    appendLine("It does not reap device-scoped `blaze` sessions; use `app --stop` for those.")
+    appendLine("It does not reap device-scoped per-device sessions; use `app --stop` for those.")
     appendLine()
   }
 
@@ -166,7 +169,7 @@ class CliDocsGenerator(
     appendLine()
     appendLine("### `$fullPath`")
     appendLine()
-    appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli())
+    appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls())
     appendLine()
 
     // Synopsis — show subcommand usage patterns if present (hidden-filtered).
@@ -225,9 +228,10 @@ class CliDocsGenerator(
 
     // Recurse into subcommands, hidden-filtered (e.g. `desktop snapshot` shouldn't
     // surface in the public CLI.md just because a hidden parent transitively includes
-    // a non-hidden child).
+    // a non-hidden child). Alias entries are dropped via [canonicalSubcommands] for
+    // the same reason as the top-level table above.
     if (hasSubcommands) {
-      commandLine.subcommands
+      commandLine.canonicalSubcommands()
         .filterValues { !it.commandSpec.usageMessage().hidden() }
         .forEach { (subName, subCommand) ->
           generateCommandSection(fullPath, subName, subCommand)
@@ -272,7 +276,7 @@ class CliDocsGenerator(
     appendLine("|--------|-------------|---------|")
     filteredOptions.forEach { option ->
       val names = option.names().joinToString(", ") { "`$it`" }
-      val desc = option.description().joinToString(" ").stripPicocli().replace("|", "\\|")
+      val desc = option.description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls().replace("|", "\\|")
       val default = if (option.defaultValue() != null && option.defaultValue().isNotEmpty()) {
         "`${option.defaultValue()}`"
       } else {
@@ -287,7 +291,7 @@ class CliDocsGenerator(
     appendLine("|----------|-------------|----------|")
     positionals.forEach { param ->
       val name = param.paramLabel() ?: param.descriptionKey() ?: "ARG"
-      val desc = param.description().joinToString(" ").stripPicocli().replace("|", "\\|")
+      val desc = param.description().joinToString(" ").stripPicocli().escapeMdxUnsafeUrls().replace("|", "\\|")
       val required = if (param.required()) "Yes" else "No"
       appendLine("| `<$name>` | $desc | $required |")
     }
@@ -295,4 +299,14 @@ class CliDocsGenerator(
 
   /** Strip Picocli format placeholders like %n from description strings. */
   private fun String.stripPicocli(): String = replace("%n", " ").trim()
+
+  companion object {
+    private val MDX_UNSAFE_URL_PATTERN =
+      Regex("""(?<!`)https?://[^\s`]*<[^>]+>[^\s`]*(?!`)""")
+
+    internal fun escapeMdxUnsafeUrls(text: String): String =
+      MDX_UNSAFE_URL_PATTERN.replace(text) { "`${it.value}`" }
+  }
+
+  private fun String.escapeMdxUnsafeUrls(): String = Companion.escapeMdxUnsafeUrls(this)
 }

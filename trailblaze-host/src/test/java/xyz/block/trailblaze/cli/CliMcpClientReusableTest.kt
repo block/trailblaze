@@ -2,6 +2,7 @@ package xyz.block.trailblaze.cli
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
@@ -12,7 +13,9 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -367,6 +370,452 @@ class CliMcpClientReusableTest {
       assertTrue(
         "\"headless\":false" in rebindBody,
         "WEB rebind must forward the caller's --headless choice; got body: $rebindBody",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  // ── session-transition message routing (eval-safety regression) ──────────
+  //
+  // `eval $(trailblaze device connect …)` requires the connect command's stdout
+  // to contain ONLY the `export TRAILBLAZE_DEVICE=…` lines — any preceding
+  // human-readable text makes the shell try to execute that text as a command
+  // (e.g. `command not found: Target`). connectReusable emits status lines on
+  // three transition paths: target change, daemon-doesn't-recognize-session,
+  // and daemon-probe-failed. All three MUST go to stderr.
+  //
+  // As a second-layer defense, we also pin that those messages stay ASCII —
+  // a stray em-dash (`—`) or Unicode arrow (`→`) inside what would otherwise
+  // be a quoted shell token has historically broken zsh's eval with
+  // `zsh: unmatched '`, so we want a hard contract that nothing routes
+  // non-ASCII characters through these particular emissions.
+
+  @Test
+  fun `target-change transition message routes to stderr, not stdout, and stays ASCII`() {
+    val server = stubServer(initialSessionId = "new-session-after-target-change")
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port).also { createdFiles += it }
+    sessionFile.writeText("old-session\nsampleapp")
+
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          CliMcpClient.connectReusable(port = port, targetAppId = "otherapp").use { /* noop */ }
+        }
+      }
+
+      val stdout = out.toString(Charsets.UTF_8)
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stdout.contains("Target app changed"),
+        "transition message must NOT appear on stdout (it would poison `eval`). " +
+          "Got stdout: <<<$stdout>>>",
+      )
+      assertTrue(
+        stderr.contains("Target app changed"),
+        "transition message must appear on stderr so the user sees it. " +
+          "Got stderr: <<<$stderr>>>",
+      )
+      assertFalse(
+        "—" in stderr || "→" in stderr,
+        "transition message must stay ASCII — em-dash (U+2014) or right-arrow " +
+          "(U+2192) inside a single-quoted shell token has historically broken " +
+          "zsh's eval. Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `device-switch transition message routes to stderr, not stdout, and stays ASCII`() {
+    // ensureDevice() emits its own "Switching device --" line on a fourth transition
+    // path (different from the three in connectReusable): when the persisted session
+    // is alive AND has a bound device, but the user passed --device pointing at a
+    // different platform/instance. This was the original site that broke
+    // `eval $(trailblaze device connect …)` on iOS FTUX — same eval-safety contract
+    // as the connectReusable-side transitions, separate test because the production
+    // emission site is separate.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "should-not-be-used")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        // INFO reports an iOS device is already bound — so the persisted session is
+        // alive AND hasExistingDevice flips true.
+        "\"tools/call\"" in body && "\"device\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Platform: iOS\nInstance ID: SIM-UUID-1234"}],"isError":false}}"""
+        // Spec mismatch triggers the "Switching device --" emission, then falls
+        // through to connectToDevice(ANDROID) → device(LIST) + device(action=ANDROID).
+        // Both need a successful stub so the call completes; the assertion just
+        // checks where the "Switching device" line landed.
+        "\"tools/call\"" in body && "\"device\"" in body && "\"LIST\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Available devices:\n  - emulator-5554 (Android) - Pixel 7"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"device\"" in body && "\"ANDROID\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Connected to emulator-5554 (Android)"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"trailblaze-session-1\"}"}],"isError":false}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port).also { createdFiles += it }
+    sessionFile.writeText("persisted-session\nsampleapp")
+
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          CliMcpClient.connectReusable(port = port, targetAppId = "sampleapp").use { client ->
+            client.ensureDevice("android")
+          }
+        }
+      }
+
+      val stdout = out.toString(Charsets.UTF_8)
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stdout.contains("Switching device"),
+        "transition message must NOT appear on stdout (would poison `eval`). " +
+          "Got stdout: <<<$stdout>>>",
+      )
+      assertTrue(
+        stderr.contains("Switching device"),
+        "transition message must appear on stderr. Got stderr: <<<$stderr>>>",
+      )
+      // Pin ASCII-only on the transition-line substring specifically — the
+      // surrounding "Connecting to …" / "10–30s" emissions intentionally still
+      // contain Unicode (they're already on stderr and predate this fix), so
+      // a blanket "no em-dash anywhere in stderr" assertion would be wrong.
+      val transitionLine = stderr.lineSequence().first { "Switching device" in it }
+      assertFalse(
+        "—" in transitionLine || "→" in transitionLine,
+        "transition line must stay ASCII. Got line: <<<$transitionLine>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  // ── target-only-swap on warm reuse (the silent-target-change regression) ──
+  //
+  // `eval $(trailblaze device connect <same-device> --target Y)` after a prior
+  // connect with `--target X` reuses the MCP session (file-tier targetAppId
+  // matches the config tier, NOT the --target arg), then the daemon hot-swaps
+  // the per-device override via `setSessionTargetForBoundDevice` — so the
+  // four `connectReusable` transition emissions above never fire. Before this
+  // fix, the user-visible output was just "Reusing session …" with no notice
+  // that their target changed. The announcing variant of the setter probes
+  // session(INFO) for the prior override-vs-daemon-wide source and emits a
+  // stderr-routed `Target app changed (X -> Y) -- pinned on existing session.`
+  // line when (and only when) it's swapping an existing per-device override.
+  //
+  // The three tests below pin: (a) the swap-of-existing-override case emits,
+  // (b) first-time pins (daemon-wide source) stay silent, (c) no-op re-pins
+  // of the same value stay silent.
+
+  @Test
+  fun `target-swap on warm reuse announces change to stderr with ASCII transition line`() {
+    // Simulates the reported reproducer: prior connect set --target default
+    // (so session(INFO) now reports `target=default, targetSource=session-override`),
+    // current connect calls setSessionTargetForBoundDeviceAnnouncingChange("team").
+    // Expect: stderr contains "Target app changed (default -> team) -- pinned on
+    // existing session." in ASCII; stdout stays clean for `eval` safety.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "warm-session")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          // Prior per-device override = "default". The announcing helper compares
+          // this against the new requested target to decide whether to emit.
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"warm-session\",\"target\":\"default\",\"targetSource\":\"session-override\"}"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"setSessionTargetForBoundDevice\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Set session target to Team (team) for android/emulator-5556."}],"isError":false}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp")
+          client.use {
+            it.initialize()
+            val error = it.setSessionTargetForBoundDeviceAnnouncingChange("team")
+            assertNull(error)
+          }
+        }
+      }
+
+      val stdout = out.toString(Charsets.UTF_8)
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stdout.contains("Target app changed"),
+        "transition message must NOT appear on stdout (it would poison `eval`). " +
+          "Got stdout: <<<$stdout>>>",
+      )
+      assertTrue(
+        stderr.contains("Target app changed (default -> team) -- pinned on existing session."),
+        "warm-reuse target swap must announce the change on stderr. " +
+          "Got stderr: <<<$stderr>>>",
+      )
+      // ASCII-only contract — em-dash (U+2014) or right-arrow (U+2192) inside
+      // a quoted shell token has historically broken zsh's eval (see other
+      // transition tests). Check the transition line specifically rather than
+      // the whole stderr (so any surrounding emissions that intentionally use
+      // Unicode aren't false-positives).
+      val transitionLine = stderr.lineSequence().first { "Target app changed" in it }
+      assertFalse(
+        "—" in transitionLine || "→" in transitionLine,
+        "transition line must stay ASCII. Got line: <<<$transitionLine>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `first-time pin from daemon-wide fallback stays silent`() {
+    // When session(INFO) reports `targetSource=daemon-wide` (no per-device
+    // override yet), the announcing helper is on the *first* pin path — the
+    // user just typed --target X and gets the device-bind + the daemon-side
+    // override. Emitting "Target app changed (default -> X)" here would be
+    // confusing because no override existed before; the daemon-wide value
+    // was just an implicit fallback.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "fresh-session")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"fresh-session\",\"target\":\"default\",\"targetSource\":\"daemon-wide\"}"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"setSessionTargetForBoundDevice\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Set session target to Team (team) for android/emulator-5556."}],"isError":false}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp")
+          client.use {
+            it.initialize()
+            val error = it.setSessionTargetForBoundDeviceAnnouncingChange("team")
+            assertNull(error)
+          }
+        }
+      }
+
+      val stdout = out.toString(Charsets.UTF_8)
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stdout.contains("Target app changed"),
+        "first-time pin must NOT emit any transition message on stdout. " +
+          "Got stdout: <<<$stdout>>>",
+      )
+      assertFalse(
+        stderr.contains("Target app changed"),
+        "first-time pin (daemon-wide → session-override) is not a target *change* — " +
+          "the helper should stay silent and let the daemon-side bind take effect quietly. " +
+          "Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `re-pinning the same value stays silent`() {
+    // Defensive: the announcing helper is opt-in (DeviceConnectCommand calls
+    // it, cliReusableWithDevice doesn't), but pin it anyway so a future caller
+    // that re-applies the env-tier target on every action command doesn't
+    // accidentally spam the user with a no-op "Target app changed (X -> X)" line.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "warm-session")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"warm-session\",\"target\":\"team\",\"targetSource\":\"session-override\"}"}],"isError":false}}"""
+        "\"tools/call\"" in body && "\"setSessionTargetForBoundDevice\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Set session target to Team (team) for android/emulator-5556."}],"isError":false}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp")
+          client.use {
+            it.initialize()
+            val error = it.setSessionTargetForBoundDeviceAnnouncingChange("team")
+            assertNull(error)
+          }
+        }
+      }
+
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stderr.contains("Target app changed"),
+        "no-op re-pin (prior session-override == new target) must stay silent. " +
+          "Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `announcing helper propagates daemon set error without emitting`() {
+    // If the daemon's setSessionTargetForBoundDevice tool returns isError=true
+    // (unknown target id, no device bound, etc), the announcing helper must
+    // propagate the error string AND stay silent on stderr. Without this pin,
+    // a future refactor that emits BEFORE checking the set error would lie to
+    // the user ("Target app changed (default -> bogus) -- pinned …") while
+    // the underlying set actually failed.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      val response = when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "warm-session")
+          """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}"""
+        }
+        "\"notifications/initialized\"" in body -> "{}"
+        "\"tools/call\"" in body && "\"session\"" in body && "\"INFO\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"sessionId\":\"warm-session\",\"target\":\"default\",\"targetSource\":\"session-override\"}"}],"isError":false}}"""
+        // Daemon refuses the swap — typical shape when the target id isn't a
+        // known one. The MCP framework converts the exception thrown by the
+        // server-side tool into a tool-call response with isError=true.
+        "\"tools/call\"" in body && "\"setSessionTargetForBoundDevice\"" in body ->
+          """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"'bogus' is not a known target id. Available: [default, team]"}],"isError":true}}"""
+        else -> error("Unexpected POST body: $body")
+      }
+      send(exchange, response)
+    }
+    server.start()
+
+    val port = server.address.port
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp")
+          client.use {
+            it.initialize()
+            val error = it.setSessionTargetForBoundDeviceAnnouncingChange("bogus")
+            assertNotNull(error, "set failure must surface as a non-null error string")
+            assertTrue(
+              "bogus" in error && "not a known target id" in error,
+              "error string must carry the daemon's reason. Got: <<<$error>>>",
+            )
+          }
+        }
+      }
+
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stderr.contains("Target app changed"),
+        "announcement must NOT fire when the underlying set failed — the helper " +
+          "would otherwise mislead the user that a change took effect. Got stderr: <<<$stderr>>>",
+      )
+    } finally {
+      server.stop(0)
+    }
+  }
+
+  @Test
+  fun `daemon-rejects-session transition message routes to stderr, not stdout`() {
+    // Mirrors the "creates a new session when daemon does not recognize the persisted id"
+    // test above but checks where the human-readable status line lands. Same eval-safety
+    // contract as the target-change variant.
+    val server = HttpServer.create(InetSocketAddress(0), 0)
+    server.createContext("/mcp") { exchange ->
+      val body = exchange.requestBody.bufferedReader().use { it.readText() }
+      when {
+        "\"initialize\"" in body -> {
+          exchange.responseHeaders.add("mcp-session-id", "recovered-session")
+          send(exchange, """{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"test","version":"1"}}}""")
+        }
+        "\"notifications/initialized\"" in body -> send(exchange, "{}")
+        "\"tools/call\"" in body && "\"device\"" in body && "\"INFO\"" in body ->
+          send(exchange, """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Unknown session id"}],"isError":true}}""")
+        else -> error("Unexpected POST body: $body")
+      }
+    }
+    server.start()
+
+    val port = server.address.port
+    val sessionFile = CliMcpClient.sessionFile(port).also { createdFiles += it }
+    sessionFile.writeText("stale-session\nsampleapp")
+
+    CliOutCapture.install()
+    val out = ByteArrayOutputStream()
+    val err = ByteArrayOutputStream()
+    try {
+      CliOutCapture.withCapture(out, err) {
+        runBlocking {
+          CliMcpClient.connectReusable(port = port, targetAppId = "sampleapp").use { /* noop */ }
+        }
+      }
+
+      val stdout = out.toString(Charsets.UTF_8)
+      val stderr = err.toString(Charsets.UTF_8)
+      assertFalse(
+        stdout.contains("Daemon doesn't recognize"),
+        "daemon-restart transition must NOT appear on stdout. Got stdout: <<<$stdout>>>",
+      )
+      assertTrue(
+        stderr.contains("Daemon doesn't recognize"),
+        "daemon-restart transition must appear on stderr. Got stderr: <<<$stderr>>>",
       )
     } finally {
       server.stop(0)

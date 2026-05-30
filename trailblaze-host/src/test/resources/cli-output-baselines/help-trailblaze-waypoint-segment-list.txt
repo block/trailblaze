@@ -13,12 +13,12 @@ calls that drove it.
   -h, --help                Show this help message and exit.
       --root=<root>         Additional directory to scan for *.waypoint.yaml
                               files (default: ./trails, resolved against the
-                              current working directory). Pack waypoints are
-                              always included regardless of --root.
+                              current working directory). Trailmap waypoints
+                              are always included regardless of --root.
       --session=<session>   Session log directory (containing *.json log files)
-      --target=<id>         Pack id whose declared `app_ids:` expand `{{target.
-                              appId}}` placeholders in waypoint selectors
-                              during matching. Match `--target` on `waypoint
-                              locate/validate` if the session was captured
-                              against that target's app.
+      --target=<id>         Trailmap id whose declared `app_ids:` expand `
+                              {{target.appId}}` placeholders in waypoint
+                              selectors during matching. Match `--target` on
+                              `waypoint locate/validate` if the session was
+                              captured against that target's app.
   -V, --version             Print version information and exit.

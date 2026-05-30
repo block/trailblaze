@@ -43,12 +43,19 @@ export interface JsScriptingCallbackRequest {
  * Kotlin `Json` instance uses `classDiscriminator = "type"` (see `ScriptingCallbackEndpoint`)
  * so a `CallToolResult` serializes as `{"type":"call_tool_result", ...}` and an `Error` as
  * `{"type":"error", ...}`.
+ *
+ * `structured_content` carries the tool's typed JSON return value when the producer populated
+ * one (TS scripted tool whose handler returns a non-string typed value). Absent / null means
+ * "this tool returns text only" — the public `client.tools.<name>(args)` proxy falls back to
+ * `text_content` in that case so older tools keep their existing string-return shape. Mirror
+ * of `JsScriptingCallbackResult.CallToolResult.structuredContent` on the Kotlin side.
  */
 export interface CallToolResult {
   type: "call_tool_result";
   success: boolean;
   text_content: string;
   error_message: string;
+  structured_content?: unknown;
 }
 
 export interface CallbackError {
@@ -73,30 +80,43 @@ export interface JsScriptingCallbackResponse {
  * `success` is redundant here — the client throws on any non-success response, so a value
  * returned from `callTool(...)` is always `success: true`. Keeping the field exposed anyway so
  * an author who reaches into the typed shape isn't surprised that it disappeared; costs nothing.
+ *
+ * `structuredContent` carries the tool's typed JSON return value when the producer populated
+ * one. Most authors never read this field directly — the public `client.tools.<name>(args)`
+ * proxy already unwraps it into the typed `result` declared in [TrailblazeToolMap]. It's
+ * exposed here for the rare consumer that drops down to the low-level `callTool` escape hatch
+ * (e.g. an SDK-internal site that needs both `textContent` and structured payload from the
+ * same response).
  */
 export interface TrailblazeCallToolResult {
   success: true;
   textContent: string;
   errorMessage: string;
+  structuredContent?: unknown;
 }
 
 /**
- * Open type map of `tool name → arg shape`. Empty by default; augmented by:
+ * Open type map of `tool name → { args; result }`. Empty by default; augmented by:
  *
  *  - The vendored `built-in-tools.d.ts` shipped with this SDK (well-known framework tools
  *    like `tapOnElementWithText`, `inputText`).
- *  - Per-pack `.d.ts` files emitted by the `trailblaze.bundle` Gradle plugin
- *    (one entry per scripted tool declared in the pack's resolved target manifest).
+ *  - Per-trailmap `.d.ts` files emitted by the framework's `WorkspaceClientDtsGenerator`
+ *    (one entry per scripted tool declared in the trailmap's resolved target manifest).
  *
  * Augmentation pattern (declaration merging):
  *
  * ```ts
  * declare module "@trailblaze/scripting" {
  *   interface TrailblazeToolMap {
- *     myScriptedTool: { foo: string; bar?: number };
+ *     myScriptedTool: { args: { foo: string; bar?: number }; result: string };
  *   }
  * }
  * ```
+ *
+ * **`args` vs `result`.** `args` is the runtime-validated input shape (JSON-Schema-shaped
+ * properties — typed against the matchers the daemon dispatcher actually checks).
+ * `result` is the static-only typed return value — see the kdoc on
+ * [TrailblazeToolMethods] for the type lie this currently carries.
  *
  * A tool listed here lights up `client.tools.<name>(args)` with autocomplete on the name
  * and type-checked args. Tools NOT listed are not reachable through the public client
@@ -107,37 +127,117 @@ export interface TrailblazeCallToolResult {
  * **Single authoring surface.** `client.tools.<name>(args)` is the only call style
  * available to a `.ts` author. The runtime still dispatches everything through the
  * internal `callTool` method that the `tools` Proxy delegates to, but the type isn't
- * exposed publicly — every tool a pack can call must be declared in `TrailblazeToolMap`.
+ * exposed publicly — every tool a trailmap can call must be declared in `TrailblazeToolMap`.
  *
- * **Multi-pack collision risk.** Within a single pack the Gradle generator fails the build
- * if two scripted tools share a name. Across packs (a TS consumer that imports two pack
+ * **Multi-trailmap collision risk.** Within a single trailmap the codegen fails the build
+ * if two scripted tools share a name. Across trailmaps (a TS consumer that imports two trailmap
  * roots' generated `.d.ts` files), TypeScript declaration merging will silently pick one
  * shape for the colliding key — the static type passes, the runtime mismatches. Tool names
- * MUST be globally unique across every pack a single consumer installs. There is no
- * automated cross-pack enforcement today; conventions and code review carry the load until
- * a multi-pack consumer demands one.
+ * MUST be globally unique across every trailmap a single consumer installs. There is no
+ * automated cross-trailmap enforcement today; conventions and code review carry the load until
+ * a multi-trailmap consumer demands one.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface TrailblazeToolMap {}
 
 /**
+ * Per-entry shape of [TrailblazeToolMap]. Authoring tools (vendored or per-trailmap) write
+ * `{ args: <ArgsShape>; result: <ResultShape> }`; the `client.tools.<name>(args)` namespace
+ * derives method signatures from these entries.
+ *
+ * Use `result: void` for tools that meaningfully return nothing (e.g. `hideKeyboard`),
+ * `result: string` for tools whose result is a plain text payload (most current tools),
+ * or a structured interface for tools that return JSON-shaped data.
+ *
+ * **Why this is exported.** The type isn't usually named at user-augmentation sites
+ * (authors write the literal `{ args; result }` inline). It exists as a public hook for
+ * upcoming codegen consumers — the static analyzer pass that walks
+ * `trailblaze.tool<I, O>(handler)` declarations will assemble emitter output against
+ * this type so emitter and runtime stay in lockstep when the entry shape evolves. Hide
+ * with caution.
+ */
+export type TrailblazeToolEntry = { args: unknown; result: unknown };
+
+/**
  * Method-style namespace derived from [TrailblazeToolMap]. Each augmented entry surfaces as
- * a typed method — e.g. given `interface TrailblazeToolMap { inputText: { text: string } }`,
- * the namespace exposes `inputText(args: { text: string }): Promise<TrailblazeCallToolResult>`.
+ * a typed method — given
+ * `interface TrailblazeToolMap { inputText: { args: { text: string }; result: void } }`,
+ * the namespace exposes `inputText(args: { text: string }): Promise<void>`.
  *
  * This is the sole authoring surface a `.ts` tool file has to compose other Trailblaze
  * tools: the IDE shows every available tool when you type `client.tools.`, hover gives
  * JSDoc on both the name and the args, and a wrong-keyed/missing-field args object errors
  * at compile time without any string-literal fiddling.
  *
- * Tools not represented in the map (dynamically-registered, packs without generated
- * bindings) are unreachable from a typed `.ts` author — every tool a pack can call must be
- * declared in `TrailblazeToolMap` via the SDK's vendored built-ins or per-pack codegen.
+ * **The `result` type matches the runtime value.** When the producer tool populates the
+ * wire's `structured_content` field (TS scripted tool whose handler returns a typed
+ * non-string value), the proxy unwraps that JSON value and returns it as `T[K]['result']`.
+ * When the producer doesn't (Kotlin tools that return text, legacy tools), the proxy
+ * returns `text_content` cast as `T[K]['result']` — correct when the declared `result` is
+ * `string` (the per-trailmap codegen default), and accepted-as-is when the declared `result` is
+ * `void` (the caller discards the return anyway). A producer that doesn't populate
+ * `structured_content` while the consumer's `TrailblazeToolMap` declares a non-string
+ * `result` is a static/runtime mismatch — surfaced as a typed string the consumer didn't
+ * expect, traceable to either a missing producer migration or a stale per-trailmap `.d.ts`.
+ *
+ * Tools not represented in the map (dynamically-registered, trailmaps without generated
+ * bindings) are unreachable from a typed `.ts` author — every tool a trailmap can call must be
+ * declared in `TrailblazeToolMap` via the SDK's vendored built-ins or per-trailmap codegen.
  */
 export type TrailblazeToolMethods = {
-  [K in keyof TrailblazeToolMap]: (
-    args: TrailblazeToolMap[K],
-  ) => Promise<TrailblazeCallToolResult>;
+  [K in keyof TrailblazeToolMap]: K extends "web_evaluate"
+    ? WebEvaluateMethod
+    : (
+        args: TrailblazeToolMap[K] extends { args: infer A } ? A : never,
+      ) => Promise<TrailblazeToolMap[K] extends { result: infer R } ? R : never>;
+};
+
+/**
+ * Function-overload shape for `client.tools.web_evaluate(...)`. Borrowed from Playwright
+ * Java's `Page.evaluate(pageFunction, args)` ergonomic — lets a Trailblaze trailmap author
+ * write a JS expression as a TypeScript arrow function (with type-checked args!) instead
+ * of hand-stringifying it into the `{ script: "..." }` wire shape the Kotlin tool actually
+ * consumes.
+ *
+ * Three call styles, all dispatch to the same `web_evaluate` Kotlin tool:
+ *
+ *  1. `web_evaluate(fn, ...args)` — the ergonomic shape. The Proxy calls
+ *     `Function.prototype.toString()` on the arrow, JSON-serializes the args array, and
+ *     emits `(<fnSrc>).apply(null, <argsJson>)` as the script payload. The function
+ *     evaluates in the PAGE context (not the host runtime) with the deserialized args
+ *     bound positionally.
+ *  2. `web_evaluate(script)` — bare string expression. Compatibility surface for authors
+ *     who want full control over the script (e.g. multi-statement IIFE).
+ *  3. `web_evaluate({ script })` — the literal args-object shape that matches the Kotlin
+ *     tool's wire contract directly. Useful when the script is computed dynamically and
+ *     the caller already has it as a string field on a config object.
+ *
+ * **Closure caveat.** Functions cross the host→page boundary via `Function.prototype.toString()`,
+ * so closure variables from the calling scope DON'T survive serialization — pass them
+ * positionally via `...args` so they're JSON-encoded into the wire script. The function
+ * body must be self-contained (no Node-side imports, no references to outer-scope names).
+ *
+ * **Return type — type lie warning.** The function form preserves the inferred `TResult`
+ * at the typed surface, but the runtime always returns a string. Today's Kotlin
+ * `web_evaluate` populates `textContent` with the `toString()` of the JS result —
+ * primitives serialize as text (`"42"`, `"hi"`, `"true"`), objects collapse to
+ * `[object Object]`, arrays serialize as comma-joined elements. The Proxy returns that
+ * raw text verbatim; no JSON.parse heuristic is applied (a previous revision tried, but
+ * the heuristic corrupted legitimate string returns whose textual form happened to look
+ * like JSON literals — e.g. `"42"` would round-trip as the number `42`, breaking the
+ * declared string contract). Authors that need a typed value should `Number(...)` /
+ * `JSON.parse(...)` the result themselves, or wait for the structured-content path that
+ * populates `structured_content` from the Kotlin side. Until then, return shapes more
+ * complex than primitives need `JSON.stringify` on the page side and `JSON.parse` on
+ * the host.
+ */
+type WebEvaluateMethod = {
+  <TArgs extends readonly unknown[], TResult>(
+    fn: (...args: TArgs) => TResult | Promise<TResult>,
+    ...args: TArgs
+  ): Promise<TResult>;
+  (script: string): Promise<string>;
+  (args: { script: string }): Promise<string>;
 };
 
 /**
@@ -154,8 +254,13 @@ interface TrailblazeClientImpl {
    * returns the result. Internal — see [TrailblazeClient] for the public surface.
    *
    * **Typed args via [TrailblazeToolMap].** `name` is constrained to `keyof TrailblazeToolMap`
-   * (vendored built-ins + per-pack-generated entries); `args` must match the typed shape
-   * exactly. Wrong keys / missing required fields error at compile time.
+   * (vendored built-ins + per-trailmap-generated entries); `args` must match the entry's `args`
+   * half (`TrailblazeToolMap[name]["args"]`). Wrong keys / missing required fields error at
+   * compile time. The return type stays `TrailblazeCallToolResult` here — `callTool` is the
+   * internal envelope-returning primitive that keeps `textContent` + `structuredContent`
+   * separate. The public [tools] namespace is where the typed `result` half is exposed —
+   * the Proxy unwraps the envelope internally (see [TrailblazeToolMethods] for the unwrap
+   * semantics).
    *
    * **Transports.** Picked automatically from the envelope — callers never branch on this:
    *
@@ -203,7 +308,7 @@ interface TrailblazeClientImpl {
    */
   callTool<K extends keyof TrailblazeToolMap>(
     name: K,
-    args: TrailblazeToolMap[K],
+    args: TrailblazeToolMap[K] extends { args: infer A } ? A : never,
   ): Promise<TrailblazeCallToolResult>;
 
   /**
@@ -221,10 +326,11 @@ interface TrailblazeClientImpl {
 }
 
 /**
- * Third handler argument on `trailblaze.tool(name, spec, handler)`. Exposes the callback
- * channel so tools can compose other Trailblaze tools. Always provided (never `undefined`) —
- * when the envelope is missing, the client's preflight check still runs and throws a clear
- * error instead of silently no-op'ing.
+ * Third handler argument on the imperative `trailblaze.tool(name, spec, handler)` signature
+ * (and reachable via `ctx.tools` on the typed `trailblaze.tool<I, O>(handler)` surface
+ * via [ToolContext]). Exposes the callback channel so tools can compose other Trailblaze
+ * tools. Always provided (never `undefined`) — when the envelope is missing, the client's
+ * preflight check still runs and throws a clear error instead of silently no-op'ing.
  *
  * **Surface narrowing.** `callTool` is hidden from the public type via `Omit` — `.ts`
  * authors can only compose tools through `client.tools.<name>(args)`, which forces every
@@ -331,6 +437,70 @@ export function createClient(ctx: TrailblazeContext | undefined): TrailblazeClie
  * touch on plain objects; not exhaustive, but covers every probe path observed in practice
  * for similar Proxy-as-namespace patterns.
  */
+/**
+ * Tool names whose `client.tools.<name>(...)` dispatch accepts the function-overload shape
+ * documented on [WebEvaluateMethod]. The Proxy detects these names at access time and
+ * routes through [buildScriptOverloadArgs] before calling into the standard `callToolImpl`
+ * dispatch.
+ *
+ * Add a tool here when both sides line up:
+ *  - The Kotlin tool accepts a `{ script: String }` arg shape.
+ *  - The typed surface in [TrailblazeToolMethods] declares the overload signature.
+ *
+ * Mismatch — e.g. adding the name here without the typed-surface conditional, or vice
+ * versa — produces either a runtime mistranslation (Proxy emits a `script` field the tool
+ * doesn't expect) or a static/runtime mismatch (TS thinks `web_X(fn)` compiles but the
+ * Proxy passes the function through as if it were an args object). Keep the two in
+ * lockstep.
+ *
+ * **Today's membership is `web_evaluate` only.** When the Playwright-tool-shim codegen
+ * lands (see the `2026-05-26-playwright-tool-shim-codegen.md` devlog), siblings like
+ * `web_addInitScript` and `web_setExtraHeaders` will join via that generator's
+ * code-generated entries — not by hand-edit here.
+ */
+const SCRIPT_OVERLOAD_TOOLS = new Set<string>(["web_evaluate"]);
+
+/**
+ * Translates a function-overload call (`tool(fn, ...args)`, `tool(scriptString)`, or
+ * `tool({ script })`) into the `{ script }` args-object shape the Kotlin tool consumes.
+ *
+ * Discriminator order matters — the function branch fires before the object branch so an
+ * authored `function ...` doesn't accidentally match the `firstArg !== null && typeof ===
+ * "object"` check (functions are objects in JS, but `typeof fn === "function"`). The
+ * string branch handles the `tool("expr")` shape; the args-object branch handles the
+ * `tool({ script })` shape and is also the fallback for any other shape (let the daemon
+ * reject malformed args with a clear message rather than this helper second-guessing).
+ *
+ * **Function-form payload.** `(<fn.toString()>).apply(null, <JSON.stringify(args)>)`
+ * — `apply` with a null `this` keeps the call indifferent to the call site (no leaking
+ * `globalThis`), and the JSON-roundtrip means closure-variable misuse fails loudly at
+ * serialization time rather than producing a subtly-wrong script. `JSON.stringify`
+ * preserves primitives, plain objects, and arrays; functions/Symbol/undefined fields
+ * disappear silently per the standard (consistent with what Playwright's own
+ * `page.evaluate` does on the wire, so authors carrying habits from there see no surprises).
+ */
+function buildScriptOverloadArgs(
+  toolName: string,
+  firstArg: unknown,
+  rest: unknown[],
+): Record<string, unknown> {
+  if (typeof firstArg === "function") {
+    const fnSrc = (firstArg as (...a: unknown[]) => unknown).toString();
+    const argsJson = JSON.stringify(rest);
+    return { script: `(${fnSrc}).apply(null, ${argsJson})` };
+  }
+  if (typeof firstArg === "string") {
+    return { script: firstArg };
+  }
+  if (firstArg !== null && typeof firstArg === "object") {
+    return firstArg as Record<string, unknown>;
+  }
+  throw new Error(
+    `client.tools.${toolName}: expected a function, script string, or { script } object as ` +
+      `the first argument; got ${firstArg === null ? "null" : typeof firstArg}.`,
+  );
+}
+
 const TOOLS_PROXY_RESERVED_PROPS = new Set<string>([
   // Thenable detection — the critical one. Without this, `await client.tools` (or any
   // value-coercion path) reads `.then`, gets back a fn, calls it, and dispatches a
@@ -350,6 +520,18 @@ const TOOLS_PROXY_RESERVED_PROPS = new Set<string>([
   "toJSON",
 ]);
 
+/**
+ * Builds the `client.tools.<name>(args)` Proxy. Each property access returns an async
+ * per-call wrapper that dispatches via [callToolImpl] and unwraps the envelope via
+ * [_unwrapToolResult] so the caller sees the typed `result` rather than the raw envelope.
+ *
+ * **Why per-call wrapping is intentional.** The pre-PR shape was `(args) => callToolImpl(...)`
+ * — one promise per call, no extra frame. After structured-content lands, the wrapper has
+ * to `await` the envelope, run unwrap, and re-return — adding one promise + one frame per
+ * dispatch. Per-call cost is negligible (<1µs); flagging here so a future micro-optimizer
+ * doesn't try to inline the unwrap away and re-introduce the envelope-leak the unwrap
+ * exists to prevent.
+ */
 function createToolsProxy(
   callToolImpl: (name: string, args: Record<string, unknown>) => Promise<TrailblazeCallToolResult>,
 ): TrailblazeToolMethods {
@@ -370,10 +552,75 @@ function createToolsProxy(
           `client.tools[${JSON.stringify(prop)}]: tool name must not be empty or whitespace-only.`,
         );
       }
-      return (args: Record<string, unknown>) =>
-        callToolImpl(prop, args ?? ({} as Record<string, unknown>));
+      // Script-overload tools (today: `web_evaluate`) accept either a function, a bare
+      // string, or a `{ script }` args object. The proxy normalizes the input to the
+      // standard `{ script }` wire shape before dispatch — see the kdoc on
+      // [SCRIPT_OVERLOAD_TOOLS] and [buildScriptOverloadArgs] for the discriminator
+      // semantics.
+      //
+      // The envelope passes through the standard `_unwrapToolResult`. The Kotlin tool
+      // populates textContent via `result?.toString()`, so the consumer receives the
+      // page's stringified return value. The function-overload's `TResult` type-inference
+      // is a documented type lie for non-string returns; authors that need a typed value
+      // should JSON.parse themselves until `structured_content` lands (kdoc on
+      // [WebEvaluateMethod] spells this out). An earlier revision JSON.parse'd textContent
+      // for the function form to try to recover primitives — that corrupted any string
+      // return that happened to parse as JSON (e.g. `"42"` becoming the number `42`) and
+      // lost legitimate empty-string returns by mapping them to `undefined`. Dropping the
+      // heuristic is the honest reflection of the wire reality.
+      //
+      // Per-tool return-value transforms (e.g. discarding textContent for `Promise<void>`
+      // tools like a future `web_addInitScript`) belong in the per-tool generated wrapper
+      // emitted by the Playwright-tool-shim codegen, NOT in this hand-edited branch.
+      if (SCRIPT_OVERLOAD_TOOLS.has(prop)) {
+        const toolName = prop;
+        return async (firstArg: unknown, ...rest: unknown[]) => {
+          const args = buildScriptOverloadArgs(toolName, firstArg, rest);
+          const envelope = await callToolImpl(toolName, args);
+          return _unwrapToolResult(envelope);
+        };
+      }
+      return async (args: Record<string, unknown>) => {
+        const envelope = await callToolImpl(prop, args ?? ({} as Record<string, unknown>));
+        return _unwrapToolResult(envelope);
+      };
     },
   });
+}
+
+/**
+ * Unwraps a [TrailblazeCallToolResult] envelope into the typed `result` declared in
+ * [TrailblazeToolMap] for the calling tool. Two branches:
+ *
+ *  - **Structured payload present.** The producer (TS scripted tool with a non-string typed
+ *    return, or a Kotlin tool that populated `structured_content`) supplied a JSON value —
+ *    return that verbatim. The TS type contract guarantees the shape matches the declared
+ *    `result`; runtime validation at the dispatch boundary is a deferred follow-up that
+ *    will consume the JSON Schema emitted by the analyzer in #3323. Until that lands, a
+ *    producer that emits a malformed structured payload (e.g. wrong nested type) surfaces
+ *    as a downstream TypeScript type-mismatch at the consumer call site, not a runtime
+ *    diagnostic at the unwrap boundary.
+ *  - **No structured payload.** Fall back to `textContent`. Correct when the declared
+ *    `result` is `string` (most tools today, the per-trailmap codegen default). When `result`
+ *    is `void`, the caller discards the return value anyway. When `result` is anything else
+ *    and the producer hasn't migrated, the caller sees a string they didn't expect —
+ *    surfaced as a downstream type mismatch rather than a silent runtime failure.
+ *
+ * **Internal.** The `_` prefix matches `_clearPendingTools` in `./tool.ts` — this is an
+ * SDK-internal helper, exported from `./client.js` only so [createMockToolsProxy] in
+ * `./testing.ts` and the unit tests in `./client.test.ts` can exercise it directly. Not
+ * re-exported from `./index.ts`; SDK consumers reach the unwrap implicitly via the
+ * `client.tools.<name>(args)` Proxy.
+ */
+export function _unwrapToolResult<R>(envelope: TrailblazeCallToolResult): R {
+  if (envelope.structuredContent !== undefined && envelope.structuredContent !== null) {
+    return envelope.structuredContent as R;
+    // TODO(#3323-followup): post-unwrap JSON Schema validation hook lands here once the
+    // analyzer emits per-tool schemas — wrap the return in `validate(envelope.structuredContent)`
+    // to convert wire/declared shape mismatches into a runtime diagnostic at this boundary
+    // rather than surfacing as a downstream TS type mismatch.
+  }
+  return envelope.textContent as unknown as R;
 }
 
 async function callTool(
@@ -601,6 +848,7 @@ function unwrapCallbackResponse(
     success: true,
     textContent: result.text_content,
     errorMessage: result.error_message,
+    structuredContent: result.structured_content,
   };
 }
 

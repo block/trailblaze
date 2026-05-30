@@ -24,6 +24,9 @@ Browse available tools by target app and platform
   -h, --help              Show this help message and exit.
   -n, --name=<name>       Show details for a single tool by name
   -s, --search=<search>   Substring search on tool name and description.
-  -t, --target=<target>   Show tools for a specific target app
+  -t, --target=<target>   Target app to show tools for. Optional — defaults to
+                            $TRAILBLAZE_TARGET (per-shell pin), then the
+                            workspace `trailblaze config target`, falling back
+                            to the built-in 'default'.
   -v, --verbose           Enable verbose output
   -V, --version           Print version information and exit.

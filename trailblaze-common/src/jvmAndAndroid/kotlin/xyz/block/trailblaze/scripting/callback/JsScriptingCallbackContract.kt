@@ -2,6 +2,7 @@ package xyz.block.trailblaze.scripting.callback
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Wire contract for the `/scripting/callback` HTTP endpoint used by subprocess MCP servers to
@@ -71,6 +72,17 @@ sealed interface JsScriptingCallbackResult {
    * successfully (not whether the HTTP request succeeded); on failure [errorMessage] carries
    * a human-readable description. [textContent] is the tool's primary string output when it
    * produced one (empty string otherwise) so callers don't have to special-case null.
+   *
+   * [structuredContent] carries the tool's structured return value when the producer populated
+   * one — that's how a TS scripted tool authored with `trailblaze.tool<I, O>({ handler })` flows
+   * its typed `O` return value back to the caller as structured JSON instead of a stringified
+   * envelope. When present, SDK consumers (e.g. `client.tools.<name>(args)`) unwrap this into
+   * the typed `result` declared in `TrailblazeToolMap[name]`. Null means "this tool returns text
+   * only" — the existing pre-typed-result wire shape — and the SDK falls back to [textContent].
+   *
+   * Backward compatible: tools that don't populate this field round-trip cleanly, and consumers
+   * on older SDKs simply ignore the unknown key (the TS-side wire types decode with
+   * `ignoreUnknownKeys = true`-equivalent permissive parsing through `JSON.parse`).
    */
   @Serializable
   @SerialName("call_tool_result")
@@ -78,6 +90,7 @@ sealed interface JsScriptingCallbackResult {
     val success: Boolean,
     @SerialName("text_content") val textContent: String = "",
     @SerialName("error_message") val errorMessage: String = "",
+    @SerialName("structured_content") val structuredContent: JsonElement? = null,
   ) : JsScriptingCallbackResult
 
   /**

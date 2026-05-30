@@ -69,7 +69,7 @@ object AppTargetDiscovery {
   ): Set<TrailblazeHostAppTarget> {
     return try {
       val workspaceConfig = workspaceConfigProvider()
-      val source = buildResourceSource(workspaceConfig.configDir, logPrefix)
+      val source = workspaceLayeredConfigResourceSource(workspaceConfig.configDir, logPrefix)
       val resolvedConfig = loadResolvedConfigLeniently(workspaceConfig, logPrefix)
       val projectConfig = resolvedConfig?.projectConfig
       val customToolClasses = loadCustomToolClasses(
@@ -80,9 +80,10 @@ object AppTargetDiscovery {
       // Register workspace-discovered Mode.TOOLS YAML configs (pure-YAML composed tools)
       // BEFORE building the resolver. The resolver snapshots
       // `TrailblazeSerializationInitializer.buildYamlDefinedTools().keys` at construction,
-      // so a `<workspace>/trails/config/tools/foo.tool.yaml` that isn't registered by this
-      // point can't be referenced by name from a toolset (`Unknown tool name 'foo'`
-      // warning at toolset load). The discovered map is the union of classpath + workspace
+      // so a `<workspace>/trails/config/trailmaps/<id>/tools/foo.tool.yaml` that isn't
+      // registered by this point can't be referenced by name from a toolset
+      // (`Unknown tool name 'foo'` warning at toolset load). The discovered map is the
+      // union of classpath + workspace
       // (the composite resource source layers them); the serialization initializer dedupes
       // against its own classpath cache so re-registering the same classpath tools is a
       // no-op. See `registerWorkspaceYamlTools` for the overlay semantics.
@@ -104,11 +105,12 @@ object AppTargetDiscovery {
       // resolution (`TrailblazeMcpServer.ensureSessionScriptToolRuntime` calling
       // `TrailblazeToolSetCatalog.resolveForDriver(...)`) can find workspace-authored toolset
       // ids. The catalog's `defaultEntries()` cache is classpath-only; without this overlay,
-      // a target whose `platforms.<p>.tool_sets:` references a `<workspace>/trails/config/
-      // toolsets/<id>.yaml` would resolve to the alwaysEnabled classpath subset only, and
-      // workspace YAML tool names listed by that toolset would never reach the session repo's
-      // `registeredYamlToolNames` — surfacing as "Unknown tool" at dispatch. Same overlay
-      // shape as `TrailblazeSerializationInitializer.registerWorkspaceYamlTools` above.
+      // a target whose `platforms.<p>.tool_sets:` references a
+      // `<workspace>/trails/config/trailmaps/<id>/toolsets/<name>.yaml` would resolve to the
+      // alwaysEnabled classpath subset only, and workspace YAML tool names listed by that
+      // toolset would never reach the session repo's `registeredYamlToolNames` — surfacing
+      // as "Unknown tool" at dispatch. Same overlay shape as
+      // `TrailblazeSerializationInitializer.registerWorkspaceYamlTools` above.
       registerWorkspaceToolSets(toolSets, logPrefix)
 
       val discoveredTargets = AppTargetYamlLoader.discoverAndLoadAll(
@@ -117,7 +119,7 @@ object AppTargetDiscovery {
         companions = companions,
         resourceSource = source,
       )
-      // Workspace-resolved targets come from the pack pool — a list of fully-resolved
+      // Workspace-resolved targets come from the trailmap pool — a list of fully-resolved
       // [AppTargetYamlConfig] sitting on TrailblazeResolvedConfig.targets, not on the
       // schema's `targets:` field (which is now just a list of ids).
       val projectTargets = resolvedConfig
@@ -148,9 +150,16 @@ object AppTargetDiscovery {
     logPrefix: String,
   ): TrailblazeResolvedConfig? {
     return try {
-      workspaceConfig.loadResolvedRuntime()
+      workspaceConfig.loadResolvedRuntime(
+        scriptedToolEnrichment = resolveScriptedToolEnrichment(),
+      )
     } catch (e: Exception) {
-      Console.log(
+      // Console.error (not Console.log) so this warning survives callers that wrap
+      // discovery in `Console.runQuiet` to suppress informational chatter (e.g. CLI
+      // `config show` / `config target`). Without this, a workspace with a malformed
+      // `trailblaze.yaml` would silently list only classpath-fallback targets with no
+      // hint why the user's custom targets disappeared.
+      Console.error(
         "$logPrefix Ignoring workspace trailblaze.yaml due to load failure: " +
           "${e::class.simpleName}: ${e.message}",
       )
@@ -159,19 +168,12 @@ object AppTargetDiscovery {
   }
 
   /**
-   * Classpath alone, or classpath + filesystem layered when a per-project dir is available.
-   * Filesystem sources come after classpath so user-contributed entries override framework
-   * defaults on filename collisions.
-   *
-   * Delegates to the shared [workspaceLayeredConfigResourceSource] in `trailblaze-models`
-   * so the layering shape stays consistent with other call sites (notably
-   * `ToolDiscoveryToolSet` in `trailblaze-server`). Keep the [logPrefix] pass-through so
-   * the layering log line shows up under `[AppTargetDiscovery]` for grepping.
+   * Delegates to [xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.Companion.resolveFromEnvironment]
+   * — the shared resolver every host call site uses (also wired into
+   * `WorkspaceCompileBootstrap`, `CompileCommand`, `TrailblazeHostYamlRunner`).
    */
-  private fun buildResourceSource(
-    trailblazeConfigDir: File?,
-    logPrefix: String,
-  ): ConfigResourceSource = workspaceLayeredConfigResourceSource(trailblazeConfigDir, logPrefix)
+  private fun resolveScriptedToolEnrichment(): xyz.block.trailblaze.config.project.ScriptedToolEnrichment? =
+    xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
 
   private fun loadCustomToolClasses(
     resourceSource: ConfigResourceSource,
@@ -181,7 +183,7 @@ object AppTargetDiscovery {
     val discovered = ToolYamlLoader.discoverAndLoadAll(resourceSource = resourceSource)
     val projectTools = projectConfig?.let(::projectToolConfigs).orEmpty()
     // Note: this returns only class-backed (`Mode.CLASS`) tools. TOOLS-mode entries that
-    // appear in `projectConfig.tools` (pack-resolved `*.tool.yaml` files flattened into the
+    // appear in `projectConfig.tools` (trailmap-resolved `*.tool.yaml` files flattened into the
     // inline list by the project-config resolver) flow through `registerWorkspaceYamlTools`
     // instead, which threads them into the YAML-defined tool overlay. No warning needed here:
     // the workspace YAML-defined tool registration line covers the operational signal.
@@ -190,8 +192,8 @@ object AppTargetDiscovery {
 
   /**
    * Discovers workspace-side `Mode.TOOLS` YAML configs (pure-YAML composed tools — files
-   * under `<workspace>/trails/config/tools/<id>.tool.yaml` and `<pack>/tools/<id>.tool.yaml`)
-   * and hands them to [TrailblazeSerializationInitializer.registerWorkspaceYamlTools] so they
+   * under `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml`) and hands
+   * them to [TrailblazeSerializationInitializer.registerWorkspaceYamlTools] so they
    * become resolvable by name from toolsets and reachable at runtime by the YAML-tool
    * executor (`TrailblazeToolRepo.toolCallToTrailblazeTool`).
    *

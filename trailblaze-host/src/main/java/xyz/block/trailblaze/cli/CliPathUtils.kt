@@ -10,7 +10,7 @@ import java.nio.file.Path
  * Cross-cutting filesystem / PATH helpers shared by the CLI subcommands.
  *
  * These primitives used to live as private methods on individual commands
- * ([CompileCommand], [TypecheckCommand]) but were copy-pasted by-construction —
+ * ([CompileCommand], [CheckCommand]) but were copy-pasted by-construction —
  * lifting them here gives every command a single place to evolve the walk-up logic
  * (symlinks, future workspace marker changes) and the PATH-lookup behavior
  * (`PATHEXT` resolution on Windows) without one command silently drifting from
@@ -20,24 +20,24 @@ internal object CliPathUtils {
 
   /**
    * Walks up from [startPath] looking for the workspace marker
-   * (`trails/config/packs/`). Returns the first ancestor that contains it, or
+   * (`trails/config/trailmaps/`). Returns the first ancestor that contains it, or
    * `null` when the walk reaches the filesystem root with no match.
    *
-   * Walking continues straight through intermediate `pack.yaml`-bearing
-   * directories (a pack inside a workspace is still inside the workspace) — the
-   * only stop condition is the `packs/` marker. Mirrors the discovery pattern
+   * Walking continues straight through intermediate `trailmap.yaml`-bearing
+   * directories (a trailmap inside a workspace is still inside the workspace) — the
+   * only stop condition is the `trailmaps/` marker. Mirrors the discovery pattern
    * used by `git` walking up to `.git/` and `gh` walking up to a repo root.
    *
    * No depth cap. Terminates at the filesystem root when [Path.getParent]
-   * returns null. Used by both `trailblaze compile` (entry into the packs tree
+   * returns null. Used by both `trailblaze compile` (entry into the trailmaps tree
    * to materialize target YAMLs) and `trailblaze typecheck` (entry into the
-   * packs tree to spawn `tsc` per pack).
+   * trailmaps tree to spawn `tsc` per trailmap).
    */
   fun findWorkspaceRoot(startPath: Path): Path? {
     val startDir = startPath.toAbsolutePath().normalize()
     var current: Path? = if (Files.isRegularFile(startDir)) startDir.parent else startDir
     while (current != null) {
-      val marker = current.resolve(TrailblazeConfigPaths.WORKSPACE_PACKS_DIR)
+      val marker = current.resolve(TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
       if (Files.isDirectory(marker)) {
         return current
       }

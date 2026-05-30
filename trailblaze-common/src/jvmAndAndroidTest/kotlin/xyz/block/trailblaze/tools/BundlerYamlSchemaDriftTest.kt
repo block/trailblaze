@@ -7,14 +7,14 @@ import kotlin.test.fail
 
 /**
  * Drift check between the bundler's slim `@Serializable` schema
- * (`trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/BundlerYamlSchema.kt`)
+ * (`trailblaze-trailmap-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/BundlerYamlSchema.kt`)
  * and the authoritative shape in `:trailblaze-models`.
  *
- * The bundler deliberately re-declares a slim view of the pack-manifest YAML to keep its
+ * The bundler deliberately re-declares a slim view of the trailmap-manifest YAML to keep its
  * own classpath independent of the heavy trailblaze-models graph. kaml's `strictMode =
  * false` tolerates fields the bundler doesn't read — but doesn't help when a field the
  * bundler *does* read gets renamed or removed in trailblaze-models. Without this test,
- * such drift only surfaces when a real consumer's pack manifest exercises the field, in
+ * such drift only surfaces when a real consumer's trailmap manifest exercises the field, in
  * production.
  *
  * **Method.** Pure static-text scan, no reflection. Reads both files, extracts
@@ -31,16 +31,16 @@ class BundlerYamlSchemaDriftTest {
 
   @Test
   fun `every SerialName in BundlerYamlSchema has a match in trailblaze-models authoritative shape`() {
-    val bundlerSchema = locate("trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/BundlerYamlSchema.kt")
-    val packManifest = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailblazePackManifest.kt")
-    val packScriptedToolFile = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/PackScriptedToolFile.kt")
+    val bundlerSchema = locate("trailblaze-trailmap-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/BundlerYamlSchema.kt")
+    val trailmapManifest = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailblazeTrailmapManifest.kt")
+    val trailmapScriptedToolFile = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailmapScriptedToolFile.kt")
     // PlatformConfig (per-platform shape) lives alongside AppTargetYamlConfig — the
     // bundler's `BundlerPlatformConfig` slim mirror needs that file in the authoritative
     // pool so its `tool_sets` SerialName matches.
     val appTargetYamlConfig = locate("trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/AppTargetYamlConfig.kt")
 
     val bundlerNames = extractSerialNames(bundlerSchema.readText())
-    // Authoritative names: union of TrailblazePackManifest.kt + PackScriptedToolFile.kt
+    // Authoritative names: union of TrailblazeTrailmapManifest.kt + TrailmapScriptedToolFile.kt
     // + AppTargetYamlConfig.kt (which declares `PlatformConfig` alongside the target shape).
     // Each file contributes BOTH explicit `@SerialName(...)` values AND plain property names
     // (where `@SerialName` is absent, kotlinx-serialization uses the Kotlin property name
@@ -48,10 +48,10 @@ class BundlerYamlSchemaDriftTest {
     // both prevents false negatives on fields like `name` / `description` that exist in
     // both schemas but are declared without redundant `@SerialName` on the authoritative
     // side.
-    val authoritativeNames = extractSerialNames(packManifest.readText()) +
-      extractKotlinPropertyNames(packManifest.readText()) +
-      extractSerialNames(packScriptedToolFile.readText()) +
-      extractKotlinPropertyNames(packScriptedToolFile.readText()) +
+    val authoritativeNames = extractSerialNames(trailmapManifest.readText()) +
+      extractKotlinPropertyNames(trailmapManifest.readText()) +
+      extractSerialNames(trailmapScriptedToolFile.readText()) +
+      extractKotlinPropertyNames(trailmapScriptedToolFile.readText()) +
       extractSerialNames(appTargetYamlConfig.readText()) +
       extractKotlinPropertyNames(appTargetYamlConfig.readText())
 
@@ -65,8 +65,8 @@ class BundlerYamlSchemaDriftTest {
           appendLine("Drift detected — these @SerialName values are declared in")
           appendLine("  $bundlerSchema")
           appendLine("but no matching @SerialName exists in the authoritative trailblaze-models files:")
-          appendLine("  $packManifest")
-          appendLine("  $packScriptedToolFile")
+          appendLine("  $trailmapManifest")
+          appendLine("  $trailmapScriptedToolFile")
           appendLine("  $appTargetYamlConfig")
           appendLine()
           missing.sorted().forEach { appendLine("  - $it") }

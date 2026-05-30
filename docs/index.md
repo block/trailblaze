@@ -2,45 +2,68 @@
 title: Introduction
 ---
 
-# 🧭 Trailblaze
+# 🥾 Trailblaze
 
-[Trailblaze](https://github.com/block/trailblaze) is an **AI-powered UI testing framework** for iOS, Android, and web. It includes platform-native device drivers (Android UiAutomator/Compose, iOS XCUITest, web Playwright), an agent loop, a recording/replay system that turns successful runs into deterministic `.trail.yaml` files, a desktop app, and a CLI — `blaze`, `ask`, `verify`, `snapshot`, `tool`, `trail` — that any LLM can drive. Two ways to drive it:
+**Natural-language device control for your coding agent — across iOS, Android, and web.**
+Every session is a replayable trail you can run as a test.
 
-- **Trailblaze's built-in agent.** `trailblaze blaze "<goal>"` runs the `blaze` agent end-to-end against a natural-language goal — it plans, calls tools, recovers from popups and stuck states, and produces a recording. No external coding agent required.
-- **Your AI coding agent.** Claude Code, Codex, Cursor, Goose, Windsurf, Aider, a CI runner, a homegrown bash agent — they all invoke the same CLI primitives. No SDK to install. No protocol to negotiate. No provider keys to wire up on the agent's side.
+[Trailblaze](https://github.com/block/trailblaze) gives your coding agent a single,
+typed, replayable way to drive any device. Built-in primitives plus your own typed
+tools, with a natural-language source of truth that travels across platforms. The
+artifact your agent leaves behind — a portable `.trail.yaml` — is both *what* the flow
+does (prose your team reads) and *how* it runs (recorded steps your CI replays
+deterministically with no LLM at replay time).
 
-Your agent already knows how to use a CLI; that's all Trailblaze needs.
+Trailblaze is not its own coding agent. Claude Code, Cursor, Codex, Goose, Aider — your
+editor's agent — does the planning. Trailblaze handles the device. (If you'd rather run
+the included built-in agent end-to-end, that's [available too](#built-in-agent-fallback)
+— it's the same agent that powers `--self-heal` and the CI fallback path, just not the
+headline integration anymore.)
 
-## Built-in Agent or Any Agent. One CLI.
+## Quickstart
 
 ```bash
 trailblaze device list
-trailblaze device connect android
 
-# Drive end-to-end with Trailblaze's own agent
-trailblaze blaze -d android "Sign in as test@example.com and confirm home"
+# Pin this shell to a device + target so subsequent calls inherit both from the env
+eval $(trailblaze device connect android --target default)
 
-# Or call primitives directly — by hand or from any AI coding agent
-trailblaze snapshot -d android                                              # See what's on screen
-trailblaze tool tapOnElement -d android ref="Sign In" -o "Tap sign in"      # Act, with intent
-trailblaze verify -d android "Welcome screen is visible"                    # Pass/fail (exit 0/1)
+# Read the screen — returns a UI tree with refs (e.g. ab42) your agent can target
+trailblaze snapshot
+
+# Act on a referenced element. Every action takes --step so self-heal can recover.
+trailblaze tool tap ref=ab42 -s "Tap sign in"
 ```
 
-Paste those into a Claude Code, Codex, Cursor, or Goose session and the agent is already authoring tests.
+Paste those into a Claude Code, Codex, Cursor, or Goose session and your agent is already
+authoring trails. (Every device-acting command — `snapshot`, `tool`, `blaze`, `ask`,
+`verify`, `session start/stop`, `run` — also accepts `-d <platform>` as a per-call
+override, and `--target <app>` where supported (`tool`, `blaze`, `session start`,
+`mcp`) — useful in CI / scripts that prefer determinism over shell state.) A longer
+walkthrough lives in [Getting Started](getting_started.md).
 
-## Why an Agent Loop at the Core
+## How Trailblaze grows with you
 
-The LLM is what does the heavy lifting of driving an app: planning steps, picking selectors, recovering from popups. Trailblaze keeps that loop first-class — Trailblaze's built-in `blaze` agent runs it natively, and external coding agents can plug into the same primitives. Trails are the artifact the agent leaves behind. Humans step in to author goals, review recordings, debug failures, and ship deterministic replays to CI.
+Three rungs. You can stop at any of them.
 
-That gives you three modes from one stack:
+1. **Drive a device.** Point your coding agent at the `trailblaze` CLI. Natural-language
+   device control across iOS, Android, and web — through built-in primitives
+   (`snapshot`, `tool`, `toolbox`) plus any custom tools your team has shipped.
+2. **Save and replay.** Any session becomes a `.trail.yaml` via `trailblaze session
+   save`. Replay ad-hoc with `trailblaze run`, commit it to your repo as a CI regression
+   test, or open it in the [Trace Viewer](#trace-viewer) — same artifact, three uses,
+   no LLM at replay.
+3. **Compose your own agent surface.** Give your agent first-class commands like `login`
+   or `addToCart`, named [waypoints](#waypoints) for your screens, and
+   [trailmaps](#trailmaps) shared across teams. Curate exactly what your agent sees:
+   surface your `login`, hide the low-level taps, pick four of twenty primitives if
+   that's what your tests need. Custom commands are typed and replayable; every call —
+   yours, the built-ins, or third-party — is a first-class command.
 
-1. **Drive a device with an agent** — `trailblaze blaze "<goal>"` runs Trailblaze's own agent, or your AI coding agent shells out to the same primitives. Every step records a screenshot, the UI hierarchy, the tool call, and the agent's reasoning.
-2. **Save what worked as a trail** — a `.trail.yaml` file. Re-run it later with no LLM in the loop, in CI, on emulators, simulators, or browsers. Opt into **self-heal** (`--self-heal`) and `blaze` steps back in to patch a step and update the recording when the UI has actually drifted; default is fail-loud.
-3. **Inspect every run in high-fidelity reports** — per-step screenshots, hierarchies, recorded tool calls, the full LLM transcript, and video replay. CI exposes the report inline on every build (open in a browser, no Trailblaze install needed); the desktop app shows the same UI for local sessions plus inline trail editing.
+## Native fidelity on every platform
 
-## Platform-Native, Not Lowest-Common-Denominator
-
-Trailblaze does *not* flatten platforms into a single abstraction. Each driver speaks its host platform's native vocabulary:
+Trailblaze does *not* flatten platforms into a single lowest-common-denominator
+abstraction. Each driver speaks its host platform's native vocabulary:
 
 | Platform | Driver | Hierarchy |
 |---|---|---|
@@ -48,70 +71,175 @@ Trailblaze does *not* flatten platforms into a single abstraction. Each driver s
 | iOS | Native Accessibility / XCUITest | `UIButton`, `UITextField`, `UITableView` |
 | Web | Playwright | ARIA roles, full DOM, network, console |
 
-The `tap`/`assertVisible`/`inputText` tools work everywhere, but the things they *see* are real platform elements — not a stripped-down subset that throws away platform information. Selectors stay stable, assertions stay precise, and the agent's grounding stays trustworthy.
+The agent picks elements semantically — "the Sign in button" — from the native
+hierarchy. Trailblaze computes the platform-specific selector behind the scenes. The
+natural-language test stays the same; the execution uses each platform's full power.
 
-Drivers are decoupled, web is first-class through Playwright, Android has a custom on-device driver, and the agent loop, recordings, packs, scripted tools, and waypoints are all Trailblaze's own.
+This only works because an agent is driving. Exposing twenty platform-specific selector
+strategies per element to a human is no one's idea of a good testing SDK. Exposing it to
+an LLM is the point.
+
+## Trace Viewer
+
+Every run — driven by you, your coding agent, the CLI, or CI — produces a rich session
+you can inspect: per-step screenshots, recorded tool calls, view-hierarchy snapshots,
+the full LLM transcript (when an LLM was involved), and video replay when capture is on.
+
+Same viewer surface, three ways:
+
+- **Desktop app** — `trailblaze app` opens the Sessions list across every device and
+  run, with live updates while a session is running, one-click "show me the trail YAML"
+  to copy back into your project, and inline trail editing.
+- **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install
+  required.
+- **On disk** under `~/.trailblaze/logs/<sessionId>/` if you ever need to grep raw
+  artifacts.
+
+When you want a different selector than the one Trailblaze auto-picked for a step, the
+viewer lets you choose from generated alternatives computed against the same captured
+hierarchy — human judgment, no re-recording. Same viewer for iOS, Android, and web.
+
+## Self-heal
+
+Recorded trails replay deterministically by default — no LLM in the loop, no flake.
+When a recorded step genuinely doesn't match the screen anymore, there are two repair
+paths:
+
+- **Built-in self-heal** handles small drift — text changes, an unexpected popup, a
+  minor reorder. Opt in with `--self-heal` and Trailblaze's built-in agent patches the
+  failing step against the live screen and updates the recording on success.
+- **Your coding agent** handles the larger cases — anything that needs project context,
+  log inspection, or judgment about intent. The trace session is the diagnosis surface;
+  Claude Code, Cursor, or Codex read the trace, compare what the step intended (its
+  natural-language step text) to what the app now does, and propose a fix.
+
+The natural-language step text is what makes this work. It captures *what the step was
+trying to do*, so repair is a matter of updating the *how* against the current app —
+not re-deriving intent from a broken selector. Default is fail-loud; self-heal is
+opt-in so real flakes don't get silently masked.
 
 ## Core Capabilities
 
-- **Built-in `blaze` agent** — `trailblaze blaze "<goal>"` runs Trailblaze's own agent end-to-end: planning, tool calls, popup recovery, stuck-state detection, recording. The same agent powers `--self-heal`.
-- **[CLI any agent can drive](CLI.md)** — `blaze` to drive a device, `ask` to query the screen, `verify` for CI assertions, `trail` to run recorded YAML, `tool` to fire individual tools, `snapshot` for the UI tree. Every capability is a shell subcommand — Claude Code, Codex, Goose, etc. invoke them the same way you do.
-- **[`--objective` on every tool call](CLI.md#trailblaze-tool)** — capture *why* alongside *what*. When the UI drifts, recorded trails self-heal against the objective instead of breaking on a brittle selector.
-- **[Self-heal](architecture.md#execution-modes)** — opt in (`--self-heal`) and the `blaze` agent patches a failing recorded step and updates the recording on success. Default is fail-loud, so flakes don't get silently masked.
-- **[Trails](project_layout.md)** — drop a `.trail.yaml` anywhere in your project. No `trails/` directory required. Run by path or shell glob; auto-discovered.
-- **High-fidelity reporting** — every run produces a rich report (per-step screenshots, hierarchies, recorded tool calls, LLM transcripts, video replay). CI exposes it inline on every build; the desktop app shows the same UI for local sessions.
-- **[External config bundles](generated/external-config.md)** — layer app targets, YAML toolsets, and TypeScript scripted tools on top of the binary without rebuilding Trailblaze.
-- **Multi-device CLI sessions** — drive Android + iOS + web from the same shell, in parallel, each with its own bound device.
+- **[CLI any agent can drive](CLI.md)** — `snapshot` to read the screen, `tool` to act,
+  `run` to replay a `.trail.yaml`, `session save` to persist a recording. Every
+  capability is a shell subcommand; your coding agent invokes them the same way you do.
+- **[`--step` on every tool call](CLI.md#trailblaze-tool)** — capture *why* alongside
+  *what*. When the UI drifts, recorded trails self-heal against the recorded step text
+  instead of breaking on a brittle selector. (`--objective` / `-o` remain accepted as
+  deprecated aliases.)
+- **[Self-heal](#self-heal)** — built-in for small drift, your coding agent for larger
+  cases via the trace.
+- **[Trails](project_layout.md)** — drop a `.trail.yaml` anywhere in your project. No
+  `trails/` directory required. Run by path or shell glob; auto-discovered.
+- **[Trace Viewer](#trace-viewer)** — every run produces a rich session: per-step
+  screenshots, hierarchies, recorded tool calls, LLM transcripts, video replay. CI
+  exposes it inline; the desktop app shows the same UI for local sessions.
+- **[External config bundles](generated/external-config.md)** — layer app targets,
+  YAML toolsets, and TypeScript scripted tools on top of the binary without rebuilding
+  Trailblaze.
+- **Multi-device CLI sessions** — drive Android + iOS + web from the same shell, in
+  parallel, each with its own bound device.
 
 ## Active Prototypes
 
-Trailblaze is moving fast. These are landing now and are worth knowing about even if they're not stable yet:
+Trailblaze is moving fast. These are landing now and are worth knowing about even if
+they're not stable yet.
 
-### Packs
+### Trailmaps
 
-A **pack** is a reusable bundle of target-aware capabilities — tools, waypoints, navigation routes, and recorded trails — that an app team publishes once and that both human authors and live agents consume. Think of it as *the Robot Pattern, generalized and shippable*: not just a bag of helper methods inside one test suite, but a published library plus a navigation model plus runnable proof that the model still works.
+A **trailmap** is a reusable bundle of target-aware capabilities — tools, waypoints,
+navigation routes, and recorded trails — that an app team publishes once and that both
+human authors and live agents consume. Think of it as *the Robot Pattern, generalized
+and shippable*: not just a bag of helper methods inside one test suite, but a published
+library plus a navigation model plus runnable proof that the model still works.
 
-See: the [Packs guide](packs.md) for the manifest schema, per-file scripted tools, and the workspace-vs-classpath precedence rule. Background: [Target Packs: Local-First Packaging](devlog/2026-04-26-target-packs-local-first.md), [Trailblaze as the Robot Pattern — and More](devlog/2026-04-26-robot-pattern-plus-packs.md).
+See: the [Trailmaps guide](trailmaps.md) for the manifest schema, per-file scripted
+tools, and the workspace-vs-classpath precedence rule. Background:
+[npm Distribution for Trailmaps](devlog/2026-05-12-npm-distribution-for-trailmaps.md),
+[Target Trailmaps: Local-First Packaging](devlog/2026-04-26-target-packs-local-first.md),
+[Trailblaze as the Robot Pattern — and More](devlog/2026-04-26-robot-pattern-plus-packs.md).
 
 ### Scripted Tools (TypeScript)
 
-Custom tools, written in TypeScript, that drop into a pack with no Kotlin or Gradle build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`, `memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via the typed `client.tools.<name>(args)` surface to compose higher-level behavior. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
+Custom tools, written in TypeScript, that drop into a trailmap with no Kotlin or Gradle
+build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`,
+`memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via
+the typed `client.tools.<name>(args)` surface to compose higher-level behavior. Tools
+execute in a QuickJS sandbox on-device or in a host subprocess.
 
-Walkthrough: [Author Your First Scripted Tool](scripted_tools.md). Background: [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md), [Scripted Tools Execution Model](devlog/2026-04-20-scripted-tools-execution-model.md).
+Recommended authoring surface:
+[Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md). Legacy reference
+(full YAML + `export async function`):
+[Scripted Tools — Legacy YAML + `export async function` Reference](scripted_tools.md).
+Background:
+[@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md).
 
 ### Waypoints
 
-A **waypoint** is a named, assertable location in the app — defined structurally (element identity, stable labels), never by content. Waypoints power the agent's mental map of an app: it can ask "am I on the Inbox?", land on a waypoint after a step, or use waypoints as checkpoints for trails. The `matchWaypoint` tool runs against captured session state and returns clean matches plus near-misses (off by one assertion), so authors iterate without staged pipelines.
+A **waypoint** is a named, assertable location in the app — defined structurally
+(element identity, stable labels), never by content. Waypoints power the agent's mental
+map of an app: it can ask "am I on the Inbox?", land on a waypoint after a step, or use
+waypoints as checkpoints for trails. The `matchWaypoint` tool runs against captured
+session state and returns clean matches plus near-misses (off by one assertion), so
+authors iterate without staged pipelines.
 
-See: [Waypoints and App Navigation Graphs](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md), [Waypoint Discovery via matchWaypoint](devlog/2026-04-21-waypoint-discovery-and-matching.md).
+See: [Waypoints and App Navigation Graphs](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md),
+[Waypoint Discovery via matchWaypoint](devlog/2026-04-21-waypoint-discovery-and-matching.md).
 
 ### Trail-as-Tool
 
-A trail can itself be exposed as a tool, so an agent (or a higher-level trail) can call it like any other capability. This makes flows composable: a `loginAsTestUser` trail becomes a one-line setup step inside any other test.
+A trail can itself be exposed as a tool, so an agent (or a higher-level trail) can call
+it like any other capability. This makes flows composable: a `loginAsTestUser` trail
+becomes a one-line setup step inside any other test.
 
 See: [runTrail Trail-as-Tool Primitive](devlog/2026-04-21-run-trail-tool-proposal.md).
 
-## Multi-Agent V3 Features
+## Built for an evolving ecosystem
 
-Trailblaze implements features from the [Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) research line:
+The AI agent ecosystem is moving fast. Whatever it looks like in a year — or five, or
+ten — your natural-language trails will come with you. Trailblaze captures *what* you're
+testing as portable prose; the *how* (selectors, recordings, agent harness, framework
+version) adapts as the landscape changes.
 
-- **Exception handling** — popups, ads, loading states, errors handled automatically
-- **Reflection & self-correction** — detects stuck states, backtracks
-- **Task decomposition** — breaks complex objectives into subtasks
-- **Cross-app memory** — remembers information across app switches
-- **Enhanced recording** — captures pre/post conditions for robust replay
-- **Progress reporting** — real-time progress events for IDE integration
+## Built-in Agent (Fallback)
 
-See [Architecture / Multi-Agent V3](architecture.md#multi-agent-v3-architecture).
+Trailblaze ships a built-in agent — `trailblaze step`, plus the vision primitives
+`trailblaze ask` and `trailblaze verify` — for cases where you don't have a coding agent
+in the loop. It's the same agent that powers `--self-heal` and the CI fallback path.
+(`trailblaze blaze` remains accepted as a deprecated alias of `trailblaze step`.)
+
+These commands appear under `Built-in agent:` at the bottom of `trailblaze --help`,
+below the recommended deterministic primitives. They require an LLM:
+
+```bash
+trailblaze config llm anthropic/claude-sonnet-4-20250514
+```
+
+The built-in agent implements features from the
+[Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) research line: exception handling
+for popups and stuck states, reflection and self-correction, task decomposition,
+cross-app memory, and enhanced recording for robust replay. See
+[Architecture / Multi-Agent V3](architecture.md#multi-agent-v3-architecture) for the
+details.
+
+For serious authoring work, you want a real coding agent (Claude Code, Cursor, Codex)
+driving the Trailblaze primitives instead — those bring your codebase, log inspection,
+and project context to the loop, which the built-in agent can't.
 
 ## Where to Go Next
 
 - **New here?** Start with [Getting Started](getting_started.md).
-- **Wiring an agent over the CLI?** See the [CLI reference](CLI.md) and the [README](https://github.com/block/trailblaze#readme).
-- **Authoring trails?** See [Project Layout](project_layout.md) and [Configuration](configuration.md).
-- **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and [Built-in Models](generated/LLM_MODELS.md).
+- **Wiring a coding agent over the CLI?** See the [CLI reference](CLI.md) and the
+  [README](https://github.com/block/trailblaze#readme).
+- **Authoring trails?** See [Project Layout](project_layout.md) and
+  [Configuration](configuration.md).
+- **Composing your own surface?** See [Trailmaps](trailmaps.md),
+  [Tool Authoring](tools.md), and
+  [Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md).
+- **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and
+  [Built-in Models](generated/LLM_MODELS.md).
 - **Going deep?** See [Architecture](architecture.md) and the [devlog](devlog/index.md).
 
 ## License
 
-Trailblaze is licensed under the [Apache License 2.0](LICENSE).
+Trailblaze is licensed under the [Apache License 2.0](../LICENSE).

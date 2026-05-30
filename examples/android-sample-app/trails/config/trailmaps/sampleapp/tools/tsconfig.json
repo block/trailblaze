@@ -1,0 +1,35 @@
+// Resolves `@trailblaze/scripting` for `.ts` tool files via the committed
+// central Trailblaze SDK bundle (see the `paths` mapping below for the
+// relative location). Committed so a fresh clone resolves imports in IDEs
+// (IntelliJ, VS Code, Cursor) without running `npm install` or
+// `trailblaze check` first.
+//
+// Intentionally hand-authored (no `// FRAMEWORK-GENERATED` banner) — the
+// framework's `PerTrailmapTsconfigEmitter` writes a different shape whose
+// `paths` mapping points at the workspace-local SDK extract at
+// `<workspace>/.trailblaze/sdk/dist/`, which only exists AFTER
+// `trailblaze check` has run. The committed variant here instead points
+// up at the central committed SDK so resolution works on a fresh clone
+// with zero bootstrap. `trailblaze check` detects the missing framework
+// banner and preserves this file verbatim.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@trailblaze/scripting": ["../../../../../../../sdks/typescript/dist/index"],
+      "@trailblaze/scripting/*": ["../../../../../../../sdks/typescript/dist/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.js"],
+  "exclude": ["**/*.test.ts"]
+}

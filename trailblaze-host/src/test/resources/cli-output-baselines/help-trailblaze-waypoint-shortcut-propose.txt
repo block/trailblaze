@@ -31,10 +31,10 @@ the pipeline's verify + auto-PR steps.
       --sessions=<dir>      Directory containing one or more session
                               subdirectories with *_AgentDriverLog.json files.
                               Each subdirectory is one session.
-      --target=<id>         Pack id. Resolves --root to
-                              <workspace>/packs/<id>/waypoints/ and supplies
-                              the pack's app_ids for templated selector
-                              expansion.
+      --target=<id>         Trailmap id. Resolves --root to
+                              <workspace>/trailmaps/<id>/waypoints/ and
+                              supplies the trailmap's app_ids for templated
+                              selector expansion.
       --top-k=<n>           Process at most the top-K surviving proposals by
                               hit count. The replay step
                             is expensive enough that v1 caps weekly throughput

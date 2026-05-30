@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli.tune
 
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -61,8 +63,8 @@ class WaypointTuneCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id. Resolves --root to <workspace>/packs/<id>/waypoints/. Also supplies the " +
-        "pack's app_ids for templated selector expansion.",
+      "Trailmap id. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. Also supplies the " +
+        "trailmap's app_ids for templated selector expansion.",
     ],
   )
   var targetId: String? = null
@@ -97,22 +99,22 @@ class WaypointTuneCommand : Callable<Int> {
   override fun call(): Int {
     if (!sessionsDir.isDirectory) {
       Console.error("--sessions must be a directory: ${sessionsDir.absolutePath}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (minSupport < 1) {
       Console.error("--min-support must be >= 1, got $minSupport")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
     val sources = loadWaypointSources(root)
     if (sources.isEmpty()) {
-      Console.error("No filesystem waypoints found under ${root.absolutePath}. Pack-only waypoints aren't tunable today; see devlog.")
-      return CommandLine.ExitCode.USAGE
+      Console.error("No filesystem waypoints found under ${root.absolutePath}. Trailmap-only waypoints aren't tunable today; see devlog.")
+      return TrailblazeExitCode.MISUSE.code
     }
     val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(r.message)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       is TargetContextResolution.Resolved -> r.context
       is TargetContextResolution.NoTarget -> null
@@ -121,7 +123,7 @@ class WaypointTuneCommand : Callable<Int> {
     val sessions = loadSessions(sessionsDir)
     if (sessions.isEmpty()) {
       Console.error("No screen-state logs found under --sessions ${sessionsDir.absolutePath}.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     Console.log("Loaded ${sources.size} waypoint(s) and ${sessions.size} step(s) across ${sessions.map { it.sessionId }.distinct().size} session(s).")
 
@@ -129,7 +131,7 @@ class WaypointTuneCommand : Callable<Int> {
     val proposals = WaypointTuner.analyze(sources, matches, minSupport = minSupport)
     Console.log("Analyzer emitted ${proposals.size} candidate proposal(s) before collision guard.")
 
-    // First pass: each proposal checked against the unmodified pack. Catches the common
+    // First pass: each proposal checked against the unmodified trailmap. Catches the common
     // case where a single loosen would overlap an existing sibling.
     val firstPassSafe = mutableListOf<WaypointTuner.Proposal>()
     val rejected = mutableListOf<WaypointSiblingCollisionGuard.Verdict>()
@@ -159,7 +161,7 @@ class WaypointTuneCommand : Callable<Int> {
     // Second pass: cross-proposal composition. Two independently-safe loosenings on
     // different waypoints can mutually collide once both apply (proposal A's
     // definitionBefore was checked against B's definitionBefore — not B.definitionAfter).
-    // Build the fully-mutated pack and re-check each proposal against the joint state.
+    // Build the fully-mutated trailmap and re-check each proposal against the joint state.
     val safeProposals = secondPassCollisionFilter(
       firstPassSafe = firstPassSafe,
       sources = sources,
@@ -171,16 +173,19 @@ class WaypointTuneCommand : Callable<Int> {
     if (idempotenceCheck) {
       val secondPass = runIdempotenceCheck(sources, safeProposals, sessions, target)
       if (secondPass.isNotEmpty()) {
-        Console.error("Idempotence check FAILED: a second pass with proposals applied still emitted ${secondPass.size} proposal(s):")
+        xyz.block.trailblaze.cli.reportCliError(
+          verb = "Idempotence check",
+          reason = "a second pass with proposals applied still emitted ${secondPass.size} proposal(s)",
+        )
         for (p in secondPass) Console.error("  ${p.waypointId} ${p.kind}")
-        return 1
+        return TrailblazeExitCode.ASSERTION_FAILED.code
       }
       Console.log("Idempotence check passed.")
     }
 
     writeProposalSidecars(safeProposals, rejected)
     Console.log("Wrote ${safeProposals.size} proposal sidecar(s) to ${outDir.absolutePath}.")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun loadWaypointSources(root: File): List<WaypointTuner.WaypointSource> {
@@ -220,7 +225,7 @@ class WaypointTuneCommand : Callable<Int> {
   /**
    * After the per-proposal collision pass, two independently-safe loosenings on different
    * waypoints can still collide once both apply. Compose all surviving proposals into a
-   * mutated pack and re-check each proposal against the joint state; drop any that newly
+   * mutated trailmap and re-check each proposal against the joint state; drop any that newly
    * collide.
    *
    * Mutates [rejected] in place to surface dropped proposals to the sidecar writer.
@@ -233,16 +238,16 @@ class WaypointTuneCommand : Callable<Int> {
     rejected: MutableList<WaypointSiblingCollisionGuard.Verdict>,
   ): List<WaypointTuner.Proposal> {
     if (firstPassSafe.size <= 1) return firstPassSafe
-    // Build the fully-mutated pack via the shared compose helper — same primitive the
+    // Build the fully-mutated trailmap via the shared compose helper — same primitive the
     // idempotence check uses, so the joint-state semantics stay in lock-step.
-    val mutatedById = WaypointTuner.composeMutatedPack(firstPassSafe)
-    val mutatedPack = sources.map { src ->
+    val mutatedById = WaypointTuner.composeMutatedTrailmap(firstPassSafe)
+    val mutatedTrailmap = sources.map { src ->
       mutatedById[src.definition.id]?.let { mutated -> src.copy(definition = mutated) } ?: src
     }
     val survived = mutableListOf<WaypointTuner.Proposal>()
     val secondPassMs = measureTimeMillis {
       for (proposal in firstPassSafe) {
-        val siblings = mutatedPack.map { it.definition }.filter { it.id != proposal.waypointId }
+        val siblings = mutatedTrailmap.map { it.definition }.filter { it.id != proposal.waypointId }
         val verdict = WaypointSiblingCollisionGuard.check(
           proposal = proposal,
           siblings = siblings,
@@ -255,7 +260,7 @@ class WaypointTuneCommand : Callable<Int> {
           rejected += verdict
           Console.log(
             "  REJECT (composition) ${proposal.waypointId} ${proposal.kind} " +
-              "(key=${proposal.proposalKey}) — collides only under the fully-mutated pack.",
+              "(key=${proposal.proposalKey}) — collides only under the fully-mutated trailmap.",
           )
         }
       }
@@ -302,7 +307,7 @@ class WaypointTuneCommand : Callable<Int> {
     // Compose ALL proposals per waypoint onto the same definition via the shared helper.
     // The previous `associateBy { waypointId }` form silently kept only the last proposal
     // per waypoint, which made multi-edit corpora look like idempotence failures.
-    val mutatedById = WaypointTuner.composeMutatedPack(proposals)
+    val mutatedById = WaypointTuner.composeMutatedTrailmap(proposals)
     val mutatedSources = sources.map { src ->
       mutatedById[src.definition.id]?.let { mutated -> src.copy(definition = mutated) } ?: src
     }

@@ -12,24 +12,24 @@ PR #2797 rebuilt the waypoint-graph viewer around three load-bearing ideas: a *s
 
 ## Why the rebuild was necessary
 
-The pre-rebuild viewer rendered the full adjacency list as a force-directed `react-flow` graph, with separate panels for waypoint detail, shortcut detail, and an LLM-prompt preview. It worked at toy size — the OSS clock pack's ~10 waypoints fit fine — but two problems compounded as packs grew:
+The pre-rebuild viewer rendered the full adjacency list as a force-directed `react-flow` graph, with separate panels for waypoint detail, shortcut detail, and an LLM-prompt preview. It worked at toy size — the OSS clock trailmap's ~10 waypoints fit fine — but two problems compounded as trailmaps grew:
 
-- **Visual overload at scale.** Real packs land in the 80–300 waypoint range — iOS Contacts is 100; merchant POS surfaces are upwards of that. A force-directed layout with that many nodes degenerates into hairball regardless of layout algorithm — the user can't see the graph through the edges.
+- **Visual overload at scale.** Real trailmaps land in the 80–300 waypoint range — iOS Contacts is 100; merchant POS surfaces are upwards of that. A force-directed layout with that many nodes degenerates into hairball regardless of layout algorithm — the user can't see the graph through the edges.
 - **Three independent panels meant three independent scroll states.** The waypoint-detail panel, the shortcut-detail panel, and the agent-prompt panel each had their own header and their own collapse state. Selecting a waypoint surfaced detail in panel A; clicking an outgoing shortcut blew away the waypoint detail and surfaced shortcut detail in panel B; the prompt preview in panel C was a separate UI mode entirely. Authors couldn't cross-reference what the LLM would see against the structural detail of the focal waypoint without flipping modes.
 
 The rebuild keeps `react-flow` for the rendering substrate but reframes the user's mental model around a *focal waypoint* and a *forward depth bound*, with the right-side dock as the single place all per-selection context lives.
 
 ## Subway view: focal + forward depth
 
-**The model.** At any time the viewer has one focal waypoint and one depth value. The visible graph is the focal plus every waypoint reachable from the focal in `≤ depth` forward shortcut hops. Clicking a non-focal visible waypoint makes that the new focal (re-roots the view). Depth is configurable 1–10 via a number input; the default is 3, which empirically keeps every pack we've authored under ~30 visible nodes while showing enough surrounding context to navigate.
+**The model.** At any time the viewer has one focal waypoint and one depth value. The visible graph is the focal plus every waypoint reachable from the focal in `≤ depth` forward shortcut hops. Clicking a non-focal visible waypoint makes that the new focal (re-roots the view). Depth is configurable 1–10 via a number input; the default is 3, which empirically keeps every trailmap we've authored under ~30 visible nodes while showing enough surrounding context to navigate.
 
 **Why forward-only and not bidirectional.** Bidirectional expansion (depth N forward + depth N backward) felt symmetrical but produced graphs the user couldn't reason about: at depth 2 the home screen pulls in *every* leaf that has a "back to home" shortcut, which is most of them. Forward-only matches the agent's model — it's planning a path *forward* from where it is — so what the human sees is what the agent's planner-tier reasoning operates on.
 
-**Why depth 1–10 and not unbounded.** Depth 10 already shows the full graph for every pack we've authored. The bound exists so a typo (depth 100, depth -1) doesn't blow up the renderer; the upper edge being 10 is a soft cap that pushes "I want everything" toward the explicit `?depth=10` rather than implicit unboundedness.
+**Why depth 1–10 and not unbounded.** Depth 10 already shows the full graph for every trailmap we've authored. The bound exists so a typo (depth 100, depth -1) doesn't blow up the renderer; the upper edge being 10 is a soft cap that pushes "I want everything" toward the explicit `?depth=10` rather than implicit unboundedness.
 
-**Default focal.** The viewer picks the first declared trailhead's `to:` waypoint. That's almost always the app's signed-in home screen, which is the most useful starting point for someone exploring a pack for the first time.
+**Default focal.** The viewer picks the first declared trailhead's `to:` waypoint. That's almost always the app's signed-in home screen, which is the most useful starting point for someone exploring a trailmap for the first time.
 
-**De-emphasized cross-tab edges.** Some packs (Contacts among them) have edges between top-level tabs that the framework loads but that aren't meaningful navigation paths from a UX perspective (e.g. "tab from Profile to Money"). These render as dimmed edges so they're discoverable but don't compete visually with the meaningful flows.
+**De-emphasized cross-tab edges.** Some trailmaps (Contacts among them) have edges between top-level tabs that the framework loads but that aren't meaningful navigation paths from a UX perspective (e.g. "tab from Profile to Money"). These render as dimmed edges so they're discoverable but don't compete visually with the meaningful flows.
 
 ## Right-side dock with `[Detail][Agent]` tabs
 
@@ -89,7 +89,7 @@ The lookup-table format also has the property that *the path list compresses wel
 `WaypointGraphData` carries waypoints, shortcuts, and trailheads as flat lists with stable ids. Two choices in the builder are load-bearing for the viewer's UX, both worth knowing:
 
 - **Per-shortcut `toolsList` + `toolClass` exposure.** Surfaces the shortcut body to the inspect modal without a separate fetch — the modal renders from the inlined list. Without this, expanding a shortcut would either need a server round-trip (live daemon mode) or a separate JSON-blob lookup (CLI export mode).
-- **Workspace-pack-aware shortcut/trailhead loading.** A workspace pack's shortcut tools live under `<workspace>/trails/config/packs/<id>/tools/`, not on the classpath. The builder threads `workspacePackDir` through `ToolYamlLoader.discoverShortcutsAndTrailheads` so calendar's 67 and contacts' 81 shortcut tools surface as graph edges in the standalone CLI export. Without this, the rendered HTML showed waypoints as orphaned nodes — visually confusing because the underlying authored graph was richer than the viewer's view.
+- **Workspace-trailmap-aware shortcut/trailhead loading.** A workspace trailmap's shortcut tools live under `<workspace>/trails/config/trailmaps/<id>/tools/`, not on the classpath. The builder threads `workspaceTrailmapDir` through `ToolYamlLoader.discoverShortcutsAndTrailheads` so calendar's 67 and contacts' 81 shortcut tools surface as graph edges in the standalone CLI export. Without this, the rendered HTML showed waypoints as orphaned nodes — visually confusing because the underlying authored graph was richer than the viewer's view.
 
 ## Default `--out` for the CLI export
 

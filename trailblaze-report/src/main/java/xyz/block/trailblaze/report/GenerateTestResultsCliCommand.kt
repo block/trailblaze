@@ -16,6 +16,7 @@ import com.github.ajalt.clikt.parameters.types.path
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.capture.logcat.LogcatParser
@@ -60,8 +61,15 @@ import kotlin.io.path.Path
  * - TRAILBLAZE_DEVICES
  * - BUILDKITE_BUILD_URL / CI_BUILD_URL
  * - BUILDKITE_BUILD_NUMBER / CI_BUILD_NUMBER
+ * - BUILDKITE_ORGANIZATION_SLUG / CI_ORGANIZATION_SLUG
+ * - BUILDKITE_PIPELINE_SLUG / CI_PIPELINE_SLUG
  * - BUILDKITE_COMMIT / GIT_COMMIT
  * - BUILDKITE_BRANCH / GIT_BRANCH
+ *
+ * Per-session host-side env (consulted by [readHostCiContext] when no sidecar is present —
+ * inline single-shard CI / local development):
+ * - BUILDKITE_JOB_ID / CI_JOB_ID
+ * - ARTIFACT_PREFIX  (derives `logs_<prefix>.zip` for the logs-zip filename)
  */
 open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results") {
 
@@ -117,6 +125,15 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     prettyPrint = true
     encodeDefaults = true
   }
+
+  /**
+   * Lenient JSON decoder for the [HOST_CI_CONTEXT_FILENAME] sidecar. The sidecar shape
+   * may evolve (a future upload-script revision could add new fields); a strict reader
+   * would throw on unknown keys and the catch block would silently fall back to env
+   * vars, losing the provenance that the sidecar was supposed to carry. Decoding with
+   * `ignoreUnknownKeys = true` keeps reader/writer evolution decoupled.
+   */
+  private val sidecarJson = Json { ignoreUnknownKeys = true }
 
   /**
    * The generated report, available after [run] completes.
@@ -181,6 +198,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           extractDeviceLogExcerpt(logsRepo, sessionId)
         } else null
 
+        val hostCiContext = readHostCiContext(logsRepo, sessionId)
+
         sessionResults.add(
           SessionResult(
             session_id = sessionId,
@@ -207,6 +226,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             started_at_epoch_ms = firstLog?.timestamp?.toEpochMilliseconds(),
             completed_at = lastLog?.timestamp?.toIso8601String(),
             completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
+            ci_job_id = hostCiContext.ci_job_id,
+            logs_zip_filename = hostCiContext.logs_zip_filename,
+            logs_zip_url = hostCiContext.logs_zip_url,
           )
         )
       } catch (e: Exception) {
@@ -324,6 +346,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
       ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
       ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
+      ci_organization_slug = getEnv("BUILDKITE_ORGANIZATION_SLUG") ?: getEnv("CI_ORGANIZATION_SLUG"),
+      ci_pipeline_slug = getEnv("BUILDKITE_PIPELINE_SLUG") ?: getEnv("CI_PIPELINE_SLUG"),
       ci_build_source = getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
       ci_build_message = getEnv("BUILDKITE_MESSAGE") ?: getEnv("CI_BUILD_MESSAGE"),
       ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
@@ -365,6 +389,75 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
 
     else -> null
+  }
+
+  /**
+   * Host-side CI provenance for one session — captured at log-upload time by the wrapping
+   * upload script writing [HOST_CI_CONTEXT_FILENAME] into each session directory BEFORE
+   * the logs are zipped. This sidecar then travels with the session through zip → extract,
+   * so a deferred-mode report-generation job — running in a *different* CI job than the
+   * test job — can still trace each result back to the originating shard.
+   *
+   * Filename starts with `host_` rather than a hex digit so [LogsRepo]'s log-file filter
+   * (`name.first().isHexDigit()`) naturally skips it during log parsing.
+   */
+  @Serializable
+  private data class HostCiContext(
+    val ci_job_id: String? = null,
+    val logs_zip_filename: String? = null,
+    /**
+     * Deep-link URL for the per-session zip artifact. Resolved by the upload script via
+     * `buildkite-agent artifact search` AFTER the upload completes (artifact IDs are assigned
+     * server-side, so the URL can only be filled in post-upload). The zip's *internal* sidecar
+     * always carries only the filename; the URL only lands in the *on-disk* sidecar that the
+     * report generator reads to populate the JSON test report. Nullable for local runs / pre-
+     * resolution archives — downstream consumers fall back to resolving the URL themselves.
+     */
+    val logs_zip_url: String? = null,
+  )
+
+  /**
+   * Resolves the host-side CI provenance for a session, in priority order:
+   *
+   *   1. [HOST_CI_CONTEXT_FILENAME] sidecar inside the session directory (the canonical source
+   *      for any CI-uploaded logs — set by the wrapping upload script before zipping).
+   *   2. Process env-var fallback for runs where the report generator is in the same process
+   *      tree as the test step (single-shard inline CI, local development). Reads the
+   *      provider-specific job-id env var (with a `CI_JOB_ID` generic fallback) and derives
+   *      the per-session zip filename from `ARTIFACT_PREFIX` + the sessionId.
+   *
+   * Returns an empty [HostCiContext] (both nulls) if neither source is available — downstream
+   * publishers will then leave the resolved artifact URL blank rather than fabricating one.
+   */
+  private fun readHostCiContext(logsRepo: LogsRepo, sessionId: xyz.block.trailblaze.logs.model.SessionId): HostCiContext {
+    val sidecar = File(logsRepo.getSessionDir(sessionId), HOST_CI_CONTEXT_FILENAME)
+    if (sidecar.exists()) {
+      try {
+        // Use a lenient decoder: future upload-script revisions may add new keys, and a
+        // strict decoder would throw on unknown fields → caller would fall back to env
+        // vars (which may be missing in deferred-mode report-gen) and silently lose the
+        // CI provenance. `ignoreUnknownKeys = true` keeps forward-compat clean.
+        return sidecarJson.decodeFromString(HostCiContext.serializer(), sidecar.readText())
+      } catch (e: Exception) {
+        Console.log("⚠️  Could not parse ${sidecar.absolutePath}: ${e.message}. Falling back to env vars.")
+      }
+    }
+    fun getEnv(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+    return HostCiContext(
+      ci_job_id = getEnv("BUILDKITE_JOB_ID") ?: getEnv("CI_JOB_ID"),
+      logs_zip_filename = getEnv("ARTIFACT_PREFIX")?.let { "logs_${it}__${sessionId.value}.zip" },
+    )
+  }
+
+  companion object {
+    /**
+     * Sidecar file dropped into each session directory by the log-upload script, carrying the
+     * originating CI job ID and logs-zip filename. Read by [readHostCiContext]; written by
+     * the wrapping upload script (in this repo's distribution: `scripts/<provider>/upload_logs.sh`)
+     * before zipping. Filename intentionally starts with a non-hex character so [LogsRepo]'s
+     * log-file filter skips it.
+     */
+    const val HOST_CI_CONTEXT_FILENAME = "host_ci_context.json"
   }
 
   /**

@@ -1,0 +1,38 @@
+- config:
+    title: 'Contacts (iOS): Search field active after typing, no result tapped'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: |
+      Call the `contacts_ios_searchContacts` tool with query="John",
+      rowText="John Appleseed", openFirstResult=false.
+    recording:
+      tools:
+      - contacts_ios_searchContacts:
+          query: John
+          rowText: John Appleseed
+          openFirstResult: false
+      - contacts_ios_openApp:
+          dismissKeyboard: true
+      - tapOnElementBySelector:
+          reason: The Contacts app must be open to perform a contact search. I will tap the Contacts icon to launch it.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+      - tapOnElementBySelector:
+          reason: To initiate the contact search, I need to focus the Search field before entering the query 'John'.
+          nodeSelector:
+            iosMaestro:
+              hintTextRegex: Search
+      - inputText:
+          text: John
+          reasoning: The Search field is focused. Enter 'John' to search for relevant contacts as required by the objective.
+  - step: Verify "John Appleseed" appears as a search suggestion row without opening it.
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The current screen shows the search suggestion row with the name 'John Appleseed' listed. To verify that this row is visible as required by the objective, I will assert the visibility of the element containing 'John Appleseed' without opening it.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Contacts

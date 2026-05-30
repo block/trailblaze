@@ -24,11 +24,31 @@ import xyz.block.trailblaze.util.Console
  *   shell directory rather than the daemon's launch cwd. Optional for backward
  *   compatibility with shims that predate this field; when absent, the daemon falls
  *   back to `Paths.get("")` which is its own cwd. See [xyz.block.trailblaze.cli.CliCallerContext].
+ * @property env the caller's interactive env vars relevant to CLI resolution
+ *   (currently `TRAILBLAZE_DEVICE`). The daemon's own JVM env was captured when
+ *   `app start` ran — any `export TRAILBLAZE_DEVICE=…` the user did afterward
+ *   never reaches `System.getenv` on the daemon side. Forwarding the caller's
+ *   shell env through this field is how the in-process forwarded subcommands
+ *   (`snapshot`, `ask`, `config`) see the shell pin that `eval $(trailblaze
+ *   device connect …)` set.
+ *
+ *   When non-null, this map is **authoritative**: present keys hold the
+ *   user's shell values, absent keys mean the user has the var unset.
+ *   The daemon-side resolver does NOT fall back to `System.getenv` when the
+ *   map is non-null — otherwise an `eval $(trailblaze device disconnect)`
+ *   that sends `env: {}` would silently resurrect the daemon's frozen
+ *   `TRAILBLAZE_DEVICE` from `app start` time, the inverse of the fix.
+ *
+ *   Null (field absent in the JSON body) means an older bash shim that
+ *   predates this field — the daemon falls back to `System.getenv` so
+ *   shipping a newer daemon doesn't regress older shims. See
+ *   [xyz.block.trailblaze.cli.CliCallerContext] for the read-side contract.
  */
 @Serializable
 data class CliExecRequest(
   val args: List<String>,
   val cwd: String? = null,
+  val env: Map<String, String>? = null,
 )
 
 /**

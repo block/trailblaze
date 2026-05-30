@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.android
 
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
+import ai.koog.prompt.message.MessagePart
+import ai.koog.utils.time.KoogClock
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
@@ -66,10 +68,6 @@ import xyz.block.trailblaze.quickjs.tools.AndroidAssetBundleSource
 import xyz.block.trailblaze.quickjs.tools.BundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
-import xyz.block.trailblaze.scripting.bundle.AndroidAssetBundleJsSource
-import xyz.block.trailblaze.scripting.bundle.BundleJsSource
-import xyz.block.trailblaze.scripting.bundle.LaunchedBundleRuntime
-import xyz.block.trailblaze.scripting.bundle.McpBundleRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -133,21 +131,6 @@ open class AndroidTrailblazeRule(
   agentOverride: MaestroTrailblazeAgent? = null,
   screenStateProviderOverride: (() -> ScreenState)? = null,
   /**
-   * MCP bundle declarations for tools authored in TypeScript and compiled to a JS bundle
-   * (PR A5 on-device path). Each entry should have `script:` set to a relative path that
-   * resolves to a `.js` asset shipped in the APK — the launcher reads via
-   * `android.content.res.AssetManager`. `command:` entries are silently skipped since they
-   * aren't bundleable.
-   *
-   * Default empty so tests that don't exercise scripted MCP tools don't have to provide a
-   * list. When non-empty, [runSuspend] launches the bundles at session start, registers
-   * advertised tools into [trailblazeToolRepo], and tears them down after the trail ends.
-   * Host-only tools (`_meta["trailblaze/requiresHost"]: true`) are dropped at
-   * registration — on-device has no host agent, so advertising them would create a
-   * silent-fail path the PR A5 scope devlog explicitly rules out.
-   */
-  private val mcpServers: List<McpServerConfig> = emptyList(),
-  /**
    * Blaze configuration for V3 exploration mode.
    *
    * Defaults to [BlazeConfig.DEFAULT] — balanced settings for most exploration scenarios.
@@ -160,39 +143,22 @@ open class AndroidTrailblazeRule(
    */
   private val blazeConfig: BlazeConfig = BlazeConfig.DEFAULT,
   /**
-   * Resolver that maps each [McpServerConfig] to a [BundleJsSource] the launcher can read.
-   * Default: treats the `script:` path as an Android asset path, reading via the test
-   * instrumentation's AssetManager. Override for tests that want to hand in an inline JS
-   * fixture or read from a non-default asset root.
-   */
-  private val bundleSourceResolver: (McpServerConfig) -> BundleJsSource = { entry ->
-    AndroidAssetBundleJsSource(
-      assetPath = requireNotNull(entry.script) {
-        "mcpServers entry is missing `script:` — `command:` entries are host-only and " +
-          "cannot bundle on-device."
-      },
-    )
-  },
-  /**
    * QuickJS tool bundle declarations for tools authored against `@trailblaze/tools` and
-   * compiled to a JS bundle. Same `script:` convention as [mcpServers] — the launcher
-   * reads each via [quickjsBundleSourceResolver] and registers advertised tools into the
-   * session's tool repo through the [QuickJsToolBundleLauncher]. Host-only tools
+   * compiled to a JS bundle. Each entry should have `script:` set to a relative path that
+   * resolves to a `.js` asset shipped in the APK — the launcher reads each via
+   * [quickjsBundleSourceResolver] and registers advertised tools into the session's tool
+   * repo through the [QuickJsToolBundleLauncher]. Host-only tools
    * (`_meta["trailblaze/requiresHost"]: true`) drop at registration so on-device sessions
    * never see them.
    *
    * Default empty so callers that don't exercise QuickJS-runtime tools don't have to pass
-   * a list. The QuickJS runtime is **additive** to [mcpServers] — both can be non-empty in
-   * the same rule and the two launchers run side-by-side, registering into the same repo.
-   * The legacy [mcpServers] path will be retired once consumers have migrated; see the
-   * `:trailblaze-quickjs-tools` README for context.
+   * a list.
    */
   private val quickjsToolBundles: List<McpServerConfig> = emptyList(),
   /**
    * Resolver that maps each [quickjsToolBundles] entry to a [BundleSource] the QuickJS
-   * launcher can read. Default treats the `script:` path as an Android asset, mirroring
-   * [bundleSourceResolver] for the legacy MCP runtime. Override for tests that want to
-   * hand in an inline JS fixture.
+   * launcher can read. Default treats the `script:` path as an Android asset. Override for
+   * tests that want to hand in an inline JS fixture.
    */
   private val quickjsBundleSourceResolver: (McpServerConfig) -> BundleSource = { entry ->
     AndroidAssetBundleSource(
@@ -219,7 +185,7 @@ open class AndroidTrailblazeRule(
    */
   private val maxLlmCalls: Int? = null,
   /**
-   * Optional pack-manifest target this rule is running against. Captured so the scripted-tool
+   * Optional trailmap-manifest target this rule is running against. Captured so the scripted-tool
    * runtime (`_meta.trailblaze.target` → `ctx.target`) surfaces `ctx.target?.resolveAppId()` to
    * bundled tools dispatching in-process through this rule's QuickJS / MCP-bundle launchers.
    *
@@ -501,15 +467,17 @@ open class AndroidTrailblazeRule(
       elementComparator = elementComparator,
     )
     val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
-      val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+      val metaInfo = RequestMetaInfo.create(KoogClock.System)
       val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
         Message.User(
-          parts = buildList {
-            add(ContentPart.Text(userMessage))
+          parts = buildList<MessagePart.RequestPart> {
+            add(MessagePart.Text(userMessage))
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               )
             )
           },
@@ -523,10 +491,10 @@ open class AndroidTrailblazeRule(
         id = "android_test_planner",
         params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
       )
-      val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-      val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
+      val response = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+      val toolCall = response.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
       val toolName = toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown"
-      val toolArgsJson = toolCall?.content ?: "{}"
+      val toolArgsJson = toolCall?.args ?: "{}"
       val toolArgs = try {
         Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
       } catch (_: Exception) {
@@ -614,14 +582,40 @@ open class AndroidTrailblazeRule(
     )
   }
 
+  /**
+   * Returns the last successfully-executed tool's [TrailblazeToolResult.Success] (carrying
+   * `message` + `structuredContent`), or `null` if the trail produced no Success. The on-device
+   * [xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler] mirrors this onto the RPC response
+   * envelope so a host-side scripted-tool author composing dual-mode primitives via
+   * `client.callTool(...)` over the RPC path receives the same payload they would from the direct
+   * host-side actual.
+   */
   suspend fun runSuspend(
     testYaml: String,
     trailFilePath: String?,
     useRecordedSteps: Boolean,
     sendSessionStartLog: Boolean,
-  ) {
-    val trailItems = trailblazeYaml.decodeTrail(testYaml)
+  ): TrailblazeToolResult.Success? {
+    // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
+    // right closest-wins recording for this on-device runner. v1 inputs ignore
+    // the list. The guard in decodeTrail throws if we ever lose classifiers and
+    // a v3 file has recordings, so the silent-LLM-fallback can't happen here.
+    val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
+    val trailItems = trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Honor `config.skip:` before sending SessionStarted — matches the CLI's pre-flight
+    // `planTrailExecution` planner, which short-circuits Skip items without dispatching them
+    // to the device runner. Skipping here (instead of inside the per-item loop) means no
+    // session, QuickJS launch, or LLM round-trip ever happens for a skip-marked trail run
+    // through this rule.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return null
+    }
+
     if (sendSessionStartLog) {
       val currentSession = trailblazeLoggingRule.session
         ?: error("Session not available when sendSessionStartLog=true. Ensure this rule is used as a @Rule in a JUnit test.")
@@ -665,42 +659,20 @@ open class AndroidTrailblazeRule(
     // PR A5: launch the target-declared MCP bundles at session start, so advertised tools
     // are registered into [trailblazeToolRepo] before the LLM selects a tool. Tear down in
     // the `finally` so subprocess teardown still runs even if a trail step throws — the
-    // same invariant the host subprocess launcher uses in [TrailblazeHostYamlRunner]. Host
-    // wraps in `withContext(NonCancellable)` there; here the trail's calling coroutine is
-    // already scoped to the runner so a trail-level cancellation shouldn't strand the
-    // bundle session, but `runCatching` on `shutdownAll` protects against that edge.
-    //
-    // Both launches are declared up-front (initialized to `null`) so the single `try/finally`
-    // below covers them as a unit. If [QuickJsToolBundleLauncher.launchAll] throws after the
-    // legacy MCP runtime started, control flows into `finally` and we still tear down the
-    // MCP side — flagged during code review as a P1 leak path. Without the unified scope,
-    // a QuickJS startup failure would strand MCP dynamic-tool registrations and the QuickJS
-    // native allocation of any partial-startup state for the rest of the process's life.
-    var launchedBundleRuntime: LaunchedBundleRuntime? = null
+    // QuickJS bundles register tools into [trailblazeToolRepo] at session start and tear
+    // them down at session end. `withContext(NonCancellable)` on teardown so a cancelled
+    // trail (timeout, abort, user cancel) still runs through to completion rather than
+    // cancelling at the first suspension point inside the bundle's shutdown — without it,
+    // a cancelled run would leak the QuickJS native allocation plus the dynamic-tool
+    // registrations into the next session's tool repo.
     var launchedQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
 
+    // Track the last `Success` across all trail items so the on-device handler can mirror its
+    // `message` / `structuredContent` onto the RPC response envelope. Mirrors
+    // `BaseTrailblazeAgent.runTrailblazeTools`'s own `lastSuccessResult` semantics — the trail's
+    // terminal Success is what the host's `client.callTool(...)` consumer expects.
+    var lastToolSuccess: TrailblazeToolResult.Success? = null
     try {
-      if (mcpServers.isNotEmpty()) {
-        launchedBundleRuntime = McpBundleRuntimeLauncher.launchAll(
-          mcpServers = mcpServers,
-          deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-          sessionId = (trailblazeLoggingRule.session
-            ?: error("Session not available for MCP bundle launch")).sessionId,
-          toolRepo = trailblazeToolRepo,
-          bundleSourceResolver = bundleSourceResolver,
-          // Callback channel is wired unconditionally by the launcher — there's no daemon
-          // HTTP server on-device, so `_meta.trailblaze.runtime = "ondevice"` tells the TS
-          // SDK to dispatch `client.callTool(…)` through the in-process QuickJS binding
-          // instead of fetch. See [McpBundleRuntimeLauncher.launchAll]'s kdoc.
-        )
-      }
-
-      // Also launch the MCP-free QuickJS bundles (`:trailblaze-quickjs-tools`). Additive
-      // to the legacy runtime above — both can register tools into the same
-      // [trailblazeToolRepo] in the same session. Same fail-fast / register-then-teardown
-      // invariant; the `finally` block below handles teardown order (QuickJS first, then
-      // MCP) so a tool dispatched from a QuickJS bundle that composes with an MCP bundle's
-      // tool still works during shutdown.
       if (quickjsToolBundles.isNotEmpty()) {
         launchedQuickjsRuntime = QuickJsToolBundleLauncher.launchAll(
           bundles = quickjsToolBundles,
@@ -726,45 +698,41 @@ open class AndroidTrailblazeRule(
         if (itemResult is TrailblazeToolResult.Error) {
           throw TrailblazeException(itemResult.errorMessage)
         }
+        // Only adopt a Success as the trail's last-tool payload if it actually carries data —
+        // `handleConfig(...)` and prompt-steps that resolve to an empty `Success()` would
+        // otherwise clobber a previous tool's payload (e.g. trail = [adbShell→stdout, config]
+        // would surface `toolMessage=null` instead of the adbShell stdout). The `toolMessage` /
+        // `toolStructuredContent` mirror is specifically the LAST DATA-RETURNING Success — empty
+        // Success() values produced by non-tool items must not overwrite a payload-bearing one.
+        if (itemResult is TrailblazeToolResult.Success && itemResult.carriesPayload()) {
+          lastToolSuccess = itemResult
+        }
       }
     } finally {
-      // Tear QuickJS down before the legacy MCP runtime: a QuickJS bundle whose handler
-      // composed with an MCP-bundle tool may still be on the call stack when shutdown
-      // fires. Closing QuickJS first releases its dispatch lock so the cross-runtime call
-      // returns/errors cleanly rather than seeing the underlying MCP transport vanish
-      // mid-call. NonCancellable for the same reason as below: a cancelled trail must
-      // still run teardown to completion.
       launchedQuickjsRuntime?.let { runtime ->
         withContext(NonCancellable) {
           runCatching { runtime.shutdownAll() }
         }
       }
-      launchedBundleRuntime?.let { runtime ->
-        // Wrap in `withContext(NonCancellable)` so a cancelled trail (timeout, abort,
-        // user cancel) still runs the bundle teardown through to completion rather than
-        // cancelling at the first suspension point inside `McpBundleSession.shutdown()`.
-        // Without this, a cancelled run would leak the QuickJS native allocation plus
-        // the dynamic-tool registrations into the next session's tool repo. Mirrors the
-        // host-side pattern in `TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny`'s
-        // caller.
-        withContext(NonCancellable) {
-          runCatching { runtime.shutdownAll() }
-        }
-      }
     }
+    return lastToolSuccess
   }
 
   override fun run(
     testYaml: String,
     trailFilePath: String?,
     useRecordedSteps: Boolean,
-  ) = runBlocking {
-    runSuspend(
-      testYaml = testYaml,
-      trailFilePath = trailFilePath,
-      useRecordedSteps = useRecordedSteps,
-      sendSessionStartLog = true,
-    )
+  ) {
+    // [TrailblazeRule.run] returns Unit — discard `runSuspend`'s `Success` payload (only the
+    // RPC handler path threads that back through the response envelope).
+    runBlocking {
+      runSuspend(
+        testYaml = testYaml,
+        trailFilePath = trailFilePath,
+        useRecordedSteps = useRecordedSteps,
+        sendSessionStartLog = true,
+      )
+    }
   }
 
   private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult =
@@ -878,3 +846,17 @@ open class AndroidTrailblazeRule(
     )
   }
 }
+
+/**
+ * `true` when this [TrailblazeToolResult.Success] carries data the on-device-RPC return path
+ * should mirror onto [xyz.block.trailblaze.llm.RunYamlResponse.toolMessage] /
+ * [xyz.block.trailblaze.llm.RunYamlResponse.toolStructuredContent]. Empty `Success()` values
+ * (produced by `handleConfig(...)`, by prompt-steps whose recorded path resolves without a
+ * narrative, and by action-style tools whose return value is just a verdict) are NOT payload-
+ * bearing and must not overwrite a previous data-returning Success in the trail-item fold.
+ *
+ * Pulled out to a top-level extension so the fold logic in [AndroidTrailblazeRule.runSuspend]
+ * is unit-testable without standing up the full Android instrumentation harness.
+ */
+internal fun TrailblazeToolResult.Success.carriesPayload(): Boolean =
+  message != null || structuredContent != null

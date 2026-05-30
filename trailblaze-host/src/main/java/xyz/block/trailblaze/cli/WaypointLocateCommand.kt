@@ -33,7 +33,7 @@ class WaypointLocateCommand : Callable<Int> {
     names = ["--target"],
     paramLabel = "<id>",
     description = [
-      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/. " +
+      "Trailmap id to operate on. Resolves --root to <workspace>/trailmaps/<id>/waypoints/. " +
         "Mutually exclusive with --root (--root wins if both given).",
     ],
   )
@@ -42,7 +42,7 @@ class WaypointLocateCommand : Callable<Int> {
   @Option(
     names = ["--root"],
     paramLabel = "<path>",
-    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
+    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Trailmap waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
   )
   var rootOverride: File? = null
 
@@ -73,7 +73,7 @@ class WaypointLocateCommand : Callable<Int> {
   override fun call(): Int {
     if (live) {
       Console.error("--live is not yet implemented for waypoint locate. Use --session/--step or --file.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     // Validate argument combinations up-front, before the expensive
     // WaypointDiscovery.discover() call. A user who fat-fingers --file or omits both
@@ -81,7 +81,7 @@ class WaypointLocateCommand : Callable<Int> {
     // trailblaze.yaml…" chatter) before learning their args are wrong.
     validateArgs()?.let { return it }
 
-    // Batch mode commits stdout to TSV. WaypointDiscovery loads the workspace pack
+    // Batch mode commits stdout to TSV. WaypointDiscovery loads the workspace trailmap
     // manifest, which routes through TrailblazeProjectConfigLoader's "Loaded
     // trailblaze.yaml from …" Console.log line on first touch — that's stdout chatter
     // and it corrupts the TSV stream callers pipe into cat/sort/awk. Flip Console into
@@ -109,19 +109,19 @@ class WaypointLocateCommand : Callable<Int> {
       reportLoadFailures(discovery.rootFailures)
       val defs = discovery.definitions
       if (defs.isEmpty()) {
-        val suffix = if (discovery.packLoadFailed) {
-          " (some packs failed to load — see warnings above)"
+        val suffix = if (discovery.trailmapLoadFailed) {
+          " (some trailmaps failed to load — see warnings above)"
         } else {
           ""
         }
-        Console.error("No waypoint definitions found in active packs or under ${root.absolutePath}.$suffix")
+        Console.error("No waypoint definitions found in active trailmaps or under ${root.absolutePath}.$suffix")
         maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       val target = when (val r = resolveTargetTemplateContext(targetId = targetId)) {
         is TargetContextResolution.Error -> {
           Console.error(r.message)
-          return CommandLine.ExitCode.USAGE
+          return TrailblazeExitCode.MISUSE.code
         }
         is TargetContextResolution.Resolved -> r.context
         is TargetContextResolution.NoTarget -> null
@@ -140,32 +140,32 @@ class WaypointLocateCommand : Callable<Int> {
   /**
    * Validates the option combinations a user can express. Returns null when all is well,
    * or a USAGE exit code after writing a clear stderr message. Run up-front so users
-   * get the error before pack-discovery I/O.
+   * get the error before trailmap-discovery I/O.
    */
   private fun validateArgs(): Int? {
     if (file != null && session != null) {
       Console.error("--file and --session are mutually exclusive. Pass one.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (file == null && session == null) {
       Console.error("Provide either --file or --session.")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     if (relBase != null) {
       if (!isBatchMode()) {
         Console.error("--rel-base is only valid in batch mode (--session without --step). Got --file or --step.")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       val r = relBase!!
       if (!r.exists() || !r.isDirectory) {
         Console.error("--rel-base must be an existing directory: ${r.absolutePath}")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
     if (logSuffix != null) {
       if (!isBatchMode()) {
         Console.error("--log-suffix is only valid in batch mode (--session without --step).")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
       // An empty suffix would make `endsWith("")` true for every log file — a no-op
       // filter that silently looks like it's doing something. Reject explicitly so a
@@ -173,7 +173,7 @@ class WaypointLocateCommand : Callable<Int> {
       // the misuse immediately rather than getting unfiltered results back.
       if (logSuffix!!.isEmpty()) {
         Console.error("--log-suffix must be non-empty. Omit the flag entirely to disable filtering.")
-        return CommandLine.ExitCode.USAGE
+        return TrailblazeExitCode.MISUSE.code
       }
     }
     return null
@@ -190,7 +190,7 @@ class WaypointLocateCommand : Callable<Int> {
   private fun isBatchMode(): Boolean = file == null && session != null && step == null
 
   private fun runSingleStep(defs: List<WaypointDefinition>, target: TargetTemplateContext?): Int {
-    val logFile = resolveLogFile() ?: return CommandLine.ExitCode.USAGE
+    val logFile = resolveLogFile() ?: return TrailblazeExitCode.MISUSE.code
     val screen = SessionLogScreenState.loadStep(logFile)
     Console.log("Locating against ${defs.size} waypoint(s); screen state: ${logFile.name}")
     val results = defs.map { WaypointMatcher.match(it, screen, target) }
@@ -218,7 +218,7 @@ class WaypointLocateCommand : Callable<Int> {
       Console.log("Skipped (no trailblazeNodeTree in screen state):")
       for (r in skipped) Console.log("  · ${r.definitionId}")
     }
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   /**
@@ -242,10 +242,10 @@ class WaypointLocateCommand : Callable<Int> {
    * Diagnostic chatter (the "Locating N step(s)…" banner and per-error stderr) goes
    * through `Console.error` so stdout stays strictly TSV and is safe to pipe into
    * `cat`/`sort`/`awk` without filtering. Console is also in quiet mode for the duration
-   * (set by `call()` above) so pack-loader chatter from discovery can't leak in.
+   * (set by `call()` above) so trailmap-loader chatter from discovery can't leak in.
    */
   private fun runBatch(defs: List<WaypointDefinition>, target: TargetTemplateContext?): Int {
-    val sessionDir = validateSessionDir(session!!) ?: return CommandLine.ExitCode.USAGE
+    val sessionDir = validateSessionDir(session!!) ?: return TrailblazeExitCode.MISUSE.code
     val allLogs = SessionLogScreenState.listScreenStateLogs(sessionDir)
     // `--log-suffix` filter (set by the pipeline shard to pin AgentDriverLog-only accounting,
     // since the pre-batch flow walked AgentDriverLog files exclusively). Unset → no filter
@@ -258,7 +258,7 @@ class WaypointLocateCommand : Callable<Int> {
         "No screen-state log files found in: ${sessionDir.absolutePath}"
       }
       Console.error(detail)
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     val baseDir = relBase ?: sessionDir.parentFile ?: sessionDir
     Console.error("Locating ${logs.size} step(s) against ${defs.size} waypoint(s) in ${sessionDir.absolutePath}")
@@ -290,7 +290,7 @@ class WaypointLocateCommand : Callable<Int> {
     // Surface non-zero exit only when EVERY step failed — partial failures should still
     // produce a usable shard. Previous version checked `logs.size == 1`, which silently
     // greenlit fully-failed multi-step sessions.
-    return if (errorCount == logs.size) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
+    return if (errorCount == logs.size) TrailblazeExitCode.INFRA_FAILED.code else TrailblazeExitCode.SUCCESS.code
   }
 
   /**

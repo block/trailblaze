@@ -11,21 +11,56 @@ import xyz.block.trailblaze.docs.Scenario
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Unit tests for CLI command validation logic.
  *
  * These tests verify picocli flag parsing and validation rules for
- * [BlazeCommand] and [ConfigCommand] without connecting to a daemon
+ * [StepCommand] and [ConfigCommand] without connecting to a daemon
  * or device. Only the pure-validation code paths (those that return
  * before accessing the uninitialized `parent` field) are exercised.
  */
 class CliCommandValidationTest {
 
+  /**
+   * Runs [block] with `trailblaze.appdata.dir` pointed at a fresh, throwaway
+   * directory so the test can mutate `CliConfigHelper` without leaking state to
+   * other tests (or to the developer's real `~/.trailblaze`).
+   *
+   * Save/restore semantics mirror the pattern that grew up inline across multiple
+   * tests in this file: take a snapshot of the prior system-property value, swap
+   * in a [TemporaryFolder]-backed appdata dir for the duration of [block], then
+   * restore the prior value (or clear it if the property wasn't set originally)
+   * in a `finally` so a thrown assertion can't leak the override.
+   *
+   * Each call gets its own [TemporaryFolder] — tests are isolated from each other
+   * within the JVM. Not a JUnit `@Rule` because the rule-per-test setup would
+   * fire even on tests that don't need an appdata dir; the lambda form keeps the
+   * cost narrowly scoped to callers that opt in.
+   */
+  private inline fun <T> withIsolatedAppDataDir(block: () -> T): T {
+    val priorAppDataDir = System.getProperty("trailblaze.appdata.dir")
+    val tempFolder = TemporaryFolder().apply { create() }
+    try {
+      val appDataDir = tempFolder.newFolder("appdata")
+      System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+      return block()
+    } finally {
+      tempFolder.delete()
+      if (priorAppDataDir == null) {
+        System.clearProperty("trailblaze.appdata.dir")
+      } else {
+        System.setProperty("trailblaze.appdata.dir", priorAppDataDir)
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
-  // BlazeCommand validation
+  // StepCommand validation
   // ---------------------------------------------------------------------------
 
   @Scenario(
@@ -39,73 +74,73 @@ class CliCommandValidationTest {
     category = "Direct Tool Execution",
   )
   @Test
-  fun `blaze without goal returns USAGE`() {
-    val cmd = BlazeCommand()
-    cmd.objectiveWords = emptyList()
+  fun `step without description returns USAGE`() {
+    val cmd = StepCommand()
+    cmd.stepWords = emptyList()
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Scenario(
     title = "Save session as trail file",
     commands =
       [
-        "trailblaze blaze --save trails/test.trail.yaml",
-        "trailblaze blaze --save trails/test.trail.yaml --setup 1-3",
-        "trailblaze blaze --save trails/test.trail.yaml --no-setup",
+        "trailblaze step --save trails/test.trail.yaml",
+        "trailblaze step --save trails/test.trail.yaml --setup 1-3",
+        "trailblaze step --save trails/test.trail.yaml --no-setup",
       ],
     description =
       "The --save flag writes the session to a trail file. Use --setup to mark leading steps as setup, or --no-setup to mark none. One of --setup or --no-setup is required with --save.",
     category = "Trail Management",
   )
   @Test
-  fun `blaze -- setup without save returns USAGE`() {
-    val cmd = BlazeCommand()
+  fun `step --setup without save returns USAGE`() {
+    val cmd = StepCommand()
     cmd.setup = "1-3"
     cmd.savePath = null
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
-  fun `blaze -- no-setup without save returns USAGE`() {
-    val cmd = BlazeCommand()
+  fun `step --no-setup without save returns USAGE`() {
+    val cmd = StepCommand()
     cmd.noSetup = true
     cmd.savePath = null
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
-  fun `blaze -- setup and no-setup together returns USAGE`() {
-    val cmd = BlazeCommand()
+  fun `step --setup and no-setup together returns USAGE`() {
+    val cmd = StepCommand()
     cmd.savePath = "trail.yaml"
     cmd.setup = "1-3"
     cmd.noSetup = true
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
-  fun `blaze -- setup without save takes precedence over mutual exclusion check`() {
+  fun `step --setup without save takes precedence over mutual exclusion check`() {
     // When --setup is provided without --save, the "requires --save" check
     // fires first, before the mutual-exclusion check with --no-setup.
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     cmd.setup = "1-3"
     cmd.noSetup = true
     cmd.savePath = null
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   // ---------------------------------------------------------------------------
@@ -113,11 +148,20 @@ class CliCommandValidationTest {
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `readConfig hydrates missing target to 'default' without writing to disk`() {
+  fun `readConfig hydrates missing target to 'default' without writing to disk`() = withIsolatedAppDataDir {
     // When selectedTargetAppId is missing (older config file predating the
     // field), readConfig materializes the "default" target in memory.
     // The on-disk file must stay untouched until the user actually mutates
     // their config — we don't want a setup check to silently rewrite settings.
+    //
+    // Wrapped in [withIsolatedAppDataDir] so this CliConfigHelper.updateConfig
+    // call writes to a TemporaryFolder, not the developer's real
+    // `~/.trailblaze/settings.json`. Previously this test (and the one below)
+    // ran against the real config — every test execution left a stray
+    // `selectedTargetAppId = "testapp"` in the developer's config that
+    // surfaced later as `./trailblaze toolbox` → `Error: Target 'testapp' not
+    // found`, which the OOBE validators flagged because no one types
+    // "testapp" by hand — it's a TEST FIXTURE LEAKING INTO PRODUCTION.
     CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
     val beforeContents = CliConfigHelper.getSettingsFile().readText()
 
@@ -136,7 +180,13 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `readConfig passes through an explicitly configured target unchanged`() {
+  fun `readConfig passes through an explicitly configured target unchanged`() = withIsolatedAppDataDir {
+    // [withIsolatedAppDataDir]: see the note on the prior test — without it,
+    // this `updateConfig { selectedTargetAppId = "testapp" }` leaks to the
+    // developer's real settings file and corrupts every subsequent
+    // `./trailblaze toolbox` invocation. The "testapp" value isn't real
+    // anywhere in the configured-targets list, so it surfaces as a hard
+    // "Target not found" error in unrelated CLI commands.
     CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "testapp") }
 
     val result = CliConfigHelper.readConfig()
@@ -158,7 +208,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   // Removed format-only "config target accepts X" tests (hyphen/uppercase/alphanumeric/default).
@@ -174,7 +224,7 @@ class CliCommandValidationTest {
 
   @Scenario(
     title = "Run a trail with self-heal enabled",
-    commands = ["trailblaze trail --self-heal flows/login.trail.yaml"],
+    commands = ["trailblaze run --self-heal flows/login.trail.yaml"],
     description =
       "Use --self-heal to let AI take over when a recorded step fails. When omitted, the persisted 'trailblaze config self-heal' setting is used (opt-in, off by default).",
     category = "Trail Execution",
@@ -187,6 +237,43 @@ class CliCommandValidationTest {
     cmdLine.parseArgs("--self-heal", "any.trail.yaml")
 
     assertEquals(true, cmd.selfHeal)
+  }
+
+  @Scenario(
+    title = "Run a trail via the deprecated 'trail' alias",
+    commands = ["trailblaze trail flows/login.trail.yaml"],
+    description =
+      "`trailblaze trail` is a deprecated alias for `trailblaze run`, kept for one release so existing CI scripts and developer muscle memory keep working. The alias prints a one-line stderr deprecation warning each time it's used and will be removed in a future release.",
+    category = "Trail Execution",
+  )
+  @Test
+  fun `'trail' alias dispatches to the same command as 'run'`() {
+    // Pins the deprecated-alias dispatch path so when #3379 lands and removes
+    // `aliases = ["trail"]`, this test will fail loudly — turning a silent removal into a
+    // deliberate one. Parsing happens at the *root* CommandLine so picocli runs its real
+    // subcommand-name resolver against the alias, not just leaf-level option parsing.
+    val cliRoot =
+      CommandLine(
+        TrailblazeCliCommand(
+          appProvider = { error("appProvider must not be invoked during alias-dispatch parsing") },
+          configProvider = { error("configProvider must not be invoked during alias-dispatch parsing") },
+        ),
+      ).setCaseInsensitiveEnumValuesAllowed(true)
+
+    val parseResult = cliRoot.parseArgs("trail", "any.trail.yaml")
+
+    // The matched subcommand must be a TrailCommand — that's the contract the alias
+    // promises. The matched spec's *canonical* name is `run` (picocli always returns the
+    // registered name, not the alias the user typed), which is the proof that "trail"
+    // routed to the renamed command.
+    val sub = parseResult.subcommand()
+    assertNotNull(sub, "Expected a matched subcommand for `trailblaze trail …`")
+    assertIs<TrailCommand>(sub.commandSpec().userObject())
+    assertEquals("run", sub.commandSpec().name())
+    assertTrue(
+      "trail" in sub.commandSpec().aliases(),
+      "Expected 'trail' to remain in the @Command aliases list",
+    )
   }
 
   @Test
@@ -207,7 +294,46 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  @Test
+  fun `trail --memory broken (no equals) returns USAGE`() {
+    // End-to-end USAGE-exit path: a malformed --memory entry must fail at CLI parse time
+    // (in the early validation block at the top of call()), not at trail-run time. This
+    // pins that the IllegalArgumentException thrown by parseMemorySeeds is converted to
+    // an ExitCode.USAGE return rather than escaping as an uncaught exception.
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--memory", "noequals", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  @Test
+  fun `trail --memory empty-key returns USAGE`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--memory", "=value", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  @Test
+  fun `trail --secret broken (no equals) returns USAGE`() {
+    // Sensitive seeds use the same parser, so a malformed --secret entry must also fail
+    // USAGE — not be silently treated as a malformed --memory.
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
+    cmdLine.parseArgs("--secret", "noequals", "any.trail.yaml")
+
+    val exitCode = cmd.call()
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -218,7 +344,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -229,7 +355,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -240,23 +366,12 @@ class CliCommandValidationTest {
     // IllegalArgumentException. The check now runs on the resolved value, catching every
     // tier — exercised here through the persisted-config tier (easiest to set up in a unit
     // test without mutating the JVM environment).
-    val priorAppDataDir = System.getProperty("trailblaze.appdata.dir")
-    val tempFolder = TemporaryFolder().apply { create() }
-    try {
-      val appDataDir = tempFolder.newFolder("appdata")
-      System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+    withIsolatedAppDataDir {
       CliConfigHelper.updateConfig { it.copy(maxLlmCalls = 12) }
 
       val cmd = TrailCommand()
       CommandLine(cmd).parseArgs("--agent", "MULTI_AGENT_V3", "any.trail.yaml")
-      assertEquals(CommandLine.ExitCode.USAGE, cmd.call())
-    } finally {
-      tempFolder.delete()
-      if (priorAppDataDir == null) {
-        System.clearProperty("trailblaze.appdata.dir")
-      } else {
-        System.setProperty("trailblaze.appdata.dir", priorAppDataDir)
-      }
+      assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
     }
   }
 
@@ -277,6 +392,35 @@ class CliCommandValidationTest {
     cmdLine.parseArgs("--max-llm-calls", "42", "any.trail.yaml")
 
     assertEquals(42, cmd.resolveEffectiveMaxLlmCalls())
+  }
+
+  @Test
+  fun `trail picocli leaves device null when --device not passed`() {
+    // Deterministic pin for the env-var-fallback contract: picocli MUST leave
+    // [TrailCommand.device] null when `--device` is absent from argv, so the
+    // `if (device == null) device = resolveCliDevice(null) ?: config?.cliDevicePlatform`
+    // branch in call() actually runs. A regression that re-introduced
+    // `required = true` would parse-fail at this assertion instead of slipping
+    // through to the smoke-test-only path. Doesn't depend on TRAILBLAZE_DEVICE
+    // being set in the test JVM — orthogonal to the env-aware path itself,
+    // which is pinned by `DeviceConnectCommandTest::resolveCliDevice falls
+    // back to TRAILBLAZE_DEVICE`.
+    val cmd = TrailCommand()
+    CommandLine(cmd).parseArgs("any.trail.yaml")
+
+    assertNull(cmd.device, "--device must remain null when not explicitly passed")
+  }
+
+  @Test
+  fun `trail picocli parses --device when passed explicitly`() {
+    // Sister pin to the null-default test above: when `--device` IS passed,
+    // picocli must store the raw value (no implicit env-var override). Together
+    // these two tests prove the flag has the right shape for the resolver's
+    // first-tier branch to function.
+    val cmd = TrailCommand()
+    CommandLine(cmd).parseArgs("--device", "android/emulator-5554", "any.trail.yaml")
+
+    assertEquals("android/emulator-5554", cmd.device)
   }
 
   // ---------------------------------------------------------------------------
@@ -301,7 +445,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("nonexistent-key", null)
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -311,7 +455,7 @@ class CliCommandValidationTest {
     // "llm" expects "provider/model" format; a bare string is invalid.
     val exitCode = cmd.executeConfig("llm", "invalid-no-slash")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -321,7 +465,7 @@ class CliCommandValidationTest {
     // "/model" has an empty provider.
     val exitCode = cmd.executeConfig("llm", "/gpt-4")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -331,7 +475,7 @@ class CliCommandValidationTest {
     // "openai/" has an empty model.
     val exitCode = cmd.executeConfig("llm", "openai/")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -340,7 +484,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("self-heal", "maybe")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -349,7 +493,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("llm", "openai/gpt-4-1")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
   }
 
   @Test
@@ -358,7 +502,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("llm", "none")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
   }
 
   @Test
@@ -367,7 +511,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("llm", "NONE")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
   }
 
   @Test
@@ -376,7 +520,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("self-heal", "true")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
   }
 
   @Test
@@ -386,7 +530,7 @@ class CliCommandValidationTest {
     // Reading a key (no value) should succeed.
     val exitCode = cmd.executeConfig("llm", null)
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
   }
 
   @Test
@@ -395,7 +539,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("agent", "NONEXISTENT_AGENT")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -404,7 +548,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("android-driver", "NONEXISTENT_DRIVER")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -413,7 +557,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.executeConfig("ios-driver", "ONDEVICE")
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   // ---------------------------------------------------------------------------
@@ -423,31 +567,31 @@ class CliCommandValidationTest {
   @Scenario(
     title = "Verify a UI assertion without executing actions",
     commands =
-      ["trailblaze blaze --verify Check the login button is visible"],
+      ["trailblaze step --verify Check the login button is visible"],
     description =
       "The --verify flag runs observation-only: the agent checks whether a condition holds on the current screen without tapping or typing.",
     category = "Direct Tool Execution",
   )
   @Test
-  fun `picocli parses blaze verify flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step verify flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--verify", "Check", "the", "button", "is", "visible")
 
     assertEquals(true, cmd.verify)
-    assertEquals(listOf("Check", "the", "button", "is", "visible"), cmd.objectiveWords)
+    assertEquals(listOf("Check", "the", "button", "is", "visible"), cmd.stepWords)
   }
 
   @Test
-  fun `picocli parses blaze save flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step save flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--save", "my-trail.yaml")
 
     assertEquals("my-trail.yaml", cmd.savePath)
   }
 
   @Test
-  fun `picocli parses blaze setup flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step setup flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--save", "trail.yaml", "--setup", "1-3")
 
     assertEquals("trail.yaml", cmd.savePath)
@@ -455,8 +599,8 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `picocli parses blaze no-setup flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step no-setup flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--save", "trail.yaml", "--no-setup")
 
     assertEquals("trail.yaml", cmd.savePath)
@@ -466,112 +610,112 @@ class CliCommandValidationTest {
   @Scenario(
     title = "Specify a target app for the session",
     commands =
-      ["trailblaze blaze --target myapp Tap login"],
+      ["trailblaze step --target myapp Tap login"],
     description =
       "The --target flag selects which app configuration to use, enabling target-specific tools and launch behavior.",
     category = "Configuration",
   )
   @Test
-  fun `picocli parses blaze target flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step target flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--target", "myapp", "Tap", "login")
 
     assertEquals("myapp", cmd.target)
-    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
+    assertEquals(listOf("Tap", "login"), cmd.stepWords)
   }
 
   @Test
-  fun `picocli parses blaze device short flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step device short flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("-d", "ANDROID", "Tap", "login")
 
     assertEquals("ANDROID", cmd.device)
   }
 
   @Test
-  fun `picocli parses blaze context flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step context flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--context", "Already on home screen", "Tap", "login")
 
     assertEquals("Already on home screen", cmd.context)
   }
 
   @Test
-  fun `picocli parses blaze verbose short flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step verbose short flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("-v", "Tap", "login")
 
     assertEquals(true, cmd.verbose)
   }
 
   @Test
-  fun `picocli parses blaze --no-screenshots flag`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step --no-screenshots flag`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--no-screenshots", "Tap", "login")
 
     assertEquals(true, cmd.noScreenshots)
-    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
+    assertEquals(listOf("Tap", "login"), cmd.stepWords)
   }
 
   @Test
-  fun `picocli parses blaze --text-only as alias for --no-screenshots`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step --text-only as alias for --no-screenshots`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--text-only", "Tap", "login")
 
     assertEquals(true, cmd.noScreenshots)
-    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
+    assertEquals(listOf("Tap", "login"), cmd.stepWords)
   }
 
   @Test
-  fun `blaze --headless defaults to null when omitted (defer to config)`() {
+  fun `step --headless defaults to null when omitted (defer to config)`() {
     // The field is null when the user didn't pass `--headless`, signalling that
     // [HeadlessOption.resolve] should fall back to the persisted `web-headless`
     // / `showWebBrowser` config. The previous "default true" behavior moved into
     // the resolver so that a one-time `trailblaze config web-headless ...` flips
     // the default for every downstream command.
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("Tap", "login")
 
     assertNull(cmd.headlessOption.headless)
   }
 
   @Test
-  fun `blaze --headless=false disables headless mode (visible browser)`() {
+  fun `step --headless=false disables headless mode (visible browser)`() {
     // `--headless=false` is the canonical CLI spelling for flipping the option,
     // matching the form called out in the originating issue.
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--headless=false", "Tap", "login")
 
     assertEquals(false, cmd.headlessOption.headless)
   }
 
   @Test
-  fun `blaze --headless false (space-separated) disables headless mode`() {
+  fun `step --headless false (space-separated) disables headless mode`() {
     // The space-separated form `--headless false` is the literal spelling from
     // the originating issue. With arity=1 picocli accepts both `=` and space forms.
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("--headless", "false", "Tap", "login")
 
     assertEquals(false, cmd.headlessOption.headless)
   }
 
   @Test
-  fun `blaze parses --device web with named instance ID`() {
+  fun `step parses --device web with named instance ID`() {
     // Multi-instance web devices: any --device web/<id> should round-trip through
     // picocli. The CLI sends the trailing "id" segment to the daemon as the
     // Playwright browser's instanceId.
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs("-d", "web/foo", "Tap", "submit")
 
     assertEquals("web/foo", cmd.device)
   }
 
   @Test
-  fun `picocli parses blaze with no arguments (zero arity)`() {
-    val cmd = BlazeCommand()
+  fun `picocli parses step with no arguments (zero arity)`() {
+    val cmd = StepCommand()
     CommandLine(cmd).parseArgs()
 
-    assertEquals(emptyList(), cmd.objectiveWords)
+    assertEquals(emptyList(), cmd.stepWords)
     assertNull(cmd.savePath)
     assertNull(cmd.setup)
     assertEquals(false, cmd.noSetup)
@@ -635,38 +779,38 @@ class CliCommandValidationTest {
 
   @Test
   fun `parseStepRange single index`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertEquals(setOf(2), cmd.parseStepRange("2", 5))
   }
 
   @Test
   fun `parseStepRange range`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertEquals(setOf(1, 2, 3), cmd.parseStepRange("1-3", 5))
   }
 
   @Test
   fun `parseStepRange comma-separated`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertEquals(setOf(1, 3, 5), cmd.parseStepRange("1,3,5", 5))
   }
 
   @Test
   fun `parseStepRange mixed ranges and indices`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertEquals(setOf(1, 2, 3, 5), cmd.parseStepRange("1-3,5", 5))
   }
 
   @Test
   fun `parseStepRange out of bounds returns null`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertNull(cmd.parseStepRange("0-3", 5))
     assertNull(cmd.parseStepRange("1-6", 5))
   }
 
   @Test
   fun `parseStepRange invalid format returns null`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertNull(cmd.parseStepRange("abc", 5))
     assertNull(cmd.parseStepRange("1-2-3", 5))
     assertNull(cmd.parseStepRange("", 5))
@@ -674,7 +818,7 @@ class CliCommandValidationTest {
 
   @Test
   fun `parseStepRange reversed range returns null`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     assertNull(cmd.parseStepRange("3-1", 5))
   }
 
@@ -684,7 +828,7 @@ class CliCommandValidationTest {
 
   @Test
   fun `restructureWithSetup splits steps into setup and trail`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     val yaml =
       """
       - prompts:
@@ -705,7 +849,7 @@ class CliCommandValidationTest {
 
   @Test
   fun `restructureWithSetup preserves config header`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     val yaml =
       """
       - config:
@@ -725,7 +869,7 @@ class CliCommandValidationTest {
 
   @Test
   fun `restructureWithSetup with no setup indices puts all in trail`() {
-    val cmd = BlazeCommand()
+    val cmd = StepCommand()
     val yaml =
       """
       - prompts:
@@ -753,7 +897,7 @@ class CliCommandValidationTest {
       // Reading any valid key should return OK (not USAGE for unknown key)
       val exitCode = cmd.executeConfig(key, null)
       assertEquals(
-        CommandLine.ExitCode.OK,
+        TrailblazeExitCode.SUCCESS.code,
         exitCode,
         "Config key '$key' should be readable but executeConfig returned $exitCode",
       )
@@ -1191,6 +1335,29 @@ class CliCommandValidationTest {
   // resolveTargetDevice — private helper on TrailCommand
   // ---------------------------------------------------------------------------
 
+  /**
+   * Test-side mirror of production [xyz.block.trailblaze.cli.envTrailblazeTarget]
+   * — applied to every `TRAILBLAZE_TARGET` read used as a branch signal in this
+   * file's resolveCliTarget* tests. The production env-tier treats the literal
+   * value `clear` (case-insensitive, whitespace-tolerant) as **unset**, not as a
+   * pin: a `--target=clear` flag is the explicit "remove the per-device
+   * override" signal, but the env tier should never be the surface that clears
+   * a pin (that's what `unset TRAILBLAZE_TARGET` is for). Without this helper,
+   * a test JVM launched with `TRAILBLAZE_TARGET=clear` would either skip when
+   * it should run, or run with an assertion that expects `clear` while the
+   * resolver correctly returns null — both failure modes Copilot caught on
+   * PR #3473's first review pass.
+   *
+   * Returning the normalized value (not just a presence boolean) lets each
+   * call site compare against the same string the production resolver would
+   * surface, so an env of ` SquareApp ` is reported as `squareapp` and tests
+   * stay deterministic across shells that export uppercase or padded ids.
+   */
+  private fun normalizedTrailblazeTargetEnv(): String? = System.getenv("TRAILBLAZE_TARGET")
+    ?.trim()
+    ?.lowercase()
+    ?.takeIf { it.isNotBlank() && it != "clear" }
+
   /** Builds a test device summary with the given driver type and instance ID. */
   private fun device(
     driverType: TrailblazeDriverType,
@@ -1341,9 +1508,414 @@ class CliCommandValidationTest {
   }
 
   // ---------------------------------------------------------------------------
+  // ToolboxCommand validation — --target is optional; --device is the only
+  // required flag (except in `--name` mode).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `toolbox without device and without name rejects`() {
+    // Bare `trailblaze toolbox` (no --device, no --name) can't render a meaningful
+    // listing — every tool's applicability depends on the device platform. The
+    // resolver must surface this as a rejection rather than silently producing
+    // an unfiltered or wrong listing.
+    //
+    // Skip guards keep the test deterministic. TRAILBLAZE_DEVICE set in the
+    // test JVM would have the resolver succeed; canAutoresolveSingleDevice
+    // covers the case where the dev has the daemon up with exactly one device
+    // connected (post-#3456 autodetect would resolve a unique device and the
+    // command would proceed). The env-aware path is covered by `toolbox with
+    // TRAILBLAZE_DEVICE set ...` below and by the smoke-test in
+    // cli_smoke_tests_common.sh.
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
+    val cmd = ToolboxCommand()
+
+    val exitCode = cmd.call()
+
+    assertRejectsBareDeviceInvocation(exitCode)
+  }
+
+  @Test
+  fun `toolbox with TRAILBLAZE_DEVICE set does not short-circuit with MISUSE`() {
+    // Mirror of `toolbox without target but with device no longer returns USAGE`:
+    // the new contract is that `eval $(trailblaze device connect <platform>)`
+    // (which writes TRAILBLAZE_DEVICE into the shell) lets bare `trailblaze
+    // toolbox` succeed past the early-validation block without re-passing
+    // `--device` on every call. We can only exercise this when the env var IS
+    // set in the test JVM, so the test is conditional. The smoke script in
+    // cli_smoke_tests_common.sh exercises the same flow end-to-end on CI.
+    val pinned = System.getenv("TRAILBLAZE_DEVICE")
+    if (pinned.isNullOrBlank()) return
+    withIsolatedAppDataDir {
+      val cmd = ToolboxCommand()
+      // No `--device` argv — the resolver must fall back to TRAILBLAZE_DEVICE.
+      CommandLine(cmd).parseArgs()
+
+      val exitCode = cmd.call()
+
+      // The daemon path returns INFRA_FAILED when it can't reach a running daemon;
+      // anything but MISUSE proves the env-aware early-validation check fired
+      // correctly.
+      assertEquals(
+        false,
+        exitCode == TrailblazeExitCode.MISUSE.code,
+        "toolbox with TRAILBLAZE_DEVICE=$pinned (no --device flag) must NOT short-circuit " +
+          "with MISUSE — got $exitCode",
+      )
+    }
+  }
+
+  @Test
+  fun `toolbox without target but with device no longer returns USAGE`() {
+    // The point of this chip: `trailblaze toolbox --device web` (no --target) must
+    // succeed past the early-validation block — `--target` is resolved from the
+    // workspace config behind the scenes. We can't reach the daemon in a unit test,
+    // so we exercise the validation path by setting only `--device` and asserting
+    // the return code is *not* MISUSE. (Without a daemon, the call will fall through
+    // and return INFRA_FAILED or similar — anything but MISUSE proves the early
+    // check no longer fires.)
+    withIsolatedAppDataDir {
+      val cmd = ToolboxCommand()
+      CommandLine(cmd).parseArgs("--device", "web")
+
+      val exitCode = cmd.call()
+
+      // The daemon path returns INFRA_FAILED when it can't reach a running daemon.
+      // The important guarantee is that the early-validation MISUSE path doesn't fire.
+      assertEquals(
+        false,
+        exitCode == TrailblazeExitCode.MISUSE.code,
+        "toolbox --device web (no --target) must NOT short-circuit with MISUSE — got $exitCode",
+      )
+    }
+  }
+
+  @Test
+  fun `toolbox picocli leaves target null when --target not passed`() {
+    val cmd = ToolboxCommand()
+    CommandLine(cmd).parseArgs("--device", "web")
+
+    assertEquals("web", cmd.device)
+    assertNull(cmd.target, "--target must remain null when not explicitly passed")
+  }
+
+  // ---------------------------------------------------------------------------
+  // resolveCliTarget — three-tier resolution (flag → workspace config → built-in)
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `resolveCliTarget treats explicit flag as Explicit source`() {
+    val resolution = resolveCliTarget("square")
+
+    assertEquals("square", resolution.id)
+    assertEquals(ResolvedCliTargetSource.Explicit, resolution.source)
+  }
+
+  @Test
+  fun `resolveCliTarget treats explicit default flag as Explicit source not BuiltinDefault`() {
+    // The `Explicit` vs `BuiltinDefault` distinction is what drives the resolved-target
+    // header — if a user passes `--target default` explicitly we must NOT print the
+    // header (the user knows what they're doing). The resolver decides this by looking
+    // at the flag, not at the resolved id.
+    val resolution = resolveCliTarget(DefaultTrailblazeHostAppTarget.id)
+
+    assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
+    assertEquals(ResolvedCliTargetSource.Explicit, resolution.source)
+  }
+
+  @Test
+  fun `resolveCliTarget reads workspace config when flag is null and config is set`() {
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "square") }
+
+      val resolution = resolveCliTarget(flag = null)
+
+      assertEquals("square", resolution.id)
+      assertEquals(
+        ResolvedCliTargetSource.WorkspaceConfig,
+        resolution.source,
+        "config-backed value must be attributed to WorkspaceConfig, not BuiltinDefault",
+      )
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget falls back to BuiltinDefault when flag is null and config is unset`() {
+    // The TRAILBLAZE_TARGET env tier sits ABOVE WorkspaceConfig in the resolver,
+    // so if the test JVM happens to have it set the resolution would short-circuit
+    // there instead of falling through to BuiltinDefault. Skip in that case — the
+    // env-tier itself is covered by `falls back to TRAILBLAZE_TARGET env when ...`
+    // below, and the explicit-wins case (which doesn't depend on env) is the
+    // load-bearing pin we keep deterministic everywhere else.
+    //
+    // Match production's `clear` sentinel: `TRAILBLAZE_TARGET=clear` is treated
+    // as unset by the resolver, so we should NOT skip in that case — the test
+    // body still exercises the BuiltinDefault fall-through correctly.
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      // Explicitly clear any prior value so we exercise the "config is null" branch
+      // rather than the "config is hydrated to default" one. The distinction matters:
+      // `readConfigRaw()?.selectedTargetAppId` returns null for the former, "default"
+      // for the latter.
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+
+      val resolution = resolveCliTarget(flag = null)
+
+      assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
+      assertEquals(ResolvedCliTargetSource.BuiltinDefault, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget falls back to TRAILBLAZE_TARGET env when flag is null and config is unset`() {
+    // The env tier closes "Bug B" from PR #3463: the daemon-side per-device target
+    // override is keyed on the recording session and wiped whenever a fresh CLI
+    // invocation re-claims the device. The TRAILBLAZE_TARGET env var (set via
+    // `eval $(trailblaze device connect ... --target X)`) gives every subsequent
+    // CLI call a deterministic source for the pin, parallel to TRAILBLAZE_DEVICE.
+    //
+    // Same env-availability conditional as `resolveCliDevice falls back to
+    // TRAILBLAZE_DEVICE env var ...` — we don't mutate process env in unit tests.
+    // The smoke suite under `cli_smoke_tests_common.sh` exercises the end-to-end
+    // path with a real `env TRAILBLAZE_TARGET=...` subprocess.
+    // Route through the production-mirror helper so `TRAILBLAZE_TARGET=clear`
+    // (treated as unset by the resolver) doesn't make this test assert
+    // `clear == resolution.id` and fail spuriously.
+    val envValue = normalizedTrailblazeTargetEnv() ?: return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+      val resolution = resolveCliTarget(flag = null)
+      // The resolver lower-cases env values so trailmap ids match daemon lookup
+      // (the daemon path is also case-insensitive on lookup). Assert the lowercased
+      // form to keep this test resilient to shells that export uppercase values.
+      assertEquals(envValue, resolution.id)
+      assertEquals(ResolvedCliTargetSource.EnvVar, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget explicit flag wins over TRAILBLAZE_TARGET env var`() {
+    // Pin explicit-wins so `--target X` is always deterministic regardless of
+    // what's in the shell's env. A regression that flipped the precedence would
+    // mean `tool --target foo` silently resolves to env's `bar` — exactly the
+    // kind of silent-routing bug we're closing here.
+    val resolution = resolveCliTarget("square")
+    assertEquals("square", resolution.id)
+    assertEquals(ResolvedCliTargetSource.Explicit, resolution.source)
+  }
+
+  @Test
+  fun `resolveCliTarget lowercases the explicit flag for parity with the pin resolver`() {
+    // Both resolvers must normalize the explicit flag identically — otherwise
+    // a `toolbox --target SquareApp` would surface "SquareApp" in headers and
+    // arguments while `tool --target SquareApp` (which routes through
+    // resolveCliTargetPin) would surface "squareapp". Daemon lookup is
+    // case-insensitive so neither path is broken today, but any case-sensitive
+    // log line or comparison would silently diverge.
+    val resolution = resolveCliTarget("SquareApp")
+    assertEquals("squareapp", resolution.id)
+    assertEquals(ResolvedCliTargetSource.Explicit, resolution.source)
+  }
+
+  @Test
+  fun `resolveCliTarget treats blank flag as unset and falls through`() {
+    // The new env-tier resolver introduced in PR #3473 also tightened the
+    // blank-flag handling: pre-PR, `--target=""` was reported as Explicit with
+    // a blank id (which would then fail at the daemon). Post-PR a blank flag
+    // falls through to the env / workspace-config / built-in tiers so the
+    // user gets a useful default. Pin the new behavior so a refactor doesn't
+    // silently revert to the broken Explicit-with-blank shape.
+    // Route through the production-mirror helper so `TRAILBLAZE_TARGET=clear`
+    // (treated as unset by the resolver) takes the workspace-config branch
+    // instead of the env-pin branch.
+    val envValue = normalizedTrailblazeTargetEnv()
+    if (envValue != null) {
+      val resolution = resolveCliTarget("   ")
+      assertEquals(envValue, resolution.id)
+      assertEquals(ResolvedCliTargetSource.EnvVar, resolution.source)
+    } else {
+      withIsolatedAppDataDir {
+        CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "square") }
+        val resolution = resolveCliTarget("   ")
+        assertEquals("square", resolution.id)
+        assertEquals(ResolvedCliTargetSource.WorkspaceConfig, resolution.source)
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // resolveCliTargetPin — two-tier pin resolver (flag → env, no workspace/builtin)
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `resolveCliTargetPin returns explicit flag lowercased when non-blank`() {
+    // The daemon's `setSessionTargetForBoundDevice` does case-insensitive lookup,
+    // but every CLI normalization site lowercases first so logging / session-file
+    // comparisons stay deterministic. Pin that the helper lowercases consistently
+    // with [cliReusableWithDevice]'s long-standing behavior.
+    assertEquals("sampleapp", resolveCliTargetPin("SampleApp"))
+  }
+
+  @Test
+  fun `resolveCliTargetPin treats clear flag as unset`() {
+    // `--target=clear` is the explicit "remove the per-device override" signal,
+    // not a pin value to re-apply. The flag-level handling in cliReusableWithDevice
+    // converts `clear` into an empty-string MCP call; resolveCliTargetPin's job is
+    // to NOT report this as a pin, so the env tier doesn't fire and re-establish
+    // an old pin the user is trying to clear in the same invocation.
+    //
+    // Critical contract: BOTH branches assert null. The env-set branch is the
+    // load-bearing pin against a class of silent-routing regressions where a
+    // future refactor of resolveCliTargetPin falls through to envTrailblazeTarget()
+    // on `clear` — that would re-establish the very pin the user is clearing.
+    // McpCommand calls resolveCliTargetPin directly (no cliReusableWithDevice
+    // wrap), so any drift here would silently break `mcp --target=clear`
+    // when TRAILBLAZE_TARGET is exported in the shell.
+    val envValue = normalizedTrailblazeTargetEnv()
+    assertNull(resolveCliTargetPin("clear"))
+    // Sanity check: case + whitespace variants of the same sentinel must all
+    // resolve to null so a shell pipeline that uppercases ('CLEAR') or pads
+    // (' clear ') the flag doesn't accidentally fall through to env.
+    assertNull(resolveCliTargetPin("CLEAR"))
+    assertNull(resolveCliTargetPin(" clear "))
+    if (envValue != null) {
+      // When env is set (and not `clear`), the prior asserts above prove the
+      // short-circuit fires. Without the short-circuit, resolveCliTargetPin("clear")
+      // would return envValue and the asserts above would FAIL.
+      assertEquals(envValue, resolveCliTargetPin(null))
+    }
+  }
+
+  @Test
+  fun `resolveCliTargetPin falls back to TRAILBLAZE_TARGET env when flag is null`() {
+    // Route through the production-mirror helper so `TRAILBLAZE_TARGET=clear`
+    // takes the null branch (matching the resolver) instead of the env-pin
+    // branch.
+    val envValue = normalizedTrailblazeTargetEnv()
+    if (envValue == null) {
+      assertNull(resolveCliTargetPin(null))
+    } else {
+      assertEquals(envValue, resolveCliTargetPin(null))
+    }
+  }
+
+  @Test
+  fun `resolveCliTargetPin treats blank flag as unset and falls through to env`() {
+    val envValue = normalizedTrailblazeTargetEnv()
+    val resolved = resolveCliTargetPin("   ")
+    if (envValue == null) {
+      assertNull(resolved)
+    } else {
+      assertEquals(envValue, resolved)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // resolveCliTargetDaemonCall — shared helper used by cliReusableWithDevice
+  // + SessionStartCommand. Pin all four branches directly; a regression here
+  // breaks both callers simultaneously, and the previous coverage was only
+  // indirect (via the two production call paths under integration tests).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `resolveCliTargetDaemonCall returns daemon payload for explicit pin`() {
+    val daemonCall = resolveCliTargetDaemonCall("MyApp")
+    // Both the daemon payload and the pin should reflect the normalized
+    // explicit-flag value. The "pin" field is what the action wrappers read
+    // for session-file invalidation; "payload" is what they pass to the MCP
+    // tool. Diverging from each other would silently desync the session-file
+    // toolset check from the daemon-side override.
+    assertEquals("myapp", daemonCall.payload)
+    assertEquals("myapp", daemonCall.pin)
+    assertEquals(false, daemonCall.isClearRequest)
+  }
+
+  @Test
+  fun `resolveCliTargetDaemonCall returns empty payload and null pin for clear flag`() {
+    // `--target=clear` is the explicit "wipe the per-device override" signal.
+    // The daemon contract: empty-string payload tells `setSessionTargetForBoundDevice`
+    // to clear. The pin must be null (not "clear") so the session-file
+    // invalidation logic doesn't treat "clear" as a real toolset id.
+    val daemonCall = resolveCliTargetDaemonCall("clear")
+    assertEquals("", daemonCall.payload)
+    assertNull(daemonCall.pin)
+    assertEquals(true, daemonCall.isClearRequest)
+  }
+
+  @Test
+  fun `resolveCliTargetDaemonCall propagates env pin when flag is null`() {
+    // When the user has env-pinned the shell and runs `tool` without
+    // `--target`, the daemon-call shape must surface the env value so the
+    // action wrapper re-applies it on every invocation (the load-bearing
+    // path that closes Bug B from PR #3463). Conditional-skip when env
+    // isn't set in the test JVM, same pattern as the other env-tier tests.
+    val envValue = normalizedTrailblazeTargetEnv() ?: return
+    val daemonCall = resolveCliTargetDaemonCall(null)
+    assertEquals(envValue, daemonCall.payload)
+    assertEquals(envValue, daemonCall.pin)
+    assertEquals(false, daemonCall.isClearRequest)
+  }
+
+  @Test
+  fun `resolveCliTargetDaemonCall returns no-op when neither flag nor env supplies a pin`() {
+    // The "skip the daemon call entirely" path — leaves any pre-existing
+    // per-device override in place and lets the daemon-wide fallback resolve.
+    // This is the path bare `tool pressBack` takes when nothing is pinned.
+    // Skip when env is set (resolver would surface the env value instead).
+    if (normalizedTrailblazeTargetEnv() != null) return
+    val daemonCall = resolveCliTargetDaemonCall(null)
+    assertNull(daemonCall.payload)
+    assertNull(daemonCall.pin)
+    assertEquals(false, daemonCall.isClearRequest)
+  }
+
+  // ---------------------------------------------------------------------------
+  // resolveCliTarget — env-vs-workspace-config precedence test
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `resolveCliTarget env wins over workspace config when both are set`() {
+    // The four-tier resolver places env ABOVE workspace config so per-shell
+    // pinning beats per-project default in the multi-terminal case — but the
+    // existing tests only cover env-when-config-is-unset and explicit-flag-
+    // wins-over-env. Without this test, a future refactor that flipped the
+    // precedence (e.g. by reading workspace config first) would silently
+    // change semantics on every multi-terminal user. Pin precedence directly.
+    val envValue = normalizedTrailblazeTargetEnv() ?: return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "config-only-target") }
+      val resolution = resolveCliTarget(flag = null)
+      assertEquals(envValue, resolution.id)
+      assertEquals(
+        ResolvedCliTargetSource.EnvVar,
+        resolution.source,
+        "env tier must win over workspace config when both supply a value",
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // ResolvedCliTargetSource.attributionLabel — collapsed into the enum after
+  // the lead-dev pass so a future source (per-device cache, MCP-session pin,
+  // …) doesn't require hunting down every per-command `when` dispatch. Pin
+  // each label so toolbox's header wording doesn't drift silently.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `ResolvedCliTargetSource attributionLabel matches each rendered source`() {
+    // Explicit has no label — the header is suppressed before any label is
+    // requested. Asserting null here is the contract that ToolboxCommand's
+    // `!!` checkpoint relies on.
+    assertNull(ResolvedCliTargetSource.Explicit.attributionLabel)
+    assertEquals("from \$TRAILBLAZE_TARGET", ResolvedCliTargetSource.EnvVar.attributionLabel)
+    assertEquals("from workspace config", ResolvedCliTargetSource.WorkspaceConfig.attributionLabel)
+    assertEquals("built-in default", ResolvedCliTargetSource.BuiltinDefault.attributionLabel)
+  }
+
+  // ---------------------------------------------------------------------------
   // ReportCommand validation
   //
-  // Like the BlazeCommand tests above, these only cover validation paths that
+  // Like the StepCommand tests above, these only cover validation paths that
   // return USAGE *before* the command touches its uninitialized `parent` field.
   // The `--current` daemon-resolution branch is intentionally not covered here
   // — it would require mocking CliMcpClient, which the unit setup doesn't wire.
@@ -1357,7 +1929,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -1369,7 +1941,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -1379,7 +1951,7 @@ class CliCommandValidationTest {
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   @Test
@@ -1409,5 +1981,201 @@ class CliCommandValidationTest {
 
     assertEquals("out.mp4", cmd.videoOutput)
     assertEquals("out.gif", cmd.gifOutput)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Positional <session-id> / <case-id> parsing (the "no flag-only ceremony"
+  // shape — `trailblaze report SESS`, `trailblaze session info SESS`,
+  // `trailblaze results C12345`).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `report picocli accepts bare positional session-id`() {
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("abc123")
+
+    assertEquals("abc123", cmd.positionalId)
+    assertNull(cmd.id)
+  }
+
+  @Test
+  fun `report picocli rejects positional and --id together`() {
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("--id", "abc", "xyz")
+
+    // Picocli accepts both fields; the call()-time guard maps the conflict to MISUSE.
+    val exitCode = cmd.call()
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  @Test
+  fun `session info picocli accepts bare positional session-id`() {
+    val cmd = SessionInfoCommand()
+    CommandLine(cmd).parseArgs("abc123")
+
+    assertEquals("abc123", cmd.positionalId)
+    assertNull(cmd.id)
+  }
+
+  @Test
+  fun `session delete requires either positional or --id`() {
+    val cmd = SessionDeleteCommand()
+    CommandLine(cmd).parseArgs()
+
+    val exitCode = cmd.call()
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Session subcommands — --device is no longer picocli-required (resolver
+  // handles the env-var fallback / MISUSE-on-missing case). Mirrors the action
+  // command coverage in DeviceConnectCommandTest.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `session start picocli accepts no --device flag`() {
+    // Bare `session start` must parse cleanly; the call()-time resolver does the
+    // env-var fallback. A regression that re-adds required=true would fail here
+    // with MissingParameterException before call() ever runs.
+    val cmd = SessionStartCommand()
+    CommandLine(cmd).parseArgs() // intentionally no args
+    assertNull(cmd.device)
+  }
+
+  @Test
+  fun `session stop picocli accepts no --device flag`() {
+    val cmd = SessionStopCommand()
+    CommandLine(cmd).parseArgs() // intentionally no args
+    assertNull(cmd.device)
+  }
+
+  @Test
+  fun `session end picocli accepts no --device flag`() {
+    val cmd = SessionEndCommand()
+    CommandLine(cmd).parseArgs() // intentionally no args
+    assertNull(cmd.device)
+  }
+
+  @Test
+  fun `session start without --device and without TRAILBLAZE_DEVICE rejects`() {
+    // Skip guards keep the test deterministic across environments — see the
+    // `toolbox without device and without name rejects` comment above for the
+    // full rationale on TRAILBLAZE_DEVICE + canAutoresolveSingleDevice.
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
+    val cmd = SessionStartCommand()
+    CommandLine(cmd).parseArgs()
+    val exitCode = cmd.call()
+    assertRejectsBareDeviceInvocation(exitCode)
+  }
+
+  @Test
+  fun `session stop without --device and without TRAILBLAZE_DEVICE rejects`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
+    val cmd = SessionStopCommand()
+    CommandLine(cmd).parseArgs()
+    val exitCode = cmd.call()
+    assertRejectsBareDeviceInvocation(exitCode)
+  }
+
+  @Test
+  fun `session end without --device and without TRAILBLAZE_DEVICE rejects`() {
+    if (!System.getenv("TRAILBLAZE_DEVICE").isNullOrBlank()) return
+    if (canAutoresolveSingleDevice) return
+    val cmd = SessionEndCommand()
+    CommandLine(cmd).parseArgs()
+    val exitCode = cmd.call()
+    assertRejectsBareDeviceInvocation(exitCode)
+  }
+
+  @Test
+  fun `session start picocli parses -d short form`() {
+    val cmd = SessionStartCommand()
+    CommandLine(cmd).parseArgs("-d", "android/emulator-5554")
+    assertEquals("android/emulator-5554", cmd.device)
+  }
+
+  @Test
+  fun `session stop picocli parses --device long form`() {
+    val cmd = SessionStopCommand()
+    CommandLine(cmd).parseArgs("--device", "ios/SIM-X")
+    assertEquals("ios/SIM-X", cmd.device)
+  }
+
+  @Test
+  fun `results picocli routes bare case-id at parent level to the show subcommand`() {
+    // `trailblaze results C12345 --device foo` — picocli should attach the positional
+    // to ResultsCommand (not match a subcommand named "C12345"), and the parent-level
+    // options should be forwarded to ResultsShowCommand when call() runs.
+    val root = ResultsCommand()
+    val parseResult = CommandLine(root).parseArgs("C12345", "--device", "android-phone")
+
+    // No subcommand match — bare positional should not have tripped a "show" lookup.
+    assertNull(parseResult.subcommand(), "Bare case-id must not be matched as a subcommand")
+    assertEquals("C12345", root.caseId)
+    assertEquals("android-phone", root.device)
+  }
+
+  @Test
+  fun `results picocli still routes explicit show subcommand`() {
+    // The pre-existing `results show C12345 ...` shape must continue to work — picocli
+    // matches "show" as a subcommand and the positional binds to ResultsShowCommand.
+    val root = ResultsCommand()
+    val parseResult =
+      CommandLine(root).parseArgs("show", "C12345", "--device", "android-phone")
+
+    val sub = parseResult.subcommand()
+    assertNotNull(sub, "Expected a matched `show` subcommand")
+    val show = sub.commandSpec().userObject() as ResultsShowCommand
+    assertEquals("C12345", show.caseId)
+    assertEquals("android-phone", show.device)
+    // Parent-level fields untouched.
+    assertNull(root.caseId)
+  }
+
+  @Test
+  fun `results no case-id but forwarded flag returns MISUSE`() {
+    // Without the MISUSE guard, `trailblaze results --device android-phone` would print
+    // the help text and exit SUCCESS — a stray missing case-id from an automation script
+    // would look like a clean run. Surface it as MISUSE so CI gates catch the typo.
+    val cmd = ResultsCommand()
+    CommandLine(cmd).parseArgs("--device", "android-phone")
+
+    val exitCode = cmd.call()
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
+  }
+
+  @Test
+  fun `results bare invocation prints help and exits SUCCESS`() {
+    // Bare `trailblaze results` (no args at all) should still print help cleanly —
+    // that's the discoverability path users hit when learning the surface.
+    val cmd = ResultsCommand()
+    CommandLine(cmd).parseArgs()
+
+    val exitCode = cmd.call()
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exitCode)
+  }
+
+  @Test
+  fun `results forwarded flag before show subcommand reaches the subcommand`() {
+    // picocli binds options BEFORE the subcommand name to the parent. Without the
+    // parent-fallback merge in ResultsShowCommand.call(), `--repo` here would never
+    // reach `show` and the user would see a misleading "results repo not configured"
+    // error. This test pins that the parent's flag value is merged into the
+    // subcommand's own field at the start of the subcommand's call().
+    val root = ResultsCommand()
+    val parseResult = CommandLine(root).parseArgs(
+      "--repo", "owner/name",
+      "show", "C12345", "--device", "android-phone",
+    )
+
+    val sub = parseResult.subcommand()
+    assertNotNull(sub, "Expected a matched `show` subcommand")
+    val show = sub.commandSpec().userObject() as ResultsShowCommand
+    // Parent has the flag bound; subcommand does not until the merge runs.
+    assertEquals("owner/name", root.repo)
+    assertNull(show.repo, "Pre-merge: subcommand field is its default until call() runs the merge")
+    assertEquals(root, show.parent, "@ParentCommand wires the back-pointer used by the merge")
   }
 }

@@ -11,6 +11,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.After
 import org.junit.Test
 import xyz.block.trailblaze.util.Console
@@ -553,5 +555,168 @@ class CallbackDispatcherTest {
     assertThat(output).contains("[JsScriptingCallbackDispatcher] SESSION_MISMATCH")
     assertThat(output).contains("request_session=attacker-session")
     assertThat(output).contains("entry_session=real-session")
+  }
+
+  @Test
+  fun `Success with structuredContent flows onto wire CallToolResult`() = runBlocking {
+    // Producer-side wiring for the typed-result feature. A scripted tool whose handler
+    // returns a non-string typed value (e.g. `trailblaze.tool<I, O>({ handler })`) hands the
+    // dispatcher a `TrailblazeToolResult.Success(structuredContent = <JsonElement>)`. The
+    // dispatcher must thread that payload onto the wire's `CallToolResult.structuredContent`
+    // so the TS SDK proxy can unwrap it as the typed `result` declared in `TrailblazeToolMap`.
+    val structuredPayload = buildJsonObject {
+      put("formatted", JsonPrimitive("hello world"))
+      put("inputLength", JsonPrimitive(5))
+    }
+    val structuredTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Success(message = null, structuredContent = structuredPayload)
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("structuredEcho")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Test-only tool that returns a structured payload.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = structuredTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("structured-content")
+    val handle = register(sessionId = sessionId, repo = repo)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(sessionId.value, handle.invocationId, "structuredEcho"),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult
+        ?: error("Expected CallToolResult, got: $result")
+      assertThat(cap.success).isEqualTo(true)
+      assertThat(cap.structuredContent).isEqualTo(structuredPayload)
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `Success without structuredContent leaves wire structuredContent null`() = runBlocking {
+    // Negative companion: producer that returned only a text message must NOT have a non-null
+    // structuredContent forced onto the wire — that would force every existing string-returning
+    // tool to start tripping the TS SDK's "unwrap structured payload" branch and surface
+    // null/empty objects in place of the expected string. Pin the absence so a refactor that
+    // accidentally synthesizes a stub structured payload can't slip through.
+    val textOnlyTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Success(message = "plain text")
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("textOnlyEcho")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Test-only tool that returns text only.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = textOnlyTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("structured-content-absent")
+    val handle = register(sessionId = sessionId, repo = repo)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(sessionId.value, handle.invocationId, "textOnlyEcho"),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult
+        ?: error("Expected CallToolResult, got: $result")
+      assertThat(cap.success).isEqualTo(true)
+      assertThat(cap.textContent).isEqualTo("plain text")
+      assertThat(cap.structuredContent).isEqualTo(null)
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `END log line carries structured=true when producer populated a structured payload`() = runBlocking {
+    // Pin the dispatcher's END log format — operators grep `structured=true` to find calls
+    // that carried a typed payload (and `structured=false` for the legacy text-only shape).
+    // Without this assertion, a future change to the log string would silently break the
+    // operator runbook / dashboard queries that depend on it.
+    val structuredPayload = buildJsonObject {
+      put("formatted", JsonPrimitive("hi"))
+    }
+    val structuredTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Success(message = null, structuredContent = structuredPayload)
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("structuredLogProbe")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Test-only tool that returns a structured payload (for log-format test).",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = structuredTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("log-format-structured-true")
+    val handle = register(sessionId = sessionId, repo = repo)
+    val output = try {
+      captureConsoleLog {
+        JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(sessionId.value, handle.invocationId, "structuredLogProbe"),
+        )
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] END")
+    assertThat(output).contains("call_tool_result success=true structured=true")
+  }
+
+  @Test
+  fun `END log line carries structured=false when producer returned text only`() = runBlocking {
+    // Negative companion to the structured=true test — pin that the text-only path emits
+    // `structured=false`, not the structured flag being silently omitted or always-true.
+    val textOnlyTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult =
+        TrailblazeToolResult.Success(message = "plain text")
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("textOnlyLogProbe")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Test-only tool that returns text only (for log-format test).",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = textOnlyTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("log-format-structured-false")
+    val handle = register(sessionId = sessionId, repo = repo)
+    val output = try {
+      captureConsoleLog {
+        JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(sessionId.value, handle.invocationId, "textOnlyLogProbe"),
+        )
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("call_tool_result success=true structured=false")
   }
 }

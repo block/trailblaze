@@ -27,14 +27,9 @@ object TrailblazeWorkspaceConfigResolver {
     if (envOverride != null) {
       val envDir = File(envOverride)
       if (envDir.isDirectory) {
-        // When the configDir has its own trailblaze.yaml, prefer it as the config file so
-        // pack targets declared there (e.g. ios-contacts/packs/contacts) are loaded instead
-        // of the workspace-root config's targets (which may point to a different pack of the
-        // same id with different tools). Falls back to the walk-up configFile when absent.
-        val envConfigFile = File(envDir, TrailblazeConfigPaths.CONFIG_FILENAME).takeIf { it.isFile }
         return ResolvedTrailblazeWorkspaceConfig(
           workspaceRoot = workspaceRoot,
-          configFile = envConfigFile ?: configFile,
+          configFile = configFile,
           configDir = envDir,
         )
       }
@@ -75,7 +70,22 @@ data class ResolvedTrailblazeWorkspaceConfig(
    * [TrailblazeResolvedConfig.targets]. Use this when you need the actual target configs
    * (target discovery, CLI surfaces, the compiler) — [loadProjectConfig] only returns
    * the schema-shape view (id list).
+   *
+   * Pass a non-null [scriptedToolEnrichment] to allow meta-only scripted-tool descriptors
+   * (YAML files with `script:` + `_meta:` only) to resolve via analyzer extraction of the
+   * sibling `.ts`. JVM host callers wire the analyzer-backed implementation here; on-device
+   * runtime / build-time callers leave it null and rely on full-YAML descriptors.
    */
-  fun loadResolvedRuntime(): TrailblazeResolvedConfig? =
-    configFile?.let { TrailblazeProjectConfigLoader.loadResolvedRuntime(it) }
+  fun loadResolvedRuntime(
+    scriptedToolEnrichment: ScriptedToolEnrichment? = null,
+  ): TrailblazeResolvedConfig? =
+    configFile?.let {
+      TrailblazeProjectConfigLoader.load(it)?.let { loaded ->
+        TrailblazeProjectConfigLoader.resolveRuntime(
+          loaded = loaded,
+          includeClasspathTrailmaps = true,
+          scriptedToolEnrichment = scriptedToolEnrichment,
+        )
+      }
+    }
 }

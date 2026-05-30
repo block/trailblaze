@@ -12,9 +12,9 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * Per-`SessionId` ownership for video/log capture across **every** path that creates a
- * Trailblaze session — `./trailblaze trail` from the CLI, the desktop UI's "Run trail"
+ * Trailblaze session — `./trailblaze run` from the CLI, the desktop UI's "Run trail"
  * button, and (most importantly for this class's existence) the MCP per-tool path
- * where the `blaze`/`ask`/`verify`/individual-tool dispatchers each open a Trailblaze
+ * where the `step`/`ask`/`verify`/individual-tool dispatchers each open a Trailblaze
  * session without going through `DesktopYamlRunner`. Prior to this coordinator,
  * `DesktopYamlRunner` was the only place that started a `CaptureSession`, so MCP-driven
  * Android runs landed with no `video.mp4` and no `video_sprites.webp` — the report

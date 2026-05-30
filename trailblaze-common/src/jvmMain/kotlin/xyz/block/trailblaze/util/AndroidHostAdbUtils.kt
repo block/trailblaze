@@ -2,8 +2,6 @@ package xyz.block.trailblaze.util
 
 import dadb.AdbShellPacket
 import dadb.Dadb
-import dadb.ID_CLOSE_STDIN
-import dadb.ID_STDIN
 import dadb.adbserver.AdbServer
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -511,35 +509,6 @@ object AndroidHostAdbUtils {
     }
     return null
   }
-
-  /**
-   * Runs a shell command and pipes [stdin] to it. Equivalent to piping bytes to `adb shell
-   * <command>` via stdin but uses dadb's shell stream so the bytes go through the adb wire
-   * protocol unmodified. Used for content-provider writes where the file body must be piped to
-   * `content write` rather than passed as an argument.
-   */
-  fun shellWithStdin(
-    deviceId: TrailblazeDeviceId,
-    command: String,
-    stdin: ByteArray,
-  ): AdbShellResult = withDadb(deviceId) { dadb ->
-    dadb.openShell(command).use { stream ->
-      stream.write(ID_STDIN, stdin)
-      stream.write(ID_CLOSE_STDIN, null)
-      val response = stream.readAll()
-      AdbShellResult(
-        output = response.output,
-        errorOutput = response.errorOutput,
-        exitCode = response.exitCode,
-      )
-    }
-  }
-
-  data class AdbShellResult(
-    val output: String,
-    val errorOutput: String,
-    val exitCode: Int,
-  )
 
   /**
    * Pulls a file from the device. Returns true on success.

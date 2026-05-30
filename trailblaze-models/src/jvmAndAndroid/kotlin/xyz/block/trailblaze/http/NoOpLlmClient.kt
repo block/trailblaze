@@ -2,10 +2,11 @@ package xyz.block.trailblaze.http
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.dsl.ModerationResult
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.LLMChoice
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
@@ -28,13 +29,13 @@ class NoOpLlmClient : LLMClient() {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<Message.Response> = throw TrailblazeException(NO_LLM_ERROR)
+  ): Message.Assistant = throw TrailblazeException(NO_LLM_ERROR)
 
   override suspend fun executeMultipleChoices(
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<List<Message.Response>> = throw TrailblazeException(NO_LLM_ERROR)
+  ): LLMChoice = throw TrailblazeException(NO_LLM_ERROR)
 
   override fun executeStreaming(
     prompt: Prompt,

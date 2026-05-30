@@ -11,6 +11,14 @@ import xyz.block.trailblaze.util.Console
  * classpath source enumerates JAR entries. In a unit-test JVM, YAML resources land on the
  * regular classpath via `commonMain/resources` wiring, so the classpath fallback finds them.
  */
+/**
+ * On Android there is no workspace concept (no CWD walk-up to a `trails/config/` directory
+ * at runtime on a device), so the "bundled" view IS the platform default. Delegating keeps
+ * the two functions byte-identical on this platform — call sites pick the function name that
+ * communicates intent, but the result is the same.
+ */
+actual fun bundledConfigResourceSource(): ConfigResourceSource = platformConfigResourceSource()
+
 actual fun platformConfigResourceSource(): ConfigResourceSource =
   object : ConfigResourceSource {
     override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> {

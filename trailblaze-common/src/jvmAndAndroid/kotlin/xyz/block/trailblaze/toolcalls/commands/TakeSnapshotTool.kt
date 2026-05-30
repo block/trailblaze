@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -20,7 +21,7 @@ class TakeSnapshotTool(
   val screenName: String,
   @param:LLMDescription("Optional description of what this snapshot captures or why it was taken.")
   val description: String? = null,
-) : ExecutableTrailblazeTool {
+) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
   companion object {
     private const val NO_SCREEN_STATE_PROVIDER_MESSAGE =
       "Snapshot '%s' not saved: no screen state provider available."

@@ -7,10 +7,12 @@ import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
-import xyz.block.trailblaze.host.PerPackClientDtsEmitter
-import xyz.block.trailblaze.host.PerPackTsconfigEmitter
+import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
+import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
 import xyz.block.trailblaze.host.ResolvedTargetReportEmitter
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
+import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -18,29 +20,29 @@ import java.nio.file.Path
 import java.util.concurrent.Callable
 
 /**
- * Compile pack manifests into resolved target YAMLs.
+ * Compile trailmap manifests into resolved target YAMLs.
  *
- * `trailblaze compile` is the equivalent of `javac` for packs: it reads
- * source pack manifests (`packs/<id>/pack.yaml`), runs dependency resolution
+ * `trailblaze compile` is the equivalent of `javac` for trailmaps: it reads
+ * source trailmap manifests (`trailmaps/<id>/trailmap.yaml`), runs dependency resolution
  * with closest-wins inheritance, and emits one materialized
- * `targets/<id>.yaml` per app pack — a pack that declares a `target:` block.
- * Library packs (no `target:`) contribute defaults but produce no output.
+ * `targets/<id>.yaml` per app trailmap — a trailmap that declares a `target:` block.
+ * Library trailmaps (no `target:`) contribute defaults but produce no output.
  *
  * Runtime callers (the daemon, the desktop target picker, the CLI's
  * `toolbox` listing) read the materialized flat `targets/<id>.yaml` files —
- * they never re-resolve packs. This keeps pack semantics in one place
+ * they never re-resolve trailmaps. This keeps trailmap semantics in one place
  * (the compiler) and the runtime hot path simple.
  *
  * The command resolves paths against the workspace root (the nearest
- * ancestor directory of the CWD containing `trails/config/packs/`), not the
+ * ancestor directory of the CWD containing `trails/config/trailmaps/`), not the
  * CWD itself, so running `trailblaze compile` from any subdirectory of a
- * workspace — including a pack's `tools/` dir several levels deep — works
+ * workspace — including a trailmap's `tools/` dir several levels deep — works
  * the same as running it from the root. Same UX as `git`.
  */
 @Command(
   name = "compile",
   mixinStandardHelpOptions = true,
-  description = ["Compile pack manifests into resolved target YAMLs"],
+  description = ["Compile trailmap manifests into resolved target YAMLs"],
 )
 class CompileCommand : Callable<Int> {
 
@@ -55,10 +57,10 @@ class CompileCommand : Callable<Int> {
   @Option(
     names = ["--input", "-i"],
     description = [
-      "Directory whose `packs/` subdirectory holds one <id>/pack.yaml per pack " +
-        "(the compiler reads `<input>/packs/<id>/pack.yaml`). " +
+      "Directory whose `trailmaps/` subdirectory holds one <id>/trailmap.yaml per trailmap " +
+        "(the compiler reads `<input>/trailmaps/<id>/trailmap.yaml`). " +
         "Defaults to <workspace-root>/trails/config — the workspace root is found by " +
-        "walking up from the current directory looking for `trails/config/packs/`, " +
+        "walking up from the current directory looking for `trails/config/trailmaps/`, " +
         "the same way `git` walks up to find `.git/`.",
     ],
   )
@@ -83,10 +85,10 @@ class CompileCommand : Callable<Int> {
       val startAbs = callerCwd.toAbsolutePath().normalize()
       Console.error(
         "trailblaze $commandLabel: not inside a Trailblaze workspace. Walked up from " +
-          "$startAbs to the filesystem root and found no `trails/config/packs/` " +
+          "$startAbs to the filesystem root and found no `trails/config/trailmaps/` " +
           "marker. Either `cd` into a workspace tree (so the walk-up can find the " +
-          "workspace root) or pass --input pointing at a directory whose `packs/` " +
-          "subdirectory holds your pack manifests.",
+          "workspace root) or pass --input pointing at a directory whose `trailmaps/` " +
+          "subdirectory holds your trailmap manifests.",
       )
       return EXIT_USAGE
     }
@@ -110,20 +112,41 @@ class CompileCommand : Callable<Int> {
           TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH,
       )
 
-    val packsDir = File(resolvedInputDir, "packs")
-    if (!packsDir.isDirectory) {
+    val trailmapsDir = File(resolvedInputDir, "trailmaps")
+    if (!trailmapsDir.isDirectory) {
       Console.error(
-        "trailblaze $commandLabel: no packs/ directory found under ${resolvedInputDir.absolutePath}; " +
-          "nothing to compile. Hint: run from a workspace whose `trails/config/packs/` " +
-          "exists, or pass --input pointing at a directory that contains `packs/`.",
+        "trailblaze $commandLabel: no trailmaps/ directory found under ${resolvedInputDir.absolutePath}; " +
+          "nothing to compile. Hint: run from a workspace whose `trails/config/trailmaps/` " +
+          "exists, or pass --input pointing at a directory that contains `trailmaps/`.",
       )
       return EXIT_USAGE
     }
 
+    // Wire enrichment so meta-only scripted-tool descriptors (`script:` + `_meta:`
+    // with `name:` / `description:` / `inputSchema:` derived from the typed `.ts`
+    // source) resolve here. Without this, a trailmap that's adopted the typed-authoring
+    // shape fails compile with "scripted-tool descriptor uses the meta-only authoring
+    // shape ... No `ScriptedToolEnrichment` was wired" even though daemon-time
+    // codegen would resolve it correctly.
+    //
+    // When the resolver returns null (no `bun` on PATH, missing TRAILBLAZE_SDK_DIR,
+    // ts-json-schema-generator not installed), log a one-line breadcrumb so the
+    // downstream "enrichment not wired" loader error has a root cause sitting next
+    // to it in the same log instead of arriving with no context.
+    val scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+    if (scriptedToolEnrichment == null) {
+      Console.info(
+        "trailblaze $commandLabel: scripted-tool analyzer unavailable — meta-only " +
+          "descriptors will fail to load. Ensure `bun` is on PATH and the SDK at " +
+          "TRAILBLAZE_SDK_DIR carries node_modules/ts-json-schema-generator.",
+      )
+    }
     val result = TrailblazeCompiler.compile(
-      packsDir = packsDir,
+      trailmapsDir = trailmapsDir,
       outputDir = resolvedOutputDir,
+      referenceSource = ClasspathConfigResourceSource,
       commandLabel = commandLabel,
+      scriptedToolEnrichment = scriptedToolEnrichment,
     )
     if (!result.isSuccess) {
       Console.error("trailblaze $commandLabel: compilation failed:")
@@ -133,8 +156,8 @@ class CompileCommand : Callable<Int> {
 
     if (result.emittedTargets.isEmpty()) {
       Console.log(
-        "trailblaze $commandLabel: no app packs found under ${packsDir.absolutePath} " +
-          "(library packs without `target:` produce no output).",
+        "trailblaze $commandLabel: no app trailmaps found under ${trailmapsDir.absolutePath} " +
+          "(library trailmaps without `target:` produce no output).",
       )
     } else {
       Console.log(
@@ -151,8 +174,8 @@ class CompileCommand : Callable<Int> {
       result.deletedOrphans.forEach { Console.log("  - ${it.name}") }
     }
 
-    // Emit per-pack typed bindings (`<packDir>/tools/.trailblaze/client.d.ts`) so the IDE
-    // picks up typed `client.callTool` overloads scoped to each pack's own platform
+    // Emit per-trailmap typed bindings (`<trailmapDir>/tools/trailblaze-client.d.ts`) so the IDE
+    // picks up typed `client.callTool` overloads scoped to each trailmap's own platform
     // `tool_sets:` + scripted tools + transitively-inherited exports. Mirrors what the
     // daemon-init bootstrap does — running `trailblaze compile` is the explicit-
     // foregrounded version of the same path. Fail-fast on codegen errors here so authors
@@ -168,26 +191,35 @@ class CompileCommand : Callable<Int> {
     val canonicalInputDir = resolvedInputDir.canonicalFile
     val generatorRoot = (canonicalInputDir.parentFile ?: workspaceRoot).toPath()
 
-    val resolvedPacks = try {
-      // Re-resolve the pack pool via the project-config loader so codegen sees the full
-      // set of packs (target packs + transitively-resolved library deps) with their
+    val resolvedTrailmaps = try {
+      // Re-resolve the trailmap pool via the project-config loader so codegen sees the full
+      // set of trailmaps (target trailmaps + transitively-resolved library deps) with their
       // sibling content (scripted tools, source dirs). Use the auto-discovery path
       // (empty `targets:`) — same shape `WorkspaceCompileBootstrap` uses, so both
-      // entry points produce the same per-pack `client.d.ts` set for a given workspace.
+      // entry points produce the same per-trailmap `client.d.ts` set for a given workspace.
       // The compile pass above already validated dependency-graph integrity; this call
-      // re-walks the same closure to surface per-pack manifests for codegen.
+      // re-walks the same closure to surface per-trailmap manifests for codegen.
       val loaded = LoadedTrailblazeProjectConfig(
         raw = TrailblazeProjectConfig(),
         sourceFile = File(canonicalInputDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME),
       )
-      TrailblazeProjectConfigLoader.resolveRuntime(loaded, includeClasspathPacks = true).resolvedPacks
+      TrailblazeProjectConfigLoader.resolveRuntime(
+        loaded,
+        includeClasspathTrailmaps = true,
+        // Reuse the analyzer instance already resolved above — re-calling
+        // `resolveFromEnvironment()` here would re-walk the SDK dir and (when the
+        // walk-up resolves) build a second `ScriptedToolDefinitionAnalyzer`. The
+        // hoisted instance covers both the initial compile + this codegen
+        // re-resolution.
+        scriptedToolEnrichment = scriptedToolEnrichment,
+      ).resolvedTrailmaps
     } catch (e: TrailblazeProjectConfigException) {
-      Console.error("trailblaze $commandLabel: pack re-resolution for codegen failed: ${e.message ?: e.javaClass.simpleName}")
+      Console.error("trailblaze $commandLabel: trailmap re-resolution for codegen failed: ${e.message ?: e.javaClass.simpleName}")
       return EXIT_COMPILE_ERROR
     }
 
     val emitted = try {
-      PerPackClientDtsEmitter.emit(resolvedPacks = resolvedPacks)
+      PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
     } catch (e: Exception) {
       Console.error("trailblaze $commandLabel: typed-bindings codegen failed: ${e.message ?: e.javaClass.simpleName}")
       return EXIT_COMPILE_ERROR
@@ -207,7 +239,7 @@ class CompileCommand : Callable<Int> {
     val reportEmitted = try {
       ResolvedTargetReportEmitter.emit(
         resolvedTargets = result.resolvedTargets,
-        resolvedPacks = resolvedPacks,
+        resolvedTrailmaps = resolvedTrailmaps,
         outputDir = resolvedOutputDir,
       )
     } catch (e: Exception) {
@@ -226,7 +258,7 @@ class CompileCommand : Callable<Int> {
     // Extract the bundled `@trailblaze/scripting` declaration bundle to
     // `<workspaceRoot>/.trailblaze/sdk/dist/index.d.ts`. No `bun install` step — the SDK
     // type surface is delivered as a single self-contained `.d.ts` (zod types inlined),
-    // consumed via the per-pack tsconfig's `paths` mapping.
+    // consumed via the per-trailmap tsconfig's `paths` mapping.
     try {
       WorkspaceTypeScriptSetup.setUp(workspaceRoot = generatorRoot)
     } catch (e: Exception) {
@@ -234,17 +266,17 @@ class CompileCommand : Callable<Int> {
       return EXIT_COMPILE_ERROR
     }
 
-    // Write the framework-managed `tools/tsconfig.json` per pack so authors get IDE
+    // Write the framework-managed `tools/tsconfig.json` per trailmap so authors get IDE
     // autocomplete on `client.tools.<name>(args)` with zero hand-authored config, plus
-    // a pack-root `.gitignore` so the framework artifacts under `tools/` don't show
+    // a trailmap-root `.gitignore` so the framework artifacts under `tools/` don't show
     // up in `git status`. Must run AFTER `WorkspaceTypeScriptSetup.setUp` because the
-    // per-pack tsconfig's `paths` entry points at the SDK declaration bundle that
-    // setUp just wrote — fail-fast here would otherwise emit packs pointing at a
+    // per-trailmap tsconfig's `paths` entry points at the SDK declaration bundle that
+    // setUp just wrote — fail-fast here would otherwise emit trailmaps pointing at a
     // non-existent bundle file.
     val tsconfigEmitted = try {
-      PerPackTsconfigEmitter.emit(workspaceRoot = generatorRoot, resolvedPacks = resolvedPacks)
+      PerTrailmapTsconfigEmitter.emit(workspaceRoot = generatorRoot, resolvedTrailmaps = resolvedTrailmaps)
     } catch (e: Exception) {
-      Console.error("trailblaze $commandLabel: per-pack tsconfig emission failed: ${e.message ?: e.javaClass.simpleName}")
+      Console.error("trailblaze $commandLabel: per-trailmap tsconfig emission failed: ${e.message ?: e.javaClass.simpleName}")
       return EXIT_COMPILE_ERROR
     }
     if (tsconfigEmitted.isNotEmpty()) {
@@ -253,7 +285,7 @@ class CompileCommand : Callable<Int> {
       // tsconfigs verbatim when the framework banner is absent. The honest verb covers
       // both branches without overstating what happened on a no-op compile.
       Console.log(
-        "trailblaze $commandLabel: ensured ${tsconfigEmitted.size} per-pack tsconfig/.gitignore file(s) in sync:",
+        "trailblaze $commandLabel: ensured ${tsconfigEmitted.size} per-trailmap tsconfig/.gitignore file(s) in sync:",
       )
       val displayBase = generatorRoot.parent ?: generatorRoot
       tsconfigEmitted.forEach { Console.log("  - ${displayBase.relativize(it)}") }
@@ -262,9 +294,9 @@ class CompileCommand : Callable<Int> {
   }
 
   /**
-   * Walks up from [startPath] looking for the `trails/config/packs/` workspace
+   * Walks up from [startPath] looking for the `trails/config/trailmaps/` workspace
    * marker. Delegates to the shared [CliPathUtils.findWorkspaceRoot] so this
-   * command, [TypecheckCommand], and any future packs-walking subcommand stay
+   * command, [CheckCommand], and any future trailmaps-walking subcommand stay
    * in sync on workspace discovery semantics.
    *
    * Visible for testing.
@@ -273,8 +305,14 @@ class CompileCommand : Callable<Int> {
     CliPathUtils.findWorkspaceRoot(startPath)
 
   private companion object {
-    const val EXIT_OK = 0
-    const val EXIT_COMPILE_ERROR = 1
-    const val EXIT_USAGE = 2
+    val EXIT_OK: Int = TrailblazeExitCode.SUCCESS.code
+    // Compile is a build step — a trailmap manifest that doesn't resolve is closer to
+    // a misuse (the workspace's source-of-truth is malformed) than infra. But the
+    // existing semantic ("non-zero on any compile failure, distinguish from arg
+    // errors") fits ASSERTION_FAILED (1) better: chaining `trailblaze compile &&
+    // trailblaze run …` should refuse to run when trailmaps don't compile, the same
+    // way `make` chains stop on a build failure.
+    val EXIT_COMPILE_ERROR: Int = TrailblazeExitCode.ASSERTION_FAILED.code
+    val EXIT_USAGE: Int = TrailblazeExitCode.MISUSE.code
   }
 }

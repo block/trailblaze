@@ -48,6 +48,24 @@ data class TrailConfig(
    * `"Compact element list regression — see #2194"`.
    */
   val skip: String? = null,
+  /**
+   * Pre-seed [xyz.block.trailblaze.AgentMemory] before any step runs. Each entry becomes
+   * a remembered variable visible to `{{name}}` / `${'$'}{name}` interpolation in NL and
+   * tool params and to scripted tools that read `ctx.memory.get("name")`. CLI
+   * `--memory KEY=VAL` flags override entries with the same key in this block.
+   *
+   * Numeric and boolean YAML scalars are silently coerced to their string form by the
+   * underlying YAML decoder (kaml) — `accountTier: 5` becomes `"5"`, `enabled: true`
+   * becomes `"true"`. This matches user expectation that YAML is permissive about
+   * primitives and avoids a quoting requirement that would make hand-edited trails
+   * brittle. Downstream consumers (interpolation, scripting `ctx.memory.get`, the
+   * `SessionStatus.Started` snapshot) always see strings.
+   *
+   * Appended at the end of the data class so existing positional component
+   * accessors (component1..N) and binary-compatibility baselines for earlier
+   * fields stay stable.
+   */
+  val memory: Map<String, String>? = null,
 )
 
 @Serializable

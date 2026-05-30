@@ -12,6 +12,8 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -19,6 +21,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 
@@ -97,6 +100,14 @@ abstract class BaseTrailblazeAgent(
     // `:trailblaze-quickjs-tools`) so the install site doesn't need a compile-time dep on
     // QuickJS — the binding consumes the slot on the read side instead.
     ToolExecutionContextThreadLocal.install(context)
+    // Wrap the whole batch in a single [SnapshotCache] frame so query tools issued by
+    // the same batch (e.g. `findMatches` called multiple times across siblings) share one
+    // captured view hierarchy instead of re-fetching it every call. Action tools below
+    // ([getIsRecordableFromAnnotation] excluding verification reads) invalidate the slot
+    // on success so a post-action query re-captures rather than reading a pre-action tree.
+    // Outside this `withFrame`, [SnapshotCache.snapshot] falls back to direct capture, so
+    // tests that drive a tool's `execute` without a batch still work.
+    SnapshotCache.pushFrame()
     try {
       for (tool in tools) {
         val resolved = resolveDynamicTool(tool)
@@ -157,6 +168,23 @@ abstract class BaseTrailblazeAgent(
             result = result,
           )
         }
+        // Default-invalidate: any tool that just ran could have mutated device
+        // state, so the [SnapshotCache] tree captured by an earlier query in
+        // this batch is potentially stale. Two opt-out paths preserve the
+        // captured tree for a follow-up query:
+        //
+        //  - [ReadOnlyTrailblazeTool] (e.g. `findMatches`) explicitly declares
+        //    the tool does not mutate state.
+        //  - `isVerification = true` (assertion tools) — successful execution
+        //    IS the assertion verdict, and verifications never mutate.
+        //
+        // The annotation flags `isRecordable` and `surfaceToLlm` are NOT used
+        // here. `isRecordable = false` is set on delegation wrappers like
+        // `TapTrailblazeTool` (the LLM-side tap) that absolutely mutate the
+        // device — gating on it would let post-tap queries read stale trees.
+        if (resolved !is ReadOnlyTrailblazeTool && !resolved.isVerificationToolInstance()) {
+          SnapshotCache.invalidateCurrent(traceTag = context.traceId?.traceId)
+        }
         lastSuccessResult = result
       }
 
@@ -166,6 +194,7 @@ abstract class BaseTrailblazeAgent(
         result = lastSuccessResult,
       )
     } finally {
+      SnapshotCache.popFrame()
       ToolExecutionContextThreadLocal.clear()
     }
   }

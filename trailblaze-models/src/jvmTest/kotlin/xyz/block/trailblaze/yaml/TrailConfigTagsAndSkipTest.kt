@@ -112,6 +112,123 @@ class TrailConfigTagsAndSkipTest {
   }
 
   @Test
+  fun `firstSkipReason returns the trimmed reason when set`() {
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - config:
+          title: Skipped trail
+          platform: android
+          skip: "  Compact element list regression — see #2194  "
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertEquals(
+      "Compact element list regression — see #2194",
+      trailblazeYaml.firstSkipReason(items),
+    )
+  }
+
+  @Test
+  fun `firstSkipReason returns null when no skip field is set`() {
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - config:
+          title: Plain trail
+          platform: android
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertNull(trailblazeYaml.firstSkipReason(items))
+  }
+
+  @Test
+  fun `firstSkipReason returns null when skip value is blank — collapses with absent`() {
+    // `skip: ""` is allowed by the schema so callers can clear a skip without dropping the field;
+    // every runner-side path that consults `firstSkipReason` must treat blank and absent the same
+    // so an accidental blank doesn't silently disable a trail.
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - config:
+          title: Empty skip
+          platform: android
+          skip: ""
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertNull(trailblazeYaml.firstSkipReason(items))
+  }
+
+  @Test
+  fun `firstSkipReason returns null when skip value is whitespace only`() {
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - config:
+          title: Whitespace skip
+          platform: android
+          skip: "   "
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertNull(trailblazeYaml.firstSkipReason(items))
+  }
+
+  @Test
+  fun `skip is orthogonal to hasActionableSteps — every runner must consult firstSkipReason before iterating`() {
+    // Pins the load-bearing invariant the runner-side short-circuit relies on:
+    // `hasActionableSteps` reports `true` for a skip-marked trail that contains
+    // prompts/tools (because the items DO exist on disk), so the actionable-steps
+    // guard cannot double as the skip guard. Every runner-side path that iterates
+    // `trailItems` (AndroidTrailblazeRule, the equivalent loop in any downstream
+    // rule, TrailblazeHostYamlRunner's 3 driver entry points, BasePlaywrightNativeTest,
+    // BasePlaywrightElectronTest, BaseHostTrailblazeTest, BaseComposeTest) MUST
+    // consult `firstSkipReason` BEFORE the loop — relying on the actionable-steps
+    // gate is insufficient. If a future runner forgets the check, the YAML will
+    // run end-to-end even though `trailblaze trail` would have skipped it.
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - config:
+          title: Skipped with actionable steps
+          platform: android
+          skip: "blocked on regression"
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertEquals(
+      "blocked on regression",
+      trailblazeYaml.firstSkipReason(items),
+      "skip must be reachable from firstSkipReason",
+    )
+    assertTrue(
+      trailblazeYaml.hasActionableSteps(items),
+      "the trail still has an actionable tool — skip is enforced by firstSkipReason " +
+        "alone, not by hasActionableSteps; a runner that only checks hasActionableSteps " +
+        "would still execute the pressBack",
+    )
+  }
+
+  @Test
+  fun `firstSkipReason returns null when the trail has no config block at all`() {
+    val items = trailblazeYaml.decodeTrail(
+      """
+      - tools:
+        - pressBack: {}
+      """.trimIndent(),
+    )
+
+    assertNull(trailblazeYaml.firstSkipReason(items))
+  }
+
+  @Test
   fun `tags and skip coexist with the rest of the config block`() {
     val parsed = trailblazeYaml.extractTrailConfig(
       """

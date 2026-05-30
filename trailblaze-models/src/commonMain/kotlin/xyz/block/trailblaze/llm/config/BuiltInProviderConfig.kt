@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 /**
  * Schema for built-in provider YAML files shipped with Trailblaze.
  *
- * Each file at `trailblaze-config/providers/{name}.yaml` describes one provider and its models.
+ * Each file at `trails/config/providers/{name}.yaml` describes one provider and its models.
  * The [providerId] makes each file self-describing — it should match the filename
  * but the file doesn't depend on its path to be interpreted correctly.
  *

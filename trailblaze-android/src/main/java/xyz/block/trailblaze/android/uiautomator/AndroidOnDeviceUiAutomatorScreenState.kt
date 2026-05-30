@@ -3,6 +3,9 @@ package xyz.block.trailblaze.android.uiautomator
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Rect
+import android.os.Build
+import android.view.accessibility.AccessibilityNodeInfo
 import maestro.DeviceInfo
 import maestro.Platform
 import xyz.block.trailblaze.AdbCommandUtil
@@ -24,6 +27,7 @@ import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scaleAndEncode
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeAndroidMaestro
@@ -262,13 +266,34 @@ class AndroidOnDeviceUiAutomatorScreenState(
           outputStream.toString()
         }
       })
-      try {
+      val standardDump = try {
         future.get(30, TimeUnit.SECONDS)
       } catch (e: TimeoutException) {
         future.cancel(true)
         throw RuntimeException("dumpViewHierarchy timed out after 30s — likely an accessibility IPC deadlock. Failing fast.", e)
       } finally {
         executor.shutdownNow()
+      }
+
+      // When all top-level nodes have isVisibleToUser()=false (e.g. an AndroidView wrapper
+      // whose host view is INVISIBLE), AccessibilityNodeInfoDumper skips them and produces a
+      // dump containing only empty structural containers (text="") and system-UI nodes. The
+      // text-node count is a reliable signal: fewer than TEXT_NODE_FALLBACK_THRESHOLD non-empty
+      // text= values implies the real app content was entirely skipped. Fall back to
+      // getRootInActiveWindow() which traverses without the visibility filter so Compose virtual
+      // nodes inside invisible containers are still reachable.
+      val standardTextNodeCount = countTextNodes(standardDump)
+      if (standardTextNodeCount < TEXT_NODE_FALLBACK_THRESHOLD) {
+        Console.log("[dumpViewHierarchy] Sparse dump ($standardTextNodeCount text nodes); activating accessibility-tree fallback.")
+        val fallbackDump = dumpViewHierarchyFromAccessibilityTree()
+        if (fallbackDump != null) {
+          fallbackDump
+        } else {
+          Console.log("[dumpViewHierarchy] Fallback returned null (timeout or null root); using standard dump.")
+          standardDump
+        }
+      } else {
+        standardDump
       }
     }
 
@@ -333,6 +358,110 @@ class AndroidOnDeviceUiAutomatorScreenState(
       )
       return mutableBitmap
     }
+
+    // Minimum number of non-empty text= values in the dump before we consider it healthy.
+    // Zero (or very few) text-bearing nodes indicates that all Compose content was skipped by
+    // UIAutomator because it lived inside an invisible ViewFactoryHolder wrapper.
+    private const val TEXT_NODE_FALLBACK_THRESHOLD = 5
+
+    // Count nodes that carry non-empty text= values. Structural container nodes always have
+    // text="" and are not counted; only nodes with real label text contribute.
+    private fun countTextNodes(xml: String): Int {
+      var count = 0
+      var searchFrom = 0
+      while (searchFrom < xml.length) {
+        val textIdx = xml.indexOf("text=\"", searchFrom)
+        if (textIdx < 0) break
+        val valueStart = textIdx + 6
+        val valueEnd = xml.indexOf('"', valueStart)
+        if (valueEnd > valueStart) count++
+        searchFrom = if (valueEnd >= 0) valueEnd + 1 else break
+      }
+      return count
+    }
+
+    /**
+     * Fallback hierarchy dump using [android.app.UiAutomation.getRootInActiveWindow].
+     *
+     * Unlike [UiDevice.dumpWindowHierarchy] (which calls AccessibilityNodeInfoDumper and
+     * skips every node where [AccessibilityNodeInfo.isVisibleToUser] is false), this traversal
+     * includes invisible nodes. That lets us reach Compose virtual nodes inside an invisible
+     * [androidx.compose.ui.viewinterop.ViewFactoryHolder] — they carry correct screen bounds
+     * even when the host View's visibility flag is INVISIBLE, so gestures at those coordinates
+     * still reach the rendered content.
+     *
+     * Returns null on timeout or if [getRootInActiveWindow] returns null, signalling the caller
+     * to fall back to the standard (sparse) dump rather than throwing.
+     */
+    private fun dumpViewHierarchyFromAccessibilityTree(): String? {
+      val executor = Executors.newSingleThreadExecutor()
+      val future = executor.submit(Callable {
+        val root = withUiAutomation { rootInActiveWindow }
+        if (root == null) {
+          Console.log("[dumpViewHierarchy] getRootInActiveWindow() returned null.")
+          return@Callable null
+        }
+        try {
+          buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+            append("<hierarchy rotation=\"0\">\n")
+            dumpAccessibilityNodeToXml(root, this, 0)
+            append("</hierarchy>")
+          }
+        } finally {
+          root.recycle()
+        }
+      })
+      return try {
+        future.get(30, TimeUnit.SECONDS)
+      } catch (e: TimeoutException) {
+        future.cancel(true)
+        Console.log("[dumpViewHierarchy] Accessibility-tree fallback timed out after 30s.")
+        null
+      } finally {
+        executor.shutdownNow()
+      }
+    }
+
+    private fun dumpAccessibilityNodeToXml(node: AccessibilityNodeInfo, sb: StringBuilder, index: Int) {
+      val bounds = Rect()
+      node.getBoundsInScreen(bounds)
+      val text = escapeXmlAttribute(node.text?.toString() ?: "")
+      val contentDesc = escapeXmlAttribute(node.contentDescription?.toString() ?: "")
+      val resourceId = escapeXmlAttribute(node.viewIdResourceName ?: "")
+      val className = escapeXmlAttribute(node.className?.toString() ?: "")
+      val packageName = escapeXmlAttribute(node.packageName?.toString() ?: "")
+      val hintText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        escapeXmlAttribute(node.hintText?.toString() ?: "")
+      } else {
+        ""
+      }
+      val boundsStr = "[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]"
+      sb.append(
+        """<node index="$index" text="$text" resource-id="$resourceId" class="$className" """ +
+          """package="$packageName" content-desc="$contentDesc" hintText="$hintText" """ +
+          """checkable="${node.isCheckable}" checked="${node.isChecked}" """ +
+          """clickable="${node.isClickable}" enabled="${node.isEnabled}" """ +
+          """focusable="${node.isFocusable}" focused="${node.isFocused}" """ +
+          """scrollable="${node.isScrollable}" long-clickable="${node.isLongClickable}" """ +
+          """password="${node.isPassword}" selected="${node.isSelected}" bounds="$boundsStr">"""
+      )
+      sb.append("\n")
+      for (i in 0 until node.childCount) {
+        val child = node.getChild(i)
+        if (child != null) {
+          dumpAccessibilityNodeToXml(child, sb, i)
+          child.recycle()
+        }
+      }
+      sb.append("</node>\n")
+    }
+
+    private fun escapeXmlAttribute(value: String): String = value
+      .replace("&", "&amp;")
+      .replace("<", "&lt;")
+      .replace(">", "&gt;")
+      .replace("\"", "&quot;")
   }
 
   /**

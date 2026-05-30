@@ -278,13 +278,13 @@ When the Android agent runs standalone (e.g., `AndroidTrailblazeRule` in an inst
 
 | Priority | Source | Description |
 |----------|--------|-------------|
-| 1 (highest) | `trailblaze-config/trailblaze.yaml` classpath resource | On-device config bundled in the test APK |
+| 1 (highest) | `trails/config/trailblaze.yaml` classpath resource | On-device config bundled in the test APK |
 | 2 | `trailblaze.llm.default_model` instrumentation arg | Passed by the host at runtime |
 | 3 | Auto-detect from provider tokens | First provider with an available API key wins |
 
 **Recommended: Add a config file to your test module**
 
-Create `src/androidTest/resources/trailblaze-config/trailblaze.yaml` in your test module:
+Create `src/androidTest/resources/trails/config/trailblaze.yaml` in your test module:
 
 ```yaml
 llm:
@@ -292,7 +292,7 @@ llm:
     model: openai/gpt-4.1
 ```
 
-The model key uses `provider/model_id` format (e.g., `openai/gpt-4.1`, `anthropic/claude-sonnet-4-6`). AGP strips dot-prefixed directories from classpath resources, so the config lives under `trailblaze-config/` instead of `.trailblaze/`.
+The model key uses `provider/model_id` format (e.g., `openai/gpt-4.1`, `anthropic/claude-sonnet-4-6`). AGP strips dot-prefixed directories from classpath resources, so the config lives under `trails/config/` instead of `.trailblaze/`.
 
 Then use `AndroidTrailblazeRule` with zero-arg defaults:
 

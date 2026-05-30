@@ -13,6 +13,7 @@ import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.OnDeviceRpcTimeouts
+import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -22,6 +23,7 @@ import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -69,9 +71,14 @@ class RunYamlRequestHandler(
    * Callback to run via TrailblazeRunner (legacy YAML processing). The third argument is a
    * shared [AgentMemory] that the handler pre-populates from `request.memorySnapshot`; the
    * callback is responsible for threading it into the constructed agent so writes from
-   * on-device tools land in the same instance the handler reads from afterward.
+   * on-device tools land in the same instance the handler reads from afterward. The return
+   * value carries both the (typically unchanged) [TrailblazeSession] and the last
+   * successfully-executed tool's [TrailblazeToolResult.Success] — the handler mirrors the
+   * latter's `message` / `structuredContent` onto [RunYamlResponse.toolMessage] /
+   * [RunYamlResponse.toolStructuredContent] so a host-side scripted-tool author receives the
+   * dual-mode primitive's payload over RPC the same way they would from the host-side actual.
    */
-  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
   /** Provider for device info including classifiers - used in session start logs.
    *  Accepts the device ID from the request so callers can initialize state before
    *  building the info (e.g., setting lateinit properties). */
@@ -104,7 +111,7 @@ class RunYamlRequestHandler(
 
   /** Terminal outcome signalled from inside the launched block to the sync awaiter. */
   private sealed interface Outcome {
-    object Success : Outcome
+    data class Success(val lastToolSuccess: TrailblazeToolResult.Success?) : Outcome
 
     object Cancelled : Outcome
 
@@ -241,26 +248,42 @@ class RunYamlRequestHandler(
           // Route to appropriate agent implementation
           // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
           // the handler already emitted it above via sessionManager.emitSessionStartLog().
+          var lastToolSuccess: TrailblazeToolResult.Success? = null
           val finalSession = when (request.agentImplementation) {
             AgentImplementation.TRAILBLAZE_RUNNER -> {
               Console.log("[RunYamlRequestHandler] Using TRAILBLAZE_RUNNER (legacy)")
               val requestWithStartLogSuppressed = request.copy(
                 config = request.config.copy(sendSessionStartLog = false),
               )
-              runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+              val callbackResult =
+                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+              lastToolSuccess = callbackResult.lastToolSuccess
+              callbackResult.session
             }
 
             AgentImplementation.MULTI_AGENT_V3 -> {
               val callback = runMultiAgentV3Callback
               if (callback != null) {
                 Console.log("[RunYamlRequestHandler] Using MULTI_AGENT_V3")
+                // On-device V3 is reserved for the future — no in-repo caller wires this
+                // callback today (the on-device handler's V3 dispatch always falls through
+                // to the TRAILBLAZE_RUNNER branch below, which DOES populate
+                // `lastToolSuccess`). When an on-device V3 dispatcher lands and starts being
+                // wired up, this branch will need a callback-result hook that surfaces the
+                // per-tool [TrailblazeToolResult.Success] back to the handler so the
+                // tool-payload mirror to [RunYamlResponse.toolMessage] /
+                // [RunYamlResponse.toolStructuredContent] stays consistent across agent
+                // implementations. Tracked as a follow-up; see PR #3507 lead-dev review.
                 callback.invoke(request, session)
               } else {
                 Console.log("[RunYamlRequestHandler] MULTI_AGENT_V3 is not supported on-device; falling back to TRAILBLAZE_RUNNER")
                 val requestWithStartLogSuppressed = request.copy(
                   config = request.config.copy(sendSessionStartLog = false),
                 )
-                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+                val callbackResult =
+                  runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+                lastToolSuccess = callbackResult.lastToolSuccess
+                callbackResult.session
               }
             }
           }
@@ -301,7 +324,7 @@ class RunYamlRequestHandler(
             // Keep the session open
           }
 
-          outcome.complete(Outcome.Success)
+          outcome.complete(Outcome.Success(lastToolSuccess))
         } catch (e: Exception) {
           // Propagate cancellation without capturing a failure screenshot —
           // cancelled sessions aren't failures. Signal the sync awaiter first so
@@ -392,6 +415,7 @@ class RunYamlRequestHandler(
             ),
           )
         }
+        val toolPayload = (resolved as? Outcome.Success)?.lastToolSuccess
         return RpcResult.Success(
           RunYamlResponse(
             sessionId = session.sessionId,
@@ -399,6 +423,8 @@ class RunYamlRequestHandler(
             errorMessage = (resolved as? Outcome.Failure)?.message
               ?: (resolved as? Outcome.Cancelled)?.let { "Execution cancelled" },
             memorySnapshot = agentMemory.variables.toMap(),
+            toolMessage = toolPayload?.message,
+            toolStructuredContent = toolPayload?.structuredContent,
           ),
         )
       }

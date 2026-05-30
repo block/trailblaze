@@ -6,65 +6,82 @@ title: Trailblaze Tools
 
 Trailblaze ships a catalog of framework tools (`tap`, `inputText`, `pressBack`,
 `assertVisible`, …) that cover most UI automation. When your app or test surface needs
-something the catalog doesn't have, you add **custom tools** to a workspace pack.
+something the catalog doesn't have, you add **custom tools** to a workspace trailmap.
 
 There are three flavors of custom tool. Pick by what kind of body you need to write:
 
-1. **Pure-YAML composed tool** (`<pack>/tools/<id>.tool.yaml`) — a declarative
+1. **Scripted (TypeScript) tool** — the recommended path for almost everyone. Declare
+   inputs and result shape as TypeScript interfaces, write the handler against the typed
+   `ctx.tools.<name>(args)` surface, and pair it with a sibling YAML descriptor. Use this
+   when the agent needs a custom command with branching, retries, async coordination, or
+   anything beyond raw YAML composition. Listed in `trailmap.yaml`'s `target.tools:`.
+
+   Start with [Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md) for
+   the canonical authoring shape; see [Trailmaps](trailmaps.md) for the manifest wiring
+   and the per-suffix file conventions.
+
+2. **Pure-YAML composed tool** (`<trailmap>/tools/<id>.tool.yaml`) — a declarative
    composition that substitutes parameters into existing framework tool calls. No code.
-   Auto-discovered; reference it by name from a toolset. The most common shape — start
-   here for thin wrappers like "press back twice" or "open the search URL for `<topic>`."
+   Auto-discovered; reference it by name from a toolset. Use for thin wrappers like
+   "press back twice" or "open the search URL for `<topic>`" — the cases where adding a
+   TypeScript handler would be more ceremony than the wrapper deserves. See
+   [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes--toolyaml-shortcutyaml-trailheadyaml).
 
-2. **Scripted (TypeScript) tool** (`<pack>/tools/<id>.yaml` paired with `<id>.ts`) — a
-   TypeScript handler function with access to the typed `client.tools.<name>(args)`
-   surface for nested framework-tool dispatch. Use when you need branching, retries,
-   async coordination, or anything else the YAML form can't express. Listed in
-   `pack.yaml`'s `target.tools:`.
+3. **Kotlin-backed tool** (`@TrailblazeToolClass`-annotated class + `*.tool.yaml` in
+   `class:` mode) — advanced / host-side state only. Use when you need to read host-side
+   state that neither YAML composition nor the scripting SDK exposes today (a host
+   process handle, a JVM-only library, a private internal API). Two files: the Kotlin
+   class lives in your own Kotlin source tree; a sibling `*.tool.yaml` descriptor
+   registers the FQN under the framework's tool registry.
 
-3. **Kotlin-backed tool** (`@TrailblazeToolClass`-annotated data class) — a Kotlin
-   `TrailblazeTool` implementation. Use when you need to read host-side state that
-   neither YAML composition nor the scripting SDK exposes today. Lives in your own
-   Kotlin source tree (host build); registered via `ToolYamlConfig` `class:` mode under
-   `trailblaze-config/tools/<id>.tool.yaml`.
+   ```kotlin
+   @Serializable
+   @TrailblazeToolClass("web_navigate")
+   @LLMDescription("Navigate the browser to a URL, or go back/forward in browser history.")
+   class PlaywrightNativeNavigateTool(
+     @param:LLMDescription("GOTO navigates to a URL, BACK/FORWARD moves through browser history.")
+     val action: NavigationAction = NavigationAction.GOTO,
+     @param:LLMDescription("The URL to navigate to. Required when action is GOTO.")
+     val url: String = "",
+     override val reasoning: String? = null,
+   ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
+     override suspend fun executeWithPlaywright(
+       page: Page,
+       context: TrailblazeToolExecutionContext,
+     ): TrailblazeToolResult { /* ... */ }
+   }
+   ```
 
-Deep dives:
+   ```yaml
+   # trails/config/trailmaps/<id>/tools/web_navigate.tool.yaml  (on the classpath alongside the class)
+   id: web_navigate
+   class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeNavigateTool
+   ```
 
-- **Pack authoring & both YAML flavors** — see [Packs](packs.md), specifically the
-  "Tool flavors: which kind do I write?" rubric and the per-suffix schema reference.
-- **TypeScript scripted tools end-to-end** — see
-  [Author Your First Scripted Tool](scripted_tools.md), covering the descriptor schema,
-  the `.ts` handler signature, the scripting SDK (`client.tools.<name>(args)`,
-  `ctx.target`, memory), and the host-vs-on-device dispatch contract.
+   `id:` must match the `@TrailblazeToolClass` name — that's the dispatch identifier the
+   agent and the trailmap loader use. The `@LLMDescription` annotations on the class and
+   each parameter become the agent-facing schema (description + parameter docs); the
+   executable interface (`PlaywrightExecutableTool`, an Android equivalent, etc.) is
+   where the host-side work happens. Framework tools live under their owning
+   `trails/config/trailmaps/<id>/tools/` directory — e.g. the `PlaywrightNative*Tool`
+   classes under `trailblaze-playwright/src/main/java/xyz/block/trailblaze/playwright/tools/`
+   ship their `*.tool.yaml` descriptors at `trails/config/trailmaps/web/tools/`. Workspace
+   authors can also drop a `*.tool.yaml` at `<workspace>/trails/config/tools/` to override
+   or extend the framework set by id.
 
-Kotlin-backed tool example:
+If you're not sure which flavor fits, default to the scripted TypeScript path. Falling
+back to pure-YAML or Kotlin is straightforward once you've hit a case where the typed
+authoring surface doesn't reach.
 
-```kotlin
-@Serializable
-@TrailblazeToolClass("signInWithEmailAndPassword")
-@LLMDescription(
-  "Sign in to the application using email and password. Prefer this tool over " +
-    "manual commands when you are on the page with just the 'Sign in' and 'Create " +
-    "account' options.",
-)
-data class SignInTrailblazeTool(
-  val email: String,
-  val password: String,
-) : MapsToMaestroCommands {
-  override fun toMaestroCommands(): List<Command> =
-    MaestroYaml.parseToCommands(
-      """
-        - tapOn:
-            text: "Sign in"
-        - inputText:
-            text: "$email"
-        - tapOn:
-            text: "Next"
-        - inputText:
-            text: "$password"
-        - tapOn:
-            text: "Sign in"
-        - waitForAnimationToEnd
-      """.trimIndent(),
-    )
-}
-```
+## Browsing the live tool catalog
+
+For the catalog of tools actually visible to a given trailmap — including framework
+built-ins resolved from its `platforms.<p>.tool_sets:`, its own scripted tools, and any
+tools its dependencies publish via `exports:` — look at the per-trailmap declaration
+rollup emitted by `trailblaze check` at `<trailmap>/tools/trailblaze-client.d.ts`. That
+file is the live, scoped source of truth: every entry has a typed signature, both
+YAML-defined and class-backed tools are represented, and the surface matches exactly
+what `client.tools.<name>(args)` autocompletes to inside that trailmap's scripted tool
+sources. There is no global cross-trailmap aggregator — per-trailmap slicing keeps
+autocomplete pollution out of your IDE and matches the runtime dispatch surface
+one-to-one.

@@ -129,6 +129,25 @@ class TrailblazeToolExecutionContext(
    * non-throwing equivalent. Tests leave this null.
    */
   val appId: String? = null,
+  /**
+   * Session's tool repo. When populated, a Kotlin tool's `execute(...)` can compose other
+   * framework tools by name via the [invokeFrameworkTool] extension — the bridge that lets
+   * the same `@TrailblazeToolClass`-registered Kotlin tools be invoked from both TS (via
+   * `ctx.tools.<name>(args)`) and from Kotlin (via `ctx.invokeFrameworkTool("<name>", args)`).
+   *
+   * ## Producer contract — host runners SHOULD populate this
+   *
+   * Every host-side dispatcher that already constructs a [TrailblazeToolRepo] for the session
+   * (to build the Koog tool registry / dispatch the LLM's tool calls) should pass the same
+   * instance here so Kotlin tools composing framework tools see the registered set. Tests
+   * that don't exercise cross-tool composition leave the default `null` — `invokeFrameworkTool`
+   * throws a clear "toolRepo not wired" error if reached, distinct from "tool not registered".
+   *
+   * Nullable rather than required so existing producers don't break when this field is added;
+   * the runtime cost of forgetting to wire it is a clear error on the first composing tool
+   * that runs, not a silent miss.
+   */
+  val toolRepo: TrailblazeToolRepo? = null,
 ) {
   /**
    * Set by a tool during [ExecutableTrailblazeTool.execute] to replace the invoked tool

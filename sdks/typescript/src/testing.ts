@@ -22,7 +22,7 @@
 //
 // Not exported back through `index.ts` — consumers reach this module via
 // `@trailblaze/scripting/testing`, which lets a future `tsc` pass over a `*.test.ts` file
-// continue to ignore test-only types in non-test builds without per-pack include shaping.
+// continue to ignore test-only types in non-test builds without per-trailmap include shaping.
 
 import type {
   TrailblazeCallToolResult,
@@ -30,9 +30,11 @@ import type {
   TrailblazeToolMap,
   TrailblazeToolMethods,
 } from "./client.js";
+import type { MatchDescriptor } from "./generated/selectors.js";
 import type {
   TrailblazeContext,
   TrailblazeDevice,
+  TrailblazeMemory,
   TrailblazeTarget,
   TrailblazeLogger,
 } from "./context.js";
@@ -41,8 +43,8 @@ import type {
 // runtime dependencies on the rest of the SDK source. Two reasons:
 //
 //   1. The framework ships this file as a standalone runtime resource (alongside the
-//      bundled `dist/testing.d.ts`) so a pack's `*.test.ts` can resolve
-//      `@trailblaze/scripting/testing` via the per-pack tsconfig's `paths` mapping AND
+//      bundled `dist/testing.d.ts`) so a trailmap's `*.test.ts` can resolve
+//      `@trailblaze/scripting/testing` via the per-trailmap tsconfig's `paths` mapping AND
 //      have bun find an executable file at the same path. Adding a relative
 //      `./logger.js` runtime import would force the framework to also ship the SDK's
 //      internal source tree — a much larger surface and a coupling we don't want.
@@ -59,6 +61,56 @@ const mockNoopLogger: TrailblazeLogger = {
   warn: () => {},
   error: () => {},
 };
+
+/**
+ * Inline mock `TrailblazeMemory` builder. Mirrors `createMemory` in `./memory.ts`
+ * deliberately rather than importing it — `testing.ts` is transpile-only (not bundled)
+ * and ships as a standalone runtime resource alongside `dist/testing.d.ts`, so a
+ * relative runtime import would force the framework to ship the SDK's internal source
+ * tree. Mirroring keeps the test-only fake independent of the production module graph
+ * for the same reason `mockNoopLogger` is a sibling copy of the production no-op logger.
+ *
+ * **Sync obligation** — when `createMemory` in `./memory.ts` grows a new method on the
+ * `TrailblazeMemory` interface, mirror it here in lockstep. The compiler enforces this
+ * (returned object must satisfy `TrailblazeMemory`), but the BEHAVIOR can drift
+ * (e.g. interpolate semantics) without a type error. If memory logic changes
+ * frequently, consider graduating `testing.ts` to a real bundled artifact.
+ *
+ * The mock supports all 8 surface methods but its drain function is a no-op — tests
+ * don't go through the `registerPendingTools` envelope-flush path, so capturing the
+ * delta would be dead state.
+ */
+function createMockMemory(snapshot: Record<string, unknown> | undefined): TrailblazeMemory {
+  const map = new Map<string, string>();
+  if (snapshot) {
+    for (const [k, v] of Object.entries(snapshot)) {
+      if (typeof v === "string") map.set(k, v);
+    }
+  }
+  const get = (key: string): string | undefined => map.get(key);
+  const memory: TrailblazeMemory & { toJSON: () => Record<string, string> } = {
+    get,
+    set(key, value) { map.set(key, value); },
+    has(key) { return map.has(key); },
+    keys() { return [...map.keys()]; },
+    delete(key) { map.delete(key); },
+    interpolate(template) {
+      let result = template;
+      for (const re of [/\$\{([^}]+)\}/g, /\{\{([^}]+)\}\}/g]) {
+        result = result.replace(re, (_match, name: string) => get(name) ?? "");
+      }
+      return result;
+    },
+    setJson(key, value) { map.set(key, JSON.stringify(value)); },
+    getJson<T,>(key: string): T | undefined {
+      const raw = map.get(key);
+      if (raw === undefined) return undefined;
+      try { return JSON.parse(raw) as T; } catch { return undefined; }
+    },
+    toJSON() { return Object.fromEntries(map); },
+  };
+  return memory;
+}
 
 /**
  * One recorded call from a [MockTrailblazeClient]. The runtime sees raw `string` /
@@ -78,10 +130,26 @@ export interface MockCall {
  * mock to throw with the production client's `"tool failed: <message>"` wording so a tool
  * under test that wraps its `client.tools.X(...)` call in `try/catch` exercises the same
  * code path against the mock as against a live daemon.
+ *
+ * `structuredContent` carries the typed JSON payload a producer would set for a non-string
+ * `result` (TS scripted tool with `trailblaze.tool<I, O>(handler)`). When non-null, the
+ * mock client's `tools.<name>(args)` unwrap returns it verbatim as the typed `result` —
+ * matching the production [createClient]'s behavior so a test that asserts on the unwrapped
+ * value sees the same shape against the mock as it would against a live daemon. Leave
+ * undefined for tools whose declared `result` is `string` (the per-trailmap codegen default).
+ *
+ * **Three equivalent ways to say "no structured payload."** Omitting the field entirely,
+ * setting it to `undefined`, and setting it explicitly to `null` all collapse to the same
+ * "fall back to `textContent`" branch in the unwrap. The mock cannot distinguish them —
+ * matching production's `_unwrapToolResult`, which treats `undefined` and `null` identically
+ * via `!== undefined && !== null`. If a test wants to model an explicit wire-null vs an
+ * omitted-key for some future test scenario, it would need a different fixture (e.g., a raw
+ * envelope passed to `_unwrapToolResult`) rather than the stub API.
  */
 export interface MockStubResponse {
   textContent: string;
   errorMessage?: string;
+  structuredContent?: unknown;
 }
 
 /**
@@ -94,7 +162,7 @@ export interface MockStubResponse {
 export type MockTrailblazeClient = TrailblazeClient & {
   /**
    * Recorded calls in invocation order. A tool that fires `web_navigate` then
-   * `web_verify_text_visible` ends up with two entries whose `tool` fields equal those
+   * `web_verifyTextVisible` ends up with two entries whose `tool` fields equal those
    * names and whose `args` mirror what the tool passed in.
    */
   calls: MockCall[];
@@ -142,6 +210,7 @@ export function createMockClient(): MockTrailblazeClient {
       success: true,
       textContent: stub?.textContent ?? "",
       errorMessage: "",
+      structuredContent: stub?.structuredContent,
     };
   };
 
@@ -186,6 +255,38 @@ const MOCK_TOOLS_PROXY_RESERVED_PROPS = new Set<string>([
   "toJSON",
 ]);
 
+/**
+ * Mirrors the production [SCRIPT_OVERLOAD_TOOLS] in client.ts — tool names whose proxy
+ * dispatch accepts the `(fn, ...args)` / `(scriptString)` / `({ script })` overload shape.
+ * Kept as a sibling copy for the same module-independence reason as the reserved-props
+ * set; if the production set grows, mirror the addition here so mock-client tests exercise
+ * the same input-translation path that production does.
+ */
+const MOCK_SCRIPT_OVERLOAD_TOOLS = new Set<string>(["web_evaluate"]);
+
+/** Mirrors the production [buildScriptOverloadArgs] in client.ts. See that helper's kdoc. */
+function mockBuildScriptOverloadArgs(
+  toolName: string,
+  firstArg: unknown,
+  rest: unknown[],
+): Record<string, unknown> {
+  if (typeof firstArg === "function") {
+    const fnSrc = (firstArg as (...a: unknown[]) => unknown).toString();
+    const argsJson = JSON.stringify(rest);
+    return { script: `(${fnSrc}).apply(null, ${argsJson})` };
+  }
+  if (typeof firstArg === "string") {
+    return { script: firstArg };
+  }
+  if (firstArg !== null && typeof firstArg === "object") {
+    return firstArg as Record<string, unknown>;
+  }
+  throw new Error(
+    `mockClient.tools.${toolName}: expected a function, script string, or { script } object as ` +
+      `the first argument; got ${firstArg === null ? "null" : typeof firstArg}.`,
+  );
+}
+
 function createMockToolsProxy(
   dispatch: (name: string, args: Record<string, unknown>) => Promise<TrailblazeCallToolResult>,
 ): TrailblazeToolMethods {
@@ -198,10 +299,34 @@ function createMockToolsProxy(
           `mockClient.tools[${JSON.stringify(prop)}]: tool name must not be empty or whitespace-only.`,
         );
       }
-      return (args: Record<string, unknown>) =>
-        dispatch(prop, args ?? ({} as Record<string, unknown>));
+      if (MOCK_SCRIPT_OVERLOAD_TOOLS.has(prop)) {
+        const toolName = prop;
+        return async (firstArg: unknown, ...rest: unknown[]) => {
+          const args = mockBuildScriptOverloadArgs(toolName, firstArg, rest);
+          const envelope = await dispatch(toolName, args);
+          return mockUnwrapToolResult(envelope);
+        };
+      }
+      return async (args: Record<string, unknown>) => {
+        const envelope = await dispatch(prop, args ?? ({} as Record<string, unknown>));
+        return mockUnwrapToolResult(envelope);
+      };
     },
   });
+}
+
+/**
+ * Mirrors the production [`_unwrapToolResult`][./client.ts] semantics exactly. Inlined here
+ * so this module keeps zero runtime imports from `./client.js` — see the kdoc at the top of
+ * this file for why testing.ts must stay runtime-independent. If [`_unwrapToolResult`]'s
+ * logic ever changes, mirror the change here in lockstep so a test that asserts on the
+ * unwrapped value can't drift from production behavior.
+ */
+function mockUnwrapToolResult<R>(envelope: TrailblazeCallToolResult): R {
+  if (envelope.structuredContent !== undefined && envelope.structuredContent !== null) {
+    return envelope.structuredContent as R;
+  }
+  return envelope.textContent as unknown as R;
 }
 
 /**
@@ -235,6 +360,74 @@ export interface CreateMockContextOptions {
  * are deterministic strings, device dimensions are a non-zero placeholder, driver type is
  * a clearly-marked test sentinel.
  */
+/**
+ * Test client surface for scenarios that need sequenced, per-call responses from
+ * `findMatches` — different from [createMockClient]'s single-static-stub-per-tool model.
+ *
+ * Built for `ConditionalAction` + `captureViewHierarchy` tests, where a flow typically
+ * needs distinct match sets across the initial snapshot and the post-action verify
+ * snapshot (or per-selector). The same primitive is useful for future waypoint detection
+ * tests that need to model a moving UI across multiple `findMatches` callbacks.
+ *
+ * `calls` records every dispatched tool name + args in insertion order (mirrors
+ * [createMockClient]). `queueFindMatches(responses)` appends to the queue; each
+ * `findMatches` callback dequeues the next response. Non-`findMatches` tools resolve to
+ * `""` (mirrors the production `textContent: ""` happy-path default).
+ *
+ * Queue exhaustion is loud — if `findMatches` is called more times than the test queued
+ * responses, the dispatcher throws with the offending args so the test failure points at
+ * the unexpected dispatch.
+ */
+export interface QueuedFindMatchesClient extends TrailblazeClient {
+  calls: Array<{ tool: string; args: Record<string, unknown> }>;
+  queueFindMatches(responses: Array<MatchDescriptor[]>): void;
+}
+
+/**
+ * Build a [QueuedFindMatchesClient]. The minimal `TrailblazeClient` surface plus a queue
+ * for `findMatches` responses — see [QueuedFindMatchesClient] for the semantics.
+ *
+ * Use for any test that exercises multi-call `findMatches` flows (catalog-driven
+ * conditional actions, multi-snapshot verify refreshes, waypoint detection iterations).
+ * The [createMockClient] mock is simpler when each tool is called at most once per test.
+ */
+export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const findMatchesQueue: Array<MatchDescriptor[]> = [];
+
+  const dispatch = (name: string, args: Record<string, unknown>): unknown => {
+    calls.push({ tool: name, args });
+    if (name === "findMatches") {
+      if (findMatchesQueue.length === 0) {
+        throw new Error(
+          `createQueuedFindMatchesClient: no more findMatches responses queued; received ` +
+            `call with args=${JSON.stringify(args)}. Did the test forget a queueFindMatches?`,
+        );
+      }
+      return findMatchesQueue.shift();
+    }
+    return "";
+  };
+
+  const tools = new Proxy({} as TrailblazeToolMethods, {
+    get(_target, prop, _receiver) {
+      if (typeof prop !== "string") return undefined;
+      // Mirror the production reserved-props guard so `await client.tools` doesn't
+      // accidentally dispatch a `then` call.
+      if (prop === "then" || prop === "catch" || prop === "finally") return undefined;
+      return async (args: Record<string, unknown>) => dispatch(prop, args ?? {});
+    },
+  });
+
+  return {
+    tools,
+    calls,
+    queueFindMatches(responses) {
+      findMatchesQueue.push(...responses);
+    },
+  };
+}
+
 export function createMockContext(opts: CreateMockContextOptions): TrailblazeContext {
   const device: TrailblazeDevice = {
     platform: opts.platform,
@@ -250,7 +443,7 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     invocationId: opts.invocationId ?? "mock-invocation",
     device,
     target: opts.target,
-    memory: opts.memory ?? {},
+    memory: createMockMemory(opts.memory),
     logger: mockNoopLogger,
   };
 }

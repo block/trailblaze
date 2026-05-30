@@ -10,15 +10,15 @@ import kotlin.test.assertTrue
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 
 /**
- * Tests for [WaypointDiscovery] — the helper that combines workspace pack waypoints,
- * classpath-bundled pack waypoints, and the legacy `--root` filesystem walk into a
+ * Tests for [WaypointDiscovery] — the helper that combines workspace trailmap waypoints,
+ * classpath-bundled trailmap waypoints, and the legacy `--root` filesystem walk into a
  * single deduplicated list for the `trailblaze waypoint` CLI commands.
  *
  * Scenarios covered:
- *  - classpath-only pack waypoints (no workspace anchor)
- *  - workspace + classpath packs both contribute
- *  - workspace pack shadows same-id classpath pack waypoint
- *  - `--root` filesystem walk shadowed by same-id pack waypoint (pack wins)
+ *  - classpath-only trailmap waypoints (no workspace anchor)
+ *  - workspace + classpath trailmaps both contribute
+ *  - workspace trailmap shadows same-id classpath trailmap waypoint
+ *  - `--root` filesystem walk shadowed by same-id trailmap waypoint (trailmap wins)
  *  - malformed workspace `trailblaze.yaml` falls back to classpath-only
  *  - empty everything → empty result
  *
@@ -37,11 +37,11 @@ class WaypointDiscoveryTest {
   }
 
   @Test
-  fun `classpath-only pack waypoints surface when no workspace anchor exists`() {
+  fun `classpath-only trailmap waypoints surface when no workspace anchor exists`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "ready.waypoint.yaml" to "id: \"framework/ready\"\ndescription: \"Framework ready.\"",
       ),
@@ -59,17 +59,17 @@ class WaypointDiscoveryTest {
   @Test
   fun `workspace and classpath waypoints both surface when ids do not collide`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "fw.waypoint.yaml" to "id: \"framework/fw\"\ndescription: \"From classpath.\"",
       ),
     )
     val workspaceRoot = newTempDir()
-    addWorkspacePack(
+    addWorkspaceTrailmap(
       workspaceRoot,
-      packId = "myapp",
+      trailmapId = "myapp",
       waypoints = mapOf(
         "app.waypoint.yaml" to "id: \"myapp/app\"\ndescription: \"From workspace.\"",
       ),
@@ -85,23 +85,23 @@ class WaypointDiscoveryTest {
   }
 
   @Test
-  fun `workspace pack waypoints shadow same-id classpath pack waypoints`() {
-    // Both packs declare a waypoint with the same id; the workspace pack should win
-    // because the workspace pack itself wholesale shadows the classpath pack of the
+  fun `workspace trailmap waypoints shadow same-id classpath trailmap waypoints`() {
+    // Both trailmaps declare a waypoint with the same id; the workspace trailmap should win
+    // because the workspace trailmap itself wholesale shadows the classpath trailmap of the
     // same id at resolution time. (See TrailblazeResolvedConfig kdoc.)
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "shared",
+      trailmapId = "shared",
       waypoints = mapOf(
         "ready.waypoint.yaml" to
           "id: \"shared/ready\"\ndescription: \"Classpath version (should be shadowed).\"",
       ),
     )
     val workspaceRoot = newTempDir()
-    addWorkspacePack(
+    addWorkspaceTrailmap(
       workspaceRoot,
-      packId = "shared",
+      trailmapId = "shared",
       waypoints = mapOf(
         "ready.waypoint.yaml" to
           "id: \"shared/ready\"\ndescription: \"Workspace version (should win).\"",
@@ -119,18 +119,18 @@ class WaypointDiscoveryTest {
   }
 
   @Test
-  fun `pack waypoint shadows same-id --root filesystem waypoint`() {
-    // A user-authored waypoint file under --root with the same id as a pack-bundled
-    // waypoint must NOT replace the pack version. The CLI's "first match wins"
-    // semantics put pack waypoints first; the filesystem walk only contributes ids
+  fun `trailmap waypoint shadows same-id --root filesystem waypoint`() {
+    // A user-authored waypoint file under --root with the same id as a trailmap-bundled
+    // waypoint must NOT replace the trailmap version. The CLI's "first match wins"
+    // semantics put trailmap waypoints first; the filesystem walk only contributes ids
     // that aren't already covered.
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "shared",
+      trailmapId = "shared",
       waypoints = mapOf(
         "ready.waypoint.yaml" to
-          "id: \"shared/ready\"\ndescription: \"Pack version.\"",
+          "id: \"shared/ready\"\ndescription: \"Trailmap version.\"",
       ),
     )
     val workspaceRoot = newTempDir()
@@ -144,17 +144,17 @@ class WaypointDiscoveryTest {
     }
 
     val waypoint = result.definitions.single()
-    assertEquals("Pack version.", waypoint.description)
+    assertEquals("Trailmap version.", waypoint.description)
   }
 
   @Test
-  fun `--root filesystem waypoints with unique ids surface alongside pack waypoints`() {
+  fun `--root filesystem waypoints with unique ids surface alongside trailmap waypoints`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
-        "fw.waypoint.yaml" to "id: \"framework/fw\"\ndescription: \"From pack.\"",
+        "fw.waypoint.yaml" to "id: \"framework/fw\"\ndescription: \"From trailmap.\"",
       ),
     )
     val workspaceRoot = newTempDir()
@@ -174,9 +174,9 @@ class WaypointDiscoveryTest {
   @Test
   fun `malformed workspace trailblaze yaml falls back to classpath-only waypoints`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "ready.waypoint.yaml" to "id: \"framework/ready\"\ndescription: \"Bundled.\"",
       ),
@@ -187,7 +187,7 @@ class WaypointDiscoveryTest {
     // typed error, log a warning, and fall back to classpath-only resolution.
     val configDir = File(workspaceRoot, "trails/config").apply { mkdirs() }
     File(configDir, "trailblaze.yaml").writeText(
-      "packs:\n  -- not yaml --\n: malformed",
+      "trailmaps:\n  -- not yaml --\n: malformed",
     )
     val emptyRoot = File(workspaceRoot, "trails-not-here")
 
@@ -200,11 +200,11 @@ class WaypointDiscoveryTest {
   }
 
   @Test
-  fun `packLoadFailed is true when workspace config is malformed`() {
+  fun `trailmapLoadFailed is true when workspace config is malformed`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "ready.waypoint.yaml" to "id: \"framework/ready\"\ndescription: \"Bundled.\"",
       ),
@@ -212,7 +212,7 @@ class WaypointDiscoveryTest {
     val workspaceRoot = newTempDir()
     val configDir = File(workspaceRoot, "trails/config").apply { mkdirs() }
     File(configDir, "trailblaze.yaml").writeText(
-      "packs:\n  -- not yaml --\n: malformed",
+      "trailmaps:\n  -- not yaml --\n: malformed",
     )
     val emptyRoot = File(workspaceRoot, "trails-not-here")
 
@@ -221,18 +221,18 @@ class WaypointDiscoveryTest {
     }
 
     // Bundled framework waypoint still surfaces — but the flag should be set so the
-    // CLI can hint that some packs failed (otherwise the user staring at the result
+    // CLI can hint that some trailmaps failed (otherwise the user staring at the result
     // wouldn't know there was a typed error logged above).
     assertEquals(listOf("framework/ready"), result.definitions.map(WaypointDefinition::id))
-    assertTrue(result.packLoadFailed, "packLoadFailed should be true when workspace YAML is malformed")
+    assertTrue(result.trailmapLoadFailed, "trailmapLoadFailed should be true when workspace YAML is malformed")
   }
 
   @Test
-  fun `packLoadFailed is false when everything loads successfully`() {
+  fun `trailmapLoadFailed is false when everything loads successfully`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "ready.waypoint.yaml" to "id: \"framework/ready\"\ndescription: \"Bundled.\"",
       ),
@@ -244,22 +244,22 @@ class WaypointDiscoveryTest {
       WaypointDiscovery.discover(root = emptyRoot, fromPath = workspaceRoot.toPath())
     }
 
-    assertTrue(!result.packLoadFailed, "packLoadFailed should be false on a clean load")
+    assertTrue(!result.trailmapLoadFailed, "trailmapLoadFailed should be false on a clean load")
   }
 
   @Test
-  fun `discover with --root pointing at a regular file still surfaces pack waypoints`() {
+  fun `discover with --root pointing at a regular file still surfaces trailmap waypoints`() {
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "framework",
+      trailmapId = "framework",
       waypoints = mapOf(
         "ready.waypoint.yaml" to "id: \"framework/ready\"\ndescription: \"Bundled.\"",
       ),
     )
     val workspaceRoot = newTempDir()
     // --root pointing at a regular file is a user error (`--root some-trail.yaml`
-    // instead of a directory). The CLI should still surface pack waypoints — the
+    // instead of a directory). The CLI should still surface trailmap waypoints — the
     // misuse only affects the filesystem-walk contributor — but log a visible
     // warning so the user notices.
     val rootAsFile = File(workspaceRoot, "definitely-a-file.txt").apply {
@@ -270,7 +270,7 @@ class WaypointDiscoveryTest {
       WaypointDiscovery.discover(root = rootAsFile, fromPath = workspaceRoot.toPath())
     }
 
-    // Pack waypoints unaffected by the --root misuse.
+    // Trailmap waypoints unaffected by the --root misuse.
     assertEquals(listOf("framework/ready"), result.definitions.map(WaypointDefinition::id))
   }
 
@@ -291,20 +291,20 @@ class WaypointDiscoveryTest {
   // Test infrastructure.
   // ==========================================================================
 
-  /** Drops a fake framework pack at `<root>/trailblaze-config/packs/<packId>/...`. */
-  private fun addClasspathPack(
+  /** Drops a fake framework trailmap at `<root>/trails/config/trailmaps/<trailmapId>/...`. */
+  private fun addClasspathTrailmap(
     root: File,
-    packId: String,
+    trailmapId: String,
     waypoints: Map<String, String>,
   ) {
-    val packDir = File(root, "trailblaze-config/packs/$packId").apply { mkdirs() }
-    val waypointDir = File(packDir, "waypoints").apply { mkdirs() }
+    val trailmapDir = File(root, "trails/config/trailmaps/$trailmapId").apply { mkdirs() }
+    val waypointDir = File(trailmapDir, "waypoints").apply { mkdirs() }
     val waypointRefs = waypoints.keys.joinToString("\n") { "  - waypoints/$it" }
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
-      id: $packId
+      id: $trailmapId
       target:
-        display_name: $packId
+        display_name: $trailmapId
       waypoints:
       $waypointRefs
       """.trimIndent(),
@@ -316,23 +316,23 @@ class WaypointDiscoveryTest {
 
   /**
    * Drops the workspace anchor at `<workspaceRoot>/trails/config/trailblaze.yaml`
-   * (the convention enforced by `findWorkspaceRoot`) and the pack itself at
-   * `<workspaceRoot>/trails/config/packs/<packId>/pack.yaml`.
+   * (the convention enforced by `findWorkspaceRoot`) and the trailmap itself at
+   * `<workspaceRoot>/trails/config/trailmaps/<trailmapId>/trailmap.yaml`.
    */
-  private fun addWorkspacePack(
+  private fun addWorkspaceTrailmap(
     workspaceRoot: File,
-    packId: String,
+    trailmapId: String,
     waypoints: Map<String, String>,
   ) {
     val configDir = File(workspaceRoot, "trails/config").apply { mkdirs() }
-    val packDir = File(configDir, "packs/$packId").apply { mkdirs() }
-    val waypointDir = File(packDir, "waypoints").apply { mkdirs() }
+    val trailmapDir = File(configDir, "trailmaps/$trailmapId").apply { mkdirs() }
+    val waypointDir = File(trailmapDir, "waypoints").apply { mkdirs() }
     val waypointRefs = waypoints.keys.joinToString("\n") { "  - waypoints/$it" }
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
-      id: $packId
+      id: $trailmapId
       target:
-        display_name: $packId
+        display_name: $trailmapId
       waypoints:
       $waypointRefs
       """.trimIndent(),
@@ -341,14 +341,14 @@ class WaypointDiscoveryTest {
       File(waypointDir, filename).writeText(content)
     }
     val workspaceConfig = File(configDir, "trailblaze.yaml")
-    val existingPacks = if (workspaceConfig.isFile) {
+    val existingTrailmaps = if (workspaceConfig.isFile) {
       workspaceConfig.readText().lines().filter { it.trimStart().startsWith("- ") }
     } else {
       emptyList()
     }
-    val packsBlock = (existingPacks + listOf("  - packs/$packId/pack.yaml"))
+    val trailmapsBlock = (existingTrailmaps + listOf("  - trailmaps/$trailmapId/trailmap.yaml"))
       .joinToString("\n")
-    workspaceConfig.writeText("packs:\n$packsBlock\n")
+    workspaceConfig.writeText("trailmaps:\n$trailmapsBlock\n")
   }
 
   private fun newTempDir(): File =

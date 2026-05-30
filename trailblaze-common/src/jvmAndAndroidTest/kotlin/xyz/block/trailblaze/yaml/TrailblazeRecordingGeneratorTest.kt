@@ -88,6 +88,7 @@ class TrailblazeRecordingGeneratorTest {
     toolName: String,
     isRecordable: Boolean = true,
     isTopLevelToolCall: Boolean = false,
+    isVerification: Boolean = false,
   ) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = tool.toLogPayload(),
     toolName = toolName,
@@ -98,6 +99,7 @@ class TrailblazeRecordingGeneratorTest {
     timestamp = now,
     isRecordable = isRecordable,
     isTopLevelToolCall = isTopLevelToolCall,
+    isVerification = isVerification,
   )
 
   private fun delegatingToolLog(
@@ -1110,5 +1112,43 @@ class TrailblazeRecordingGeneratorTest {
     // Verify round-trip stability
     val reencoded = trailblazeYaml.encodeToString(decoded)
     assertThat(reencoded).isEqualTo(yaml)
+  }
+
+  @Test
+  fun verificationDuplicatesCollapseInStepActionsPreserved() {
+    // Reproduces the case_5370490 step 6 pattern: 4 assertVisibleBySelector for the same key
+    // with varying `reason:` strings, plus 2 identical TapOnByElementSelector calls. The
+    // assertions collapse to one (verifications are idempotent); the taps preserve both
+    // (entering "11" needs both presses).
+    val step = VerificationStep(verify = "Confirm key '1' is visible")
+    val keySelector = TrailblazeElementSelector(textRegex = "1")
+    val assertWithReason = { reason: String ->
+      toolLog(
+        AssertVisibleBySelectorTrailblazeTool(reason = reason, selector = keySelector),
+        "assertVisibleBySelector",
+        isVerification = true,
+      )
+    }
+    val tapKey = toolLog(
+      TapOnByElementSelector(reason = "Press 1", selector = keySelector),
+      "tapOnElementBySelector",
+    )
+    val logs = listOf(
+      objectiveStart(step),
+      assertWithReason("digit 1 visible"),
+      assertWithReason("re-check digit 1"),
+      assertWithReason("verify digit 1 still visible"),
+      assertWithReason("digit 1 confirmed"),
+      tapKey,
+      tapKey,
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
+    val tools = prompts.promptSteps[0].recording!!.tools
+    assertThat(tools.filter { it.name == "assertVisibleBySelector" }.size).isEqualTo(1)
+    assertThat(tools.filter { it.name == "tapOnElementBySelector" }.size).isEqualTo(2)
   }
 }

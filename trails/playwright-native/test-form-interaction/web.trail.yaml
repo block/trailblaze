@@ -44,7 +44,7 @@
   - step: Select "Feedback" from the Category dropdown
     recording:
       tools:
-      - web_select_option:
+      - web_selectOption:
           ref: e11
           element: Category dropdown
           values:
@@ -78,12 +78,12 @@
   - step: Verify the text "Form submitted!" is visible
     recording:
       tools:
-      - web_verify_text_visible:
+      - web_verifyTextVisible:
           text: Form submitted!
           reasoning: The current objective requires verifying that the text 'Form submitted!' is visible on the screen. The view hierarchy confirms the presence of this text in a 'strong' element. This action will assert its visibility.
   - step: Verify the text "Trail Blaze" is visible in the form summary
     recording:
       tools:
-      - web_verify_text_visible:
+      - web_verifyTextVisible:
           text: Trail Blaze
           reasoning: 'The objective requires verifying that ''Trail Blaze'' is visible in the form summary. The current screen contains a paragraph element that includes ''Name: Trail Blaze,'' which indicates the required text is present. Verifying this meets the objective.'

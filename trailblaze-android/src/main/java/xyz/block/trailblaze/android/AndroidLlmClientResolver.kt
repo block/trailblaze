@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android
 
+import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
@@ -25,7 +26,7 @@ import xyz.block.trailblaze.util.Console
  * eliminating the need for manual wiring in [AndroidTrailblazeRule] subclasses.
  *
  * Model resolution order:
- * 1. `llm.defaults.model` from `trailblaze-config/trailblaze.yaml` classpath resource
+ * 1. `llm.defaults.model` from `trails/config/trailblaze.yaml` classpath resource
  * 2. `trailblaze.llm.default_model` instrumentation arg (set by the desktop host app)
  * 3. Auto-detect from the first provider whose auth token is present
  *
@@ -91,7 +92,7 @@ object AndroidLlmClientResolver {
    * Resolves the default [TrailblazeLlmModel].
    *
    * Resolution order:
-   * 1. `llm.defaults.model` from `trailblaze-config/trailblaze.yaml` classpath resource
+   * 1. `llm.defaults.model` from `trails/config/trailblaze.yaml` classpath resource
    * 2. Explicit `trailblaze.llm.default_model` instrumentation arg (e.g., "openai/gpt-4.1")
    * 3. Auto-detect: tries [PROVIDER_PRIORITY] in order (OpenAI → OpenRouter → Anthropic →
    *    Google → Ollama) and returns the first model whose provider has an auth token available.
@@ -136,7 +137,7 @@ object AndroidLlmClientResolver {
       buildString {
         appendLine("Could not resolve LLM model.")
         appendLine("Either:")
-        appendLine("  - Add src/androidTest/resources/trailblaze-config/trailblaze.yaml with llm.defaults.model set")
+        appendLine("  - Add src/androidTest/resources/trails/config/trailblaze.yaml with llm.defaults.model set")
         appendLine("  - Pass an API key as instrumentation arg (e.g., trailblaze.llm.auth.token.openai)")
       }
     )
@@ -148,6 +149,10 @@ object AndroidLlmClientResolver {
    */
   fun createClient(model: TrailblazeLlmModel): LLMClient {
     if (model.trailblazeLlmProvider == TrailblazeLlmProvider.NONE) return NoOpLlmClient()
+    // Koog 1.0.0: wrap the on-device Ktor HttpClient (with TLS / reverse-proxy plugin
+    // for the instrumentation reverse-proxy endpoint) in a KoogHttpClient.Factory so
+    // each LLM client gets a KoogHttpClient built from our configured engine.
+    val httpClientFactory = KtorKoogHttpClient.Factory(baseClient = httpClient)
     val llmClients = buildMap<LLMProvider, LLMClient> {
       // Ollama (no token needed)
       val ollamaBaseUrl =
@@ -156,7 +161,7 @@ object AndroidLlmClientResolver {
         LLMProvider.Ollama,
         OllamaClient(
           baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
-          baseClient = httpClient,
+          httpClientFactory = httpClientFactory,
         ),
       )
 
@@ -165,12 +170,12 @@ object AndroidLlmClientResolver {
         put(
           LLMProvider.OpenAI,
           OpenAILLMClient(
-            baseClient = httpClient,
             apiKey = key,
             settings =
               OpenAIClientSettings(
                 baseUrl = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
               ),
+            httpClientFactory = httpClientFactory,
           ),
         )
       }
@@ -179,7 +184,7 @@ object AndroidLlmClientResolver {
       getToken(TrailblazeLlmProvider.OPEN_ROUTER)?.let { key ->
         put(
           LLMProvider.OpenRouter,
-          OpenRouterLLMClient(baseClient = httpClient, apiKey = key),
+          OpenRouterLLMClient(apiKey = key, httpClientFactory = httpClientFactory),
         )
       }
 
@@ -194,9 +199,9 @@ object AndroidLlmClientResolver {
             put(
               koogProvider,
               OpenAILLMClient(
-                baseClient = httpClient,
                 apiKey = key,
                 settings = OpenAIClientSettings(baseUrl = baseUrl),
+                httpClientFactory = httpClientFactory,
               ),
             )
           }
@@ -217,7 +222,7 @@ object AndroidLlmClientResolver {
     configuration = YamlConfiguration(strictMode = false, encodeDefaults = false),
   )
 
-  /** Reads `llm.defaults.model` from a classpath resource at `trailblaze-config/trailblaze.yaml`. */
+  /** Reads `llm.defaults.model` from a classpath resource at `trails/config/trailblaze.yaml`. */
   private fun loadDefaultModelFromConfig(): String? = try {
     val content = (Thread.currentThread().contextClassLoader?.getResource(CONFIG_RESOURCE_PATH)
       ?: AndroidLlmClientResolver::class.java.classLoader?.getResource(CONFIG_RESOURCE_PATH))

@@ -38,11 +38,11 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 object WaypointGraphBuilder {
 
   /**
-   * Builds a snapshot. The expensive bits (filesystem walk, classpath pack scan,
+   * Builds a snapshot. The expensive bits (filesystem walk, classpath trailmap scan,
    * example decoding) all happen here synchronously — callers are responsible for
    * pushing the call onto an IO dispatcher when invoking from a UI/RPC thread.
    *
-   * @param root filesystem root to scan for `*.waypoint.yaml` files. Pack-bundled
+   * @param root filesystem root to scan for `*.waypoint.yaml` files. Trailmap-bundled
    *             waypoints from the classpath are always included regardless.
    * @param liveSourceLabel populates the trailing `(live)` / `(snapshot)` suffix in the
    *             generated note. The desktop endpoint passes "live"; the CLI passes a
@@ -53,7 +53,7 @@ object WaypointGraphBuilder {
    *             the CLI passes the caller's cwd via [CliCallerContext.callerCwd]
    *             so its server-served invocations resolve against the user's shell,
    *             not the daemon process. Without this, only classpath-bundled tools
-   *             load — pack tools authored under `<workspace>/trails/config/packs/<id>/tools/`
+   *             load — trailmap tools authored under `<workspace>/trails/config/trailmaps/<id>/tools/`
    *             (the convention introduced in PR #2796) are silently invisible.
    */
   @OptIn(ExperimentalEncodingApi::class)
@@ -78,13 +78,13 @@ object WaypointGraphBuilder {
         val mime = ImageFormatDetector.detectFormat(bytes).mimeType
         "data:$mime;base64,${Base64.encode(bytes)}"
       }
-      // Derive platform from the source-label path (`packs/<pack>/waypoints/<platform>/...`).
+      // Derive platform from the source-label path (`trailmaps/<trailmap>/waypoints/<platform>/...`).
       // The id no longer carries it post-URL-rename — the platform lives on disk now and
       // gets surfaced here so the front-end filter pills don't have to parse it themselves.
       //
       // Match the platform as a *path segment* (not a substring) so a relative label that
       // starts with the platform — e.g. `ios/contacts_ios_X.waypoint.yaml` when `--target`
-      // redirected root into `<pack>/waypoints/` — gets attributed correctly. The earlier
+      // redirected root into `<trailmap>/waypoints/` — gets attributed correctly. The earlier
       // `/<platform>/` substring check missed exactly that shape because there's no
       // leading slash on a relative-from-root path.
       val platform = item.sourceLabel?.let { label ->
@@ -205,9 +205,9 @@ object WaypointGraphBuilder {
   /**
    * Layered resource source: classpath alone if no workspace anchor is found,
    * otherwise classpath + workspace `trails/config/`. The workspace layer means
-   * pack-bundled tools authored under `<workspace>/trails/config/packs/<id>/tools/`
+   * trailmap-bundled tools authored under `<workspace>/trails/config/trailmaps/<id>/tools/`
    * surface alongside framework-classpath ones — without it the standalone CLI
-   * export silently drops every workspace-pack shortcut/trailhead from the graph.
+   * export silently drops every workspace-trailmap shortcut/trailhead from the graph.
    *
    * Composes via the same shape `AppTargetDiscovery.buildResourceSource` uses
    * (kept independent here so the graph path doesn't depend on the AppTarget

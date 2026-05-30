@@ -123,6 +123,15 @@ class SubprocessTrailblazeTool(
           ),
         ),
       )
+      // Apply any `_meta.trailblaze.memoryDelta` (+ memoryDeletions) the handler emitted
+      // into the shared `AgentMemory` — but only on a successful result. The TS SDK's
+      // `attachMemoryDelta` runs after the handler returns, so an `isError: true` result
+      // would otherwise commit partial scratchpad state while a THROW (same conceptual
+      // failure) would not. Gating here keeps the failure modes symmetric: both error
+      // shapes leave host memory untouched.
+      if (response.isError != true) {
+        TrailblazeContextEnvelope.applyResultMemoryDelta(toolExecutionContext.memory, response.meta)
+      }
       response.toTrailblazeToolResult()
     } catch (e: CancellationException) {
       // Coroutine cancellation must propagate — swallowing it here would break structured

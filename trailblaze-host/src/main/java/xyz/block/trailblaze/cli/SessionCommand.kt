@@ -9,27 +9,18 @@ import kotlinx.serialization.json.jsonPrimitive
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
+import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
 
 /**
- * Returns true when the user-supplied `--device` argument matches the daemon's
- * currently bound device. Two ways to match, both case-insensitive:
- *
- *  - Fully-qualified — user said `android/emulator-5554` and that's exactly what's bound.
- *  - Platform-only — user said just `android`; accept any instance of that platform.
- *
- * Pure function with no I/O — kept here next to its only callers (`session stop` /
- * `session end`) rather than on `CliMcpClient`, since the matching policy is a
- * session-command policy, not a transport-layer one. `internal` so the unit test in
- * the same module can call it directly.
+ * Shared usage-error message printed by every `session …` subcommand that accepts the
+ * session ID both positionally and via `--id`. Kept here so the wording stays uniform.
  */
-internal fun deviceArgMatches(userDeviceArg: String, boundDevice: TrailblazeDeviceId): Boolean {
-  if (userDeviceArg.equals(boundDevice.toFullyQualifiedDeviceId(), ignoreCase = true)) return true
-  return userDeviceArg.equals(boundDevice.trailblazeDevicePlatform.name, ignoreCase = true)
-}
+internal const val SESSION_ID_CONFLICT_MESSAGE: String =
+  "Positional <session-id> and --id are two ways to spell the same thing — pass only one."
 
 /**
  * Manage the CLI session — save recordings, end the session.
@@ -46,7 +37,7 @@ internal fun deviceArgMatches(userDeviceArg: String, boundDevice: TrailblazeDevi
 @Command(
   name = "session",
   mixinStandardHelpOptions = true,
-  description = ["Every blaze records a session — save it as a replayable trail"],
+  description = ["Manage the current device session — save it as a replayable trail, inspect steps, end it"],
   subcommands = [
     SessionStartCommand::class,
     SessionStopCommand::class,
@@ -65,21 +56,25 @@ class SessionCommand : Callable<Int> {
 
   override fun call(): Int {
     CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }
 
 /**
  * Start a new session.
  *
- * `--device` is required on every invocation — the CLI is single-shot over MCP and
- * does not durably honor a daemon-side "active" session, so we name the device
- * explicitly every time. `--target` and `--mode` may be omitted if already in
- * config; `--device` may not.
+ * The session is bound to one device — the CLI is single-shot over MCP and does
+ * not durably honor a daemon-side "active" session, so we resolve the device on
+ * every invocation via `--device` flag → `TRAILBLAZE_DEVICE` env var → MISUSE.
+ * The flag itself is optional at parse time: pin a per-shell ambient with
+ * `eval $(trailblaze device connect <platform>)` once and subsequent commands
+ * pick it up from the env var. `--target` and `--mode` may be omitted if
+ * already in config.
  *
  * Examples:
  *   trailblaze session start --target myapp --mode trail --device android
  *   trailblaze session start --device ios      (target/mode already configured)
+ *   trailblaze session start                   (TRAILBLAZE_DEVICE pinned in this shell)
  */
 @Command(
   name = "start",
@@ -93,12 +88,7 @@ class SessionStartCommand : Callable<Int> {
 
   @Option(
     names = ["--target"],
-    description = [
-      "Target app ID for this session's bound device. Scoped to the device " +
-        "as a daemon-process override (dies on daemon restart or device " +
-        "release). Pass `--target=clear` to remove a previously-set override. " +
-        "To set a persistent default, use `trailblaze config target`.",
-    ],
+    description = [TARGET_OPTION_DESCRIPTION_SESSION],
   )
   var target: String? = null
 
@@ -110,16 +100,9 @@ class SessionStartCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = [
-      "Device to bind the session to: platform (android, ios, web) or platform/id " +
-        "(e.g., ios/DEVICE-UUID). Required — the CLI doesn't durably track an " +
-        "\"active\" session across single-shot MCP calls, so every device-acting " +
-        "command takes the device explicitly. Examples: --device android, " +
-        "--device ios/DEVICE-UUID, --device web.",
-    ],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
-  lateinit var device: String
+  var device: String? = null
 
   @Option(
     names = ["--title"],
@@ -153,7 +136,15 @@ class SessionStartCommand : Callable<Int> {
     val normalizedMode = mode?.lowercase()
     if (normalizedMode != null && normalizedMode !in setOf("trail", "blaze")) {
       Console.error("Error: --mode must be 'trail' or 'blaze' (got '$mode').")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
+    }
+
+    // Resolve --device → $TRAILBLAZE_DEVICE → null. The session lifecycle is per-device,
+    // so we need a device explicitly: either the user named it on this invocation, or
+    // they pinned it in the shell via `eval $(trailblaze device connect <platform>)`.
+    val resolvedDevice = when (val r = requireSessionDevice(device, verb = "Session start")) {
+      is DeviceResolution.Resolved -> r.deviceSpec
+      else -> return r.exitCodeFallback()
     }
 
     if (normalizedMode != null) {
@@ -163,50 +154,64 @@ class SessionStartCommand : Callable<Int> {
 
     if (!verbose) Console.enableQuietMode()
     val port = CliConfigHelper.resolveEffectiveHttpPort()
-    // Session-scoped target: pass the explicit flag if set, else anchor on the
-    // daemon-wide default so connectReusable can detect a toolset change and
-    // recreate the per-device session when needed. Per-device target overrides
-    // live in the daemon's in-memory map (set via setSessionTargetForBoundDevice
-    // below) — never written to disk. `--target=clear` is the explicit unset.
-    val normalizedTarget = target?.lowercase()?.takeIf { it.isNotBlank() }
-    val isClearRequest = normalizedTarget == "clear"
-    val targetAppId = when {
-      isClearRequest -> currentConfig.selectedTargetAppId
-      normalizedTarget != null -> normalizedTarget
-      else -> currentConfig.selectedTargetAppId
-    }
+    // Session-scoped target: prefer the explicit `--target` flag, fall back
+    // to `TRAILBLAZE_TARGET` env var (per-shell pin from `eval $(trailblaze
+    // device connect ... --target X)`), else anchor on the daemon-wide
+    // default so connectReusable can detect a toolset change and recreate
+    // the per-device session when needed. Per-device target overrides live
+    // in the daemon's in-memory map (set via setSessionTargetForBoundDevice
+    // below) — never written to disk. `--target=clear` is the explicit
+    // unset, flag-only (an env pin of `clear` is treated as unset, not as
+    // a clear request — see [resolveCliTargetPin]).
+    //
+    // Shared helper keeps this in lockstep with [cliReusableWithDevice]; both
+    // call sites reuse the same payload-shape resolution so a third action
+    // command that wants the same semantics doesn't copy the logic a third
+    // time.
+    val daemonCall = resolveCliTargetDaemonCall(target)
+    val targetAppId = daemonCall.pin ?: currentConfig.selectedTargetAppId
 
     return runBlocking {
       val client = connectOrStartDaemonReusable(port, targetAppId = targetAppId)
-        ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
+        ?: return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
 
       client.use {
-        // --device is required, so no config-default or auto-detect fallback. The user
-        // tells us the device explicitly on every invocation; we honor it directly.
+        // --device is resolved (flag → $TRAILBLAZE_DEVICE), so no config-default or
+        // auto-detect fallback. The user tells us the device explicitly on every
+        // invocation or via the shell-pinned env var; we honor it directly.
         val deviceError = it.ensureDevice(
-          deviceSpec = device,
+          deviceSpec = resolvedDevice,
           webHeadless = headlessOption.resolve(),
         )
         if (deviceError != null) {
           Console.error(deviceError)
-          return@runBlocking CommandLine.ExitCode.SOFTWARE
+          return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
         }
         // Save the platform to config so other commands (e.g., `trail`) that still
         // fall back to cliDevicePlatform when --device is omitted see the most recent
         // value. The session lifecycle no longer falls back to it itself.
-        val platformStr = device.split("/", limit = 2)[0]
+        val platformStr = resolvedDevice.split("/", limit = 2)[0]
         if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
           CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
         }
-        // Session-scope the target on the daemon for the bound device when the
-        // user passed --target explicitly. No-op when --target is omitted.
-        // `--target=clear` sends an empty string to clear the override.
-        if (normalizedTarget != null) {
-          val payload = if (isClearRequest) "" else normalizedTarget
-          val setError = it.setSessionTargetForBoundDevice(payload)
+        // Session-scope the target on the daemon for the bound device when
+        // the user pinned one — either via explicit `--target` or via
+        // `TRAILBLAZE_TARGET` in the calling shell. No-op when neither tier
+        // supplies a value. `--target=clear` (flag-only) sends an empty
+        // string to clear the override.
+        if (daemonCall.payload != null) {
+          val setError = it.setSessionTargetForBoundDevice(daemonCall.payload)
           if (setError != null) {
             Console.error(setError)
-            return@runBlocking CommandLine.ExitCode.SOFTWARE
+            // Mirror cliReusableWithDevice's env-source hint so a stale shell
+            // pin surfaces with a one-liner recovery rather than a mystery.
+            if (target == null && daemonCall.pin != null) {
+              Console.error(
+                "  hint: TRAILBLAZE_TARGET=${daemonCall.pin} is your shell pin; " +
+                  "`unset TRAILBLAZE_TARGET` to drop it, or pass --target=clear",
+              )
+            }
+            return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
           }
         }
 
@@ -218,14 +223,14 @@ class SessionStartCommand : Callable<Int> {
         val result = it.callTool("session", arguments)
         if (result.isError) {
           Console.error("Error: ${extractErrorMessage(result.content)}")
-          CommandLine.ExitCode.SOFTWARE
+          TrailblazeExitCode.INFRA_FAILED.code
         } else {
           try {
             val json = Json.parseToJsonElement(result.content).jsonObject
             val error = json["error"]?.jsonPrimitive?.content
             if (!error.isNullOrBlank()) {
               Console.error("Error: $error")
-              return@use CommandLine.ExitCode.SOFTWARE
+              return@use TrailblazeExitCode.INFRA_FAILED.code
             }
             val msg = json["message"]?.jsonPrimitive?.content
             val sessionId = json["sessionId"]?.jsonPrimitive?.content
@@ -234,7 +239,7 @@ class SessionStartCommand : Callable<Int> {
           } catch (_: Exception) {
             Console.info(result.content)
           }
-          CommandLine.ExitCode.OK
+          TrailblazeExitCode.SUCCESS.code
         }
       }
     }
@@ -253,16 +258,9 @@ class SessionStopCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = [
-      "Device whose session to stop: platform (android, ios, web) or platform/id. " +
-        "The CLI is single-shot over MCP and doesn't durably track an \"active\" session " +
-        "across calls, so --device is the lookup key — there's one session per device, " +
-        "and stop refuses to act if the daemon's currently-bound device doesn't match. " +
-        "Examples: --device android, --device android/emulator-5554, --device ios/UUID.",
-    ],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
-  lateinit var device: String
+  var device: String? = null
 
   @Option(
     names = ["--save"],
@@ -277,11 +275,19 @@ class SessionStopCommand : Callable<Int> {
   var title: String? = null
 
   override fun call(): Int {
+    // Resolve --device → $TRAILBLAZE_DEVICE → null. `stop` is per-device, so we
+    // need an explicit target — either passed on this invocation or pinned in
+    // the shell. See DeviceDisconnectCommand for the multi-terminal safety note.
+    val resolvedDevice = when (val r = requireSessionDevice(device, verb = "Session stop")) {
+      is DeviceResolution.Resolved -> r.deviceSpec
+      else -> return r.exitCodeFallback()
+    }
+
     val port = CliConfigHelper.resolveEffectiveHttpPort()
     if (!DaemonClient(port = port).use { it.isRunningBlocking() }) {
       Console.log("No active session (daemon not running).")
       CliMcpClient.clearSession(port)
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     return runBlocking {
@@ -290,48 +296,34 @@ class SessionStopCommand : Callable<Int> {
       } catch (_: Exception) {
         Console.log("No active session.")
         CliMcpClient.clearSession(port)
-        return@runBlocking CommandLine.ExitCode.OK
+        return@runBlocking TrailblazeExitCode.SUCCESS.code
       }
 
-      var exitCode = CommandLine.ExitCode.OK
+      var exitCode = TrailblazeExitCode.SUCCESS.code
       client.use {
-        // Use --device to look up which session this stop is targeting. The contract is
-        // "one session per device", and the CLI's MCP session memory isn't reliable
-        // across single-shot calls — so we ask the daemon what it's bound to, compare,
-        // and refuse to stop if the user named a different device.
-        val boundDevice = it.getBoundDeviceId()
-        when {
-          boundDevice == null -> {
-            Console.log("No active session for device $device.")
-            CliMcpClient.clearSession(port)
-            return@runBlocking CommandLine.ExitCode.OK
-          }
-          !deviceArgMatches(device, boundDevice) -> {
-            Console.error(
-              "No active session for device $device — the daemon's current session is " +
-                "bound to ${boundDevice.toFullyQualifiedDeviceId()}. Pass --device " +
-                "${boundDevice.toFullyQualifiedDeviceId()} if you " +
-                "meant to stop that one.",
-            )
-            return@runBlocking CommandLine.ExitCode.SOFTWARE
-          }
-          // else: match — proceed with stop.
+        val extraArgs = buildMap<String, Any?> {
+          if (save) put("save", true)
+          if (title != null) put("title", title)
         }
-        val arguments = mutableMapOf<String, Any?>("action" to "STOP")
-        if (save) arguments["save"] = true
-        if (title != null) arguments["title"] = title
-
-        val result = it.callTool("session", arguments)
-        if (result.isError) {
-          Console.error("Error: ${extractErrorMessage(result.content)}")
-          exitCode = CommandLine.ExitCode.SOFTWARE
-        } else {
-          try {
-            val json = Json.parseToJsonElement(result.content).jsonObject
-            val msg = json["message"]?.jsonPrimitive?.content
-            if (msg != null) Console.info(msg)
-          } catch (_: Exception) {
-            Console.info(result.content)
+        when (val outcome = stopBoundSessionIfMatches(it, resolvedDevice, extraArgs)) {
+          is StopBoundSessionResult.NoActiveSession -> {
+            Console.log("No active session for device $resolvedDevice.")
+            // Fall through to clearSession + SUCCESS at the bottom.
+          }
+          is StopBoundSessionResult.DeviceMismatch -> {
+            Console.error(
+              "No active session for device $resolvedDevice — the daemon's current session is " +
+                "bound to ${outcome.boundDevice.toFullyQualifiedDeviceId()}. Pass --device " +
+                "${outcome.boundDevice.toFullyQualifiedDeviceId()} if you meant to stop that one.",
+            )
+            return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
+          }
+          is StopBoundSessionResult.StopFailed -> {
+            Console.error("Error: ${extractErrorMessage(outcome.error)}")
+            exitCode = TrailblazeExitCode.INFRA_FAILED.code
+          }
+          is StopBoundSessionResult.Stopped -> {
+            outcome.message?.let { msg -> Console.info(msg) }
           }
         }
       }
@@ -367,7 +359,7 @@ class SessionListCommand : Callable<Int> {
   override fun call(): Int {
     if (limit < 0) {
       Console.error("Error: --limit must be non-negative (got $limit).")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val port = CliConfigHelper.resolveEffectiveHttpPort()
@@ -376,8 +368,8 @@ class SessionListCommand : Callable<Int> {
       val client = try {
         CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
-        Console.error(DAEMON_NOT_RUNNING_ERROR)
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        reportDaemonUnreachable()
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
       client.use {
@@ -385,14 +377,14 @@ class SessionListCommand : Callable<Int> {
         val result = it.callTool("session", mapOf("action" to "LIST", "limit" to fetchLimit))
         if (result.isError) {
           Console.error("Error: ${extractErrorMessage(result.content)}")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
         try {
           val json = Json.parseToJsonElement(result.content).jsonObject
           val sessions = json["sessions"] as? JsonArray
           if (sessions == null || sessions.isEmpty()) {
             Console.info("No sessions found.")
-            return@use CommandLine.ExitCode.OK
+            return@use TrailblazeExitCode.SUCCESS.code
           }
 
           if (all) {
@@ -403,7 +395,7 @@ class SessionListCommand : Callable<Int> {
         } catch (_: Exception) {
           Console.info(result.content)
         }
-        CommandLine.ExitCode.OK
+        TrailblazeExitCode.SUCCESS.code
       }
     }
   }
@@ -470,37 +462,53 @@ class SessionArtifactsCommand : Callable<Int> {
   @CommandLine.ParentCommand
   private lateinit var parent: SessionCommand
 
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<session-id>",
+    description = [
+      "Session ID (positional form of --id, defaults to current session). " +
+        "Mutually exclusive with --id.",
+    ],
+  )
+  var positionalId: String? = null
+
   @Option(
     names = ["--id"],
-    description = ["Session ID (defaults to current session)"],
+    description = ["Session ID (defaults to current session). Equivalent to the positional form."],
   )
   var id: String? = null
 
   override fun call(): Int {
+    if (positionalId != null && id != null) {
+      Console.error(SESSION_ID_CONFLICT_MESSAGE)
+      return TrailblazeExitCode.MISUSE.code
+    }
+    val effectiveId = positionalId ?: id
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
-        Console.error(DAEMON_NOT_RUNNING_ERROR)
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        reportDaemonUnreachable()
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
       client.use {
         val arguments = mutableMapOf<String, Any?>("action" to "ARTIFACTS")
-        if (id != null) arguments["id"] = id
+        if (effectiveId != null) arguments["id"] = effectiveId
         val result = it.callTool("session", arguments)
         if (result.isError) {
           Console.error("Error: ${extractErrorMessage(result.content)}")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
         try {
           val json = Json.parseToJsonElement(result.content).jsonObject
           val error = json["error"]?.jsonPrimitive?.content
           if (!error.isNullOrBlank()) {
             Console.error("Error: $error")
-            return@use CommandLine.ExitCode.SOFTWARE
+            return@use TrailblazeExitCode.INFRA_FAILED.code
           }
           val path = json["path"]?.jsonPrimitive?.content
           val artifacts = json["artifacts"] as? JsonArray
@@ -523,7 +531,7 @@ class SessionArtifactsCommand : Callable<Int> {
         } catch (_: Exception) {
           Console.info(result.content)
         }
-        CommandLine.ExitCode.OK
+        TrailblazeExitCode.SUCCESS.code
       }
     }
   }
@@ -539,43 +547,61 @@ class SessionDeleteCommand : Callable<Int> {
   @CommandLine.ParentCommand
   private lateinit var parent: SessionCommand
 
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<session-id>",
+    description = [
+      "Session ID to delete (positional form of --id, supports prefix matching). " +
+        "Mutually exclusive with --id; one of the two is required.",
+    ],
+  )
+  var positionalId: String? = null
+
   @Option(
     names = ["--id"],
-    description = ["Session ID to delete (supports prefix matching)"],
-    required = true,
+    description = ["Session ID to delete (supports prefix matching). Equivalent to the positional form."],
   )
-  lateinit var id: String
+  var id: String? = null
 
   override fun call(): Int {
+    if (positionalId != null && id != null) {
+      Console.error(SESSION_ID_CONFLICT_MESSAGE)
+      return TrailblazeExitCode.MISUSE.code
+    }
+    val effectiveId = positionalId ?: id ?: run {
+      Console.error("Missing required <session-id>. Pass it positionally or via --id.")
+      return TrailblazeExitCode.MISUSE.code
+    }
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
-        Console.error(DAEMON_NOT_RUNNING_ERROR)
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        reportDaemonUnreachable()
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
       client.use {
-        val result = it.callTool("session", mapOf("action" to "DELETE", "id" to id))
+        val result = it.callTool("session", mapOf("action" to "DELETE", "id" to effectiveId))
         if (result.isError) {
           Console.error("Error: ${extractErrorMessage(result.content)}")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
         try {
           val json = Json.parseToJsonElement(result.content).jsonObject
           val error = json["error"]?.jsonPrimitive?.content
           if (!error.isNullOrBlank()) {
             Console.error("Error: $error")
-            return@use CommandLine.ExitCode.SOFTWARE
+            return@use TrailblazeExitCode.INFRA_FAILED.code
           }
           val msg = json["message"]?.jsonPrimitive?.content
           if (msg != null) Console.info(msg)
         } catch (_: Exception) {
           Console.info(result.content)
         }
-        CommandLine.ExitCode.OK
+        TrailblazeExitCode.SUCCESS.code
       }
     }
   }
@@ -593,16 +619,9 @@ class SessionEndCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = [
-      "Device whose session to end: platform (android, ios, web) or platform/id. " +
-        "Same lookup-key semantics as `session stop` — the CLI doesn't trust a " +
-        "daemon-side \"active\" session across single-shot calls, so --device tells us " +
-        "which session you mean and end refuses to act if the daemon's bound device " +
-        "doesn't match.",
-    ],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
-  lateinit var device: String
+  var device: String? = null
 
   @Option(
     names = ["--name", "-n"],
@@ -613,13 +632,20 @@ class SessionEndCommand : Callable<Int> {
   override fun call(): Int {
     Console.error("Deprecated: use 'trailblaze session stop' instead.")
 
+    // Resolve --device → $TRAILBLAZE_DEVICE → null. `end` is per-device with the same
+    // multi-terminal safety contract as `session stop` — require an explicit target.
+    val resolvedDevice = when (val r = requireSessionDevice(device, verb = "Session end")) {
+      is DeviceResolution.Resolved -> r.deviceSpec
+      else -> return r.exitCodeFallback()
+    }
+
     // Find the root command to get the port
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     if (!DaemonClient(port = port).use { it.isRunningBlocking() }) {
       Console.log("No active session (daemon not running).")
       CliMcpClient.clearSession(port)
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     return runBlocking {
@@ -628,7 +654,7 @@ class SessionEndCommand : Callable<Int> {
       } catch (e: Exception) {
         Console.log("No active session.")
         CliMcpClient.clearSession(port)
-        return@runBlocking CommandLine.ExitCode.OK
+        return@runBlocking TrailblazeExitCode.SUCCESS.code
       }
 
       client.use {
@@ -638,18 +664,18 @@ class SessionEndCommand : Callable<Int> {
         val boundDevice = it.getBoundDeviceId()
         when {
           boundDevice == null -> {
-            Console.log("No active session for device $device.")
+            Console.log("No active session for device $resolvedDevice.")
             CliMcpClient.clearSession(port)
-            return@runBlocking CommandLine.ExitCode.OK
+            return@runBlocking TrailblazeExitCode.SUCCESS.code
           }
-          !deviceArgMatches(device, boundDevice) -> {
+          !deviceArgMatches(resolvedDevice, boundDevice) -> {
             Console.error(
-              "No active session for device $device — the daemon's current session is " +
+              "No active session for device $resolvedDevice — the daemon's current session is " +
                 "bound to ${boundDevice.toFullyQualifiedDeviceId()}. Pass --device " +
                 "${boundDevice.toFullyQualifiedDeviceId()} if you " +
                 "meant to end that one.",
             )
-            return@runBlocking CommandLine.ExitCode.SOFTWARE
+            return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
           }
           // else: match — proceed with end.
         }
@@ -669,7 +695,7 @@ class SessionEndCommand : Callable<Int> {
       // Clear the session file
       CliMcpClient.clearSession(port)
       Console.log("Session ended.")
-      CommandLine.ExitCode.OK
+      TrailblazeExitCode.SUCCESS.code
     }
   }
 }
@@ -711,8 +737,8 @@ class SessionSaveCommand : Callable<Int> {
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     if (!DaemonClient(port = port).use { it.isRunningBlocking() }) {
-      Console.error(DAEMON_NOT_RUNNING_ERROR)
-      return CommandLine.ExitCode.SOFTWARE
+      reportDaemonUnreachable()
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     return runBlocking {
@@ -720,7 +746,7 @@ class SessionSaveCommand : Callable<Int> {
         CliMcpClient.connectReusable(port)
       } catch (e: Exception) {
         Console.error("Error: No active session. ${e.message}")
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
       client.use {
@@ -730,21 +756,21 @@ class SessionSaveCommand : Callable<Int> {
         val result = it.callTool("session", arguments)
         if (result.isError) {
           Console.error("Error saving trail: ${extractErrorMessage(result.content)}")
-          CommandLine.ExitCode.SOFTWARE
+          TrailblazeExitCode.INFRA_FAILED.code
         } else {
           try {
             val json = Json.parseToJsonElement(result.content).jsonObject
             val error = json["error"]?.jsonPrimitive?.content
             if (!error.isNullOrBlank()) {
               Console.error("Error: $error")
-              return@use CommandLine.ExitCode.SOFTWARE
+              return@use TrailblazeExitCode.INFRA_FAILED.code
             }
             val msg = json["message"]?.jsonPrimitive?.content
             if (msg != null) Console.info(msg)
           } catch (_: Exception) {
             Console.info(result.content)
           }
-          CommandLine.ExitCode.OK
+          TrailblazeExitCode.SUCCESS.code
         }
       }
     }
@@ -761,42 +787,61 @@ class SessionRecordingCommand : Callable<Int> {
   @CommandLine.ParentCommand
   private lateinit var parent: SessionCommand
 
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<session-id>",
+    description = [
+      "Session ID (positional form of --id, defaults to current session, supports " +
+        "prefix matching). Mutually exclusive with --id.",
+    ],
+  )
+  var positionalId: String? = null
+
   @Option(
     names = ["--id"],
-    description = ["Session ID (defaults to current session, supports prefix matching)"],
+    description = [
+      "Session ID (defaults to current session, supports prefix matching). " +
+        "Equivalent to the positional form.",
+    ],
   )
   var id: String? = null
 
   override fun call(): Int {
+    if (positionalId != null && id != null) {
+      Console.error(SESSION_ID_CONFLICT_MESSAGE)
+      return TrailblazeExitCode.MISUSE.code
+    }
+    val effectiveId = positionalId ?: id
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     if (!DaemonClient(port = port).use { it.isRunningBlocking() }) {
-      Console.error(DAEMON_NOT_RUNNING_ERROR)
-      return CommandLine.ExitCode.SOFTWARE
+      reportDaemonUnreachable()
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     return runBlocking {
       val client = try {
         CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
-        Console.error(DAEMON_NOT_RUNNING_ERROR)
-        return@runBlocking CommandLine.ExitCode.SOFTWARE
+        reportDaemonUnreachable()
+        return@runBlocking TrailblazeExitCode.INFRA_FAILED.code
       }
 
       client.use {
         val arguments = mutableMapOf<String, Any?>("action" to "RECORDING")
-        if (id != null) arguments["id"] = id
+        if (effectiveId != null) arguments["id"] = effectiveId
         val result = it.callTool("session", arguments)
         if (result.isError) {
           Console.error("Error: ${extractErrorMessage(result.content)}")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
         try {
           val json = Json.parseToJsonElement(result.content).jsonObject
           val error = json["error"]?.jsonPrimitive?.content
           if (!error.isNullOrBlank()) {
             Console.error("Error: $error")
-            return@use CommandLine.ExitCode.SOFTWARE
+            return@use TrailblazeExitCode.INFRA_FAILED.code
           }
           val yaml = json["yaml"]?.jsonPrimitive?.content
           if (yaml != null) {
@@ -804,12 +849,12 @@ class SessionRecordingCommand : Callable<Int> {
             println(yaml)
           } else {
             Console.error("Error: No recording YAML returned.")
-            return@use CommandLine.ExitCode.SOFTWARE
+            return@use TrailblazeExitCode.INFRA_FAILED.code
           }
         } catch (_: Exception) {
           Console.info(result.content)
         }
-        CommandLine.ExitCode.OK
+        TrailblazeExitCode.SUCCESS.code
       }
     }
   }
@@ -825,18 +870,34 @@ class SessionInfoCommand : Callable<Int> {
   @CommandLine.ParentCommand
   private lateinit var parent: SessionCommand
 
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<session-id>",
+    description = [
+      "Session ID (positional form of --id, defaults to current session). " +
+        "Mutually exclusive with --id.",
+    ],
+  )
+  var positionalId: String? = null
+
   @Option(
     names = ["--id"],
-    description = ["Session ID (defaults to current session)"],
+    description = ["Session ID (defaults to current session). Equivalent to the positional form."],
   )
   var id: String? = null
 
   override fun call(): Int {
+    if (positionalId != null && id != null) {
+      Console.error(SESSION_ID_CONFLICT_MESSAGE)
+      return TrailblazeExitCode.MISUSE.code
+    }
+    val effectiveId = positionalId ?: id
     val port = CliConfigHelper.resolveEffectiveHttpPort()
 
     if (!DaemonClient(port = port).use { it.isRunningBlocking() }) {
       Console.log("No active session (daemon not running).")
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     return runBlocking {
@@ -844,12 +905,12 @@ class SessionInfoCommand : Callable<Int> {
         CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.log("No active session.")
-        return@runBlocking CommandLine.ExitCode.OK
+        return@runBlocking TrailblazeExitCode.SUCCESS.code
       }
 
       client.use {
         val arguments = mutableMapOf<String, Any?>("action" to "INFO")
-        if (id != null) arguments["id"] = id
+        if (effectiveId != null) arguments["id"] = effectiveId
 
         val result = it.callTool("session", arguments)
 
@@ -859,12 +920,12 @@ class SessionInfoCommand : Callable<Int> {
         } catch (_: Exception) { null }
         if (infoError != null) {
           Console.info(infoError)
-          return@use CommandLine.ExitCode.OK
+          return@use TrailblazeExitCode.SUCCESS.code
         }
 
         if (result.isError) {
           Console.error("Error: ${result.content}")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
         try {
           val json = Json.parseToJsonElement(result.content).jsonObject
@@ -885,7 +946,7 @@ class SessionInfoCommand : Callable<Int> {
         } catch (_: Exception) {
           Console.info(result.content)
         }
-        CommandLine.ExitCode.OK
+        TrailblazeExitCode.SUCCESS.code
       }
     }
   }

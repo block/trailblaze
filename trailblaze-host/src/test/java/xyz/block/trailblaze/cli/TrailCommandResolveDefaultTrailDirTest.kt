@@ -9,7 +9,7 @@ import org.junit.rules.TemporaryFolder
 
 /**
  * Pins the contract of [TrailCommand.resolveDefaultTrailDir] — the helper that supplies the
- * default `<workspace-root>/trails/` directory when `trailblaze trail` is invoked with no path
+ * default `<workspace-root>/trails/` directory when `trailblaze run` is invoked with no path
  * argument. Returns null when no workspace root resolves OR when the workspace exists but has
  * no `trails/` directory next to its config; the caller surfaces a clear error in either case.
  */

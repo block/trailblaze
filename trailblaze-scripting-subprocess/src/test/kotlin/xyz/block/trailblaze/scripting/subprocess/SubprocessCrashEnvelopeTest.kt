@@ -43,7 +43,7 @@ import kotlin.test.Test
  * that drops the exit code (or stops feeding the stderr tail in) would only surface
  * during a real post-incident debugging session.
  *
- * Skipped when bun/tsx isn't on PATH — matches [SubprocessRuntimeEndToEndTest]'s gate so
+ * Skipped when bun isn't on PATH — matches [SubprocessRuntimeEndToEndTest]'s gate so
  * the suite stays green on environments without a Node-compatible runtime.
  */
 class SubprocessCrashEnvelopeTest {
@@ -73,7 +73,7 @@ class SubprocessCrashEnvelopeTest {
   @Test fun `subprocess crash during dispatch surfaces as FatalError with exit code and stderr tail`() {
     runBlocking {
       assumeTrue(
-        "bun or tsx must be on PATH to exercise the e2e subprocess runtime",
+        "bun must be on PATH to exercise the e2e subprocess runtime",
         runtimeAvailable(),
       )
 
@@ -138,9 +138,9 @@ class SubprocessCrashEnvelopeTest {
   )
 
   private fun runtimeAvailable(): Boolean = try {
-    NodeRuntimeDetector.cached
+    BunRuntimeDetector.cached
     true
-  } catch (_: NoCompatibleTsRuntimeException) {
+  } catch (_: NoBunRuntimeException) {
     false
   }
 }

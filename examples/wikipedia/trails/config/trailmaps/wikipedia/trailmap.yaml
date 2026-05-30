@@ -1,0 +1,49 @@
+# Authored trailmap for the Wikipedia example. Demonstrates a web target that drives the
+# public en.wikipedia.org site via the Playwright Native driver, using a small set of
+# scripted tools that wrap common Wikipedia interactions (search, language switcher,
+# random article, banner dismissal). Each scripted tool is a bare `<name>.ts` under
+# `tools/` whose `trailblaze.tool<I>(spec, handler)` export carries name, input schema,
+# and metadata. No sibling YAML descriptor is needed — the trailmap loader auto-discovers
+# every `.ts` in `tools/` that exports a typed tool and resolves the names listed below
+# into the runtime tool list. (An optional `<name>.yaml` is still supported when an
+# author needs to pin a descriptor field or declare a multi-tool file.)
+id: wikipedia
+target:
+  display_name: Wikipedia (en)
+  # Target-scoped system prompt that nudges the LLM toward the wikipedia_web_*
+  # scripted tools when a natural-language step matches a known task pattern
+  # ("search Wikipedia for X" → searchAndOpenFirstResult, etc.). Without this,
+  # the agent tends to inline-expand to generic web_* builtins even when the
+  # scripted-tool descriptions advertise themselves as the right choice. The
+  # file lives next to this trailmap.yaml and is inlined at trailmap-load time.
+  system_prompt_file: wikipedia-system-prompt.md
+  tools:
+    # --- Trailheads: deterministic starting points -------------------------------
+    - wikipedia_web_openMainPage
+    - wikipedia_web_openArticle
+    # --- Feature tools -----------------------------------------------------------
+    - wikipedia_web_dismissBannerIfPresent
+    - wikipedia_web_searchAndOpenFirstResult
+    - wikipedia_web_openRandomArticle
+    - wikipedia_web_verifyArticleStructure
+    - wikipedia_web_openMainPageSection
+    - wikipedia_web_switchArticleLanguage
+    # --- Composition example: a scripted tool that delegates to other -----------
+    # --- scripted tools in the same trailmap via `ctx.tools.<name>(args)`. ----------
+    - wikipedia_web_searchAndVerify
+    # The typed-authoring demo at `tools/wikipedia_typed_demo.ts` and the
+    # conditional-action demo at `tools/wikipedia_conditional_action_demo.ts` are
+    # auto-discovered by the trailmap loader (every `.ts` with a
+    # `trailblaze.tool<...>(...)` export is added to the candidate pool), but
+    # neither is listed here, so they don't surface as agent-dispatchable tools.
+    # They exist as type-surface-only examples for new authors to read in their
+    # IDE. To make either one dispatchable from a prompt, add its export name to
+    # this list — no YAML descriptor is required.
+
+  platforms:
+    web:
+      drivers: [playwright-native, playwright-electron]
+      tool_sets:
+        - web_core
+        - web_verification
+        - memory

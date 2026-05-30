@@ -1,5 +1,5 @@
 ---
-title: "Workspace Config Resolution: .trailblaze/ and trailblaze-config/ Conventions"
+title: "Workspace Config Resolution: .trailblaze/ and trails/config/ Conventions"
 type: decision
 date: 2026-04-07
 status: partially-implemented
@@ -11,7 +11,7 @@ status: partially-implemented
 
 Trailblaze config (`trailblaze.yaml`) uses two directory conventions depending on context:
 - **User-level (desktop):** `~/.trailblaze/trailblaze.yaml`
-- **Classpath/bundled (all platforms):** `trailblaze-config/` — required because Android's AGP strips dot-prefixed directories from assets and Java resources.
+- **Classpath/bundled (all platforms):** `trails/config/` — required because Android's AGP strips dot-prefixed directories from assets and Java resources.
 
 Walk-up resolution and stacking merge from multiple ancestor directories were proposed but **have not been implemented**. `LlmConfigLoader` still resolves project config from `./trailblaze.yaml` via `File(".")`.
 
@@ -41,7 +41,7 @@ Maestro has no LLM/auth config — it doesn't need layering. Trailblaze has shar
 
 ## Decision
 
-### The Android constraint: `trailblaze-config/`
+### The Android constraint: `trails/config/`
 
 Android's Gradle Plugin (AGP) automatically strips dot-prefixed directories from both assets and Java resources. This means `.trailblaze/` cannot be used for classpath-bundled config that needs to work on Android.
 
@@ -50,8 +50,8 @@ The solution is two directory conventions (see `TrailblazeConfigPaths.kt`):
 | Constant | Value | Used for |
 |----------|-------|----------|
 | `DOT_TRAILBLAZE_DIR` | `.trailblaze` | User-level desktop config (`~/.trailblaze/`) |
-| `CONFIG_DIR` | `trailblaze-config` | Classpath-bundled resources (all platforms) |
-| `PROVIDERS_DIR` | `trailblaze-config/providers` | Built-in LLM provider YAML definitions |
+| `CONFIG_DIR` | `trails/config` | Classpath-bundled resources (all platforms) |
+| `PROVIDERS_DIR` | `trails/config/providers` | Built-in LLM provider YAML definitions |
 
 ### What was implemented
 
@@ -74,7 +74,7 @@ Loading order (later overrides earlier):
 #### Android resolution (`AndroidLlmClientResolver`)
 
 ```
-1. classpath: trailblaze-config/trailblaze.yaml   # bundled project defaults
+1. classpath: trails/config/trailblaze.yaml   # bundled project defaults
      |
 2. Instrumentation arg: trailblaze.llm.default_model
      |
@@ -85,7 +85,7 @@ Loading order (later overrides earlier):
 
 #### Built-in provider definitions
 
-Provider YAML files are bundled at `trailblaze-config/providers/{provider_id}.yaml` on the classpath. `BuiltInLlmModelRegistry` discovers them via classpath resource loading with a core-provider fallback on Android.
+Provider YAML files are bundled at `trails/config/providers/{provider_id}.yaml` on the classpath. `BuiltInLlmModelRegistry` discovers them via classpath resource loading with a core-provider fallback on Android.
 
 ### What was NOT implemented (future work)
 
@@ -119,10 +119,10 @@ my-repo/
 
 When trail YAML files reference other trails (e.g., a future `runTrail:` directive), paths resolve relative to the **calling file's parent directory**, not CWD. This follows Maestro's `runFlow` convention and is independent of config resolution.
 
-### The `trailblaze-config/` directory (classpath)
+### The `trails/config/` directory (classpath)
 
 ```
-trailblaze-config/
+trails/config/
 ├── trailblaze.yaml                # bundled project defaults
 └── providers/                     # built-in LLM provider definitions
     ├── anthropic.yaml
@@ -137,7 +137,7 @@ trailblaze-config/
 - **Stop sentinel**: Should walk-up stop at a marker (like `.git/`)? Cargo stops at filesystem root. Git stops at `.git/`.
 - **Merge semantics for lists**: When merging `targets:` or `mcpServers:` lists, should child configs replace or append?
 - **`trailblaze init`**: Should there be an `init` command that scaffolds `.trailblaze/trailblaze.yaml`?
-- **Unifying the two conventions**: Can walk-up resolution use `trailblaze-config/` on-disk too, or should it stay `.trailblaze/` for user-facing directories and only use `trailblaze-config/` for classpath resources?
+- **Unifying the two conventions**: Can walk-up resolution use `trails/config/` on-disk too, or should it stay `.trailblaze/` for user-facing directories and only use `trails/config/` for classpath resources?
 
 ## Related Documents
 

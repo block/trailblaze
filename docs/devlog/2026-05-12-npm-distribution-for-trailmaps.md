@@ -8,13 +8,13 @@ date: 2026-05-12
 
 ## Summary
 
-Trailmaps (the unit formerly called "packs" — see the parallel rename) will be distributed as npm packages, resolved by the actual npm CLI against `node_modules/`. The Trailblaze CLI gains a discovery hook that walks `node_modules/` for packages containing a `trailmap.yaml`. No Trailblaze-specific package manager is built; npm does the resolution, caching, lockfile, semver, and GitHub auth.
+Trailmaps (the unit formerly called "trailmaps" — see the parallel rename) will be distributed as npm packages, resolved by the actual npm CLI against `node_modules/`. The Trailblaze CLI gains a discovery hook that walks `node_modules/` for packages containing a `trailmap.yaml`. No Trailblaze-specific package manager is built; npm does the resolution, caching, lockfile, semver, and GitHub auth.
 
 ## Context
 
-The pack system today has two distribution sources: classpath-bundled (shipped in the binary) and workspace file-based. This breaks down in two ways:
+The trailmap system today has two distribution sources: classpath-bundled (shipped in the binary) and workspace file-based. This breaks down in two ways:
 
-1. **Binary-bundled target packs can't be extended.** Anyone outside the framework repo who wants to add tools or platforms to an existing target pack has to wholesale-shadow the entire pack, losing future updates. A downstream team consuming a target pack via binary distribution hit this when they wanted to add a web platform to a mobile-only target — they sidestepped it by defining their own target, but the gap is real for teams that genuinely need to extend an existing target.
+1. **Binary-bundled target trailmaps can't be extended.** Anyone outside the framework repo who wants to add tools or platforms to an existing target trailmap has to wholesale-shadow the entire trailmap, losing future updates. A downstream team consuming a target trailmap via binary distribution hit this when they wanted to add a web platform to a mobile-only target — they sidestepped it by defining their own target, but the gap is real for teams that genuinely need to extend an existing target.
 
 2. **No story for an open community.** The vision is an ecosystem of community-authored trailmaps for hundreds of apps and websites (Shopify, Airbnb, Wikipedia, etc.) that agents can auto-discover. Classpath bundling can't scale to that; file-based dependencies don't have versioning or remote resolution.
 
@@ -30,9 +30,9 @@ Versioned, remotely-resolvable dependencies are the missing piece. Once that exi
 2. Trailmap dependencies are declared as ordinary npm dependencies.
 3. `npm install` populates `node_modules/`.
 4. The Trailblaze CLI walks `node_modules/` at daemon init, identifying packages that contain a `trailmap.yaml` at the package root (or declare a `"trailblaze"` field in their `package.json`).
-5. Discovered trailmaps register as a third pack source alongside classpath and workspace, with the same resolution semantics that already exist for those two.
+5. Discovered trailmaps register as a third trailmap source alongside classpath and workspace, with the same resolution semantics that already exist for those two.
 
-That's the entire integration. The pack resolver becomes a thin layer over `node_modules/` discovery. Everything else (caching, integrity, lockfile, registry auth, semver) is npm's job.
+That's the entire integration. The trailmap resolver becomes a thin layer over `node_modules/` discovery. Everything else (caching, integrity, lockfile, registry auth, semver) is npm's job.
 
 ### Authoring loop
 
@@ -73,13 +73,13 @@ Considered and rejected:
 
 npm wins on every axis: zero infrastructure on our end, free public registry, the entire JS ecosystem (Renovate, Dependabot, `npm audit`, `npm publish`, `npm version`) works for free, and tools are already migrating to TS/JS/YAML so `node_modules/` already exists in a Trailblaze workspace's future state.
 
-## Relationship to the pack → trailmap rename
+## Relationship to the trailmap → trailmap rename
 
-This decision is paired with a separate decision to rename `pack` → `trailmap` across the codebase (file, Kotlin types, KDoc, error messages). `target` stays as-is for the CLI flag and YAML block name — that's a deliberate exception for coding-agent ergonomics ("target" has overwhelming corpus prior in dev tooling; renaming the CLI flag would hurt agent reliability more than the metaphor break costs).
+This decision is paired with a separate decision to rename `trailmap` → `trailmap` across the codebase (file, Kotlin types, KDoc, error messages). `target` stays as-is for the CLI flag and YAML block name — that's a deliberate exception for coding-agent ergonomics ("target" has overwhelming corpus prior in dev tooling; renaming the CLI flag would hurt agent reliability more than the metaphor break costs).
 
 Final vocabulary:
 
-- **Trailmap** — the manifest, an npm package (formerly "pack")
+- **Trailmap** — the manifest, an npm package (formerly "trailmap")
 - **Trailhead** — entry point into the navigated thing
 - **Waypoint** — navigation reference
 - **Shortcut** — faster route between waypoints
@@ -101,4 +101,4 @@ Open questions to resolve in the implementation PR:
 1. Discovery convention — `trailmap.yaml` at the package root, or a `"trailblaze"` field in `package.json` pointing at the manifest? Probably the former for simplicity; the latter if we ever want one npm package to ship multiple trailmaps.
 2. How `dependencies:` inside `trailmap.yaml` map to npm dependencies. Likely they're the same list — the YAML's `dependencies:` becomes a hint to the resolver, but the actual install happens via `package.json`.
 3. Whether the Trailblaze CLI runs `npm install` itself at daemon init (convenience) or assumes the user has run it (predictability). Probably the latter, matching how every other JS tool behaves.
-4. Resolution precedence between classpath, workspace pack, and `node_modules/`. Likely workspace > `node_modules/` > classpath, matching the current "closer wins" semantics.
+4. Resolution precedence between classpath, workspace trailmap, and `node_modules/`. Likely workspace > `node_modules/` > classpath, matching the current "closer wins" semantics.

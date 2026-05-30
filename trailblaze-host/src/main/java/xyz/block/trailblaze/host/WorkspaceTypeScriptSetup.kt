@@ -14,17 +14,17 @@ import xyz.block.trailblaze.util.Console
  *      (`dist/index.d.ts`) from the trailblaze JAR's resources into
  *      `<workspaceRoot>/.trailblaze/sdk/` once, idempotently
  *      (skip-write-if-content-matches keeps mtimes stable across runs of the same SDK).
- *      The bundle is a single self-contained `.d.ts` file with zod types inlined — a pack's
+ *      The bundle is a single self-contained `.d.ts` file with zod types inlined — a trailmap's
  *      `tsconfig.json` points its `paths` mapping at it via a workspace-relative path. No
- *      `node_modules/`, no per-pack `package.json`, no `bun install`.
+ *      `node_modules/`, no per-trailmap `package.json`, no `bun install`.
  *
  * **What changed when the bundled-.d.ts approach landed.** Pre-Phase-D the workspace
- * also wrote a `tsconfig.base.json` that per-pack tsconfigs `extends:`-ed. That coupling
- * made packs non-portable for the future npm-distribution direction: a trailmap installed
+ * also wrote a `tsconfig.base.json` that per-trailmap tsconfigs `extends:`-ed. That coupling
+ * made trailmaps non-portable for the future npm-distribution direction: a trailmap installed
  * into a different workspace's `node_modules/` would have a broken `extends:` chain. The
- * declaration bundle lets each per-pack tsconfig be fully self-contained (compiler
+ * declaration bundle lets each per-trailmap tsconfig be fully self-contained (compiler
  * options + paths inlined), so the workspace base file is gone — see
- * [PerPackTsconfigEmitter] for the per-pack render.
+ * [PerTrailmapTsconfigEmitter] for the per-trailmap render.
  *
  * **Failure handling is the caller's call.** This helper just does the work or throws.
  * The compile-CLI wire-in lets exceptions propagate (fail-fast — author wants to see
@@ -56,9 +56,9 @@ object WorkspaceTypeScriptSetup {
 
   /**
    * Delete `<workspaceRoot>/.trailblaze/tsconfig.base.json` left behind from the
-   * pre-bundled-.d.ts era, where per-pack tsconfigs `extends:`-ed a workspace-level
-   * base file. The current setup writes no workspace base — per-pack tsconfigs are
-   * fully self-contained (see [PerPackTsconfigEmitter]) — so the old file is inert
+   * pre-bundled-.d.ts era, where per-trailmap tsconfigs `extends:`-ed a workspace-level
+   * base file. The current setup writes no workspace base — per-trailmap tsconfigs are
+   * fully self-contained (see [PerTrailmapTsconfigEmitter]) — so the old file is inert
    * cruft. Without this prune, every workspace that touched the prior version keeps
    * the orphaned file forever; over time that's "what is this for?" friction for
    * authors and a foot-gun for anyone debugging tsconfig resolution who finds a
@@ -79,14 +79,14 @@ object WorkspaceTypeScriptSetup {
     if (Files.deleteIfExists(stale)) {
       Console.info(
         "[WorkspaceTypeScriptSetup] Pruned stale workspace tsconfig.base.json " +
-          "(per-pack tsconfigs are now self-contained): $stale",
+          "(per-trailmap tsconfigs are now self-contained): $stale",
       )
     }
   }
 
   /**
    * Extract the SDK declaration bundle from JAR resources rooted at
-   * `trailblaze-config/sdk/typescript/` into `<workspaceRoot>/.trailblaze/sdk/`.
+   * `trails/config/sdk/typescript/` into `<workspaceRoot>/.trailblaze/sdk/`.
    * Idempotent — skip-write-if-content-matches keeps mtimes stable across runs of the
    * same SDK version (so file watchers and TS language servers don't churn).
    *
@@ -162,7 +162,7 @@ object WorkspaceTypeScriptSetup {
 
   /**
    * Extract the bundled TypeScript compiler (`_tsc.js` + `lib.*.d.ts`) from JAR resources
-   * rooted at `trailblaze-config/typecheck/typescript/` into
+   * rooted at `trails/config/typecheck/typescript/` into
    * `<workspaceRoot>/.trailblaze/typecheck/typescript/`. Idempotent —
    * skip-write-if-content-matches keeps mtimes stable across runs of the same tsc version,
    * so file watchers don't churn.
@@ -238,21 +238,21 @@ object WorkspaceTypeScriptSetup {
 
   // Resource-path constants — mirror the JAR layout from `:trailblaze-models`'s
   // `copyTypescriptSdkResources` Gradle task, which stages files under
-  // `build/generated-resources/sdk/trailblaze-config/sdk/typescript/...` and ships them
+  // `build/generated-resources/sdk/trails/config/sdk/typescript/...` and ships them
   // at that classpath path.
-  internal const val SDK_RESOURCE_PREFIX = "trailblaze-config/sdk/typescript"
+  internal const val SDK_RESOURCE_PREFIX = "trails/config/sdk/typescript"
 
   /**
    * JAR classpath prefix for the bundled tsc payload. Mirrors `:trailblaze-host`'s
    * `copyTypescriptCompilerResources` Gradle task, which stages files under
-   * `build/generated-resources/typecheck/trailblaze-config/typecheck/typescript/...`.
+   * `build/generated-resources/typecheck/trails/config/typecheck/typescript/...`.
    */
-  internal const val TYPECHECK_RESOURCE_PREFIX = "trailblaze-config/typecheck/typescript"
+  internal const val TYPECHECK_RESOURCE_PREFIX = "trails/config/typecheck/typescript"
 
   // Workspace-side path constants — written at the workspace root (`trails/`) rather than
-  // under `config/tools/` so the SDK lives above per-pack content and is unambiguously
-  // workspace-level. Packs reference it via a relative `paths:` entry computed at
-  // `trailblaze compile` time — see [PerPackTsconfigEmitter].
+  // under `config/tools/` so the SDK lives above per-trailmap content and is unambiguously
+  // workspace-level. Trailmaps reference it via a relative `paths:` entry computed at
+  // `trailblaze compile` time — see [PerTrailmapTsconfigEmitter].
   internal const val GENERATED_DIR_NAME = ".trailblaze"
   internal const val SDK_DIR_NAME = "sdk"
 
@@ -263,23 +263,23 @@ object WorkspaceTypeScriptSetup {
   internal const val TYPECHECK_DIR_NAME = "typecheck"
 
   /**
-   * Pack-aware tsc entry point relative to the typescript install root. Used to compute
+   * Trailmap-aware tsc entry point relative to the typescript install root. Used to compute
    * the absolute path returned from [extractTypecheck] and consumed by `trailblaze
-   * typecheck` when spawning `bun|node <tscJs> --project <packTsconfig>`.
+   * typecheck` when spawning `bun|node <tscJs> --project <trailmapTsconfig>`.
    */
   internal const val TSC_ENTRY_RELATIVE_PATH = "lib/_tsc.js"
 
   /**
    * Path of the rolled-up declaration bundle relative to [SDK_DIR_NAME]. Must match the
    * resource layout the `:trailblaze-models` Gradle build produces (`dist/index.d.ts`)
-   * and the path [PerPackTsconfigEmitter] inlines into per-pack tsconfigs as the `paths`
+   * and the path [PerTrailmapTsconfigEmitter] inlines into per-trailmap tsconfigs as the `paths`
    * target. POSIX separator is correct on both sides — `Path.resolve` accepts `/` and the
    * tsconfig consumer is TypeScript, which is platform-neutral.
    */
   internal const val SDK_DTS_BUNDLE_RELATIVE_PATH: String = "dist/index.d.ts"
 
   /**
-   * Filename of the pre-Phase-D workspace base tsconfig that per-pack tsconfigs used
+   * Filename of the pre-Phase-D workspace base tsconfig that per-trailmap tsconfigs used
    * to `extends:`. No longer written — see [pruneStaleWorkspaceTsconfigBase]. Pulled
    * into a const for symmetry with [SDK_DTS_BUNDLE_RELATIVE_PATH] and so future
    * readers grep-find the legacy path from one place.

@@ -131,23 +131,39 @@ class PlaywrightBrowserManager(
     // (`dispatchAndAwaitSettle`, `waitForPageReady` default param). See that file for definitions.
 
     /**
-     * JVM-wide guard against concurrent `Playwright.create()` invocations. The upstream
+     * JVM-wide guard against concurrent [PlaywrightBrowserManager] init. The upstream
      * `com.microsoft.playwright` Java client is not thread-safe under simultaneous init —
      * observed under parallel test workloads as "Failed to read message from driver,
-     * pipe closed" when two [PlaywrightBrowserManager] instances initialized at the same
-     * instant. Each manager has its own dedicated [playwrightExecutor] thread + its own
-     * driver subprocess, but the upstream library's process-spawning code races on
-     * internal static state (driver-binary resolution, stdio handshake setup).
+     * pipe closed" when two managers init at the same instant. Each manager has its own
+     * dedicated [playwrightExecutor] thread + its own driver subprocess, but the upstream
+     * library's process-spawning code races on internal static state (driver-binary
+     * resolution, stdio handshake setup, Chromium browser spawn).
      *
-     * Serializing `Playwright.create()` JVM-wide is the cheapest fix: concurrent
-     * BrowserManager inits spend at most ~200ms back-to-back on the init handshake
-     * instead of in parallel, but the resulting Playwright instances + driver
-     * subprocesses + browsers all run fully in parallel after init. A future
-     * higher-parallelism setup may prefer a pre-warmed singleton model instead, but
-     * this lock is sufficient for the parallel-test-runner workloads we ship today.
+     * **Scope of the lock.** The lock covers the *entire* init sequence inside
+     * [PlaywrightBrowserManager.init]: [PlaywrightDriverManager.ensureDriverAvailable]
+     * **and** [PlaywrightDriverManager.ensureBrowserInstalled] **and** `Playwright.create()`
+     * **and** `chromium().launch()` **and** [createFreshContextAndPage]. Two earlier
+     * revisions narrowed the scope; both were wrong. (a) Narrowing to just `create()`
+     * (the original `playwrightCreateLock` design) left the post-`create()` browser-spawn
+     * racing — worker 2 reliably crashed ~4 s in. (b) Narrowing to "everything after the
+     * driver-manager bootstrap" left the pre-`create()` driver-manager calls racing —
+     * the failing worker's "Initializing…" appeared only 84 ms after the surviving
+     * worker's in the public CI job log, and the failure-vs-survivor gap was only
+     * ~2.2 s, far too fast for fully-serialized init. The driver-manager calls touch
+     * `System.setProperty("playwright.cli.dir")` (JVM-global) and the `ms-playwright/`
+     * cache directory (shared filesystem); concurrent invocations corrupt each other.
+     * The current full-scope lock resolves both failure shapes.
+     *
+     * **Performance.** Concurrent BrowserManager inits run back-to-back inside this lock
+     * (~5–10 s sequential per concurrent worker), but everything *after* init —
+     * page navigation, network requests, all interactive Playwright operations on the
+     * resulting instances + driver subprocesses + browsers — runs fully in parallel.
+     * For workloads that need higher init parallelism, a pre-warmed singleton
+     * (one Playwright + one Chromium, multiple BrowserContexts) is the next step;
+     * this lock keeps the current per-manager-isolation model honest.
      */
     @kotlin.jvm.JvmStatic
-    private val playwrightCreateLock = Any()
+    private val playwrightInitLock = Any()
   }
 
   /**
@@ -411,39 +427,69 @@ class PlaywrightBrowserManager(
   init {
     // Initialize Playwright on the dedicated thread to ensure thread affinity.
     // All subsequent Playwright API calls must happen on this same thread.
+    //
+    // The `[PlaywrightBrowserManager] init …` start/end pair brackets the [playwrightInitLock]
+    // critical section. When a concurrent worker reports a long "init starting" → "init complete"
+    // gap (>> the ~5–10 s expected single-worker cost) the difference between "init slow" and
+    // "blocked on lock contention" is visible in the log alone — no source diving required.
+    val initStartMs = System.currentTimeMillis()
+    Console.log("[PlaywrightBrowserManager] init starting (engine=$browserEngine, headless=$headless)")
     try {
-      // Ensure the Playwright driver is available (downloads on first use if driver-bundle
-      // is not on the classpath, e.g., when running from the uber JAR).
-      PlaywrightDriverManager.ensureDriverAvailable()
-      // Ensure the Chromium browser binary is installed. This is a no-op after first install.
-      PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
       runBlocking(playwrightDispatcher) {
-        // See [playwrightCreateLock] kdoc for why this is serialized JVM-wide. Each
-        // manager still runs on its own [playwrightDispatcher] thread; the lock only
-        // serializes the upstream library's racy init handshake. After this call
-        // returns, all further Playwright operations on the resulting instance happen
+        // See [playwrightInitLock] kdoc for the full scope rationale. Briefly: the
+        // upstream library's racy init isn't confined to `Playwright.create()` — the
+        // pipe-closed crash observed under concurrent parallel-worker init happens
+        // between `create()` and `chromium().launch()`, so the lock must cover the
+        // whole init handshake (driver subprocess + browser spawn + first context),
+        // INCLUDING the [PlaywrightDriverManager] `ensureDriverAvailable` and
+        // `ensureBrowserInstalled` steps. Those touch JVM-global `System.setProperty`
+        // ("playwright.cli.dir") and the shared `ms-playwright/` cache directory; if
+        // two managers run them concurrently, the second one's later `Playwright.create()`
+        // observes the first one's partially-written state and dies with the same
+        // pipe-closed error the rest of the lock guards against. (Diagnosis: in a
+        // failing N=2 CI run the two workers printed their "Initializing…" progress
+        // messages only 84 ms apart — i.e. the pre-lock setup was running in parallel —
+        // and the surviving worker's "Launching browser…" appeared only 2.2 s after
+        // the loser's pipe-closed error, far too fast for a fully-serialized init.)
+        //
+        // Each manager still owns its own [playwrightDispatcher] thread; the lock
+        // only serializes the upstream library's racy init. After this block returns,
+        // all further Playwright operations on the resulting instance happen
         // independently from any other manager's instance.
-        playwright = synchronized(playwrightCreateLock) { Playwright.create() }
-        // Resolve the user-facing viewport spec against the live Playwright registry
-        // before any context is built — preset typos surface here as a clean
-        // IllegalArgumentException ("Unknown Playwright device preset 'iPhne 14'…")
-        // rather than later as a confusing context-creation failure.
-        resolvedViewport = PlaywrightDeviceRegistry.resolve(
-          playwright = playwright,
-          spec = WebViewportSpec.parse(viewportSpec),
-          defaultWidth = DEFAULT_VIEWPORT_WIDTH,
-          defaultHeight = DEFAULT_VIEWPORT_HEIGHT,
-        )
-        val browserType =
-          when (browserEngine) {
-            BrowserEngine.CHROMIUM -> playwright.chromium()
-            BrowserEngine.FIREFOX -> playwright.firefox()
-            BrowserEngine.WEBKIT -> playwright.webkit()
-          }
-        browser = browserType.launch(launchOptions)
-        createFreshContextAndPage()
+        synchronized(playwrightInitLock) {
+          // Ensure the Playwright driver is available (downloads on first use if driver-bundle
+          // is not on the classpath, e.g., when running from the uber JAR).
+          PlaywrightDriverManager.ensureDriverAvailable()
+          // Ensure the Chromium browser binary is installed. This is a no-op after first install.
+          PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
+          playwright = Playwright.create()
+          // Resolve the user-facing viewport spec against the live Playwright registry
+          // before any context is built — preset typos surface here as a clean
+          // IllegalArgumentException ("Unknown Playwright device preset 'iPhne 14'…")
+          // rather than later as a confusing context-creation failure.
+          resolvedViewport = PlaywrightDeviceRegistry.resolve(
+            playwright = playwright,
+            spec = WebViewportSpec.parse(viewportSpec),
+            defaultWidth = DEFAULT_VIEWPORT_WIDTH,
+            defaultHeight = DEFAULT_VIEWPORT_HEIGHT,
+          )
+          val browserType =
+            when (browserEngine) {
+              BrowserEngine.CHROMIUM -> playwright.chromium()
+              BrowserEngine.FIREFOX -> playwright.firefox()
+              BrowserEngine.WEBKIT -> playwright.webkit()
+            }
+          browser = browserType.launch(launchOptions)
+          createFreshContextAndPage()
+        }
       }
+      Console.log("[PlaywrightBrowserManager] init complete (${System.currentTimeMillis() - initStartMs}ms)")
     } catch (e: Exception) {
+      // Surface the upstream exception on the local logger before propagating. If the
+      // pipe-closed concurrent-init race ever resurfaces in a different shape, the local
+      // log line makes it recognizable without source-diving the upstream playwright
+      // client. We deliberately keep `throw e` so the caller's behavior is unchanged.
+      Console.log("[PlaywrightBrowserManager] init failed after ${System.currentTimeMillis() - initStartMs}ms: ${e.message}")
       playwrightExecutor.shutdownNow()
       throw e
     }

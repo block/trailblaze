@@ -1,0 +1,29 @@
+# Complete scripted-tool descriptor (name + description + inputSchema) so the
+# trailmap resolves on runtimes without the bun analyzer (e.g. on-device).
+# The `.ts` sibling remains the implementation; this descriptor mirrors its
+# `trailblaze.tool<...>()` declaration. Keep in sync when the `.ts` changes.
+script: ./wikipedia_web_openArticle.ts
+name: wikipedia_web_openArticle
+description: |
+  Open a specific Wikipedia article by its title. Use this whenever the task
+  is to read, open, navigate to, or view a particular Wikipedia article —
+  e.g. "open the Albert Einstein article", "go to the Python (programming
+  language) page", "navigate to the Shakespeare article". Spaces in the
+  title are normalized to underscores (Wikipedia's URL convention) so you
+  can pass the title verbatim. Verifies the article rendered by checking
+  the #firstHeading element is visible.
+supportedPlatforms:
+  - web
+inputSchema:
+  title:
+    type: string
+    description: "Article title to open (spaces → underscores in URL)."
+    required: false
+  expectedHeading:
+    type: string
+    description: "Visible heading text to assert. Defaults to `title`."
+    required: false
+  dismissBanner:
+    type: boolean
+    description: "When true (default), tries to close any visible fundraising banner."
+    required: false

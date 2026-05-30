@@ -29,6 +29,17 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * this tool from `.ts` scripted-tool bodies and the same composition works whether the
  * tool is dispatched on the daemon JVM or on the device's QuickJS bundle path.
  *
+ * ### Transport and timeout consequences
+ *
+ * `HostOnDeviceRpcTrailblazeAgent` dispatches this tool via the on-device RPC path (not
+ * the host-side dadb path). On-device, `executeShellCommand` routes through
+ * `UiDevice.executeShellCommand` (UiAutomation) — which is bounded by the RPC handler's
+ * own cap ([xyz.block.trailblaze.llm.OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS]), not by
+ * the host-side `TRAILBLAZE_ADB_TIMEOUT_MS` env var (see `CLAUDE.md` "ADB Configuration").
+ * Both transports return the full stdout buffered in memory — no streaming — so commands
+ * with very large output (e.g. `dumpsys`, `logcat -d`) are bounded by JVM heap on whichever
+ * side runs the actual.
+ *
  * Marked `requiresHost = false` so the on-device runner registers it alongside the host
  * one. A scripted tool that composes only `android_adbShell` and other dual-mode tools (e.g.
  * [AndroidSendBroadcastTrailblazeTool]) does **not** need `requiresHost: true` on its
@@ -93,10 +104,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
   name = "android_adbShell",
   surfaceToLlm = false,
   isRecordable = false,
-  // Dual-mode primitive: on-device-RPC strips `Success.message`, so scripted-tool authors that
-  // compose `android_adbShell` via `client.callTool(...)` rely on host-side dispatch to receive the
-  // stdout/stderr payload they read several frames down. See `TrailblazeToolClass`'s kdoc.
-  prefersHostSideForCallback = true,
 )
 @LLMDescription("Executes a shell command in the Android device's shell environment. Returns combined stdout/stderr.")
 data class AdbShellTrailblazeTool(

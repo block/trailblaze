@@ -6,7 +6,8 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze session [-hV] [COMMAND]
-Every blaze records a session — save it as a replayable trail
+Manage the current device session — save it as a replayable trail, inspect
+steps, end it
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:

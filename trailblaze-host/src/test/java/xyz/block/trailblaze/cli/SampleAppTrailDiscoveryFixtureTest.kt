@@ -18,7 +18,7 @@ import xyz.block.trailblaze.recordings.TrailRecordings
  * semantics, trail-name contract — that would stop the MCP `trail(action=LIST)` tool
  * or the desktop UI's Trails browser from finding sample-app fixtures fails the build.
  *
- * The CLI itself no longer consumes [TrailDiscovery]; `trailblaze trail` takes explicit
+ * The CLI itself no longer consumes [TrailDiscovery]; `trailblaze run` takes explicit
  * file arguments or a shell glob (see `docs/project_layout.md`). Discovery
  * is still foundational for the MCP and desktop UI code paths, which is what this
  * test gates.

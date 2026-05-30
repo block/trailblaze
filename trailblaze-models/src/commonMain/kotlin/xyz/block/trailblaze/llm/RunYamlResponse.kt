@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.llm
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.logs.model.SessionId
 
 /**
@@ -44,11 +45,51 @@ data class RunYamlResponse(
    * fire-and-forget response is returned before any tool executes.
    */
   val memorySnapshot: Map<String, String> = emptyMap(),
+
+  /**
+   * The last successfully-executed tool's [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success.message]
+   * payload, mirrored back to the host so scripted-tool authors composing dual-mode primitives
+   * (`android_adbShell`, `android_sendBroadcast`, `mobile_listInstalledApps`) via
+   * `client.callTool(...)` receive the same stdout / broadcast result / installed-app JSON they
+   * would get from the direct host-side actual.
+   *
+   * ## "Last successful tool" semantics
+   *
+   * Mirrors the on-device dispatch loop's `lastSuccessResult`:
+   *
+   *  - **Single-tool RPC dispatches** (the host-driver case for
+   *    `HostOnDeviceRpcTrailblazeAgent.executeToolViaRpc` and the scripted-tool
+   *    `client.callTool(...)` path) pass the tool's `Success.message` through 1:1.
+   *  - **Multi-tool YAML** (when a single [RunYamlRequest] carries a trail with multiple
+   *    tools) carries ONLY the final successful tool's message — intermediate tools'
+   *    messages are silently discarded. Authors who need per-tool payloads must dispatch
+   *    one tool per request.
+   *
+   * Null when no tool produced a Success (fire-and-forget, run failed before any Success,
+   * or every tool's `Success` was constructed without a message — action-style `Success()`
+   * defaults).
+   */
+  val toolMessage: String? = null,
+
+  /**
+   * The last successfully-executed tool's [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success.structuredContent]
+   * payload. Paired with [toolMessage] — same "last success wins" semantics — but carries the
+   * typed JSON return value produced by MCP scripted tools (subprocess or on-device QuickJS
+   * bundle) whose handler returns a non-string typed result. The TS SDK's
+   * `client.tools.<name>(args)` proxy unwraps this into the typed `result` declared in
+   * `TrailblazeToolMap`; null means "no structured payload" and the caller falls back to
+   * [toolMessage].
+   */
+  val toolStructuredContent: JsonElement? = null,
 ) {
   init {
     require(success != null || memorySnapshot.isEmpty()) {
       "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry a " +
         "memorySnapshot — memory sync requires a completion event."
+    }
+    require(success != null || (toolMessage == null && toolStructuredContent == null)) {
+      "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry a tool " +
+        "payload — no tool has executed yet."
     }
   }
 }

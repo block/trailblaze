@@ -6,9 +6,17 @@ date: 2026-05-21
 
 # Unit-testing scripted tools without a device
 
+> **Update (2026-05-22, PR #3283):** the standalone `trailblaze test` subcommand
+> described below was deleted in favor of folding the bun-test phase into
+> `trailblaze check` (now a three-phase command: materialize → tsc → bun-test).
+> The `@trailblaze/scripting/testing` SDK subpath and the per-trailmap `*.test.ts`
+> discovery shape are unchanged. Invoke as `./trailblaze check <trailmap>` (or
+> `--all`) instead of `./trailblaze test <trailmap>`. The "Test runner" section
+> below describes the original CLI surface; everything else still applies.
+
 ## What landed
 
-`*.test.ts` files next to a `.ts` scripted tool now run via `./trailblaze test <pack>` —
+`*.test.ts` files next to a `.ts` scripted tool now run via `./trailblaze test <trailmap>` —
 no daemon, no device, no MCP roundtrip. The deliverable is three coupled pieces:
 
 1. **`@trailblaze/scripting/testing` SDK subpath.** New `sdks/typescript/src/testing.ts`
@@ -19,14 +27,14 @@ no daemon, no device, no MCP roundtrip. The deliverable is three coupled pieces:
    target, memory })` (returns a `TrailblazeContext` with a no-op logger and explicit
    target / memory shape, no on-device runtime needed).
 
-2. **Test runner.** `trailblaze test [<pack-id>|--all]` walks the pack's `tools/` tree
-   for `*.test.ts` files and shells out to `bun test`. Pack discovery mirrors
-   `typecheck` (walk-up from caller cwd, or `--all`, or explicit pack id); the
+2. **Test runner.** `trailblaze test [<trailmap-id>|--all]` walks the trailmap's `tools/` tree
+   for `*.test.ts` files and shells out to `bun test`. Trailmap discovery mirrors
+   `typecheck` (walk-up from caller cwd, or `--all`, or explicit trailmap id); the
    subprocess timeout is governed by `TRAILBLAZE_TEST_TIMEOUT_MS` with a 5-minute
    default and a 1-minute lower clamp.
 
 3. **Runtime resolution path.** The SDK ships both `dist/testing.d.ts` (for tsc) AND
-   `dist/testing.js` (for bun's runtime resolution via the per-pack tsconfig `paths`
+   `dist/testing.js` (for bun's runtime resolution via the per-trailmap tsconfig `paths`
    mapping). The `.js` is a plain esbuild transpile of `src/testing.ts`, not a bundle
    — testing.ts has zero runtime imports from the rest of the SDK (only type-only
    imports), so the transpiled output is self-contained. `TrailblazeSdkDtsBundlePlugin`
@@ -36,7 +44,7 @@ no daemon, no device, no MCP roundtrip. The deliverable is three coupled pieces:
 The canonical sample test sits next to a real tool:
 `examples/playwright-native/.../playwrightSample_web_openFixtureAndVerifyText.test.ts`
 (rooted at the OSS tree) asserts the tool dispatches `web_navigate` then
-`web_verify_text_visible` with the expected args, and that module defaults apply when
+`web_verifyTextVisible` with the expected args, and that module defaults apply when
 args are omitted.
 
 ## Why a separate `test` subcommand instead of folding into `typecheck`
@@ -84,19 +92,19 @@ is the kind of drift a `*.test.ts` file would catch first (a test that calls
 
 ## What needed `baseUrl` and what didn't
 
-The per-pack tsconfig the framework already emits maps `@trailblaze/scripting/*` to a
+The per-trailmap tsconfig the framework already emits maps `@trailblaze/scripting/*` to a
 `../../../../.trailblaze/sdk/dist/*` glob path. Confirmed via bun's actual resolution
 that `../`-prefixed paths resolve fine WITHOUT `baseUrl`, but unprefixed relative
 paths (`sdk2/*`) silently fail to resolve. The production emitter always uses
-`../`-prefixed paths (the pack lives inside the workspace; the SDK lives at the
-workspace root), so no change to `PerPackTsconfigEmitter` was needed — but if a
+`../`-prefixed paths (the trailmap lives inside the workspace; the SDK lives at the
+workspace root), so no change to `PerTrailmapTsconfigEmitter` was needed — but if a
 future change makes that emitter resolve the SDK to a sibling-relative path, expect
 to add `baseUrl: "."` to keep bun's resolution happy.
 
 ## Out of scope (intentionally)
 
 - **`.js`-authored test files.** The runner discovery glob is `*.test.ts` only. A
-  pack that authors tools in `.js` can still write tests in `.ts` — the import
+  trailmap that authors tools in `.js` can still write tests in `.ts` — the import
   surface is type-checked either way. Adding `*.test.js` would require deciding what
   `allowJs` behavior we want for tests, separate from what we want for tool source.
 - **Watch mode.** `bun test --watch` is a single flag away; we deliberately don't
@@ -104,5 +112,5 @@ to add `baseUrl: "."` to keep bun's resolution happy.
   what runs in CI, and watch mode is local-dev-only ergonomics. Add when an author
   actually asks.
 - **Coverage.** Same reasoning — `bun test --coverage` works fine if invoked
-  directly from inside a pack's `tools/` dir, but isn't wired through the
+  directly from inside a trailmap's `tools/` dir, but isn't wired through the
   `trailblaze test` flag surface yet.

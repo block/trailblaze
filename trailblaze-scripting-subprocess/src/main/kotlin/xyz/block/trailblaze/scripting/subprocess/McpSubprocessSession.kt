@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.util.Console
 
 /**
- * One running subprocess MCP session: the spawned `bun` / `tsx` [Process], the
+ * One running subprocess MCP session: the spawned `bun` [Process], the
  * `io.modelcontextprotocol.kotlin.sdk.client.Client` wired to it, and the stdio transport
  * connecting the two.
  *

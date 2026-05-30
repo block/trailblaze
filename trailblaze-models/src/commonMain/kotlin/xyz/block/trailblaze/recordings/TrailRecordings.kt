@@ -31,6 +31,26 @@ object TrailRecordings {
    */
   const val TRAILBLAZE_DOT_YAML = "trailblaze.yaml"
   const val BLAZE_DOT_YAML = "blaze.yaml"
+
+  /**
+   * Filename for the unified-per-test trail YAML file. The unified format
+   * collapses the per-platform `<classifier>.trail.yaml` siblings plus the
+   * `blaze.yaml` NL definition into a single document keyed by device
+   * classifier.
+   *
+   * Resolution priority within a trail directory:
+   *   1. Most-specific classifier match (`ios-iphone.trail.yaml`, then
+   *      `ios.trail.yaml`).
+   *   2. [UNIFIED_TRAIL_FILENAME] — the unified file, classifier-agnostic at
+   *      the filename level (lowering happens at parse time).
+   *   3. NL definition fallback ([BLAZE_DOT_YAML] / [TRAILBLAZE_DOT_YAML]).
+   *
+   * The unified file sits between the platform-specific legacy recordings
+   * and the legacy NL definitions so directories that still contain
+   * per-platform files keep running unchanged — bulk-migration deletes
+   * those legacy files when the unified format is intended to win.
+   */
+  const val UNIFIED_TRAIL_FILENAME = "trail.yaml"
   /**
    * The default filename used when creating new NL definition files.
    * Change this single constant to switch the default across all write paths.
@@ -57,17 +77,24 @@ object TrailRecordings {
 
   /**
    * Returns `true` if [fileName] is any Trailblaze YAML file — either an NL definition
-   * (`blaze.yaml` / `trailblaze.yaml`) or a platform-specific recording (`*.trail.yaml`).
+   * (`blaze.yaml` / `trailblaze.yaml`), a unified file (`trail.yaml`), or a
+   * platform-specific legacy recording (`*.trail.yaml`).
    */
   fun isTrailFile(fileName: String): Boolean =
     isNlDefinitionFile(fileName) || fileName.endsWith(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
 
+  /** Returns `true` if [fileName] is the unified per-test trail file. */
+  fun isUnifiedTrailFile(fileName: String): Boolean = fileName == UNIFIED_TRAIL_FILENAME
+
   /**
-   * Returns `true` if [fileName] is a platform-specific recording file
-   * (ends with `.trail.yaml` but is **not** the NL definition file).
+   * Returns `true` if [fileName] is a platform-specific legacy recording file —
+   * ends with `.trail.yaml`, is not the NL definition, and is not the unified
+   * file (`trail.yaml` happens to end with `.trail.yaml`).
    */
   fun isRecordingFile(fileName: String): Boolean =
-    fileName.endsWith(DOT_TRAIL_DOT_YAML_FILE_SUFFIX) && !isNlDefinitionFile(fileName)
+    fileName.endsWith(DOT_TRAIL_DOT_YAML_FILE_SUFFIX) &&
+      !isNlDefinitionFile(fileName) &&
+      !isUnifiedTrailFile(fileName)
 
   /**
    * Based on the classifiers, determine possible names, in order of most specific to least specific
@@ -87,6 +114,12 @@ object TrailRecordings {
             DOT_TRAIL_DOT_YAML_FILE_SUFFIX
         )
       }
+      // Unified-format trail file — chosen after the per-classifier legacy
+      // recordings (so back-compat dirs that still have those keep working)
+      // but BEFORE the NL-definition fallback (so a unified-migrated test
+      // wins over an obsolete blaze.yaml that wasn't deleted alongside the
+      // recordings).
+      add(UNIFIED_TRAIL_FILENAME)
       // Add default fallback
       addAll(NL_DEFINITION_FILENAMES)
     }

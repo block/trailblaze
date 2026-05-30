@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android
 
+import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import io.ktor.client.HttpClient
@@ -67,16 +68,21 @@ object OnDeviceOpenAICompatibleLlmClientFactory {
     } else {
       baseHttpClient
     }
-    val settings = if (resolved.chatCompletionsPath != null) {
-      OpenAIClientSettings(baseUrl = resolved.baseUrl, chatCompletionsPath = resolved.chatCompletionsPath)
-    } else {
-      OpenAIClientSettings(baseUrl = resolved.baseUrl)
-    }
-    Console.log("Registered on-device openai_compatible client for provider '${resolved.providerId}'")
+    // Default `chatCompletionsPath` to `"chat/completions"` (not Koog's
+    // `"v1/chat/completions"`). See [OpenAICompatibleLlmClientFactory] file kdoc on the
+    // host for why — same `/v1/v1/` double-segment bug applies here.
+    val settings = OpenAIClientSettings(
+      baseUrl = resolved.baseUrl,
+      chatCompletionsPath = resolved.chatCompletionsPath ?: "chat/completions",
+    )
+    Console.log(
+      "Registered on-device openai_compatible client for provider '${resolved.providerId}' " +
+        "(baseUrl=${resolved.baseUrl}, chatCompletionsPath=${settings.chatCompletionsPath})",
+    )
     return OpenAILLMClient(
       apiKey = resolved.apiKey,
       settings = settings,
-      baseClient = configuredClient,
+      httpClientFactory = KtorKoogHttpClient.Factory(baseClient = configuredClient),
     )
   }
 

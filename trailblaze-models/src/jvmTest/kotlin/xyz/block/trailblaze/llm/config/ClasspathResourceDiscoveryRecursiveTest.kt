@@ -11,8 +11,8 @@ import kotlin.test.assertTrue
 /**
  * Regression test for [ClasspathResourceDiscovery.discoverFilenamesRecursive] under the
  * `file:` classpath protocol. Earlier the file branch matched [suffix] against
- * `File.name` only, so a caller passing `suffix = "/pack.yaml"` (to require nested
- * pack.yaml under a pack-id subdirectory, mirroring jar-branch semantics) silently got
+ * `File.name` only, so a caller passing `suffix = "/trailmap.yaml"` (to require nested
+ * trailmap.yaml under a trailmap-id subdirectory, mirroring jar-branch semantics) silently got
  * zero matches whenever the classpath was an exploded directory rather than a JAR. CI
  * caught this; this test pins the relative-path semantics so it cannot regress.
  */
@@ -29,39 +29,39 @@ class ClasspathResourceDiscoveryRecursiveTest {
   @Test
   fun `recursive discovery matches suffix against relative path on file protocol`() {
     val rootDir = newTempDir()
-    val packsDir = File(rootDir, "trailblaze-config/packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText("id: alpha")
-    File(packsDir, "beta").mkdirs()
-    File(packsDir, "beta/pack.yaml").writeText("id: beta")
-    // A flat sibling YAML directly under packs/ — must NOT match the "/pack.yaml" suffix.
-    File(packsDir, "siblings.yaml").writeText("not-a-pack")
+    val trailmapsDir = File(rootDir, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha")
+    File(trailmapsDir, "beta").mkdirs()
+    File(trailmapsDir, "beta/trailmap.yaml").writeText("id: beta")
+    // A flat sibling YAML directly under trailmaps/ — must NOT match the "/trailmap.yaml" suffix.
+    File(trailmapsDir, "siblings.yaml").writeText("not-a-trailmap")
 
     withClasspathRoot(rootDir) {
       val results = ClasspathResourceDiscovery.discoverFilenamesRecursive(
-        directoryPath = "trailblaze-config/packs",
-        suffix = "/pack.yaml",
+        directoryPath = "trails/config/trailmaps",
+        suffix = "/trailmap.yaml",
       )
-      assertEquals(setOf("alpha/pack.yaml", "beta/pack.yaml"), results)
+      assertEquals(setOf("alpha/trailmap.yaml", "beta/trailmap.yaml"), results)
     }
   }
 
   @Test
   fun `recursive discovery still works with bare-suffix matches like dot-yaml`() {
     val rootDir = newTempDir()
-    val packsDir = File(rootDir, "trailblaze-config/packs").apply { mkdirs() }
-    File(packsDir, "alpha").mkdirs()
-    File(packsDir, "alpha/pack.yaml").writeText("id: alpha")
-    File(packsDir, "siblings.yaml").writeText("not-a-pack")
+    val trailmapsDir = File(rootDir, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha")
+    File(trailmapsDir, "siblings.yaml").writeText("not-a-trailmap")
 
     withClasspathRoot(rootDir) {
       val results = ClasspathResourceDiscovery.discoverFilenamesRecursive(
-        directoryPath = "trailblaze-config/packs",
+        directoryPath = "trails/config/trailmaps",
         suffix = ".yaml",
       )
       // Bare suffix matches both nested and flat entries — relative-path semantics
       // do not change the meaning of suffixes that don't include `/`.
-      assertTrue("alpha/pack.yaml" in results)
+      assertTrue("alpha/trailmap.yaml" in results)
       assertTrue("siblings.yaml" in results)
     }
   }
@@ -71,8 +71,8 @@ class ClasspathResourceDiscoveryRecursiveTest {
     val rootDir = newTempDir()
     withClasspathRoot(rootDir) {
       val results = ClasspathResourceDiscovery.discoverFilenamesRecursive(
-        directoryPath = "trailblaze-config/packs",
-        suffix = "/pack.yaml",
+        directoryPath = "trails/config/trailmaps",
+        suffix = "/trailmap.yaml",
       )
       assertEquals(emptySet(), results)
     }

@@ -37,7 +37,7 @@ import java.io.File
  *
  * Example:
  * ```bash
- * # In a CI script that drives `trailblaze trail …`
+ * # In a CI script that drives `trailblaze run …`
  * export TRAILBLAZE_DEFERRED_VARIABLES="user_email,user_pin"
  * ```
  */

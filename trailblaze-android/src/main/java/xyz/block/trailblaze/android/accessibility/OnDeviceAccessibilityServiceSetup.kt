@@ -88,10 +88,18 @@ object OnDeviceAccessibilityServiceSetup {
       when {
         currentServices.isBlank() || currentServices == "null" -> serviceComponent
         currentServices.contains(serviceComponent) -> {
-          Console.log("Accessibility service already in enabled_accessibility_services.")
-          // Still need to ensure accessibility is globally enabled
-          AdbCommandUtil.execShellCommand("settings put secure accessibility_enabled 1")
-          return
+          // Service is in settings but not currently running (isServiceRunning() returned false
+          // before we got here). This happens when am instrument force-stops the test package at
+          // startup, killing the service process and leaving it in Android's "Crashed services"
+          // list. Cycling the setting (remove → re-add) clears the crashed state and prompts the
+          // system to rebind the service.
+          Console.log("Accessibility service in settings but not running; cycling to clear crashed state.")
+          val withoutSelf =
+            currentServices.split(":").filter { it != serviceComponent }.joinToString(":")
+          AdbCommandUtil.execShellCommand(
+            "settings put secure enabled_accessibility_services ${withoutSelf.ifBlank { "null" }}"
+          )
+          currentServices // re-add the original list (which includes this component)
         }
         else -> "$currentServices:$serviceComponent"
       }

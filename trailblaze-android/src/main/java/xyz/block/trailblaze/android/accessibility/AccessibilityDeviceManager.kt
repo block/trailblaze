@@ -3,6 +3,7 @@ package xyz.block.trailblaze.android.accessibility
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.telephony.TelephonyManager
@@ -549,7 +550,7 @@ class AccessibilityDeviceManager(
             val center = result.node.centerPoint()
               ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
             Console.log("Resolved via TrailblazeNode: ${action.nodeSelector.description()} at (${center.first}, ${center.second})")
-            tapOrLongPress(center.first, center.second, action.longPress)
+            tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
@@ -559,7 +560,7 @@ class AccessibilityDeviceManager(
             Console.log(
               "TrailblazeNode selector matched ${result.nodes.size} elements, using first at (${center.first}, ${center.second})"
             )
-            tapOrLongPress(center.first, center.second, action.longPress)
+            tapOrLongPressOnResolvedNode(first, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
@@ -601,6 +602,71 @@ class AccessibilityDeviceManager(
 
   private fun tapOrLongPress(x: Int, y: Int, longPress: Boolean) {
     if (longPress) longPress(x, y) else tap(x, y)
+  }
+
+  /**
+   * Selector-resolved tap dispatch: prefers `ACTION_CLICK` on the live accessibility node
+   * matching [resolvedNode]'s identity when [planActionClickRoute] returns a plan, otherwise
+   * falls back to coordinate gesture dispatch. Long-press always uses the gesture path.
+   *
+   * Scoped here (not on raw [tap]) so coordinate-only taps (`AccessibilityAction.Tap`,
+   * `TapRelative`) keep physical-touch semantics where they matter — EditText caret
+   * placement, custom touch regions, IME keys under non-application overlays, etc. The
+   * routing decision uses the same node the selector resolution chose, keeping it aligned
+   * with the rest of Trailblaze's hit-test / `resolveFromTap` machinery (no z-order or
+   * deepest-clickable heuristic divergence).
+   */
+  private fun tapOrLongPressOnResolvedNode(
+    resolvedNode: TrailblazeNode,
+    centerX: Int,
+    centerY: Int,
+    longPress: Boolean,
+  ) {
+    if (actionClickRouteDisabled()) {
+      Console.log("[tap-route] kill-switch set, using gesture at ($centerX,$centerY)")
+      return tapOrLongPress(centerX, centerY, longPress)
+    }
+    val plan = planActionClickRoute(resolvedNode, longPress)
+    if (plan == null) {
+      // Surface the gate-relevant fields of the resolved node so an oncall debugging
+      // "why did this tap go via gesture?" can map each value to the matching condition
+      // in `planActionClickRoute`'s kdoc without re-running the session. The 7-condition
+      // gate makes a generic "declined" message uninformative.
+      Console.log(
+        "[tap-route] gesture at ($centerX,$centerY) — gate declined ACTION_CLICK " +
+          "(${describeNodeForRouteLog(resolvedNode, longPress)})",
+      )
+      return tapOrLongPress(centerX, centerY, longPress)
+    }
+    dispatchAndAwaitSettleBlocking {
+      val dispatched = TrailblazeAccessibilityService.tapByActionClickOnBounds(
+        plan.bounds.toAndroidRect(),
+        plan.className,
+        plan.resourceId,
+      )
+      if (dispatched) {
+        Console.log("[tap-route] ACTION_CLICK dispatched on ${plan.className ?: "<no-class>"}")
+      } else {
+        // Live tree didn't carry a node matching the resolved identity (tree mutated between
+        // resolve and dispatch, or node no longer advertises ACTION_CLICK). Fall back to the
+        // gesture path at the resolved coordinate.
+        Console.log(
+          "[tap-route] ACTION_CLICK lookup miss for ${plan.className ?: "<no-class>"}, " +
+            "gesture fallback at ($centerX,$centerY)",
+        )
+        TrailblazeAccessibilityService.tap(centerX, centerY)
+      }
+    }
+  }
+
+  private fun actionClickRouteDisabled(): Boolean {
+    // Kill-switch for the ACTION_CLICK route. Set
+    // `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE=1` to force every selector-resolved tap back to
+    // the gesture path — same shape as `TRAILBLAZE_ADB_TIMEOUT_MS` /
+    // `TRAILBLAZE_CLI_PRINT_STACK_TRACES`. Read on every dispatch (not cached) so an oncall
+    // can flip it via env on a running daemon without a restart.
+    val raw = System.getenv("TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE")?.lowercase()
+    return raw == "1" || raw == "true"
   }
 
   /** Asserts an element matching the selector is visible, polling until timeout. */
@@ -672,4 +738,83 @@ class AccessibilityDeviceManager(
         swipe((screenWidth * 0.1f).toInt(), centerY, (screenWidth * 0.9f).toInt(), centerY, durationMs)
     }
   }
+}
+
+/**
+ * Identity a [tapOrLongPressOnResolvedNode] caller will look up in the live a11y tree when
+ * routing via `ACTION_CLICK`. Kept on the cross-platform [TrailblazeNode.Bounds] type rather
+ * than an `android.graphics.Rect` so [planActionClickRoute] stays unit-testable on the JVM —
+ * `Rect` is a stub on the pure-JVM Android jar (its `equals` throws). The dispatch site
+ * converts to `Rect` only when calling the service.
+ */
+internal data class ActionClickPlan(
+  val bounds: TrailblazeNode.Bounds,
+  val className: String?,
+  val resourceId: String?,
+)
+
+/**
+ * Returns the [ActionClickPlan] for routing a tap on [node] via `ACTION_CLICK`, or `null`
+ * when the gesture path should be used instead. Pure function — exposed `internal` so the
+ * routing decision is unit-testable without an instrumentation context.
+ *
+ * Routes to ACTION_CLICK when ALL hold:
+ * - it's a tap (long-press always uses gesture — `ACTION_LONG_CLICK` is its own routing
+ *   decision, out of scope for this gate),
+ * - [node] has known [TrailblazeNode.bounds] (the live-tree lookup is bounds-keyed),
+ * - [node] carries an [DriverNodeDetail.AndroidAccessibility] detail whose `actions`
+ *   advertise `ACTION_CLICK`,
+ * - the node is enabled — a disabled-but-clickable node's `performAction(ACTION_CLICK)`
+ *   returns false silently and the gesture-path fallback is also a no-op, so the caller
+ *   would see resolved coords + a "success" outcome with nothing actually tapped. Routing
+ *   disabled nodes to gesture from the start lets the caller's normal timeout-retry
+ *   surface the un-interactable state,
+ * - the node is visible to the user (an `isVisibleToUser=false` selector match is a
+ *   background button under an in-app overlay; gesture defers to the OS hit-test which
+ *   respects z-order, ACTION_CLICK would bypass that and fire the hidden node directly),
+ * - the node is not editable (EditText caret placement requires the touch offset; ACTION_CLICK
+ *   merely focuses the field without honoring it),
+ * - the node carries its own text or contentDescription — distinguishes interactive **leaf**
+ *   elements (`ExploreByTouchHelper` virtual buttons that emit a per-button
+ *   `contentDescription`, standard `<Button text="Submit"/>`, Compose
+ *   `Button { Text("Hello") }` merged-semantics nodes whose accessibility text is the merged
+ *   label) from **container wrappers** whose `clickable=true` is set declaratively but whose
+ *   real click logic lives elsewhere. Empirically, some downstream apps surface row-shaped
+ *   call-to-action buttons as an `android.view.ViewGroup` with `clickable=true` and
+ *   `ACTION_CLICK` advertised, but the actual click handler isn't `View.performClick()` —
+ *   gesture-path motion injection lands at the right interceptor, `ACTION_CLICK` no-ops
+ *   silently. The text/contentDescription requirement filters those wrappers out without
+ *   re-introducing the canvas-widget failure mode this routing was originally designed to
+ *   fix (virtual views emit their contentDescription as part of the helper's accessibility
+ *   contract, so they pass).
+ */
+internal fun planActionClickRoute(node: TrailblazeNode, longPress: Boolean): ActionClickPlan? {
+  if (longPress) return null
+  val bounds = node.bounds ?: return null
+  val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility ?: return null
+  if (ACTION_CLICK_NAME !in detail.actions) return null
+  if (!detail.isEnabled) return null
+  if (detail.isEditable) return null
+  if (!detail.isVisibleToUser) return null
+  if (detail.text.isNullOrBlank() && detail.contentDescription.isNullOrBlank()) return null
+  return ActionClickPlan(bounds, detail.className, detail.resourceId)
+}
+
+internal fun TrailblazeNode.Bounds.toAndroidRect(): Rect = Rect(left, top, right, bottom)
+
+/**
+ * Builds a one-line diagnostic string of the gate-relevant fields on [node] so a `[tap-route]`
+ * decline log entry can name the failing condition without re-running the session. Each field
+ * lines up with one of the checks in [planActionClickRoute]'s kdoc — `text=null,
+ * contentDescription=null` → new leaf-text gate fired; `isVisibleToUser=false` → overlay gate;
+ * etc. Pure function, kept top-level alongside [planActionClickRoute] for the same JVM-unit-
+ * testability reasons.
+ */
+internal fun describeNodeForRouteLog(node: TrailblazeNode, longPress: Boolean): String {
+  val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
+  return "longPress=$longPress, hasBounds=${node.bounds != null}, " +
+    "className=${detail?.className}, text=${detail?.text}, contentDescription=${detail?.contentDescription}, " +
+    "isEnabled=${detail?.isEnabled}, isEditable=${detail?.isEditable}, " +
+    "isVisibleToUser=${detail?.isVisibleToUser}, " +
+    "hasActionClick=${detail?.actions?.contains(ACTION_CLICK_NAME)}"
 }

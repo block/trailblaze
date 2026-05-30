@@ -39,9 +39,9 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.cli.WaypointDiscovery
 import xyz.block.trailblaze.config.ToolYamlLoader
-import xyz.block.trailblaze.config.project.LoadedTrailblazePackManifest
-import xyz.block.trailblaze.config.project.PackSource
-import xyz.block.trailblaze.config.project.TrailblazePackManifestLoader
+import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
+import xyz.block.trailblaze.config.project.TrailmapSource
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.logs.model.SessionId
@@ -68,7 +68,7 @@ import javax.swing.JFileChooser
 
 /**
  * Desktop-only host for the multiplatform [WaypointVisualizer]. Loads waypoints via the
- * same code path as the `trailblaze waypoint` CLI (workspace packs + classpath packs +
+ * same code path as the `trailblaze waypoint` CLI (workspace trailmaps + classpath trailmaps +
  * a filesystem walk under [initialRootPath]) and surfaces parse failures inline.
  *
  * The visualizer itself lives in `:trailblaze-ui` commonMain so the WASM target can
@@ -346,12 +346,12 @@ internal fun loadWaypoints(root: File): WaypointLoadOutput {
   val discovery = WaypointDiscovery.discover(root)
   val idToFile = if (root.isDirectory) buildIdToFileMap(root) else emptyMap()
   val exampleFailures = mutableListOf<String>()
-  val packContents = collectPackContents(exampleFailures)
+  val trailmapContents = collectTrailmapContents(exampleFailures)
 
   val items = mergeWaypointSources(
     definitions = discovery.definitions,
     idToFile = idToFile,
-    packContents = packContents,
+    trailmapContents = trailmapContents,
     root = root,
     loadFilesystemExample = { file, id -> tryLoadFilesystemExample(file, id, exampleFailures, root) },
   )
@@ -362,8 +362,8 @@ internal fun loadWaypoints(root: File): WaypointLoadOutput {
 
   val failureMessages = buildList {
     addAllCapped(rootFailureMessages, MAX_FAILURE_MESSAGES_PER_SOURCE, label = "root failures")
-    if (discovery.packLoadFailed) {
-      add("One or more pack-bundled waypoint sources failed to load (see CLI logs for details).")
+    if (discovery.trailmapLoadFailed) {
+      add("One or more trailmap-bundled waypoint sources failed to load (see CLI logs for details).")
     }
     addAllCapped(exampleFailures, MAX_FAILURE_MESSAGES_PER_SOURCE, label = "example failures")
   }
@@ -387,14 +387,14 @@ private fun MutableList<String>.addAllCapped(source: List<String>, cap: Int, lab
 
 /**
  * Pure merge step exposed for unit testing — given the list of definitions discovered by
- * [WaypointDiscovery] plus the side maps (filesystem id→file, classpath pack contents),
+ * [WaypointDiscovery] plus the side maps (filesystem id→file, classpath trailmap contents),
  * produces a [WaypointDisplayItem] per definition with the right source label and example.
  *
  * Source-of-truth rule (the bug originally flagged by Codex):
- * if a definition's id appears in [PackContents.ids], the pack is its provenance. Any
- * same-id filesystem file under [root] is shadowed by [WaypointDiscovery]'s pack-first
+ * if a definition's id appears in [TrailmapContents.ids], the trailmap is its provenance. Any
+ * same-id filesystem file under [root] is shadowed by [WaypointDiscovery]'s trailmap-first
  * dedup and must NOT contribute its path or example — otherwise the visualizer would
- * describe a pack waypoint with the shadowed file's screenshot.
+ * describe a trailmap waypoint with the shadowed file's screenshot.
  *
  * `loadFilesystemExample` is parameterized so tests can stub the example loader without
  * touching the filesystem; production callers pass a lambda that wraps
@@ -403,25 +403,25 @@ private fun MutableList<String>.addAllCapped(source: List<String>, cap: Int, lab
 internal fun mergeWaypointSources(
   definitions: List<WaypointDefinition>,
   idToFile: Map<String, File>,
-  packContents: PackContents,
+  trailmapContents: TrailmapContents,
   root: File,
   loadFilesystemExample: (File, String) -> WaypointExample?,
 ): List<WaypointDisplayItem> = definitions.map { def ->
-  val isPackProvenance = def.id in packContents.ids
-  val packExample = packContents.examples[def.id]
-  val file = if (isPackProvenance) null else idToFile[def.id]
+  val isTrailmapProvenance = def.id in trailmapContents.ids
+  val trailmapExample = trailmapContents.examples[def.id]
+  val file = if (isTrailmapProvenance) null else idToFile[def.id]
   val sourceLabel = when {
     file != null -> file.toRelativeStringOrAbsolute(root)
-    packExample?.sourceLabel != null -> packExample.sourceLabel
-    // Pack-provenance with no captured example: fall back to the manifest path so
+    trailmapExample?.sourceLabel != null -> trailmapExample.sourceLabel
+    // Trailmap-provenance with no captured example: fall back to the manifest path so
     // the source label still encodes the platform sub-dir
-    // (`packs/<pack>/waypoints/<platform>/...`). Downstream consumers that derive
+    // (`trailmaps/<trailmap>/waypoints/<platform>/...`). Downstream consumers that derive
     // platform from sourceLabel (e.g. WaypointGraphBuilder) need this for every
     // waypoint, not just the ones lucky enough to have an example.json sibling.
-    isPackProvenance -> packContents.idToPackPath[def.id] ?: "(pack-bundled)"
-    else -> "(pack-bundled)"
+    isTrailmapProvenance -> trailmapContents.idToTrailmapPath[def.id] ?: "(trailmap-bundled)"
+    else -> "(trailmap-bundled)"
   }
-  val example = file?.let { loadFilesystemExample(it, def.id) } ?: packExample?.example
+  val example = file?.let { loadFilesystemExample(it, def.id) } ?: trailmapExample?.example
   WaypointDisplayItem(definition = def, sourceLabel = sourceLabel, example = example)
 }
 
@@ -472,158 +472,158 @@ private fun tryLoadFilesystemExample(
 }
 
 /**
- * Pack-bundled (classpath) waypoints come through [WaypointDiscovery] as plain definitions
+ * Trailmap-bundled (classpath) waypoints come through [WaypointDiscovery] as plain definitions
  * with no source file we can sit next to. To still surface their captured screenshots,
- * walk the discovered classpath pack manifests directly: each manifest's `waypoints:`
- * list gives us the pack-relative path to a `.waypoint.yaml`, and the example.json /
+ * walk the discovered classpath trailmap manifests directly: each manifest's `waypoints:`
+ * list gives us the trailmap-relative path to a `.waypoint.yaml`, and the example.json /
  * screenshot live as siblings under the same path stem.
  *
  * Returned map is keyed by waypoint id (read out of the YAML) and includes a human
- * source label like `pack:clock — waypoints/clock-tab.waypoint.yaml`.
+ * source label like `trailmap:clock — waypoints/clock-tab.waypoint.yaml`.
  */
-internal data class PackExample(val sourceLabel: String, val example: WaypointExample)
+internal data class TrailmapExample(val sourceLabel: String, val example: WaypointExample)
 
 /**
- * What the pack-side discovery contributed to the visualizer:
- *  - [ids] — every waypoint id parsed out of a classpath pack manifest, even when no
+ * What the trailmap-side discovery contributed to the visualizer:
+ *  - [ids] — every waypoint id parsed out of a classpath trailmap manifest, even when no
  *    `.example.json` companion exists. Used by [mergeWaypointSources] to detect
- *    provenance: if an id is in this set, [WaypointDiscovery]'s pack-first dedup means
- *    the def we have is the pack's, and any same-id filesystem file under `root` is a
+ *    provenance: if an id is in this set, [WaypointDiscovery]'s trailmap-first dedup means
+ *    the def we have is the trailmap's, and any same-id filesystem file under `root` is a
  *    shadowed entry whose path/screenshot must not be shown.
  *  - [examples] — the subset of those ids that had a usable `.example.json` + tree.
  */
-internal data class PackContents(
+internal data class TrailmapContents(
   val ids: Set<String>,
-  val examples: Map<String, PackExample>,
+  val examples: Map<String, TrailmapExample>,
   /**
-   * Every pack-provided waypoint id → its pack-relative manifest label, e.g.
-   * `pack:myapp — waypoints/android/home.waypoint.yaml`. Populated even for ids
+   * Every trailmap-provided waypoint id → its trailmap-relative manifest label, e.g.
+   * `trailmap:myapp — waypoints/android/home.waypoint.yaml`. Populated even for ids
    * with no captured example, so downstream consumers can read platform out of
    * the path segment without needing an example.json sibling. Defaults to empty
    * for backward compatibility with the test fixtures that pre-date this field.
    */
-  val idToPackPath: Map<String, String> = emptyMap(),
+  val idToTrailmapPath: Map<String, String> = emptyMap(),
 )
 
-private fun collectPackContents(failures: MutableList<String>): PackContents {
-  val classpathPacks = runCatching {
-    TrailblazePackManifestLoader.discoverAndLoadFromClasspath()
+private fun collectTrailmapContents(failures: MutableList<String>): TrailmapContents {
+  val classpathTrailmaps = runCatching {
+    TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath()
   }.getOrElse { e ->
     // Don't lose this — without it, a malformed manifest silently zeros out every
-    // pack-bundled waypoint and the user has no clue why their tab is empty.
-    val msg = "pack manifest discovery failed: ${e.message ?: e::class.simpleName}"
+    // trailmap-bundled waypoint and the user has no clue why their tab is empty.
+    val msg = "trailmap manifest discovery failed: ${e.message ?: e::class.simpleName}"
     failures += msg
     Console.log("[Waypoints] $msg")
-    return PackContents(emptySet(), emptyMap())
+    return TrailmapContents(emptySet(), emptyMap())
   }
-  return buildPackContents(classpathPacks, failures)
+  return buildTrailmapContents(classpathTrailmaps, failures)
 }
 
 /**
- * Pure function over a list of pre-loaded pack manifests — separates the classpath-
- * discovery side effect (which the test suite can't easily control) from the per-pack
+ * Pure function over a list of pre-loaded trailmap manifests — separates the classpath-
+ * discovery side effect (which the test suite can't easily control) from the per-trailmap
  * waypoint enumeration that the test suite actually wants to verify. `internal` so
- * `WaypointPackContentsTest` can drive it with `PackSource.Filesystem`-backed packs.
+ * `WaypointTrailmapContentsTest` can drive it with `TrailmapSource.Filesystem`-backed trailmaps.
  */
-internal fun buildPackContents(
-  classpathPacks: List<LoadedTrailblazePackManifest>,
+internal fun buildTrailmapContents(
+  classpathTrailmaps: List<LoadedTrailblazeTrailmapManifest>,
   failures: MutableList<String>,
-): PackContents {
+): TrailmapContents {
   val ids = mutableSetOf<String>()
-  val examples = mutableMapOf<String, PackExample>()
-  val idToPackPath = mutableMapOf<String, String>()
-  for (pack in classpathPacks) {
-    // Modern packs leave `manifest.waypoints` empty and rely on auto-discovery from
-    // `<pack>/waypoints/**/*.waypoint.yaml` (mirroring TrailblazeProjectConfigLoader's
-    // resolveSinglePack). Without this fallback, every modern pack contributes zero
-    // to PackContents — so `idToPackPath` stays empty, the platform-from-source-label
+  val examples = mutableMapOf<String, TrailmapExample>()
+  val idToTrailmapPath = mutableMapOf<String, String>()
+  for (trailmap in classpathTrailmaps) {
+    // Modern trailmaps leave `manifest.waypoints` empty and rely on auto-discovery from
+    // `<trailmap>/waypoints/**/*.waypoint.yaml` (mirroring TrailblazeProjectConfigLoader's
+    // resolveSingleTrailmap). Without this fallback, every modern trailmap contributes zero
+    // to TrailmapContents — so `idToTrailmapPath` stays empty, the platform-from-source-label
     // derivation in WaypointGraphBuilder always returns null, and the graph viewer's
     // platform filter pills silently disappear. Iterate the manifest list when present
-    // (legacy packs still parse), else walk `waypoints/` directly.
-    val waypointPaths = pack.manifest.waypoints.takeIf { it.isNotEmpty() }
+    // (legacy trailmaps still parse), else walk `waypoints/` directly.
+    val waypointPaths = trailmap.manifest.waypoints.takeIf { it.isNotEmpty() }
       ?: runCatching {
-        pack.source.listSiblingsRecursive(
+        trailmap.source.listSiblingsRecursive(
           relativeDir = "waypoints",
           suffixes = listOf(".waypoint.yaml"),
         )
       }.getOrElse { e ->
-        failures += "pack:${pack.manifest.id}: failed to enumerate waypoints/ (${e.message ?: e::class.simpleName})"
+        failures += "trailmap:${trailmap.manifest.id}: failed to enumerate waypoints/ (${e.message ?: e::class.simpleName})"
         emptyList()
       }
     for (waypointPath in waypointPaths) {
-      val parsed = loadPackWaypointAndExample(pack, waypointPath, failures) ?: continue
-      // `putIfAbsent`/`add` so the first pack to claim an id wins, mirroring
-      // WaypointDiscovery's dedup semantics (workspace > classpath, pack-first within each).
-      val packLabel = "pack:${pack.manifest.id} — $waypointPath"
+      val parsed = loadTrailmapWaypointAndExample(trailmap, waypointPath, failures) ?: continue
+      // `putIfAbsent`/`add` so the first trailmap to claim an id wins, mirroring
+      // WaypointDiscovery's dedup semantics (workspace > classpath, trailmap-first within each).
+      val trailmapLabel = "trailmap:${trailmap.manifest.id} — $waypointPath"
       ids += parsed.id
-      idToPackPath.putIfAbsent(parsed.id, packLabel)
+      idToTrailmapPath.putIfAbsent(parsed.id, trailmapLabel)
       parsed.example?.let { ex ->
         if (!examples.containsKey(parsed.id)) {
-          examples[parsed.id] = PackExample(
-            sourceLabel = packLabel,
+          examples[parsed.id] = TrailmapExample(
+            sourceLabel = trailmapLabel,
             example = ex,
           )
         }
       }
     }
   }
-  return PackContents(ids = ids, examples = examples, idToPackPath = idToPackPath)
+  return TrailmapContents(ids = ids, examples = examples, idToTrailmapPath = idToTrailmapPath)
 }
 
-internal data class PackParse(val id: String, val example: WaypointExample?)
+internal data class TrailmapParse(val id: String, val example: WaypointExample?)
 
 /**
- * `internal` for unit testing — the test suite drives a `PackSource.Filesystem` with
+ * `internal` for unit testing — the test suite drives a `TrailmapSource.Filesystem` with
  * various sibling-file shapes through this function to lock down the failure-message
  * strings that surface in the visualizer's banner.
  */
-internal fun loadPackWaypointAndExample(
-  pack: LoadedTrailblazePackManifest,
+internal fun loadTrailmapWaypointAndExample(
+  trailmap: LoadedTrailblazeTrailmapManifest,
   waypointPath: String,
   failures: MutableList<String>,
-): PackParse? {
-  val packLabel = "pack:${pack.manifest.id} — $waypointPath"
+): TrailmapParse? {
+  val trailmapLabel = "trailmap:${trailmap.manifest.id} — $waypointPath"
   // `readSibling` returns null when the file isn't present — for the waypoint yaml itself
   // (declared in the manifest) that's a real "manifest references missing file" error,
   // distinct from an exception during read. Surface both to the user.
-  val yamlText: String = runCatching { pack.source.readSibling(waypointPath) }
+  val yamlText: String = runCatching { trailmap.source.readSibling(waypointPath) }
     .getOrElse { e ->
-      failures += "$packLabel: failed to read waypoint yaml (${e.message ?: e::class.simpleName})"
+      failures += "$trailmapLabel: failed to read waypoint yaml (${e.message ?: e::class.simpleName})"
       return null
     }
     ?: run {
-      failures += "$packLabel: waypoint yaml not found in pack source"
+      failures += "$trailmapLabel: waypoint yaml not found in trailmap source"
       return null
     }
   val def = runCatching {
-    PACK_WAYPOINT_YAML.decodeFromString(WaypointDefinition.serializer(), yamlText)
+    TRAILMAP_WAYPOINT_YAML.decodeFromString(WaypointDefinition.serializer(), yamlText)
   }.getOrElse { e ->
-    failures += "$packLabel: failed to parse waypoint yaml (${e.message ?: e::class.simpleName})"
+    failures += "$trailmapLabel: failed to parse waypoint yaml (${e.message ?: e::class.simpleName})"
     return null
   }
   val basename = waypointPath.removeSuffix(".waypoint.yaml")
   val exampleJsonPath = "$basename.example.json"
   // example.json is optional — readSibling returning null means "no companion file",
   // not a parse error, so we don't add a failure entry here.
-  val exampleText = runCatching { pack.source.readSibling(exampleJsonPath) }.getOrNull()
-    ?: return PackParse(def.id, example = null)
+  val exampleText = runCatching { trailmap.source.readSibling(exampleJsonPath) }.getOrNull()
+    ?: return TrailmapParse(def.id, example = null)
   val projection = runCatching {
     TrailblazeJson.defaultWithoutToolsInstance
-      .decodeFromString(PackExampleProjection.serializer(), exampleText)
+      .decodeFromString(TrailmapExampleProjection.serializer(), exampleText)
   }.getOrElse { e ->
-    failures += "$packLabel: failed to parse example.json (${e.message ?: e::class.simpleName}) (waypoint=${def.id})"
-    return PackParse(def.id, example = null)
+    failures += "$trailmapLabel: failed to parse example.json (${e.message ?: e::class.simpleName}) (waypoint=${def.id})"
+    return TrailmapParse(def.id, example = null)
   }
   val tree = projection.trailblazeNodeTree ?: run {
-    failures += "$packLabel: example.json has no trailblazeNodeTree (waypoint=${def.id})"
-    return PackParse(def.id, example = null)
+    failures += "$trailmapLabel: example.json has no trailblazeNodeTree (waypoint=${def.id})"
+    return TrailmapParse(def.id, example = null)
   }
   val parentDir = waypointPath.substringBeforeLast('/', missingDelimiterValue = "")
   val screenshotBytes = projection.screenshotFile?.let { fileName ->
     val relPath = if (parentDir.isEmpty()) fileName else "$parentDir/$fileName"
-    readPackBytes(pack.source, relPath)
+    readTrailmapBytes(trailmap.source, relPath)
   }
-  return PackParse(
+  return TrailmapParse(
     id = def.id,
     example = WaypointExample(
       tree = tree,
@@ -635,7 +635,7 @@ internal fun loadPackWaypointAndExample(
 }
 
 /** Same kaml config as `WaypointLoader.yaml`, duplicated here to avoid widening that internal API. */
-private val PACK_WAYPOINT_YAML = Yaml(
+private val TRAILMAP_WAYPOINT_YAML = Yaml(
   configuration = YamlConfiguration(strictMode = false, encodeDefaults = false),
 )
 
@@ -646,7 +646,7 @@ private val PACK_WAYPOINT_YAML = Yaml(
  * visualizer needs — the matcher's deeper plumbing isn't relevant here.
  */
 @Serializable
-private data class PackExampleProjection(
+private data class TrailmapExampleProjection(
   val trailblazeNodeTree: TrailblazeNode? = null,
   val screenshotFile: String? = null,
   val deviceWidth: Int = 0,
@@ -654,20 +654,20 @@ private data class PackExampleProjection(
 )
 
 /**
- * Reads a pack-relative resource as raw bytes. Mirrors [PackSource.readSibling] except
+ * Reads a trailmap-relative resource as raw bytes. Mirrors [TrailmapSource.readSibling] except
  * that one returns text only — screenshots are binary (.webp/.png) so we need a bytes
  * variant. Goes through the same context classloader path the manifest loader uses so
  * jar:/file: classpath entries both work.
  */
-private fun readPackBytes(source: PackSource, relativePath: String): ByteArray? {
+private fun readTrailmapBytes(source: TrailmapSource, relativePath: String): ByteArray? {
   return when (source) {
-    is PackSource.Filesystem -> {
-      val target = File(source.packDir, relativePath)
+    is TrailmapSource.Filesystem -> {
+      val target = File(source.trailmapDir, relativePath)
       if (target.isFile) target.readBytes() else null
     }
-    is PackSource.Classpath -> {
+    is TrailmapSource.Classpath -> {
       val cl = Thread.currentThread().contextClassLoader
-        ?: PackSource::class.java.classLoader
+        ?: TrailmapSource::class.java.classLoader
       cl?.getResourceAsStream("${source.resourceDir}/$relativePath")?.use { it.readBytes() }
     }
   }

@@ -17,7 +17,7 @@ import org.junit.Test
  * Both default to true. Three non-default combinations are exercised here so a future
  * change that re-conflates the two flags (a single `if` over the wrong field, an
  * accidental copy-paste in the gating block) regresses obviously rather than only
- * showing up downstream in `PerPackClientDtsEmitter` or the agent toolbox composition.
+ * showing up downstream in `PerTrailmapClientDtsEmitter` or the agent toolbox composition.
  */
 class SurfaceFlagFilteringTest {
 
@@ -73,7 +73,7 @@ class SurfaceFlagFilteringTest {
   // `asToolType` does not know how to lower. The LLM path historically hid this by
   // returning null at the `surfaceToLlm = false` gate before reaching the lowering; the
   // scripted-tool path cannot, so `toScriptedToolDescriptor` swallows the failure rather
-  // than crashing all-pack codegen. These tests pin both halves of that contract: the
+  // than crashing all-trailmap codegen. These tests pin both halves of that contract: the
   // swallow happens for lowering failures, AND a tool with `surfaceToScriptedTools = true`
   // but no other issues still produces a descriptor.
   // ─────────────────────────────────────────────────────────────────────────────
@@ -89,8 +89,8 @@ class SurfaceFlagFilteringTest {
   fun `toScriptedToolDescriptor swallows asToolType IllegalArgumentException`() {
     // The Map<String, String> parameter type makes `asToolType` throw
     // IllegalArgumentException. `toScriptedToolDescriptor` must return null instead of
-    // letting the exception propagate to `PerPackClientDtsEmitter`'s `mapNotNull`, which
-    // would crash codegen for the entire pack.
+    // letting the exception propagate to `PerTrailmapClientDtsEmitter`'s `mapNotNull`, which
+    // would crash codegen for the entire trailmap.
     assertNull(UnsupportedParamShapeTool::class.toScriptedToolDescriptor())
   }
 
@@ -102,7 +102,7 @@ class SurfaceFlagFilteringTest {
     // Pin the precondition that the catch in `toScriptedToolDescriptor` is load-bearing
     // for IllegalStateException too — a missing @LLMDescription throws via `error(...)`,
     // and we want the codegen path to absorb that failure exactly like it absorbs Map
-    // lowering, rather than crashing the whole pack on a single broken tool annotation.
+    // lowering, rather than crashing the whole trailmap on a single broken tool annotation.
     assertFailsWith<IllegalStateException> {
       NoLlmDescriptionTool::class.buildToolDescriptorIgnoringSurface()
     }

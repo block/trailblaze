@@ -8,7 +8,7 @@ date: 2026-04-20
 
 ## Context
 
-Trailblaze tool definitions in `trailblaze-config/tools/*.yaml` currently support exactly
+Trailblaze tool definitions in `trails/config/tools/*.yaml` currently support exactly
 one authoring mode: **Kotlin class reference**.
 
 ```yaml
@@ -19,7 +19,7 @@ class: xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
 `ToolYamlConfig` (`trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/ToolYamlConfig.kt`)
 parses this into an `id` + FQCN. `ToolYamlLoader`
 (`trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/ToolYamlLoader.kt`)
-discovers every `trailblaze-config/tools/*.yaml` on the classpath, reflects the FQCN via
+discovers every `trails/config/tools/*.yaml` on the classpath, reflects the FQCN via
 `Class.forName`, and returns a `Map<ToolName, KClass<out TrailblazeTool>>`. LLM descriptors
 (`TrailblazeToolDescriptor`) are then generated reflectively from each Kotlin class by
 `KClass.toKoogToolDescriptor()`

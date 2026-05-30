@@ -6,8 +6,8 @@ import org.junit.Test
 
 /**
  * Locks down [WaypointGraphBuilder.applyScope] — the filter that backs the CLI's
- * `--target` / `--platform` flags and that the deployed Blockcell maps depend on for
- * correct per-(target, platform) scoping.
+ * `--target` / `--platform` flags and that the published waypoint-graph map sites
+ * depend on for correct per-(target, platform) scoping.
  *
  * The end-to-end script run validates the function works once empirically, but a
  * regression in the cascade-to-edges logic (e.g. flipping a shortcut endpoint check

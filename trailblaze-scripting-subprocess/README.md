@@ -1,6 +1,6 @@
 # trailblaze-scripting-subprocess
 
-**Out-of-process subprocess (real MCP SDK over stdio).** Spawns a bun/node
+**Out-of-process subprocess (real MCP SDK over stdio).** Spawns a bun
 subprocess per Trailblaze session, speaks MCP JSON-RPC over stdio using the
 official `io.modelcontextprotocol:kotlin-sdk`, and registers the subprocess's
 advertised tools into the global `TrailblazeToolDescriptor` registry.
@@ -15,16 +15,20 @@ on execution model:
 
 | | `:trailblaze-scripting-subprocess` | `:trailblaze-scripting` |
 |---|---|---|
-| Execution | Out-of-process bun/node subprocess | In-process QuickJS |
+| Execution | Out-of-process bun subprocess | In-process QuickJS |
 | Transport | MCP JSON-RPC over stdio | Direct Kotlin ↔ JS binding |
 | JS runtime | Real `@modelcontextprotocol/sdk` | `dokar3/quickjs-kt` |
-| Host requirement | `bun` or `node`+`tsx` on `PATH` | Just the JVM classpath |
+| Host requirement | `bun` on `PATH` (a `tsx` fallback is still wired in `NodeRuntime.kt` during the bun-only transition; do not rely on it) | Just the JVM classpath |
 | Can run on-device | No (can't spawn subprocesses) | Yes (planned — PR A5 bundle path) |
 
 ## How it's wired
 
-- Target YAMLs declare scripts via `mcp_servers:` on `AppTargetYamlConfig` (see
-  `:trailblaze-models`). Each entry points at a `.ts` file.
+- Tool descriptors under `<trailmap>/tools/` opt into this runtime via `runtime:
+  subprocess` (explicit) or by using a `.js`/`.mjs`/`.cjs` entrypoint (the
+  default extension heuristic, see `ScriptedToolRuntime.resolve`). The
+  framework synthesizes an MCP wrapper script per tool at session start.
+  (`requiresHost: true` is a separate, on-device visibility gate — not the
+  runtime selector.)
 - At session start, Trailblaze spawns the subprocess, runs the MCP handshake
   (`initialize` → `tools/list`), and registers each returned tool under the name
   it advertised — no prefixing or renaming (per conventions § 4).

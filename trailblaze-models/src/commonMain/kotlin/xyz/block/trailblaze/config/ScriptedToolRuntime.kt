@@ -8,8 +8,8 @@ import kotlinx.serialization.Serializable
  *
  * Trailblaze can execute author-supplied scripted tools under two runtimes:
  *
- *  - [SUBPROCESS] — a `bun` or `tsx` child process, via the MCP stdio transport. The handler
- *    runs in a real Node-like environment with the full `node:fs`, `node:child_process`, etc.
+ *  - [SUBPROCESS] — a `bun` child process, via the MCP stdio transport. The handler runs in
+ *    a real Node-like environment with the full `node:fs`, `node:child_process`, etc.
  *    surface. Use this for tools that need to read/write files, hold cross-process locks,
  *    spawn helper processes, or anything else QuickJS can't do.
  *  - [IN_PROCESS] — the embedded QuickJS engine. The handler runs in-JVM, has access to
@@ -17,11 +17,11 @@ import kotlinx.serialization.Serializable
  *    APIs. Faster startup, deterministic sandboxing, and the only path that works inside
  *    the on-device `:trailblaze-scripting-bundle`.
  *
- * **Default routing (when [PackScriptedToolFile.runtime] / [InlineScriptToolConfig.runtime]
+ * **Default routing (when [TrailmapScriptedToolFile.runtime] / [InlineScriptToolConfig.runtime]
  * is `null`)** is extension-based: `.js` / `.mjs` / `.cjs` → [SUBPROCESS]; everything else
  * (notably `.ts`) → [IN_PROCESS]. The extension heuristic remains for backwards compatibility
  * with the descriptors that pre-date this field. Authors who want explicit control —
- * particularly authors who want to use `.ts` syntax under bun/tsx where it's natively
+ * particularly authors who want to use `.ts` syntax under bun where it's natively
  * supported — set this field on the descriptor.
  *
  * Example use cases:
@@ -34,7 +34,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 enum class ScriptedToolRuntime {
-  /** `bun run <script>` / `tsx <script>` subprocess. Full Node API surface. */
+  /** `bun run <script>` subprocess. Full Node API surface. */
   @SerialName("subprocess")
   SUBPROCESS,
 

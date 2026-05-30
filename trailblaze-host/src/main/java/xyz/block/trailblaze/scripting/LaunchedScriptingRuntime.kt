@@ -7,7 +7,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * Per-session lifecycle handle for both forms of session-scoped scripting machinery:
  *
- *  - **Inline scripted tools** (declared under a pack manifest's `target.tools:`) — each
+ *  - **Inline scripted tools** (declared under a trailmap manifest's `target.tools:`) — each
  *    runs its handler inside an in-process [QuickJsToolHost][xyz.block.trailblaze.quickjs.tools.QuickJsToolHost].
  *    Owned by the per-tool [LazyYamlScriptedToolRegistration] entries.
  *  - **External MCP servers** (declared under `mcp_servers:`) — each runs as its own

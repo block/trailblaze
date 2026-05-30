@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.toLogPayloads
 import xyz.block.trailblaze.util.Console
@@ -58,6 +59,7 @@ fun TrailblazeAgentContext.logToolExecution(
       traceId = context.traceId,
       session = sessionProvider.invoke().sessionId,
       isRecordable = recordedTool.getIsRecordableFromAnnotation(),
+      isVerification = recordedTool.isVerificationToolInstance(),
       dispatchedHostSide = dispatchedHostSide,
     )
   // Clear the override after consuming it. The execution context is reused across every
@@ -116,6 +118,7 @@ fun TrailblazeAgentContext.logToolExecution(
     traceId = traceId,
     session = session.sessionId,
     isRecordable = tool.getIsRecordableFromAnnotation(),
+    isVerification = tool.isVerificationToolInstance(),
     dispatchedHostSide = dispatchedHostSide,
   )
   trailblazeLogger.log(session, toolLog)

@@ -77,7 +77,7 @@ open class AppCommand : Callable<Int> {
           daemon.showWindowBlocking()
         }
         Console.log("Trailblaze is already running on port $port.")
-        return@use CommandLine.ExitCode.OK
+        return@use TrailblazeExitCode.SUCCESS.code
       }
 
       // Find the launcher script to spawn as a background process
@@ -111,7 +111,7 @@ open class AppCommand : Callable<Int> {
         pb.start()
       } catch (e: Exception) {
         Console.error("Failed to start: ${e.message}")
-        return@use CommandLine.ExitCode.SOFTWARE
+        return@use TrailblazeExitCode.INFRA_FAILED.code
       }
 
       // Wait for daemon to be ready (progress dots so the user knows it's working)
@@ -130,10 +130,10 @@ open class AppCommand : Callable<Int> {
           Console.error("Trailblaze did not start within 30s. If a source build is in progress it may need more time.")
           Console.error("Daemon log: ${daemonLogFile.absolutePath}")
           Console.error("Run with --foreground to see startup output directly.")
-          return@use CommandLine.ExitCode.SOFTWARE
+          return@use TrailblazeExitCode.INFRA_FAILED.code
         }
       }
-      CommandLine.ExitCode.OK
+      TrailblazeExitCode.SUCCESS.code
     }
   }
 
@@ -147,7 +147,7 @@ open class AppCommand : Callable<Int> {
         Console.log("Trailblaze daemon is not running.")
         Console.log("")
         Console.log("Start the daemon with: trailblaze app")
-        return@use CommandLine.ExitCode.OK
+        return@use TrailblazeExitCode.SUCCESS.code
       }
 
       val status = daemon.getStatusBlocking()
@@ -165,7 +165,7 @@ open class AppCommand : Callable<Int> {
         }
       }
 
-      CommandLine.ExitCode.OK
+      TrailblazeExitCode.SUCCESS.code
     }
   }
 }

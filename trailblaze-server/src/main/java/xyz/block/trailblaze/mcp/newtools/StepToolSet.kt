@@ -40,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeT
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
+import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.isVerification
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -218,22 +219,22 @@ class StepToolSet(
 
   @LLMDescription(
     """
-    Take a step toward your objective, or verify an assertion.
+    Take one step toward your objective, or verify an assertion.
 
-    Each blaze() call should be a COMPLETE USER-FACING ACTION with all relevant
+    Each step() call should be a COMPLETE USER-FACING ACTION with all relevant
     parameters — not individual UI taps, but not multi-screen journeys either.
     The inner agent has specialized tools that handle multi-step flows (login,
     setup, onboarding, etc.) and needs full context to select the right one.
 
     GOOD scope — one action with all its details:
-      blaze(objective="Login with test@example.com")
-      blaze(objective="Search flights from Paris to London on October 4")
-      blaze(objective="Enter shipping address: 123 Main St, Springfield, IL 62701")
+      step(objective="Login with test@example.com")
+      step(objective="Search flights from Paris to London on October 4")
+      step(objective="Enter shipping address: 123 Main St, Springfield, IL 62701")
 
     BAD scope — too granular, strips context the inner agent needs:
-      blaze(objective="Launch the app")  ← inner agent can't tell this is part of a login
-      blaze(objective="Tap the email field")
-      blaze(objective="Type test@example.com")
+      step(objective="Launch the app")  ← inner agent can't tell this is part of a login
+      step(objective="Tap the email field")
+      step(objective="Type test@example.com")
 
     Trailblaze can handle larger objectives autonomously — it will break them down
     internally and use specialized tools. Larger objectives mean less back-and-forth but
@@ -248,8 +249,8 @@ class StepToolSet(
     With hint="VERIFY", checks an assertion using read-only tools and returns passed (true/false).
     """
   )
-  @Tool(McpToolProfile.TOOL_BLAZE)
-  suspend fun blaze(
+  @Tool(McpToolProfile.TOOL_STEP)
+  suspend fun step(
     @LLMDescription("A complete user-facing action with all relevant details (e.g., 'Login with test@example.com', 'Search flights Paris to London Oct 4'). Include credentials, search terms, and parameters — the inner agent needs this context to select specialized tools.")
     objective: String,
     @LLMDescription("Context from previous steps (optional)")
@@ -273,6 +274,26 @@ class StepToolSet(
 
     // Parse snapshot detail options for screen summary enrichment
     val parsedSnapshotDetails = parseSnapshotDetails(snapshotDetails)
+
+    // Parse + validate direct-tool YAML BEFORE awaitScreenState so every rejection
+    // (parse error, no tools, unknown tool, wrong-driver tool) short-circuits before
+    // any screen capture. The capture path can sit in a transient state on
+    // Web/Playwright long enough (up to PLAYWRIGHT_INSTALL_TIMEOUT_MS = 5min) to
+    // outlast the CLI socket timeout, swallowing rejections that fire fine on
+    // iOS/Android. The CLI's MISUSE_MARKERS list matches the marker strings in this
+    // returned markdown so the user sees EXIT=3 (MISUSE) consistently across drivers.
+    //
+    // takeSnapshot is excluded — that branch consumes the captured screen state
+    // directly, so the snapshot short-circuit below handles the YAML. The substring
+    // match here pairs with the matching check in the snapshot short-circuit below;
+    // don't tighten one without the other.
+    val preValidatedDirectTools: DirectToolsValidation.Valid? =
+      if (tools != null && "takeSnapshot" !in tools) {
+        when (val v = parseAndValidateDirectTools(tools, objective)) {
+          is DirectToolsValidation.Failed -> return v.errorMarkdown
+          is DirectToolsValidation.Valid -> v
+        }
+      } else null
 
     // When screenshot is requested, capture with screenshots even in fast mode.
     val skipScreenshot = isFast && !wantsScreenshot
@@ -334,9 +355,17 @@ class StepToolSet(
       ).toMarkdown()
     }
 
-    // Direct tool execution mode — bypass the AI agent, execute provided tools as-is
-    if (tools != null) {
-      return executeDirectTools(objective, tools, traceId, isFast, parsedSnapshotDetails)
+    // Direct tool execution mode — bypass the AI agent, execute provided tools as-is.
+    // parseAndValidateDirectTools already produced the validated wrappers above; this
+    // call performs the actual tool execution against the now-captured screen state.
+    if (tools != null && preValidatedDirectTools != null) {
+      return executeDirectTools(
+        objective = objective,
+        validated = preValidatedDirectTools,
+        traceId = traceId,
+        fast = isFast,
+        snapshotDetails = parsedSnapshotDetails,
+      )
     }
 
     // AI agent mode requires an LLM — fail clearly if not configured
@@ -532,23 +561,36 @@ class StepToolSet(
   }
 
   /**
-   * Executes a YAML tool sequence directly, bypassing the AI agent.
-   * Records the step with the NL objective paired with the tool execution,
-   * so it produces a proper trail step when saved.
+   * Single source of truth for direct-tools YAML parsing, dynamic-repo resolution,
+   * and rejection checks (unknown tool names, tools not applicable to the current
+   * driver/target, parse failures, empty tool lists). Called once per [blaze]
+   * direct-tools invocation **before** [awaitScreenState] so every rejection short-
+   * circuits with no screen capture — robust to drivers (Web/Playwright) where the
+   * capture path can sit in a transient state long enough to outlast the CLI socket
+   * timeout (180s), which is what made `trailblaze tool <unknown> -o "..."` hang on
+   * Web while EXIT=3 was returned cleanly on iOS/Android.
+   *
+   * Returns [DirectToolsValidation.Valid] with the resolved wrappers when every
+   * check passes; [executeDirectTools] then runs the actual tool execution against
+   * those wrappers without re-validating. Returns [DirectToolsValidation.Failed]
+   * with already-rendered rejection markdown (containing the `MISUSE_MARKERS` the
+   * CLI maps to EXIT=3) on any of the four rejection categories.
    */
-  private suspend fun executeDirectTools(
-    objective: String,
+  private suspend fun parseAndValidateDirectTools(
     toolsYaml: String,
-    traceId: TraceId,
-    fast: Boolean = false,
-    snapshotDetails: Set<SnapshotDetail> = emptySet(),
-  ): String {
-    val toolExecutor = rawToolExecutor
-      ?: return StepResult(executed = false, error = "Direct tool execution not available").toMarkdown()
-
+    objective: String,
+  ): DirectToolsValidation {
     val promptStep = DirectionStep(step = objective)
     val stepStartTime = Clock.System.now()
     emitObjectiveStart(promptStep)
+
+    fun fail(msg: String): DirectToolsValidation.Failed {
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
+      Console.log("[blaze pre-validation] rejected: $msg")
+      return DirectToolsValidation.Failed(
+        errorMarkdown = StepResult(executed = false, error = msg).toMarkdown(),
+      )
+    }
 
     // Parse the user's raw tool list using the type-safe YAML parser.
     // Supports two formats:
@@ -557,23 +599,16 @@ class StepToolSet(
     val customClasses = customToolClassesProvider?.invoke() ?: emptySet()
     val yaml = createTrailblazeYaml(customClasses)
     val toolWrappers = try {
-      // Try trail format first (handles `- tools:` wrapper)
       val trailItems = yaml.decodeTrail(toolsYaml)
       trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>().flatMap { it.tools }
     } catch (_: Exception) {
       try {
-        // Fall back to raw tool list format
         yaml.decodeTools(toolsYaml)
       } catch (e: Exception) {
-        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Failed to parse tools YAML: ${e.message}")
-        return StepResult(executed = false, error = "Failed to parse tools YAML: ${e.message}").toMarkdown()
+        return fail("Failed to parse tools YAML: ${e.message}")
       }
     }
-
-    if (toolWrappers.isEmpty()) {
-      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "No tools found in YAML")
-      return StepResult(executed = false, error = "No tools found in YAML").toMarkdown()
-    }
+    if (toolWrappers.isEmpty()) return fail("No tools found in YAML")
 
     val dynamicRepo = dynamicToolRepoProvider?.invoke()
     val resolvedToolWrappers = toolWrappers.map { wrapper ->
@@ -584,33 +619,38 @@ class StepToolSet(
       wrapper.copy(trailblazeTool = resolved)
     }
 
-    // Reject unknown tool names — OtherTrailblazeTool means the name still wasn't in the registry
-    val unknownTools = resolvedToolWrappers.filter { it.trailblazeTool is OtherTrailblazeTool }.map { it.name }
+    // Reject unknown tool names — `OtherTrailblazeTool` means the name still wasn't
+    // in the registry after the dynamic-repo resolve attempt above. "Unknown tool"
+    // is in the CLI's `MISUSE_MARKERS` list.
+    val unknownTools = resolvedToolWrappers
+      .filter { it.trailblazeTool is OtherTrailblazeTool }
+      .map { it.name }
     if (unknownTools.isNotEmpty()) {
-      val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: ${unknownTools.joinToString(", ")}. Use toolbox() to see available tools."
-      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
-      return StepResult(executed = false, error = msg).toMarkdown()
+      val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: " +
+        "${unknownTools.joinToString(", ")}. Use toolbox() to see available tools."
+      return fail(msg)
     }
 
     // Reject tools that are registered but not applicable to the current driver/target —
-    // e.g. invoking `openUrl` (Maestro-mapped) on a Playwright web device. Without this gate
-    // the call reaches MapsToMaestroCommands.execute() and surfaces a cryptic
+    // e.g. invoking `openUrl` (Maestro-mapped) on a Playwright web device. Without this
+    // gate the call reaches MapsToMaestroCommands.execute() and surfaces a cryptic
     // "MapsToMaestroCommands requires MaestroTrailblazeAgent" cast error.
     //
-    // The empty-provider branch is a transient state — device booting, brief disconnect, or
-    // a slow tool-catalog load. Skipping validation in that case keeps the user moving (the
-    // request may still succeed), but we log so the daemon log shows when the catalog gate
-    // was bypassed, which is useful when debugging "why did I get the cryptic cast error
-    // back" reports.
+    // The empty-provider branch is a transient state — device booting, brief disconnect,
+    // or a slow tool-catalog load. Skipping validation in that case keeps the user moving
+    // (the request may still succeed); we log so the daemon log shows when the catalog
+    // gate was bypassed, which is useful when debugging "why did I get the cryptic cast
+    // error back" reports.
     val availableNames = availableToolsProvider().map { it.name }.toSet()
     if (availableNames.isEmpty()) {
       Console.log("Tool catalog empty for this device/target; skipping per-tool availability check")
     } else {
       val notValidForDevice = resolvedToolWrappers.map { it.name }.filter { it !in availableNames }
       if (notValidForDevice.isNotEmpty()) {
-        // "web_navigate" remains a string literal because trailblaze-server cannot depend on
-        // trailblaze-playwright (where PlaywrightNativeNavigateTool is declared); introduce a
-        // shared constant if a second cross-platform hint is added.
+        // "web_navigate" remains a string literal because trailblaze-server cannot
+        // depend on trailblaze-playwright (where PlaywrightNativeNavigateTool is
+        // declared); introduce a shared constant if a second cross-platform hint
+        // is added.
         val hints = buildString {
           if (CoreTools.OPEN_URL in notValidForDevice && "web_navigate" in availableNames) {
             append(" On web devices, use `web_navigate url=<url>` instead of `${CoreTools.OPEN_URL}`.")
@@ -618,10 +658,59 @@ class StepToolSet(
         }
         val msg = "Tool${if (notValidForDevice.size > 1) "s" else ""} not valid for the current device/target: " +
           "${notValidForDevice.joinToString(", ")}.$hints Use toolbox() to see available tools."
-        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
-        return StepResult(executed = false, error = msg).toMarkdown()
+        return fail(msg)
       }
     }
+
+    return DirectToolsValidation.Valid(promptStep, stepStartTime, resolvedToolWrappers)
+  }
+
+  /**
+   * Result of [parseAndValidateDirectTools]. Either every check passed and we have
+   * a list of wrappers ready for execution, or one check failed and the rendered
+   * rejection markdown is ready to return verbatim from [blaze].
+   */
+  private sealed class DirectToolsValidation {
+    data class Valid(
+      val promptStep: DirectionStep,
+      val stepStartTime: kotlinx.datetime.Instant,
+      val resolvedToolWrappers: List<xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper>,
+    ) : DirectToolsValidation()
+
+    data class Failed(val errorMarkdown: String) : DirectToolsValidation()
+  }
+
+  /**
+   * Executes the validated tool sequence produced by [parseAndValidateDirectTools],
+   * bypassing the AI agent. All parsing, resolution, and rejection happens upstream
+   * in [parseAndValidateDirectTools]; this method assumes [validated] is consistent
+   * with the current device/target catalog and only runs the device-touching parts
+   * (per-tool dispatch, post-action screen summary, step recording).
+   *
+   * Records the step with the NL objective paired with the tool execution, so it
+   * produces a proper trail step when saved.
+   */
+  private suspend fun executeDirectTools(
+    objective: String,
+    validated: DirectToolsValidation.Valid,
+    traceId: TraceId,
+    fast: Boolean = false,
+    snapshotDetails: Set<SnapshotDetail> = emptySet(),
+  ): String {
+    val toolExecutor = rawToolExecutor
+      ?: run {
+        emitObjectiveComplete(
+          validated.promptStep,
+          validated.stepStartTime,
+          success = false,
+          failureReason = "Direct tool execution not available",
+        )
+        return StepResult(executed = false, error = "Direct tool execution not available").toMarkdown()
+      }
+
+    val promptStep = validated.promptStep
+    val stepStartTime = validated.stepStartTime
+    val resolvedToolWrappers = validated.resolvedToolWrappers
 
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
@@ -717,7 +806,7 @@ class StepToolSet(
       STANDARD — interactable elements with descriptions and hierarchy
       FULL     — complete view tree including non-interactable elements
 
-    Unlike blaze(hint="VERIFY"), this returns information — not pass/fail.
+    Unlike step(hint="VERIFY"), this returns information — not pass/fail.
     """
   )
   @Tool(McpToolProfile.TOOL_ASK)
@@ -832,7 +921,7 @@ class StepToolSet(
    * execute under `blaze(hint=VERIFY)`. Determined by the
    * [TrailblazeToolClass.isVerification] annotation on the registered tool class, so the
    * source of truth lives next to the tool definition (e.g. `assertVisible`,
-   * `web_verify_text_visible`) and individual targets can opt new tools in by setting the
+   * `web_verifyTextVisible`) and individual targets can opt new tools in by setting the
    * flag — no central allowlist to keep in sync.
    *
    * Scans every class-backed tool reachable from the active session:
@@ -980,6 +1069,7 @@ class StepToolSet(
         session = sessionId,
         timestamp = startTime,
         isRecordable = tool.getIsRecordableFromAnnotation(),
+        isVerification = tool.isVerificationToolInstance(),
         isTopLevelToolCall = true,
       ),
     )

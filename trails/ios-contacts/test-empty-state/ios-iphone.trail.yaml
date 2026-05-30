@@ -1,0 +1,15 @@
+- config:
+    title: 'Contacts (iOS): Contacts navbar visible on cold start'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: Launch the iOS Contacts app from a cold start. Verify the navbar shows "Contacts" and the list root surface is visible. Do not tap anything.
+    recording:
+      tools:
+      - contacts_ios_openApp:
+          dismissKeyboard: true
+      - launchApp:
+          appId: com.apple.MobileAddressBook
+          launchMode: FORCE_RESTART
+          reasoning: The Contacts app icon is visible on the home screen. Launching Contacts from a cold start using its bundle identifier is required to begin the flow and verify its root view and navbar.

@@ -10,6 +10,26 @@ object TrailblazeAiRunnerMessages {
 
   private val MULTI_STEP_PATTERNS = listOf(" and then ", " then ", " followed by ", " after that ")
 
+  // Caps on `## REMEMBERED VALUES` rendering — prevent per-step prompt bloat from
+  // unbounded variable accumulation and contain prompt-injection vectors in stored values.
+  private const val MAX_REMEMBERED_VALUES = 50
+  private const val MAX_REMEMBERED_VALUE_LENGTH = 200
+
+  private fun sanitizeRememberedValue(raw: String): String {
+    val truncated = if (raw.length > MAX_REMEMBERED_VALUE_LENGTH) {
+      raw.take(MAX_REMEMBERED_VALUE_LENGTH) + "…"
+    } else {
+      raw
+    }
+    // Escape so a stored value cannot break out of its bullet line and inject
+    // headers / new sections into the reminder prompt.
+    return truncated
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+  }
+
   private fun isConditionalObjective(prompt: String): Boolean =
     CONDITIONAL_PATTERNS.any { prompt.lowercase().startsWith(it) }
 
@@ -21,6 +41,8 @@ object TrailblazeAiRunnerMessages {
     completedObjectiveDescriptions: List<String> = emptyList(),
     latestObjectiveStatus: String? = null,
     cycleWarning: String? = null,
+    rememberedValues: Map<String, String> = emptyMap(),
+    staleRefRecovery: String? = null,
   ): String {
     val prompt = promptStep.prompt
     val isVerification = promptStep is VerificationStep
@@ -46,6 +68,18 @@ object TrailblazeAiRunnerMessages {
         appendLine()
       }
 
+      if (rememberedValues.isNotEmpty()) {
+        appendLine("## REMEMBERED VALUES")
+        rememberedValues.entries.take(MAX_REMEMBERED_VALUES).forEach { (key, value) ->
+          appendLine("- $key: \"${sanitizeRememberedValue(value)}\"")
+        }
+        val overflow = rememberedValues.size - MAX_REMEMBERED_VALUES
+        if (overflow > 0) {
+          appendLine("- ($overflow more value(s) not shown)")
+        }
+        appendLine()
+      }
+
       // Show in-progress status from within the current step
       latestObjectiveStatus
         ?.takeIf { it != "COMPLETED" }
@@ -54,6 +88,16 @@ object TrailblazeAiRunnerMessages {
           appendLine("Your last status: $status")
           appendLine()
         }
+
+      // Stale-ref recovery signal — fires when the runner has noticed N consecutive
+      // `Element ref X not found` errors targeting the same ref. Rendered ABOVE the generic
+      // stuck-detection hint because it diagnoses a specific failure mode (the LLM's
+      // memorized refs are stale; history truncation hid the older successful snapshot) and
+      // tells the LLM exactly how to recover (re-read from the live view hierarchy below).
+      staleRefRecovery?.let {
+        appendLine(it.trimEnd())
+        appendLine()
+      }
 
       // Stuck-detection signal — fires when the runner has noticed action repetition without
       // progress. Surfacing this here lets the LLM break the loop or call objectiveStatus(FAILED)

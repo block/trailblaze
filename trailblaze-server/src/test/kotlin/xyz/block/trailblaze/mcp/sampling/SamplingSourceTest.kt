@@ -3,14 +3,14 @@ package xyz.block.trailblaze.mcp.sampling
 import ai.koog.agents.core.tools.ToolDescriptor
 import xyz.block.trailblaze.agent.SamplingResult
 import ai.koog.prompt.dsl.ModerationResult
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.utils.time.KoogClock
 import kotlinx.coroutines.test.runTest
-import kotlin.time.Clock
 import org.junit.Test
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -325,15 +325,13 @@ private class MockLlmClient(
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<Message.Response> {
+  ): Message.Assistant {
     if (throwException != null) {
       throw throwException
     }
-    return listOf(
-      Message.Assistant(
-        content = responseText,
-        metaInfo = ResponseMetaInfo.create(Clock.System),
-      ),
+    return Message.Assistant(
+      content = responseText,
+      metaInfo = ResponseMetaInfo.create(KoogClock.System),
     )
   }
 

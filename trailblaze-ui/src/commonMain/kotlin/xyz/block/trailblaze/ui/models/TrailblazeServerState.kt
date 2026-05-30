@@ -149,6 +149,15 @@ data class TrailblazeServerState(
     val screenshotMaxLongerSide: Int? = null,
     val screenshotMaxShorterSide: Int? = null,
     val screenshotCompressionQuality: Float? = null,
+    /**
+     * When true, action commands (`tool`, `step`, `ask`, `verify`) reject calls
+     * without a per-step natural-language description (`-s`/`--step`). The
+     * description is the durable contract self-heal uses to retry a recorded
+     * step when the UI changes. Off by default (permissive) so first-time tire-
+     * kicking doesn't hit a wall; downstream distributions can flip the default
+     * by setting this to true in their own desktop-app config subclass.
+     */
+    val requireSteps: Boolean = false,
   ) {
     /**
      * Materializes the user's effective [ScreenshotScalingConfig], substituting framework

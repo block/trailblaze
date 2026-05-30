@@ -212,6 +212,23 @@ Run `trailblaze mcp install claude`, or manually add to `~/Library/Application S
 }
 ```
 
+### Pre-binding a device + target on the MCP server
+
+When you want the MCP session to land on a specific device + target without the agent having to call `device(...)` first, register the MCP server with `--device` and `--target` so the shim auto-binds on initialize:
+
+```json
+{
+  "mcpServers": {
+    "trailblaze-android-default": {
+      "command": "trailblaze",
+      "args": ["mcp", "--device", "android", "--target", "default"]
+    }
+  }
+}
+```
+
+Alternatively, drop the flags and inherit `TRAILBLAZE_DEVICE` from the shell that launches the MCP server (helpful when a CLI session pinned via `eval $(trailblaze device connect …)` is already in scope). Explicit `--device` / `--target` win over the env var.
+
 ### Connecting from Cursor
 
 Run `trailblaze mcp install cursor`, or manually add to `~/.cursor/mcp.json`:

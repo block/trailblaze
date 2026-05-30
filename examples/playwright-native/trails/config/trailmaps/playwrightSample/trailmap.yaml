@@ -1,0 +1,26 @@
+# Authored trailmap for the Playwright Sample example. Replaces the legacy flat target at
+# ../../targets/playwright-sample.yaml — this workspace is now trailmap-driven via the
+# sibling trailblaze.yaml. Each scripted tool is a bare `<name>.ts` under `tools/` whose
+# `trailblaze.tool<I>(spec, handler)` export carries name, input schema, and metadata.
+# No sibling YAML descriptor is needed — the trailmap loader auto-discovers every `.ts`
+# in `tools/` that exports a typed tool and resolves the names listed below into the
+# runtime tool list. (An optional `<name>.yaml` is still supported when an author needs
+# to pin a descriptor field or declare a multi-tool file.)
+id: playwrightSample
+target:
+  display_name: Playwright Sample App
+  tools:
+    - playwrightSample_web_openFixtureAndVerifyText
+    - playwrightSample_web_incrementCounterToValue
+    - playwrightSample_web_submitContactForm
+    - playwrightSample_web_openFormIfNeeded
+    - playwrightSample_web_openDuplicateProductDetail
+    - playwrightSample_web_searchProductsAndOpenResult
+
+  platforms:
+    web:
+      drivers: [playwright-native, playwright-electron]
+      tool_sets:
+        - web_core
+        - web_verification
+        - memory

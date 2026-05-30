@@ -73,17 +73,17 @@ class WorkspaceLayeredConfigResourceSourceTest {
 
   @Test
   fun `existing configDir builds a composite source that surfaces a workspace-authored trailhead`() {
-    // Author a single trailhead.yaml under the workspace's pack layout — `<configDir>/packs/
-    // <pack>/trailheads/<name>.trailhead.yaml`. The helper must layer the filesystem source so
-    // discoverAndLoadRecursive on PACKS_DIR returns its content. Reading the YAML directly via
-    // the recursive API is the actual interaction `ToolYamlLoader.discoverPackBundledTool
+    // Author a single trailhead.yaml under the workspace's trailmap layout — `<configDir>/trailmaps/
+    // <trailmap>/trailheads/<name>.trailhead.yaml`. The helper must layer the filesystem source so
+    // discoverAndLoadRecursive on TRAILMAPS_DIR returns its content. Reading the YAML directly via
+    // the recursive API is the actual interaction `ToolYamlLoader.discoverTrailmapBundledTool
     // Contents` uses, so this test pins the integration point.
     val configDir = File(tempRoot, "config").apply { mkdirs() }
-    val packTrailheadsDir = File(configDir, "packs/samplepack/trailheads").apply { mkdirs() }
-    File(packTrailheadsDir, "samplepack_android_launch.trailhead.yaml").writeText(
+    val trailmapTrailheadsDir = File(configDir, "trailmaps/samplepack/trailheads").apply { mkdirs() }
+    File(trailmapTrailheadsDir, "samplepack_android_launch.trailhead.yaml").writeText(
       """
       id: samplepack_android_launch
-      description: Launch the sample pack app.
+      description: Launch the sample trailmap app.
       trailhead:
         to: samplepack/android/home
       tools:
@@ -97,7 +97,7 @@ class WorkspaceLayeredConfigResourceSourceTest {
     val source = workspaceLayeredConfigResourceSource(configDir)
 
     val entries = source.discoverAndLoadRecursive(
-      directoryPath = "packs",
+      directoryPath = "trailmaps",
       suffix = ".trailhead.yaml",
     )
     val match = entries.entries.firstOrNull { (key, _) ->
@@ -121,8 +121,8 @@ class WorkspaceLayeredConfigResourceSourceTest {
     // to the helper would silently break this common case — the trailhead would stop appearing
     // in `toolbox trailheads`. Pin it.
     val configDir = File(tempRoot, "config").apply { mkdirs() }
-    val packTrailheadsDir = File(configDir, "packs/samplepack/trailheads").apply { mkdirs() }
-    File(packTrailheadsDir, "samplepack_pre_compile.trailhead.yaml").writeText(
+    val trailmapTrailheadsDir = File(configDir, "trailmaps/samplepack/trailheads").apply { mkdirs() }
+    File(trailmapTrailheadsDir, "samplepack_pre_compile.trailhead.yaml").writeText(
       """
       id: samplepack_pre_compile
       description: Workspace trailhead before any compile run.
@@ -141,7 +141,7 @@ class WorkspaceLayeredConfigResourceSourceTest {
     val source = workspaceLayeredConfigResourceSource(configDir)
 
     val entries = source.discoverAndLoadRecursive(
-      directoryPath = "packs",
+      directoryPath = "trailmaps",
       suffix = ".trailhead.yaml",
     )
     val match = entries.entries.firstOrNull { (key, _) ->

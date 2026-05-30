@@ -20,7 +20,7 @@ import picocli.CommandLine
  *  - `--step` without `--session` must fail fast (else a pinned step number is
  *    silently dropped and the user gets an arbitrary auto-search result).
  *  - When the matched waypoint id is bundled on the classpath only (i.e. no
- *    writable on-disk YAML), the user must get a pointed "pass --root <pack-dir>"
+ *    writable on-disk YAML), the user must get a pointed "pass --root <trailmap-dir>"
  *    error rather than the generic "Waypoint id not found" — this was the most
  *    user-visible defect in the initial PR draft.
  *  - Filesystem-backed waypoints get the normal not-found error when the id
@@ -57,7 +57,7 @@ class WaypointCaptureExampleBehaviorTest {
   @Test
   fun `capture-example fails fast when --step is given without --session`() {
     // Concrete waypoint must exist on disk for findWaypointFile to succeed; otherwise
-    // the test would fail on the wrong code path. Set up a minimal workspace pack.
+    // the test would fail on the wrong code path. Set up a minimal workspace trailmap.
     val root = newRootWithWaypoint(
       yamlFilename = "home.waypoint.yaml",
       waypointId = "myapp/home",
@@ -67,7 +67,7 @@ class WaypointCaptureExampleBehaviorTest {
       execute("waypoint", "capture-example", "--id", "myapp/home", "--step", "5", "--root", root.absolutePath)
     }
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode, "expected USAGE exit code for --step without --session")
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode, "expected USAGE exit code for --step without --session")
     val err = capturedErr.toString()
     assertTrue(
       "--step requires --session" in err,
@@ -103,20 +103,20 @@ class WaypointCaptureExampleBehaviorTest {
 
   @Test
   fun `capture-example with classpath-only waypoint emits pointed --root hint not generic not-found`() {
-    // The capture-example user case that was silently broken: --target <pack> for
-    // a classpath-bundled pack. WaypointDiscovery sees the id (it's on the classpath
+    // The capture-example user case that was silently broken: --target <trailmap> for
+    // a classpath-bundled trailmap. WaypointDiscovery sees the id (it's on the classpath
     // via WaypointDiscovery.discover); WaypointLoader.discover (filesystem walk) does
     // not. Without the targeted error, the user gets "Waypoint id not found" with no
     // hint that the limitation is capture-example-specific. With the fix in place,
-    // they get the pack-source-dir suggestion.
+    // they get the trailmap-source-dir suggestion.
     //
-    // Inject a fake classpath pack via URLClassLoader (same pattern as
-    // WaypointDiscoveryTest) so the test doesn't depend on which OSS packs happen
+    // Inject a fake classpath trailmap via URLClassLoader (same pattern as
+    // WaypointDiscoveryTest) so the test doesn't depend on which OSS trailmaps happen
     // to be on the test classpath.
     val classpathRoot = newTempDir()
-    addClasspathPack(
+    addClasspathTrailmap(
       classpathRoot,
-      packId = "fakeapp",
+      trailmapId = "fakeapp",
       waypoints = mapOf(
         "home.waypoint.yaml" to "id: \"fakeapp/home\"\ndescription: \"Bundled.\"",
       ),
@@ -136,7 +136,7 @@ class WaypointCaptureExampleBehaviorTest {
       }
     }
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
     val err = capturedErr.toString()
     assertTrue(
       "bundled on the classpath only" in err,
@@ -167,7 +167,7 @@ class WaypointCaptureExampleBehaviorTest {
       )
     }
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
     val err = capturedErr.toString()
     assertTrue("Waypoint id not found" in err, "expected generic not-found error, got: $err")
     assertTrue(
@@ -217,20 +217,20 @@ class WaypointCaptureExampleBehaviorTest {
   private fun <T> withCapture(block: () -> T): T =
     CliOutCapture.withCapture(capturedOut, capturedErr, block)
 
-  /** Drops a fake classpath pack at `<root>/trailblaze-config/packs/<packId>/...`. */
-  private fun addClasspathPack(
+  /** Drops a fake classpath trailmap at `<root>/trails/config/trailmaps/<trailmapId>/...`. */
+  private fun addClasspathTrailmap(
     root: File,
-    packId: String,
+    trailmapId: String,
     waypoints: Map<String, String>,
   ) {
-    val packDir = File(root, "trailblaze-config/packs/$packId").apply { mkdirs() }
-    val waypointDir = File(packDir, "waypoints").apply { mkdirs() }
+    val trailmapDir = File(root, "trails/config/trailmaps/$trailmapId").apply { mkdirs() }
+    val waypointDir = File(trailmapDir, "waypoints").apply { mkdirs() }
     val waypointRefs = waypoints.keys.joinToString("\n") { "  - waypoints/$it" }
-    File(packDir, "pack.yaml").writeText(
+    File(trailmapDir, "trailmap.yaml").writeText(
       """
-      id: $packId
+      id: $trailmapId
       target:
-        display_name: $packId
+        display_name: $trailmapId
       waypoints:
       $waypointRefs
       """.trimIndent(),
@@ -243,8 +243,8 @@ class WaypointCaptureExampleBehaviorTest {
   /**
    * Sets the context class loader to a [URLClassLoader] rooted at [classpathRoot] for
    * the duration of [block]. The CLI's `WaypointDiscovery` reads classpath-bundled
-   * packs via `Thread.currentThread().contextClassLoader`, so this lets tests inject
-   * synthetic packs without polluting the test JVM's actual classpath.
+   * trailmaps via `Thread.currentThread().contextClassLoader`, so this lets tests inject
+   * synthetic trailmaps without polluting the test JVM's actual classpath.
    */
   private fun <T> withClasspathRoot(classpathRoot: File, block: () -> T): T {
     val classLoader = URLClassLoader(arrayOf(classpathRoot.toURI().toURL()), null)

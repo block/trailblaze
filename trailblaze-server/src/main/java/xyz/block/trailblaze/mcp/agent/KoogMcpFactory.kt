@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mcp.agent
 
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.mcp.McpToolRegistryProvider
+import ai.koog.agents.mcp.metadata.McpServerInfo
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 
@@ -63,6 +64,7 @@ object KoogMcpFactory {
     // Create and return tool registry - Koog discovers tools via MCP protocol
     return McpToolRegistryProvider.fromTransport(
       transport = transport,
+      serverInfo = McpServerInfo(url = mcpServerUrl),
       name = clientName,
       version = clientVersion,
     )
@@ -78,7 +80,11 @@ object KoogMcpFactory {
    */
   suspend fun createMcpToolRegistryFromClient(
     mcpClient: Client,
+    mcpServerUrl: String = DEFAULT_SELF_CONNECTION_URL,
   ): ToolRegistry {
-    return McpToolRegistryProvider.fromClient(mcpClient)
+    return McpToolRegistryProvider.fromClient(
+      mcpClient = mcpClient,
+      serverInfo = McpServerInfo(url = mcpServerUrl),
+    )
   }
 }

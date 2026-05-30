@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -265,6 +266,248 @@ class VideoSpriteExtractorTest {
   }
 
   @Test
+  fun `tiny single-frame mp4 still yields a sprite sheet via the low-rate re-stamp path`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    // Reproduces the CI smoke failure mode: a fresh default-config Android
+    // emulator (320x640, headless, no compositor activity) recorded for ~11 wall-clock seconds
+    // produces an h264 stream with a single IDR frame and nothing else, which the `-c copy`
+    // mp4 wrap stamps as a 0.04-second, 1-frame container. The previous synthetic-rate clamp
+    // at 0.1 fps rejected the (1 frame / 11 s ≈ 0.09 fps) re-stamp; the un-re-stamped pipeline
+    // then sampled at fps=2 from a 0.04-second timeline and produced zero PNG frames. Lowering
+    // the clamp lets the re-stamp run, ffmpeg duplicates the single frame across the wall-clock
+    // window, and dedup collapses the result back to one unique sprite frame.
+    val crushed = synthesizeTinySingleFrameMp4(File(tempDir, "tiny_crushed.mp4"))
+
+    // Sanity-check the fixture matches the real CI failure shape — without this guard a future
+    // ffmpeg release that changes setpts rounding could let the test pass without exercising
+    // the low-rate path we're actually testing. The CI signature is `nb_frames=1` *and*
+    // `duration≈0.04s`; assert both so a drift in either dimension surfaces here rather than
+    // silently weakening the test into "any short mp4 works."
+    val reportedSeconds = readDurationSeconds(crushed) ?: error("ffprobe couldn't read duration")
+    val reportedFrames = readNbFrames(crushed) ?: error("ffprobe couldn't read nb_frames")
+    assertEquals(
+      1L,
+      reportedFrames,
+      "fixture should report nb_frames=1 to mirror the CI single-IDR-frame failure mode",
+    )
+    assertTrue(
+      reportedSeconds in 0.01..0.5,
+      "fixture should report ~0.04s duration to mirror the CI bug; got ${"%.3f".format(reportedSeconds)}s",
+    )
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = crushed,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      // 11 seconds of wall-clock matches the smoke test's blaze run window.
+      expectedDurationMs = 11_000L,
+    )
+
+    assertNotNull(
+      spriteFile,
+      "low-activity recording with a single frame should still yield a sprite sheet, not bail with " +
+        "'ffmpeg ran (exit=0) but produced 0 frames'",
+    )
+    val meta = File(crushed.parentFile, "video_sprites.txt")
+    val props =
+      meta.readLines().associate {
+        val parts = it.split("=", limit = 2)
+        parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+      }
+    val actualFrames = props["frames"]?.toIntOrNull() ?: error("frames missing")
+    // With the re-stamp applied, ffmpeg's fps=2 filter across the 11-second window emits ~22
+    // duplicates of the single source frame. The exact count depends on ffmpeg's rounding at
+    // edges; assert ≥ 5 so a regression that re-tightens the clamp drops back to ≤ 1 and
+    // visibly fails this assertion.
+    assertTrue(
+      actualFrames >= 5,
+      "expected ≥5 sprite frames after low-rate re-stamp; got $actualFrames (metadata=$props)",
+    )
+    val uniqueFrames = props["uniqueFrames"]?.toIntOrNull() ?: error("uniqueFrames missing")
+    assertTrue(
+      uniqueFrames in 1..2,
+      "the single source frame should dedup to 1 (or rarely 2) unique sprite; got $uniqueFrames",
+    )
+  }
+
+  @Test
+  fun `short wall-clock window with broken-timing mp4 still yields a sprite sheet`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    // Reproduces the CLI smoke regression on the Android shards (build 8290+): the daemon-
+    // driven `trailblaze blaze "Describe what's on screen"` finishes in roughly one wall-clock
+    // second on a static-screen AVD, so the recorder hands the extractor an mp4 with
+    // `nb_frames=1, duration=0.04s` together with `expectedDurationMs=~1000`. The original
+    // tolerance check (|0.04 - 1.0| = 0.96 ≤ 2.0 floor) classified that pair as "healthy
+    // wobble" and skipped the re-stamp; the un-re-stamped `fps=2` pipeline then sampled a
+    // 0.04s timeline and produced zero PNG frames — the `video_sprites.webp missing` failure.
+    // The fix adds a ratio-based bound on top of the absolute floor so a 25× duration
+    // disagreement still triggers the re-stamp.
+    val crushed = synthesizeTinySingleFrameMp4(File(tempDir, "tiny_crushed.mp4"))
+
+    // Sanity-check the fixture before it's load-bearing: without this guard a future ffmpeg
+    // behavior change could quietly drift the synthesized mp4 away from the CI shape (1 frame,
+    // ~0.04s) and the test would still pass for the wrong reason. Mirrors the assertion the
+    // sibling `tiny single-frame mp4 …` test runs over the same fixture.
+    val reportedSeconds = readDurationSeconds(crushed) ?: error("ffprobe couldn't read duration")
+    val reportedFrames = readNbFrames(crushed) ?: error("ffprobe couldn't read nb_frames")
+    assertEquals(
+      1L,
+      reportedFrames,
+      "fixture should report nb_frames=1 to mirror the CI single-IDR-frame failure mode",
+    )
+    assertTrue(
+      reportedSeconds in 0.01..0.5,
+      "fixture should report ~0.04s duration to mirror the CI bug; got ${"%.3f".format(reportedSeconds)}s",
+    )
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = crushed,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      // 1 second wall-clock — small enough that the absolute tolerance floor (2s) used to
+      // swallow the broken timing on its own.
+      expectedDurationMs = 1_000L,
+    )
+
+    assertNotNull(
+      spriteFile,
+      "short-wall-clock recording with broken-timing mp4 should still yield a sprite sheet — " +
+        "this is the CI smoke regression that the ratio-bound fix addresses",
+    )
+    val meta = File(crushed.parentFile, "video_sprites.txt")
+    val props =
+      meta.readLines().associate {
+        val parts = it.split("=", limit = 2)
+        parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+      }
+    val actualFrames = props["frames"]?.toIntOrNull() ?: error("frames missing")
+    // With the re-stamp applied, ffmpeg's setpts+fps chain duplicates the single source frame
+    // across the 1-second wall-clock window at 2fps → at least 2 frames. Assert ≥2 so a
+    // regression that silently re-introduces the tolerance hole drops back to 0 or 1.
+    assertTrue(
+      actualFrames >= 2,
+      "expected ≥2 sprite frames after restamp across 1s wall-clock window; got $actualFrames (metadata=$props)",
+    )
+  }
+
+  @Test
+  fun `healthy ratio just above the 0_5 floor takes the no-restamp branch`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    // Pins the *healthy side* of the duration-mismatch ratio bound. A 2-second healthy mp4
+    // against a 3-second wall-clock expectation has:
+    //   absDiff = |2.0 - 3.0| = 1.0  ≤  tolerance (floor 2.0s) → absolute check passes
+    //   ratio = 2 / 3 = 0.667        ≥  0.5 (DURATION_MISMATCH_RATIO_MIN) → ratio check passes
+    // Both clear the threshold, so maybeRestamp returns baseVf and the sprite extraction
+    // takes the un-re-stamped path: fps=2 over a 2-second timeline ≈ 4 frames. A re-stamp
+    // would spread the source's 30 frames over the 3-second expected window and emit ≈ 6
+    // frames at fps=2, so a regression that tightens `DURATION_MISMATCH_RATIO_MIN` to 0.7+
+    // would push the frame count above this assertion.
+    //
+    // Without this test, the only ratio-bound coverage is the extreme case (ratio 0.04 in
+    // `short wall-clock window …`), so a future change that flips the threshold to 0.7
+    // would still be caught only on the broken side, leaving the healthy side
+    // silently broken.
+    val healthy = generateHealthyMp4(File(tempDir, "healthy_ratio.mp4"), durationSeconds = 2, fps = 15)
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = healthy,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 3_000L,
+    )
+
+    assertNotNull(spriteFile)
+    val meta = File(healthy.parentFile, "video_sprites.txt")
+    val props = meta.readLines().associate {
+      val parts = it.split("=", limit = 2)
+      parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+    }
+    val actualFrames = props["frames"]?.toIntOrNull() ?: error("frames missing from metadata: $props")
+    // 2s × 2fps = 4 frames, ±1 for ffmpeg edge rounding. The un-re-stamped baseline. If
+    // restamp had fired we'd see ~6 frames; the upper bound at 5 catches that regression
+    // without making the test brittle against legit ffmpeg rounding drift.
+    assertTrue(
+      actualFrames in 3..5,
+      "expected ~4 un-re-stamped sprite frames (no restamp on ratio=0.667); got $actualFrames (metadata=$props)",
+    )
+  }
+
+  @Test
+  fun `single-frame fallback recovers when fps sampling and probe both bail`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    // Reproduces the live Android CI smoke regression where the diagnostic block showed
+    // `probe=unavailable` *and* `vf=fps=2,scale=-2:720` produced 0 frames: the
+    // primary `fps=N` extraction can't find any samples on a sparse-timing mp4 even though
+    // the stream is decodable. Without the fallback the run aborts with the marker; with the
+    // fallback we recover a single static sprite frame, which is enough for the smoke step's
+    // `assert video_sprites.webp exists` check to pass.
+    //
+    // The 0.04-second single-frame fixture combined with `expectedDurationMs = null` takes
+    // the no-op branch in maybeRestamp, leaving `fps=2,scale=...` to extract from a 0.04s
+    // timeline — ffmpeg exits 0 but emits no PNG frames in the primary pass, so the
+    // single-frame fallback is the only thing that can succeed here.
+    val crushed = synthesizeTinySingleFrameMp4(File(tempDir, "tiny_crushed.mp4"))
+
+    // Sanity-check the fixture — same shape as the sibling tests so a future ffmpeg drift
+    // surfaces here rather than weakening the assertion silently.
+    val reportedFrames = readNbFrames(crushed) ?: error("ffprobe couldn't read nb_frames")
+    assertEquals(1L, reportedFrames, "fixture should report nb_frames=1 to mirror the CI failure mode")
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = crushed,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      // Intentionally null so the un-re-stamped pipeline runs and the primary fps=2 produces
+      // 0 frames, forcing the fallback to take over.
+      expectedDurationMs = null,
+    )
+    assertNotNull(
+      spriteFile,
+      "expected the single-frame fallback to recover a sprite sheet when fps sampling " +
+        "produces 0 frames — this is the CI smoke regression behavior the fallback is meant to fix",
+    )
+    val meta = File(crushed.parentFile, "video_sprites.txt")
+    val props = meta.readLines().associate {
+      val parts = it.split("=", limit = 2)
+      parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+    }
+    val actualFrames = props["frames"]?.toIntOrNull() ?: error("frames missing from metadata: $props")
+    assertEquals(
+      1,
+      actualFrames,
+      "fallback path should yield exactly one sprite frame; got $actualFrames (metadata=$props)",
+    )
+    // No failure marker should be written on the recovered path — the fallback's job is to
+    // turn what was a hard failure into a successful (if static) sprite.
+    val markerFile = File(crushed.parentFile, VideoSpriteExtractor.FAILURE_MARKER_FILENAME)
+    assertTrue(
+      !markerFile.exists(),
+      "no failure marker should be written when the fallback recovers; got:\n" +
+        (if (markerFile.exists()) markerFile.readText() else ""),
+    )
+  }
+
+  @Test
   fun `extraction failure writes video_sprites_failed marker`() {
     if (!ffmpegOnPath() || !ffprobeOnPath()) {
       println("skipping: ffmpeg or ffprobe not on PATH")
@@ -301,6 +544,249 @@ class VideoSpriteExtractorTest {
       markerText.contains("ffmpeg frame extraction failed") ||
         markerText.contains("ffmpeg ran (exit=0) but produced 0 frames"),
       "marker should contain a recognizable failure stage, got:\n$markerText",
+    )
+    // And the diagnostic block — expectedDurationMs + the chosen vf chain — needs to be in
+    // the marker too. CI silences `Console.log`, so this block is the only thing that
+    // survives an artifact snapshot when an operator tries to debug a sprite-extraction
+    // failure post-hoc.
+    assertTrue(
+      markerText.contains("expectedDurationMs=5000"),
+      "marker should include expectedDurationMs for post-hoc diagnosis, got:\n$markerText",
+    )
+    assertTrue(
+      markerText.contains("vf="),
+      "marker should include the chosen ffmpeg -vf chain so it's clear whether restamp fired, got:\n$markerText",
+    )
+  }
+
+  @Test
+  fun `K1-style broken-timing mp4 over a long session trips the broken-mp4 gate`() {
+    // Reproduces the K1 CI pathology (trailblaze-ios-pr build 11092). The CI mp4 there
+    // claimed 2 seconds of duration for an 87-second test; ffmpeg sampled the truncated
+    // timeline directly (re-stamp didn't fire) and emitted only 4 sprite frames vs the
+    // ~174 the wall-clock window called for. We synthesize the same shape by feeding the
+    // tiny single-frame fixture (0.04s container, 1 frame — the existing CI smoke fixture)
+    // with a *much* longer expected window. With nbFrames=1 and expectedS=1000s,
+    // syntheticRate = 1/1000 = 0.001, which sits below SYNTHETIC_RATE_MIN (0.005) — the
+    // upstream clamp trips, re-stamp is skipped, and the un-re-stamped pipeline yields a
+    // single sprite frame via the existing single-frame fallback. Against the 2000 expected
+    // frames (1000s × 2fps), 1/2000 ≈ 0.05% coverage is far below the gate's 10% threshold
+    // and well above the gate's 60-expected-frame floor — so the broken-mp4 marker fires.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val tiny = synthesizeTinySingleFrameMp4(File(tempDir, "tiny_broken.mp4"))
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = tiny,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 1_000_000L,
+    )
+    assertNull(
+      spriteFile,
+      "broken-mp4 gate should suppress sprite emission when extraction can't fill the wall-clock window",
+    )
+
+    val brokenMarker = File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME)
+    assertTrue(
+      brokenMarker.exists(),
+      "expected ${VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME} so platform callers can skip VIDEO fallback",
+    )
+    assertTrue(
+      VideoSpriteExtractor.isMp4DetectedAsBroken(tempDir),
+      "isMp4DetectedAsBroken() should report true when the marker is present",
+    )
+    val markerText = brokenMarker.readText()
+    assertTrue(
+      markerText.contains("expected ~"),
+      "marker should record the expected-vs-actual coverage so triage doesn't need to re-derive it; got:\n$markerText",
+    )
+    // The diag file should *also* be present — the broken-mp4 gate is a refinement of the
+    // probe + re-stamp decision tree, so the diagnostic block telling us what ffprobe saw
+    // and which vf chain ffmpeg ran rides along in the same session dir.
+    assertTrue(
+      File(tempDir, VideoSpriteExtractor.DIAG_FILENAME).exists(),
+      "expected ${VideoSpriteExtractor.DIAG_FILENAME} alongside the broken-mp4 marker",
+    )
+  }
+
+  @Test
+  fun `healthy mp4 with full coverage does not trip the broken-mp4 gate`() {
+    // Counterpart to the gate-trips test: when the source mp4's actual frame count matches
+    // (or exceeds) what the wall-clock window calls for, the gate must not fire. Otherwise
+    // every healthy long session would lose its sprite sheet.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val healthy = generateHealthyMp4(
+      target = File(tempDir, "healthy.mp4"),
+      durationSeconds = 30,
+      fps = 30,
+    )
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = healthy,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 30_000L,
+    )
+    assertNotNull(spriteFile, "healthy 30s mp4 should produce a sprite sheet")
+    assertTrue(
+      !File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).exists(),
+      "broken-mp4 marker must not be present for healthy captures",
+    )
+  }
+
+  @Test
+  fun `isMp4DetectedAsBroken reflects marker file presence`() {
+    // Directly exercise the predicate platform wrappers and report-generation depend on.
+    // Without this, the contract is only covered transitively through generateSpriteSheet.
+    assertTrue(
+      !VideoSpriteExtractor.isMp4DetectedAsBroken(tempDir),
+      "fresh tempDir has no marker — predicate must return false",
+    )
+    assertTrue(
+      !VideoSpriteExtractor.isMp4DetectedAsBroken(null),
+      "null dir (e.g. file.parentFile at filesystem root) must return false rather than NPE",
+    )
+    File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).writeText("test marker")
+    assertTrue(
+      VideoSpriteExtractor.isMp4DetectedAsBroken(tempDir),
+      "marker present — predicate must return true",
+    )
+  }
+
+  @Test
+  fun `shouldSkipVideoFallbackForBrokenMp4 short-circuits when marker is absent or dir is null`() {
+    // The shared helper platform wrappers (Android / iOS / Playwright) call after a null
+    // sprite return. It must return false on the healthy path (sprite gen failed for some
+    // unrelated infra reason) so callers fall back to emitting VIDEO as before; only the
+    // broken-mp4 case should return true.
+    assertTrue(
+      !VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(tempDir, "TestPlatform"),
+      "no marker → must not skip VIDEO fallback",
+    )
+    assertTrue(
+      !VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(null, "TestPlatform"),
+      "null dir → must not skip VIDEO fallback (no NPE)",
+    )
+    File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).writeText("test marker")
+    assertTrue(
+      VideoSpriteExtractor.shouldSkipVideoFallbackForBrokenMp4(tempDir, "TestPlatform"),
+      "marker present → must signal skip",
+    )
+  }
+
+  @Test
+  fun `generateSpriteSheet clears stale broken-mp4 marker before deciding`() {
+    // A leftover marker from a previous failed attempt in the same dir must not suppress
+    // emission for a healthy current run. In practice session dirs are unique per recording,
+    // but the cleanup is the durable contract.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).writeText("stale marker")
+    val healthy = generateHealthyMp4(
+      target = File(tempDir, "healthy_after_stale_marker.mp4"),
+      durationSeconds = 30,
+      fps = 30,
+    )
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = healthy,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 30_000L,
+    )
+    assertNotNull(spriteFile, "healthy mp4 must produce a sprite sheet even if a stale marker existed")
+    assertTrue(
+      !File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).exists(),
+      "stale marker must be cleared at the start of generateSpriteSheet",
+    )
+  }
+
+  @Test
+  fun `short single-frame static-screen recording does not trip the broken-mp4 gate`() {
+    // The CI smoke fixture: 0.04s mp4 with 1 frame, 11s expected wall-clock. After re-stamp
+    // the single frame is replicated across the timeline; the gate's absolute floor
+    // (BROKEN_MP4_MIN_EXPECTED_FRAMES) keeps this case out of the broken bucket because the
+    // expected frame count for an 11-second session at 2fps is only 22 — below the floor.
+    // Regression test: if a future contributor lowers the floor without thinking through
+    // the static-screen path, this test fails first.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val crushed = synthesizeTinySingleFrameMp4(File(tempDir, "tiny_static.mp4"))
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = crushed,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 11_000L,
+    )
+    assertNotNull(
+      spriteFile,
+      "11s single-frame static-screen recording must still produce a sprite sheet — " +
+        "the broken-mp4 gate's absolute floor is what keeps this case out of the broken bucket",
+    )
+    assertTrue(
+      !File(tempDir, VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME).exists(),
+      "broken-mp4 marker must not be written for legitimate single-frame recordings",
+    )
+  }
+
+  @Test
+  fun `successful extraction writes video_sprites_diag with probe and restamp summary`() {
+    // The diagnostic file is the only forensic trail when sprite extraction completes but the
+    // result is suspect (e.g. tiny sprite from a long session because re-stamp silently didn't
+    // fire). It must be written even on the success path; CI artifact uploads see the file but
+    // not host-side Console.log, so this is the only signal that survives.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val broken = synthesizeBrokenTimingMp4(
+      target = File(tempDir, "broken.mp4"),
+      realDurationSeconds = 10,
+      compressedToSeconds = 1,
+      fps = 15,
+    )
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = broken,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 10_000L,
+    )
+    assertNotNull(spriteFile, "sprite sheet should be produced for the broken-timing fixture")
+
+    val diagFile = File(tempDir, VideoSpriteExtractor.DIAG_FILENAME)
+    assertTrue(
+      diagFile.exists(),
+      "expected ${VideoSpriteExtractor.DIAG_FILENAME} on the success path",
+    )
+    val diagText = diagFile.readText()
+    assertTrue(
+      diagText.contains("expectedDurationMs=10000"),
+      "diag should include expectedDurationMs for the K1-style post-hoc triage, got:\n$diagText",
+    )
+    assertTrue(
+      diagText.contains("probe=reportedS="),
+      "diag should include the ffprobe outcome, got:\n$diagText",
+    )
+    assertTrue(
+      diagText.contains("setpts="),
+      "broken-timing fixture should have triggered re-stamp; diag's vf= line should include setpts=, got:\n$diagText",
     )
   }
 
@@ -363,6 +849,63 @@ class VideoSpriteExtractorTest {
     }
     healthy.delete()
     return target
+  }
+
+  /**
+   * Synthesizes a 1-frame mp4 with a ~0.04-second container duration — the exact shape the
+   * Android `screenrecord` path produces on a fresh default 320x640 AVD when the recorded
+   * screen is static (one IDR frame, no further data). The `-c copy` mp4 wrap stamps the
+   * container at 25 fps default, so 1 frame = 1/25s = 0.04s. The test that uses this
+   * fixture relies on `ffprobe` reporting `nb_frames=1, duration=0.04`.
+   */
+  private fun synthesizeTinySingleFrameMp4(target: File): File {
+    // Generate a 25-frame, 25 fps testsrc, then crush PTS to ~0.04s and keep just the first
+    // frame. We need the multi-frame intermediate because `setpts=PTS*0.04` on a 1-frame stream
+    // doesn't shrink the container (nothing to "compress" with a single PTS=0 frame).
+    val intermediate = generateHealthyMp4(File(tempDir, "intermediate.mp4"), durationSeconds = 1, fps = 25)
+    val pb = ProcessBuilder(
+      "ffmpeg",
+      "-y",
+      "-i", intermediate.absolutePath,
+      "-filter:v", "setpts=PTS*0.04",
+      "-frames:v", "1",
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-pix_fmt", "yuv420p",
+      target.absolutePath,
+    ).redirectErrorStream(true)
+    val process = pb.start()
+    process.inputStream.bufferedReader().readText()
+    if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) {
+      throw IllegalStateException("failed to synthesize tiny single-frame mp4 at ${target.absolutePath}")
+    }
+    intermediate.delete()
+    return target
+  }
+
+  /**
+   * Probes [file] via ffprobe for `nb_frames` on the first video stream. Returns null when
+   * ffprobe is missing, exits non-zero, or the container reports `N/A` (some containers don't
+   * carry a header-side frame count). Mirrors [readDurationSeconds] — the two are paired so
+   * test fixtures can assert both halves of the CI failure signature in one go.
+   */
+  private fun readNbFrames(file: File): Long? {
+    val pb = ProcessBuilder(
+      "ffprobe",
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=nb_frames",
+      "-of", "default=nw=1:nk=1",
+      file.absolutePath,
+    ).redirectErrorStream(true)
+    return try {
+      val process = pb.start()
+      val output = process.inputStream.bufferedReader().readText().trim()
+      if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) return null
+      output.toLongOrNull()
+    } catch (_: Exception) {
+      null
+    }
   }
 
   private fun readDurationSeconds(file: File): Double? {

@@ -15,13 +15,23 @@ import java.util.concurrent.ConcurrentHashMap
 class AgentMemory {
   val variables: MutableMap<String, String> = ConcurrentHashMap()
 
-  // Keys whose values must not appear in logs or scripting envelopes (e.g. passwords).
+  // Keys whose values must not appear in logs or scripting envelopes (e.g. passwords, PINs,
+  // credit-card numbers). Downstream consumers stash PII through `rememberSensitive` and rely
+  // on those keys being filtered out of the scripting envelope, the LLM context, and
+  // `dumpMemory` traces.
   private val _sensitiveKeys = mutableSetOf<String>()
   val sensitiveKeys: Set<String> get() = _sensitiveKeys
 
   fun clear() {
     variables.clear()
     _sensitiveKeys.clear()
+  }
+
+  fun has(key: String): Boolean = variables.containsKey(key)
+
+  fun delete(key: String) {
+    variables.remove(key)
+    _sensitiveKeys.remove(key)
   }
 
   fun remember(key: String, value: String) {
@@ -34,6 +44,40 @@ class AgentMemory {
     Console.log("Remembering for current test: $key and value: [REDACTED]")
     variables[key] = value
     _sensitiveKeys.add(key)
+  }
+
+  /**
+   * Seed this memory from the (YAML defaults → CLI seeds → CLI sensitive seeds) composition
+   * used at trail start.
+   *
+   * Precedence (later tiers override on the same key):
+   *
+   *  1. `yamlDefaults` — the trail YAML's `config.memory:` block.
+   *  2. `cliSeeds` — `--memory KEY=VAL` entries; override yaml on collision.
+   *  3. `cliSensitiveSeeds` — `--secret KEY=VAL` entries; override both yaml and cli on
+   *     collision AND are routed through [rememberSensitive] so values are redacted in
+   *     logs and excluded from the scripting envelope.
+   *
+   * Returns the resolved NON-sensitive snapshot — exactly what
+   * [xyz.block.trailblaze.logs.model.SessionStatus.Started.resolvedInitialMemory] should
+   * carry. Sensitive keys appear only via [sensitiveKeys] (or the parallel
+   * `Started.sensitiveMemoryKeys`), never with their values.
+   */
+  fun seedFrom(
+    yamlDefaults: Map<String, String>?,
+    cliSeeds: Map<String, String>,
+    cliSensitiveSeeds: Map<String, String>,
+  ): Map<String, String> {
+    val resolved = LinkedHashMap<String, String>()
+    yamlDefaults?.let { resolved.putAll(it) }
+    resolved.putAll(cliSeeds)
+    // Sensitive seeds win on a same-key collision but are NOT included in the returned
+    // resolved snapshot — they're applied to memory via rememberSensitive instead.
+    val sensitiveKeysCollision = cliSensitiveSeeds.keys.intersect(resolved.keys)
+    sensitiveKeysCollision.forEach { resolved.remove(it) }
+    resolved.forEach { (key, value) -> remember(key, value) }
+    cliSensitiveSeeds.forEach { (key, value) -> rememberSensitive(key, value) }
+    return resolved
   }
 
   /**

@@ -120,7 +120,7 @@ class ResolvedTargetTest {
     assertTrue(msg.contains("fake-none"), "Error must name the target id; got: $msg")
     assertTrue(msg.contains("IOS"), "Error must name the platform; got: $msg")
     assertTrue(
-      msg.contains("trailblaze-config/targets/fake-none.yaml"),
+      msg.contains("trails/config/targets/fake-none.yaml"),
       "Error must surface the YAML path so the oncaller knows where to look; got: $msg",
     )
     assertTrue(

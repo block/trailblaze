@@ -4,11 +4,12 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.asToolType
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.withTimeout
@@ -131,8 +132,9 @@ class LocalLlmSamplingSource(
         )
       }
 
-      // Extract token usage from the response
-      val responseMetaInfo = responses.filterIsInstance<Message.Response>().lastOrNull()?.metaInfo
+      // Extract token usage from the response (Koog 1.0.0: LLMClient.execute() returns a
+      // single Message.Assistant whose metaInfo is the ResponseMetaInfo).
+      val responseMetaInfo: ai.koog.prompt.message.ResponseMetaInfo? = responses.metaInfo
       val tokenUsage = if (responseMetaInfo != null) {
         TokenUsage(
           inputTokens = responseMetaInfo.inputTokensCount?.toLong() ?: 0L,
@@ -142,12 +144,7 @@ class LocalLlmSamplingSource(
         null
       }
 
-      val responseText = responses.firstOrNull()?.let { response ->
-        when (response) {
-          is Message.Assistant -> response.content
-          else -> response.toString()
-        }
-      } ?: ""
+      val responseText = responses.textContent()
 
       // Log the response
       Console.log("")
@@ -246,28 +243,24 @@ class LocalLlmSamplingSource(
       }
 
       // Extract token usage from the response
-      val responseMetaInfo = responses.filterIsInstance<Message.Response>().lastOrNull()?.metaInfo
-      val tokenUsage = if (responseMetaInfo != null) {
-        TokenUsage(
-          inputTokens = responseMetaInfo.inputTokensCount?.toLong() ?: 0L,
-          outputTokens = responseMetaInfo.outputTokensCount?.toLong() ?: 0L,
-        )
-      } else {
-        null
-      }
+      val responseMetaInfo = responses.metaInfo
+      val tokenUsage = TokenUsage(
+        inputTokens = responseMetaInfo.inputTokensCount?.toLong() ?: 0L,
+        outputTokens = responseMetaInfo.outputTokensCount?.toLong() ?: 0L,
+      )
 
-      // Extract the tool call from response
-      val toolCall = responses.filterIsInstance<Message.Tool>().firstOrNull()
+      // Extract the tool call from response (Tool.Call is now a MessagePart inside the Assistant)
+      val toolCall = responses.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
         ?: return SamplingResult.Error(
-          "LLM did not return a tool call. Response: ${responses.firstOrNull()}"
+          "LLM did not return a tool call. Response: ${responses.textContent()}"
         )
 
       // Parse the tool arguments as JsonObject
       val arguments = try {
-        Json.decodeFromString<JsonObject>(toolCall.content)
+        Json.decodeFromString<JsonObject>(toolCall.args)
       } catch (e: Exception) {
         return SamplingResult.Error(
-          "Failed to parse tool call arguments as JSON: ${e.message}. Content: ${toolCall.content}"
+          "Failed to parse tool call arguments as JSON: ${e.message}. Content: ${toolCall.args}"
         )
       }
 
@@ -276,7 +269,7 @@ class LocalLlmSamplingSource(
         model = model,
         systemPrompt = systemPrompt,
         userMessage = userMessage,
-        completion = toolCall.content,
+        completion = toolCall.args,
         includedScreenshot = screenshotBytes != null && screenshotBytes.isNotEmpty(),
         screenshotBytes = screenshotBytes,
         tokenUsage = tokenUsage,
@@ -362,28 +355,24 @@ class LocalLlmSamplingSource(
       }
 
       // Extract token usage from the response
-      val responseMetaInfo = responses.filterIsInstance<Message.Response>().lastOrNull()?.metaInfo
-      val tokenUsage = if (responseMetaInfo != null) {
-        TokenUsage(
-          inputTokens = responseMetaInfo.inputTokensCount?.toLong() ?: 0L,
-          outputTokens = responseMetaInfo.outputTokensCount?.toLong() ?: 0L,
-        )
-      } else {
-        null
-      }
+      val responseMetaInfo = responses.metaInfo
+      val tokenUsage = TokenUsage(
+        inputTokens = responseMetaInfo.inputTokensCount?.toLong() ?: 0L,
+        outputTokens = responseMetaInfo.outputTokensCount?.toLong() ?: 0L,
+      )
 
-      // Extract the tool call from response
-      val toolCall = responses.filterIsInstance<Message.Tool>().firstOrNull()
+      // Extract the tool call from response (Tool.Call is now a MessagePart inside the Assistant)
+      val toolCall = responses.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
         ?: return SamplingResult.Error(
-          "LLM did not return a tool call. Response: ${responses.firstOrNull()}"
+          "LLM did not return a tool call. Response: ${responses.textContent()}"
         )
 
       // Parse the tool arguments as JsonObject
       val arguments = try {
-        Json.decodeFromString<JsonObject>(toolCall.content)
+        Json.decodeFromString<JsonObject>(toolCall.args)
       } catch (e: Exception) {
         return SamplingResult.Error(
-          "Failed to parse tool call arguments as JSON: ${e.message}. Content: ${toolCall.content}"
+          "Failed to parse tool call arguments as JSON: ${e.message}. Content: ${toolCall.args}"
         )
       }
 
@@ -392,7 +381,7 @@ class LocalLlmSamplingSource(
         model = model,
         systemPrompt = systemPrompt,
         userMessage = userMessage,
-        completion = toolCall.content,
+        completion = toolCall.args,
         includedScreenshot = screenshotBytes != null && screenshotBytes.isNotEmpty(),
         screenshotBytes = screenshotBytes,
         tokenUsage = tokenUsage,
@@ -451,14 +440,16 @@ class LocalLlmSamplingSource(
     )
     add(
       Message.User(
-        parts = buildList {
-          add(ContentPart.Text(text = userMessage))
+        parts = buildList<MessagePart.RequestPart> {
+          add(MessagePart.Text(text = userMessage))
           val supportsVision = llmModel?.capabilities?.contains(LLMCapability.Vision.Image) != false
           if (screenshotBytes != null && screenshotBytes.isNotEmpty() && supportsVision) {
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               ),
             )
           }
@@ -599,7 +590,7 @@ class LocalLlmSamplingSource(
             TrailblazeLlmMessage(role = "assistant", message = completion.take(MAX_LOG_MESSAGE_LENGTH))
           },
         ),
-        llmResponse = emptyList(), // Raw responses not available at this level
+        llmResponse = emptyList<Message.Assistant>(), // Raw responses not available at this level
         actions = emptyList(), // Actions parsed at higher level
         toolOptions = toolOptions,
         llmRequestUsageAndCost = usageAndCost,

@@ -6,8 +6,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import xyz.block.trailblaze.config.project.PackTargetConfig
-import xyz.block.trailblaze.config.project.TrailblazePackManifest
+import xyz.block.trailblaze.config.project.TrailmapTargetConfig
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import java.io.File
 import java.io.IOException
 import kotlin.test.assertEquals
@@ -108,14 +108,14 @@ class DaemonScriptedToolBundlerTest {
 
   @Test
   fun `bundleAll resolves script path relative to the descriptor YAML file`() = runBlocking {
-    // Pins the descriptor-relative resolution added alongside the pack self-containment
+    // Pins the descriptor-relative resolution added alongside the trailmap self-containment
     // refactor. Before this change, `script: ./tool.ts` resolved from the JVM CWD (repo
-    // root), forcing authors to write long paths like `./trails/config/packs/mypacks/tool.ts`.
-    // After: a bare `./tool.ts` in a descriptor at `packDir/tools/tool.yaml` resolves to
-    // `packDir/tools/tool.ts` — the implementation lives next to the descriptor in the pack.
+    // root), forcing authors to write long paths like `./trails/config/trailmaps/mypacks/tool.ts`.
+    // After: a bare `./tool.ts` in a descriptor at `trailmapDir/tools/tool.yaml` resolves to
+    // `trailmapDir/tools/tool.ts` — the implementation lives next to the descriptor in the trailmap.
     assumeEsbuildPresent()
-    val packDir = tempFolder.newFolder("relativePathPack")
-    val toolScript = File(packDir, "tools/myPack_relativePathTool.ts").apply {
+    val trailmapDir = tempFolder.newFolder("relativePathTrailmap")
+    val toolScript = File(trailmapDir, "tools/myPack_relativePathTool.ts").apply {
       parentFile.mkdirs()
       writeText(
         """
@@ -125,16 +125,16 @@ class DaemonScriptedToolBundlerTest {
       )
     }
     // Descriptor uses a descriptor-relative path — just the filename with no dir prefix.
-    File(packDir, "tools/myPack_relativePathTool.yaml").writeText(
+    File(trailmapDir, "tools/myPack_relativePathTool.yaml").writeText(
       toolDescriptorYaml(name = "myPack_relativePathTool", scriptPath = "./${toolScript.name}"),
     )
-    val pack = TrailblazePackManifest(
-      id = "relativePathPack",
-      target = packTarget(displayName = "Relative Path Pack", toolNames = listOf("myPack_relativePathTool")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "relativePathTrailmap",
+      target = trailmapTarget(displayName = "Relative Path Trailmap", toolNames = listOf("myPack_relativePathTool")),
     )
     val result = bundler.bundleAll(
-      packs = listOf(pack),
-      packBaseDirs = mapOf(pack to packDir),
+      trailmaps = listOf(trailmap),
+      trailmapBaseDirs = mapOf(trailmap to trailmapDir),
     )
     assertTrue(result.containsKey("myPack_relativePathTool"), "expected tool to be bundled; got keys: ${result.keys}")
     assertTrue(result["myPack_relativePathTool"]!!.isFile, "expected bundle file to exist")
@@ -142,41 +142,41 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
-  fun `bundleAll across two synthetic packs returns map keyed by tool name`() = runBlocking {
+  fun `bundleAll across two synthetic trailmaps returns map keyed by tool name`() = runBlocking {
     assumeEsbuildPresent()
-    val packADir = tempFolder.newFolder("packA")
-    val packBDir = tempFolder.newFolder("packB")
+    val trailmapADir = tempFolder.newFolder("trailmapA")
+    val trailmapBDir = tempFolder.newFolder("trailmapB")
 
     // Each script must export a function whose name matches the descriptor's `name:` —
     // the bundler's synthesized wrapper imports the named export for registration.
-    val toolAScript = writeTinyTs("toolA-source.ts", exportName = "packA_demo_toolA", body = "console.log('A')")
-    val toolBScript = writeTinyTs("toolB-source.ts", exportName = "packB_demo_toolB", body = "console.log('B')")
+    val toolAScript = writeTinyTs("toolA-source.ts", exportName = "trailmapA_demo_toolA", body = "console.log('A')")
+    val toolBScript = writeTinyTs("toolB-source.ts", exportName = "trailmapB_demo_toolB", body = "console.log('B')")
 
-    File(packADir, "tools/toolA.yaml").apply {
+    File(trailmapADir, "tools/toolA.yaml").apply {
       parentFile.mkdirs()
-      writeText(toolDescriptorYaml(name = "packA_demo_toolA", scriptPath = toolAScript.absolutePath))
+      writeText(toolDescriptorYaml(name = "trailmapA_demo_toolA", scriptPath = toolAScript.absolutePath))
     }
-    File(packBDir, "tools/toolB.yaml").apply {
+    File(trailmapBDir, "tools/toolB.yaml").apply {
       parentFile.mkdirs()
-      writeText(toolDescriptorYaml(name = "packB_demo_toolB", scriptPath = toolBScript.absolutePath))
+      writeText(toolDescriptorYaml(name = "trailmapB_demo_toolB", scriptPath = toolBScript.absolutePath))
     }
 
-    val packA = TrailblazePackManifest(
-      id = "packA",
-      target = packTarget(displayName = "Pack A", toolNames = listOf("packA_demo_toolA")),
+    val trailmapA = TrailblazeTrailmapManifest(
+      id = "trailmapA",
+      target = trailmapTarget(displayName = "Trailmap A", toolNames = listOf("trailmapA_demo_toolA")),
     )
-    val packB = TrailblazePackManifest(
-      id = "packB",
-      target = packTarget(displayName = "Pack B", toolNames = listOf("packB_demo_toolB")),
+    val trailmapB = TrailblazeTrailmapManifest(
+      id = "trailmapB",
+      target = trailmapTarget(displayName = "Trailmap B", toolNames = listOf("trailmapB_demo_toolB")),
     )
 
     val result = bundler.bundleAll(
-      packs = listOf(packA, packB),
-      packBaseDirs = mapOf(packA to packADir, packB to packBDir),
+      trailmaps = listOf(trailmapA, trailmapB),
+      trailmapBaseDirs = mapOf(trailmapA to trailmapADir, trailmapB to trailmapBDir),
     )
 
     assertEquals(
-      setOf("packA_demo_toolA", "packB_demo_toolB"),
+      setOf("trailmapA_demo_toolA", "trailmapB_demo_toolB"),
       result.keys,
       "expected the result map to contain both tools keyed by their declared names",
     )
@@ -189,20 +189,20 @@ class DaemonScriptedToolBundlerTest {
   @Test
   fun `bundleAll fails when target tools references an unknown name`() = runBlocking {
     // With the name-based resolution model, `target.tools:` lists tool names rather than
-    // paths. A name that doesn't match any descriptor under `<pack>/tools/` fails with the
+    // paths. A name that doesn't match any descriptor under `<trailmap>/tools/` fails with the
     // discovered-name list embedded for triage. (Replaces the legacy descriptor-path
     // containment test — there are no paths in `target.tools:` to escape from anymore.)
-    val packDir = tempFolder.newFolder("unknownNamePack")
-    File(packDir, "tools/known.yaml").apply {
+    val trailmapDir = tempFolder.newFolder("unknownNameTrailmap")
+    File(trailmapDir, "tools/known.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = "knownTool", scriptPath = "./known.ts"))
     }
-    val pack = TrailblazePackManifest(
-      id = "unknownNamePack",
-      target = packTarget(displayName = "Unknown Name Pack", toolNames = listOf("missingTool")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "unknownNameTrailmap",
+      target = trailmapTarget(displayName = "Unknown Name Trailmap", toolNames = listOf("missingTool")),
     )
     val thrown = assertFailsWith<IOException> {
-      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+      bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue(
@@ -216,34 +216,34 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
-  fun `bundleAll rejects relative script that escapes the pack dir`() = runBlocking {
+  fun `bundleAll rejects relative script that escapes the trailmap dir`() = runBlocking {
     // Pins canonical-path containment for the session-time resolver, matching the loader's
     // mcp_servers containment guarantee. Without this check, a descriptor declaring
-    // `script: ../sibling.ts` would resolve outside the pack at session start with no
+    // `script: ../sibling.ts` would resolve outside the trailmap at session start with no
     // guard — defense-in-depth across all the resolvers.
-    val packDir = tempFolder.newFolder("containmentPack")
-    // Sibling file OUTSIDE the pack — exists so the test pins containment, not file-not-found.
-    val outsideScript = File(packDir.parentFile, "sibling-outside.ts").apply {
+    val trailmapDir = tempFolder.newFolder("containmentTrailmap")
+    // Sibling file OUTSIDE the trailmap — exists so the test pins containment, not file-not-found.
+    val outsideScript = File(trailmapDir.parentFile, "sibling-outside.ts").apply {
       writeText("export function escapeTool(): void {}")
     }
     assertTrue(outsideScript.isFile, "outside script must exist for containment to be the real failure")
-    // Descriptor lives under `<packDir>/tools/` (the only place discovery looks). Its
-    // `script:` field reaches outside the pack via `../../`.
-    File(packDir, "tools/escapeTool.yaml").apply {
+    // Descriptor lives under `<trailmapDir>/tools/` (the only place discovery looks). Its
+    // `script:` field reaches outside the trailmap via `../../`.
+    File(trailmapDir, "tools/escapeTool.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = "escapeTool", scriptPath = "../../${outsideScript.name}"))
     }
-    val pack = TrailblazePackManifest(
-      id = "containmentPack",
-      target = packTarget(displayName = "Containment Pack", toolNames = listOf("escapeTool")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "containmentTrailmap",
+      target = trailmapTarget(displayName = "Containment Trailmap", toolNames = listOf("escapeTool")),
     )
     val thrown = assertFailsWith<IOException> {
-      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+      bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue(
-      message.contains("resolves outside the pack directory"),
-      "expected message to call out pack containment; got: $message",
+      message.contains("resolves outside the trailmap directory"),
+      "expected message to call out trailmap containment; got: $message",
     )
     assertTrue(
       message.contains("escapeTool"),
@@ -252,40 +252,40 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
-  fun `bundleAll throws when two packs declare the same scripted tool name`() = runBlocking {
+  fun `bundleAll throws when two trailmaps declare the same scripted tool name`() = runBlocking {
     // Pins the duplicate-name detection added in 520bb7ac5. Pre-fix, a LinkedHashMap.put
     // would silently overwrite the earlier entry; downstream dispatch would route to
-    // whichever bundle won the race. We want a loud failure that names both pack ids.
+    // whichever bundle won the race. We want a loud failure that names both trailmap ids.
     assumeEsbuildPresent()
-    val packADir = tempFolder.newFolder("dupPackA")
-    val packBDir = tempFolder.newFolder("dupPackB")
+    val trailmapADir = tempFolder.newFolder("dupTrailmapA")
+    val trailmapBDir = tempFolder.newFolder("dupTrailmapB")
 
     val sharedToolName = "duplicate_demo_tool"
     val toolAScript = writeTinyTs("dupA-source.ts", exportName = sharedToolName, body = "console.log('A')")
     val toolBScript = writeTinyTs("dupB-source.ts", exportName = sharedToolName, body = "console.log('B')")
 
-    File(packADir, "tools/tool.yaml").apply {
+    File(trailmapADir, "tools/tool.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = sharedToolName, scriptPath = toolAScript.absolutePath))
     }
-    File(packBDir, "tools/tool.yaml").apply {
+    File(trailmapBDir, "tools/tool.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = sharedToolName, scriptPath = toolBScript.absolutePath))
     }
 
-    val packA = TrailblazePackManifest(
-      id = "dupPackA",
-      target = packTarget(displayName = "Dup A", toolNames = listOf(sharedToolName)),
+    val trailmapA = TrailblazeTrailmapManifest(
+      id = "dupTrailmapA",
+      target = trailmapTarget(displayName = "Dup A", toolNames = listOf(sharedToolName)),
     )
-    val packB = TrailblazePackManifest(
-      id = "dupPackB",
-      target = packTarget(displayName = "Dup B", toolNames = listOf(sharedToolName)),
+    val trailmapB = TrailblazeTrailmapManifest(
+      id = "dupTrailmapB",
+      target = trailmapTarget(displayName = "Dup B", toolNames = listOf(sharedToolName)),
     )
 
     val thrown = assertFailsWith<IOException> {
       bundler.bundleAll(
-        packs = listOf(packA, packB),
-        packBaseDirs = mapOf(packA to packADir, packB to packBDir),
+        trailmaps = listOf(trailmapA, trailmapB),
+        trailmapBaseDirs = mapOf(trailmapA to trailmapADir, trailmapB to trailmapBDir),
       )
     }
     val message = thrown.message.orEmpty()
@@ -300,38 +300,38 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
-  fun `bundleAll fails when target tools lists the same name twice in one pack`() = runBlocking {
-    // Pin the per-pack dedup added alongside the name-resolution flip. Without this check,
-    // listing the same name twice in `target.tools:` would trip the cross-pack collision
-    // guard later with a message that incorrectly blames a sibling pack. The per-pack check
+  fun `bundleAll fails when target tools lists the same name twice in one trailmap`() = runBlocking {
+    // Pin the per-trailmap dedup added alongside the name-resolution flip. Without this check,
+    // listing the same name twice in `target.tools:` would trip the cross-trailmap collision
+    // guard later with a message that incorrectly blames a sibling trailmap. The per-trailmap check
     // fires first and produces an accurate diagnostic.
-    val packDir = tempFolder.newFolder("dupInTargetPack")
-    File(packDir, "tools/foo.yaml").apply {
+    val trailmapDir = tempFolder.newFolder("dupInTargetTrailmap")
+    File(trailmapDir, "tools/foo.yaml").apply {
       parentFile.mkdirs()
       writeText(toolDescriptorYaml(name = "foo", scriptPath = "./foo.ts"))
     }
-    val pack = TrailblazePackManifest(
-      id = "dupInTargetPack",
-      target = packTarget(displayName = "Dup In Target", toolNames = listOf("foo", "foo")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "dupInTargetTrailmap",
+      target = trailmapTarget(displayName = "Dup In Target", toolNames = listOf("foo", "foo")),
     )
 
     val thrown = assertFailsWith<IOException> {
-      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+      bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue(message.contains("'foo'"), "expected duplicate name in message; got: $message")
-    assertTrue(message.contains("more than once"), "expected per-pack diagnostic; got: $message")
+    assertTrue(message.contains("more than once"), "expected per-trailmap diagnostic; got: $message")
     assertTrue(
-      !message.contains("Duplicate scripted-tool name 'foo' across packs"),
-      "must NOT misattribute to cross-pack collision; got: $message",
+      !message.contains("Duplicate scripted-tool name 'foo' across trailmaps"),
+      "must NOT misattribute to cross-trailmap collision; got: $message",
     )
   }
 
   @Test
-  fun `bundleAll rejects symlinked descriptor that escapes the pack dir at discovery`() = runBlocking {
-    // Pin the symlink-containment check added in the round-1 follow-up. A `<pack>/tools/foo.yaml`
-    // that symlinks outside the pack must be rejected, not silently followed — matches the
-    // runtime loader's `PackSource.readFilesystemSibling` containment guarantee.
+  fun `bundleAll rejects symlinked descriptor that escapes the trailmap dir at discovery`() = runBlocking {
+    // Pin the symlink-containment check added in the round-1 follow-up. A `<trailmap>/tools/foo.yaml`
+    // that symlinks outside the trailmap must be rejected, not silently followed — matches the
+    // runtime loader's `TrailmapSource.readFilesystemSibling` containment guarantee.
     //
     // Note the fixture: `target.tools:` lists `outsideTool` (the name *inside* the outside
     // descriptor) rather than `escape` (the symlink filename) so the test pins discovery-time
@@ -339,13 +339,13 @@ class DaemonScriptedToolBundlerTest {
     // failure would change to UnknownScriptedToolName ('outsideTool' didn't register because
     // it was filtered out at containment time) — distinguishable from the current "resolves
     // outside" assertion.
-    val packDir = tempFolder.newFolder("symlinkContainmentPack")
-    File(packDir, "tools").mkdirs()
+    val trailmapDir = tempFolder.newFolder("symlinkContainmentTrailmap")
+    File(trailmapDir, "tools").mkdirs()
     val outsideDir = tempFolder.newFolder("outside-tools")
     val outsideDescriptor = File(outsideDir, "outside.yaml").apply {
       writeText(toolDescriptorYaml(name = "outsideTool", scriptPath = "./outside.ts"))
     }
-    val symlinkSource = File(packDir, "tools/outsideTool.yaml").toPath()
+    val symlinkSource = File(trailmapDir, "tools/outsideTool.yaml").toPath()
     try {
       java.nio.file.Files.createSymbolicLink(symlinkSource, outsideDescriptor.toPath())
     } catch (_: UnsupportedOperationException) {
@@ -353,17 +353,17 @@ class DaemonScriptedToolBundlerTest {
       // rather than fail it. The bundler test for the same guard uses the same pattern.
       return@runBlocking
     }
-    val pack = TrailblazePackManifest(
-      id = "symlinkContainmentPack",
-      target = packTarget(displayName = "Symlink Containment", toolNames = listOf("outsideTool")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "symlinkContainmentTrailmap",
+      target = trailmapTarget(displayName = "Symlink Containment", toolNames = listOf("outsideTool")),
     )
 
     val thrown = assertFailsWith<IOException> {
-      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+      bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue(
-      message.contains("resolves outside the pack directory"),
+      message.contains("resolves outside the trailmap directory"),
       "expected containment failure; got: $message",
     )
   }
@@ -374,22 +374,22 @@ class DaemonScriptedToolBundlerTest {
     // behavior + the downstream unknown-name diagnostic WITHOUT requiring esbuild — the
     // failure surfaces before any bundling happens. Pinning this independently of esbuild
     // means clean CI agents (no `bun install`) still get the regression check.
-    val packDir = tempFolder.newFolder("malformedReferencedPack")
-    File(packDir, "tools").mkdirs()
-    File(packDir, "tools/foo.yaml").writeText(
+    val trailmapDir = tempFolder.newFolder("malformedReferencedTrailmap")
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/foo.yaml").writeText(
       """
       |script: ./foo.ts
       |this is not valid yaml:::
       |  - { unclosed
       |""".trimMargin(),
     )
-    val pack = TrailblazePackManifest(
-      id = "malformedReferencedPack",
-      target = packTarget(displayName = "Malformed Referenced", toolNames = listOf("foo")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "malformedReferencedTrailmap",
+      target = trailmapTarget(displayName = "Malformed Referenced", toolNames = listOf("foo")),
     )
 
     val thrown = assertFailsWith<IOException> {
-      bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+      bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     }
     val message = thrown.message.orEmpty()
     assertTrue("got: $message") { message.contains("'foo'") }
@@ -400,14 +400,14 @@ class DaemonScriptedToolBundlerTest {
 
   @Test
   fun `bundleAll skips malformed descriptors and continues with sibling tools`() = runBlocking {
-    // Lead-dev review #2 (round 2): a half-written `<pack>/tools/broken.yaml` must NOT take
-    // the whole pack out — sibling descriptors still register and `target.tools:` references
+    // Lead-dev review #2 (round 2): a half-written `<trailmap>/tools/broken.yaml` must NOT take
+    // the whole trailmap out — sibling descriptors still register and `target.tools:` references
     // resolve normally against them.
     assumeEsbuildPresent()
-    val packDir = tempFolder.newFolder("wipFriendlyPack")
-    File(packDir, "tools").mkdirs()
+    val trailmapDir = tempFolder.newFolder("wipFriendlyTrailmap")
+    File(trailmapDir, "tools").mkdirs()
     // Malformed YAML — half-written by the author.
-    File(packDir, "tools/broken.yaml").writeText(
+    File(trailmapDir, "tools/broken.yaml").writeText(
       """
       |script: ./broken.ts
       |this is not valid yaml:::
@@ -416,15 +416,15 @@ class DaemonScriptedToolBundlerTest {
     )
     // Working sibling — must still register and bundle.
     val workingScript = writeTinyTs("wip-working.ts", exportName = "workingTool")
-    File(packDir, "tools/working.yaml").writeText(
+    File(trailmapDir, "tools/working.yaml").writeText(
       toolDescriptorYaml(name = "workingTool", scriptPath = workingScript.absolutePath),
     )
-    val pack = TrailblazePackManifest(
-      id = "wipFriendlyPack",
-      target = packTarget(displayName = "WIP Friendly", toolNames = listOf("workingTool")),
+    val trailmap = TrailblazeTrailmapManifest(
+      id = "wipFriendlyTrailmap",
+      target = trailmapTarget(displayName = "WIP Friendly", toolNames = listOf("workingTool")),
     )
 
-    val result = bundler.bundleAll(packs = listOf(pack), packBaseDirs = mapOf(pack to packDir))
+    val result = bundler.bundleAll(trailmaps = listOf(trailmap), trailmapBaseDirs = mapOf(trailmap to trailmapDir))
     assertTrue(
       result.containsKey("workingTool"),
       "sibling descriptor must still register despite the malformed neighbor; got keys: ${result.keys}",
@@ -502,6 +502,73 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `synthesized wrapper exposes a tools Proxy with SDK-aligned reserved props and unwrap`() {
+    // The wrapper-synthesized `__client.tools` Proxy must mirror the SDK's
+    // `createToolsProxy` (`sdks/typescript/src/client.ts:535`) so typed handlers see
+    // the same `ctx.tools.<name>(args)` semantics whether they run on the QuickJS
+    // bundle path (this wrapper) or the subprocess MCP path (the SDK's real Proxy).
+    // The Proxy is emitted into every per-tool IIFE the bundler produces. Two drift
+    // points this test guards against:
+    //  - `TOOLS_PROXY_RESERVED_PROPS` parity (`client.ts:504-521`) — including
+    //    `__proto__`, which most JS engines synthesize as a Proxy `get`-trap.
+    //    Without the full reserved set, `await client.tools` (probes `.then`),
+    //    `JSON.stringify(client.tools)` (probes `.toJSON` / `.toString`), and
+    //    prototype walks (probe `.constructor` / `.__proto__`) would dispatch a
+    //    spurious `callTool("then", ...)` to the host.
+    //  - Envelope unwrap (`_unwrapToolResult` at `client.ts:615`) — return
+    //    `structuredContent` if present, fall back to `textContent`. The wrapper
+    //    additionally handles `message` for the on-device callback transport's
+    //    `TrailblazeToolResult.Success` shape (serialized verbatim by
+    //    `SessionScopedHostBinding.callFromBundle`). Without unwrap, a typed handler
+    //    reading `const r = await ctx.tools.foo(args); r.field` sees the envelope,
+    //    not the structured payload — silent regression for any handler composing
+    //    other tools.
+    //
+    // The actual runtime semantics are pinned by the integration test that runs
+    // the wrapper through QuickJS — see `LaunchedScriptingRuntimeTest` /
+    // `QuickJsToolHostTest`. This test guards against drift in the generated
+    // wrapper source so a future refactor on either side (the SDK Proxy or this
+    // synthesis) catches the divergence before it ships.
+    val src = writeTinyTs("proxy-parity-source.ts", exportName = "doSomething")
+    val wrapper = bundler.synthesizeWrapper(src, toolName = "doSomething")
+
+    // Reserved props: every name from TOOLS_PROXY_RESERVED_PROPS appears in the
+    // single combined conditional. The Proxy returns `undefined` for these so
+    // value-coercion / inspect paths don't fire a stray callTool against the daemon.
+    val reservedProps = listOf(
+      "then", "catch", "finally",
+      "constructor", "prototype", "__proto__",
+      "toString", "valueOf", "toJSON",
+    )
+    for (prop in reservedProps) {
+      assertTrue(
+        wrapper.contains("name === '$prop'"),
+        "expected reserved-prop check for '$prop' in wrapper; got:\n$wrapper",
+      )
+    }
+
+    // Envelope unwrap — structuredContent → textContent → message fallback chain.
+    // Matches `_unwrapToolResult` at `client.ts:615` plus the on-device
+    // `TrailblazeToolResult.Success { message }` shape `SessionScopedHostBinding`
+    // emits. Drift on either side surfaces here.
+    assertTrue(
+      wrapper.contains("envelope.structuredContent !== undefined") &&
+        wrapper.contains("envelope.structuredContent !== null"),
+      "expected structuredContent check in wrapper; got:\n$wrapper",
+    )
+    assertTrue(
+      wrapper.contains("envelope.textContent !== undefined") &&
+        wrapper.contains("envelope.textContent !== null"),
+      "expected textContent fallback in wrapper; got:\n$wrapper",
+    )
+    assertTrue(
+      wrapper.contains("return envelope.message"),
+      "expected message fallback (TrailblazeToolResult.Success on-device shape) " +
+        "in wrapper; got:\n$wrapper",
+    )
+  }
+
+  @Test
   fun `bundleOne rejects tool names with invalid characters`() = runBlocking {
     val src = writeTinyTs("validation-source.ts", exportName = "doSomething")
     // Spaces, quotes, control chars all produce syntactically broken wrappers or are
@@ -534,6 +601,42 @@ class DaemonScriptedToolBundlerTest {
     assertTrue(
       !staleWrapper.exists(),
       "expected bundleOneInternal to sweep stale wrapper file; still at ${staleWrapper.absolutePath}",
+    )
+  }
+
+  @Test
+  fun `stale-wrapper sweep runs at most once per parent directory per JVM`() = runBlocking {
+    // Pins the once-per-(JVM, directory) sweep dedup added to fix a concurrent-bundle race:
+    // pre-fix, every bundleOne call swept ALL `.trailblaze-wrapper-*.ts` files in the parent
+    // dir, including ones a concurrent bundler had just written and was still feeding to
+    // esbuild — surfaced as `[ERROR] Could not resolve ".../.trailblaze-wrapper-…ts"`.
+    // After the fix, the sweep runs only on the first call per (JVM, directory); subsequent
+    // calls leave sibling wrappers alone (real ones from a previous crash get cleaned up by
+    // the first call; live ones from concurrent calls are left intact).
+    assumeEsbuildPresent()
+    val src1 = writeTinyTs("sweep-once-1.ts", exportName = "first")
+    val firstStale = File(src1.parentFile, "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}stale-before-first.ts")
+    firstStale.writeText("// stale from a previous JVM crash")
+    bundler.bundleOne(src1, toolName = "first")
+    assertTrue(
+      !firstStale.exists(),
+      "first call must sweep pre-existing stale wrappers; still at ${firstStale.absolutePath}",
+    )
+
+    // Drop a NEW sibling wrapper after the first call. This simulates the state a
+    // concurrent bundle would leave in the directory (its in-flight wrapper). The next
+    // bundleOne in the same directory must NOT delete it.
+    val src2 = writeTinyTs("sweep-once-2.ts", exportName = "second")
+    val concurrentlyActiveWrapper = File(
+      src2.parentFile,
+      "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}stale-after-first.ts",
+    )
+    concurrentlyActiveWrapper.writeText("// would belong to a concurrent bundler — must survive")
+    bundler.bundleOne(src2, toolName = "second")
+    assertTrue(
+      concurrentlyActiveWrapper.exists(),
+      "second call in same dir must NOT re-sweep; concurrent-wrapper stand-in was deleted at " +
+        concurrentlyActiveWrapper.absolutePath,
     )
   }
 
@@ -588,24 +691,6 @@ class DaemonScriptedToolBundlerTest {
     )
   }
 
-  @Test
-  fun `synthesized wrapper exposes client_tools proxy for client_tools_X authoring surface`() {
-    // Pins the fix for the runtime failure "cannot read property 'X' of undefined"
-    // that occurs when a scripted tool uses `client.tools.launchApp(...)` instead of
-    // `client.callTool("launchApp", ...)`. The wrapper's `__client` shim must expose
-    // a `tools` Proxy that maps property accesses to `callTool` dispatches.
-    val src = writeTinyTs("tools-proxy-source.ts", exportName = "doSomething")
-    val wrapper = bundler.synthesizeWrapper(src, toolName = "doSomething")
-    assertTrue(
-      wrapper.contains("__client.tools = new Proxy"),
-      "expected wrapper to attach client.tools Proxy; got:\n$wrapper",
-    )
-    assertTrue(
-      wrapper.contains("return function(args) { return __client.callTool(prop, args); }"),
-      "expected tools Proxy to delegate to __client.callTool; got:\n$wrapper",
-    )
-  }
-
   // --- helpers ---
 
   private fun writeTinyTs(
@@ -625,12 +710,12 @@ class DaemonScriptedToolBundlerTest {
     return file
   }
 
-  private fun packTarget(displayName: String, toolNames: List<String>): PackTargetConfig =
-    PackTargetConfig(displayName = displayName, tools = toolNames)
+  private fun trailmapTarget(displayName: String, toolNames: List<String>): TrailmapTargetConfig =
+    TrailmapTargetConfig(displayName = displayName, tools = toolNames)
 
   /**
    * Minimal descriptor YAML — just the fields the bundler reads (`name`, `script`).
-   * Real pack tool descriptors carry more (description, inputSchema, _meta), but the
+   * Real trailmap tool descriptors carry more (description, inputSchema, _meta), but the
    * bundler doesn't need them; kaml's `strictMode = false` ignores absent extras.
    */
   private fun toolDescriptorYaml(name: String, scriptPath: String): String =

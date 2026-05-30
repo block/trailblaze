@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.config
 
-import xyz.block.trailblaze.config.project.TrailblazePackManifest
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
@@ -10,11 +10,12 @@ import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 
 /**
- * Loads per-tool YAML files from `trailblaze-config/tools/` and resolves each tool's class via
- * reflection (for class-backed tools) or returns the parsed [ToolYamlConfig] (for YAML-defined
- * `tools:` mode tools).
+ * Loads per-tool YAML files from `trails/config/trailmaps/<id>/tools/` and resolves each
+ * tool's class via reflection (for class-backed tools) or returns the parsed [ToolYamlConfig]
+ * (for YAML-defined `tools:` mode tools).
  *
- * Files in `tools/` use one of three suffixes that signal the tool's operational class:
+ * Files in a trailmap's `tools/` directory use one of three suffixes that signal the tool's
+ * operational class:
  *
  * - `*.tool.yaml` — regular tool. Must NOT declare a `shortcut:` or `trailhead:` block.
  * - `*.shortcut.yaml` — shortcut tool. Must declare a `shortcut:` block; must not declare
@@ -140,24 +141,22 @@ object ToolYamlLoader {
   private fun discoverAllConfigs(
     resourceSource: ConfigResourceSource,
   ): List<ToolYamlConfig> {
-    // Walk for `.yaml` (the resource-source contract strips this exact suffix from the
-    // returned map keys). Filenames like `eraseText.tool.yaml` become map keys
-    // `eraseText.tool` — the trailing word identifies the operational class.
-    val yamlContents = resourceSource.discoverAndLoad(
-      directoryPath = TrailblazeConfigPaths.TOOLS_DIR,
-      suffix = ".yaml",
-    )
-    val packBundled = discoverPackBundledToolContents(resourceSource)
-    return parseAllConfigs(yamlContents + packBundled)
+    // Single walk: tools live at `trails/config/trailmaps/<id>/tools/<name>.tool.yaml`
+    // (and shortcuts/trailheads at their sibling directories). The composite source has
+    // already collapsed the workspace + classpath layers at the same relPath before we
+    // get here — workspace-authored tools at
+    // `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml` win over
+    // classpath-bundled tools at the same relPath.
+    return parseAllConfigs(discoverTrailmapBundledToolContents(resourceSource))
   }
 
   /**
-   * Discovers tool YAMLs bundled inside library / target packs under three sibling
+   * Discovers tool YAMLs bundled inside library / target trailmaps under three sibling
    * directories, one per operational class:
    *
-   * - `trailblaze-config/packs/<id>/tools/[<subdir>/...]<name>.tool.yaml`
-   * - `trailblaze-config/packs/<id>/shortcuts/[<subdir>/...]<name>.shortcut.yaml`
-   * - `trailblaze-config/packs/<id>/trailheads/[<subdir>/...]<name>.trailhead.yaml`
+   * - `trails/config/trailmaps/<id>/tools/[<subdir>/...]<name>.tool.yaml`
+   * - `trails/config/trailmaps/<id>/shortcuts/[<subdir>/...]<name>.shortcut.yaml`
+   * - `trails/config/trailmaps/<id>/trailheads/[<subdir>/...]<name>.trailhead.yaml`
    *
    * Each suffix is permitted in exactly one directory. A `.shortcut.yaml` dropped under
    * `tools/` (or vice versa) is dropped by discovery and logged at warning level so the
@@ -165,59 +164,71 @@ object ToolYamlLoader {
    * suffix-content contract can't fire on them.
    *
    * Subdirectories under each top-level dir are allowed at any depth so authors can
-   * organize a pack's surface by platform, sub-flow, or any other grouping that fits
-   * the pack (e.g. `shortcuts/web/`, `shortcuts/android/checkout/`). This mirrors the
-   * existing `<pack>/waypoints/<...>/<name>.waypoint.yaml` layout. The constraint is
+   * organize a trailmap's surface by platform, sub-flow, or any other grouping that fits
+   * the trailmap (e.g. `shortcuts/web/`, `shortcuts/android/checkout/`). This mirrors the
+   * existing `<trailmap>/waypoints/<...>/<name>.waypoint.yaml` layout. The constraint is
    * **structural, not organizational**: a YAML must live somewhere under the matching
-   * top-level directory for its operational class — a stray YAML elsewhere in the pack
+   * top-level directory for its operational class — a stray YAML elsewhere in the trailmap
    * doesn't accidentally register.
    *
-   * Why this lives next to the flat-`tools/`-dir scan: pack-bundled tools must surface
-   * in the same global tool registry that the flat scan populates so toolset YAMLs and
-   * trail YAMLs can reference them by bare id, regardless of which pack ships them.
-   * Without this step, moving a tool YAML from `trailblaze-config/tools/` into a pack's
-   * subdirectory would silently drop it from the resolver — toolsets would log
-   * "unknown tool" warnings and trails would fail to decode.
+   * This is the only discovery path for class-backed and YAML-defined tools: every tool
+   * YAML lives under its owning trailmap's `tools/` directory, and toolset YAMLs / trail
+   * YAMLs reference them by bare id regardless of which trailmap ships them. The
+   * trailmap-scoped layout is also what users author at
+   * `<workspace>/trails/config/trailmaps/<id>/tools/<name>.tool.yaml`; the classpath and
+   * workspace layers merge at the same relPath via [CompositeConfigResourceSource]
+   * (workspace wins on collision) before discovery sees them.
    *
-   * Per-target scripted-tool descriptors (`PackScriptedToolFile`) live under `tools/`
+   * Per-target scripted-tool descriptors (`TrailmapScriptedToolFile`) live under `tools/`
    * but use a plain `.yaml` extension and are deliberately excluded — they flow
    * through the per-target `target.tools:` resolution path instead of the global
    * registry.
    *
-   * Map keys are the **full pack-relative path** with `.yaml` stripped (e.g.
-   * `<pack-id>/shortcuts/<name>.shortcut`). Keying by basename only would silently
-   * collapse two packs that ship a same-named file (e.g. `packs/a/shortcuts/login.shortcut.yaml`
-   * vs `packs/b/shortcuts/login.shortcut.yaml`) into one entry before the YAML is even
+   * Map keys are the **full trailmap-relative path** with `.yaml` stripped (e.g.
+   * `<trailmap-id>/shortcuts/<name>.shortcut`). Keying by basename only would silently
+   * collapse two trailmaps that ship a same-named file (e.g. `trailmaps/a/shortcuts/login.shortcut.yaml`
+   * vs `trailmaps/b/shortcuts/login.shortcut.yaml`) into one entry before the YAML is even
    * parsed, losing one tool from the registry without any duplicate-id warning. Keying
    * by full path keeps both files in the discovery map and lets [warnOnDuplicateIds]
    * catch the collision at the *id* level instead.
    *
-   * **Library-pack trailhead guard.** A pack with no `target:` block cannot legitimately
+   * **Library-trailmap trailhead guard.** A trailmap with no `target:` block cannot legitimately
    * ship a `*.trailhead.yaml` file (a trailhead bootstraps to a known waypoint, which
    * only makes sense within a target). The manifest-side rule lives in
-   * `TrailblazeProjectConfigLoader.resolvePackSiblings` and only fires for tools that
-   * are referenced by `pack.yaml`'s `tools:` list. To prevent a library pack from
+   * `TrailblazeProjectConfigLoader.resolveTrailmapSiblings` and only fires for tools that
+   * are referenced by `trailmap.yaml`'s `tools:` list. To prevent a library trailmap from
    * silently registering a trailhead tool *just by dropping it on disk*, this discovery
-   * pass also classifies each pack and skips `*.trailhead.yaml` files inside library
-   * packs (with a loud warning naming the offending file).
+   * pass also classifies each trailmap and skips `*.trailhead.yaml` files inside library
+   * trailmaps (with a loud warning naming the offending file).
    *
    * Routes through [ConfigResourceSource.discoverAndLoadRecursive] so the same logic works
-   * on JVM (classpath URL scan) and on Android (AssetManager walk). The pack-bundled hook
-   * was JVM-only originally — on-device tests now resolve pack-bundled tools the same way.
+   * on JVM (classpath URL scan) and on Android (AssetManager walk). The trailmap-bundled hook
+   * was JVM-only originally — on-device tests now resolve trailmap-bundled tools the same way.
+   *
+   * **Multi-module contribution.** A single trailmap id can have artifacts contributed from
+   * more than one Gradle module — e.g. the `trailblaze` trailmap's `trailmap.yaml` ships in
+   * `:trailblaze-models` while its `tools/` directory ships in `:trailblaze-common`. Both
+   * land at the same classpath path (`trails/config/trailmaps/trailblaze/`) and the
+   * recursive walk above merges them transparently. Safe-to-co-contribute artifact types
+   * are the operational ones in this loader (`tools/`, `shortcuts/`, `trailheads/`) and
+   * toolsets (handled by `ToolSetYamlLoader`). The `trailmap.yaml` manifest must stay
+   * singular per id — only one owning module declares it. Two modules attempting to ship
+   * `trailmaps/<id>/trailmap.yaml` would collapse to whichever jar resolves first on the
+   * classpath; the resolution is undefined order.
    */
-  private fun discoverPackBundledToolContents(
+  private fun discoverTrailmapBundledToolContents(
     resourceSource: ConfigResourceSource,
   ): Map<String, String> {
-    val libraryPackIds = discoverLibraryPackIds(resourceSource)
+    val libraryTrailmapIds = discoverLibraryTrailmapIds(resourceSource)
     val result = mutableMapOf<String, String>()
-    TrailblazeConfigPaths.PACK_TOOL_LAYOUT.forEach { (expectedDir, suffix) ->
+    TrailblazeConfigPaths.TRAILMAP_TOOL_LAYOUT.forEach { (expectedDir, suffix) ->
       val matches = resourceSource.discoverAndLoadRecursive(
-        directoryPath = TrailblazeConfigPaths.PACKS_DIR,
+        directoryPath = TrailblazeConfigPaths.TRAILMAPS_DIR,
         suffix = suffix,
       )
       matches.forEach { (relPath, content) ->
-        // Layout: `<pack-id>/<expectedDir>/[<subdir>/...]<name><suffix>` (the
-        // resource-source contract strips the leading `trailblaze-config/packs/`
+        // Layout: `<trailmap-id>/<expectedDir>/[<subdir>/...]<name><suffix>` (the
+        // resource-source contract strips the leading `trails/config/trailmaps/`
         // prefix from `relPath`). Require segments[1] == expectedDir so each
         // operational class lives under its own top-level directory; subdirs at
         // any depth below that are permitted.
@@ -225,27 +236,27 @@ object ToolYamlLoader {
         if (segments.size < 3) return@forEach
         if (segments[1] != expectedDir) {
           // A YAML with a recognized suffix landed under the wrong sibling directory
-          // (e.g. `<pack>/tools/foo.shortcut.yaml`). The author almost certainly meant
+          // (e.g. `<trailmap>/tools/foo.shortcut.yaml`). The author almost certainly meant
           // it to register, so log loudly rather than dropping silently — the sibling
-          // library-pack-trailhead branch below uses the same shape for the same
+          // library-trailmap-trailhead branch below uses the same shape for the same
           // reason. The suffix-content contract in `parseAllConfigs` only fires for
           // YAMLs that survive discovery, so misfiled YAMLs would otherwise produce
           // no signal at all.
           Console.log(
             "Warning: Skipping '$relPath' — file with suffix '$suffix' must live under " +
-              "'<pack>/$expectedDir/' but was found under '<pack>/${segments[1]}/'. " +
+              "'<trailmap>/$expectedDir/' but was found under '<trailmap>/${segments[1]}/'. " +
               "Move the file or rename its suffix.",
           )
           return@forEach
         }
-        val packId = segments[0]
-        if (suffix == ".trailhead.yaml" && packId in libraryPackIds) {
+        val trailmapId = segments[0]
+        if (suffix == ".trailhead.yaml" && trailmapId in libraryTrailmapIds) {
           Console.log(
-            "Warning: Skipping trailhead tool '$relPath' — pack '$packId' is a library " +
-              "pack (no target: block) and library packs cannot ship trailhead tools. " +
+            "Warning: Skipping trailhead tool '$relPath' — trailmap '$trailmapId' is a library " +
+              "trailmap (no target: block) and library trailmaps cannot ship trailhead tools. " +
               "Trailheads bootstrap to a known waypoint, which only makes sense within a " +
-              "target pack. Move the tool into a target pack or add a target: block to " +
-              "the owning pack.",
+              "target trailmap. Move the tool into a target trailmap or add a target: block to " +
+              "the owning trailmap.",
           )
           return@forEach
         }
@@ -257,32 +268,32 @@ object ToolYamlLoader {
   }
 
   /**
-   * Returns the ids of classpath-discovered packs that have no `target:` block (library
-   * packs). Used by [discoverPackBundledToolContents] to skip `*.trailhead.yaml` files
-   * inside library packs at discovery time. A best-effort decode: a malformed
-   * `pack.yaml` is silently skipped here (it'll fail with a better message in
-   * `TrailblazePackManifestLoader` during the host-side path).
+   * Returns the ids of classpath-discovered trailmaps that have no `target:` block (library
+   * trailmaps). Used by [discoverTrailmapBundledToolContents] to skip `*.trailhead.yaml` files
+   * inside library trailmaps at discovery time. A best-effort decode: a malformed
+   * `trailmap.yaml` is silently skipped here (it'll fail with a better message in
+   * `TrailblazeTrailmapManifestLoader` during the host-side path).
    */
-  private fun discoverLibraryPackIds(resourceSource: ConfigResourceSource): Set<String> {
-    val packManifests = resourceSource.discoverAndLoadRecursive(
-      directoryPath = TrailblazeConfigPaths.PACKS_DIR,
-      suffix = "/pack.yaml",
+  private fun discoverLibraryTrailmapIds(resourceSource: ConfigResourceSource): Set<String> {
+    val trailmapManifests = resourceSource.discoverAndLoadRecursive(
+      directoryPath = TrailblazeConfigPaths.TRAILMAPS_DIR,
+      suffix = "/trailmap.yaml",
     )
     val ids = mutableSetOf<String>()
-    packManifests.forEach { (relPath, content) ->
-      // Only direct `<pack-id>/pack.yaml` entries count — same convention as
-      // TrailblazePackManifestLoader.discoverAndLoadFromClasspath.
-      val packDirectoryName = relPath.removeSuffix("/pack.yaml")
-      if (packDirectoryName.isEmpty() || packDirectoryName.contains('/')) return@forEach
+    trailmapManifests.forEach { (relPath, content) ->
+      // Only direct `<trailmap-id>/trailmap.yaml` entries count — same convention as
+      // TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath.
+      val trailmapDirectoryName = relPath.removeSuffix("/trailmap.yaml")
+      if (trailmapDirectoryName.isEmpty() || trailmapDirectoryName.contains('/')) return@forEach
       val manifest = try {
         TrailblazeConfigYaml.instance.decodeFromString(
-          TrailblazePackManifest.serializer(),
+          TrailblazeTrailmapManifest.serializer(),
           content,
         )
       } catch (_: Exception) {
         return@forEach
       }
-      if (manifest.target == null) ids.add(packDirectoryName)
+      if (manifest.target == null) ids.add(trailmapDirectoryName)
     }
     return ids
   }
@@ -324,8 +335,10 @@ object ToolYamlLoader {
       Console.log(
         "Warning: Tool id '$id' is declared by ${dupes.size} different tool YAML files. " +
           "Downstream consumers keep only one (last-wins by file order); the others are " +
-          "silently dropped from the registry. Rename the duplicates so each tool has a " +
-          "unique id.",
+          "silently dropped from the registry. If this is an accidental collision, rename " +
+          "the duplicates so each tool has a unique id; if it's an intentional workspace " +
+          "override of a framework tool, this warning is informational only — the workspace " +
+          "body wins.",
       )
     }
   }

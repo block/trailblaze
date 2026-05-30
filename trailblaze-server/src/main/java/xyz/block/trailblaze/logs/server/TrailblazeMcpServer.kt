@@ -2,7 +2,6 @@ package xyz.block.trailblaze.logs.server
 
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolRegistry
-import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import ai.koog.agents.core.tools.reflect.asTools
 import ai.koog.serialization.kotlinx.KotlinxSerializer
@@ -71,11 +70,13 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.HostLocalToolDispatchingBridge
 import xyz.block.trailblaze.mcp.InFlightToolCall
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -117,7 +118,6 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
-import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import kotlin.reflect.KClass
@@ -177,22 +177,6 @@ class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
   val mcpBridge: TrailblazeMcpBridge,
   val trailsDirProvider: () -> File,
-  /**
-   * Resolves the active workspace `trails/config/` directory the daemon should layer over the
-   * classpath when discovering YAMLs (targets / toolsets / role tools). MUST honor the same
-   * resolution policy that `AppTargetDiscovery` uses — i.e. the workspace resolver that
-   * checks `TRAILBLAZE_CONFIG_DIR`, walks up from cwd looking for `trailblaze.yaml`, and
-   * returns `null` when there's no workspace. Wire from
-   * `TrailblazeSettingsRepo.getCurrentTrailblazeConfigDir()` (or equivalent).
-   *
-   * Returning `null` is fine — the daemon falls back to classpath-only discovery. Returning
-   * something different from what target discovery sees is the actual bug: workspace
-   * `*.trailhead.yaml` would appear in `targets` but not in `toolbox trailheads`.
-   *
-   * Defaults to `{ null }` so existing callers (and tests that don't care about workspace
-   * layering) keep compiling — the classpath fallback matches the pre-existing behavior.
-   */
-  val trailblazeConfigDirProvider: () -> File? = { null },
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
@@ -302,11 +286,52 @@ class TrailblazeMcpServer(
     var lastActiveMcpSessionId: String? = null
   }
 
+  /**
+   * Result of [pinMostRecentUnboundMcpSession]. A non-error signal — callers
+   * (CLI side) print a one-line confirmation for `Pinned`, stay quiet on
+   * `NoCandidates`, log on `DeviceNotFound`, and report a typo on
+   * `ExplicitSessionNotFound`.
+   */
+  sealed class PinResult {
+    /** The named session has been pinned to [deviceId]. */
+    data class Pinned(
+      val sessionId: String,
+      val mcpClientName: String?,
+      val deviceId: TrailblazeDeviceId,
+    ) : PinResult()
+
+    /**
+     * No real-MCP-client sessions (`mcpClientName != "TrailblazeCLI"`) were
+     * found that hadn't already bound a device. This is the common case when
+     * nobody has Claude Desktop / Cursor open — completely silent on the CLI.
+     */
+    data object NoCandidates : PinResult()
+
+    /** [deviceSpec] couldn't be resolved to a known device. */
+    data class DeviceNotFound(val deviceSpec: String) : PinResult()
+
+    /**
+     * The caller passed an explicit `--mcp-session <id>` that does not match
+     * any current unbound real-MCP-client session. Distinct from
+     * [NoCandidates] because the user did something deliberate — staying
+     * silent would mask a typo'd id.
+     */
+    data class ExplicitSessionNotFound(val explicitSessionId: String) : PinResult()
+  }
+
   // Per-session progress token tracking - use String keys for reliable ConcurrentHashMap behavior
   private val sessionContexts = ConcurrentHashMap<String, TrailblazeMcpSessionContext>()
 
   // Track sessions by their MCP server session object (needed for per-session notifications)
   private val sessionServerSessions = ConcurrentHashMap<String, ServerSession>()
+
+  // Track the SDK [Server] instance per MCP session. Each Streamable-HTTP / STDIO
+  // client gets its own [Server] (created in [createSessionForClient] /
+  // [startStdioMcpServer]); we cache it so out-of-band events (target changes,
+  // mid-session re-registration) can locate the right [Server] without having
+  // to thread the closure variable through every callsite. Cleaned up alongside
+  // [sessionContexts] in the session-close paths.
+  private val sessionMcpServers = ConcurrentHashMap<String, Server>()
 
   // Custom SSE notification channels per session - bypasses SDK transport limitations
   // When client opens GET /mcp for notifications, we store the SSE session here
@@ -352,9 +377,74 @@ class TrailblazeMcpServer(
     )
   }
 
-  private fun findCurrentTarget(): TrailblazeHostAppTarget? {
-    val targetId = mcpBridge.getCurrentAppTargetId() ?: return null
-    return mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId }
+  /**
+   * Resolves the in-scope device for a registration callback. Prefers the
+   * per-call [McpDeviceContext.currentDeviceId] ThreadLocal (set on each
+   * `tools/call` dispatch via `asContextElement`) so multi-device MCP
+   * sessions hit the device that's about to run the tool — and falls back
+   * to the session's bound device when called outside a dispatched tool
+   * (registration time, lambdas evaluated lazily, etc.).
+   *
+   * Shared by every register-side lambda that needs the active device.
+   * Keeping the resolution in one place means any future change (e.g.
+   * adding a third tier, swapping the ThreadLocal key, threading more
+   * context through) lands once, not at every callsite.
+   */
+  private fun activeDeviceId(
+    sessionContext: TrailblazeMcpSessionContext,
+  ): TrailblazeDeviceId? =
+    McpDeviceContext.currentDeviceId.get() ?: sessionContext.associatedDeviceId
+
+  /**
+   * Resolves the effective target app for the bound device. Prefers the
+   * per-device session override (set via `--target` / setSessionTargetForBoundDevice)
+   * when [deviceId] is supplied; otherwise falls back to the daemon-wide
+   * setting.
+   *
+   * Pass `null` only from surfaces that genuinely have no device context —
+   * callers building a per-device tool list MUST pass the bound device, or
+   * the daemon-wide setting will silently shadow the override and YAML-
+   * defined tools (only included via the resolved target's trailmap
+   * toolsets) will be dropped from the dispatch gate.
+   *
+   * Visibility is `internal` (not `private`) so a same-module test can pin
+   * the per-device override → daemon-wide fallback → null chain end-to-end
+   * without spinning up the full registerTools pipeline.
+   */
+  internal fun findCurrentTarget(deviceId: TrailblazeDeviceId? = null): TrailblazeHostAppTarget? {
+    // When [deviceId] is supplied, the bridge's `getSessionTargetAppIdForDevice`
+    // contract already returns per-device override OR daemon-wide fallback —
+    // see `TrailblazeMcpBridgeImpl.getSessionTargetAppIdForDevice` and the
+    // interface KDoc on `TrailblazeMcpBridge`. So the device-scoped resolver
+    // is the single source of truth for any caller with a device context.
+    // No device → genuinely no per-device context; the daemon-wide setting is
+    // the only thing we can read.
+    val targetId = if (deviceId != null) {
+      mcpBridge.getSessionTargetAppIdForDevice(deviceId)
+    } else {
+      mcpBridge.getCurrentAppTargetId()
+    }
+    // Hoist availableTargets once: it's used both for the resolution lookup
+    // below AND for the diagnostic log on null resolution. The bridge impl
+    // can rebuild discovery on this call (walks `trailblazeDeviceManager.
+    // availableAppTargets`), so double-fetching on the no-resolution path
+    // adds work to the very state — empty / unresolvable target — that's
+    // already the unhappy path.
+    val available = mcpBridge.getAvailableAppTargets()
+    val resolved = targetId?.let { id -> available.firstOrNull { it.id == id } }
+    // Diagnostic for the "Tool not valid for the current device/target"
+    // case — when the gate rejects a tool, the only existing signal is
+    // `target=null` in the inner-agent log, which doesn't tell oncall
+    // whether the deviceId was missing, the resolver returned null, or
+    // the resolved id wasn't registered. Emitted only on null resolution
+    // so the happy path stays quiet.
+    if (resolved == null) {
+      Console.log(
+        "[findCurrentTarget] no resolution: deviceId=${deviceId?.instanceId} " +
+          "targetId=$targetId available=${available.map { it.id }}",
+      )
+    }
+    return resolved
   }
 
   private fun collectCustomToolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
@@ -406,13 +496,12 @@ class TrailblazeMcpServer(
     return mutex.withLock {
       val sessionContext = sessionContexts[sessionId] ?: return@withLock null
       val deviceId = sessionContext.associatedDeviceId ?: return@withLock null
-      val target = findCurrentTarget() ?: run {
+      val target = findCurrentTarget(deviceId) ?: run {
         clearSessionScriptToolRuntime(sessionId)
         return@withLock null
       }
-      val declaredServers = target.getMcpServers()
       val inlineTools = target.getInlineScriptTools()
-      if (declaredServers.isEmpty() && inlineTools.isEmpty()) {
+      if (inlineTools.isEmpty()) {
         clearSessionScriptToolRuntime(sessionId)
         return@withLock null
       }
@@ -428,10 +517,10 @@ class TrailblazeMcpServer(
         clearSessionScriptToolRuntime(sessionId)
       }
 
-      // Resolve the active target's declared toolsets (e.g. the `wikipedia` pack's
+      // Resolve the active target's declared toolsets (e.g. the `wikipedia` trailmap's
       // `platforms.android.tool_sets: [wikipedia_extras]`) so YAML-defined tool names that
-      // arrive via a toolset reference — not via the pack's `target.tools:` array — end up
-      // in the session repo's `registeredYamlToolNames`. Without this, a pack's pure-YAML
+      // arrive via a toolset reference — not via the trailmap's `target.tools:` array — end up
+      // in the session repo's `registeredYamlToolNames`. Without this, a trailmap's pure-YAML
       // composed tool is visible in the toolbox and the inner-agent descriptor list but the
       // dispatch-time resolver (`TrailblazeToolRepo.toolCallToTrailblazeTool`) classifies it
       // as an `OtherTrailblazeTool` and `StepToolSet` rejects with "Unknown tool". Mirrors
@@ -447,10 +536,10 @@ class TrailblazeMcpServer(
       // `target toolset resolution surfaces workspace yaml tool names for dispatch repo`
       // in `AppTargetDiscoveryTest`.
       val declaredToolSetIds = target.getDeclaredToolSetIdsForDriver(driverType)
-      val resolvedFromPack = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
+      val resolvedFromTrailmap = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
       val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
         customToolClasses = collectCustomToolClasses(driverType),
-        customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromPack.yamlToolNames,
+        customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames,
         excludedToolClasses = target.getExcludedToolsForDriver(driverType),
         catalog = TrailblazeToolSetCatalog.defaultEntries(),
         driverType = driverType,
@@ -462,7 +551,7 @@ class TrailblazeMcpServer(
         outputDir = File(sessionDir, "inline-script-tools"),
       )
       val runtime = McpSubprocessRuntimeLauncher.launchAll(
-        mcpServers = declaredServers + inlineToolServers,
+        mcpServers = inlineToolServers,
         deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
         config = TrailblazeConfig.DEFAULT,
         sessionId = launchSessionId,
@@ -498,6 +587,120 @@ class TrailblazeMcpServer(
 
   fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
     sessionContexts[mcpSessionId.sessionId]
+
+  /**
+   * Test seam: directly install a fully-formed session context under
+   * [sessionId]. Bypasses the normal `initialize` → transport callback path
+   * used in production, so unit tests can exercise session-registry behavior
+   * (e.g. [pinMostRecentUnboundMcpSession]) without spinning up a Netty +
+   * StreamableHttp pipeline. Production code paths never call this.
+   */
+  internal fun installSessionContextForTest(
+    sessionId: String,
+    sessionContext: TrailblazeMcpSessionContext,
+  ) {
+    sessionContexts[sessionId] = sessionContext
+  }
+
+  /**
+   * Test seam: fires every time [refreshToolsForSession] is *invoked* with a
+   * known session id that isn't a TrailblazeCLI session. It fires *before*
+   * the per-session [Server] lookup, so a fixture session that hasn't gone
+   * through `createSessionForClient` still triggers the probe — that's the
+   * desired behavior, because the thing under test is the *caller's*
+   * decision to refresh, not the SDK's notification dispatch (which is
+   * pinned by the SDK's own tests).
+   *
+   * Production code leaves this null. The SDK's `Server.addTool` /
+   * `Server.removeTools` calls inside [registerTools] do the actual
+   * `notifications/tools/list_changed` dispatch; this seam exists solely
+   * to make the caller decision observable.
+   */
+  internal var onToolsRefreshedForTest: ((sessionId: String) -> Unit)? = null
+
+  /**
+   * Re-registers every tool against the existing per-session [Server] so the
+   * SDK emits `notifications/tools/list_changed`. Used after an out-of-band
+   * mutation that changes which tools the session should expose — currently
+   * just per-session target changes (via
+   * [DeviceManagerToolSet.setSessionTargetForBoundDevice] and the optional
+   * `target` arg of [pinMostRecentUnboundMcpSession]). Without this call the
+   * daemon updates its routing immediately but a connected MCP client
+   * (Claude Desktop, Cursor, Goose, …) keeps serving stale tool definitions
+   * cached from `initialize`, so `myapp_launchSignedIn` style target-scoped
+   * tools never appear in the agent's view.
+   *
+   * **Caller is responsible for only invoking this when the underlying state
+   * actually changed.** The helper does not re-detect "did the target really
+   * change" — calling it on a no-op write would still fire `tools/list_changed`
+   * and force every connected client to refetch for nothing. The two
+   * production callsites already gate on a real change (the `appTargetId`
+   * cleared-vs-set branch in [DeviceManagerToolSet], and the `normalizedTarget
+   * != null` branch in [pinMostRecentUnboundMcpSession]).
+   *
+   * **TrailblazeCLI sessions are skipped.** The CLI's MCP client is one-shot
+   * per command; the McpProxy doesn't surface `tools/list_changed` to its
+   * (synthetic) parent because there isn't one. Sending the refresh would
+   * just churn the CLI session's `Server` for no observable effect.
+   *
+   * Silently no-ops when [sessionId] is unknown (the session was torn down
+   * between the target-change write and our refresh attempt). That's the
+   * same shape every other lifecycle helper here uses — production callers
+   * never branch on the outcome.
+   */
+  internal fun refreshToolsForSession(sessionId: String) {
+    val sessionContext = sessionContexts[sessionId] ?: return
+    if (sessionContext.mcpClientName == TRAILBLAZE_CLI_CLIENT_NAME) return
+    // Probe fires here — before the [Server] lookup — so tests with fixture
+    // sessions that bypass `createSessionForClient` can still observe the
+    // caller's decision to refresh. Production deployments always have a
+    // [Server] registered for non-CLI sessions, so the SDK
+    // `notifications/tools/list_changed` dispatch below is the real effect;
+    // the probe is purely a unit-test seam.
+    onToolsRefreshedForTest?.invoke(sessionId)
+    val mcpServer = sessionMcpServers[sessionId] ?: return
+    Console.log(
+      "[MCP SESSION] Target changed for session $sessionId — re-registering tools to fire tools/list_changed",
+    )
+    registerTools(mcpServer, sessionContext.mcpSessionId, sessionContext)
+    emitDebugState()
+  }
+
+  /**
+   * Finalize the [TrailblazeMcpSessionContext.mcpClientName] for a session whose
+   * `initialize` POST has just been processed by the SDK transport, but whose
+   * `setOnSessionInitialized` callback fired BEFORE the server-side
+   * `serverSessionHolder` reference was assigned (the SDK fires the callback
+   * synchronously inside `mcpServer.createSession()`, which returns the holder
+   * only after the callback completes). The lazy-populate inside the tool
+   * dispatcher (`registerTools`) only fires on the FIRST `tools/call`, leaving
+   * an initialize-only session with `mcpClientName = null` — which the
+   * `pinMostRecentUnboundMcpSession` filter excludes, breaking the OOBE flow
+   * where the user opens an MCP client and immediately runs
+   * `trailblaze device connect` in a terminal BEFORE the agent has done anything.
+   *
+   * By the time this helper is invoked (right after `transport.handlePostRequest`
+   * returns for an initialize POST), the SDK has populated
+   * `serverSession.clientVersion` and we can safely read it.
+   *
+   * Returns true when the client name was newly set, false otherwise (already
+   * set, no server session, or no client name on the server session). The
+   * boolean is purely for testability — the production caller doesn't branch on it.
+   *
+   * Visible as `internal` for direct unit-test coverage; production caller is
+   * the new-session branch of the `POST /mcp` handler.
+   */
+  internal fun finalizeNewSessionClientName(sessionId: String): Boolean {
+    val ctx = sessionContexts[sessionId] ?: return false
+    if (ctx.mcpClientName != null) return false
+    val name = ctx.mcpServerSession?.clientVersion?.name ?: return false
+    ctx.mcpClientName = name
+    Console.log(
+      "[MCP SESSION] Client identified (post-handlePost): $name (session=$sessionId)",
+    )
+    emitDebugState()
+    return true
+  }
 
   /**
    * Terminates an MCP session and releases all its resources.
@@ -543,6 +746,7 @@ class TrailblazeMcpServer(
     sessionContexts.remove(sessionId)
     sessionCreationTimes.remove(sessionId)
     sessionServerSessions.remove(sessionId)
+    sessionMcpServers.remove(sessionId)
     sseNotificationChannels.remove(sessionId)?.close()
     registeredTrailblazeToolNamesBySession.remove(sessionId)
     hostMcpToolRegistryBySession.remove(sessionId)
@@ -551,6 +755,216 @@ class TrailblazeMcpServer(
 
     emitDebugState()
     return clientName
+  }
+
+  /**
+   * Pins a real-MCP-client session (Claude Desktop, Cursor, Goose, etc.) that
+   * hasn't bound a device yet to [deviceSpec] (and optionally [target]), so the
+   * client's next tool call routes against the same device + target the shell
+   * just connected to.
+   *
+   * **Filter for "real MCP client":** `mcpClientName != null && mcpClientName != "TrailblazeCLI"`.
+   * CLI one-shot sessions are excluded because they create-and-destroy a session
+   * per command — they aren't long-lived editor/agent sessions that benefit from
+   * being adopted into a freshly-connected device.
+   *
+   * **Filter for "unbound":** `associatedDeviceId == null`. A session that
+   * already chose a device is left alone — we never silently re-pin an active
+   * client.
+   *
+   * **Tie-break:** highest [TrailblazeMcpSessionContext.lastActive] wins. If
+   * [explicitSessionId] is non-null we pin THAT session (when it matches the
+   * filter), bypassing the recency ranking.
+   *
+   * Pinning writes [TrailblazeMcpSessionContext.associatedDeviceId], records
+   * a claim against [deviceClaimRegistry] on the pinned session's behalf, and
+   * when [target] is non-blank calls [mcpBridge.setSessionTargetForDevice] —
+   * the same three writes the CLI's own `device(action=PLATFORM)` +
+   * `setSessionTargetForBoundDevice` pair does in
+   * [xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet.connectToDeviceUnified].
+   * The claim entry is what lets the registry detect device-busy conflicts
+   * the next time another session tries to grab the same device — without it
+   * the pinned client could drive a device the registry believes is free.
+   * No driver init happens here; the client's next tool call performs that
+   * lazily when it touches the device.
+   *
+   * `suspend` so [resolveDeviceSpec] can call [mcpBridge.getAvailableDevices]
+   * directly instead of via `runBlocking`. Bridge failures (timeouts, IO
+   * errors) propagate up — the CLI's `device connect` flow already catches
+   * exceptions and falls back to a quiet log.
+   */
+  suspend fun pinMostRecentUnboundMcpSession(
+    deviceSpec: String,
+    target: String? = null,
+    explicitSessionId: String? = null,
+  ): PinResult {
+    // Normalize the target once — both the bridge call and the diagnostic
+    // log line use the same value, so a `"  "` target doesn't get skipped by
+    // the bridge call but still leak `(target=  )` into the log.
+    val normalizedTarget = target?.takeIf { it.isNotBlank() }
+
+    // Resolve deviceSpec to a TrailblazeDeviceId. We accept the same forms the
+    // CLI's --device flag accepts: `<platform>` (defer instance resolution to
+    // the bridge), `<platform>/<instance>` (verified against available devices
+    // for ANDROID/IOS/DESKTOP — WEB instance ids are virtual and skipped),
+    // or a bare instance id we look up in the available-devices list.
+    val resolvedDeviceId = resolveDeviceSpec(deviceSpec)
+      ?: return PinResult.DeviceNotFound(deviceSpec)
+
+    // Snapshot the registry — ConcurrentHashMap's entries() is weakly
+    // consistent, which is what we want: a session that's racing to bind
+    // itself elsewhere may not be visible, but that's fine (we'll just skip
+    // pinning it; the shell user can re-run `device connect`).
+    val candidates = sessionContexts.entries
+      .filter { (_, ctx) ->
+        val name = ctx.mcpClientName
+        name != null &&
+          name != TRAILBLAZE_CLI_CLIENT_NAME &&
+          ctx.associatedDeviceId == null
+      }
+
+    if (candidates.isEmpty()) return PinResult.NoCandidates
+
+    val winner = if (explicitSessionId != null) {
+      candidates.firstOrNull { it.key == explicitSessionId }
+        ?: return PinResult.ExplicitSessionNotFound(explicitSessionId)
+    } else {
+      candidates.maxByOrNull { it.value.lastActive }
+        ?: return PinResult.NoCandidates
+    }
+
+    val (winnerId, winnerCtx) = winner
+
+    // Re-check the unbound invariant under the session-context lock right
+    // before we write. Between the filter snapshot above and this point the
+    // session may have raced through its own `device()` call and bound itself
+    // to a different device — in that case silently overwriting would be the
+    // exact "never silently re-pin an active client" behavior the doc
+    // promises NOT to do. Lock on the context object so concurrent writes
+    // from the request handler serialize against ours.
+    synchronized(winnerCtx) {
+      if (winnerCtx.associatedDeviceId != null) {
+        return PinResult.NoCandidates
+      }
+      winnerCtx.setAssociatedDevice(resolvedDeviceId)
+    }
+
+    // Now that we've recorded the binding on the session context, register
+    // the claim so the device-claim registry knows this session owns this
+    // device. Without this step, a competing session calling `device()` on
+    // the same instance would see "no holder" and silently take over while
+    // the pinned client thinks it still owns the device. We use the same
+    // claim() call connectToDeviceUnified uses; same-session re-claims are
+    // idempotent so the pinned client's eventual `device()` call (if it ever
+    // makes one) just refreshes the timestamp.
+    try {
+      deviceClaimRegistry.claim(resolvedDeviceId, winnerId)
+    } catch (e: DeviceBusyException) {
+      // Another session is actively driving this device. Roll back the
+      // pin we just wrote — leaving associatedDeviceId set would route the
+      // pinned client's next tool call to a device it doesn't own.
+      synchronized(winnerCtx) {
+        if (winnerCtx.associatedDeviceId == resolvedDeviceId) {
+          winnerCtx.clearAssociatedDevice()
+        }
+      }
+      Console.log(
+        "[MCP PIN] Rolled back pin: device ${resolvedDeviceId.instanceId} is busy on session ${e.owningSessionId.take(8)}…"
+      )
+      return PinResult.DeviceNotFound(deviceSpec)
+    }
+
+    if (normalizedTarget != null) {
+      // Track whether the bridge actually accepted the target write. We only
+      // fire `tools/list_changed` when the pinned session's effective toolset
+      // truly changed — a thrown exception or a null return (unknown target
+      // id, per the bridge contract) leaves the session's tools unchanged, so
+      // forcing every connected client to refetch in those cases is pure
+      // churn. Mirrors the success-gated callback in
+      // [DeviceManagerToolSet.setSessionTargetForBoundDevice] (which throws on
+      // null return; here we catch + log, so we have to check explicitly).
+      val targetApplied = try {
+        mcpBridge.setSessionTargetForDevice(resolvedDeviceId, normalizedTarget) != null
+      } catch (e: Exception) {
+        // Surfacing the failure here would leave the session pinned to the
+        // device but with no target. Log + continue — the shell session that
+        // just connected has already pinned the target on the *daemon* level
+        // for its own bound device, and the next time the MCP client touches
+        // the device the bridge will report whatever target is active.
+        Console.log(
+          "[MCP PIN] setSessionTargetForDevice failed for ${resolvedDeviceId.toFullyQualifiedDeviceId()}: ${e.message}"
+        )
+        false
+      }
+      if (targetApplied) {
+        // The pinned session's exposed toolset just changed (target-specific
+        // tools like `myapp_launchSignedIn` may have appeared or disappeared).
+        // Re-register so the SDK fires `notifications/tools/list_changed` and
+        // the MCP client refetches. Refresh is a no-op for sessions without a
+        // registered [Server] (e.g. test fixtures that bypass
+        // `createSessionForClient`) — guarded inside [refreshToolsForSession].
+        refreshToolsForSession(winnerId)
+      }
+    }
+
+    Console.log(
+      "[MCP PIN] Pinned session $winnerId (client=${winnerCtx.mcpClientName}) to " +
+        "${resolvedDeviceId.toFullyQualifiedDeviceId()}" +
+        (normalizedTarget?.let { " (target=$it)" } ?: ""),
+    )
+    emitDebugState()
+    return PinResult.Pinned(
+      sessionId = winnerId,
+      mcpClientName = winnerCtx.mcpClientName,
+      deviceId = resolvedDeviceId,
+    )
+  }
+
+  /**
+   * Resolves a CLI-style device spec (`android`, `android/emulator-5554`, or a
+   * bare instance id) to a [TrailblazeDeviceId] using the same heuristics the
+   * CLI uses on the host side. Returns `null` when nothing matches.
+   *
+   * For `<platform>/<instance>` specs on validated platforms (ANDROID, IOS,
+   * DESKTOP) the instance id is checked against [mcpBridge.getAvailableDevices]
+   * so a typo'd spec returns null rather than producing a synthetic device id
+   * that points nowhere. WEB instance ids are virtual (e.g. `web/checkout`
+   * names a browser session that may not exist yet), so we accept them
+   * unconditionally — same policy the CLI's own `--device` flag uses.
+   */
+  private suspend fun resolveDeviceSpec(deviceSpec: String): TrailblazeDeviceId? {
+    val parts = deviceSpec.split("/", limit = 2)
+    val platform = TrailblazeDevicePlatform.fromString(parts[0])
+    if (platform != null) {
+      val instanceId = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+      if (instanceId != null) {
+        // WEB instance ids are virtual; don't validate. Other platforms must
+        // point to a known device, otherwise we'd silently accept typos like
+        // `android/does-not-exist` and pin a session to a non-existent target.
+        if (platform == TrailblazeDevicePlatform.WEB) {
+          return TrailblazeDeviceId(instanceId = instanceId, trailblazeDevicePlatform = platform)
+        }
+        val available = mcpBridge.getAvailableDevices()
+        return available.firstOrNull {
+          it.trailblazeDeviceId.trailblazeDevicePlatform == platform &&
+            it.trailblazeDeviceId.instanceId == instanceId
+        }?.trailblazeDeviceId
+      }
+      // Platform-only spec (e.g. `android`) — defer to the bridge: pick the
+      // currently-bound device if it matches, otherwise the first available
+      // device on that platform.
+      mcpBridge.getCurrentlySelectedDeviceId()
+        ?.takeIf { it.trailblazeDevicePlatform == platform }
+        ?.let { return it }
+      val available = mcpBridge.getAvailableDevices()
+      return available.firstOrNull { it.trailblazeDeviceId.trailblazeDevicePlatform == platform }
+        ?.trailblazeDeviceId
+    }
+    // Not a known platform — treat the whole spec as an instance id and look
+    // it up in the available-devices list.
+    val available = mcpBridge.getAvailableDevices()
+    return available.firstOrNull { it.trailblazeDeviceId.instanceId == deviceSpec }
+      ?.trailblazeDeviceId
   }
 
   @OptIn(InternalAgentToolsApi::class)
@@ -581,7 +995,10 @@ class TrailblazeMcpServer(
     hostMcpToolRegistryBySession[mcpSessionId.sessionId] = newToolRegistry
 
     Console.log("[MCP] Registering ${newToolRegistry.tools.size} tools from Koog registry")
-    newToolRegistry.tools.forEach { tool: Tool<*, *> ->
+    newToolRegistry.tools.forEach { tool ->
+      // Koog 1.0.0 broadened the iteration type from Tool<*, *> to ToolBase<*, *>
+      // (super-type that no-metadata Tool and metadata-aware ToolBase implementations
+      // both extend). Capture as `tool` and read `.descriptor` / `.name` through ToolBase.
       try {
       // Build properties JsonObject directly (following Koog pattern).
       // Post-process each property to simplify nullable anyOf patterns for broad
@@ -735,10 +1152,10 @@ class TrailblazeMcpServer(
             }
           }
 
-          val toolResponseMessage = when (toolResponse) {
-            is ToolResult -> toolResponse.toStringDefault()
-            else -> toolResponse.toString()
-          }
+          // Koog 1.0.0 removed the `ToolResult` interface (tools now carry their own TResult
+          // generic and override `encodeResultToString` for serialization). Fall back to
+          // toString() for all tool response shapes.
+          val toolResponseMessage = toolResponse.toString()
 
           val durationMs = System.currentTimeMillis() - startTime
 
@@ -950,6 +1367,10 @@ class TrailblazeMcpServer(
 
         sessionContexts[generatedSessionId] = sessionContext
         sessionCreationTimes[generatedSessionId] = System.currentTimeMillis()
+        // Cache the per-session [Server] so out-of-band events (mode change,
+        // target change) can locate it via [refreshToolsForSession] without
+        // threading the closure variable through every downstream callsite.
+        sessionMcpServers[generatedSessionId] = mcpServer
 
         // Wire up mode change callback for this session — re-register tools when mode changes
         sessionContext.onModeChanged = { newMode ->
@@ -1005,6 +1426,7 @@ class TrailblazeMcpServer(
         // Clean up remaining session state
         sessionCreationTimes.remove(closedSessionId)
         sessionServerSessions.remove(closedSessionId)
+        sessionMcpServers.remove(closedSessionId)
         activeTransports.remove(closedSessionId)
         sseNotificationChannels.remove(closedSessionId)?.close()
         registeredTrailblazeToolNamesBySession.remove(closedSessionId)
@@ -1137,6 +1559,11 @@ class TrailblazeMcpServer(
                   ContentType.Application.Json,
                 )
                 return@withContext
+              }.also {
+                // Refresh per-session liveness signal so MCP-session-pinning
+                // (`pinMostRecentUnboundMcpSession`) picks the freshest real
+                // MCP client when a shell `device connect` fires.
+                sessionContexts[sessionIdHeader]?.lastActive = kotlinx.datetime.Clock.System.now()
               }
             } else {
               // No session ID - new client, create session
@@ -1169,6 +1596,20 @@ class TrailblazeMcpServer(
               // Process the request - SDK handles JSON response
               transport.handlePostRequest(null, call)
             }
+
+            // Finalize the just-created session's `mcpClientName`. The SDK's
+            // `setOnSessionInitialized` callback fires INSIDE `mcpServer.createSession()`
+            // BEFORE `serverSessionHolder` is assigned, so the synchronous write inside
+            // that callback no-ops and we land here with `mcpClientName = null`. The
+            // lazy-populate inside the tool dispatcher only fires on the FIRST
+            // `tools/call`, so a brand-new MCP client that hasn't called a tool yet has
+            // `mcpClientName = null` — which `pinMostRecentUnboundMcpSession` excludes,
+            // breaking the OOBE flow where the user opens an MCP client and immediately
+            // runs `trailblaze device connect` in a terminal BEFORE the agent has done
+            // anything. See [finalizeNewSessionClientName] for the full rationale.
+            if (sessionIdHeader == null) {
+              transport.sessionId?.let { finalizeNewSessionClientName(it) }
+            }
           }
         }
 
@@ -1196,6 +1637,10 @@ class TrailblazeMcpServer(
             close()
             return@sse
           }
+          // Refresh liveness signal: opening the notification stream is a clear
+          // sign the client is alive. Mirrors the POST-handler touch above so
+          // pinMostRecentUnboundMcpSession sees the latest of either signal.
+          sessionContext.lastActive = kotlinx.datetime.Clock.System.now()
 
           Console.log("[MCP GET/SSE] Opening custom notification stream for session: $sessionIdHeader")
 
@@ -1266,9 +1711,14 @@ class TrailblazeMcpServer(
    * Device control tools (TrailblazeTools) use progressive disclosure: only the core
    * toolset is registered initially. The LLM can request additional toolsets via the
    * `setActiveToolSets` MCP tool.
+   *
+   * Visible as `internal` so out-of-band events (mode changes via
+   * [TrailblazeMcpSessionContext.onModeChanged], target changes via
+   * [refreshToolsForSession]) can re-invoke it without going through the
+   * `createSessionForClient` closure.
    */
   @OptIn(InternalAgentToolsApi::class)
-  private fun registerTools(
+  internal fun registerTools(
     mcpServer: Server,
     mcpSessionId: McpSessionId,
     sessionContext: TrailblazeMcpSessionContext,
@@ -1294,10 +1744,15 @@ class TrailblazeMcpServer(
       sessionContext = sessionContext,
     )
 
-    // Callback for when the LLM requests a toolset change via setActiveToolSets
+    // Callback for when the LLM requests a toolset change via setActiveToolSets.
+    // Routes through the driver-aware resolver when a driver is currently attached so
+    // mobile-only `always_enabled` entries (e.g. `core_interaction`) don't leak into a
+    // web/Compose session and vice versa — matches the inner-agent-tools-provider path
+    // below, the single authoritative source for "what the LLM sees".
     val onActiveToolSetsChanged: (List<String>, List<ToolSetCatalogEntry>) -> Unit =
       { activeToolSetIds, catalog ->
-        val resolved = TrailblazeToolSetCatalog.resolve(activeToolSetIds, catalog)
+        val driverType = mcpBridge.getDriverType()
+        val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, activeToolSetIds, catalog)
         val newToolClasses = resolved.toolClasses
 
         // Remove previously registered TrailblazeTool MCP tools
@@ -1314,10 +1769,13 @@ class TrailblazeMcpServer(
         )
         registeredTrailblazeToolNames.addAll(newToolClasses.map { it.toolName().toolName })
 
-        Console.log("Active toolsets changed to: $activeToolSetIds (${newToolClasses.size} tools)")
+        Console.log(
+          "Active toolsets changed to: $activeToolSetIds (${newToolClasses.size} tools) " +
+            "[driver=${driverType?.name ?: "none"}]",
+        )
       }
 
-    val initialToolRegistry = ToolRegistry.Companion {
+    val initialToolRegistry = ToolRegistry {
       // Minimal default tools: device management and session control only
       // ObservationToolSet (getScreenState, viewHierarchy) NOT registered by default
       // to keep large screen payloads out of the primary context window.
@@ -1333,6 +1791,8 @@ class TrailblazeMcpServer(
           onTerminateSession = ::terminateSession,
           onDeviceConnected = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
           onTargetAppChanged = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
+          onSessionTargetChanged = ::refreshToolsForSession,
+          onPinMostRecentUnboundMcpSession = ::pinMostRecentUnboundMcpSession,
         ).asTools(),
       )
 
@@ -1369,26 +1829,22 @@ class TrailblazeMcpServer(
           sessionContext = sessionContext,
           allTargetAppsProvider = { mcpBridge.getAvailableAppTargets() },
           currentTargetProvider = {
-            val targetId = mcpBridge.getCurrentAppTargetId()
-            if (targetId != null) {
-              mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId }
-            } else null
+            // Device-scoped so `--target` set via `device connect` shows up
+            // in toolbox/discovery for the bound device, not the daemon-wide
+            // default. Without this, the LLM/CLI sees a tool list built
+            // against the daemon-wide target instead of the one the user
+            // actually bound.
+            findCurrentTarget(activeDeviceId(sessionContext))
           },
           currentDriverTypeProvider = {
             mcpBridge.getDriverType()
           },
-          // Layer the classpath under the workspace's already-resolved `trails/config/` (and
-          // its `dist/` output) so `*.trailhead.yaml` / `*.shortcut.yaml` files authored in
-          // workspace packs surface in the role lists. Crucially, this uses the SAME workspace
-          // resolver `AppTargetDiscovery` consumes — checking `TRAILBLAZE_CONFIG_DIR`, walking
-          // up for `trailblaze.yaml` — rather than the saved trails-file directory, which can
-          // be `.` or the app-data folder and won't match where workspace packs actually live.
-          resourceSourceProvider = {
-            workspaceLayeredConfigResourceSource(
-              configDir = trailblazeConfigDirProvider(),
-              logPrefix = "[ToolDiscoveryToolSet]",
-            )
-          },
+          // resourceSourceProvider intentionally omitted — its default
+          // `platformConfigResourceSource()` is workspace-aware, so workspace-authored
+          // `*.trailhead.yaml` / `*.shortcut.yaml` files surface in role lists with no
+          // explicit wiring. The workspace dir is resolved through `WorkspaceConfigDirHolder`,
+          // installed by `TrailblazeWorkspaceConfigBootstrap` at CLI startup — same
+          // `TrailblazeWorkspaceConfigResolver.resolve(...)` that `AppTargetDiscovery` uses.
         ).asTools(),
       )
 
@@ -1469,27 +1925,31 @@ class TrailblazeMcpServer(
               .map { it.toTrailblazeToolDescriptor() }
           } else {
           val driverType = mcpBridge.getDriverType()
-          val activeTarget = findCurrentTarget()
+          // Resolve the active device the same way every register-side
+          // callback does (ThreadLocal → session) so multi-device MCP
+          // sessions resolve the tool list against the device that's about
+          // to run.
+          val activeTarget = findCurrentTarget(activeDeviceId(sessionContext))
           // Ask the bridge for device-appropriate built-in tools.
           // For WEB/Playwright/Compose/Revyl: returns a driver-specific replacement (no kitchen sink).
-          // For Android/iOS: returns empty → we resolve from the active target's pack `tool_sets:`
+          // For Android/iOS: returns empty → we resolve from the active target's trailmap `tool_sets:`
           // declarations via TrailblazeToolSetCatalog.resolveForDriver (driver-aware, target-scoped),
           // not the catalog-wide kitchen sink. With no active target, the LLM sees only the
-          // catalog's `always_enabled` toolsets — pack authors opt into more by declaring tool_sets.
+          // catalog's `always_enabled` toolsets — trailmap authors opt into more by declaring tool_sets.
           val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
           val usingBridgeTools = bridgeToolClasses.isNotEmpty()
 
-          val packToolSets = if (driverType != null && activeTarget != null) {
+          val trailmapToolSets = if (driverType != null && activeTarget != null) {
             activeTarget.getDeclaredToolSetIdsForDriver(driverType)
           } else emptyList()
-          val resolvedFromPack = if (driverType != null) {
-            TrailblazeToolSetCatalog.resolveForDriver(driverType, packToolSets)
+          val resolvedFromTrailmap = if (driverType != null) {
+            TrailblazeToolSetCatalog.resolveForDriver(driverType, trailmapToolSets)
           } else null
 
           val builtInToolClasses = if (usingBridgeTools) {
             bridgeToolClasses
           } else {
-            resolvedFromPack?.toolClasses ?: emptySet()
+            resolvedFromTrailmap?.toolClasses ?: emptySet()
           }
           val customToolClasses = if (driverType != null && activeTarget != null) {
             activeTarget.getCustomToolsForDriver(driverType)
@@ -1513,7 +1973,7 @@ class TrailblazeMcpServer(
             val excludedYamlNames = if (driverType != null && activeTarget != null) {
               activeTarget.getExcludedYamlToolNamesForDriver(driverType)
             } else emptySet()
-            val builtInYamlNames = resolvedFromPack?.yamlToolNames ?: emptySet()
+            val builtInYamlNames = resolvedFromTrailmap?.yamlToolNames ?: emptySet()
             KoogToolExt.buildDescriptorsForYamlDefined(
               (customYamlNames + builtInYamlNames - excludedYamlNames).toSet(),
             ).map { it.toTrailblazeToolDescriptor() }
@@ -1521,7 +1981,7 @@ class TrailblazeMcpServer(
           val allTools = classDescriptors + yamlDescriptors
           Console.log(
             "[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, " +
-              "target=${activeTarget?.id}, packToolSets=$packToolSets, " +
+              "target=${activeTarget?.id}, trailmapToolSets=$trailmapToolSets, " +
               "custom=${customToolClasses.size}, excluded=${excludedToolClasses.size}, " +
               "yaml=${yamlDescriptors.size})"
           )
@@ -1543,7 +2003,7 @@ class TrailblazeMcpServer(
             // Capture the device ID from the current thread's context before entering
             // runBlocking, which creates a new coroutine scope that doesn't inherit
             // the parent's ThreadLocal-based context element.
-            val deviceId = McpDeviceContext.currentDeviceId.get() ?: sessionContext.associatedDeviceId
+            val deviceId = activeDeviceId(sessionContext)
             try {
               runBlocking(
                 deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
@@ -1626,8 +2086,18 @@ class TrailblazeMcpServer(
       }
     }
 
-    // Register MCP resources
-    registerResources(mcpServer, sessionContext, mcpBridge, trailsDirProvider, llmModelListsProvider)
+    // Register MCP resources. Threading our own `findCurrentTarget` through
+    // so the `currentAppTarget` field on the connected-device resource
+    // resolves through the SAME per-device → daemon-wide → validity-check
+    // chain that tool dispatch uses — one resolver, one place to evolve.
+    registerResources(
+      mcpServer = mcpServer,
+      sessionContext = sessionContext,
+      mcpBridge = mcpBridge,
+      trailsDirProvider = trailsDirProvider,
+      llmModelListsProvider = llmModelListsProvider,
+      currentTargetResolver = ::findCurrentTarget,
+    )
 
     mcpServer.onClose { }
   }
@@ -1827,6 +2297,7 @@ class TrailblazeMcpServer(
     )
     sessionContexts[mcpSessionId.sessionId] = sessionContext
     sessionCreationTimes[mcpSessionId.sessionId] = System.currentTimeMillis()
+    sessionMcpServers[mcpSessionId.sessionId] = mcpServer
 
     // Register tools BEFORE creating the session/transport to avoid a race condition.
     // The MCP client can send tool calls immediately after the initialize handshake,
@@ -1873,6 +2344,7 @@ class TrailblazeMcpServer(
 
       sessionContexts.remove(mcpSessionId.sessionId)
       sessionCreationTimes.remove(mcpSessionId.sessionId)
+      sessionMcpServers.remove(mcpSessionId.sessionId)
       registeredTrailblazeToolNamesBySession.remove(mcpSessionId.sessionId)
       hostMcpToolRegistryBySession.remove(mcpSessionId.sessionId)
       runBlocking { clearSessionScriptToolRuntime(mcpSessionId.sessionId) }
@@ -1961,12 +2433,12 @@ class TrailblazeMcpServer(
   ): SessionId {
     // Defer session creation to the first blaze/ask call so the session is named
     // after the first objective (e.g., "Tap the login button") rather than a generic name.
-    val shouldEnsureSession = toolName == McpToolProfile.TOOL_BLAZE ||
+    val shouldEnsureSession = toolName == McpToolProfile.TOOL_STEP ||
       toolName == McpToolProfile.TOOL_ASK
 
     val sessionId = if (shouldEnsureSession) {
       val testName = when (toolName) {
-        McpToolProfile.TOOL_BLAZE ->
+        McpToolProfile.TOOL_STEP ->
           (args["objective"] as? JsonPrimitive)?.content?.trim()?.take(80)
         McpToolProfile.TOOL_ASK ->
           (args["question"] as? JsonPrimitive)?.content?.trim()?.take(80)

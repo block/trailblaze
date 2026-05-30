@@ -31,8 +31,13 @@ import java.util.concurrent.Callable
  *   `results/testrail/<caseId>/<device>/latest.json`        (every terminal run)
  *   `results/testrail/<caseId>/<device>/latest_success.json` (passing runs only)
  *
- * Each file is self-contained:
- *   { "testCaseId": "C12345", "device": "android-phone", "schemaVersion": 1, "run": { … } }
+ * The file is self-contained. Two schema versions are supported transparently:
+ *   v1 (legacy):  { "testCaseId": "C12345", "device": "android-phone", "schemaVersion": 1, "run": { … } }
+ *   v2 (current): { "schema_version": 2, "test_case_id": "C12345", "device": "android-phone",
+ *                   "consecutive_failures": N, "metadata": {…}, "result": {…} }
+ * The reader normalizes both shapes into a [CellView] before rendering; new cells are written
+ * in v2 (see [xyz.block.trailblaze.report.models.TestResultCell]) and old v1 cells are still
+ * readable during the migration window.
  *
  * The repo to query is resolved from `--repo` or the `TRAILBLAZE_RESULTS_REPO` env var
  * (in that order). Distributions that ship with a default repo do so by setting the env
@@ -46,16 +51,102 @@ import java.util.concurrent.Callable
 @Command(
   name = "results",
   mixinStandardHelpOptions = true,
-  description = ["Query the persisted test-result index for a TestRail case"],
+  description = [
+    "Query the persisted test-result index for a TestRail case. " +
+      "Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) " +
+      "is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes " +
+      "the bare case-id straight to the `show` subcommand.",
+  ],
   subcommands = [ResultsShowCommand::class],
 )
 class ResultsCommand : Callable<Int> {
   @CommandLine.ParentCommand
   internal lateinit var cliRoot: TrailblazeCliCommand
 
+  /**
+   * Injected by picocli so [call] can render the live parsed-tree usage (which carries the
+   * full `trailblaze results` qualifier) instead of building a detached `CommandLine(this)`
+   * (which renders the bare `Usage: results …` and loses the parent context).
+   */
+  @CommandLine.Spec
+  internal lateinit var spec: CommandLine.Model.CommandSpec
+
+  @Parameters(
+    index = "0",
+    arity = "0..1",
+    paramLabel = "<case-id>",
+    description = [
+      "TestRail case ID. When supplied without a subcommand, this routes to `show <case-id>`. " +
+        "Case-insensitive; the leading `C` is required (e.g. C12345).",
+    ],
+  )
+  var caseId: String? = null
+
+  @Option(
+    names = ["--device"],
+    paramLabel = "<profile>",
+    description = ["Forwarded to `show --device`. See `trailblaze results show --help` for the full flag set."],
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["--all-devices"],
+    description = ["Forwarded to `show --all-devices`."],
+  )
+  var allDevices: Boolean = false
+
+  @Option(
+    names = ["--latest"],
+    description = ["Forwarded to `show --latest`."],
+  )
+  var latest: Boolean = false
+
+  @Option(
+    names = ["--json"],
+    description = ["Forwarded to `show --json`."],
+  )
+  var jsonOnly: Boolean = false
+
+  @Option(
+    names = ["--repo"],
+    description = ["Forwarded to `show --repo`."],
+  )
+  var repo: String? = null
+
+  /**
+   * True when the user passed any of the forwarded options that only make sense alongside a
+   * case-id (`--device`, `--all-devices`, `--latest`, `--json`, `--repo`). The two-way
+   * routing makes a silent no-op the worst failure mode: a stray `trailblaze results
+   * --device foo` (forgot the case-id) would otherwise print help + exit SUCCESS, masking
+   * a broken automation. Surfacing it as MISUSE turns the typo into a loud failure.
+   * Internal so call() can read it from outside this companion / this class.
+   */
+  internal fun anyForwardedOptionSet(): Boolean =
+    device != null || allDevices || latest || jsonOnly || repo != null
+
   override fun call(): Int {
-    CommandLine(this).usage(System.out)
-    return CommandLine.ExitCode.OK
+    if (caseId == null) {
+      if (anyForwardedOptionSet()) {
+        reportCliError(
+          verb = "Results lookup",
+          reason = "missing <case-id>",
+          hint = "pass the case ID (e.g. `trailblaze results C12345 --device android-phone`) " +
+            "or drop the forwarded flags to see the full help",
+        )
+        return TrailblazeExitCode.MISUSE.code
+      }
+      spec.commandLine().usage(System.out)
+      return TrailblazeExitCode.SUCCESS.code
+    }
+    val show = ResultsShowCommand().also {
+      it.caseId = caseId!!
+      it.device = device
+      it.allDevices = allDevices
+      it.latest = latest
+      it.jsonOnly = jsonOnly
+      it.repo = repo
+    }
+    return show.call()
   }
 }
 
@@ -65,6 +156,21 @@ class ResultsCommand : Callable<Int> {
   description = ["Show the recorded result for a TestRail case ID"],
 )
 class ResultsShowCommand : Callable<Int> {
+
+  /**
+   * Set by picocli when this command is invoked via `trailblaze results show …` (the real
+   * subcommand chain). Stays null when [ResultsCommand.call] instantiates this class
+   * manually for the bare-positional routing (`trailblaze results <case-id>`) — that path
+   * copies the forwarded fields directly, so no parent fallback is needed.
+   *
+   * Without this field, options passed BEFORE the subcommand name (e.g.
+   * `trailblaze results --repo owner/name show C12345 --device android-phone`) bind to
+   * the parent's [ResultsCommand] and never reach this command's own fields, silently
+   * dropping the user's intent. Per-field fallbacks in [call] consult this parent so
+   * either spelling works.
+   */
+  @CommandLine.ParentCommand
+  internal var parent: ResultsCommand? = null
 
   @Parameters(
     index = "0",
@@ -129,46 +235,75 @@ class ResultsShowCommand : Callable<Int> {
   var repo: String? = null
 
   override fun call(): Int {
+    // Forwarded-flag merge from the parent. picocli binds options *before* the
+    // subcommand name to the parent ([ResultsCommand]) and options *after* to this
+    // subcommand. Without this merge, `trailblaze results --repo owner/name show C12345`
+    // would silently drop `--repo`. Each field falls back to the parent only when the
+    // user didn't set it explicitly on the subcommand — explicit-on-show wins.
+    parent?.let { p ->
+      if (device == null) device = p.device
+      if (!allDevices) allDevices = p.allDevices
+      if (!latest) latest = p.latest
+      if (!jsonOnly) jsonOnly = p.jsonOnly
+      if (repo == null) repo = p.repo
+    }
+
     val normalizedCaseId = normalizeCaseId(caseId) ?: run {
-      Console.log("Invalid case ID '$caseId' — expected format Cxxxxx (e.g. C12345).")
-      return 1
+      reportCliError(
+        verb = "Results lookup",
+        reason = "invalid case ID '$caseId' — expected format Cxxxxx (e.g. C12345)",
+      )
+      return TrailblazeExitCode.MISUSE.code
     }
 
     val resolvedRepo = repo
       ?: System.getenv(RESULTS_REPO_ENV_VAR)?.takeIf { it.isNotBlank() }
       ?: run {
-        Console.log(
-          "Results repo not configured — pass --repo <owner/name> or set $RESULTS_REPO_ENV_VAR.",
+        reportCliError(
+          verb = "Results lookup",
+          reason = "results repo not configured",
+          hint = "pass --repo <owner/name> or set $RESULTS_REPO_ENV_VAR",
         )
-        return 1
+        return TrailblazeExitCode.MISUSE.code
       }
 
     val token = resolveGithubToken()
     if (token == null) {
-      Console.log(
-        "GITHUB_TOKEN (or GH_TOKEN) is not set — most results repos are private and require a token.",
+      reportCliError(
+        verb = "Results lookup",
+        reason = "GITHUB_TOKEN (or GH_TOKEN) is not set — most results repos are private",
+        hint = "export GITHUB_TOKEN=<a personal access token with `repo` scope>",
       )
-      return 1
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     if (allDevices) {
       if (device != null || latest || jsonOnly) {
-        Console.log("--all-devices is mutually exclusive with --device / --latest / --json.")
-        return 1
+        reportCliError(
+          verb = "Results lookup",
+          reason = "--all-devices is mutually exclusive with --device / --latest / --json",
+        )
+        return TrailblazeExitCode.MISUSE.code
       }
       return showAllDevices(normalizedCaseId, resolvedRepo, token)
     }
 
     val chosenDevice = device ?: run {
-      Console.log(
-        "Pass --device <profile> (e.g. android-phone, ios-iphone, ios-ipad, web) " +
-          "or --all-devices to enumerate.",
+      reportCliError(
+        verb = "Results lookup",
+        reason = "missing --device",
+        hint = "pass --device <profile> (e.g. android-phone, ios-iphone, web) " +
+          "or --all-devices to enumerate every device profile",
       )
-      return 1
+      return TrailblazeExitCode.MISUSE.code
     }
     if (!chosenDevice.matches(DEVICE_SEGMENT_REGEX)) {
-      Console.log("Invalid device '$chosenDevice' — expected path-segment characters only (alphanumerics, '-', '_').")
-      return 1
+      reportCliError(
+        verb = "Results lookup",
+        target = chosenDevice,
+        reason = "invalid --device — expected path-segment characters only (alphanumerics, '-', '_')",
+      )
+      return TrailblazeExitCode.MISUSE.code
     }
 
     return showSingleDevice(normalizedCaseId, chosenDevice, resolvedRepo, token)
@@ -183,55 +318,98 @@ class ResultsShowCommand : Callable<Int> {
     val fileName = if (latest) "latest.json" else "latest_success.json"
     val path = "results/testrail/$caseId/$device/$fileName"
 
-    val rawJson = runBlocking {
-      fetchContents(repo = repo, path = path, token = token)
-    } ?: run {
-      if (latest) {
-        Console.log("No latest run recorded for $caseId on $device (looked for $path).")
-        Console.log("This (case, device) cell may not have run yet.")
-      } else {
-        Console.log("No passing run recorded for $caseId on $device (looked for $path).")
-        Console.log("Use --latest to see the most recent terminal run, or pass --all-devices to enumerate.")
+    val rawJson = when (val outcome = runBlocking { fetchContents(repo = repo, path = path, token = token) }) {
+      is FetchOutcome.Found -> outcome.body
+      is FetchOutcome.NotFound -> {
+        if (latest) {
+          Console.log("No latest run recorded for $caseId on $device (looked for $path).")
+          Console.log("This (case, device) cell may not have run yet.")
+        } else {
+          Console.log("No passing run recorded for $caseId on $device (looked for $path).")
+          Console.log("Use --latest to see the most recent terminal run, or pass --all-devices to enumerate.")
+        }
+        // Genuine "no recorded result" — ASSERTION_FAILED is the right "CI gate"
+        // semantic: if a script chained `results show … && deploy`, the absence
+        // of a passing run should block the deploy the same way a recorded
+        // failure would.
+        return TrailblazeExitCode.ASSERTION_FAILED.code
       }
-      return 1
+      is FetchOutcome.TransportError -> {
+        // Auth/rate-limit/5xx — we couldn't ask the question, not "the answer
+        // is no." Route to INFRA_FAILED so a chained `&& deploy` distinguishes
+        // "no recorded pass" (CI gate fires) from "GitHub rejected the lookup"
+        // (operator needs to investigate the token/rate-limit/outage).
+        reportCliError(
+          verb = "Results lookup",
+          target = path,
+          reason = "GitHub returned HTTP ${outcome.statusCode}",
+          hint = "check the token's scopes, watch for rate limit (429), or retry after a known GitHub outage",
+        )
+        return TrailblazeExitCode.INFRA_FAILED.code
+      }
     }
 
     if (jsonOnly) {
       println(rawJson)
-      return 0
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     val parsed: JsonObject = try {
       RESULTS_JSON.parseToJsonElement(rawJson).jsonObject
     } catch (e: Exception) {
-      Console.log("Failed to parse result document at $path: ${e.message}")
-      return 1
+      reportCliError(
+        verb = "Results parse",
+        target = path,
+        reason = describeThrowableForUser(e),
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
-    val run = parsed["run"]?.let { runCatching { it.jsonObject }.getOrNull() } ?: run {
-      Console.log("$path: missing `run` block (file shape may be stale).")
-      return 1
+    val view = CellView.fromCellJson(parsed) ?: run {
+      reportCliError(
+        verb = "Results parse",
+        target = path,
+        reason = "file shape unrecognized — neither v1 `run` block nor v2 `result` block present",
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
-    prettyPrint(caseId, device, isLatestFile = latest, run = run)
-    return 0
+    prettyPrint(caseId, device, isLatestFile = latest, view = view)
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun showAllDevices(caseId: String, repo: String, token: String): Int {
     val devicesPath = "results/testrail/$caseId"
-    val listingJson = runBlocking {
-      fetchContents(repo = repo, path = devicesPath, token = token, raw = false)
-    } ?: run {
-      Console.log("No recorded results for $caseId at $repo:$devicesPath.")
-      Console.log("This case may not have run on any device yet.")
-      return 1
+    val listingJson = when (val outcome = runBlocking { fetchContents(repo = repo, path = devicesPath, token = token, raw = false) }) {
+      is FetchOutcome.Found -> outcome.body
+      is FetchOutcome.NotFound -> {
+        Console.log("No recorded results for $caseId at $repo:$devicesPath.")
+        Console.log("This case may not have run on any device yet.")
+        // "No recorded results" is the CI-gate equivalent of a failing assertion:
+        // chained as `results show … && deploy` it should block the deploy the
+        // same way a recorded failure would.
+        return TrailblazeExitCode.ASSERTION_FAILED.code
+      }
+      is FetchOutcome.TransportError -> {
+        reportCliError(
+          verb = "Results lookup",
+          target = devicesPath,
+          reason = "GitHub returned HTTP ${outcome.statusCode}",
+          hint = "check the token's scopes, watch for rate limit (429), or retry after a known GitHub outage",
+        )
+        return TrailblazeExitCode.INFRA_FAILED.code
+      }
     }
 
     val listing: JsonArray = try {
       RESULTS_JSON.parseToJsonElement(listingJson).jsonArray
     } catch (e: Exception) {
-      Console.log("Failed to parse device listing for $caseId: ${e.message}")
-      return 1
+      reportCliError(
+        verb = "Results parse",
+        target = devicesPath,
+        reason = describeThrowableForUser(e),
+      )
+      return TrailblazeExitCode.INFRA_FAILED.code
     }
 
     val deviceDirs = listing
@@ -242,7 +420,8 @@ class ResultsShowCommand : Callable<Int> {
 
     if (deviceDirs.isEmpty()) {
       Console.log("$caseId: case directory exists but no device subdirs found.")
-      return 1
+      // Same CI-gate semantic as the "no listing" path above.
+      return TrailblazeExitCode.ASSERTION_FAILED.code
     }
 
     println("Results for $caseId across ${deviceDirs.size} device(s):")
@@ -271,8 +450,10 @@ class ResultsShowCommand : Callable<Int> {
     // the directory listing is authoritative — if the device dir exists, the test ran on it,
     // and a 403/corrupt-file/missing-file on an existing cell is a real "we don't know"
     // condition that a CI gate (`results show … --all-devices && deploy`) should treat
-    // conservatively. The prior shape silently swallowed unknowns as "0 = clean."
-    return if (anyNonPassing) 1 else 0
+    // conservatively. The prior shape silently swallowed unknowns as "0 = clean." Maps to
+    // ASSERTION_FAILED (1) because the verdict is an answer ("not green"), not an
+    // infra/transport failure.
+    return if (anyNonPassing) TrailblazeExitCode.ASSERTION_FAILED.code else TrailblazeExitCode.SUCCESS.code
   }
 
   /**
@@ -286,6 +467,127 @@ class ResultsShowCommand : Callable<Int> {
   ) {
     companion object {
       val EMPTY = CellSummary(null, null, null)
+    }
+  }
+
+  /**
+   * Normalized view of a cell file's contents, shielding the renderer from the v1/v2 schema
+   * split. `status` is normalized to the v1 vocabulary ("pass" / "fail" / lowercase outcome
+   * for non-terminal states) so a v2 cell prints identically to a v1 cell of the same outcome.
+   *
+   * Created via [fromCellJson], which detects the schema by looking for the v2 `result` key
+   * (or `schema_version` = 2) and falls back to the v1 `run` shape.
+   */
+  internal data class CellView(
+    val status: String?,
+    val timestamp: String?,
+    val sessionId: String?,
+    val executionMs: String?,
+    val llmCalls: String?,
+    val gitSha: String?,
+    val appVersion: String?,
+    val consecutiveFailures: Int?,
+    val buildUrl: String?,
+    val logsZipUrl: String?,
+    val logsZipFilename: String?,
+  ) {
+    companion object {
+      /** Highest schema version this reader knows how to interpret. */
+      internal const val MAX_SUPPORTED_SCHEMA_VERSION = 2
+
+      fun fromCellJson(doc: JsonObject): CellView? {
+        val schemaVersion = doc["schema_version"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+        // Reject schema versions newer than we understand. A future writer that bumps to 3
+        // may restructure fields; pretending to read it as v2 silently produces wrong data.
+        if (schemaVersion != null && schemaVersion > MAX_SUPPORTED_SCHEMA_VERSION) {
+          Console.error(
+            "Cell file declares schema_version=$schemaVersion but reader supports at most " +
+              "$MAX_SUPPORTED_SCHEMA_VERSION. Upgrade the trailblaze CLI to read this cell.",
+          )
+          return null
+        }
+        val explicitV2 = schemaVersion?.let { it >= 2 } == true
+        val resultBlock = doc["result"]?.let { runCatching { it.jsonObject }.getOrNull() }
+        val runBlock = doc["run"]?.let { runCatching { it.jsonObject }.getOrNull() }
+        // Mixed shapes are diagnostic of either a corruption or an incomplete migration —
+        // surface but don't fail: v2 wins because that's the authoritative current shape.
+        if (resultBlock != null && runBlock != null) {
+          Console.error(
+            "Cell file contains BOTH legacy `run` block AND current `result` block; " +
+              "using `result` (v2) and ignoring `run` (v1). Check for partial-migration artifacts.",
+          )
+        }
+        if (explicitV2 || resultBlock != null) {
+          if (resultBlock == null) {
+            // Distinct error from "unknown shape" so a v2-but-malformed file shows the right
+            // root cause instead of looking identical to a totally unrecognized document.
+            Console.error("Cell file declares schema_version=$schemaVersion but is missing the required `result` block.")
+            return null
+          }
+          val metadata = doc["metadata"]?.let { runCatching { it.jsonObject }.getOrNull() }
+          return fromV2(resultBlock, metadata, doc)
+        }
+        if (runBlock == null) return null
+        return fromV1(runBlock)
+      }
+
+      // Migration note: `fromV1` is the legacy v1 (`run` block) reader. It can be deleted
+      // once every cell in the index repo has been re-published in v2 shape — either via a
+      // one-off backfill pass that rewrites every existing cell, OR via natural turnover
+      // (every test case has run at least once since the v2 writer landed). Until then the
+      // legacy `run` block remains the only signal for stale cells that haven't seen a new run.
+      private fun fromV1(run: JsonObject): CellView = CellView(
+        status = run["status"]?.jsonPrimitive?.contentOrNull,
+        timestamp = run["timestamp"]?.jsonPrimitive?.contentOrNull,
+        sessionId = run["sessionId"]?.jsonPrimitive?.contentOrNull,
+        executionMs = run["executionTimeMs"]?.jsonPrimitive?.contentOrNull,
+        llmCalls = run["llmCallCount"]?.jsonPrimitive?.contentOrNull,
+        gitSha = run["trailblazeInternalGitSha"]?.jsonPrimitive?.contentOrNull,
+        appVersion = run["appVersionUnderTest"]?.jsonPrimitive?.contentOrNull,
+        consecutiveFailures = run["consecutiveFailures"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+        buildUrl = run["buildUrl"]?.jsonPrimitive?.contentOrNull,
+        logsZipUrl = run["logsZipUrl"]?.jsonPrimitive?.contentOrNull,
+        logsZipFilename = null, // v1 has no separate filename field
+      )
+
+      private fun fromV2(result: JsonObject, metadata: JsonObject?, root: JsonObject): CellView {
+        val outcome = result["outcome"]?.jsonPrimitive?.contentOrNull
+        return CellView(
+          status = normalizeOutcome(outcome),
+          timestamp = result["completed_at"]?.jsonPrimitive?.contentOrNull,
+          sessionId = result["session_id"]?.jsonPrimitive?.contentOrNull,
+          executionMs = result["duration_ms"]?.jsonPrimitive?.contentOrNull,
+          llmCalls = result["llm_call_count"]?.jsonPrimitive?.contentOrNull,
+          gitSha = metadata?.get("git_commit")?.jsonPrimitive?.contentOrNull,
+          appVersion = metadata?.get("android_build_version")?.jsonPrimitive?.contentOrNull
+            ?: metadata?.get("ios_build_version")?.jsonPrimitive?.contentOrNull,
+          consecutiveFailures = root["consecutive_failures"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+          buildUrl = metadata?.get("ci_build_url")?.jsonPrimitive?.contentOrNull,
+          logsZipUrl = result["logs_zip_url"]?.jsonPrimitive?.contentOrNull,
+          logsZipFilename = result["logs_zip_filename"]?.jsonPrimitive?.contentOrNull,
+        )
+      }
+
+      /**
+       * Normalize a v2 [xyz.block.trailblaze.report.models.Outcome] enum value to the v1
+       * status vocabulary so the renderer and the `--all-devices` exit-code logic stay
+       * uniform across both schemas. `PASSED` is the only "pass"; the four terminal failure
+       * modes we know about collapse to `"fail"`; `SKIPPED` / `CANCELLED` pass through
+       * lowercase; anything else (including future outcome enum values) maps to the
+       * `"unknown"` sentinel so `summarizeNotes` (which checks `latest.status != "pass"`)
+       * conservatively treats it as not-passing rather than silently green-lighting a new
+       * outcome we don't recognize.
+       */
+      internal fun normalizeOutcome(outcome: String?): String? = when (outcome) {
+        null -> null
+        "PASSED" -> "pass"
+        "FAILED", "TIMEOUT", "MAX_CALLS_REACHED", "ERROR" -> "fail"
+        "SKIPPED", "CANCELLED" -> outcome.lowercase()
+        else -> {
+          Console.error("Unknown outcome '$outcome' in cell file; treating as 'unknown' for CI-gate safety.")
+          "unknown"
+        }
+      }
     }
   }
 
@@ -308,25 +610,20 @@ class ResultsShowCommand : Callable<Int> {
     token: String,
   ): CellSummary {
     val path = "results/testrail/$caseId/$device/$fileName"
-    val raw = runBlocking { fetchContents(repo = repo, path = path, token = token) }
+    // `fetchSummary` is one row in the --all-devices table; a TransportError on a
+    // single cell shouldn't tear the whole table down (other rows might still
+    // succeed). Treat it as "data unavailable" (the same shape as NotFound from
+    // `summarizeNotes`'s point of view) — the row's verdict logic already maps
+    // missing data to "not passing." The actual transport error has already been
+    // logged to stderr by `fetchContents`.
+    val raw = when (val outcome = runBlocking { fetchContents(repo = repo, path = path, token = token) }) {
+      is FetchOutcome.Found -> outcome.body
+      is FetchOutcome.NotFound, is FetchOutcome.TransportError -> null
+    }
     return parseRunBlock(raw)
   }
 
-  private fun prettyPrint(caseId: String, device: String, isLatestFile: Boolean, run: JsonObject) {
-    val status = run["status"]?.jsonPrimitive?.contentOrNull ?: "?"
-    val timestamp = run["timestamp"]?.jsonPrimitive?.contentOrNull ?: "?"
-    val sessionId = run["sessionId"]?.jsonPrimitive?.contentOrNull
-    val executionMs = run["executionTimeMs"]?.jsonPrimitive?.contentOrNull
-    val llmCalls = run["llmCallCount"]?.jsonPrimitive?.contentOrNull
-    val trailPath = run["trailPath"]?.jsonPrimitive?.contentOrNull
-    val sha = run["trailblazeInternalGitSha"]?.jsonPrimitive?.contentOrNull
-    val appVersion = run["appVersionUnderTest"]?.jsonPrimitive?.contentOrNull
-    val cluster = run["failureClusterTag"]?.jsonPrimitive?.contentOrNull
-    val consecFails = run["consecutiveFailures"]?.jsonPrimitive?.contentOrNull
-    val buildUrl = run["buildUrl"]?.jsonPrimitive?.contentOrNull
-    val reportUrl = run["reportUrl"]?.jsonPrimitive?.contentOrNull
-    val logsZipUrl = run["logsZipUrl"]?.jsonPrimitive?.contentOrNull
-
+  private fun prettyPrint(caseId: String, device: String, isLatestFile: Boolean, view: CellView) {
     val header = if (isLatestFile) {
       "Most recent run of $caseId on $device"
     } else {
@@ -334,25 +631,41 @@ class ResultsShowCommand : Callable<Int> {
     }
     println(header)
     println("=".repeat(header.length))
-    println("  Status:        $status")
-    println("  When:          $timestamp")
-    if (sessionId != null) println("  Session id:    $sessionId")
-    if (executionMs != null) println("  Duration ms:   $executionMs")
-    if (llmCalls != null) println("  LLM calls:     $llmCalls")
-    if (trailPath != null) println("  Trail path:    $trailPath")
-    if (sha != null) println("  Repo SHA:      $sha")
-    if (appVersion != null) println("  App version:   $appVersion")
-    if (cluster != null) println("  Cluster tag:   $cluster")
-    if (consecFails != null && isLatestFile) {
-      println("  Consec. fails: $consecFails")
+    println("  Status:        ${view.status ?: "?"}")
+    println("  When:          ${view.timestamp ?: "?"}")
+    if (view.sessionId != null) println("  Session id:    ${view.sessionId}")
+    if (view.executionMs != null) println("  Duration ms:   ${view.executionMs}")
+    if (view.llmCalls != null) println("  LLM calls:     ${view.llmCalls}")
+    if (view.gitSha != null) println("  Repo SHA:      ${view.gitSha}")
+    if (view.appVersion != null) println("  App version:   ${view.appVersion}")
+    if (view.consecutiveFailures != null && isLatestFile) {
+      println("  Consec. fails: ${view.consecutiveFailures}")
     }
-    if (buildUrl != null || reportUrl != null || logsZipUrl != null) {
+    if (view.buildUrl != null || view.logsZipUrl != null || view.logsZipFilename != null) {
       println()
       println("Links:")
-      if (buildUrl != null) println("  Build:         $buildUrl")
-      if (reportUrl != null) println("  Report:        $reportUrl")
-      if (logsZipUrl != null) println("  Logs zip:      $logsZipUrl")
+      if (view.buildUrl != null) println("  Build:         ${view.buildUrl}")
+      if (view.logsZipUrl != null) println("  Logs zip:      ${view.logsZipUrl}")
+      if (view.logsZipFilename != null) println("  Logs file:     ${view.logsZipFilename}")
     }
+  }
+
+  /**
+   * Outcome of a single GitHub contents-API fetch. Distinguishes the three states
+   * the caller needs to route on:
+   *  - [Found] — 2xx with body. The happy path.
+   *  - [NotFound] — 404. The expected "no such (case, device, file) yet" branch.
+   *    Maps to [TrailblazeExitCode.ASSERTION_FAILED] at the call site (CI-gate
+   *    semantic: "no recorded pass" should block a chained deploy).
+   *  - [TransportError] — 401 / 403 / 429 / 5xx. A revoked token, rate limit, or
+   *    GitHub outage looks identical to "no data" if we swallow it as null —
+   *    routed to [TrailblazeExitCode.INFRA_FAILED] instead so the operator can
+   *    actually triage the auth/transport failure.
+   */
+  internal sealed interface FetchOutcome {
+    data class Found(val body: String) : FetchOutcome
+    data object NotFound : FetchOutcome
+    data class TransportError(val statusCode: Int, val message: String) : FetchOutcome
   }
 
   /**
@@ -361,7 +674,7 @@ class ResultsShowCommand : Callable<Int> {
    * contents. When false, uses the standard `application/vnd.github+json` accept header,
    * appropriate for directory listings (which return a JSON array of entries).
    */
-  private suspend fun fetchContents(repo: String, path: String, token: String, raw: Boolean = true): String? {
+  private suspend fun fetchContents(repo: String, path: String, token: String, raw: Boolean = true): FetchOutcome {
     val response = resultsHttpClient.get("https://api.github.com/repos/$repo/contents/$path") {
       header("Authorization", "Bearer $token")
       header(
@@ -372,21 +685,20 @@ class ResultsShowCommand : Callable<Int> {
     }
     return when {
       // 404 is the expected "no such (case, device, file) yet" path and stays quiet — the
-      // caller turns it into a user-facing "no result recorded" message.
-      response.status == HttpStatusCode.NotFound -> null
-      response.status.isSuccess() -> response.bodyAsText()
+      // caller turns it into a user-facing "no result recorded" message + ASSERTION_FAILED.
+      response.status == HttpStatusCode.NotFound -> FetchOutcome.NotFound
+      response.status.isSuccess() -> FetchOutcome.Found(response.bodyAsText())
       else -> {
         // 401/403/429/5xx all need to surface to the operator with the status code —
         // a revoked token (403) or rate limit (429) looks identical to a 404 if we swallow
-        // it, and triage gets miserable. Routed through `Console.error` so it lands on
-        // stderr and doesn't pollute `--json` consumers piping stdout into `jq`. Body is
-        // included but truncated to keep noisy GitHub HTML error pages from drowning the log.
+        // it. Routed through `Console.error` so it lands on stderr and doesn't pollute
+        // `--json` consumers piping stdout into `jq`. Body is included but truncated to
+        // keep noisy GitHub HTML error pages from drowning the log.
         val body = runCatching { response.bodyAsText() }.getOrDefault("")
-        Console.error(
-          "GitHub contents API ${response.status.value} ${response.status.description} " +
-            "for $repo/$path${if (body.isNotBlank()) ": ${body.take(200)}" else ""}",
-        )
-        null
+        val message = "GitHub contents API ${response.status.value} ${response.status.description} " +
+          "for $repo/$path${if (body.isNotBlank()) ": ${body.take(200)}" else ""}"
+        Console.error(message)
+        FetchOutcome.TransportError(response.status.value, message)
       }
     }
   }
@@ -434,10 +746,10 @@ class ResultsShowCommand : Callable<Int> {
     /**
      * Parse a slice of cell-file JSON into the fields `--all-devices` cares about. Returns
      * [CellSummary.EMPTY] for null input (file missing on the remote), unparseable JSON,
-     * or a document that doesn't contain a `run` object. The lenient handling intentionally
-     * keeps the table-rendering path robust against partial / future-shape documents — the
-     * exit-code logic in `showAllDevices` treats EMPTY conservatively (non-passing) so a
-     * silent parse failure doesn't fake a clean state.
+     * or a document that doesn't contain either a v1 `run` block or a v2 `result` block.
+     * The lenient handling intentionally keeps the table-rendering path robust against
+     * partial / future-shape documents — the exit-code logic in `showAllDevices` treats
+     * EMPTY conservatively (non-passing) so a silent parse failure doesn't fake a clean state.
      */
     internal fun parseRunBlock(rawJson: String?): CellSummary {
       if (rawJson == null) return CellSummary.EMPTY
@@ -446,12 +758,11 @@ class ResultsShowCommand : Callable<Int> {
       } catch (_: Exception) {
         return CellSummary.EMPTY
       }
-      val run = parsed["run"]?.let { runCatching { it.jsonObject }.getOrNull() }
-        ?: return CellSummary.EMPTY
+      val view = CellView.fromCellJson(parsed) ?: return CellSummary.EMPTY
       return CellSummary(
-        status = run["status"]?.jsonPrimitive?.contentOrNull,
-        timestamp = run["timestamp"]?.jsonPrimitive?.contentOrNull,
-        consecutiveFailures = run["consecutiveFailures"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+        status = view.status,
+        timestamp = view.timestamp,
+        consecutiveFailures = view.consecutiveFailures,
       )
     }
 

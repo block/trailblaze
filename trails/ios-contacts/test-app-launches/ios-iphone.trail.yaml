@@ -1,0 +1,22 @@
+- config:
+    title: 'Contacts (iOS): App launches to a contacts list'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+- prompts:
+  - step: Launch the iOS Contacts app (com.apple.MobileAddressBook) with a clean state, and verify the contacts list root rendered — the "Contacts" navbar title should be visible.
+    recording:
+      tools:
+      - contacts_ios_openApp:
+          dismissKeyboard: true
+      - tapOnElementBySelector:
+          reason: The Contacts app icon is visible in the view hierarchy with ref 'z698'. Tapping this will attempt to launch the Contacts app as required by the objective.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+      - assertVisibleBySelector:
+          reason: The objective requires the 'Contacts' navbar title to be visible to confirm the contacts list root rendered. The view hierarchy shows 'Contacts' at the top with ref 'w72', which should be asserted visible.
+          nodeSelector:
+            iosMaestro:
+              textRegex: Trace Check426
+            index: 0

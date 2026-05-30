@@ -178,7 +178,7 @@ class WaypointSiblingCollisionGuardTest {
 
   @Test
   fun `checkOverlap with null before self-filters when siblings list includes the new waypoint`() {
-    // Caller passing the full pack (incl. the new waypoint) must not produce a self-
+    // Caller passing the full trailmap (incl. the new waypoint) must not produce a self-
     // collision pseudo-failure. The id-filter inside the loop is the contract.
     val newDef = waypoint("myapp/new", required = listOf(textEntry("Accept")))
     val step = sessionStep("s1", "s1/a", screenStateOf("Accept"))

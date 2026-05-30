@@ -33,8 +33,8 @@ proposal.
                               is resolved relative to this dir, and the
                               cross-waypoint bleed guard walks the full session
                               set.
-      --target=<id>         Pack id. Resolves --root + provides the proposal
-                              namespace (`<target>/auto-<slug>`).
+      --target=<id>         Trailmap id. Resolves --root + provides the
+                              proposal namespace (`<target>/auto-<slug>`).
       --top-n=<n>           Maximum number of clusters to process in
                               --aggregate mode (default: 10).
   -V, --version             Print version information and exit.

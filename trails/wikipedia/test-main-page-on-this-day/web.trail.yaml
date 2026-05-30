@@ -15,7 +15,7 @@
       tools:
       - web_scroll:
           reasoning: The visible portion of the page does not show an 'On this day' section. Scrolling down should reveal more of the main page content, which likely contains this section based on Wikipedia's standard layout.
-      - web_verify_element_visible:
+      - web_verifyElementVisible:
           reasoning: The objective requires verification that the 'On this day' section is visible. In the view hierarchy, [e121] is the heading for this section. Confirming its visibility will fulfill the objective.
           nodeSelector:
             web:

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.ollama.client.OllamaClient
@@ -22,6 +23,7 @@ import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
@@ -39,7 +41,10 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     )
   }
 
-  override fun handleRunRequest(runYamlRequest: RunYamlRequest, agentMemory: AgentMemory) {
+  override fun handleRunRequest(
+    runYamlRequest: RunYamlRequest,
+    agentMemory: AgentMemory,
+  ): TrailblazeToolResult.Success? {
     this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
     // Propagate the runtime driver type so session logs reflect the actual driver
     runYamlRequest.driverType?.let { trailblazeLoggingRule.driverTypeOverride = it }
@@ -52,31 +57,36 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       agentMemoryOverride = agentMemory,
       maxLlmCalls = runYamlRequest.maxLlmCalls,
     )
+    var lastToolSuccess: TrailblazeToolResult.Success? = null
     startInTestCoroutineScope {
-      androidTrailblazeRule.runSuspend(
+      lastToolSuccess = androidTrailblazeRule.runSuspend(
         testYaml = runYamlRequest.yaml,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         trailFilePath = runYamlRequest.trailFilePath,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
       )
     }
+    return lastToolSuccess
   }
 
   override fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient {
     // Reuse the cached HTTP client to prevent "unknown client" errors
     val ollamaBaseUrl =
       InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.BASE_URL_ARG)
+    // Koog 1.0.0: LLM clients no longer take a raw Ktor `HttpClient`. Wrap our cached
+    // on-device client in a `KtorKoogHttpClient.Factory` so its config flows through.
+    val httpClientFactory = KtorKoogHttpClient.Factory(baseClient = cachedHttpClient)
     val llmClients = mutableMapOf<LLMProvider, LLMClient>(
       TrailblazeLlmProvider.NONE.toKoogLlmProvider() to NoOpLlmClient(),
       LLMProvider.Ollama to OllamaClient(
         baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
-        baseClient = cachedHttpClient,
+        httpClientFactory = httpClientFactory,
       ),
     )
     InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))?.let { openAiApiKey ->
       llmClients[LLMProvider.OpenAI] = OpenAILLMClient(
-        baseClient = cachedHttpClient,
         apiKey = openAiApiKey,
+        httpClientFactory = httpClientFactory,
       )
     }
     // Custom openai_compatible providers from the workspace `trailblaze.yaml` arrive via

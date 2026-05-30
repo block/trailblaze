@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.host
 
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.utils.time.KoogClock
 import ai.koog.prompt.params.LLMParams
 import java.io.File
 import java.util.UUID
@@ -224,16 +226,16 @@ object TrailblazeHostYamlRunner {
   ): LaunchedScriptingRuntime? {
     val sessionDir = logsRepo.getSessionDir(sessionId)
 
-    // 1. Inline scripted tools (target.tools: in pack manifests) — the #2749 path. Each
+    // 1. Inline scripted tools (target.tools: in trailmap manifests) — the #2749 path. Each
     // tool routes to one of two runtimes:
     //
     //  - **Subprocess (bun / tsx)** — full Node API surface (`node:fs`, `node:child_process`,
     //    etc.). Route through [InlineScriptToolServerSynthesizer] → MCP subprocess path so
-    //    the handler runs inside Node/Bun where those APIs exist. `host_writeArtifact.js`
+    //    the handler runs inside Node/Bun where those APIs exist. `sampleapp_writeArtifact.js`
     //    is the canonical example.
     //  - **QuickJS in-process** — no Node APIs, but composes via `client.callTool(...)`,
-    //    avoids subprocess fork overhead, and is the only path that works inside the
-    //    on-device `:trailblaze-scripting-bundle`. Bundle via [DaemonScriptedToolBundler]
+    //    avoids subprocess fork overhead, and is the path used on-device by
+    //    `:trailblaze-quickjs-tools`. Bundle via [DaemonScriptedToolBundler]
     //    (esbuild) and register as an in-process QuickJS-backed dynamic tool. The
     //    LLM-shape `surfaceToLlm`/`requiresHost` filter that previously hid
     //    `runCommand`/`mobile_clearAppData` from scripted-tool composition is bypassed via
@@ -260,11 +262,27 @@ object TrailblazeHostYamlRunner {
     val inlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
       val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
       if (esbuildBinary == null) {
-        Console.log(
+        // Use `Console.info` (not `Console.log`) so this critical breadcrumb survives the
+        // default CLI quiet mode (`CliInfrastructure.enableQuietMode()`). Without this,
+        // the entire QuickJS-inline-tool-registration phase silently no-ops on CI agents
+        // that don't have `esbuild` on PATH — the operator sees only the downstream
+        // failure surface ("Unsupported tool type for RPC execution: OtherTrailblazeTool"
+        // when a trail recording invokes a TS-migrated scripted tool) with no hint that
+        // the upstream bundler skipped. Visible diagnostic at the skip site closes a
+        // long-standing CI diagnostic gap.
+        //
+        // Also surface to the progress channel so the operator running `trailblaze trail`
+        // in CI mode sees the skip without grepping the daemon log.
+        Console.info(
           "[#2749] esbuild binary not found on PATH or build-tree fallback locations — " +
             "${quickJsInlineTools.size} inline scripted tool(s) will not be available this " +
             "session. Install esbuild (e.g. via Homebrew or `bun install`) to enable inline " +
             "scripted-tool dispatch.",
+        )
+        onProgressMessage(
+          "Skipping ${quickJsInlineTools.size} inline scripted tool(s): esbuild not found " +
+            "on PATH or under <repo>/sdks/typescript/node_modules/.bin/. " +
+            "Install esbuild or run `bun install` in the SDK dir.",
         )
         emptyList()
       } else {
@@ -317,15 +335,15 @@ object TrailblazeHostYamlRunner {
       emptyList()
     }
 
-    // 2. MCP subprocesses: explicit `mcp_servers:` entries PLUS the synthesized wrappers
-    // for `.js`-extension inline scripted tools. Both paths run the handler in Node/Bun
-    // where Node APIs exist; the synthesized wrappers are what authors of
-    // `host_writeArtifact.js`-style tools have always relied on, so they keep that
-    // contract end-to-end. If subprocess launch throws after the QuickJS-path inline
-    // registrations succeeded, the inline regs are stranded in the toolRepo with no
-    // cleanup handle — catch + dispose them before rethrowing so the same
-    // partial-construction guarantee applies across both blocks.
-    val nodeApiInlineToolServers = if (nodeApiInlineTools.isNotEmpty()) {
+    // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective
+    // runtime is SUBPROCESS — selected via `runtime: subprocess` on the descriptor or via
+    // the default `.js`/`.mjs`/`.cjs` extension heuristic (see [ScriptedToolRuntime.resolve]).
+    // These run the handler in Node/Bun where Node APIs exist; this is what authors of
+    // `sampleapp_writeArtifact.js`-style tools have always relied on. If subprocess launch
+    // throws after the QuickJS-path inline registrations succeeded, the inline regs are
+    // stranded in the toolRepo with no cleanup handle — catch + dispose them before
+    // rethrowing so the same partial-construction guarantee applies across both blocks.
+    val mcpServers = if (nodeApiInlineTools.isNotEmpty()) {
       InlineScriptToolServerSynthesizer.synthesize(
         tools = nodeApiInlineTools,
         outputDir = File(sessionDir, "inline-script-tools"),
@@ -333,7 +351,6 @@ object TrailblazeHostYamlRunner {
     } else {
       emptyList()
     }
-    val mcpServers = targetTestApp?.getMcpServers().orEmpty() + nodeApiInlineToolServers
     val launchableCount = mcpServers.count { it.script != null }
     val subprocessRuntime = if (launchableCount > 0) {
       onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
@@ -477,6 +494,18 @@ object TrailblazeHostYamlRunner {
   ): SessionId? {
     val onProgressMessage = runOnHostParams.onProgressMessage
     val runYamlRequest = runOnHostParams.runYamlRequest
+
+    // Mirror the V1/Compose-RPC/Revyl runners — Playwright Native doesn't apply memory
+    // seeding either, so loudly warn rather than silently dropping `config.memory:` /
+    // `--memory` / `--secret`. Parses the YAML to extract `config.memory:` for an accurate
+    // count; cheap one-off parse, same call the other runners make.
+    val playwrightTrailConfig =
+      runCatching { createTrailblazeYaml().extractTrailConfig(runYamlRequest.yaml) }.getOrNull()
+    warnIfMemorySeedsDropped(
+      runnerName = "Playwright Native runner",
+      trailConfig = playwrightTrailConfig,
+      runYamlRequest = runYamlRequest,
+    )
 
     val requestDeviceId = runYamlRequest.trailblazeDeviceId
     val keepBrowserAlive = !runYamlRequest.config.sendSessionEndLog
@@ -647,6 +676,15 @@ object TrailblazeHostYamlRunner {
   ): SessionId? {
     val onProgressMessage = runOnHostParams.onProgressMessage
     val runYamlRequest = runOnHostParams.runYamlRequest
+
+    // See parallel comment in runPlaywrightNativeYaml.
+    val electronTrailConfig =
+      runCatching { createTrailblazeYaml().extractTrailConfig(runYamlRequest.yaml) }.getOrNull()
+    warnIfMemorySeedsDropped(
+      runnerName = "Playwright Electron runner",
+      trailConfig = electronTrailConfig,
+      runYamlRequest = runYamlRequest,
+    )
 
     val requestDeviceId = runYamlRequest.trailblazeDeviceId
     val keepAlive = !runYamlRequest.config.sendSessionEndLog
@@ -952,15 +990,35 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Executing YAML test via Compose RPC...")
       Console.log("▶️ Starting Compose RPC execution for device: ${trailblazeDeviceId.instanceId}")
 
-      val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(runYamlRequest.yaml)
+      val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+        runYamlRequest.yaml,
+        deviceClassifiers = trailblazeDeviceInfo.classifiers,
+      )
       val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+      warnIfMemorySeedsDropped("ComposeRpc runner", trailConfig, runYamlRequest)
+
+      // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
+      // `planTrailExecution` planner. Short-circuit here so the runner never opens a session,
+      // runs the actionable-steps guard, or iterates trail items for a skip-marked trail.
+      trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+        Console.log(
+          "[Trailblaze] Skipping trail" +
+            (runYamlRequest.trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+        )
+        return@executeTrailSession session.sessionId
+      }
 
       if (runYamlRequest.config.sendSessionStartLog) {
         loggingRule.logger.log(
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
             sessionStatus = SessionStatus.Started(
-              trailConfig = trailConfig,
+              // Strip trailConfig.memory: this runner does NOT apply it (see the
+              // warnIfMemorySeedsDropped call above), so persisting it into the session
+              // log would produce a false-presence artifact for replay tools that read
+              // SessionStarted.trailConfig and assume the values were seeded. The
+              // separate resolvedInitialMemory field stays empty for the same reason.
+              trailConfig = trailConfig?.copy(memory = null),
               trailFilePath = runYamlRequest.trailFilePath,
               testClassName = "ComposeRpc",
               testMethodName = "run",
@@ -1206,15 +1264,32 @@ object TrailblazeHostYamlRunner {
         onProgressMessage("Executing YAML test via Revyl cloud device...")
         Console.log("▶️ Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
 
-        val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(runYamlRequest.yaml)
+        val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+          runYamlRequest.yaml,
+          deviceClassifiers = trailblazeDeviceInfo.classifiers,
+        )
         val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+        warnIfMemorySeedsDropped("Revyl runner", trailConfig, runYamlRequest)
+
+        // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
+        // `planTrailExecution` planner. See parallel comment at the ComposeRpc site.
+        trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+          Console.log(
+            "[Trailblaze] Skipping trail" +
+              (runYamlRequest.trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+          )
+          return@executeTrailSession session.sessionId
+        }
 
         if (runYamlRequest.config.sendSessionStartLog) {
           loggingRule.logger.log(
             session,
             TrailblazeLog.TrailblazeSessionStatusChangeLog(
               sessionStatus = SessionStatus.Started(
-                trailConfig = trailConfig,
+                // See parallel comment at the ComposeRpc site — strip trailConfig.memory
+                // because Revyl doesn't apply it. Replay would otherwise read a
+                // false-presence signal off this snapshot.
+                trailConfig = trailConfig?.copy(memory = null),
                 trailFilePath = runYamlRequest.trailFilePath,
                 testClassName = "Revyl",
                 testMethodName = "run",
@@ -1302,6 +1377,17 @@ object TrailblazeHostYamlRunner {
     val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
     val onProgressMessage = runOnHostParams.onProgressMessage
 
+    // See parallel comment in runPlaywrightNativeYaml — Maestro host path also doesn't
+    // apply memory seeding today, so warn loudly rather than silently dropping seeds.
+    val maestroTrailConfig =
+      runCatching { createTrailblazeYaml().extractTrailConfig(runOnHostParams.runYamlRequest.yaml) }
+        .getOrNull()
+    warnIfMemorySeedsDropped(
+      runnerName = "Maestro host runner",
+      trailConfig = maestroTrailConfig,
+      runYamlRequest = runOnHostParams.runYamlRequest,
+    )
+
     // Skip force-stop for MCP requests - MCP maintains persistent connections
     // between tool calls and we don't want to kill the driver each time.
     val isMcpRequest = runOnHostParams.referrer == TrailblazeReferrer.MCP
@@ -1355,17 +1441,15 @@ object TrailblazeHostYamlRunner {
 
     val keepDriverAlive = runOnHostParams.referrer == TrailblazeReferrer.MCP
 
-    // Decision 038 session-startup wiring: per-session subprocess MCP servers declared by the
-    // target's `mcp_servers:` YAML. The launcher spawns each entry, runs the MCP handshake,
+    // Per-session subprocess MCP runtimes for inline scripted tools synthesized from the
+    // target's `tools:` YAML. The launcher spawns each entry, runs the MCP handshake,
     // registers filtered tools into hostTbRunner.toolRepo, and hands back a teardown handle.
     // Launch must happen inside the executeTrailSession lambda — we need the SessionId for
     // the env-var contract and for the session-log directory; both are available there.
     //
-    // Modeled as a mutable list of resources (empty when the target declares no
-    // `mcp_servers:`, populated once launch succeeds) so the cleanup lambda can reference
-    // the collection directly without a forward-declared nullable var. Today launch is
-    // called at most once per session, but the list shape naturally accommodates
-    // splitting per-server launches later without reshaping the control flow.
+    // Modeled as a mutable list of resources (empty when the target declares no `tools:`
+    // with subprocess routing, populated once launch succeeds) so the cleanup lambda can
+    // reference the collection directly without a forward-declared nullable var.
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
 
     return executeTrailSession(
@@ -1482,9 +1566,17 @@ object TrailblazeHostYamlRunner {
       customTrailblazeToolClasses = customToolClasses,
     )
 
+    // Query device classifiers up-front so a v3 trail can be lowered with the
+    // right closest-wins recording for THIS device. v1 trails ignore the list
+    // (they have a single recording per step), so this re-ordering is a no-op
+    // for the existing format.
+    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+    }
+
     // Decode trail YAML to extract prompt steps for V3
     val trailItems = try {
-      trailblazeYaml.decodeTrail(runYamlRequest.yaml)
+      trailblazeYaml.decodeTrail(runYamlRequest.yaml, deviceClassifiers = classifiers)
     } catch (e: Exception) {
       Console.log("❌ Failed to decode V3 trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
@@ -1503,11 +1595,6 @@ object TrailblazeHostYamlRunner {
         "Trail has no executable prompt steps — this would be a false positive pass. " +
           "Add steps to this trail file or the TestRail case.",
       )
-    }
-
-    // Query the device for its actual classifiers via a lightweight screen state probe.
-    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
     }
 
     // Set up host-side logging (session start/end logs are emitted here, not on-device)
@@ -1551,7 +1638,18 @@ object TrailblazeHostYamlRunner {
     // client's per-tool arg interpolation, so values written by host-local tools are visible
     // to subsequent RPC dispatches. AgentMemory is backed by a ConcurrentHashMap, so this
     // sharing is safe even if tool execution is ever parallelized.
+    //
+    // Seeded once before any tool runs via the [AgentMemory.seedFrom] composition: YAML
+    // `config.memory:` defaults first, then CLI `--memory KEY=VAL` overrides, then CLI
+    // `--secret KEY=VAL` (routed through `rememberSensitive` and excluded from the
+    // returned snapshot). Later tiers win on a same-key collision.
     val sharedAgentMemory = AgentMemory()
+    val resolvedInitialMemory = sharedAgentMemory.seedFrom(
+      yamlDefaults = trailConfig?.memory,
+      cliSeeds = runYamlRequest.initialMemorySeeds,
+      cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+    )
+    val sensitiveMemoryKeys: Set<String> = sharedAgentMemory.sensitiveKeys.toSet()
     // Pre-resolve the session's target once (#2699 — closes the deferred wiring note on
     // ResolvedTarget and surfaces ctx.target.{id, appIds, appId} to scripted tools).
     // `by lazy` keeps the cost off sessions that never invoke a target-aware tool, and means
@@ -1637,6 +1735,8 @@ object TrailblazeHostYamlRunner {
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              resolvedInitialMemory = resolvedInitialMemory,
+              sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),
@@ -1656,15 +1756,17 @@ object TrailblazeHostYamlRunner {
       }
 
       val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
-        val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+        val metaInfo = RequestMetaInfo.create(KoogClock.System)
         val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
           Message.User(
-            parts = buildList {
-              add(ContentPart.Text(userMessage))
+            parts = buildList<MessagePart.RequestPart> {
+              add(MessagePart.Text(userMessage))
               add(
-                ContentPart.Image(
-                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                MessagePart.Attachment(
+                  source = AttachmentSource.Image(
+                    content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                    format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                  ),
                 ),
               )
             },
@@ -1681,9 +1783,9 @@ object TrailblazeHostYamlRunner {
           id = "host_accessibility_v3_planner",
           params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
         )
-        val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-        val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
-        val toolArgsJson = toolCall?.content ?: "{}"
+        val response = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+        val toolCall = response.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
+        val toolArgsJson = toolCall?.args ?: "{}"
         val toolArgs = try {
           Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
         } catch (_: Exception) {
@@ -1837,8 +1939,14 @@ object TrailblazeHostYamlRunner {
       customTrailblazeToolClasses = customToolClasses,
     )
 
+    // Query device classifiers up-front so a v3 trail can be lowered with the
+    // right closest-wins recording for THIS device. v1 trails ignore the list.
+    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+    }
+
     val trailItems = try {
-      trailblazeYaml.decodeTrail(runYamlRequest.yaml)
+      trailblazeYaml.decodeTrail(runYamlRequest.yaml, deviceClassifiers = classifiers)
     } catch (e: Exception) {
       Console.log("❌ Failed to decode on-device-RPC trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
@@ -1847,10 +1955,18 @@ object TrailblazeHostYamlRunner {
       throw e
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+    warnIfMemorySeedsDropped("V1 runHostTrailblazeRunnerWithOnDeviceRpc", trailConfig, runYamlRequest)
 
-    // Query the device for its actual classifiers via a lightweight screen state probe.
-    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+    // Honor `config.skip:` before opening any session — matches the CLI's pre-flight
+    // `planTrailExecution` planner. This site short-circuits even earlier than the
+    // ComposeRpc/Revyl sites because `executeTrailSession` hasn't been called yet here,
+    // so the on-device-RPC runner never establishes a session for a skip-marked trail.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" +
+          (runYamlRequest.trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return null
     }
 
     val loggingRule = HostTrailblazeLoggingRule(
@@ -2095,7 +2211,11 @@ object TrailblazeHostYamlRunner {
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
             sessionStatus = SessionStatus.Started(
-              trailConfig = trailConfig,
+              // See parallel comment at the ComposeRpc site — strip trailConfig.memory
+              // because the V1 RpcRunner path doesn't apply it (it constructs its own
+              // AgentMemory inside the per-tool agent rather than going through
+              // AgentMemory.seedFrom). Replay would otherwise read a false-presence signal.
+              trailConfig = trailConfig?.copy(memory = null),
               trailFilePath = runYamlRequest.trailFilePath,
               testClassName = "HostOnDeviceRpcRunner",
               testMethodName = "run",
@@ -2258,6 +2378,33 @@ object TrailblazeHostYamlRunner {
     }
   }
 
+  /**
+   * Emits a loud warning when the runner path can't apply memory seeding but the request
+   * carries seeds anyway (from `config.memory:` YAML, `--memory KEY=VAL`, or `--secret
+   * KEY=VAL`). Only the V3 accessibility runner wires composition through
+   * [xyz.block.trailblaze.AgentMemory.seedFrom] today; V1 and Compose-RPC runners build
+   * their `AgentMemory` inside the per-tool agent and would silently drop the seeds.
+   * Surfacing a warning rather than failing means a YAML that uses `config.memory:` for
+   * the V3 path still runs through CI's V1/Compose paths (with degraded behavior) instead
+   * of bricking the whole pipeline; once V1/Compose are wired this warning goes away.
+   */
+  private fun warnIfMemorySeedsDropped(
+    runnerName: String,
+    trailConfig: xyz.block.trailblaze.yaml.TrailConfig?,
+    runYamlRequest: RunYamlRequest,
+  ) {
+    val yamlCount = trailConfig?.memory?.size ?: 0
+    val cliCount = runYamlRequest.initialMemorySeeds.size
+    val secretCount = runYamlRequest.initialMemorySensitiveSeeds.size
+    if (yamlCount == 0 && cliCount == 0 && secretCount == 0) return
+    Console.error(
+      "[memory] $runnerName received memory seeds ($yamlCount from config.memory:, " +
+        "$cliCount from --memory, $secretCount from --secret) but this runner path " +
+        "does not currently wire AgentMemory.seedFrom — seeds will be silently dropped. " +
+        "Only the V3 accessibility runner (runHostV3WithAccessibilityYaml) applies them.",
+    )
+  }
+
   private fun requireActionableSteps(
     trailblazeYaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
     trailItems: List<TrailYamlItem>,
@@ -2355,13 +2502,13 @@ object TrailblazeHostYamlRunner {
    * Loads the waypoint registry for the current trail run and returns a id->definition
    * resolver, used by `DeterministicTrailExecutor` to evaluate step postconditions.
    *
-   * Resolves classpath-bundled waypoint packs only (workspace `packs:` entries would need
+   * Resolves classpath-bundled waypoint trailmaps only (workspace `trailmaps:` entries would need
    * a configured `trailblaze.yaml` anchor that the daemon does not currently track).
-   * Bundled packs are sufficient for the in-tree waypoint coverage shipped with the
+   * Bundled trailmaps are sufficient for the in-tree waypoint coverage shipped with the
    * compiled CLI; user-authored workspace waypoints can land in a follow-up.
    *
-   * Returns `null` (resolver disabled, postconditions silently no-op) when pack loading
-   * raises — so a malformed pack manifest cannot block trail execution. A failure here is
+   * Returns `null` (resolver disabled, postconditions silently no-op) when trailmap loading
+   * raises — so a malformed trailmap manifest cannot block trail execution. A failure here is
    * logged via [Console.log] for the operator and otherwise swallowed.
    */
   private fun resolveWaypointsForRun(): ((String) -> WaypointDefinition?)? {
@@ -2371,7 +2518,14 @@ object TrailblazeHostYamlRunner {
           raw = TrailblazeProjectConfig(),
           sourceFile = File(".").absoluteFile,
         ),
-        includeClasspathPacks = true,
+        includeClasspathTrailmaps = true,
+        // Even though this entry point only USES waypoints, trailmap loading itself fails
+        // when a workspace has meta-only scripted-tool descriptors and no enrichment is
+        // wired (the loader's enrichDeferredDescriptors throws). Wire the same shared
+        // resolver every other host call site uses so trail execution doesn't get
+        // blocked by a mode-3 descriptor that happens to live in a trailmap the workspace
+        // also uses for waypoint resolution.
+        scriptedToolEnrichment = xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
       )
       val byId: Map<String, WaypointDefinition> = resolved.waypoints.associateBy { it.id }
       // Closure over the id->definition map. Returns null for unknown ids — the asserter

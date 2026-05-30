@@ -51,6 +51,12 @@ data class CiRunMetadata(
   /** CI build number */
   val ci_build_number: String? = null,
 
+  /** CI organization slug (the CI provider's top-level account/org identifier). Lets tooling reach the build without parsing [ci_build_url]. */
+  val ci_organization_slug: String? = null,
+
+  /** CI pipeline slug (the CI provider's pipeline identifier within the org). Lets tooling reach the build without parsing [ci_build_url]. */
+  val ci_pipeline_slug: String? = null,
+
   /** CI build source (e.g., "web", "api", "schedule) */
   val ci_build_source: String? = null,
 

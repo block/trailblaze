@@ -18,6 +18,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.OnDeviceRpcTimeouts
+import xyz.block.trailblaze.llm.RunYamlCallbackResult
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -27,6 +28,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -76,7 +78,7 @@ class RunYamlRequestHandlerTest {
   @Test
   fun `sync success returns response with success=true`() = runTest {
     val handler = createHandler(
-      runTrailblazeYaml = { _, session, _ -> session },
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) },
     )
 
     val result = handler.handle(testRequest.copy(awaitCompletion = true))
@@ -84,6 +86,60 @@ class RunYamlRequestHandlerTest {
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
     assertEquals(true, result.data.success)
     assertNull(result.data.errorMessage)
+  }
+
+  /**
+   * Wire pin for the `prefersHostSideForCallback` removal: a tool's
+   * `TrailblazeToolResult.Success.message` flows through the handler onto
+   * [xyz.block.trailblaze.llm.RunYamlResponse.toolMessage] so the host's `toToolResult` can
+   * package it back into the per-call `Success.message` consumed by scripted-tool authors. Before
+   * this PR, the message was silently dropped — `android_adbShell` / `mobile_listInstalledApps` /
+   * `android_sendBroadcast` were short-circuited host-side to avoid the loss.
+   */
+  @Test
+  fun `last successful tool's Success message flows onto RunYamlResponse toolMessage`() = runTest {
+    val deviceMessage = "[{\"appId\":\"com.example\"}]"
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ ->
+        RunYamlCallbackResult(
+          session = session,
+          lastToolSuccess = TrailblazeToolResult.Success(message = deviceMessage),
+        )
+      },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(true, result.data.success)
+    assertEquals(deviceMessage, result.data.toolMessage)
+    assertNull(result.data.toolStructuredContent)
+  }
+
+  /**
+   * Same wire pin for the structuredContent path — when an on-device MCP scripted tool returns a
+   * typed JSON payload, the handler mirrors it onto
+   * [xyz.block.trailblaze.llm.RunYamlResponse.toolStructuredContent] so the host's TS SDK
+   * `client.tools.<name>` proxy can unwrap the typed `result`.
+   */
+  @Test
+  fun `last successful tool's structuredContent flows onto RunYamlResponse toolStructuredContent`() = runTest {
+    val structured = kotlinx.serialization.json.JsonObject(
+      mapOf("count" to kotlinx.serialization.json.JsonPrimitive(7)),
+    )
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ ->
+        RunYamlCallbackResult(
+          session = session,
+          lastToolSuccess = TrailblazeToolResult.Success(structuredContent = structured),
+        )
+      },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(structured, result.data.toolStructuredContent)
   }
 
   /**
@@ -102,7 +158,7 @@ class RunYamlRequestHandlerTest {
         seen.putAll(agentMemory.variables)
         // Simulate an on-device tool writing back to memory.
         agentMemory.remember("device_wrote", "from-device")
-        session
+        RunYamlCallbackResult(session = session)
       },
     )
 
@@ -182,6 +238,10 @@ class RunYamlRequestHandlerTest {
         errorMessage.contains("timed out"),
         "Expected errorMessage to mention timeout, got: $errorMessage",
       )
+      // No tool produced a Success — the timeout fired before completion. The tool-payload
+      // mirror must stay null; populating it on a timeout would be a regression.
+      assertNull(result.data.toolMessage)
+      assertNull(result.data.toolStructuredContent)
 
       // The cancelled callback's finally{} must have run — proves the job was actually
       // cancelled rather than leaking.
@@ -221,6 +281,10 @@ class RunYamlRequestHandlerTest {
     assertNull(result.data.success)
     assertNull(result.data.errorMessage)
     assertTrue(result.data.memorySnapshot.isEmpty(), "Fire-and-forget must not carry memory")
+    // Fire-and-forget returns BEFORE any tool runs, so the tool-payload mirror must stay null.
+    // Enforced at the wire by `RunYamlResponse`'s init-block require; this is the path-level pin.
+    assertNull(result.data.toolMessage)
+    assertNull(result.data.toolStructuredContent)
 
     // Let the background job tick forward; confirm it did start (it would run indefinitely
     // in production until cancelled — the test scope will cancel it at the end of runTest).
@@ -258,6 +322,44 @@ class RunYamlRequestHandlerTest {
         sessionId = xyz.block.trailblaze.logs.model.SessionId("s"),
         success = null,
         memorySnapshot = mapOf("k" to "v"),
+      )
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected IllegalArgumentException, got no throw")
+    assertTrue(
+      ex is IllegalArgumentException,
+      "Expected IllegalArgumentException, got ${ex::class.simpleName}",
+    )
+  }
+
+  /**
+   * Same wire-contract enforcement for the per-tool payload mirror: a fire-and-forget
+   * response (`success = null`) cannot carry `toolMessage` — no tool has executed yet, so
+   * any value here would be a fabricated payload at the wire boundary.
+   */
+  @Test
+  fun `RunYamlResponse rejects fire-and-forget plus non-null toolMessage at construction`() {
+    val ex = kotlin.runCatching {
+      xyz.block.trailblaze.llm.RunYamlResponse(
+        sessionId = xyz.block.trailblaze.logs.model.SessionId("s"),
+        success = null,
+        toolMessage = "stdout-from-nowhere",
+      )
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected IllegalArgumentException, got no throw")
+    assertTrue(
+      ex is IllegalArgumentException,
+      "Expected IllegalArgumentException, got ${ex::class.simpleName}",
+    )
+  }
+
+  /** Same require, structuredContent variant. */
+  @Test
+  fun `RunYamlResponse rejects fire-and-forget plus non-null toolStructuredContent at construction`() {
+    val ex = kotlin.runCatching {
+      xyz.block.trailblaze.llm.RunYamlResponse(
+        sessionId = xyz.block.trailblaze.logs.model.SessionId("s"),
+        success = null,
+        toolStructuredContent = kotlinx.serialization.json.JsonPrimitive(42),
       )
     }.exceptionOrNull()
     assertNotNull(ex, "Expected IllegalArgumentException, got no throw")
@@ -328,6 +430,27 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
+   * Same deserialization-side enforcement for the tool-payload mirror. A fire-and-forget
+   * response on the wire (`success: null`) that carries a `toolMessage` must trip the
+   * init-block require during decode, not pass through with a fabricated tool payload.
+   */
+  @Test
+  fun `RunYamlResponse deserialization rejects fire-and-forget plus non-null toolMessage`() {
+    val malformedResponseJson =
+      """{"sessionId":"s","success":null,"toolMessage":"stdout-from-nowhere"}"""
+    val parser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+    val ex = kotlin.runCatching {
+      parser.decodeFromString(xyz.block.trailblaze.llm.RunYamlResponse.serializer(), malformedResponseJson)
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected deserialization to throw, got no throw")
+    assertTrue(
+      ex.findIllegalArgumentInChain() != null,
+      "Expected IllegalArgumentException somewhere in the cause chain, got " +
+        "${ex::class.simpleName}: ${ex.message}",
+    )
+  }
+
+  /**
    * kotlinx.serialization may wrap the init-block `IllegalArgumentException` in a
    * `SerializationException`. Walk the cause chain so the test pins the underlying
    * contract violation rather than the wrapping behavior.
@@ -356,7 +479,7 @@ class RunYamlRequestHandlerTest {
     // test correct if the dispatcher or scheduling ever changes.
     val settleCount = java.util.concurrent.atomic.AtomicInteger(0)
     val handler = createHandler(
-      runTrailblazeYaml = { _, session, _ -> session },
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) },
       waitForSettled = { settleCount.incrementAndGet() },
     )
 
@@ -374,7 +497,7 @@ class RunYamlRequestHandlerTest {
   // ── test infrastructure ──────────────────────────────────────────────────
 
   private fun TestScope.createHandler(
-    runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
+    runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
     progressManager: ProgressSessionManager? = null,
     waitForSettled: suspend () -> Unit = { /* no-op */ },
   ): RunYamlRequestHandler {

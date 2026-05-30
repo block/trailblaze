@@ -4,7 +4,6 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
-import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
 
 /**
@@ -31,8 +30,7 @@ class VerifyCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    required = true,
-    description = ["Device: platform (android, ios, web) or platform/id. Required."],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
   var device: String? = null
 
@@ -57,21 +55,19 @@ class VerifyCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    val assertion = assertionWords.joinToString(" ")
-    val deviceArg = device
-    if (deviceArg.isNullOrBlank()) {
-      Console.error("Error: --device is required for this command.")
-      return CommandLine.ExitCode.USAGE
-    }
+    // Trim to match `tool` / `step`'s normalization: whitespace-only positional
+    // (`trailblaze verify "   "`) records as empty and trips `require-steps` the
+    // same way a missing step would.
+    val assertion = assertionWords.joinToString(" ").trim()
+    requireStepIfConfigured(assertion, verb = "verify")?.let { return it }
     return cliReusableWithDevice(
       verbose = verbose,
-      device = deviceArg,
-      sessionScope = cliDeviceSessionScope(deviceArg),
+      device = device,
       webHeadless = headlessOption.resolve(),
     ) { client ->
       val arguments = mutableMapOf<String, Any?>("objective" to assertion, "hint" to "VERIFY")
       if (noScreenshots) arguments["fast"] = true
-      val result = client.callTool("blaze", arguments)
+      val result = client.callTool("step", arguments)
       formatVerifyResultAgent(result)
     }
   }

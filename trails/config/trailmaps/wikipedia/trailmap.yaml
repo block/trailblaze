@@ -1,0 +1,46 @@
+# Demo trailmap for the Wikipedia (en) target. Loaded as a workspace trailmap from the opensource
+# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
+# adopters running outside this repo do not see this target unless they declare a workspace
+# trailmap with the same id.
+#
+# Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
+# framework trailmap via `dependencies: [trailblaze]`. Platforms that only need defaults are
+# declared as empty maps (`{}`) — the explicit signal "this platform exists, fill in
+# everything from defaults."
+id: wikipedia
+dependencies:
+  - trailblaze
+target:
+  display_name: Wikipedia (en)
+  # Target-scoped system prompt that nudges the LLM toward the wikipedia_web_*
+  # scripted tools when a natural-language step matches a known task pattern
+  # ("search Wikipedia for X" → searchAndOpenFirstResult, etc.). Inlined at
+  # trailmap-load time from the file next to this manifest.
+  system_prompt_file: wikipedia-system-prompt.md
+  tools:
+    # Android trailhead.
+    - wikipedia_android_launchApp
+    # --- web scripted tools ------------------------------------------------------
+    # Trailheads: deterministic starting points.
+    - wikipedia_web_openMainPage
+    - wikipedia_web_openArticle
+    # Feature tools.
+    - wikipedia_web_dismissBannerIfPresent
+    - wikipedia_web_searchAndOpenFirstResult
+    - wikipedia_web_openRandomArticle
+    - wikipedia_web_verifyArticleStructure
+    - wikipedia_web_openMainPageSection
+    - wikipedia_web_switchArticleLanguage
+    # Composition example: delegates to sibling scripted tools via ctx.tools.<name>().
+    - wikipedia_web_searchAndVerify
+    # wikipedia_typed_demo.ts and wikipedia_conditional_action_demo.ts are
+    # auto-discovered (every `.ts` with a trailblaze.tool<...>() export joins the
+    # candidate pool) but intentionally NOT listed here — they're type-surface-only
+    # examples for authors to read in their IDE, not agent-dispatchable tools.
+  platforms:
+    android:
+      app_ids:
+        - org.wikipedia
+    ios: {}
+    web: {}
+    compose: {}

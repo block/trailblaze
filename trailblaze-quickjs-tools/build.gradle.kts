@@ -6,7 +6,7 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
   alias(libs.plugins.kotlin.serialization)
   // Bundles author tool sources under
-  // `examples/android-sample-app/trails/config/packs/sampleapp/tools/quickjs-tools/`
+  // `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools/`
   // into runnable JS via esbuild. The produced bundle is consumed by SampleAppToolsDemoTest as
   // the "real esbuild output" proof point — no inline esbuild invocation in the test.
   id("trailblaze.author-tool-bundle")
@@ -24,7 +24,7 @@ trailblazeAuthorToolBundles {
   register("sampleAppTyped") {
     // Path is relative to this module's projectDir — works regardless of repository layout.
     sourceDir.set(
-      layout.projectDirectory.dir("../examples/android-sample-app/trails/config/packs/sampleapp/tools/quickjs-tools"),
+      layout.projectDirectory.dir("../examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools"),
     )
     entryPoint.set("typed.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.

@@ -6,6 +6,7 @@ import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 /**
  * Generates a source-backed guide for the current external-config story used by the desktop/CLI
@@ -18,13 +19,18 @@ class ExternalConfigDocsGenerator(
 
   fun generate() {
     val outputFile = File(generatedDir, "external-config.md")
-    val resolver = ToolNameResolver.fromBuiltInAndCustomTools()
-    val toolSets = ToolSetYamlLoader.discoverAndLoadAll(resolver).values.sortedBy { it.config.id }
+    // Generator emits canonical bundled-classpath docs — pin to classpath-only so workspace
+    // bleed doesn't reach the committed output.
+    val classpathOnly = ClasspathConfigResourceSource
+    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = classpathOnly)
+    val toolSets = ToolSetYamlLoader.discoverAndLoadAll(resolver, resourceSource = classpathOnly)
+      .values
+      .sortedBy { it.config.id }
     val sampleConfigRoot =
       File(opensourceRoot, "examples/android-sample-app/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}")
-    val samplePackFile =
-      File(sampleConfigRoot, "${TrailblazeConfigPaths.PACKS_SUBDIR}/sampleapp/${TrailblazeConfigPaths.PACK_MANIFEST_FILENAME}")
-    val samplePackYaml = samplePackFile.takeIf { it.isFile }?.readText()?.trim()
+    val sampleTrailmapFile =
+      File(sampleConfigRoot, "${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}/sampleapp/${TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME}")
+    val sampleTrailmapYaml = sampleTrailmapFile.takeIf { it.isFile }?.readText()?.trim()
     val sampleScriptFiles = listOf(
       "mcp/tools.ts",
       "mcp-sdk/tools.ts",
@@ -52,7 +58,7 @@ class ExternalConfigDocsGenerator(
           "The intended split is now the live split: ${workspaceAnchorDir()} is the workspace anchor, " +
             "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` is the workspace manifest, and " +
             "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` is the artifact directory that holds " +
-            "concrete pack, target, toolset, and tool files, plus the reserved location for provider YAMLs.",
+            "concrete trailmap, target, toolset, and tool files, plus the reserved location for provider YAMLs.",
         )
         appendLine()
 
@@ -79,7 +85,7 @@ class ExternalConfigDocsGenerator(
         appendLine(
           "The coherent model is to keep ${workspaceAnchorDir()} as the workspace anchor, " +
             "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` as the project entry point, and " +
-            "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` as the directory that holds concrete pack, " +
+            "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` as the directory that holds concrete trailmap, " +
             "target, toolset, and tool files, plus the reserved provider location.",
         )
         appendLine()
@@ -116,15 +122,15 @@ class ExternalConfigDocsGenerator(
         appendLine("└── ${TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR}/")
         appendLine("    ├── config/")
         appendLine("    │   ├── ${TrailblazeProjectConfigLoader.CONFIG_FILENAME}")
-        appendLine("    │   ├── ${TrailblazeConfigPaths.PACKS_SUBDIR}/")
-        appendLine("    │   │   └── your-pack/")
-        appendLine("    │   │       └── ${TrailblazeConfigPaths.PACK_MANIFEST_FILENAME}")
+        appendLine("    │   ├── ${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}/")
+        appendLine("    │   │   └── your-trailmap/")
+        appendLine("    │   │       ├── ${TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME}")
+        appendLine("    │   │       ├── toolsets/")
+        appendLine("    │   │       │   └── your-toolset.yaml")
+        appendLine("    │   │       └── tools/")
+        appendLine("    │   │           └── your-tool.tool.yaml")
         appendLine("    │   ├── ${subdirName(TrailblazeConfigPaths.TARGETS_DIR)}/")
         appendLine("    │   │   └── your-target.yaml")
-        appendLine("    │   ├── ${subdirName(TrailblazeConfigPaths.TOOLSETS_DIR)}/")
-        appendLine("    │   │   └── your-toolset.yaml")
-        appendLine("    │   ├── ${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/")
-        appendLine("    │   │   └── your-tool.yaml")
         appendLine("    │   ├── ${subdirName(TrailblazeConfigPaths.PROVIDERS_DIR)}/")
         appendLine("    │   │   └── your-provider.yaml")
         appendLine("    │   └── mcp/")
@@ -133,46 +139,47 @@ class ExternalConfigDocsGenerator(
         appendLine("```")
         appendLine()
         appendLine(
-          "The binary auto-discovers `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/targets`, " +
-            "`${subdirName(TrailblazeConfigPaths.TOOLSETS_DIR)}/`, and `${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/`. " +
-            "`packs:` entries in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` pull pack manifests through the same loader path. " +
-            "`mcp/` is just a convention for the JS/TS files you reference from pack or target YAML. " +
-            "`providers/` remains the reserved location for provider YAMLs; today provider loading " +
-            "still comes from the `llm:` block in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` " +
-            "plus built-in classpath metadata.",
+          "The binary auto-discovers `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/targets` and " +
+            "every `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/<id>/{tools,toolsets,shortcuts,trailheads}/` " +
+            "tree. `trailmaps:` entries in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` pull " +
+            "trailmap manifests through the same loader path. `mcp/` is just a convention for the " +
+            "JS/TS files you reference from trailmap or target YAML. `providers/` remains the " +
+            "reserved location for provider YAMLs; today provider loading still comes from the " +
+            "`llm:` block in `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` plus built-in " +
+            "classpath metadata.",
         )
         appendLine()
 
-        appendLine("## Pack Discovery Sources")
+        appendLine("## Trailmap Discovery Sources")
         appendLine()
         appendLine(
-          "Pack manifests can reach the runtime via two sources, in precedence order " +
+          "Trailmap manifests can reach the runtime via two sources, in precedence order " +
             "**base → override**:",
         )
         appendLine()
         appendLine(
-          "1. **Classpath-bundled packs** under `trailblaze-config/packs/<id>/pack.yaml`. " +
+          "1. **Classpath-bundled trailmaps** under `trails/config/trailmaps/<id>/trailmap.yaml`. " +
             "Auto-discovered from JAR or compiled-resources entries by the framework — " +
-            "users get framework-shipped packs (`clock`, `wikipedia`, `contacts`) without " +
-            "writing any `packs:` entry.",
+            "users get framework-shipped trailmaps (`clock`, `wikipedia`, `contacts`) without " +
+            "writing any `trailmaps:` entry.",
         )
         appendLine(
-          "2. **Workspace `packs:` entries** in `${TrailblazeProjectConfigLoader.CONFIG_FILENAME}`. " +
-            "Anchor-relative filesystem paths to your own pack manifests.",
+          "2. **Workspace `trailmaps:` entries** in `${TrailblazeProjectConfigLoader.CONFIG_FILENAME}`. " +
+            "Anchor-relative filesystem paths to your own trailmap manifests.",
         )
         appendLine()
-        appendLine("### Pack-id Collision")
+        appendLine("### Trailmap-id Collision")
         appendLine()
         appendLine(
-          "When the same pack `id` appears in both sources, **the workspace pack " +
-            "wholesale shadows the classpath pack**. Workspace authors can locally " +
-            "override framework-shipped packs without having to fork them — useful when " +
+          "When the same trailmap `id` appears in both sources, **the workspace trailmap " +
+            "wholesale shadows the classpath trailmap**. Workspace authors can locally " +
+            "override framework-shipped trailmaps without having to fork them — useful when " +
             "you want a different `target.platforms` block, a tweaked toolset list, or " +
-            "an overridden waypoint set for a bundled pack.",
+            "an overridden waypoint set for a bundled trailmap.",
         )
         appendLine()
         appendLine(
-          "If you re-author a framework pack id locally, **all** of its bundled " +
+          "If you re-author a framework trailmap id locally, **all** of its bundled " +
             "contributions are dropped — the override is wholesale, not per-field. To " +
             "extend rather than replace, wait for `extend:` semantics " +
             "(reserved schema field today, runtime semantics deferred).",
@@ -180,7 +187,7 @@ class ExternalConfigDocsGenerator(
         appendLine()
         appendLine(
           "This precedence is intentional and is documented in code on " +
-            "`TrailblazeResolvedConfig`. If the framework ever ships packs with " +
+            "`TrailblazeResolvedConfig`. If the framework ever ships trailmaps with " +
             "non-overridable invariants, we'd revisit by adding a sealed/locked flag " +
             "on the manifest rather than changing this default.",
         )
@@ -191,32 +198,25 @@ class ExternalConfigDocsGenerator(
         appendLine("| Contribution | Filesystem Overlay | Notes |")
         appendLine("| --- | --- | --- |")
         appendLine(
-          "| `packs/<id>/pack.yaml` via `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` `packs:` | Yes | Pack-first authored unit. Flattens nested `target:` plus referenced toolsets/tools back into the existing runtime model. |",
+          "| `trailmaps/<id>/trailmap.yaml` via `${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` `trailmaps:` | Yes | Trailmap-first authored unit. Flattens nested `target:` plus referenced toolsets/tools back into the existing runtime model. |",
         )
         appendLine(
           "| `${subdirName(TrailblazeConfigPaths.TARGETS_DIR)}/*.yaml` | Yes | Defines target ids, " +
-            "per-platform app ids, tool selection, driver scoping, and target-root `mcp_servers:`. Still supported as the legacy compatibility path. |",
+            "per-platform app ids, tool selection, and driver scoping. Still supported as the legacy compatibility path. |",
         )
         appendLine(
-          "| `${subdirName(TrailblazeConfigPaths.TOOLSETS_DIR)}/*.yaml` | Yes | Groups tools and can " +
+          "| `trailmaps/<id>/toolsets/*.yaml` | Yes | Groups tools and can " +
             "scope them with `platforms:` or `drivers:`. |",
         )
         appendLine(
-          "| `${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/*.yaml` with `class:` | Yes | The class " +
+          "| `trailmaps/<id>/tools/*.tool.yaml` with `class:` | Yes | The class " +
             "must already be on the JVM classpath. |",
         )
         appendLine(
-          "| `${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/*.yaml` with `tools:` | Not yet | " +
-            "YAML-defined tool composition is currently classpath-backed, not loaded as a new " +
-            "filesystem contribution. |",
-        )
-        appendLine(
-          "| `mcp_servers: [{ script: ... }]` at target root | Yes | JS/TS MCP servers are supported " +
-            "today from target YAML. |",
-        )
-        appendLine(
-          "| Toolset-level MCP server declarations | Not yet | `mcp_servers:` is currently a target " +
-            "feature, not a toolset feature. |",
+          "| `trailmaps/<id>/tools/*.tool.yaml` with `tools:` | Yes | " +
+            "YAML-defined tool composition. Workspace-authored entries register through " +
+            "`AppTargetDiscovery` and resolve via the toolset → tool dispatch chain the same " +
+            "way classpath-bundled tools do. |",
         )
         appendLine(
           "| `${TrailblazeProjectConfigLoader.CONFIG_FILENAME}` targets / toolsets / tools | " +
@@ -241,7 +241,6 @@ class ExternalConfigDocsGenerator(
         appendLine("| `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |")
         appendLine("| `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |")
         appendLine("| `platforms.<platform>.min_build_version` | Optional minimum build gate. |")
-        appendLine("| `mcp_servers` | Target-specific JS/TS MCP servers. Current support is `script:` entries. |")
         appendLine()
 
         appendLine("### Platform Section Keys")
@@ -259,12 +258,12 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
 
-        samplePackYaml?.let { yaml ->
-          appendLine("### Reference Pack in This Repo")
+        sampleTrailmapYaml?.let { yaml ->
+          appendLine("### Reference Trailmap in This Repo")
           appendLine()
           appendLine(
-            "The sample app ships a filesystem-backed pack at " +
-              "`examples/android-sample-app/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/packs/sampleapp/pack.yaml`:",
+            "The sample app ships a filesystem-backed trailmap at " +
+              "`examples/android-sample-app/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/trailmaps/sampleapp/trailmap.yaml`:",
           )
           appendLine()
           appendLine("```yaml")
@@ -276,7 +275,7 @@ class ExternalConfigDocsGenerator(
         appendLine("## Authoring Toolsets")
         appendLine()
         appendLine(
-          "Toolsets are declared in `${subdirName(TrailblazeConfigPaths.TOOLSETS_DIR)}/*.yaml`. " +
+          "Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. " +
             "They are pure YAML groupings: `id`, `description`, optional `platforms:` / `drivers:` " +
             "filters, optional `always_enabled`, and a `tools:` list.",
         )
@@ -311,9 +310,9 @@ class ExternalConfigDocsGenerator(
         appendLine()
         appendLine("Tool definitions have three current shapes:")
         appendLine()
-        appendLine("1. **Class-backed YAML** in `${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/*.yaml`.")
-        appendLine("2. **YAML-defined composition** in `${subdirName(TrailblazeConfigPaths.TOOLS_DIR)}/*.yaml` with a `tools:` block.")
-        appendLine("3. **JS/TS MCP tools** referenced from a target's `mcp_servers:` block.")
+        appendLine("1. **Class-backed YAML** in `trailmaps/<id>/tools/*.tool.yaml`.")
+        appendLine("2. **YAML-defined composition** in `trailmaps/<id>/tools/*.tool.yaml` with a `tools:` block.")
+        appendLine("3. **JS/TS scripted tools** referenced from a target's `tools:` block (each entry resolves to a `<trailmap>/tools/<name>.yaml` descriptor).")
         appendLine()
         appendLine("### Class-Backed YAML")
         appendLine()
@@ -350,23 +349,29 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
 
-        appendLine("### JS / TS MCP Tools")
+        appendLine("### JS / TS Scripted Tools")
         appendLine()
         appendLine(
           "For binary users, JS/TS tools are the path that does **not** require rebuilding " +
-            "Trailblaze. Put the script anywhere in your workspace, then reference it from the " +
-            "target YAML with `mcp_servers:`.",
+            "Trailblaze. Put each tool's `<name>.ts` (or `.js`) file plus a sibling `<name>.yaml` " +
+            "descriptor under `<trailmap>/tools/`, and list the tool's `name:` under the trailmap's " +
+            "`target.tools:` block.",
         )
         appendLine()
         appendLine("```yaml")
-        appendLine("mcp_servers:")
-        appendLine("  - script: ./trails/config/mcp/your-tools.ts")
+        appendLine("# trailmaps/<your-trailmap>/trailmap.yaml")
+        appendLine("target:")
+        appendLine("  tools:")
+        appendLine("    - yourTool")
         appendLine("```")
         appendLine()
         appendLine(
-          "Current path resolution for `script:` is against the JVM's current working directory " +
-            "(where you launched `trailblaze`), not the YAML file's directory. Use a repo-relative " +
-            "path that works from your launch directory.",
+          "Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime " +
+            "selection happens per descriptor: set `runtime: subprocess` (or use a `.js` / " +
+            "`.mjs` / `.cjs` entrypoint) to dispatch through a host bun/node subprocess for " +
+            "full Node APIs; the default routes through the in-process QuickJS runtime. " +
+            "`requiresHost: true` is a separate, on-device visibility gate — not a runtime " +
+            "selector.",
         )
         appendLine()
 
@@ -378,30 +383,25 @@ class ExternalConfigDocsGenerator(
             appendLine("- `$relativePath`")
           }
           appendLine()
-          appendLine(
-            "The sample app intentionally carries both the raw MCP SDK authoring surface and the " +
-              "`@trailblaze/scripting` SDK authoring surface side-by-side.",
-          )
-          appendLine()
         }
 
-        appendLine("## Distribution Pattern for Pre-Vetted Target Packs")
+        appendLine("## Distribution Pattern for Pre-Vetted Target Trailmaps")
         appendLine()
         appendLine(
           "The current loader already supports a good packaging model for app-specific bundles " +
-            "such as a Gmail web pack or a pre-vetted enterprise app pack:",
+            "such as a Gmail web trailmap or a pre-vetted enterprise app trailmap:",
         )
         appendLine()
         appendLine(
           "1. Ship a self-contained `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` directory with one or " +
-            "more targets, app-specific toolsets, and JS/TS MCP tools.",
+            "more targets, app-specific toolsets, and JS/TS scripted tools.",
         )
         appendLine(
           "2. Point the binary at that directory with `TRAILBLAZE_CONFIG_DIR=/path/to/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}` " +
             "or place it at `<workspace>/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` under the ${workspaceAnchorDir()} anchor.",
         )
         appendLine(
-          "3. Keep target-specific capabilities inside the pack's nested target block so the agent only sees the " +
+          "3. Keep target-specific capabilities inside the trailmap's nested target block so the agent only sees the " +
             "extra tools when that target is active.",
         )
         appendLine(
@@ -410,10 +410,9 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
         appendLine(
-          "What is still missing for a full remote-download story is install/update UX, " +
-            "toolset-level MCP sources, and filesystem discovery for YAML-defined `tools:` " +
-            "compositions. The directory shape above is still the right place to put those " +
-            "contributions as the wiring lands.",
+          "What is still missing for a full remote-download story is install/update UX and " +
+            "filesystem discovery for YAML-defined `tools:` compositions. The directory shape " +
+            "above is still the right place to put those contributions as the wiring lands.",
         )
         appendLine()
 
@@ -425,10 +424,9 @@ class ExternalConfigDocsGenerator(
             "`xyz.block.trailblaze.config.AppTargetYamlConfig`, " +
             "`xyz.block.trailblaze.config.ToolSetYamlConfig`, " +
             "`xyz.block.trailblaze.config.ToolYamlConfig`, " +
-            "`xyz.block.trailblaze.config.McpServerConfig`, " +
             "`xyz.block.trailblaze.config.project.TrailblazeProjectConfig`, " +
             "`xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader`, " +
-            "`examples/android-sample-app/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/packs/sampleapp/pack.yaml`",
+            "`examples/android-sample-app/${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/trailmaps/sampleapp/trailmap.yaml`",
         )
         appendLine()
         appendLine("**Regenerate**: `./gradlew :docs:generator:run`")

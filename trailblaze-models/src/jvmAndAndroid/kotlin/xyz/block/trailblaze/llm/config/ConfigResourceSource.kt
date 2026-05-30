@@ -17,10 +17,10 @@ fun interface ConfigResourceSource {
    * Recursively discovers all files matching [suffix] anywhere under [directoryPath] and returns
    * their contents as a map of `relativePath -> content`. The relative path is rooted at
    * [directoryPath] using `/` separators and **preserves [suffix]** so callers can derive both
-   * the leaf name and any intermediate directories (e.g. `<pack>/tools/foo.tool.yaml`).
+   * the leaf name and any intermediate directories (e.g. `<trailmap>/tools/foo.tool.yaml`).
    *
    * Mirrors [ClasspathResourceDiscovery.discoverAndLoadRecursive] semantics so the two sources
-   * stay interchangeable for hierarchical layouts (pack-bundled tools, pack manifests).
+   * stay interchangeable for hierarchical layouts (trailmap-bundled tools, trailmap manifests).
    *
    * Default implementation returns the flat (non-recursive) result so existing implementations
    * keep compiling — concrete sources that can recurse override this.

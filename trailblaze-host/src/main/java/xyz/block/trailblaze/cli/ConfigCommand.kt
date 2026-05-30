@@ -71,14 +71,14 @@ class ConfigCommand : Callable<Int> {
     if (configKey == null) {
       Console.error("Unknown config key: $key")
       Console.error("Valid keys: ${CONFIG_KEYS.keys.joinToString(", ")}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
 
     if (value == null) {
       // Key only: show that key's value
       val currentConfig = CliConfigHelper.getOrCreateConfig()
       Console.log(configKey.get(currentConfig))
-      return CommandLine.ExitCode.OK
+      return TrailblazeExitCode.SUCCESS.code
     }
 
     // Key + value: set and save
@@ -87,20 +87,27 @@ class ConfigCommand : Callable<Int> {
     if (updatedConfig == null) {
       Console.error("Invalid value for $key: $value")
       Console.error("Valid values: ${configKey.validValues}")
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     CliConfigHelper.writeConfig(updatedConfig)
     Console.log("Set $key: ${configKey.get(updatedConfig)}")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun showAllConfig(): Int {
     val currentConfig = CliConfigHelper.getOrCreateConfig()
 
-    // Fetch provider data (triggers full init). `runQuiet` ensures the daemon's quiet-mode
-    // flag is restored even if `getConfigProvider()` throws — without it, a config-provider
-    // failure would silence every subsequent `Console.log` for the lifetime of the daemon.
-    val config = Console.runQuiet { getConfigProvider() }
+    // Fetch provider + lazy-resolved data (token statuses, app targets) inside one runQuiet
+    // block. Both `availableAppTargets` and `getAllLlmTokenStatuses()` trigger `by lazy`
+    // initialization that emits `[BlockAppTargets] …` / `[AppTargetDiscovery] …` discovery
+    // lines via `Console.log`; running them inside runQuiet keeps the diagnostic chatter
+    // off user-facing stdout. `Console.info` and `Console.error` (used for every human-
+    // readable line below) are unaffected by quiet mode and stay visible — discovery-time
+    // warnings emitted via `Console.error` from `AppTargetDiscovery` also still surface.
+    val (tokenStatuses, targets) = Console.runQuiet {
+      val cfg = getConfigProvider()
+      cfg.getAllLlmTokenStatuses() to cfg.availableAppTargets.sortedBy { it.displayName }
+    }
 
     // Show which settings file is in effect — `getSettingsFile()` prefers a
     // git-root `.trailblaze/` over `~/.trailblaze/`, which surprises users when
@@ -116,7 +123,6 @@ class ConfigCommand : Callable<Int> {
     if (currentProvider == LLM_NONE) {
       Console.info("  * [-] none — no LLM configured")
     }
-    val tokenStatuses = config.getAllLlmTokenStatuses()
     if (tokenStatuses.isNotEmpty()) {
       val sorted = tokenStatuses.entries.sortedBy { it.key.display }
       val selectedFirst = sorted.filter { it.key.id == currentProvider } +
@@ -143,7 +149,6 @@ class ConfigCommand : Callable<Int> {
     val currentTargetId = currentConfig.selectedTargetAppId
     Console.info("")
     Console.info("Targets:")
-    val targets = config.availableAppTargets.sortedBy { it.displayName }
     if (targets.isNotEmpty()) {
       val selectedFirst = targets.filter { it.id == currentTargetId } +
         targets.filter { it.id != currentTargetId }
@@ -205,8 +210,8 @@ class ConfigCommand : Callable<Int> {
     // those background services *are* the daemon — killing them takes the whole
     // daemon down. Return normally instead and let the IPC fast path return
     // captured stdout to the shell shim.
-    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
-    exitProcess(CommandLine.ExitCode.OK)
+    if (DaemonSettingsBridge.settingsRepo != null) return TrailblazeExitCode.SUCCESS.code
+    exitProcess(TrailblazeExitCode.SUCCESS.code)
   }
 
   /**
@@ -237,8 +242,14 @@ class ConfigCommand : Callable<Int> {
   private fun showLlmConfig(): Int {
     val currentConfig = CliConfigHelper.getOrCreateConfig()
 
-    // Fetch provider data (triggers full init). See `showAllConfig` for the runQuiet rationale.
-    val config = Console.runQuiet { getConfigProvider() }
+    // Fetch provider + lazy-resolved data inside one runQuiet block so the discovery-time
+    // `Console.log` lines emitted by lazy initializers (e.g. `[BlockAppTargets] …`) don't
+    // leak to user-facing stdout. See `showAllConfig` for the runQuiet rationale.
+    val (tokenStatuses, modelLists) = Console.runQuiet {
+      val cfg = getConfigProvider()
+      cfg.getAllLlmTokenStatuses() to cfg.getAllSupportedLlmModelLists()
+    }
+    val modelsByProvider = modelLists.associateBy { it.provider.id }
 
     val currentProvider = currentConfig.llmProvider
 
@@ -249,11 +260,6 @@ class ConfigCommand : Callable<Int> {
     } else {
       Console.info("Current: ${currentConfig.llmProvider}/${currentConfig.llmModel}")
     }
-
-    // Providers with models listed underneath, ready to copy-paste
-    val tokenStatuses = config.getAllLlmTokenStatuses()
-    val modelLists = config.getAllSupportedLlmModelLists()
-    val modelsByProvider = modelLists.associateBy { it.provider.id }
 
     // Available providers first (with models), then unconfigured providers (no models)
     val available = tokenStatuses.entries
@@ -304,8 +310,8 @@ class ConfigCommand : Callable<Int> {
     // those background services *are* the daemon — killing them takes the whole
     // daemon down. Return normally instead and let the IPC fast path return
     // captured stdout to the shell shim.
-    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
-    exitProcess(CommandLine.ExitCode.OK)
+    if (DaemonSettingsBridge.settingsRepo != null) return TrailblazeExitCode.SUCCESS.code
+    exitProcess(TrailblazeExitCode.SUCCESS.code)
   }
 }
 
@@ -335,7 +341,7 @@ class ConfigShowCommand : Callable<Int> {
  *   trailblaze config target myapp       - Set target to "myapp"
  *   trailblaze config target default     - Use the default (no-app) target
  *
- * The `--target X --device Y` flag on action commands (`tool`, `blaze`, etc.)
+ * The `--target X --device Y` flag on action commands (`tool`, `step`, etc.)
  * is **session-scoped** — it doesn't write to this persistent config, it sets
  * the target on the daemon's per-device session only. Use this subcommand to
  * change the persistent fallback that takes effect when no per-device session
@@ -363,13 +369,13 @@ class ConfigTargetCommand : Callable<Int> {
 
   private fun applyTarget(): Int {
     var currentConfig = CliConfigHelper.getOrCreateConfig()
-    val normalizedTarget = targetId!!.lowercase()
-    if (!TrailblazeHostAppTarget.isValidId(normalizedTarget)) {
+    val rawTarget = targetId!!
+    if (!TrailblazeHostAppTarget.isValidId(rawTarget)) {
       Console.error(
-        "Error: target must be lowercase alphanumeric, hyphens, or underscores only (got '$targetId').\n" +
+        "Error: target must be alphanumeric, hyphens, or underscores only (got '$rawTarget').\n" +
           "Run 'trailblaze config target' to see available targets."
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
     // Format-valid but unknown target ids would otherwise persist silently and
     // resurface later as a confusing "Target app changed (X → <unknown>)" line
@@ -378,24 +384,32 @@ class ConfigTargetCommand : Callable<Int> {
     val availableIds = Console.runQuiet {
       parent.getConfigProvider().availableAppTargets.map { it.id }.toSet()
     }
-    Console.log("config target validation: resolved ${availableIds.size} target ids")
-    if (normalizedTarget !in availableIds) {
+    // Case-insensitive resolve so `--target playwrightsample` and `--target playwrightSample`
+    // both land on the canonical id stored in the registry. The 2026-05-27 trailmap-scoped
+    // tool naming work widened ids to accept lowerCamelCase, so the canonical case is no
+    // longer guaranteed to be all-lowercase.
+    val canonicalId = availableIds.firstOrNull { it.equals(rawTarget, ignoreCase = true) }
+    if (canonicalId == null) {
       Console.error(
-        "Error: '$normalizedTarget' is not a known target app.\n" +
+        "Error: '$rawTarget' is not a known target app.\n" +
           "Available: ${availableIds.sorted().joinToString(", ")}"
       )
-      return CommandLine.ExitCode.USAGE
+      return TrailblazeExitCode.MISUSE.code
     }
-    currentConfig = currentConfig.copy(selectedTargetAppId = normalizedTarget)
+    currentConfig = currentConfig.copy(selectedTargetAppId = canonicalId)
     CliConfigHelper.writeConfig(currentConfig)
-    Console.log("Target set: $normalizedTarget")
-    return CommandLine.ExitCode.OK
+    Console.log("Target set: $canonicalId")
+    return TrailblazeExitCode.SUCCESS.code
   }
 
   private fun listTargets(): Int {
-    val config = Console.runQuiet { parent.getConfigProvider() }
+    // Trigger the `availableAppTargets` lazy inside runQuiet so the
+    // `[BlockAppTargets] Discovered N toolsets …` / `… Registered N toolset(s) …` lines
+    // emitted via `Console.log` during discovery don't leak to user-facing stdout.
+    val targets = Console.runQuiet {
+      parent.getConfigProvider().availableAppTargets.sortedBy { it.displayName }
+    }
     val currentTargetId = CliConfigHelper.readConfig()?.selectedTargetAppId
-    val targets = config.availableAppTargets.sortedBy { it.displayName }
 
     Console.info("")
     Console.info("Available Targets:")
@@ -420,8 +434,8 @@ class ConfigTargetCommand : Callable<Int> {
     // those background services *are* the daemon — killing them takes the whole
     // daemon down. Return normally instead and let the IPC fast path return
     // captured stdout to the shell shim.
-    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
-    exitProcess(CommandLine.ExitCode.OK)
+    if (DaemonSettingsBridge.settingsRepo != null) return TrailblazeExitCode.SUCCESS.code
+    exitProcess(TrailblazeExitCode.SUCCESS.code)
   }
 }
 
@@ -439,8 +453,11 @@ class ConfigModelsCommand : Callable<Int> {
   private lateinit var parent: ConfigCommand
 
   override fun call(): Int {
-    val config = Console.runQuiet { parent.getConfigProvider() }
-    val modelLists = config.getAllSupportedLlmModelLists()
+    // Resolve provider + model lists inside runQuiet — `getAllSupportedLlmModelLists()` can
+    // touch lazy initializers that emit `[BlockAppTargets] …` discovery lines.
+    val modelLists = Console.runQuiet {
+      parent.getConfigProvider().getAllSupportedLlmModelLists()
+    }
 
     Console.info("")
     Console.info("Available LLM Models:")
@@ -464,8 +481,8 @@ class ConfigModelsCommand : Callable<Int> {
     // those background services *are* the daemon — killing them takes the whole
     // daemon down. Return normally instead and let the IPC fast path return
     // captured stdout to the shell shim.
-    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
-    exitProcess(CommandLine.ExitCode.OK)
+    if (DaemonSettingsBridge.settingsRepo != null) return TrailblazeExitCode.SUCCESS.code
+    exitProcess(TrailblazeExitCode.SUCCESS.code)
   }
 }
 
@@ -486,7 +503,7 @@ class ConfigResetCommand : Callable<Int> {
     val defaults = CliConfigHelper.defaultConfig()
     CliConfigHelper.writeConfig(defaults)
     Console.log("Config reset to defaults.")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }
 
@@ -496,6 +513,6 @@ class ConfigDriversCommand : Callable<Int> {
   override fun call(): Int {
     Console.info("Driver configuration is available in the Trailblaze desktop app.")
     Console.log("")
-    return CommandLine.ExitCode.OK
+    return TrailblazeExitCode.SUCCESS.code
   }
 }

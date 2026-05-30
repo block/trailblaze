@@ -47,11 +47,11 @@ import org.junit.Assume.assumeTrue
  * determinism (which is what makes byte equality meaningful).
  *
  * **esbuild prerequisite.** The TS SDK's `node_modules/.bin/esbuild` must exist in the
- * checkout. CI's `pr_static_checks.sh` runs `bun install` (with npm fallback) before
+ * checkout. CI's `pr_static_checks.sh` runs `bun install --frozen-lockfile` before
  * invoking the verify task; local developers running `./gradlew :build-logic:test` need to
- * have run the same install. Tests skip via [assumeTrue] when esbuild is absent — same
- * "skip rather than falsely pass" pattern `TrailblazeBundlePluginFunctionalTest` uses for
- * symlink support.
+ * have run the same install (`source bin/activate-hermit` puts bun on PATH). Tests skip
+ * via [assumeTrue] when esbuild is absent — same "skip rather than falsely pass" pattern
+ * `TrailblazeBundlePluginFunctionalTest` uses for symlink support.
  */
 class TrailblazeSdkBundlePluginFunctionalTest {
 

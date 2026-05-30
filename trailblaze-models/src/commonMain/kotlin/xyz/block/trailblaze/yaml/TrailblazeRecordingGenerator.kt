@@ -98,8 +98,9 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
             .ifEmpty { toolLogsInWindow }
-          val toolWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
+          val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
+          val toolWrappers = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
 
           // Zero recordable tools in this objective window → emit no recording at all (null).
           // At replay time the step will fall through to AI rather than ghost-passing. Empty
@@ -145,21 +146,36 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           // the objective window in the sorted log list.
           if (currentLog.isRecordable) {
             val wrapper = wrapTrailblazeTool(currentLog.trailblazeTool, currentLog.toolName)
+            val candidateFingerprint = if (currentLog.isVerification) {
+              fingerprintForDedup(wrapper, trailblazeYaml)
+            } else {
+              null
+            }
             val lastItem = items.lastOrNull()
             if (lastItem is TrailYamlItem.PromptsTrailItem && lastItem.promptSteps.isNotEmpty()) {
               val lastStep = lastItem.promptSteps.last()
               val existingTools = lastStep.recording?.tools ?: emptyList()
-              val updatedRecording = ToolRecording(tools = existingTools + wrapper)
-              val updatedStep = when (lastStep) {
-                is DirectionStep -> lastStep.copy(recording = updatedRecording)
-                is VerificationStep -> lastStep.copy(recording = updatedRecording)
+              val isRepeat = candidateFingerprint != null && existingTools.any { existing ->
+                fingerprintForDedup(existing, trailblazeYaml) == candidateFingerprint
               }
-              val updatedSteps = lastItem.promptSteps.dropLast(1) + updatedStep
-              items[items.lastIndex] = lastItem.copy(promptSteps = updatedSteps)
+              if (!isRepeat) {
+                val updatedRecording = ToolRecording(tools = existingTools + wrapper)
+                val updatedStep = when (lastStep) {
+                  is DirectionStep -> lastStep.copy(recording = updatedRecording)
+                  is VerificationStep -> lastStep.copy(recording = updatedRecording)
+                }
+                val updatedSteps = lastItem.promptSteps.dropLast(1) + updatedStep
+                items[items.lastIndex] = lastItem.copy(promptSteps = updatedSteps)
+              }
             } else {
               // No preceding prompt step — standalone tool (rare, but preserve it)
               if (lastItem is TrailYamlItem.ToolTrailItem) {
-                items[items.lastIndex] = lastItem.copy(tools = lastItem.tools + wrapper)
+                val isRepeat = candidateFingerprint != null && lastItem.tools.any { existing ->
+                  fingerprintForDedup(existing, trailblazeYaml) == candidateFingerprint
+                }
+                if (!isRepeat) {
+                  items[items.lastIndex] = lastItem.copy(tools = lastItem.tools + wrapper)
+                }
               } else {
                 items.add(TrailYamlItem.ToolTrailItem(listOf(wrapper)))
               }
@@ -188,4 +204,47 @@ fun List<TrailblazeLog>.generateRecordedYaml(
     Console.error("Failed to generate recording: ${e.stackTraceToString()}")
     ""
   }
+}
+
+/**
+ * Collapses repeated verification calls (e.g. the LLM re-asserting visibility of the same
+ * selector 4x with different `reason:` strings) within a single objective window. Only tools
+ * whose log carries `isVerification = true` are considered — verifications are read-only and
+ * idempotent, so re-running the same one is always redundant. Action tools (taps, swipes,
+ * waits, text entry) pass through unchanged: their repeats are usually deliberate (e.g.
+ * tapping the same digit key while entering "500" needs both "0" taps).
+ */
+private fun dedupeVerificationRepeats(
+  wrappers: List<TrailblazeToolYamlWrapper>,
+  logs: List<TrailblazeLog.TrailblazeToolLog>,
+  trailblazeYaml: TrailblazeYaml,
+): List<TrailblazeToolYamlWrapper> {
+  val seen = mutableSetOf<String>()
+  return wrappers.zip(logs).mapNotNull { (wrapper, log) ->
+    if (!log.isVerification) {
+      wrapper
+    } else {
+      val fingerprint = fingerprintForDedup(wrapper, trailblazeYaml)
+      if (seen.add(fingerprint)) wrapper else null
+    }
+  }
+}
+
+/**
+ * Canonical fingerprint for a wrapper's identity-minus-`reason`. The free-form `reason:` LLM
+ * annotation has zero replay significance — two calls with identical selectors but different
+ * reasons describe the same physical assertion and hash the same here. Falls back to the bare
+ * tool name on encode failure so a serializer hiccup never causes a tool to be dropped.
+ */
+private fun fingerprintForDedup(
+  wrapper: TrailblazeToolYamlWrapper,
+  trailblazeYaml: TrailblazeYaml,
+): String {
+  val rawYaml = try {
+    trailblazeYaml.encodeToString(listOf(TrailYamlItem.ToolTrailItem(listOf(wrapper))))
+  } catch (_: Exception) {
+    wrapper.name
+  }
+  return wrapper.name + "||" +
+    rawYaml.lines().filterNot { it.trimStart().startsWith("reason:") }.joinToString("\n")
 }

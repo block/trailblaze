@@ -233,7 +233,7 @@ class DirectMcpToolExecutorTest {
   @Test
   fun `executeToolByName handles pressBack from NAVIGATION category`() =
     runTest {
-      // pressBack is a YAML-defined tool (`trailblaze-config/tools/pressBack.yaml` via
+      // pressBack is a YAML-defined tool (`trails/config/tools/pressBack.yaml` via
       // `tools:` composition) that ships as part of the `navigation` catalog entry. This
       // is the load-bearing regression guard for YAML-defined tool execution through
       // DirectMcpToolExecutor: the executor must advertise `pressBack` in the NAVIGATION

@@ -28,8 +28,16 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return AdbCommandUtil.execShellCommand(command)
   }
 
-  actual fun executeShellCommandArgs(vararg args: String): String =
-    AdbCommandUtil.execShellCommand(args.joinToString(" ") { it.shellEscape() })
+  actual fun executeShellCommandArgs(vararg args: String): String {
+    require(args.none { it.any(Char::isWhitespace) }) {
+      "executeShellCommandArgs: arguments must not contain whitespace on Android — " +
+        "UiAutomationConnection.executeShellCommand routes through Runtime.exec(String), " +
+        "which splits on whitespace and execs tokens directly without a shell interpreter. " +
+        "Whitespace-containing args would be silently re-split into extra tokens. " +
+        "Offending args: ${args.filter { it.any(Char::isWhitespace) }}"
+    }
+    return AdbCommandUtil.execShellCommand(args.joinToString(" "))
+  }
 
   actual fun executeShellCommandAs(appId: String, command: String): String {
     // Delegates to executeShellCommand → UiDevice.executeShellCommand → UiAutomation, which

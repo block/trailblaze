@@ -1,8 +1,8 @@
-# iOS Contacts Example — a canonical Trailblaze target pack for mobile
+# iOS Contacts Example — a canonical Trailblaze target trailmap for mobile
 
 A worked end-to-end example of using Trailblaze to test a real mobile
 application. Drives **Apple's built-in iOS Contacts app**
-(`com.apple.MobileAddressBook`) through the host driver. The pack ships:
+(`com.apple.MobileAddressBook`) through the host driver. The trailmap ships:
 
 - **9 scripted tools** (in TypeScript) covering app launch, search, contact
   open/create/delete, multi-step edit-mode forms, contact-shape assertions,
@@ -13,10 +13,10 @@ application. Drives **Apple's built-in iOS Contacts app**
 - **A target-scoped system prompt** that teaches the LLM when to reach for
   the scripted tools instead of inline-expanding to raw `tap` /
   `inputText` primitives.
-- **CLI-first runtime** — every trail runs via `./trailblaze trail …`, the
+- **CLI-first runtime** — every trail runs via `./trailblaze run …`, the
   same path an end user takes. There is no XCUITest / JUnit harness.
 
-If you're building a target pack for your own mobile app, this is the
+If you're building a target trailmap for your own mobile app, this is the
 reference shape to copy.
 
 ## Why use Trailblaze for iOS instead of raw XCUITest?
@@ -41,17 +41,16 @@ for the 5-10 workflows you run every build.
 
 ## Quick start (first green test in 60 seconds)
 
-> Paths below are relative to the OSS repo root (this README's canonical
-> home). If you're reading this in an internal mirror where the OSS tree
-> is nested under a sub-directory, prefix every path with that directory
-> name.
+> Paths below are relative to the repo root (this README's canonical home).
+> If your checkout nests the tree under a sub-directory, prefix every path
+> with that directory name.
 
 Prerequisites: an iOS Simulator running iOS 17+ with the system Contacts
 app available. Boot one via Xcode or `xcrun simctl boot "iPhone 15"` and
 make sure `xcrun simctl list devices booted` shows it before continuing.
 
 ```bash
-# 1. From the repo root, point the daemon at this pack's config dir.
+# 1. From the repo root, point the daemon at this trailmap's config dir.
 #    This is what registers the contacts_ios_* tools when the daemon boots.
 export TRAILBLAZE_CONFIG_DIR=$PWD/examples/ios-contacts/trails/config
 
@@ -64,7 +63,7 @@ export TRAILBLAZE_CONFIG_DIR=$PWD/examples/ios-contacts/trails/config
 ./trailblaze toolbox --device ios --target contacts --search contacts_
 
 # 4. Run a single trail end-to-end.
-./trailblaze trail trails/ios-contacts/test-app-launches \
+./trailblaze run trails/ios-contacts/test-app-launches \
   --device ios/ios-host
 ```
 
@@ -77,7 +76,7 @@ The first run takes ~10s (simulator app launch + 1-2 LLM rounds). Expect
 ## Anatomy of a scripted tool
 
 Every scripted tool is a `(yaml, ts)` pair under
-`trails/config/packs/contacts/tools/`. Here's `contacts_ios_openContact`
+`trails/config/trailmaps/contacts/tools/`. Here's `contacts_ios_openContact`
 broken into the parts that matter.
 
 ### The YAML manifest tells the LLM what the tool does
@@ -163,10 +162,10 @@ Three files, then restart the daemon. Concrete steps:
 
 ```bash
 TOOL=contacts_ios_myNewTool
-PACK=examples/ios-contacts/trails/config/packs/contacts
+TRAILMAP=examples/ios-contacts/trails/config/trailmaps/contacts
 
 # 1. Manifest — what the LLM reads.
-cat > $PACK/tools/${TOOL}.yaml <<'YAML'
+cat > $TRAILMAP/tools/${TOOL}.yaml <<'YAML'
 script: ./contacts_ios_myNewTool.ts
 name: contacts_ios_myNewTool
 description: |
@@ -183,7 +182,7 @@ inputSchema:
 YAML
 
 # 2. Body — what it actually does.
-cat > $PACK/tools/${TOOL}.ts <<'TS'
+cat > $TRAILMAP/tools/${TOOL}.ts <<'TS'
 import type { TrailblazeClient, TrailblazeContext } from "@trailblaze/scripting";
 import { requireSessionContext } from "./contacts_ios_shared";
 
@@ -200,8 +199,8 @@ export async function contacts_ios_myNewTool(
 }
 TS
 
-# 3. Register in pack.yaml — list it under target.tools by bare name.
-$EDITOR $PACK/pack.yaml
+# 3. Register in trailmap.yaml — list it under target.tools by bare name.
+$EDITOR $TRAILMAP/trailmap.yaml
 
 # 4. Restart the daemon so the new tool is discovered + bindings regenerate.
 ./trailblaze app --stop && ./trailblaze app --headless & disown
@@ -213,7 +212,7 @@ $EDITOR $PACK/pack.yaml
 
 That's the whole loop. If autocomplete doesn't pick up the new tool, run
 `./trailblaze check --workspace examples/ios-contacts`
-manually — that's the per-pack `client.d.ts` regeneration step the daemon
+manually — that's the per-trailmap `trailblaze-client.d.ts` regeneration step the daemon
 fires on restart.
 
 ### Tool-description discipline (load-bearing)
@@ -269,13 +268,13 @@ Every trail's `config:` block carries a `tags:` list. `--tags` filters by them.
 
 ```bash
 # Smoke pass (fast, deterministic, must-pass on every build):
-./trailblaze trail trails/ios-contacts --device ios --tags smoke
+./trailblaze run trails/ios-contacts --device ios --tags smoke
 
 # Anything in the search or crud suites:
-./trailblaze trail trails/ios-contacts --device ios --tags search,crud
+./trailblaze run trails/ios-contacts --device ios --tags search,crud
 
 # Long-tail nightly:
-./trailblaze trail trails/ios-contacts --device ios --tags slow
+./trailblaze run trails/ios-contacts --device ios --tags slow
 ```
 
 Conventions used in this example:
@@ -332,7 +331,7 @@ when you're authoring new tools or trails for your own target:
 
 ## IDE autocomplete on `args` / `ctx` / `client`
 
-Pack tools are TypeScript only — the bundler rejects `.js` / `.mjs` / `.cjs`
+Trailmap tools are TypeScript only — the bundler rejects `.js` / `.mjs` / `.cjs`
 sources so authors can't fall back to a subprocess runtime that would lose
 the typesafe contract.
 
@@ -343,18 +342,18 @@ the typesafe contract.
 That writes two artifacts (both gitignored as derived output):
 
 - **Workspace SDK** at `trails/.trailblaze/sdk/` — the `@trailblaze/scripting`
-  source the per-pack `tsconfig.json` resolves through path mapping. Ships
+  source the per-trailmap `tsconfig.json` resolves through path mapping. Ships
   curated runtime globals (`URL`, `fetch`, `AbortController`, `console`).
-- **Per-pack `client.d.ts`** at `<pack>/tools/.trailblaze/client.d.ts` —
+- **Per-trailmap `trailblaze-client.d.ts`** at `<trailmap>/tools/trailblaze-client.d.ts` —
   exhaustive bindings for every tool the runtime registry knows about
-  (framework built-ins + pack-local scripted tools + Kotlin tools surfaced
-  through `tool_sets:` declared in `pack.yaml`).
+  (framework built-ins + trailmap-local scripted tools + Kotlin tools surfaced
+  through `tool_sets:` declared in `trailmap.yaml`).
 
 Open any `.ts` file in `tools/` and hover `ctx` / `client` / `args` to
 confirm the types resolve. Mistype a tool name or pass the wrong arg shape
 and `tsc` flags it at compile time.
 
-To run the bundled `tsc` against your pack:
+To run the bundled `tsc` against your trailmap:
 
 ```bash
 ./trailblaze check contacts
@@ -371,6 +370,37 @@ ships. Sub-millisecond dispatch; every tool call goes through
 
 ---
 
+## Testing your tools
+
+Per-trailmap unit tests are part of `./trailblaze check` — its third phase runs `bun test`
+across every trailmap's `.test.ts` files after materialize + tsc. From inside this example
+workspace (`examples/ios-contacts/`), run `./trailblaze check contacts` to validate the
+trailmap end-to-end; the test step shells out to `bun test` against the mock client + mock
+context from `@trailblaze/scripting/testing`, so tests run without a daemon or a
+simulator. Requires `bun` on PATH (install from https://bun.sh). All paths below are
+relative to this README's directory. See the existing samples for patterns:
+
+- `trails/config/trailmaps/contacts/tools/contacts_ios_searchContacts.test.ts` — single-tool
+  sequence; asserts the order of `client.tools.*` dispatches + the args of each call,
+  exercises the "No Results" pre-flight conditional branch with the default mock, and
+  demonstrates `client.stub(name, { errorMessage })` as a fault-injection lever for a
+  chosen dispatch.
+- `trails/config/trailmaps/contacts/tools/contacts_ios_searchAndVerify.test.ts` — composition
+  pattern; asserts the tool delegates to `contacts_ios_searchContacts` then
+  `contacts_ios_verifyContactStructure` with the right args, without unrolling the
+  sub-tools themselves.
+- `trails/config/trailmaps/contacts/tools/contacts_ios_verifyContactStructure.test.ts` —
+  exercises the per-field probe loop on the happy path and documents `client.stub`'s
+  tool-wide fault-injection scope (the stubbed assertion fires on the up-front name
+  probe, short-circuiting the `requireFields` loop — sequence-aware stubbing would be
+  needed to drive the per-field branch).
+
+These unit tests cover tool logic without a simulator; pair them with the
+natural-language trails in `trails/ios-contacts/` for real end-to-end coverage. Both
+feed into the same CI pipeline.
+
+---
+
 ## Troubleshooting
 
 **Daemon won't start** — check `./trailblaze app --status`, then look at
@@ -383,15 +413,15 @@ stale entries from previous crashes are safe to delete.
 1. Confirm the file is named exactly `<toolName>.ts` + `<toolName>.yaml`
    under `tools/`. The bundler discovers by filename, not by manifest.
 2. Confirm the bare tool name is listed under `target.tools:` in
-   `pack.yaml`. Names omitted from that list are loaded by the bundler but
+   `trailmap.yaml`. Names omitted from that list are loaded by the bundler but
    not advertised to the agent for this target.
 3. Restart the daemon after editing anything under
-   `trails/config/packs/<pack>/`. Packs are discovered at boot.
+   `trails/config/trailmaps/<trailmap>/`. Trailmaps are discovered at boot.
 
 **IDE shows red squiggles on `client.tools.X(args)`** — run
-`./trailblaze check --workspace <path-to-your-config>` to regenerate the per-pack
-`client.d.ts`. If that fails, check `./trailblaze app --status` — the
-daemon writes the SDK + `client.d.ts` on every restart.
+`./trailblaze check --workspace <path-to-your-config>` to regenerate the per-trailmap
+`trailblaze-client.d.ts`. If that fails, check `./trailblaze app --status` — the
+daemon writes the SDK + `trailblaze-client.d.ts` on every restart.
 
 **"Daemon unreachable after 30 consecutive poll failures"** — known CLI
 flake on long agent rounds. See **Known issues** below.
@@ -413,7 +443,7 @@ canonical shape will improve when these land.
   interaction primitives). Until fixed, only trails that exercise pure
   built-in tools get useful recordings. That's why all trails here stay
   NL-only.
-- **CLI poll-timeout on long LLM rounds.** `./trailblaze trail …` can
+- **CLI poll-timeout on long LLM rounds.** `./trailblaze run …` can
   return `FAILED: Daemon unreachable after 30 consecutive poll failures`
   while the daemon is still healthy and the session is making progress.
   The session artifacts under `logs/<session>/` are still written; you
@@ -428,8 +458,8 @@ examples/ios-contacts/
 ├── build.gradle.kts                          ← only runs `trailblaze.bundle`
 └── trails/config/
     ├── trailblaze.yaml                       ← workspace anchor
-    └── packs/contacts/
-        ├── pack.yaml                         ← target manifest
+    └── trailmaps/contacts/
+        ├── trailmap.yaml                         ← target manifest
         ├── contacts-ios-system-prompt.md     ← LLM tool-selection guidance
         └── tools/                            ← scripted tool sources
             ├── tsconfig.json                 ← extends workspace base
@@ -452,5 +482,5 @@ trails/ios-contacts/
 
 CI runs the same commands a developer does — there's no separate harness.
 The benchmark pipeline scripts set up the daemon, fan out via
-`./trailblaze trail`, and summarize results. Look at those if you're
-wiring a similar pack into your own CI.
+`./trailblaze run`, and summarize results. Look at those if you're
+wiring a similar trailmap into your own CI.

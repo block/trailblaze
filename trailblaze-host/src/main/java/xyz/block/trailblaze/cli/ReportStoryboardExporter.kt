@@ -391,7 +391,7 @@ object ReportStoryboardExporter {
               "Storyboard WebP still exceeds ${maxBytes}B at the " +
                 "${MaxArtifactSize.READABILITY_FLOOR_PX}px readability floor " +
                 "(current size: ${outputWebp.length()}B). The storyboard's size scales with " +
-                "step count — try `--storyboard-columns 8` to pack more cells per row (smaller " +
+                "step count — try `--storyboard-columns 8` to trailmap more cells per row (smaller " +
                 "individual thumbs), or split the session into multiple shorter recordings.",
             )
           }
@@ -789,7 +789,7 @@ object ReportStoryboardExporter {
         }
         .grid {
           display: grid;
-          /* `auto-fill` packs as many ${cellWidthPx}px columns as fit, so the grid
+          /* `auto-fill` trailmaps as many ${cellWidthPx}px columns as fit, so the grid
              reflows under browser zoom and on narrower viewports without distorting cell
              dimensions. At Playwright's pinned ${pageWidthPx}px viewport this always
              resolves to exactly $columns columns — the canonical screenshot layout. */

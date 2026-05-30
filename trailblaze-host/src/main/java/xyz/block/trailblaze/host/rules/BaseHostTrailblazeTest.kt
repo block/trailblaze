@@ -1,11 +1,13 @@
 package xyz.block.trailblaze.host.rules
 
 import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.AttachmentSource
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.utils.time.KoogClock
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -300,15 +302,17 @@ abstract class BaseHostTrailblazeTest(
     )
 
     val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, traceId, screenshotBytes ->
-      val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+      val metaInfo = RequestMetaInfo.create(KoogClock.System)
       val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
         Message.User(
-          parts = buildList {
-            add(ContentPart.Text(userMessage))
+          parts = buildList<MessagePart.RequestPart> {
+            add(MessagePart.Text(userMessage))
             add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              MessagePart.Attachment(
+                source = AttachmentSource.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
               )
             )
           },
@@ -325,10 +329,10 @@ abstract class BaseHostTrailblazeTest(
         id = "host_test_planner",
         params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
       )
-      val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-      val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
+      val response = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+      val toolCall = response.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
       val toolName = toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown"
-      val toolArgsJson = toolCall?.content ?: "{}"
+      val toolArgsJson = toolCall?.args ?: "{}"
       val toolArgs = try {
         Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
       } catch (_: Exception) {
@@ -426,7 +430,7 @@ abstract class BaseHostTrailblazeTest(
    * the IOS_HOST / Maestro-host trail driver path.
    *
    * Returns null (postconditions become a silent no-op) on any loader error so a malformed
-   * pack manifest cannot block trail execution.
+   * trailmap manifest cannot block trail execution.
    */
   private fun resolveWaypointsForTrail(): ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? {
     return try {
@@ -435,7 +439,7 @@ abstract class BaseHostTrailblazeTest(
           raw = xyz.block.trailblaze.config.project.TrailblazeProjectConfig(),
           sourceFile = java.io.File(".").absoluteFile,
         ),
-        includeClasspathPacks = true,
+        includeClasspathTrailmaps = true,
       )
       val byId: Map<String, xyz.block.trailblaze.api.waypoint.WaypointDefinition> =
         resolved.waypoints.associateBy { it.id }
@@ -461,7 +465,9 @@ abstract class BaseHostTrailblazeTest(
     resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
       val setupFile = File(setupTrailId)
       if (setupFile.exists()) {
-        val setupItems = createTrailblazeYaml().decodeTrail(setupFile.readText())
+        val setupClassifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+        val setupItems = createTrailblazeYaml()
+          .decodeTrail(setupFile.readText(), deviceClassifiers = setupClassifiers)
         for (setupItem in setupItems) {
           val result =
             when (setupItem) {
@@ -543,8 +549,22 @@ abstract class BaseHostTrailblazeTest(
     if (forceStopApp) {
       ensureTargetAppIsStopped()
     }
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
+    // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
+    // right closest-wins recording for this device. v1 inputs ignore the list.
+    val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
+    // `planTrailExecution` planner. This base test path is exercised directly by JUnit eval
+    // tests (not through the CLI), so without this short-circuit a skip-marked trail would
+    // run end-to-end here even though `trailblaze trail` would skip it.
+    trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
+      Console.log(
+        "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
+      )
+      return loggingRule.session?.sessionId ?: SessionId("unknown")
+    }
 
     if (sendSessionStartLog) {
       val session = loggingRule.session

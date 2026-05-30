@@ -3,6 +3,7 @@ package xyz.block.trailblaze.agent
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -11,8 +12,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.agent.blaze.IterationStaleRefSummary
+import xyz.block.trailblaze.agent.blaze.StaleRefTracker
+import xyz.block.trailblaze.agent.blaze.buildStaleRefRecoveryMessage
 import xyz.block.trailblaze.agent.blaze.detectActionCycleHint
 import xyz.block.trailblaze.agent.blaze.detectDominantActionHint
+import xyz.block.trailblaze.agent.blaze.summarizeIterationStaleRefs
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
@@ -21,6 +26,7 @@ import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.agent.model.VerifyAssertionLedger
 import xyz.block.trailblaze.agent.util.toLlmResponseHistory
+import xyz.block.trailblaze.TrailblazeAgentContext
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
@@ -145,16 +151,29 @@ class TrailblazeRunner(
     // Each entry represents one tool call from an LLM response — a single response may
     // contribute multiple entries when the LLM batches tool calls.
     val recentToolFingerprints = ArrayDeque<String>(STUCK_FINGERPRINT_WINDOW)
+    // Per-step tracker for the "stale-ref hallucination loop" where the LLM repeatedly
+    // taps the same ref that no longer exists on the current screen. Reset on every
+    // non-stale-ref tool outcome so we only fire on *consecutive* failures. See
+    // [StaleRefRecovery.kt] for the failure-mode forensics.
+    val staleRefTracker = StaleRefTracker()
     do {
       TrailblazeTracer.trace("prepareNextStep", "agent") {
         stepStatus.prepareNextStep()
       }
       val requestStartTimeMs = Clock.System.now()
 
+      // Filter `sensitiveKeys` (e.g. PINs, passwords) before exposing memory to the LLM —
+      // matches the guard already applied by ScriptTrailblazeTool.buildInput and
+      // TrailblazeContextEnvelope. Sensitive values remain available for ${var} interpolation
+      // in tool args, just not surfaced into the LLM's per-step reminder text.
+      val rememberedValues = (agent as? TrailblazeAgentContext)?.memory?.let { mem ->
+        mem.variables.filterKeys { it !in mem.sensitiveKeys }.toMap()
+      } ?: emptyMap()
       val koogLlmRequestMessages: List<Message> = TrailblazeTracer.trace("createNextChatRequest", "agent") {
         llmClientHelper.createNextChatRequest(
           stepStatus = stepStatus,
           previouslyCompletedStepDescriptions = completedStepDescriptions,
+          rememberedValues = rememberedValues,
         )
       }
 
@@ -179,7 +198,7 @@ class TrailblazeRunner(
 
       Console.appendInfo("  LLM ")
       val llmCallStartTime = Clock.System.now()
-      val koogLlmResponseMessages: List<Message.Response> = coroutineScope {
+      val koogLlmResponseMessages: Message.Assistant = coroutineScope {
         val dotJob = launch {
           while (true) {
             delay(1000)
@@ -231,19 +250,59 @@ class TrailblazeRunner(
       } else {
         "${"%.1f".format(llmCallSeconds)}s"
       }
-      val toolNames = koogLlmResponseMessages
-        .filterIsInstance<Message.Tool>()
+      val toolNames = koogLlmResponseMessages.parts
+        .filterIsInstance<MessagePart.Tool.Call>()
         .joinToString(", ") { it.tool }
       val toolInfo = if (toolNames.isNotEmpty()) " -> $toolNames" else ""
       Console.info(" $llmCallTimeStr$toolInfo")
       TrailblazeTracer.trace("processToolMessages", "agent", mapOf("tools" to (toolInfo.removePrefix(" -> ")))) {
         stepToolStrategy.processToolMessages(
-          llmResponses = koogLlmResponseMessages,
+          llmResponse = koogLlmResponseMessages,
           stepStatus = stepStatus,
           agent = agent,
           helper = llmClientHelper,
           traceId = traceId,
         )
+      }
+
+      val toolCalls = koogLlmResponseMessages.parts.filterIsInstance<MessagePart.Tool.Call>()
+
+      // --- Stale-ref recovery: catch the "keep tapping a ref that no longer exists" loop ---
+      // [TapTrailblazeTool] / [AssertVisibleTrailblazeTool] validate the LLM's ref against the
+      // live view hierarchy BEFORE dispatching, so a stale ref returns an error tool_result
+      // with `callCount=0` (no underlying action ran). Chat-history truncation hides older
+      // successful snapshot observations, so the LLM has no signal that its memorized refs
+      // are stale and burns the entire LLM-call budget retrying. Forensic source: case_5380770.
+      //
+      // We scan the tool_result outputs from THIS iteration's response (just appended to
+      // chat history by `processToolMessages`) for the stale-ref error pattern, key on the
+      // ref name, and latch a recovery message after N consecutive hits on the same ref.
+      // A successful (or different-error) call this iteration breaks the streak first via
+      // [resetStreak] — even when stale-ref hits also land in the same response, because
+      // [MultipleToolStrategy] (verification steps) can mix outcomes in one LLM turn and
+      // any progress should clear the consecutive-failure counter.
+      val iterationSummary = summarizeStaleRefsFromLastIteration(
+        history = stepStatus.getLimitedHistory(),
+        toolCallsCount = toolCalls.size,
+      )
+      if (iterationSummary.hadNonStaleRefResult) {
+        staleRefTracker.resetStreak()
+      }
+      for (ref in iterationSummary.staleRefs) {
+        if (staleRefTracker.recordStaleRef(ref)) {
+          val recoveryMessage = buildStaleRefRecoveryMessage(
+            ref = ref,
+            repeatCount = staleRefTracker.currentCount,
+          )
+          stepStatus.setPendingStaleRefRecovery(recoveryMessage)
+          Console.info(
+            "  [STALE_REF_RECOVERY] Latching recovery message: ref='$ref' " +
+              "consecutiveFailures=${staleRefTracker.currentCount}",
+          )
+          // Only fire once per iteration even if multiple stale-ref errors land in
+          // the same response — the recovery message itself names the dominant ref.
+          break
+        }
       }
 
       // --- Stuck detection: bail out early if the agent is looping ---
@@ -256,9 +315,8 @@ class TrailblazeRunner(
       // from the args before fingerprinting — those vary per call by design and
       // would otherwise mask a real loop where the underlying action is identical
       // but the LLM's free-text reasoning differs each time.
-      val toolCalls = koogLlmResponseMessages.filterIsInstance<Message.Tool>()
       for (toolCall in toolCalls) {
-        val fingerprint = "${toolCall.tool}:${stripAnalysisFromContent(toolCall.content)}"
+        val fingerprint = "${toolCall.tool}:${stripAnalysisFromContent(toolCall.args)}"
         if (recentToolFingerprints.size >= STUCK_FINGERPRINT_WINDOW) {
           recentToolFingerprints.removeFirst()
         }
@@ -453,6 +511,46 @@ class TrailblazeRunner(
 private fun PromptStep.getToolStrategy() = when (this) {
   is DirectionStep -> SingleToolStrategy()
   is VerificationStep -> MultipleToolStrategy()
+}
+
+/**
+ * Walks the tail of [history] looking at up to [toolCallsCount] most-recent
+ * [MessagePart.Tool.Result] entries (the tool_results just appended for this iteration's
+ * tool_calls) and classifies them into stale-ref refs vs other outcomes via
+ * [summarizeIterationStaleRefs].
+ *
+ * Returns an empty summary when [toolCallsCount] is 0 (LLM emitted no tool calls) so the
+ * caller treats a zero-call iteration as "no signal either way."
+ *
+ * Implementation note: the history window is post-truncation (`getLimitedHistory()`),
+ * so newer entries always live at the tail. We only inspect the last [toolCallsCount]
+ * Tool.Result entries — not the whole window — to avoid double-counting older stale-ref
+ * errors that were already accounted for in previous iterations.
+ */
+private fun summarizeStaleRefsFromLastIteration(
+  history: List<Message>,
+  toolCallsCount: Int,
+): IterationStaleRefSummary {
+  if (toolCallsCount <= 0) {
+    return IterationStaleRefSummary(emptyList(), hadNonStaleRefResult = false)
+  }
+  // Walk the history newest-first so we can take exactly the LAST `toolCallsCount`
+  // Tool.Result entries (the ones the current iteration just produced) without scanning
+  // the older windows. After taking those, restore chronological order so the
+  // state-machine sees the same sequence the LLM actually emitted — the tracker's
+  // streak counter is order-sensitive (a ref switch resets the count), so reversing
+  // newest-first across the same iteration's mixed stale refs would distort fire
+  // semantics for batched MultipleToolStrategy responses.
+  val toolResults = history
+    .asReversed()
+    .asSequence()
+    .filterIsInstance<Message.User>()
+    .flatMap { it.parts.asSequence() }
+    .filterIsInstance<MessagePart.Tool.Result>()
+    .take(toolCallsCount)
+    .toList()
+    .reversed()
+  return summarizeIterationStaleRefs(toolResults.map { it.output })
 }
 
 /**

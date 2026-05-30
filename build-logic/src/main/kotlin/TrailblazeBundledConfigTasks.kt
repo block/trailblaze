@@ -19,38 +19,38 @@ import org.gradle.api.tasks.TaskAction
 import xyz.block.trailblaze.bundle.yaml.YamlEmitter
 
 /**
- * Minimal typed shape for the pack-manifest fields the generator consumes. Mirrors a subset of
- * the runtime [xyz.block.trailblaze.config.project.PackTargetConfig] schema so this build-logic
+ * Minimal typed shape for the trailmap-manifest fields the generator consumes. Mirrors a subset of
+ * the runtime [xyz.block.trailblaze.config.project.TrailmapTargetConfig] schema so this build-logic
  * task can read system-prompt configuration through the same field names as the runtime, via
  * kaml's typed decode, instead of looking them up as inline string keys on a generic
  * `Map<String, Any?>`.
  *
  * Only the fields needed for build-time resolution are captured here — kaml ignores the rest
  * because [Yaml.configuration]'s `strictMode` is false in this task. The rest of the generator
- * keeps walking the pack manifest as a generic Map so unknown / future fields still flow through
+ * keeps walking the trailmap manifest as a generic Map so unknown / future fields still flow through
  * to the emitted target YAML untouched.
  *
  * Build-logic intentionally does NOT depend on `:trailblaze-models` (avoids inflating the
  * Gradle classpath with the multiplatform graph), so this shape is duplicated here. Keep the
- * `@SerialName` values aligned with `PackTargetConfig` — same drift contract as
- * `mergeInheritedDefaults` keeps with `PackDependencyResolver`.
+ * `@SerialName` values aligned with `TrailmapTargetConfig` — same drift contract as
+ * `mergeInheritedDefaults` keeps with `TrailmapDependencyResolver`.
  */
 @Serializable
-private data class PackManifestPromptShape(
-  val target: PackTargetPromptShape? = null,
+private data class TrailmapManifestPromptShape(
+  val target: TrailmapTargetPromptShape? = null,
 ) {
   @Serializable
-  data class PackTargetPromptShape(
+  data class TrailmapTargetPromptShape(
     @SerialName("system_prompt_file") val systemPromptFile: String? = null,
   )
 }
 
-// Subset of `PackScriptedToolFile` (in :trailblaze-models) sufficient for the generator to
-// resolve pack-relative `target.tools:` path refs into the full `InlineScriptToolConfig`
+// Subset of `TrailmapScriptedToolFile` (in :trailblaze-models) sufficient for the generator to
+// resolve trailmap-relative `target.tools:` path refs into the full `InlineScriptToolConfig`
 // shape that `AppTargetYamlConfig.tools` expects at runtime. Mirrors the same fields the
-// canonical `PackScriptedToolFile.toInlineScriptToolConfig()` reads — keep aligned with
+// canonical `TrailmapScriptedToolFile.toInlineScriptToolConfig()` reads — keep aligned with
 // `:trailblaze-models`'s shape when fields move (same drift contract as the
-// `mergeInheritedDefaults` ↔ `PackDependencyResolver` parity note above).
+// `mergeInheritedDefaults` ↔ `TrailmapDependencyResolver` parity note above).
 //
 // Build-logic intentionally doesn't depend on `:trailblaze-models`, so the descriptor is
 // parsed via kaml's tree API rather than typed decode — kaml's typed-decode path doesn't
@@ -59,7 +59,7 @@ private data class PackManifestPromptShape(
 // invasive than walking the YamlMap directly.
 
 abstract class TrailblazeBundledConfigExtension @Inject constructor(objects: ObjectFactory) {
-  val packsDir: DirectoryProperty = objects.directoryProperty()
+  val trailmapsDir: DirectoryProperty = objects.directoryProperty()
   val targetsDir: DirectoryProperty = objects.directoryProperty()
   /**
    * Anchor that scripted-tool `script:` paths in the generated target.yaml are emitted relative
@@ -79,7 +79,7 @@ abstract class TrailblazeBundledConfigExtension @Inject constructor(objects: Obj
 abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
   @get:InputDirectory
   @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val packsDir: DirectoryProperty
+  abstract val trailmapsDir: DirectoryProperty
 
   @get:OutputDirectory
   abstract val targetsDir: DirectoryProperty
@@ -89,7 +89,7 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
    * (typically `rootProject.layout.projectDirectory`), NOT a content input. Treating it as
    * an input would have Gradle hash every file under the repo root for up-to-date checks,
    * and the resulting task graph would require explicit dependencies on every sibling-module
-   * compilation. The script content itself IS tracked — via [packsDir], where the .js files
+   * compilation. The script content itself IS tracked — via [trailmapsDir], where the .js files
    * live and where any author edit invalidates this task.
    */
   @get:org.gradle.api.tasks.Internal
@@ -100,8 +100,8 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
 
   @TaskAction
   fun generate() {
-    val generator = PackTargetGenerator(
-      packsDir = packsDir.asFile.get(),
+    val generator = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir.asFile.get(),
       targetsDir = targetsDir.asFile.get(),
       scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
@@ -120,7 +120,7 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
 abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
   @get:InputDirectory
   @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val packsDir: DirectoryProperty
+  abstract val trailmapsDir: DirectoryProperty
 
   @get:InputDirectory
   @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -131,7 +131,7 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
    * (typically `rootProject.layout.projectDirectory`), NOT a content input. Treating it as
    * an input would have Gradle hash every file under the repo root for up-to-date checks,
    * and the resulting task graph would require explicit dependencies on every sibling-module
-   * compilation. The script content itself IS tracked — via [packsDir], where the .js files
+   * compilation. The script content itself IS tracked — via [trailmapsDir], where the .js files
    * live and where any author edit invalidates this task.
    */
   @get:org.gradle.api.tasks.Internal
@@ -142,8 +142,8 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
 
   @TaskAction
   fun verify() {
-    val generator = PackTargetGenerator(
-      packsDir = packsDir.asFile.get(),
+    val generator = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir.asFile.get(),
       targetsDir = targetsDir.asFile.get(),
       scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
@@ -163,7 +163,7 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
     generator.findManagedTargetFiles()
       .filter { it !in expected.keys }
       .forEach { stale ->
-        staleFiles += "Stale generated target with no pack source: ${stale.relativeTo(project.projectDir).invariantSeparatorsPath}"
+        staleFiles += "Stale generated target with no trailmap source: ${stale.relativeTo(project.projectDir).invariantSeparatorsPath}"
       }
 
     if (staleFiles.isNotEmpty()) {
@@ -178,11 +178,11 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
   }
 }
 
-// Generates flat target YAMLs from authored pack manifests for the bundled-config plugin.
+// Generates flat target YAMLs from authored trailmap manifests for the bundled-config plugin.
 //
 // **YAML library: kaml.** SnakeYAML was the original choice but Trailblaze code is
 // standardizing on kaml across the codebase. The generic-Map walker pattern below uses
-// kaml's tree API (`YamlNode` / `YamlMap` / `YamlList` / `YamlScalar`) since pack manifests
+// kaml's tree API (`YamlNode` / `YamlMap` / `YamlList` / `YamlScalar`) since trailmap manifests
 // are walked structurally rather than decoded into typed `@Serializable` classes — the
 // generator preserves arbitrary fields when re-emitting target YAMLs, so a typed schema
 // would either drop or hard-code unknown keys.
@@ -194,14 +194,14 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
 // `DumperOptions` did, and even SnakeYAML couldn't actually produce this exact layout
 // (it required indicatorIndent < indent, forcing the map indent up to 4). The hand-rolled
 // renderer below preserves the existing format byte-for-byte. kaml is used only for
-// *parsing* pack manifests + emitting properly-quoted scalars on the dump path.
-internal class PackTargetGenerator(
-  private val packsDir: File,
+// *parsing* trailmap manifests + emitting properly-quoted scalars on the dump path.
+internal class TrailmapTargetGenerator(
+  private val trailmapsDir: File,
   private val targetsDir: File,
   private val regenerateCommand: String,
   private val scriptRootDir: File? = null,
 ) {
-  /** Used for parsing pack manifests — strict mode off so unknown keys flow through. */
+  /** Used for parsing trailmap manifests — strict mode off so unknown keys flow through. */
   private val yaml = Yaml(
     configuration = YamlConfiguration(strictMode = false, encodeDefaults = false),
   )
@@ -210,81 +210,81 @@ internal class PackTargetGenerator(
     val expected = linkedMapOf<File, String>()
     val seenTargetIds = mutableSetOf<String>()
 
-    // Pre-pass: load every discoverable pack and index by id so dep walks below can
-    // look up `defaults:` from sibling packs. Build-logic intentionally does NOT depend
+    // Pre-pass: load every discoverable trailmap and index by id so dep walks below can
+    // look up `defaults:` from sibling trailmaps. Build-logic intentionally does NOT depend
     // on `:trailblaze-common` (avoids inflating every Gradle build's classpath with the
-    // koog/MCP graph), so the canonical [PackDependencyResolver] isn't reachable here.
-    // This generator implements the same closest-wins inheritance against pack manifests
+    // koog/MCP graph), so the canonical [TrailmapDependencyResolver] isn't reachable here.
+    // This generator implements the same closest-wins inheritance against trailmap manifests
     // it walks itself; the equivalence test in `:trailblaze-common`'s compile-test suite
     // is the drift guard between this build-time mini-resolver and the runtime resolver.
-    val packsById = linkedMapOf<String, PackInfo>()
-    discoverPackFiles().forEach { packFile ->
-      val pack = loadMap(packFile)
-      val packId = pack.requiredString("id", packFile)
-      check(packsById.put(packId, PackInfo(packFile, pack)) == null) {
-        "Duplicate pack id '$packId' across pack manifests under ${packsDir.absolutePath} " +
-          "(also at ${packsById[packId]?.packFile?.relativeTo(packsDir)})"
+    val trailmapsById = linkedMapOf<String, TrailmapInfo>()
+    discoverTrailmapFiles().forEach { trailmapFile ->
+      val trailmap = loadMap(trailmapFile)
+      val trailmapId = trailmap.requiredString("id", trailmapFile)
+      check(trailmapsById.put(trailmapId, TrailmapInfo(trailmapFile, trailmap)) == null) {
+        "Duplicate trailmap id '$trailmapId' across trailmap manifests under ${trailmapsDir.absolutePath} " +
+          "(also at ${trailmapsById[trailmapId]?.trailmapFile?.relativeTo(trailmapsDir)})"
       }
     }
 
-    packsById.values.forEach { (packFile, pack) ->
-      val packId = pack.requiredString("id", packFile)
-      val target = pack["target"] as? Map<*, *> ?: return@forEach
-      val normalizedTarget = resolveSystemPromptFile(normalizeMap(target), packFile)
-      // If `target.id` is set, it must be a string. Silently falling back to the pack
+    trailmapsById.values.forEach { (trailmapFile, trailmap) ->
+      val trailmapId = trailmap.requiredString("id", trailmapFile)
+      val target = trailmap["target"] as? Map<*, *> ?: return@forEach
+      val normalizedTarget = resolveSystemPromptFile(normalizeMap(target), trailmapFile)
+      // If `target.id` is set, it must be a string. Silently falling back to the trailmap
       // id when the author wrote `id: 123` (or anything non-string) would lose their
       // intent without warning — better to fail loudly so the misuse is fixable at
       // edit time rather than appearing as drift in a later regen.
       val explicitTargetId = normalizedTarget["id"]
       if (explicitTargetId != null && explicitTargetId !is String) {
         throw GradleException(
-          "Pack manifest ${packFile.absolutePath} has 'target.id' of type " +
+          "Trailmap manifest ${trailmapFile.absolutePath} has 'target.id' of type " +
             "${explicitTargetId::class.simpleName} ($explicitTargetId). target.id must " +
-            "be a string. Remove the field to default to the pack id ('$packId').",
+            "be a string. Remove the field to default to the trailmap id ('$trailmapId').",
         )
       }
-      val targetId = (explicitTargetId as? String) ?: packId
+      val targetId = (explicitTargetId as? String) ?: trailmapId
       check(seenTargetIds.add(targetId)) {
-        "Duplicate generated target id '$targetId' from ${packFile.relativeTo(packsDir)}"
+        "Duplicate generated target id '$targetId' from ${trailmapFile.relativeTo(trailmapsDir)}"
       }
 
-      val ownDeps = (pack["dependencies"] as? List<*>)
+      val ownDeps = (trailmap["dependencies"] as? List<*>)
         ?.mapIndexed { index, value ->
           value as? String ?: throw GradleException(
-            "Pack manifest ${packFile.absolutePath} has non-string dependency at index $index ($value)",
+            "Trailmap manifest ${trailmapFile.absolutePath} has non-string dependency at index $index ($value)",
           )
         }
         .orEmpty()
       val resolvedTarget = mergeInheritedDefaults(
         ownTarget = normalizedTarget,
         ownDeps = ownDeps,
-        ownPackId = packId,
-        ownPackFile = packFile,
-        packsById = packsById,
+        ownTrailmapId = trailmapId,
+        ownTrailmapFile = trailmapFile,
+        trailmapsById = trailmapsById,
       )
 
       val orderedTarget = linkedMapOf<String, Any?>("id" to targetId)
       resolvedTarget.forEach { (key, value) ->
         if (key == "id") return@forEach
-        // `tools:` in pack manifests holds path refs (e.g. `tools/myTool.yaml`) pointing at
-        // `PackScriptedToolFile` descriptors with flat `inputSchema`. `AppTargetYamlConfig.tools`
+        // `tools:` in trailmap manifests holds path refs (e.g. `tools/myTool.yaml`) pointing at
+        // `TrailmapScriptedToolFile` descriptors with flat `inputSchema`. `AppTargetYamlConfig.tools`
         // expects `List<InlineScriptToolConfig>` (with JSON-Schema `inputSchema`), so we have
         // to resolve each path ref here at build time — mirrors what `TrailblazeProjectConfigLoader.
-        // resolvePackSiblings` + `PackScriptedToolFile.toInlineScriptToolConfig` do at runtime
-        // when loading pack.yaml. The runtime daemon discovers targets from the generated
+        // resolveTrailmapSiblings` + `TrailmapScriptedToolFile.toInlineScriptToolConfig` do at runtime
+        // when loading trailmap.yaml. The runtime daemon discovers targets from the generated
         // target.yaml (via `AppTargetYamlLoader.discoverAndLoadAll`), so without resolution
         // here `targetTestApp.getInlineScriptTools()` would return empty and scripted-tool
         // dispatch would fall through to `OtherTrailblazeTool` at trail-run time.
         if (key == "tools") {
-          val resolved = resolveScriptedToolList(value, packFile)
+          val resolved = resolveScriptedToolList(value, trailmapFile)
           if (resolved.isNotEmpty()) orderedTarget["tools"] = resolved
           return@forEach
         }
         orderedTarget[key] = value
       }
 
-      val sourceRoot = packsDir.parentFile?.parentFile ?: packsDir.parentFile ?: packsDir
-      val sourcePath = packFile.invariantPathRelativeTo(sourceRoot)
+      val sourceRoot = trailmapsDir.parentFile?.parentFile ?: trailmapsDir.parentFile ?: trailmapsDir
+      val sourcePath = trailmapFile.invariantPathRelativeTo(sourceRoot)
       val rendered = buildString {
         appendLine("# GENERATED FILE. DO NOT EDIT.")
         appendLine("# Source: $sourcePath")
@@ -303,32 +303,32 @@ internal class PackTargetGenerator(
    * Walks [ownDeps] (depth-first, declaration-order) collecting per-platform per-field
    * default contributions, then fills in any field the consumer didn't set on a platform
    * it explicitly declared. Mirrors the closest-wins-no-list-concat semantics documented
-   * on `PackDependencyResolver` in `:trailblaze-common`.
+   * on `TrailmapDependencyResolver` in `:trailblaze-common`.
    *
    * Platforms the consumer didn't declare are NOT added — declaring `ios: {}` says "this
    * platform exists, fill in everything from defaults," while omitting the platform key
    * says "this target doesn't run on iOS." The runtime resolver enforces the same
-   * distinction (see `PackDependencyResolver.resolveTarget`).
+   * distinction (see `TrailmapDependencyResolver.resolveTarget`).
    *
    * ## PARITY CONTRACT (do not skim)
    *
    * This function is a build-time mirror of
-   * `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/PackDependencyResolver.kt`'s
+   * `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailmapDependencyResolver.kt`'s
    * `resolveTarget` — same closest-wins inheritance rules, same cycle / missing-dep
    * behavior, same "platform set comes from the consumer" semantics. Build-logic has a
    * second implementation because Gradle includedBuild + build-classpath constraints
    * forbid pulling in `:trailblaze-common`'s heavy graph (koog, jackson, MCP). Both
    * implementations MUST stay aligned: if you change rules here, change them there too,
-   * and rerun BOTH `PackTargetGeneratorTest` (this file's tests) AND
-   * `PackDependencyResolverTest` (`:trailblaze-common`'s tests) — the two test suites
+   * and rerun BOTH `TrailmapTargetGeneratorTest` (this file's tests) AND
+   * `TrailmapDependencyResolverTest` (`:trailblaze-common`'s tests) — the two test suites
    * pin the same behavioral contract from each side.
    */
   private fun mergeInheritedDefaults(
     ownTarget: Map<String, Any?>,
     ownDeps: List<String>,
-    ownPackId: String,
-    ownPackFile: File,
-    packsById: Map<String, PackInfo>,
+    ownTrailmapId: String,
+    ownTrailmapFile: File,
+    trailmapsById: Map<String, TrailmapInfo>,
   ): Map<String, Any?> {
     if (ownDeps.isEmpty()) return ownTarget
 
@@ -336,25 +336,25 @@ internal class PackTargetGenerator(
     val visited = mutableSetOf<String>()
     val visiting = mutableSetOf<String>()
 
-    fun visit(packId: String, viaPath: List<String>) {
-      if (packId in visited) return
-      if (packId in visiting) {
+    fun visit(trailmapId: String, viaPath: List<String>) {
+      if (trailmapId in visited) return
+      if (trailmapId in visiting) {
         throw GradleException(
-          "Cycle in pack dependencies: ${(viaPath + packId).joinToString(" -> ")}",
+          "Cycle in trailmap dependencies: ${(viaPath + trailmapId).joinToString(" -> ")}",
         )
       }
-      val info = packsById[packId] ?: throw GradleException(
-        "Pack '$packId' (referenced by dependency chain ${viaPath.joinToString(" -> ")}) " +
-          "was not found under ${packsDir.absolutePath}",
+      val info = trailmapsById[trailmapId] ?: throw GradleException(
+        "Trailmap '$trailmapId' (referenced by dependency chain ${viaPath.joinToString(" -> ")}) " +
+          "was not found under ${trailmapsDir.absolutePath}",
       )
-      visiting += packId
+      visiting += trailmapId
 
-      // Collect this pack's own per-platform defaults BEFORE recursing into its deps,
+      // Collect this trailmap's own per-platform defaults BEFORE recursing into its deps,
       // so closer entries in the walk win when the same (platform, field) pair appears
-      // in multiple packs. Matches PackDependencyResolver's "closest-wins" rule.
-      val packDefaults = info.manifest["defaults"] as? Map<*, *>
-      if (packDefaults != null) {
-        normalizeMap(packDefaults).forEach { (platform, platformDefaults) ->
+      // in multiple trailmaps. Matches TrailmapDependencyResolver's "closest-wins" rule.
+      val trailmapDefaults = info.manifest["defaults"] as? Map<*, *>
+      if (trailmapDefaults != null) {
+        normalizeMap(trailmapDefaults).forEach { (platform, platformDefaults) ->
           val platformMap = platformDefaults as? Map<*, *> ?: return@forEach
           val accum = perPlatformContributions.getOrPut(platform) { linkedMapOf() }
           platformMap.forEach { (field, value) ->
@@ -367,25 +367,25 @@ internal class PackTargetGenerator(
       val nextDeps = (info.manifest["dependencies"] as? List<*>)
         ?.filterIsInstance<String>()
         .orEmpty()
-      nextDeps.forEach { dep -> visit(dep, viaPath + packId) }
+      nextDeps.forEach { dep -> visit(dep, viaPath + trailmapId) }
 
-      visiting -= packId
-      visited += packId
+      visiting -= trailmapId
+      visited += trailmapId
     }
 
-    ownDeps.forEach { dep -> visit(dep, listOf(ownPackId)) }
+    ownDeps.forEach { dep -> visit(dep, listOf(ownTrailmapId)) }
 
     val ownPlatforms = ownTarget["platforms"] as? Map<*, *> ?: return ownTarget
     val mergedPlatforms = linkedMapOf<String, Any?>()
     ownPlatforms.forEach { (platformKey, ownPlatformValue) ->
       val platform = platformKey as? String ?: throw GradleException(
-        "Pack manifest ${ownPackFile.absolutePath} has non-string platform key '$platformKey'",
+        "Trailmap manifest ${ownTrailmapFile.absolutePath} has non-string platform key '$platformKey'",
       )
       val ownPlatformMap = when (ownPlatformValue) {
         null -> linkedMapOf<String, Any?>()
         is Map<*, *> -> normalizeMap(ownPlatformValue)
         else -> throw GradleException(
-          "Pack manifest ${ownPackFile.absolutePath} has non-map value for platform " +
+          "Trailmap manifest ${ownTrailmapFile.absolutePath} has non-map value for platform " +
             "'$platform': $ownPlatformValue",
         )
       }
@@ -405,40 +405,40 @@ internal class PackTargetGenerator(
   }
 
   /**
-   * Resolves a `system_prompt_file:` field on the pack target into an inlined `system_prompt:`
-   * value, mirroring the runtime [PackTargetConfig.toAppTargetYamlConfig] behavior. The file
-   * path is resolved against the pack manifest's parent directory; missing or unreadable files
+   * Resolves a `system_prompt_file:` field on the trailmap target into an inlined `system_prompt:`
+   * value, mirroring the runtime [TrailmapTargetConfig.toAppTargetYamlConfig] behavior. The file
+   * path is resolved against the trailmap manifest's parent directory; missing or unreadable files
    * fail the build with a clear message so authoring errors don't slip into a stale generated
    * target. Returns the target map unchanged if neither field is present.
    *
-   * The read side is typed via [PackManifestPromptShape] (kaml typed decode against the same
+   * The read side is typed via [TrailmapManifestPromptShape] (kaml typed decode against the same
    * `@SerialName` keys the runtime uses); the write side rebuilds a [LinkedHashMap] because the
    * generator's outer pipeline preserves arbitrary unknown fields by passing them through as a
    * generic map.
    */
-  private fun resolveSystemPromptFile(target: Map<String, Any?>, packFile: File): Map<String, Any?> {
+  private fun resolveSystemPromptFile(target: Map<String, Any?>, trailmapFile: File): Map<String, Any?> {
     val promptShape =
-      yaml.decodeFromString(PackManifestPromptShape.serializer(), packFile.readText())
+      yaml.decodeFromString(TrailmapManifestPromptShape.serializer(), trailmapFile.readText())
     val promptFile = promptShape.target?.systemPromptFile ?: return target
-    val packDir = packFile.parentFile
-      ?: throw GradleException("Pack manifest ${packFile.absolutePath} has no parent directory")
-    val resolved = packDir.resolve(promptFile).canonicalFile
-    val packDirCanonical = packDir.canonicalFile
+    val trailmapDir = trailmapFile.parentFile
+      ?: throw GradleException("Trailmap manifest ${trailmapFile.absolutePath} has no parent directory")
+    val resolved = trailmapDir.resolve(promptFile).canonicalFile
+    val trailmapDirCanonical = trailmapDir.canonicalFile
     // Path-element containment (not character-prefix). Without the trailing separator, a
-    // sibling directory sharing the pack name as a prefix (e.g. `pack-extras/foo.md` against a
-    // pack root `/.../pack`) would pass a raw startsWith check because they share the literal
+    // sibling directory sharing the trailmap name as a prefix (e.g. `trailmap-extras/foo.md` against a
+    // trailmap root `/.../trailmap`) would pass a raw startsWith check because they share the literal
     // prefix string. Comparing `path + separator` makes the check require a real directory
-    // boundary, so siblings sharing a prefix can't escape the pack root.
-    val packDirPath = packDirCanonical.path + File.separator
-    if (resolved == packDirCanonical || !resolved.path.startsWith(packDirPath)) {
+    // boundary, so siblings sharing a prefix can't escape the trailmap root.
+    val trailmapDirPath = trailmapDirCanonical.path + File.separator
+    if (resolved == trailmapDirCanonical || !resolved.path.startsWith(trailmapDirPath)) {
       throw GradleException(
-        "system_prompt_file '$promptFile' in ${packFile.absolutePath} resolves outside the pack " +
-          "directory (${packDir.absolutePath}); only pack-relative paths are allowed.",
+        "system_prompt_file '$promptFile' in ${trailmapFile.absolutePath} resolves outside the trailmap " +
+          "directory (${trailmapDir.absolutePath}); only trailmap-relative paths are allowed.",
       )
     }
     if (!resolved.isFile) {
       throw GradleException(
-        "system_prompt_file '$promptFile' referenced by ${packFile.absolutePath} not found at " +
+        "system_prompt_file '$promptFile' referenced by ${trailmapFile.absolutePath} not found at " +
           "${resolved.absolutePath}.",
       )
     }
@@ -454,7 +454,7 @@ internal class PackTargetGenerator(
   }
 
 
-  private data class PackInfo(val packFile: File, val manifest: Map<String, Any?>)
+  private data class TrailmapInfo(val trailmapFile: File, val manifest: Map<String, Any?>)
 
   fun findManagedTargetFiles(): List<File> {
     if (!targetsDir.isDirectory) return emptyList()
@@ -470,16 +470,16 @@ internal class PackTargetGenerator(
       .forEach(File::delete)
   }
 
-  private fun discoverPackFiles(): List<File> {
-    if (!packsDir.isDirectory) return emptyList()
-    return packsDir.walkTopDown()
-      .filter { it.isFile && it.name == "pack.yaml" }
-      .sortedBy { it.relativeTo(packsDir).invariantSeparatorsPath }
+  private fun discoverTrailmapFiles(): List<File> {
+    if (!trailmapsDir.isDirectory) return emptyList()
+    return trailmapsDir.walkTopDown()
+      .filter { it.isFile && it.name == "trailmap.yaml" }
+      .sortedBy { it.relativeTo(trailmapsDir).invariantSeparatorsPath }
       .toList()
   }
 
   /**
-   * Parse a pack manifest into a generic Map<String, Any?> shape via kaml's tree API.
+   * Parse a trailmap manifest into a generic Map<String, Any?> shape via kaml's tree API.
    * The kaml-tree-to-Kotlin-tree conversion + plain-scalar resolution lives in
    * [YamlEmitter.yamlMapToMutable]; this method just wraps it with the manifest-specific
    * "must decode to a map" guard.
@@ -487,14 +487,14 @@ internal class PackTargetGenerator(
   private fun loadMap(file: File): Map<String, Any?> {
     val node = yaml.parseToYamlNode(file.readText())
     val mapNode = node as? YamlMap
-      ?: throw GradleException("Pack manifest must decode to a YAML map: ${file.absolutePath}")
+      ?: throw GradleException("Trailmap manifest must decode to a YAML map: ${file.absolutePath}")
     return YamlEmitter.yamlMapToMutable(mapNode)
   }
 
   private fun Map<String, Any?>.requiredString(key: String, sourceFile: File): String {
     val value = this[key] as? String
     if (value.isNullOrBlank()) {
-      throw GradleException("Pack manifest ${sourceFile.absolutePath} is missing required '$key'")
+      throw GradleException("Trailmap manifest ${sourceFile.absolutePath} is missing required '$key'")
     }
     return value
   }
@@ -503,7 +503,7 @@ internal class PackTargetGenerator(
     val normalized = linkedMapOf<String, Any?>()
     map.forEach { (key, value) ->
       val stringKey = key as? String
-        ?: throw GradleException("Pack manifest map key must be a string, found '$key'")
+        ?: throw GradleException("Trailmap manifest map key must be a string, found '$key'")
       normalized[stringKey] = normalizeValue(value)
     }
     return normalized
@@ -521,15 +521,15 @@ internal class PackTargetGenerator(
   companion object {
     private const val GENERATED_HEADER = "# GENERATED FILE. DO NOT EDIT."
 
-    // String keys for the pack-target YAML fields read/written by `resolveSystemPromptFile`.
+    // String keys for the trailmap-target YAML fields read/written by `resolveSystemPromptFile`.
     // Pulled out so the resolver doesn't sprinkle inline string literals at field boundaries —
-    // single source of truth, kept in step with `PackManifestPromptShape`'s @SerialName values
-    // (and ultimately the runtime `PackTargetConfig.system_prompt_file` /
+    // single source of truth, kept in step with `TrailmapManifestPromptShape`'s @SerialName values
+    // (and ultimately the runtime `TrailmapTargetConfig.system_prompt_file` /
     // `AppTargetYamlConfig.system_prompt` `@SerialName`s).
     const val SYSTEM_PROMPT_FILE_KEY = "system_prompt_file"
     const val SYSTEM_PROMPT_KEY = "system_prompt"
 
-    /** Pack-relative directory that holds scripted-tool descriptor YAMLs. */
+    /** Trailmap-relative directory that holds scripted-tool descriptor YAMLs. */
     private const val SCRIPTED_TOOLS_DIR = "tools"
 
     /**
@@ -545,11 +545,11 @@ internal class PackTargetGenerator(
   }
 
   /**
-   * Resolves a pack manifest's `target.tools:` value (a list of pack-relative path refs into
-   * `PackScriptedToolFile` descriptors) into the full inline `InlineScriptToolConfig` shape
+   * Resolves a trailmap manifest's `target.tools:` value (a list of trailmap-relative path refs into
+   * `TrailmapScriptedToolFile` descriptors) into the full inline `InlineScriptToolConfig` shape
    * that `AppTargetYamlConfig.tools` expects at runtime. Empty/null input → empty list.
    *
-   * Mirrors `PackScriptedToolFile.toInlineScriptToolConfig()` from `:trailblaze-models`:
+   * Mirrors `TrailmapScriptedToolFile.toInlineScriptToolConfig()` from `:trailblaze-models`:
    *  - flat `inputSchema` is rewritten into a JSON-Schema `object` with `properties` and
    *    `required` arrays, dropping the per-property `required` flag the flat shape uses.
    *  - `supportedPlatforms` and `requiresHost` shortcuts fold into `_meta` under the
@@ -560,16 +560,16 @@ internal class PackTargetGenerator(
    */
   private fun resolveScriptedToolList(
     rawTools: Any?,
-    packFile: File,
+    trailmapFile: File,
   ): List<Map<String, Any?>> {
     val list = rawTools as? List<*> ?: return emptyList()
     if (list.isEmpty()) return emptyList()
-    val packDir = packFile.parentFile
-      ?: throw GradleException("Pack manifest ${packFile.absolutePath} has no parent directory")
-    // Discover scripted-tool descriptors under `<pack>/tools/` and key them by `name:`.
+    val trailmapDir = trailmapFile.parentFile
+      ?: throw GradleException("Trailmap manifest ${trailmapFile.absolutePath} has no parent directory")
+    // Discover scripted-tool descriptors under `<trailmap>/tools/` and key them by `name:`.
     // `target.tools:` then names which discovered tools the target exposes — names, not
     // file paths. Mirrors the runtime resolution in `TrailblazeProjectConfigLoader` and
-    // the build-time emission in `TrailblazePackBundler`.
+    // the build-time emission in `TrailblazeTrailmapBundler`.
     //
     // Each descriptor expands to 1..N entries:
     //   - Single-tool shape (`script: + name:`)         → 1 entry
@@ -577,30 +577,30 @@ internal class PackTargetGenerator(
     // The runtime synthesizer (`InlineScriptToolServerSynthesizer`) and QuickJS bundler
     // both group by `script:` path, so a group of 8 tools costs one subprocess / one bundle
     // regardless of how the descriptor is structured.
-    val discovery = buildPackScriptedToolRegistry(packDir, packFile)
+    val discovery = buildTrailmapScriptedToolRegistry(trailmapDir, trailmapFile)
     val registry = discovery.registry
     // Detect duplicates inside `target.tools:` itself — without this guard, listing the same
     // name twice silently emits two inline-tool maps in the generated target YAML; the runtime
     // tool repo then fails with a confusing "tool already registered" message that points away
-    // from the manifest. SISTER-IMPL-TAG: pack-target-tools-dup-detection.
+    // from the manifest. SISTER-IMPL-TAG: trailmap-target-tools-dup-detection.
     val seenInTarget = mutableSetOf<String>()
     return list.flatMap { entry ->
       val toolName = entry as? String ?: throw GradleException(
-        "Pack manifest ${packFile.absolutePath} has non-string entry in `target.tools:`: $entry",
+        "Trailmap manifest ${trailmapFile.absolutePath} has non-string entry in `target.tools:`: $entry",
       )
       if (!seenInTarget.add(toolName)) {
         throw GradleException(
-          "Pack manifest ${packFile.absolutePath}: `target.tools:` lists '$toolName' more than " +
+          "Trailmap manifest ${trailmapFile.absolutePath}: `target.tools:` lists '$toolName' more than " +
             "once. Each scripted-tool name must appear at most once in `target.tools:`.",
         )
       }
       val match = registry[toolName] ?: throw GradleException(
         buildString {
-          append("Pack scripted tool name '$toolName' not found under ")
-          append("${packDir.resolve(SCRIPTED_TOOLS_DIR).absolutePath} ")
-          append("(referenced by `target.tools:` in ${packFile.absolutePath}). ")
+          append("Trailmap scripted tool name '$toolName' not found under ")
+          append("${trailmapDir.resolve(SCRIPTED_TOOLS_DIR).absolutePath} ")
+          append("(referenced by `target.tools:` in ${trailmapFile.absolutePath}). ")
           if (registry.isEmpty()) {
-            append("No scripted-tool descriptors discovered under <pack>/tools/.")
+            append("No scripted-tool descriptors discovered under <trailmap>/tools/.")
           } else {
             append("Available tool names: [${registry.keys.sorted().joinToString(", ")}].")
           }
@@ -618,20 +618,20 @@ internal class PackTargetGenerator(
             append("file to register the '$toolName' name.")
           } else if (discovery.skipped.isNotEmpty()) {
             append(" Note: ${discovery.skipped.size} other descriptor(s) under ")
-            append("<pack>/tools/ were skipped during discovery (see earlier stderr ")
+            append("<trailmap>/tools/ were skipped during discovery (see earlier stderr ")
             append("warnings); one of them may have been intended to declare '$toolName'.")
           }
         },
       )
-      packScriptedToolToInlineMaps(match.descriptor, match.toolFile)
+      trailmapScriptedToolToInlineMaps(match.descriptor, match.toolFile)
         .filter { it["name"] == toolName }
     }
   }
 
   /**
    * Pairs a scripted-tool descriptor with the file it was decoded from. Used by the
-   * registry built in [buildPackScriptedToolRegistry] so the downstream
-   * [packScriptedToolToInlineMaps] step can resolve script paths against the descriptor's
+   * registry built in [buildTrailmapScriptedToolRegistry] so the downstream
+   * [trailmapScriptedToolToInlineMaps] step can resolve script paths against the descriptor's
    * parent directory.
    */
   private data class ScriptedToolDescriptorMatch(
@@ -645,45 +645,45 @@ internal class PackTargetGenerator(
    * so an author whose `target.tools:` references a skipped file's intended name gets
    * pointed at it directly. See lead-dev round 3 #I2.
    */
-  private data class PackScriptedToolDiscoveryResult(
+  private data class TrailmapScriptedToolDiscoveryResult(
     val registry: Map<String, ScriptedToolDescriptorMatch>,
     val skipped: List<File>,
   )
 
   /**
-   * Scans `<packDir>/tools/` for scripted-tool descriptors (`*.yaml` files whose name
+   * Scans `<trailmapDir>/tools/` for scripted-tool descriptors (`*.yaml` files whose name
    * doesn't carry an operational suffix) and indexes each one by every declared tool
    * name (top-level `name:` for single-tool descriptors; each entry's `name:` for
-   * multi-tool descriptors). Duplicate names across files in the same pack fail loudly
+   * multi-tool descriptors). Duplicate names across files in the same trailmap fail loudly
    * with both contributing file names.
    *
    * SISTER IMPLEMENTATIONS — same algorithm lives in three other places, keep all four in
    * lockstep:
    *   - `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailblazeProjectConfigLoader.kt`
-   *     `discoverPackScriptedTools` — runtime pack loader.
-   *   - `trailblaze-pack-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/TrailblazePackBundler.kt`
+   *     `discoverTrailmapScriptedTools` — runtime trailmap loader.
+   *   - `trailblaze-trailmap-bundler/src/main/kotlin/xyz/block/trailblaze/bundle/TrailblazeTrailmapBundler.kt`
    *     `buildScriptedToolRegistry` — build-time `.d.ts` augmentation generator.
    *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/scripting/DaemonScriptedToolBundler.kt`
    *     `discoverScriptedToolDescriptors` — daemon-time esbuild bundler.
    * Build-logic stays free of `:trailblaze-models` (Gradle plugin classpath concern); we
-   * use kaml's raw `YamlMap`/`YamlList` here rather than the typed `PackScriptedToolFile`
+   * use kaml's raw `YamlMap`/`YamlList` here rather than the typed `TrailmapScriptedToolFile`
    * serializer. Keep the parse shape in sync with the typed sister implementations.
    *
    * Search tag for grepping all four sister implementations at once (resilient against
-   * future file moves): `SISTER-IMPL-TAG: pack-scripted-tool-discovery`.
+   * future file moves): `SISTER-IMPL-TAG: trailmap-scripted-tool-discovery`.
    */
-  private fun buildPackScriptedToolRegistry(
-    packDir: File,
-    packFile: File,
-  ): PackScriptedToolDiscoveryResult {
-    val toolsDir = packDir.resolve(SCRIPTED_TOOLS_DIR)
-    if (!toolsDir.isDirectory) return PackScriptedToolDiscoveryResult(emptyMap(), emptyList())
-    // Canonical-path containment mirrors the runtime loader's `PackSource.readFilesystemSibling`
-    // guarantee — a `<pack>/tools/foo.yaml` symlink that resolves outside the pack must be
+  private fun buildTrailmapScriptedToolRegistry(
+    trailmapDir: File,
+    trailmapFile: File,
+  ): TrailmapScriptedToolDiscoveryResult {
+    val toolsDir = trailmapDir.resolve(SCRIPTED_TOOLS_DIR)
+    if (!toolsDir.isDirectory) return TrailmapScriptedToolDiscoveryResult(emptyMap(), emptyList())
+    // Canonical-path containment mirrors the runtime loader's `TrailmapSource.readFilesystemSibling`
+    // guarantee — a `<trailmap>/tools/foo.yaml` symlink that resolves outside the trailmap must be
     // rejected, not silently followed. Without this check the Gradle generator would happily
     // decode escape symlinks the runtime loader would refuse to read, producing inline-tool
     // configs in the generated `dist/targets/*.yaml` that the loader then rejects at start time.
-    val canonicalPackDir = packDir.canonicalFile.toPath()
+    val canonicalTrailmapDir = trailmapDir.canonicalFile.toPath()
     val candidates = toolsDir.listFiles()
       .orEmpty()
       .filter { it.isFile && it.name.endsWith(".yaml") }
@@ -696,18 +696,18 @@ internal class PackTargetGenerator(
           file.canonicalFile
         } catch (e: java.io.IOException) {
           throw GradleException(
-            "Pack '${packDir.name}' (${packFile.absolutePath}): scripted-tool descriptor " +
-              "candidate '${file.name}' under <pack>/tools/ could not be canonicalized " +
+            "Trailmap '${trailmapDir.name}' (${trailmapFile.absolutePath}): scripted-tool descriptor " +
+              "candidate '${file.name}' under <trailmap>/tools/ could not be canonicalized " +
               "(likely a symlink loop or other filesystem error): ${e.message}",
             e,
           )
         }
-        if (!canonicalFile.toPath().startsWith(canonicalPackDir)) {
+        if (!canonicalFile.toPath().startsWith(canonicalTrailmapDir)) {
           throw GradleException(
-            "Pack '${packDir.name}' (${packFile.absolutePath}): scripted-tool descriptor " +
-              "candidate '${file.name}' under <pack>/tools/ resolves outside the pack directory " +
-              "(canonical path: ${canonicalFile.absolutePath}, pack at: $canonicalPackDir). " +
-              "Symlinked descriptors must stay inside the pack.",
+            "Trailmap '${trailmapDir.name}' (${trailmapFile.absolutePath}): scripted-tool descriptor " +
+              "candidate '${file.name}' under <trailmap>/tools/ resolves outside the trailmap directory " +
+              "(canonical path: ${canonicalFile.absolutePath}, trailmap at: $canonicalTrailmapDir). " +
+              "Symlinked descriptors must stay inside the trailmap.",
           )
         }
         true
@@ -717,7 +717,7 @@ internal class PackTargetGenerator(
     val skipped = mutableListOf<File>()
     candidates.forEach { toolFile ->
       // Per-descriptor decode wrapped in try/log/skip so a single malformed (or half-written
-      // WIP) file under `<pack>/tools/` doesn't tank the entire Gradle generator run. Sibling
+      // WIP) file under `<trailmap>/tools/` doesn't tank the entire Gradle generator run. Sibling
       // descriptors still register; any `target.tools:` reference that names a tool from the
       // skipped file surfaces downstream as the unknown-name GradleException. See lead-dev
       // review #2 (round 2).
@@ -731,28 +731,28 @@ internal class PackTargetGenerator(
         toolFile.readText()
       } catch (e: java.io.IOException) {
         throw GradleException(
-          "Pack '${packDir.name}' (${packFile.absolutePath}): could not read scripted-tool " +
-            "descriptor candidate '${toolFile.name}' under <pack>/tools/: ${e.message}",
+          "Trailmap '${trailmapDir.name}' (${trailmapFile.absolutePath}): could not read scripted-tool " +
+            "descriptor candidate '${toolFile.name}' under <trailmap>/tools/: ${e.message}",
           e,
         )
       }
       val descriptorNode = try {
         yaml.parseToYamlNode(toolText) as? YamlMap
       } catch (e: com.charleskorn.kaml.YamlException) {
-        System.err.println(skippedMalformedMessage(toolFile, packDir, e))
+        System.err.println(skippedMalformedMessage(toolFile, trailmapDir, e))
         skipped += toolFile
         return@forEach
       } catch (e: IllegalArgumentException) {
         // kaml raises IllegalArgumentException on a handful of shape mismatches at parse time —
         // same author-fixable failure class as YamlException.
-        System.err.println(skippedMalformedMessage(toolFile, packDir, e))
+        System.err.println(skippedMalformedMessage(toolFile, trailmapDir, e))
         skipped += toolFile
         return@forEach
       }
       if (descriptorNode == null) {
         System.err.println(
           "trailblaze: skipping scripted-tool descriptor ${toolFile.absolutePath} " +
-            "(pack '${packDir.name}') — top-level YAML must be a map. Sibling descriptors still register.",
+            "(trailmap '${trailmapDir.name}') — top-level YAML must be a map. Sibling descriptors still register.",
         )
         skipped += toolFile
         return@forEach
@@ -781,7 +781,7 @@ internal class PackTargetGenerator(
             // unknown-name downstream.
             System.err.println(
               "trailblaze: skipping scripted-tool descriptor ${toolFile.absolutePath} " +
-                "(pack '${packDir.name}') — must declare either a top-level `name:` (single-tool " +
+                "(trailmap '${trailmapDir.name}') — must declare either a top-level `name:` (single-tool " +
                 "shape) or `tools:` (multi-tool shape). Sibling descriptors still register.",
             )
             skipped += toolFile
@@ -791,12 +791,12 @@ internal class PackTargetGenerator(
         }
       }
       declaredNames.forEach { name ->
-        // Symmetric with the bundler's `BlankToolName` guard — see SISTER-IMPL-TAG: pack-
+        // Symmetric with the bundler's `BlankToolName` guard — see SISTER-IMPL-TAG: trailmap-
         // scripted-tool-discovery. `name: ""` decodes successfully but would register under
         // the empty key, masking author errors.
         if (name.isBlank()) {
           throw GradleException(
-            "Pack '${packDir.name}' (${packFile.absolutePath}): scripted-tool descriptor " +
+            "Trailmap '${trailmapDir.name}' (${trailmapFile.absolutePath}): scripted-tool descriptor " +
               "'${toolFile.name}' declares a blank tool name. Tool names must be non-empty " +
               "and contain at least one non-whitespace character.",
           )
@@ -804,26 +804,26 @@ internal class PackTargetGenerator(
         val previous = registry[name]
         if (previous != null) {
           throw GradleException(
-            "Pack '${packDir.name}' (${packFile.absolutePath}): two scripted-tool descriptors " +
-              "under <pack>/tools/ declare the same tool name '$name': " +
+            "Trailmap '${trailmapDir.name}' (${trailmapFile.absolutePath}): two scripted-tool descriptors " +
+              "under <trailmap>/tools/ declare the same tool name '$name': " +
               "'${previous.toolFile.name}' and '${toolFile.name}'. Tool names must be unique " +
-              "within a pack — rename one of the descriptors' `name:` field (or, for a " +
+              "within a trailmap — rename one of the descriptors' `name:` field (or, for a " +
               "multi-tool descriptor, the offending entry under `tools:`).",
           )
         }
         registry[name] = ScriptedToolDescriptorMatch(toolFile, descriptorNode)
       }
     }
-    return PackScriptedToolDiscoveryResult(registry, skipped)
+    return TrailmapScriptedToolDiscoveryResult(registry, skipped)
   }
 
   private fun skippedMalformedMessage(
     toolFile: File,
-    packDir: File,
+    trailmapDir: File,
     cause: Throwable,
   ): String =
     "trailblaze: skipping malformed scripted-tool descriptor ${toolFile.absolutePath} " +
-      "(pack '${packDir.name}'): ${cause.message}. Sibling descriptors still register; any " +
+      "(trailmap '${trailmapDir.name}'): ${cause.message}. Sibling descriptors still register; any " +
       "`target.tools:` entry naming a tool from this file will fail downstream until the " +
       "file is fixed."
 
@@ -843,19 +843,19 @@ internal class PackTargetGenerator(
    * list of inline maps. Downstream dedup (one subprocess / one bundle per `script:`) happens
    * in the synthesizer + bundler, not here.
    */
-  private fun packScriptedToolToInlineMaps(
+  private fun trailmapScriptedToolToInlineMaps(
     descriptor: YamlMap,
     toolFile: File,
   ): List<Map<String, Any?>> {
     val rawScript = descriptor.requireScalarString("script", toolFile)
-    // Descriptor `script:` is descriptor-relative (`./foo.js`) per the pack-author convention.
+    // Descriptor `script:` is descriptor-relative (`./foo.js`) per the trailmap-author convention.
     // At runtime the synthesizer resolves it against JVM CWD (which is the repo root when the
     // user invokes `./trailblaze` from there). To make the generated target.yaml carry a path
     // that round-trips correctly, rewrite to the script file's path relative to [scriptRootDir]
     // — the consuming module sets this to `rootProject.layout.projectDirectory`.
     //
     // Falls back to the raw descriptor value when no `scriptRootDir` is configured: workspace
-    // packs that author scripted tools authored a path relative to where they invoke trailblaze
+    // trailmaps that author scripted tools authored a path relative to where they invoke trailblaze
     // and don't need the rewrite.
     val script = if (scriptRootDir != null) {
       val scriptFile = toolFile.parentFile.resolve(rawScript).canonicalFile
@@ -1008,7 +1008,7 @@ internal class PackTargetGenerator(
 
   /**
    * Translates the flat `inputSchema: { propName: { type, description?, enum?, required? } }`
-   * shape from `PackScriptedToolFile` into the JSON-Schema `{ type: object, properties: ...,
+   * shape from `TrailmapScriptedToolFile` into the JSON-Schema `{ type: object, properties: ...,
    * required: [...] }` shape `InlineScriptToolConfig.inputSchema` expects. Matches the runtime
    * conversion in `:trailblaze-models`'s `buildInputSchemaObject`.
    */

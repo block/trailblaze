@@ -87,4 +87,32 @@ data class SessionResult(
 
   /** Failure reasons from replaced attempts (populated during dedup when this result superseded earlier failures) */
   val replaced_failure_reasons: List<String> = emptyList(),
+
+  // === CI Provenance (per-session) ===
+  /**
+   * CI job ID that produced this session — typically the provider's per-step UUID. Captured
+   * at session-emit time so a later report-generation job in a different CI job can still
+   * trace each result back to the originating shard. Nullable — absent for local runs or
+   * pre-provenance log archives.
+   */
+  val ci_job_id: String? = null,
+
+  /**
+   * Filename of the per-session zip artifact that contains this session's logs
+   * (e.g. `logs_uitest-sample-app-accessibility_0__a1b2c3d4.zip`). Despite the legacy `logs_`
+   * prefix, the artifact this points to is the *per-session* zip (one zip per session),
+   * not a step-wide bundle — see `scripts/buildkite/buildkite_upload_logs.sh`. Combined
+   * with [ci_job_id] and the build's organization/pipeline/number from [CiRunMetadata], a
+   * consumer can resolve the artifact's deep-link URL via the CI provider's CLI without
+   * inspecting zip contents.
+   */
+  val logs_zip_filename: String? = null,
+
+  /**
+   * Resolved deep-link URL for the per-session zip artifact. Populated either by the upload
+   * script (via post-upload `buildkite-agent artifact search`, stamped into the on-disk
+   * sidecar before report generation) or, as a backstop, by the test-results publisher
+   * during cell-write. Nullable for local runs / pre-resolution archives.
+   */
+  val logs_zip_url: String? = null,
 )

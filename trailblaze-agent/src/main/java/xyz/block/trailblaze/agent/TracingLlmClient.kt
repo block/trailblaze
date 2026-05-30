@@ -2,10 +2,11 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.dsl.ModerationResult
-import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.LLMChoice
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
@@ -32,7 +33,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<Message.Response> = traceLlmClient("execute") {
+  ): Message.Assistant = traceLlmClient("execute") {
     delegate.execute(
       prompt = prompt,
       model = model,
@@ -44,7 +45,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<List<Message.Response>> = traceLlmClient("executeMultipleChoices") {
+  ): LLMChoice = traceLlmClient("executeMultipleChoices") {
     delegate.executeMultipleChoices(prompt, model, tools)
   }
 

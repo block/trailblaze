@@ -26,15 +26,16 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 /**
  * Covers `android_sendBroadcast` YAML round-trip and the typed-extra coercion layer.
  *
- * The tool is YAML-registered (see `trailblaze-config/tools/android_sendBroadcast.yaml`);
- * these tests pin down both the shorthand scalar extra form and the full object form,
- * and assert the coerced Kotlin runtime types that [BroadcastIntent.extras] will see.
+ * The tool is YAML-registered (see `trails/config/tools/android_sendBroadcast.yaml`);
+ * these tests pin down the closed-shape list-of-objects extras form (so the typed
+ * scripted-tool surface can lower it) and the coerced Kotlin runtime types that
+ * [BroadcastIntent.extras] will see.
  */
 class AndroidSendBroadcastSerializationTest {
   private val trailblazeYaml = createTrailblazeYaml(setOf(AndroidSendBroadcastTrailblazeTool::class))
 
   @Test
-  fun deserializeBroadcastWithShorthandStringExtras() {
+  fun deserializeBroadcastWithStringExtras() {
     val yaml = """
 - tools:
     - android_sendBroadcast:
@@ -42,8 +43,10 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: com.example.app
         componentClass: com.example.app.DebugBroadcastReceiver
         extras:
-          enable_test_mode: "1"
-          another_key: "hello"
+          - key: enable_test_mode
+            value: "1"
+          - key: another_key
+            value: "hello"
     """.trimIndent()
 
     val trailItems = trailblazeYaml.decodeTrail(yaml)
@@ -54,9 +57,9 @@ class AndroidSendBroadcastSerializationTest {
     assertThat(tool.componentPackage).isEqualTo("com.example.app")
     assertThat(tool.componentClass).isEqualTo("com.example.app.DebugBroadcastReceiver")
     assertThat(tool.extras).isEqualTo(
-      mapOf(
-        "enable_test_mode" to BroadcastExtra(value = "1"),
-        "another_key" to BroadcastExtra(value = "hello"),
+      listOf(
+        BroadcastExtra(key = "enable_test_mode", value = "1"),
+        BroadcastExtra(key = "another_key", value = "hello"),
       ),
     )
   }
@@ -70,19 +73,19 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: com.example
         componentClass: com.example.Receiver
         extras:
-          flag_string:
+          - key: flag_string
             value: "hello"
             type: string
-          flag_bool:
+          - key: flag_bool
             value: "true"
             type: boolean
-          flag_int:
+          - key: flag_int
             value: "42"
             type: int
-          flag_long:
+          - key: flag_long
             value: "4200000000"
             type: long
-          flag_float:
+          - key: flag_float
             value: "3.14"
             type: float
     """.trimIndent()
@@ -91,11 +94,12 @@ class AndroidSendBroadcastSerializationTest {
     val tool = (trailItems.single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
 
-    assertThat(tool.extras["flag_string"]!!.toTypedValue()).isInstanceOf(String::class).isEqualTo("hello")
-    assertThat(tool.extras["flag_bool"]!!.toTypedValue()).isInstanceOf(Boolean::class).isEqualTo(true)
-    assertThat(tool.extras["flag_int"]!!.toTypedValue()).isInstanceOf(Int::class).isEqualTo(42)
-    assertThat(tool.extras["flag_long"]!!.toTypedValue()).isInstanceOf(Long::class).isEqualTo(4_200_000_000L)
-    assertThat(tool.extras["flag_float"]!!.toTypedValue()).isInstanceOf(Float::class).isEqualTo(3.14f)
+    val byKey = tool.extras.associateBy { it.key }
+    assertThat(byKey["flag_string"]!!.toTypedValue()).isInstanceOf(String::class).isEqualTo("hello")
+    assertThat(byKey["flag_bool"]!!.toTypedValue()).isInstanceOf(Boolean::class).isEqualTo(true)
+    assertThat(byKey["flag_int"]!!.toTypedValue()).isInstanceOf(Int::class).isEqualTo(42)
+    assertThat(byKey["flag_long"]!!.toTypedValue()).isInstanceOf(Long::class).isEqualTo(4_200_000_000L)
+    assertThat(byKey["flag_float"]!!.toTypedValue()).isInstanceOf(Float::class).isEqualTo(3.14f)
   }
 
   @Test
@@ -107,7 +111,7 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: p
         componentClass: c
         extras:
-          flag:
+          - key: flag
             value: "7"
             type: INT
     """.trimIndent()
@@ -115,12 +119,12 @@ class AndroidSendBroadcastSerializationTest {
     val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
 
-    assertThat(tool.extras["flag"]!!.toTypedValue()).isEqualTo(7)
+    assertThat(tool.extras.single().toTypedValue()).isEqualTo(7)
   }
 
   @Test
   fun unknownTypeReportsValidOptions() {
-    val extra = BroadcastExtra(value = "1", type = "bogus")
+    val extra = BroadcastExtra(key = "k", value = "1", type = "bogus")
 
     assertFailure { extra.toTypedValue() }
       .hasMessage { msg ->
@@ -134,7 +138,7 @@ class AndroidSendBroadcastSerializationTest {
   }
 
   @Test
-  fun cliFlagAliasesCanonicalizeToJavaTypeNames() {
+  fun cliFlagAliasesResolveToTheRightJavaType() {
     val yaml = """
 - tools:
     - android_sendBroadcast:
@@ -142,10 +146,10 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: p
         componentClass: c
         extras:
-          shortEi:
+          - key: shortEi
             value: "42"
             type: ei
-          shortEz:
+          - key: shortEz
             value: "true"
             type: ez
     """.trimIndent()
@@ -153,16 +157,16 @@ class AndroidSendBroadcastSerializationTest {
     val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
 
-    // Short forms normalize to long forms at decode time — storage stays canonical.
-    assertThat(tool.extras["shortEi"]!!.type).isEqualTo("int")
-    assertThat(tool.extras["shortEz"]!!.type).isEqualTo("boolean")
-    assertThat(tool.extras["shortEi"]!!.toTypedValue()).isEqualTo(42)
-    assertThat(tool.extras["shortEz"]!!.toTypedValue()).isEqualTo(true)
+    val byKey = tool.extras.associateBy { it.key }
+    // Storage preserves whatever the author wrote; `toTypedValue()` resolves both short
+    // (`ei`/`ez`) and long (`int`/`boolean`) forms via case-insensitive lookup.
+    assertThat(byKey["shortEi"]!!.toTypedValue()).isEqualTo(42)
+    assertThat(byKey["shortEz"]!!.toTypedValue()).isEqualTo(true)
   }
 
   @Test
   fun parseFailureIncludesValueAndType() {
-    val extra = BroadcastExtra(value = "not-a-number", type = "int")
+    val extra = BroadcastExtra(key = "k", value = "not-a-number", type = "int")
 
     assertFailure { extra.toTypedValue() }
       .hasMessage { msg ->
@@ -172,7 +176,7 @@ class AndroidSendBroadcastSerializationTest {
   }
 
   @Test
-  fun unknownKeyInExtraObjectFormReportsHint() {
+  fun unknownKeyInExtraObjectReportsHint() {
     val yaml = """
 - tools:
     - android_sendBroadcast:
@@ -180,20 +184,18 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: p
         componentClass: c
         extras:
-          flag:
+          - key: flag
             valu: "oops"
     """.trimIndent()
 
     assertFailure { trailblazeYaml.decodeTrail(yaml) }
       .hasMessage { msg ->
         msg.contains("valu")
-        msg.contains("value")
-        msg.contains("type")
       }
   }
 
   @Test
-  fun roundTripPreservesExtrasInCanonicalForm() {
+  fun roundTripPreservesExtrasInListForm() {
     val yaml = """
 - tools:
     - android_sendBroadcast:
@@ -201,8 +203,9 @@ class AndroidSendBroadcastSerializationTest {
         componentPackage: com.example
         componentClass: com.example.Receiver
         extras:
-          bare: "1"
-          count:
+          - key: bare
+            value: "1"
+          - key: count
             value: "42"
             type: int
     """.trimIndent()
@@ -214,11 +217,41 @@ class AndroidSendBroadcastSerializationTest {
     val tool = (reDecoded.single() as TrailYamlItem.ToolTrailItem)
       .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
 
-    // Shorthand expands to canonical object form on the round trip; coerced
-    // typed values still resolve correctly.
-    assertThat(tool.extras["bare"]).isEqualTo(BroadcastExtra(value = "1", type = "string"))
-    assertThat(tool.extras["count"]).isEqualTo(BroadcastExtra(value = "42", type = "int"))
-    assertThat(tool.extras["count"]!!.toTypedValue()).isEqualTo(42)
+    val byKey = tool.extras.associateBy { it.key }
+    assertThat(byKey["bare"]).isEqualTo(BroadcastExtra(key = "bare", value = "1", type = "string"))
+    assertThat(byKey["count"]).isEqualTo(BroadcastExtra(key = "count", value = "42", type = "int"))
+    assertThat(byKey["count"]!!.toTypedValue()).isEqualTo(42)
+  }
+
+  @Test
+  fun blankExtraKeyFailsExecutionWithClearError() = runBlocking {
+    val tool = AndroidSendBroadcastTrailblazeTool(
+      action = "a", componentPackage = "p", componentClass = "c",
+      extras = listOf(BroadcastExtra(key = "  ", value = "oops")),
+    )
+
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("blank key")
+    assertThat(result.errorMessage).contains("oops")
+  }
+
+  @Test
+  fun duplicateExtraKeysFailExecutionWithClearError() = runBlocking {
+    val tool = AndroidSendBroadcastTrailblazeTool(
+      action = "a", componentPackage = "p", componentClass = "c",
+      extras = listOf(
+        BroadcastExtra(key = "dup", value = "1"),
+        BroadcastExtra(key = "dup", value = "2"),
+      ),
+    )
+
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("duplicate")
+    assertThat(result.errorMessage).contains("dup")
   }
 
   @Test

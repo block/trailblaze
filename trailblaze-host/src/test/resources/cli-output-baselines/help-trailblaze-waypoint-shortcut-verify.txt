@@ -5,14 +5,15 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint shortcut verify [-hV] --device=<id> [--driver=<id>]
-       [--max-attempts=<n>] [--timeout-seconds=<s>] [--trail-out=<path>]
-       [--trailblaze-bin=<path>] --yaml=<path>
+Usage: trailblaze waypoint shortcut verify [-hV] [--device=<id>]
+       [--driver=<id>] [--max-attempts=<n>] [--timeout-seconds=<s>]
+       [--trail-out=<path>] [--trailblaze-bin=<path>] --yaml=<path>
 Empirical replay of a proposed shortcut against a connected emulator.
-Generates a throwaway trail YAML and runs it via `trailblaze trail`.
+Generates a throwaway trail YAML and runs it via `trailblaze run`.
 Returns 0 if the post-condition waypoint matches, non-zero otherwise.
       --device=<id>        Device id to run against (forwarded to `trailblaze
-                             trail --device`).
+                             run --device`).
+                           Defaults to $TRAILBLAZE_DEVICE.
       --driver=<id>        Driver to use in the generated trail config.
                              Default: ANDROID_ONDEVICE_ACCESSIBILITY.
                            Pick a different value when verifying an iOS
@@ -31,7 +32,7 @@ Returns 0 if the post-condition waypoint matches, non-zero otherwise.
                            shortcut and the default policy reflects that.
       --timeout-seconds=<s>
                            Per-attempt timeout in seconds for the inner
-                             `trailblaze trail` subprocess.
+                             `trailblaze run` subprocess.
                            Default: 600 (10 min). A wedged trail run (device
                              disconnect, ADB hung, runtime
                            stuck on settle) is destroyed and returns exit code

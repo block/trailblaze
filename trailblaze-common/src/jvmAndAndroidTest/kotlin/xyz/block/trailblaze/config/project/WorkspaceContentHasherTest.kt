@@ -31,9 +31,9 @@ class WorkspaceContentHasherTest {
   @BeforeTest
   fun setUp() {
     workspace = Files.createTempDirectory("workspace-hash-test").toFile()
-    File(workspace, "trailblaze.yaml").writeText("packs:\n  - packs/foo/pack.yaml\n")
-    File(workspace, "packs/foo").mkdirs()
-    File(workspace, "packs/foo/pack.yaml").writeText("id: foo\n")
+    File(workspace, "trailblaze.yaml").writeText("trailmaps:\n  - trailmaps/foo/trailmap.yaml\n")
+    File(workspace, "trailmaps/foo").mkdirs()
+    File(workspace, "trailmaps/foo/trailmap.yaml").writeText("id: foo\n")
     File(workspace, "tools").mkdirs()
     File(workspace, "tools/helper.js").writeText("export function noop() {}\n")
   }
@@ -65,9 +65,9 @@ class WorkspaceContentHasherTest {
     try {
       File(replica, "tools").mkdirs()
       File(replica, "tools/helper.js").writeText("export function noop() {}\n")
-      File(replica, "packs/foo").mkdirs()
-      File(replica, "packs/foo/pack.yaml").writeText("id: foo\n")
-      File(replica, "trailblaze.yaml").writeText("packs:\n  - packs/foo/pack.yaml\n")
+      File(replica, "trailmaps/foo").mkdirs()
+      File(replica, "trailmaps/foo/trailmap.yaml").writeText("id: foo\n")
+      File(replica, "trailblaze.yaml").writeText("trailmaps:\n  - trailmaps/foo/trailmap.yaml\n")
       val replicaHash = WorkspaceContentHasher.compute(replica, version = "v1")
       assertEquals(firstHash, replicaHash, "Walk order must not affect the hash.")
     } finally {
@@ -91,7 +91,7 @@ class WorkspaceContentHasherTest {
   @Test
   fun `compute returns a different hash when a file's content changes`() {
     val before = WorkspaceContentHasher.compute(workspace, version = "v1")
-    File(workspace, "packs/foo/pack.yaml").writeText("id: foo\n# edited\n")
+    File(workspace, "trailmaps/foo/trailmap.yaml").writeText("id: foo\n# edited\n")
     val after = WorkspaceContentHasher.compute(workspace, version = "v1")
     assertNotEquals(before, after, "Content edit must flip the hash.")
   }

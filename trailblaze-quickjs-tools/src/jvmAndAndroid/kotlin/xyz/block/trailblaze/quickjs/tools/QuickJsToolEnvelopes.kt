@@ -2,6 +2,7 @@ package xyz.block.trailblaze.quickjs.tools
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Typed envelopes for the SDK's `TrailblazeToolResult` shape and the per-invocation `ctx`
@@ -28,6 +29,14 @@ import kotlinx.serialization.json.Json
 internal data class QuickJsToolResultEnvelope(
   val content: List<QuickJsContentPart> = emptyList(),
   val isError: Boolean = false,
+  /**
+   * Optional MCP-spec `structuredContent` payload — a bundle handler that returns a typed
+   * non-string value sets this so the caller (a scripted tool via `client.tools.<name>(...)`)
+   * unwraps it as the typed `result` instead of the legacy text-only envelope. See
+   * [xyz.block.trailblaze.scripting.callback.JsScriptingCallbackResult.CallToolResult.structuredContent]
+   * for the cross-transport wire field this lands on.
+   */
+  val structuredContent: JsonElement? = null,
 )
 
 /**
@@ -75,9 +84,9 @@ internal data class QuickJsDeviceContext(
  * to act on the session's active app without hardcoding ids.
  *
  * **Three fields, intentional separation:**
- *  - [id] — the target's identifier from its pack manifest (`"clock"`, `"contacts"`, …).
+ *  - [id] — the target's identifier from its trailmap manifest (`"clock"`, `"contacts"`, …).
  *  - [appIds] — the raw declared candidate app ids in priority order, exactly as the
- *    target's pack manifest declares them. Informational; useful when authors want to
+ *    target's trailmap manifest declares them. Informational; useful when authors want to
  *    inspect "what builds are configured for this target" rather than just launch one.
  *  - [appId] — the candidate that's actually installed on the device. Picked at
  *    session start by intersecting [appIds] with the device's installed-apps list (one

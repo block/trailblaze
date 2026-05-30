@@ -21,7 +21,7 @@ import xyz.block.trailblaze.ui.goose.TrailblazeGooseExtension
  * round-trip with a tree-API-plus-shared-emitter approach, so a baseline regression
  * surface is needed.
  *
- * The reusable scenarios live here (rather than in `:trailblaze-pack-bundler`'s emitter
+ * The reusable scenarios live here (rather than in `:trailblaze-trailmap-bundler`'s emitter
  * test) because they exercise the *integration* — read existing config, splice typed
  * entry, write back — not just the emitter primitives.
  */

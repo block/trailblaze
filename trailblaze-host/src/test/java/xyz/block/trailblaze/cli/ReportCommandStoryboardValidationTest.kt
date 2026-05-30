@@ -20,13 +20,13 @@ class ReportCommandStoryboardValidationTest {
   @Test
   fun `--storyboard-columns above the valid range exits with USAGE`() {
     val exit = runReport("--storyboard", "/tmp/sb.webp", "--id", "x", "--storyboard-columns", "13")
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
   }
 
   @Test
   fun `--storyboard-columns below the valid range exits with USAGE`() {
     val exit = runReport("--storyboard", "/tmp/sb.webp", "--id", "x", "--storyboard-columns", "0")
-    assertEquals(CommandLine.ExitCode.USAGE, exit)
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit)
   }
 
   @Test
@@ -42,7 +42,7 @@ class ReportCommandStoryboardValidationTest {
       "--storyboard-yaml", "--no-storyboard-yaml",
     )
     assertEquals(
-      CommandLine.ExitCode.USAGE,
+      TrailblazeExitCode.MISUSE.code,
       exit,
       "Specifying both the positive and negated form should fail with USAGE — picocli " +
         "treats this as ambiguous user input rather than applying \"last wins\".",
@@ -56,6 +56,7 @@ class ReportCommandStoryboardValidationTest {
         configProvider = { error("configProvider must not be invoked when validation rejects the args") },
       ),
     ).setCaseInsensitiveEnumValuesAllowed(true)
+    installTrailblazeExceptionHandlers(root)
     return root.execute("report", *args)
   }
 }

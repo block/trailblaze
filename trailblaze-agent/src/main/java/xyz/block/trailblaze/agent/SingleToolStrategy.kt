@@ -13,19 +13,19 @@ import xyz.block.trailblaze.util.Console
 class SingleToolStrategy : ToolProcessingStrategy {
 
   override fun processToolMessages(
-    llmResponses: List<Message.Response>,
+    llmResponse: Message.Assistant,
     stepStatus: PromptStepStatus,
     traceId: TraceId,
     agent: TrailblazeAgent,
     helper: TrailblazeKoogLlmClientHelper,
   ) {
-    val toolMessage = llmResponses.firstToolMessage()
-    val llmMessage = llmResponses.llmMessage()
+    val toolCall = llmResponse.firstToolCall()
+    val llmMessage = llmResponse.textMessage()
 
-    if (toolMessage != null) {
+    if (toolCall != null) {
       helper.handleLlmResponse(
         llmMessage = llmMessage,
-        tool = toolMessage,
+        tool = toolCall,
         step = stepStatus,
         agent = agent,
         traceId = traceId,

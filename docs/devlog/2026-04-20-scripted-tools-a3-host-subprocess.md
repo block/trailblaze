@@ -162,7 +162,7 @@ Entry fields (MVP):
   schema-reserved but not runtime-implemented.
 
 **Path resolution (settled by the runtime landing):** target YAMLs live as
-classpath resources (`trailblaze-config/targets/*.yaml`), not filesystem
+classpath resources (`trails/config/targets/*.yaml`), not filesystem
 files, so "relative to the target YAML's directory" has no filesystem
 meaning. The runtime anchors relative `script:` paths against the **JVM's
 current working directory** (`System.getProperty("user.dir")`) — i.e. where

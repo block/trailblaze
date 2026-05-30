@@ -1,0 +1,37 @@
+# Library trailmap — owns the Android framework-primitive tools that were historically
+# scoped via the flat `android_*` name prefix (`android_adbShell`, `android_sendBroadcast`,
+# `android_systemUiDemoMode`). Standing this up as a library trailmap makes the
+# prefix-equals-trailmap-id rule hold for these tools without renaming any of them.
+#
+# This trailmap has no `target:` block, so it's not surfaced as a runnable target — its sole
+# job is to declare the `android_primitives` toolset as ownership of these three primitives.
+# The toolset itself lives in the global `trails/config/toolsets/` pool (same discovery
+# path as `core_interaction`, `android_framework`, `mobile_primitives`, etc.); this manifest
+# doesn't enumerate the toolset files. See docs/devlog/2026-05-27-trailmap-scoped-tool-naming.md
+# (PR #3435), and the parallel `mobile` library trailmap (PR #3451) this one mirrors.
+#
+# The `platforms:` block below feeds the *runtime-registry* layer (see
+# [TrailblazeTrailmapManifest.platforms] kdoc): any future consumer that adds
+# `dependencies: [android]` will get `android_primitives` registered for callback dispatch
+# on Android. This is deliberately decoupled from the agent-toolbox layer — consumers control
+# what surfaces to the LLM via their own `target.platforms.tool_sets:`; this `platforms:`
+# block only governs what's dispatchable via `client.callTool(...)`. Safe today because no
+# consumer depends on `android` yet; the block puts the ownership wiring in place ahead of
+# the consumer-migration follow-up.
+#
+# Android-only by construction — `android_adbShell`, `android_sendBroadcast`, and
+# `android_systemUiDemoMode` are Android-specific primitives with no iOS / web / compose
+# implementations. No `ios:` / `web:` / `compose:` entries in the platforms block; the
+# resolver test pins that the resolver doesn't synthesize phantom platform keys.
+#
+# Consumers do NOT yet depend on this trailmap. The existing `android_framework` toolset
+# (which lists `android_sendBroadcast` and `android_adbShell` alongside
+# `mobile_listInstalledApps`) is left untouched — additive establishment only. The
+# duplicate-entry cleanup (removing `android_sendBroadcast` / `android_adbShell` from
+# `android_framework` once consumers migrate to depend on this trailmap) is explicitly
+# deferred to a follow-up PR.
+id: android
+platforms:
+  android:
+    tool_sets:
+      - android_primitives

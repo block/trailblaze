@@ -106,6 +106,12 @@ class HostAccessibilityRpcClientTest {
         },
       toolExecutionContextProvider = toolExecutionContextProvider,
       memory = memory,
+      // Collapse production's 10s re-warm budget + 500ms poll into ~50ms / 1ms so any future
+      // wedge-recovery test on this client doesn't pay real-clock retry delays. Today no test
+      // exercises the slow path, but the override mirrors HostOnDeviceRpcTrailblazeAgentTest's
+      // pattern so the speedup is preserved if/when one is added.
+      reWarmTimeoutMs = 50L,
+      reWarmPollIntervalMs = 1L,
     )
 
   @Test

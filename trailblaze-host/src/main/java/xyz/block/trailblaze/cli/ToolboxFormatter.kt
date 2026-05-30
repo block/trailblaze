@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -108,6 +109,138 @@ internal object ToolboxFormatter {
   data class TargetSummary(val name: String, val platforms: List<String>?)
 
   /**
+   * Renders the single-line toolbox banner that prepends EVERY `toolbox` invocation —
+   * the resolved-context line a downstream LLM (Claude / Codex / etc.) reads first to know
+   * "this output describes (target X, platform Y)". Distinct from
+   * [renderResolvedTargetHeader]: the banner is unconditional and states WHAT was resolved;
+   * the resolved-target header is the OOBE discovery affordance that also tells the user
+   * HOW it was resolved and how to switch.
+   *
+   * Shape:
+   *  - `# Trailblaze toolbox` — when neither target nor platform are known (e.g.
+   *    `toolbox --name <tool>` invoked without a connected device or pinned target).
+   *  - `# Trailblaze toolbox — <target>` — target known, platform unknown.
+   *  - `# Trailblaze toolbox — <target> (<platform>)` — both known.
+   *  - `… — tool: <toolName>` suffix appended when [toolName] is set, marking this output
+   *    as a single-tool drill-down rather than a target-wide listing.
+   */
+  fun renderToolboxBanner(target: String?, platform: String?, toolName: String? = null): String {
+    // Funnel blank-string inputs through the same path as null — picocli won't normally
+    // emit empty `--name`, and the CLI already pre-blanks `resolvedDevice` upstream, but
+    // belt-and-braces here so the banner never renders a dangling `(<empty>)` or
+    // `— tool: ` suffix when a future caller passes empty strings through.
+    val normalizedTarget = target?.takeIf { it.isNotBlank() }
+    val normalizedPlatform = platform?.takeIf { it.isNotBlank() }
+    val normalizedTool = toolName?.takeIf { it.isNotBlank() }
+    val core = when {
+      normalizedTarget == null && normalizedPlatform == null -> "# Trailblaze toolbox"
+      normalizedTarget == null -> "# Trailblaze toolbox — ($normalizedPlatform)"
+      normalizedPlatform == null -> "# Trailblaze toolbox — $normalizedTarget"
+      else -> "# Trailblaze toolbox — $normalizedTarget ($normalizedPlatform)"
+    }
+    return if (normalizedTool != null) "$core — tool: $normalizedTool" else core
+  }
+
+  /**
+   * Renders the `## System prompt` section that surfaces the resolved target's curated
+   * LLM-facing prose to a CLI-side agent. Returned as a list of lines including a trailing
+   * blank line so the next section ([renderToolsHeader] or the existing catalog) breathes.
+   *
+   * Empty / blank content returns an empty list — callers can omit the section entirely
+   * without a guard. The trailing `## Tools` divider is rendered separately via
+   * [renderToolsHeader] so callers can choose whether to emit it (skip it when the system
+   * prompt section is absent — there's no need for a `## Tools` header without a `##
+   * System prompt` above to disambiguate from).
+   */
+  fun renderSystemPromptSection(content: String?): List<String> {
+    if (content.isNullOrBlank()) return emptyList()
+    val out = mutableListOf<String>()
+    out += "## System prompt"
+    out += ""
+    out += content.trimEnd()
+    out += ""
+    return out
+  }
+
+  /**
+   * Renders the `## Tools` header line plus a trailing blank. Emitted before the existing
+   * catalog rendering when a `## System prompt` section preceded it, so the two sections
+   * are visually delimited for downstream LLM consumers.
+   */
+  fun renderToolsHeader(): List<String> = listOf("## Tools", "")
+
+  /**
+   * Renders the full system-prompt block — prose section *plus* the `## Tools` divider —
+   * or an empty list when [content] is null / blank.
+   *
+   * Centralises the "emit `## Tools` only when system prompt was emitted" policy so callers
+   * (today: [ToolboxCommand.formatToolsResult]; potentially future ones) don't each re-derive
+   * the guard. The pieces remain available individually via [renderSystemPromptSection] and
+   * [renderToolsHeader] for callers that need just one half (e.g., a future help screen that
+   * surfaces only the prompt).
+   */
+  fun renderSystemPromptBlock(content: String?): List<String> {
+    val prompt = renderSystemPromptSection(content)
+    if (prompt.isEmpty()) return emptyList()
+    return prompt + renderToolsHeader()
+  }
+
+  /**
+   * One-shot dispatcher used by [ToolboxCommand.formatToolsResult] to decide whether the
+   * `## System prompt` + `## Tools` block fires for a given daemon response.
+   *
+   * Encodes the cross-mode policy that previously lived as a sequence of statements in the
+   * command class: the block is emitted for every target-wide listing (index / target /
+   * search / role-filter) and suppressed for tool-specific drill-downs (`--name <tool>`).
+   *
+   * @param response the daemon's JSON response object (already parsed by the caller)
+   * @param isNameMode true when `--name <tool>` is in play (suppresses the block)
+   * @return the lines to emit, or an empty list when the block should not fire — either
+   *   because the caller is in `--name` mode, the response has no `systemPrompt` field, or
+   *   the prompt content is blank
+   */
+  fun systemPromptBlockForResponse(
+    response: JsonObject,
+    isNameMode: Boolean,
+  ): List<String> {
+    if (isNameMode) return emptyList()
+    val content = response["systemPrompt"]?.jsonPrimitive?.contentOrNull
+    return renderSystemPromptBlock(content)
+  }
+
+  /**
+   * Renders the three-line "resolved target" header that prepends `toolbox`'s output
+   * when the user didn't pass `--target`. Tells them which target was picked, where
+   * it came from, what alternatives exist, and how to switch — so the first
+   * `toolbox --device <p>` invocation discovers the flag without requiring the user
+   * to know the word "target" exists.
+   *
+   * Returned as a list of lines so the unit test can assert against the line shape
+   * without redirecting Console. The caller emits each line via `Console.info`.
+   *
+   * The pure-rendering contract: caller passes a fully-resolved [sourceLabel] phrase
+   * (e.g. "from workspace config", "built-in default"). The formatter stays decoupled
+   * from the CLI-resolution enum that drives those phrases.
+   *
+   * Empty `availableTargets` collapses the second line to just the resolved target —
+   * a workspace with no discoverable targets shouldn't render "Available targets: "
+   * with a dangling colon.
+   */
+  fun renderResolvedTargetHeader(
+    resolved: String,
+    sourceLabel: String,
+    availableTargets: List<String>,
+  ): List<String> {
+    val availableList = if (availableTargets.isEmpty()) resolved else availableTargets.joinToString(", ")
+    return listOf(
+      "Using target: $resolved (no --target specified; $sourceLabel)",
+      "Available targets: $availableList",
+      "To switch: --target <name>",
+      "",
+    )
+  }
+
+  /**
    * Renders a role-grouped section — one of the headline blocks at the top of
    * `toolbox`'s default index view, or the entire body of `toolbox <role>` filtered
    * output. Pure: takes the role's tool ids + a name → description lookup and emits
@@ -162,7 +295,7 @@ internal object ToolboxFormatter {
     return listOf(
       "No $role tools available for $tgt on $plat.",
       "",
-      "If you need one, use the `waypoints` skill to author a new $suffix in the relevant pack.",
+      "If you need one, use the `waypoints` skill to author a new $suffix in the relevant trailmap.",
     )
   }
 
@@ -205,6 +338,96 @@ internal object ToolboxFormatter {
       }
     }
     return byName
+  }
+
+  /**
+   * Result of rendering a single tool's help (the `toolbox --name <tool>` shape).
+   *
+   * [Lines] carries the rendered output ready for `Console.info` emission.
+   * [Error] is the daemon-reported "tool not found" or other error message — caller
+   * decides whether to print via `Console.error` and which exit code to return.
+   *
+   * **Why this diverges from the `List<String>` convention elsewhere in this file**:
+   * the other renderers (`renderTargetListBlock`, `renderRoleSection`,
+   * `renderRoleEmptyMessage`) use empty list as their "no output" signal because empty
+   * is a benign rendering state. Per-tool help has a distinct *error* shape — the
+   * daemon's "tool not found" reply must be routed to `Console.error` (stderr) and
+   * paired with a non-zero exit code, not collapsed to "render nothing". The sealed
+   * split makes that error vs. success contract explicit at the call sites
+   * ([ToolboxCommand.formatNameResult] and [ToolHelpRenderer.renderHelp]) so neither
+   * can drop the error path on accident.
+   */
+  sealed interface ToolNameRender {
+    data class Lines(val lines: List<String>) : ToolNameRender
+    data class Error(val message: String) : ToolNameRender
+  }
+
+  /**
+   * Renders the per-tool help block — name, description, parameters, optional
+   * category/target footers — from the `toolbox` daemon response JSON. Pure: returns
+   * lines; the caller emits them.
+   *
+   * Shared between `toolbox --name <tool>` (the explicit catalog path) and
+   * `tool <name> --help` (the discoverable path) so both surfaces stay in lock-step.
+   */
+  fun renderToolNameLines(json: JsonObject): ToolNameRender {
+    val tool = json["tool"] as? JsonObject
+      ?: return ToolNameRender.Error(
+        json["error"]?.jsonPrimitive?.contentOrNull ?: "Tool not found",
+      )
+
+    val out = mutableListOf<String>()
+    val toolName = tool["name"]?.jsonPrimitive?.contentOrNull ?: "?"
+    val toolDesc = tool["description"]?.jsonPrimitive?.contentOrNull ?: ""
+    out += toolName
+    out += "  $toolDesc"
+    out += ""
+    out += renderParameterLines(tool, "  ")
+
+    // Defensive joins: a malformed daemon payload (null entry, nested object, accidental
+    // array-of-arrays) must not crash help rendering — sibling parsers in this file
+    // (`parseTargetSummariesJson`) already use the same `mapNotNull { (it as? JsonPrimitive)
+    // ... }` shape. Drop bad rows silently and render whatever remains.
+    val categories = (json["foundInCategories"] as? JsonArray)
+      ?.mapNotNull { (it as? JsonPrimitive)?.takeUnless { p -> p is JsonNull }?.content }
+    if (!categories.isNullOrEmpty()) {
+      out += "  Categories: ${categories.joinToString(", ")}"
+    }
+    val targets = (json["foundInTargets"] as? JsonArray)
+      ?.mapNotNull { (it as? JsonPrimitive)?.takeUnless { p -> p is JsonNull }?.content }
+    if (!targets.isNullOrEmpty()) {
+      out += "  Targets: ${targets.joinToString(", ")}"
+    }
+    return ToolNameRender.Lines(out)
+  }
+
+  /**
+   * Renders parameter rows for a single tool — required first, then optional, each
+   * prefixed with [indent]. Empty list when the tool has no parameters.
+   */
+  fun renderParameterLines(toolObj: JsonObject, indent: String): List<String> {
+    val out = mutableListOf<String>()
+    val required = toolObj["requiredParameters"] as? JsonArray
+    if (required != null) {
+      for (param in required) {
+        val pObj = (param as? JsonObject) ?: continue
+        val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: continue
+        val pType = pObj["type"]?.jsonPrimitive?.contentOrNull ?: ""
+        val pDesc = pObj["description"]?.jsonPrimitive?.contentOrNull ?: ""
+        out += "${indent}$pName ($pType, required): $pDesc"
+      }
+    }
+    val optional = toolObj["optionalParameters"] as? JsonArray
+    if (optional != null) {
+      for (param in optional) {
+        val pObj = (param as? JsonObject) ?: continue
+        val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: continue
+        val pType = pObj["type"]?.jsonPrimitive?.contentOrNull ?: ""
+        val pDesc = pObj["description"]?.jsonPrimitive?.contentOrNull ?: ""
+        out += "${indent}$pName ($pType, optional): $pDesc"
+      }
+    }
+    return out
   }
 
   /**

@@ -104,7 +104,7 @@ class MultiAgentV3Runner private constructor(
    */
   suspend fun blaze(
     objective: String,
-    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("blaze"),
+    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("step"),
   ): BlazeResult {
     val startTime = System.currentTimeMillis()
 
@@ -516,7 +516,7 @@ class MultiAgentV3Runner private constructor(
                   xyz.block.trailblaze.waypoint.StepPostconditionAsserter.describeMismatch(assertion)
               is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.WaypointNotFound ->
                 "Step $stepIndex: postcondition references unknown waypoint " +
-                  "'${assertion.requestedId}'. Check the waypoint id against the loaded packs."
+                  "'${assertion.requestedId}'. Check the waypoint id against the loaded trailmaps."
               is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.NoScreenState ->
                 "Step $stepIndex: postcondition '${assertion.definitionId}' could not be " +
                   "evaluated — the screen state provider returned no state within " +

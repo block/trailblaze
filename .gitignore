@@ -54,20 +54,27 @@ local.settings.gradle
 # Node
 node_modules/
 
-# Trailblaze pack bundle — generated per-pack `.d.ts` files emitted by the
-# `trailblaze.bundle` Gradle plugin and by `trailblaze check`. Derived from the pack
-# manifest, regenerated on build, not source-of-truth. Anchored to the per-pack tools
+# Trailblaze trailmap bundle — generated per-trailmap `.d.ts` files emitted by the
+# `trailblaze.bundle` Gradle plugin and by `trailblaze check`. Derived from the trailmap
+# manifest, regenerated on build, not source-of-truth. Anchored to the per-trailmap tools
 # dir so an unrelated future `.trailblaze/` directory elsewhere in the tree (e.g., a
 # config dir) isn't silently ignored.
 **/trailblaze-config/tools/.trailblaze/
-# Same generator, workspace-anchor layout. Per-pack output sits under each pack's
-# `tools/.trailblaze/`; the workspace-level `.trailblaze/sdk/` + `tsconfig.base.json`
-# (written by `trailblaze check`) live one level up at `<workspace>/.trailblaze/`.
-**/trails/config/packs/*/tools/.trailblaze/
+# Same generator, workspace-anchor layout. Per-trailmap output (the typed-tool surface
+# `tools/trailblaze-client.d.ts`) sits directly under each trailmap's `tools/`; the
+# workspace-level `.trailblaze/sdk/` + `tsconfig.base.json` (written by `trailblaze
+# check`) live one level up at `<workspace>/.trailblaze/`.
+#
+# Authors who want the typed surface as a checked-in API contract (so a fresh clone
+# resolves typed `client.tools.<name>(args)` methods in IDEs without any pre-IDE
+# bootstrap) can commit `tools/trailblaze-client.d.ts` per trailmap — already-tracked
+# files are unaffected by these ignore rules. The framework regenerates it
+# idempotently for the same toolset.
+**/trails/config/trailmaps/*/tools/trailblaze-client.d.ts
 /trails/.trailblaze/
 
 # Daemon-emitted compiled-target output (`trailblaze check` writes per-target YAML
-# bundles here from the workspace's `packs/` definitions). Generated and lazy-rebundled
+# bundles here from the workspace's `trailmaps/` definitions). Generated and lazy-rebundled
 # at daemon init, never edited by hand.
 /trails/config/dist/
 
@@ -81,6 +88,14 @@ __pycache__/
 *.pyc
 /sdks/python/.venv/
 
+# NPM/bun lockfiles — ignored globally because most node_modules-using directories
+# in this tree (examples, fixtures) deliberately float deps. The ONE exception is
+# the framework's TypeScript SDK at `sdks/typescript/`, whose `bun.lock` IS
+# committed so the bundled artifacts (`trailblaze-sdk-bundle.js`,
+# `dist/index.d.ts`) regenerate byte-deterministically across CI and developer
+# machines. See the framework's pre-push checklist + the static-checks CI
+# script for the strict-lockfile install workflow.
 package-lock.json
 bun.lock
 bun.lockb
+!sdks/typescript/bun.lock

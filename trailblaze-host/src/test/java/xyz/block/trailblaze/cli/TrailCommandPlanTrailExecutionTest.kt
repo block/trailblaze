@@ -9,11 +9,12 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 /**
  * Pins the contract of [TrailCommand.planTrailExecution] and [TrailCommand.expandTrailFiles].
- * These are the single source of truth for how `trailblaze trail` resolves its arguments into
+ * These are the single source of truth for how `trailblaze run` resolves its arguments into
  * an executable workload — directory expansion, `--tags` filtering, and `skip:` classification.
  * The downstream per-file loop in both `call()` and `delegateToDaemon()` is a single iteration
  * over the plan's output, so anything the planner mis-classifies surfaces as a CI regression in
@@ -184,6 +185,32 @@ class TrailCommandPlanTrailExecutionTest {
   }
 
   @Test
+  fun `directory with blaze and ios iphone recording picks the recording given multi-segment classifiers`() {
+    // Regression for the load-vs-save filename gap. Save-side writes recordings using the
+    // host classifier's full list (`ios-iphone.trail.yaml` for an iPhone sim). Load-side
+    // used to compute classifiers as platform-only at CLI plan time, so the candidate
+    // filename list was `[ios.trail.yaml, blaze.yaml, ...]` — no match for
+    // `ios-iphone.trail.yaml` on disk, silent fallback to `blaze.yaml`, paid LLM run.
+    // [DeviceClassifierResolver] now produces the multi-segment list at plan time; this
+    // test pins that `findBestTrailResourcePath` picks the recording end-to-end when fed
+    // those classifiers.
+    val trailDir = File(tempFolder.root, "ios-iphone-recording").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    val iosIphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = listOf(
+        TrailblazeDeviceClassifier("ios"),
+        TrailblazeDeviceClassifier("iphone"),
+      ),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(iosIphoneRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
   fun `directory with multiple android recordings picks the platform-level one given only the platform classifier`() {
     // Pins the "CLI classifier list is platform-only" contract documented on
     // parseDeviceClassifiersFromSpec. With richer multi-segment recordings (e.g.
@@ -203,6 +230,93 @@ class TrailCommandPlanTrailExecutionTest {
 
     assertEquals(1, expanded.size)
     assertEquals(androidRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `directory with only platform-prefixed recording falls back to that recording over blaze yaml`() {
+    // The recording-emitter writes filenames using the device's *full* classifier list (e.g.
+    // `ios-iphone.trail.yaml` for a booted iPhone), but at CLI expansion time
+    // [parseDeviceClassifiersFromSpec] only produces the platform classifier (`[ios]`). The
+    // resolver's candidate list is `[ios.trail.yaml, blaze.yaml, trailblaze.yaml]` for that
+    // input, so it falls through to `blaze.yaml` — silently bypassing the only recording on
+    // disk. `--use-recorded-steps` then has no effect because the loaded YAML has no
+    // `recording:` blocks. Fix: when the resolver returns an NL fallback but a
+    // `<platform>-*.trail.yaml` exists in the directory, prefer the platform-prefixed
+    // recording. Without this fallback, `./trailblaze run <dir> --device ios/<udid>`
+    // against the canonical iOS Contacts example (which ships `ios-iphone.trail.yaml`)
+    // silently fires the LLM despite the explicit replay flag.
+    val trailDir = File(tempFolder.root, "ios-recording-only").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("ios"),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(iphoneRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `directory with multiple platform-prefixed recordings prefers the most-specific one by filename length`() {
+    // Tie-breaker for the platform-prefixed fallback: when an author ships multiple
+    // device-class captures in one directory (e.g. ios-iphone + ios-ipad), the CLI's
+    // single-classifier limitation can't disambiguate further. Prefer the longer
+    // filename (more classifier segments hyphenated into the name) as a proxy for
+    // "most specific" — picks `ios-iphone.trail.yaml` (21 chars) over
+    // `ios-ipad.trail.yaml` (19 chars).
+    val trailDir = File(tempFolder.root, "ios-multi").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    writeTrail("ios-ipad.trail.yaml", dir = trailDir)
+    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("ios"),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(iphoneRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `equal-length platform-prefixed recordings tie-break alphabetically for determinism`() {
+    // Stable tiebreaker when "most specific" can't disambiguate: equal filename length
+    // → alphabetical-first wins. Pins the deterministic ordering so two captures of the
+    // same device-class width in one dir don't flap. Same length (both 21 chars):
+    // `ios-iphone.trail.yaml` < `ios-iwatch.trail.yaml` alphabetically.
+    val trailDir = File(tempFolder.root, "ios-tied").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+    writeTrail("ios-iwatch.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("ios"),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(iphoneRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `platform-prefixed recording fallback only fires when the resolver returned an NL definition`() {
+    // Confirms the fix doesn't perturb the normal path: when an exact-match `<platform>.trail.yaml`
+    // exists, it wins over any `<platform>-*.trail.yaml` sibling. The fallback only kicks in
+    // when the resolver had no recording-shaped candidate and fell through to `blaze.yaml`.
+    val trailDir = File(tempFolder.root, "ios-exact-plus-class").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    val exactRecording = writeTrail("ios.trail.yaml", dir = trailDir)
+    writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("ios"),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(exactRecording.canonicalPath, expanded.single().canonicalPath)
   }
 
   @Test

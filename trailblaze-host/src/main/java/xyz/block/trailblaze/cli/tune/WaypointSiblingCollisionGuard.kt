@@ -13,7 +13,7 @@ import xyz.block.trailblaze.waypoint.WaypointMatcher
  *
  * The check is: does applying the proposal cause waypoint A to *newly* match a step that
  * some other waypoint B *already* matches? If yes, A's new match set overlaps with B's
- * existing match set on a step that didn't overlap before — a collision the pack reviewer
+ * existing match set on a step that didn't overlap before — a collision the trailmap reviewer
  * almost certainly didn't want.
  *
  * Two entry points:
@@ -68,7 +68,7 @@ object WaypointSiblingCollisionGuard {
    * checked against every *other* waypoint in [siblings] — if any sibling also
    * matches, the step is a collision.
    *
-   * Sibling list passed in by the caller (the CLI hands in the rest of the pack). Pass
+   * Sibling list passed in by the caller (the CLI hands in the rest of the trailmap). Pass
    * `target = null` for non-templated waypoints; templated ones must come with a
    * resolved [TargetTemplateContext] or the matcher will skip them as
    * `UNRESOLVED_TARGET_TEMPLATE` and the guard will silently see no matches.
@@ -115,7 +115,7 @@ object WaypointSiblingCollisionGuard {
    * the before-side matcher entirely when null).
    *
    * Self-filter: a sibling whose id equals [waypointId] is skipped — the caller can
-   * pass the full pack without worrying about pseudo-collisions against itself.
+   * pass the full trailmap without worrying about pseudo-collisions against itself.
    *
    * Templated waypoints must come with a resolved [TargetTemplateContext] or the
    * matcher will skip them as `UNRESOLVED_TARGET_TEMPLATE` and the guard will silently

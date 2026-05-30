@@ -166,7 +166,7 @@ fun List<TrailblazeTool>.toLogPayloads(): List<OtherTrailblazeTool> = map { it.t
  * Resolves the verification bit for a tool instance.
  *
  * Verification tools are read-only assertions whose successful execution is itself the
- * verify verdict (e.g. `assertVisible`, `web_verify_text_visible`). Used by
+ * verify verdict (e.g. `assertVisible`, `web_verifyTextVisible`). Used by
  * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute — non-verification
  * tools could side-effect the device and their success is unrelated to the assertion.
  *
@@ -185,40 +185,6 @@ fun TrailblazeTool.isVerificationToolInstance(): Boolean {
     Console.error(
       "Failed to read isVerification annotation from ${this::class.simpleName}: ${e.message}. " +
         "Defaulting to false.",
-    )
-    false
-  }
-}
-
-/**
- * Resolves the host-side-callback-preference bit for a tool instance.
- *
- * Dual-mode composition primitives whose `Success.message` payload is the contract for
- * scripted-tool authors (today: `mobile_listInstalledApps`, `android_sendBroadcast`,
- * `android_adbShell`) opt in to host-side routing on the callback channel because the on-device-RPC
- * return path strips per-tool `Success.message`. `HostOnDeviceRpcTrailblazeAgent` consults
- * this predicate when deciding whether to short-circuit the dispatch host-side instead of
- * routing through RPC.
- *
- * Per-instance [TrailblazeTool.toolMetadata] (when present) wins — same path
- * `YamlDefinedTrailblazeTool` uses for the other flags, so a YAML-aliased dual-mode tool
- * can opt in via `requires_host_side_for_callback: true` in its descriptor. Otherwise the
- * class-level [TrailblazeToolClass] annotation is authoritative; defaults to `false`.
- *
- * Reflection is wrapped in try/catch matching the four sibling predicates above. Some
- * host environments strip/proguard annotation metadata; an uncaught exception there would
- * tank the entire callback-dispatch path with no diagnostic. Falling back to `false`
- * preserves the safe default (route via RPC) and `Console.error` makes the failure
- * observable.
- */
-fun TrailblazeTool.prefersHostSideForCallbackInstance(): Boolean {
-  this.toolMetadata?.prefersHostSideForCallback?.let { return it }
-  return try {
-    this::class.findAnnotation<TrailblazeToolClass>()?.prefersHostSideForCallback ?: false
-  } catch (e: Exception) {
-    Console.error(
-      "Failed to read prefersHostSideForCallback annotation from ${this::class.simpleName}: " +
-        "${e.message}. Defaulting to false.",
     )
     false
   }
