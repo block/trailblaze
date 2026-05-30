@@ -49,9 +49,15 @@ jobs:
         # `playwright install chromium`, but it does not install OS-level libraries.
         # These packages cover the shared libs that Chromium requires on Ubuntu and
         # are not guaranteed to be present on the runner image.
+        #
+        # ffmpeg (with libwebp) is added here too: the docs report-gallery step exports
+        # an animated-timeline WebP via `trailblaze report --webp`, which shells out to
+        # `ffmpeg -c:v libwebp_anim`. The storyboard WebP uses bundled libwebp and does
+        # not need ffmpeg, so a degraded runner still produces the storyboard + HTML.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            ffmpeg \
             libasound2t64 \
             libatk-bridge2.0-0 \
             libatk1.0-0 \
@@ -76,6 +82,14 @@ jobs:
         continue-on-error: true
         run: ./.github/pr_generate_trailblaze_report.sh
 
+      - name: Generate docs report-gallery assets
+        # Storyboard + animated-timeline WebP + interactive HTML report, consumed by the
+        # GitHub Pages build for the Report Gallery. continue-on-error so a flaky encoder
+        # never reds the trail job; the docs fall back to the committed placeholder.
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_generate_report_assets.sh
+
       - name: Create artifacts
         if: always()
         continue-on-error: true
@@ -89,6 +103,17 @@ jobs:
           path: |
             trailblaze-logs.zip
             trailblaze_report.html
+
+      - name: Upload docs report-gallery assets
+        # Dedicated, predictably-named artifact the GitHub Pages workflow downloads from
+        # the latest successful run on main. Kept separate from the debug bundle above so
+        # the Pages fetch pulls only the three files the docs page embeds.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-report-wikipedia
+          path: report-assets/
+          if-no-files-found: warn
 
       - name: Fail if trails failed
         if: steps.run-trails.outcome == 'failure'

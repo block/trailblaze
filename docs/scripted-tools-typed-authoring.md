@@ -1,480 +1,688 @@
 ---
-title: Typed Authoring for Scripted Tools
+title: Scripted Tools (TypeScript)
 ---
 
-# Typed Authoring for Scripted Tools
+# Scripted Tools (TypeScript)
 
-This page describes the **typed authoring surface** for scripted tools — a
-TypeScript-first declaration pattern that lets you express a tool's inputs and result
-shape as plain TypeScript interfaces. The authoring surface is stable; the daemon-time
-runtime registration, dispatch path, and per-trailmap `client.d.ts` codegen are all wired.
+A **scripted tool** is a custom Trailblaze tool authored in TypeScript that drops into a
+**trailmap** (a directory of Trailblaze configuration that groups a target app with the
+tools that drive it) with no Kotlin code, no Gradle build, and no per-tool YAML
+descriptor. You declare the tool's inputs (and optional structured result) as TypeScript
+interfaces, write the handler against the typed `ctx.tools.<name>(args)` composition
+surface, and the framework takes care of the rest — schema extraction, IDE typings, MCP
+registration, dispatch.
 
-This is the recommended authoring shape for new scripted tools. The older
-full-YAML + `export async function` shape is still supported — documented as the
-[Legacy YAML + `export async function` Reference](scripted_tools.md) for trailmaps
-that haven't been migrated yet — but the typed surface in this page **supersedes**
-it for new tools. It expresses everything the legacy YAML descriptor used to,
-directly in TypeScript, while keeping the YAML descriptor as a tiny `_meta:`-carrying
-anchor.
+This page is the per-tool reference. **If you're starting from zero, read
+[Your First Trailmap](your-first-trailmap.md) first** — it walks an empty directory all
+the way to a passing run, and that walkthrough is the natural lead-in to the material
+on this page. Come back here for the per-tool authoring details once your workspace is
+running.
+
+### Vocabulary cheat sheet
+
+You'll see these terms throughout the page; here's the cheat sheet so you can read
+straight through without context-switching:
+
+| Term | What it means |
+|---|---|
+| **target** | An app under test (iOS Contacts, your team's web checkout flow). |
+| **trailmap** | A directory that groups one target with the tools, system prompt, and trails that drive it (`trails/config/trailmaps/<id>/`). |
+| **trail** | A `.yaml` test file (`blaze.yaml` + optional `<device>.trail.yaml` recording) that exercises a target. |
+| **`trailblaze` CLI** | The single binary you run. On first invocation it boots a local **daemon** that holds the device session and dispatches tools. Restart the daemon when you change a trailmap; everything else (typings, schema extraction, test runs) flows through the CLI. |
+| **driver** | The framework's adapter for one platform — `ios-host` for iOS Simulator, `playwright-native` for browsers, etc. A target picks which drivers it supports under `platforms.<p>.drivers:`. |
+| **host vs on-device** | "Host" is the developer machine running the daemon and CLI. "On-device" is the emulator / simulator / browser the trailmap drives. Tools default to running on-host; the `requiresHost: true` spec flag enforces that for tools that need Node-only APIs. |
+| **QuickJS** | The embedded JavaScript engine the daemon uses to dispatch `.ts` tools in-process (no subprocess fork, no Node `node_modules`). Tools needing full Node-compatible APIs opt into a Bun subprocess via `requiresHost: true`. |
+| **MCP** | Model Context Protocol — the wire protocol the daemon uses to advertise tools to the agent. Scripted tools register through this automatically; you never touch the protocol directly. |
+
+See [Getting Started](getting_started.md) for install + first-device pairing.
+
+The worked references throughout this page are the two example trailmaps in the OSS tree:
+
+- **[`examples/ios-contacts/`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts)**
+  — drives Apple's built-in iOS Contacts app through 9 scripted tools (search, open,
+  create, delete, verify, plus a composition example). See
+  [`README`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/README.md)
+  for the workspace-level walkthrough.
+- **[`examples/wikipedia/`](https://github.com/block/trailblaze/tree/main/examples/wikipedia)**
+  — drives live `en.wikipedia.org` through Playwright Native with 9 scripted tools
+  (search, articles, language switching, banner dismissal, structure verification, plus
+  a composition example). See
+  [`README`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/README.md)
+  for the workspace-level walkthrough.
+
+Both trailmaps ship the canonical shape this page documents: one `.ts` per tool, no
+sibling YAML, typed inputs, TSDoc-as-description, composition via `ctx.tools`.
 
 ## The shape
 
-A typed-author tool is a single `.ts` declaration that names the inputs and result shape.
-This is the canonical example from the `ios-contacts` worked-example trailmap:
+A scripted tool is a single `.ts` file containing a `trailblaze.tool<I, O>(spec, handler)`
+export. The export name IS the tool name the LLM will see. Everything the framework needs
+— the tool's input schema, its result shape, its description, its platform/driver gates —
+is derived from the `.ts` file itself: the type parameters, the spec object, and the TSDoc
+above the binding.
+
+The example below imports a few helpers (`SELECTORS`, `articleUrl`, `nonEmptyString`)
+from `./wikipedia_shared` — that's a sibling module **you write**, not a framework
+import. Every trailmap that has more than one tool ends up wanting a `*_shared.ts`
+helper to keep selectors and constants out of individual tool bodies; see
+[Shared helpers](#shared-helpers) below for what goes in it. The framework treats it as
+a plain TypeScript module — it has no `trailblaze.tool(...)` export, so it doesn't
+register as a tool.
 
 ```ts
+// examples/wikipedia/trails/config/trailmaps/wikipedia/tools/wikipedia_web_openArticle.ts
 import { trailblaze } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString, textIsVisible } from "./contacts_ios_shared";
+import { SELECTORS, articleUrl, nonEmptyString } from "./wikipedia_shared";  // ← author-written helpers
 
-const DEFAULT_QUERY = "John";
+export interface OpenArticleArgs {
+  /** Title of the Wikipedia article to open. Defaults to "Wikipedia". */
+  title?: string;
+}
 
-export interface SearchContactsArgs {
-  /** Query to type into the contacts list's pull-down search field. */
+/**
+ * Open a Wikipedia article by title. Use this whenever the task is to
+ * navigate to a specific article — e.g. "open the Albert Einstein article",
+ * "go to the Python article". Asserts the destination's #firstHeading is
+ * visible.
+ */
+export const wikipedia_web_openArticle = trailblaze.tool<OpenArticleArgs>(
+  { supportedPlatforms: ["web"], requiresContext: true },
+  async (input, ctx) => {
+    const title = nonEmptyString(input.title, "Wikipedia");
+
+    await ctx.tools.web_navigate({ action: "GOTO", url: articleUrl(title) });
+    await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
+
+    return `Opened "${title}".`;
+  },
+);
+```
+
+That's the whole tool. There is no `wikipedia_web_openArticle.yaml`, no `inputSchema:`
+block to maintain in two places, no `name:` to keep in sync. The export name is
+`wikipedia_web_openArticle`; the framework registers a tool by exactly that name.
+
+Read the full file:
+[`wikipedia_web_openArticle.ts`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/trails/config/trailmaps/wikipedia/tools/wikipedia_web_openArticle.ts).
+
+### What the framework derives from this one file
+
+| From | Becomes |
+|---|---|
+| The export name (`wikipedia_web_openArticle`) | The tool's dispatchable identifier; an entry on `ctx.tools` for sibling tools to compose; the name listed under `target.tools:` in `trailmap.yaml`. |
+| The TSDoc above `export const` | The tool's LLM-facing description (and IDE hover text on `ctx.tools.wikipedia_web_openArticle(...)`). |
+| The `<I, O>` type parameters | The tool's input JSON Schema and (when O is given) typed result shape. Per-field TSDoc on each interface property becomes that field's JSON Schema `description`. |
+| The spec object (`{ supportedPlatforms, requiresContext, ... }`) | Registration gates and metadata hints carried into the runtime tool descriptor. |
+| The handler body | The runtime behavior. |
+
+### Three overloads, simplest-to-richest
+
+The most common form is **#1 (typed input, string return)** — that's what every UI-driving
+tool in the worked examples uses. The others trade pieces away or add structured returns
+when the tool's contract calls for them.
+
+```ts
+// 1. Typed input, string return — the workhorse for "drive UI, report what happened".
+//    This is what 90%+ of scripted tools end up looking like.
+export const search = trailblaze.tool<SearchArgs>(
+  { supportedPlatforms: ["web"], requiresContext: true },
+  async (input, ctx) => { /* ... */ return `Searched for "${input.query}".`; },
+);
+
+// 2. Typed input AND typed result — when the tool returns structured data callers
+//    consume programmatically (rare; usually you want a human-readable string).
+export const getAppMetadata = trailblaze.tool<EmptyInput, AppMetadata>(
+  async (_, ctx) => ({ version: "1.0.3", buildNumber: 142 }),
+);
+
+// 3. No input, string return — the trivial smoke-test form. Defaults to
+//    TInput = {}, TResult = string.
+export const ping = trailblaze.tool(async () => "pong");
+```
+
+The spec object is also optional — pass it as the first positional argument when the tool
+needs gating (`supportedPlatforms`, `requiresContext`, etc.); omit it for a bare-handler
+shape:
+
+```ts
+// Bare-handler — no spec.
+trailblaze.tool<Args>(async (input, ctx) => { ... });
+
+// With spec.
+trailblaze.tool<Args>(
+  { supportedPlatforms: ["ios"], requiresContext: true },
+  async (input, ctx) => { ... },
+);
+```
+
+The analyzer requires **named type references** for the `<I, O>` slots — inline
+primitives like `<{q: string}, string>` are rejected. Declare an interface (or import
+`EmptyInput` for the no-input case) and pass its name.
+
+## Wiring a tool into a trailmap
+
+A trailmap is the unit that groups a target with the tools that drive it. Layout:
+
+```
+my-workspace/trails/config/
+├── trailblaze.yaml                          # workspace anchor
+└── trailmaps/
+    └── wikipedia/
+        ├── trailmap.yaml                    # target manifest (display_name, platforms, tools list)
+        ├── wikipedia-system-prompt.md       # optional LLM tool-selection guidance
+        └── tools/
+            ├── wikipedia_shared.ts          # shared helpers (selectors, label constants)
+            ├── wikipedia_web_openArticle.ts # one tool per file
+            ├── wikipedia_web_searchAndOpenFirstResult.ts
+            └── ...
+```
+
+The trailmap manifest lists each tool by **bare export name** under `target.tools:`:
+
+```yaml
+# examples/wikipedia/trails/config/trailmaps/wikipedia/trailmap.yaml
+id: wikipedia
+target:
+  display_name: Wikipedia (en)
+  system_prompt_file: wikipedia-system-prompt.md
+  tools:
+    - wikipedia_web_openMainPage
+    - wikipedia_web_openArticle
+    - wikipedia_web_searchAndOpenFirstResult
+    - wikipedia_web_verifyArticleStructure
+    # … more …
+  platforms:
+    web:
+      drivers: [playwright-native, playwright-electron]
+      tool_sets:
+        - web_core
+        - web_verification
+        - memory
+```
+
+The trailmap loader walks `tools/` for every `.ts` that exports a `trailblaze.tool(...)`
+declaration; the names listed under `target.tools:` decide which of those tools are
+**advertised to the agent** for this target. Files in `tools/` that are imported as
+helpers (`wikipedia_shared.ts`) but don't export a tool are ignored by the loader. Tools
+that DO export but aren't listed under `target.tools:` (e.g. typed-demo or
+work-in-progress drafts) live in the candidate pool but stay invisible to the agent
+until you add their name to the list.
+
+See [Trailmaps](trailmaps.md) for the full manifest schema (dependencies, defaults,
+toolsets, waypoints).
+
+## Typed inputs
+
+The input interface is the source of truth for the parameter schema. Per-field TSDoc
+becomes per-field JSON Schema `description`. The analyzer also picks up JSDoc tags like
+`@default` and turns them into schema defaults — the runtime fills missing fields from
+those defaults before the handler sees `input`:
+
+```ts
+export interface SearchAndOpenFirstResultArgs {
+  /** Query to type into the search box. */
   query?: string;
-  /**
-   * Row text the tool taps after typing the query. Defaults to `query`. Pass
-   * this explicitly when the query is a partial prefix of the row's visible
-   * label (e.g. `query="alb"` + `rowText="Albert Einstein"`).
-   */
-  rowText?: string;
-  /**
-   * When true (default), taps the first visible matching row to open the
-   * contact's detail screen.
-   */
+  /** Heading text to assert on the opened article. Defaults to `query`. */
+  expectedHeading?: string;
+  /** Submit the search form (default true). */
+  openFirstResult?: boolean;
+}
+```
+
+The runtime validates `args` against the derived schema before the handler runs. If the
+agent sends a malformed payload (wrong type, missing required field), the dispatch fails
+fast with a `ValidationError` envelope that names the offending fields — the LLM can
+self-correct on the next round without crashing inside the handler.
+
+For typed structured returns, declare a second type parameter. Both type parameters
+must be **named type references** — the analyzer rejects inline type literals (e.g.
+`<{title: string}, ArticleMetadata>`) in the `<I, O>` slots, so declare an interface
+for the input even when it has one field:
+
+```ts
+export interface DescribeArticleArgs {
+  title: string;
+}
+
+export interface ArticleMetadata {
+  title: string;
+  lengthBytes: number;
+}
+
+export const wikipedia_web_describeArticle = trailblaze.tool<DescribeArticleArgs, ArticleMetadata>(
+  { supportedPlatforms: ["web"], requiresContext: true },
+  async (input, ctx) => {
+    // ... read the page ...
+    return { title: input.title, lengthBytes: 12345 };
+  },
+);
+```
+
+Arrays as **interface fields** flow through the analyzer normally
+(`filters: string[]`). Arrays as the **top-level type parameter** need a named alias
+(`type ItemList = Item[]`) — the analyzer requires a named root type for the `<I, O>`
+slots.
+
+For the no-input case, import `EmptyInput`:
+
+```ts
+import { trailblaze, type EmptyInput } from "@trailblaze/scripting";
+
+export const wikipedia_web_openMainPage = trailblaze.tool<EmptyInput>(
+  { supportedPlatforms: ["web"], requiresContext: true },
+  async (_, ctx) => { /* ... */ return "Opened main page."; },
+);
+```
+
+## The spec object
+
+The spec carries the framework hints that used to live under `_meta: { trailblaze/... }`
+in the legacy YAML descriptor. Every field is optional:
+
+| Field | Purpose |
+|---|---|
+| `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
+| `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
+| `requiresHost?: boolean` | Registration gate. Skip registering on-device QuickJS runs. Use when the tool needs Node-only APIs (`node:fs`, `node:child_process`, file locks) — the on-device runtime can't reach them. |
+| `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
+
+There is **no `description` field on the spec.** The tool's description lives in the
+TSDoc above the `export const` binding — that's the single source of truth the analyzer
+reads, and forcing it into TSDoc keeps the IDE-hover text and the LLM-facing description
+identical by construction.
+
+A tool whose spec is `{ supportedPlatforms: ["web"], requiresContext: true }` is the
+canonical shape for a UI-driving web tool. Mobile UI tools use
+`{ supportedPlatforms: ["ios"], requiresContext: true }` or `["android"]`. Cross-platform
+helpers omit `supportedPlatforms` entirely.
+
+## Composing other tools via `ctx.tools.<name>(args)`
+
+The second argument to every handler is the `ToolContext`. Its `tools` namespace is a
+typed Proxy that exposes every tool reachable from this trailmap:
+
+- **Framework primitives** brought in by the trailmap's `platforms.<p>.tool_sets:`
+  declarations (e.g. `web_core` → `web_navigate`, `web_click`, `web_type`).
+- **Sibling scripted tools** in this trailmap's own `target.tools:` list.
+- **Transitively-inherited scripted tools** that this trailmap's `dependencies:` publish
+  via their own `exports:` field.
+
+Calls are typed by the per-trailmap `trailblaze-client.d.ts` (regenerated on every
+`trailblaze check` and on every daemon-aware command):
+
+```ts
+// Compose framework primitives:
+await ctx.tools.web_type({ ref: SELECTORS.searchInput, text: query });
+await ctx.tools.web_click({ ref: SELECTORS.searchSubmit });
+await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
+
+// Compose your own sibling scripted tools (cross-tool composition):
+await ctx.tools.contacts_ios_searchContacts({
+  query: "Albert Einstein",
+  openFirstResult: true,
+});
+```
+
+The proxy throws on failure — if the inner call fails, `ctx.tools.<name>(...)` throws an
+`Error` you can `try`/`catch`. An unknown name is a `tsc` compile error (the typed
+surface deliberately omits a generic `callTool` so authors can't bypass type-checking).
+
+### Worked composition example
+
+[`contacts_ios_searchAndVerify`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_searchAndVerify.ts)
+is the canonical composition demo — it doesn't dispatch any iOS primitive directly,
+just delegates to two sibling scripted tools and assembles their behaviors into one
+higher-level workflow:
+
+```ts
+export const contacts_ios_searchAndVerify = trailblaze.tool<SearchAndVerifyArgs>(
+  { supportedPlatforms: ["ios"], requiresContext: true },
+  async (input, ctx) => {
+    const query = nonEmptyString(input?.query, "John Appleseed");
+    const expectedName = nonEmptyString(input?.expectedName, query);
+    const requireFields = filterNonEmptyStrings(input?.requireFields);
+
+    await ctx.tools.contacts_ios_searchContacts({
+      query,
+      rowText: expectedName,
+      openFirstResult: true,
+    });
+
+    await ctx.tools.contacts_ios_verifyContactStructure({
+      name: expectedName,
+      requireFields,
+    });
+
+    return requireFields.length > 0
+      ? `Searched for "${query}", opened "${expectedName}", and verified fields [${requireFields.join(", ")}].`
+      : `Searched for "${query}", opened "${expectedName}", and verified detail screen.`;
+  },
+);
+```
+
+The agent sees one tool-call worth of latency — the whole composition runs inside one
+QuickJS invocation. Each sub-tool's selector knowledge, retry behavior, and assertion
+shape stays in one place; the wrapper just chooses which primitives to run.
+
+## Worked examples
+
+### Wikipedia: a typed web tool with conditional UI
+
+[`wikipedia_web_searchAndOpenFirstResult.ts`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/trails/config/trailmaps/wikipedia/tools/wikipedia_web_searchAndOpenFirstResult.ts)
+covers the common shape of an action tool that types into a form, optionally submits,
+and verifies the destination. `nonEmptyString`, `ensureOn`, and `isWikipediaHostname`
+below come from the trailmap's `wikipedia_shared.ts` helper module — typical helpers
+for a shared module — see [Shared helpers](#shared-helpers).
+
+```ts
+export interface SearchAndOpenFirstResultArgs {
+  /** Query to type into the search box. */
+  query?: string;
+  /** Heading text to assert on the opened article. Defaults to `query`. */
+  expectedHeading?: string;
+  /** Submit the search form (default true). */
   openFirstResult?: boolean;
 }
 
 /**
- * Search the iOS Contacts list for a name and (optionally) open the first
- * matching contact. Use this whenever the task is to search Contacts for a
- * person, look up a contact by name, find someone in Contacts, or jump to a
- * known contact's detail screen.
+ * Search Wikipedia from the header search box. Use this whenever the task
+ * is to search Wikipedia for something — e.g. "search for Albert Einstein",
+ * "look up Python on Wikipedia", "find articles about Mount Everest"...
  */
-export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
+export const wikipedia_web_searchAndOpenFirstResult = trailblaze.tool<SearchAndOpenFirstResultArgs>(
+  { supportedPlatforms: ["web"], requiresContext: true },
   async (input, ctx) => {
-    const query = nonEmptyString(input?.query, DEFAULT_QUERY);
-    const rowText = nonEmptyString(input?.rowText, query);
-    const openFirstResult = input?.openFirstResult !== false;
+    const query = nonEmptyString(input.query, "Trailblazer");
+    const expectedHeading = nonEmptyString(input.expectedHeading, query);
+    const openFirstResult = input.openFirstResult !== false;
 
-    await ensureContactsRoot(ctx);
-    await ctx.tools.swipe({ direction: "DOWN" });
-    await ctx.tools.tapOnElementWithText({ text: "Search" });
-    await ctx.tools.inputText({ text: query });
+    await ensureOn(ctx, isWikipediaHostname, WIKIPEDIA_MAIN_PAGE);
+
+    await ctx.tools.web_type({ ref: SELECTORS.searchInput, text: query });
 
     if (!openFirstResult) {
-      return `Typed "${query}" into Contacts search and stopped (no result tapped).`;
+      return `Typed "${query}" into Wikipedia search and stopped (no submit).`;
     }
-    if (await textIsVisible(ctx, "No Results")) {
+
+    await ctx.tools.web_click({ ref: SELECTORS.searchSubmit });
+    await ctx.tools.web_verifyElementVisible({ ref: SELECTORS.firstHeading });
+    await ctx.tools.web_verifyTextVisible({ text: expectedHeading });
+
+    return `Searched for "${query}" and verified result heading "${expectedHeading}".`;
+  },
+);
+```
+
+### iOS Contacts: a typed mobile tool with structured branching
+
+[`contacts_ios_verifyContactStructure.ts`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_verifyContactStructure.ts)
+illustrates a verification tool whose contract depends on which fields the caller
+demands:
+
+```ts
+export interface VerifyContactStructureArgs {
+  /** Contact name to assert in the navbar / heading. */
+  name?: string;
+  /**
+   * Optional list of additional field labels the contact must surface — common
+   * values: "phone", "mobile", "email", "home", "work". Empty list (the
+   * default) skips the field-presence assertions.
+   */
+  requireFields?: string[];
+}
+
+/**
+ * Verify the currently-open iOS contact detail screen conforms to an expected
+ * shape — name heading visible, plus an optional list of required field
+ * labels ("phone", "email", "home", etc.)...
+ */
+export const contacts_ios_verifyContactStructure = trailblaze.tool<VerifyContactStructureArgs>(
+  { supportedPlatforms: ["ios"], requiresContext: true },
+  async (input, ctx) => {
+    const name = nonEmptyString(input?.name, DEFAULT_NAME);
+    const requireFields = filterNonEmptyStrings(input?.requireFields);
+
+    await ctx.tools.assertVisibleWithAccessibilityText({ accessibilityText: name });
+
+    if (requireFields.length === 0) {
+      return `Verified contact "${name}" detail screen rendered.`;
+    }
+
+    const missing: string[] = [];
+    for (const field of requireFields) {
+      if (!(await textIsVisible(ctx, field))) {
+        missing.push(field);
+      }
+    }
+    if (missing.length > 0) {
       throw new Error(
-        `contacts_ios_searchContacts: query "${query}" returned no results.`,
+        `contacts_ios_verifyContactStructure: contact "${name}" missing fields: ${missing.join(", ")}.`,
       );
     }
-    await ctx.tools.tapOnElementWithText({ text: rowText });
-    return `Searched for "${query}" and opened the row matching "${rowText}".`;
+    return `Verified contact "${name}" with fields [${requireFields.join(", ")}].`;
   },
 );
 ```
 
-Consumers — whether a sibling tool in the same trailmap, or another trailmap that has imported
-the per-trailmap generated `client.d.ts` — see a fully typed entry on the
-`tools.<name>(args)` namespace. The namespace surfaces on both authoring contexts: as
-`ctx.tools.<name>(args)` inside a typed handler (the modern composition surface, shown
-below), and as `client.tools.<name>(args)` on a raw `TrailblazeClient` for legacy or
-direct-API callers. The two are aliases for the same Proxy — pick whichever your
-handler's signature gives you.
+### Shared helpers
+
+Every trailmap with more than one tool ends up wanting a shared helper module — a
+single place to keep label constants, selector definitions, and small validators. Both
+example trailmaps follow the same convention:
+
+- iOS Contacts:
+  [`contacts_ios_shared.ts`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_shared.ts)
+  — exports a `LABELS` frozen object with every accessibility label, plus
+  `ensureContactsRoot`, `textIsVisible`, `nonEmptyString`, `filterNonEmptyStrings`.
+- Wikipedia:
+  [`wikipedia_shared.ts`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/trails/config/trailmaps/wikipedia/tools/wikipedia_shared.ts)
+  — exports a `SELECTORS` frozen object with every CSS/ARIA selector, plus
+  `ensureOn`, `elementIsVisible`, `articleUrl`, and friends.
+
+Helpers take `ctx: ToolContext` directly (no `client` argument) and live in
+`*_shared.ts` so the trailmap loader skips them at registration time (they have no
+`trailblaze.tool(...)` export).
+
+## Tool descriptions: what the LLM actually sees
+
+The TSDoc on each exported `const` is the **only** way the LLM learns what your tool
+does. Two non-obvious rules:
+
+- **Don't write "USE THIS TOOL FOR X."** The LLM picks tools by matching the prompt
+  against the description's prose. Telling it to "use" the tool reduces the description
+  to a single keyword and loses the surrounding context. Describe what the tool *does*
+  and include the task patterns it matches — "Search Wikipedia for X / look up Y on
+  Wikipedia / find articles about Z" — not "USE THIS WHEN SEARCHING."
+- **Match real user phrasing.** If a trail says "open Albert Einstein's contact" but the
+  tool description only mentions "navigate to a contact's detail screen," the LLM may
+  not connect them. Include the synonyms (open, view, navigate to, look up) that real
+  prompts will use.
+
+The same care applies to per-field TSDoc. A `defaults to "John"` note in the field's
+docstring becomes the LLM's hint that the field is optional and what the implicit
+default looks like.
+
+Per-target **system prompts** complement tool descriptions for the cases where the
+agent needs a nudge to prefer your scripted tool over an inline expansion to raw
+primitives. Set the path on `target.system_prompt_file:` in `trailmap.yaml` — examples:
+[`wikipedia-system-prompt.md`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/trails/config/trailmaps/wikipedia/wikipedia-system-prompt.md),
+[`contacts-ios-system-prompt.md`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/contacts-ios-system-prompt.md).
+
+## IDE typings — `trailblaze check`
+
+Trailblaze emits per-trailmap typings so `ctx.tools.<name>(args)` autocompletes in your
+editor with no hand-authored config. Run once after cloning (or after a `trailmap.yaml`
+edit):
+
+```bash
+trailblaze check
+```
+
+That command:
+
+1. Resolves the trailmap graph and emits per-target rolled-up YAML at
+   `trails/config/dist/targets/<id>.yaml`.
+2. Vendors the workspace SDK at `<workspace>/.trailblaze/sdk/dist/index.d.ts` — a single
+   rolled-up `.d.ts` that `tsc` resolves through the per-trailmap tsconfig.
+3. Emits per-trailmap typed bindings at `<trailmap>/tools/trailblaze-client.d.ts` —
+   exhaustive types for every tool the runtime knows about (framework primitives,
+   trailmap-local scripted tools, transitively-inherited dependencies' `exports:`).
+4. Writes framework-managed `<trailmap>/tools/tsconfig.json` + `<trailmap>/.gitignore` so
+   the editor picks up the typings with no manual setup.
+
+After this, hover any `ctx.tools.<name>` call in `tools/*.ts` — the IDE shows the typed
+signature and the original TSDoc. Mistype a name or pass the wrong arg shape and `tsc`
+flags it at compile time.
+
+The daemon also fires this pipeline on every aware command (`trailblaze step` / `ask` /
+`verify` / `trail` / `session` / `app start`) — on a fresh clone it primes everything
+automatically; on subsequent runs a content hash makes it a sub-millisecond no-op.
+
+**No `bun install` required.** The SDK is delivered as a single rolled-up `.d.ts`
+resolved through path mapping, not through `node_modules`. Per-trailmap `package.json`
+files are no longer needed for type-checking — the entire scaffolding is framework-managed.
+
+## Testing your tool
+
+Pair every `.ts` tool with a sibling `<name>.test.ts` file and tests run through the
+mock client + mock context from `@trailblaze/scripting/testing` — no daemon, no device,
+no MCP roundtrip:
+
+```bash
+trailblaze check                  # materialize + tsc + bun test
+trailblaze check --no-typecheck   # tests only, skip tsc
+```
+
+The mock helpers satisfy the handler signature:
+
+- **`createMockClient()`** — returns a client whose `tools` proxy records every
+  `ctx.tools.<name>(args)` call into `client.calls`. Tests assert call order + arg
+  shapes against that array. `client.stub(toolName, { textContent, errorMessage })`
+  registers a canned response — a non-empty `errorMessage` makes the call throw with
+  production's wording, which exercises `try/catch` recovery branches.
+- **`createMockContext({ platform, sessionId?, target?, memory? })`** — returns a
+  context with a no-op logger and sensible test defaults.
+
+Worked composition test from iOS Contacts —
+[`contacts_ios_searchAndVerify.test.ts`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_searchAndVerify.test.ts):
 
 ```ts
-const message = await ctx.tools.contacts_ios_searchContacts({
-  query: "Albert Einstein",
-  openFirstResult: true,
+import { describe, expect, test } from "bun:test";
+import { createMockClient, createMockContext } from "@trailblaze/scripting/testing";
+
+import { contacts_ios_searchAndVerify } from "./contacts_ios_searchAndVerify";
+
+describe("contacts_ios_searchAndVerify", () => {
+  test("dispatches searchContacts then verifyContactStructure with the forwarded args", async () => {
+    const client = createMockClient();
+    const ctx = createMockContext({ platform: "ios" });
+
+    await contacts_ios_searchAndVerify(
+      { query: "Apple Inc.", requireFields: ["phone", "email"] },
+      ctx,
+      client,
+    );
+
+    // Two cross-tool dispatches, in order. Neither sub-tool is unrolled —
+    // each sub-tool has its own dedicated test file.
+    expect(client.calls.map((c) => c.tool)).toEqual([
+      "contacts_ios_searchContacts",
+      "contacts_ios_verifyContactStructure",
+    ]);
+    expect(client.calls[0]?.args).toMatchObject({
+      query: "Apple Inc.",
+      rowText: "Apple Inc.",
+      openFirstResult: true,
+    });
+  });
 });
-// `message` is typed as `string` — the analyzer derived it from the tool's <I, O> shape.
 ```
 
-The `<I, O>` type parameters are the source of truth: the input interface becomes the
-tool's parameter schema, the output type becomes the tool's typed result, and the
-exported `const`'s TSDoc becomes the registered description.
+Other patterns worth copying live in the same `tools/` directory:
 
-The analyzer requires **named type references** for both type parameters — inline
-primitives (`<MyInput, string>`) are rejected. When the return is a plain string
-message, omit the second type argument and rely on the default (`string`). The
-worked example above uses `<SearchContactsArgs>` for exactly that reason.
+- [`contacts_ios_searchContacts.test.ts`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_searchContacts.test.ts)
+  — single-tool sequence asserting call order + arg shapes + the "No Results"
+  conditional branch.
+- [`contacts_ios_verifyContactStructure.test.ts`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_verifyContactStructure.test.ts)
+  — per-field probe loop + `client.stub` for fault injection.
 
-## What this looks like in practice
+**Preconditions.** `bun` on PATH (install from https://bun.sh) and a one-time
+`trailblaze check` so `tools/tsconfig.json` exists; the CLI's pre-flight surfaces a
+directed error pointing back to `trailblaze check` if the file is missing.
 
-The `examples/ios-contacts/trails/config/trailmaps/contacts/tools/` directory (under this
-OSS tree) is the worked-example directory referenced throughout this page. Every tool in
-that trailmap — `contacts_ios_openApp`, `contacts_ios_openContact`, `contacts_ios_searchContacts`,
-`contacts_ios_createContact`, `contacts_ios_deleteContact`,
-`contacts_ios_dismissKeyboardIfPresent`, `contacts_ios_addPhoneNumber`,
-`contacts_ios_verifyContactStructure`, `contacts_ios_searchAndVerify` — is authored
-against this typed surface, paired with a sibling YAML and a shared helper module
-(`contacts_ios_shared.ts`) that takes `ctx: ToolContext` directly.
+## Runtime: QuickJS in-process by default
 
-The ios-contacts trailmap ships in **mode 2** (full YAML + typed `.ts`) rather than the
-lighter mode-3 (meta-only YAML + typed `.ts`). Reason: this trailmap is built by the
-Gradle plugin's `bundleTrailblazeTrailmap` task, which doesn't yet admit meta-only
-descriptors (see "What's not wired yet" below). Once the build-time bundler is wired
-into the analyzer, the descriptors collapse to `script:` + `_meta:` only; the `.ts`
-half doesn't change. Each YAML in the trailmap carries a short comment pointing at this
-constraint so a future cleanup PR has the breadcrumb.
+`.ts` files dispatch through the daemon's in-process QuickJS runtime — no subprocess
+fork, sub-millisecond invocation, no `node_modules` resolution. The SDK ships curated
+runtime globals (`URL`, `fetch`, `AbortController`, `console`); Node-flavored built-ins
+(`node:fs`, `node:child_process`, `node:os`) are not present.
 
-When in doubt about how a particular shape (typed input + message return, no-input + typed
-return, composition tool that delegates to sibling tools, etc.) translates to the typed
-surface, read the corresponding `contacts_ios_*` tool — they cover the full spread.
-
-## Common shapes
-
-Both type parameters default — `TInput = Record<string, never>` (no args), `TResult = string`
-(message return) — so the lightest possible authoring shape is just:
+If your tool needs full Node-compatible APIs — `node:fs`, persistent state, native
+modules — opt into the **host subprocess** runtime by setting `requiresHost: true` on
+the spec. The framework spawns a Bun subprocess for that tool's invocations; the rest of
+your trailmap stays in-process.
 
 ```ts
-import { trailblaze } from "@trailblaze/scripting";
-
-export const ping = trailblaze.tool(async () => "pong");
-```
-
-For typed input but a message return (the most common shape for action tools that drive
-the UI and report what they did), omit only the second type argument:
-
-```ts
-import { trailblaze } from "@trailblaze/scripting";
-
-interface SearchInput {
-  query: string;
-}
-
-export const search = trailblaze.tool<SearchInput>(async (input, ctx) => {
-  await ctx.tools.tapOnElementWithText({ text: "Search" });
-  await ctx.tools.inputText({ text: input.query });
-  return `Searched for "${input.query}".`;
-});
-```
-
-The full `<MyInput, MyOutput>` form is reserved for tools that return structured data.
-The analyzer applies the same defaults the SDK does — 0 type args → empty input schema
-+ `result: string`; 1 type arg → typed input + `result: string`; 2 type args → both
-typed.
-
-### Typed result, no input
-
-> **Migration note.** Prior guidance recommended importing `EmptyInput` from
-> `@trailblaze/scripting` as the canonical no-input marker. The analyzer can't yet
-> resolve cross-module type-only imports back to a named root type, so declare a
-> local empty interface instead (pattern shown below). The `EmptyInput` export still
-> type-checks at the SDK boundary — only the analyzer-side schema lookup misses it.
-> This limitation will lift in a future analyzer revision.
-
-TypeScript generic defaults are positional, so an author who wants a typed result with
-**no** input can't skip the first type argument — it has to be spelled. The analyzer
-currently requires every type-parameter reference to resolve against a type declared
-in the same file (cross-module type-only imports aren't yet followed), so for now
-declare a local empty interface and pass it explicitly:
-
-```ts
-import { trailblaze } from "@trailblaze/scripting";
-
-interface ReadAppMetadataInput { /* intentionally empty */ }
-
-interface AppMetadata {
-  version: string;
-  buildNumber: number;
-}
-
-export const readAppMetadata = trailblaze.tool<ReadAppMetadataInput, AppMetadata>(
-  async (_, ctx) => {
-    // ...read from device, return structured value
-    return { version: "1.0.3", buildNumber: 142 };
-  },
-);
-```
-
-The SDK exports an `EmptyInput` marker (= `Record<string, never>`) for the same
-shape; it's accepted at the type-check boundary today but the analyzer's
-`ts-json-schema-generator` can't resolve cross-module imports back to a named root
-type. A future analyzer revision will follow imports; until then, declaring the
-empty interface locally is the supported pattern.
-
-When the result is also a plain string (no input, string return), drop both type
-parameters entirely:
-
-```ts
-export const contacts_ios_dismissKeyboardIfPresent = trailblaze.tool(
-  async (_input, ctx) => {
-    // ...
-    return "Dismissed iOS keyboard via Cancel chip.";
-  },
-);
-```
-
-The `contacts_ios_dismissKeyboardIfPresent` tool in the worked-example trailmap uses
-exactly this shape.
-
-### Arrays as input or output
-
-Inline `T[]` in a type parameter slot is rejected — the analyzer requires named type
-references for the top-level slots. Wrap arrays in a type alias and the analyzer's
-`ts-json-schema-generator` walks them as the expected JSON Schema:
-
-```ts
-interface Item {
-  id: string;
-  label: string;
-}
-
-// Named alias is the required idiom for a top-level array slot:
-type ItemList = Item[];
-
-export const listItems = trailblaze.tool<EmptyInput, ItemList>(async () => [/* ... */]);
-```
-
-Arrays as **fields inside an interface** don't need the alias dance — they're walked
-through whatever surrounding interface holds them:
-
-```ts
-interface SearchInput {
-  query: string;
-  filters: string[];  // array as a property — no alias needed
-}
-```
-
-Top-level array **inputs** technically work via the same named-alias pattern but
-generally aren't useful: MCP tool arguments arrive as a named-property object on the
-wire (`tools/call → arguments: { ... }`), so a top-level array would have nothing to
-key on. Prefer wrapping in an object with a named field.
-
-## TSDoc convention
-
-TSDoc on the exported `const` becomes the tool's registered description. TSDoc on each
-input field becomes that field's JSON Schema `description`. Write them the way you'd
-write any other JSDoc:
-
-```ts
-/**
- * Search the corporate directory for a user by employee ID.
- */
-interface FindUserInput {
-  /** Six-digit employee ID. Leading zeros required. */
-  userId: string;
-
-  /** Whether to include archived (former-employee) records. Defaults to `false`. */
-  includeArchived?: boolean;
-}
-```
-
-These comments flow through the analyzer to:
-
-- the tool's registered `description` (surfaced to the LLM in tool-call prompting), and
-- the per-trailmap `client.d.ts` as JSDoc on the corresponding `TrailblazeToolMap` entry,
-  so a consumer trailmap hovering over `ctx.tools.findUser(...)` sees the original prose.
-
-## What's wired
-
-- The `trailblaze.tool<I, O>(handler)` authoring surface. At runtime the helper returns
-  a 3-arg adapter `(args, ctx, client) => Promise<TResult>` that bridges the legacy
-  synthesized wrapper's call shape onto the author's typed `(input, ToolContext)`
-  handler. The bare-function form is the ONLY accepted shape — the SDK does not
-  maintain a transitional `{ handler }` spec object.
-- The `TrailblazeToolMap` entry shape — every entry is now
-  `{ args: <ArgsShape>; result: <ResultShape> }`, with the `client.tools.<name>(args)`
-  namespace deriving both halves automatically.
-- **Per-trailmap `client.d.ts` emitter consumes the static analyzer.** At daemon startup
-  (and `trailblaze compile`), every trailmap's `tools/` directory is walked by
-  `ScriptedToolDefinitionAnalyzer`. Each `export const X = trailblaze.tool<I, O>(handler)`
-  declaration is matched against the trailmap's runtime-registered scripted tools, and the
-  analyzer's JSON Schemas for `I` and `O` are serialized to TypeScript type literals
-  that drop into the emitted `client.d.ts` verbatim. Per-field TSDoc round-trips intact.
-- **Typed handlers dispatch through the existing wrapper.** A `.ts` file authored as
-  `export const X = trailblaze.tool<I, O>(async (input, ctx) => ...)` registers and
-  dispatches identically to the legacy `export async function X(args, ctx, client)`
-  shape — the adapter that `trailblaze.tool<I, O>` returns is itself a 3-arg function,
-  and the synthesized wrapper from `DaemonScriptedToolBundler` invokes it with
-  `(args, ctx, client)` exactly as before. Inside the adapter, `ctx.tools` is built
-  from `client.tools` so the author's typed handler composes other tools through the
-  same `tools.<name>(args)` Proxy as legacy authors.
-- **Workspace SDK ships a runtime `dist/index.js`.** Per-trailmap tsconfigs resolve the
-  `paths` stem `dist/index` — bun loads the `.js` for runtime, tsc loads the
-  `.d.ts` for type-checking. The two-bundle consolidation (single runtime artifact
-  shared between QuickJS and host-subprocess paths) is a tracked follow-up.
-- Analyzer subprocess behavior is tunable via environment variables on
-  `ScriptedToolDefinitionAnalyzer` (`TRAILBLAZE_SDK_DIR`, `TRAILBLAZE_SDK_PACKAGE`,
-  `TRAILBLAZE_TOOL_ANALYZER_TIMEOUT_SECONDS`) — see the **Scripted-tool analyzer
-  configuration** table in the repo root `CLAUDE.md` for the full set.
-- The analyzer's degradation contract is preserved: a daemon that can't resolve `bun`
-  on PATH (or whose SDK directory hasn't run `bun install`) still emits
-  per-trailmap `client.d.ts` files — just without the typed `result` upgrades. Tools whose
-  authoring shape is the legacy `export async function foo(...)` keep emitting via the
-  existing YAML `inputSchema:` decomposition with `result: string`.
-
-## Two authoring modes
-
-Going forward, scripted tools can be authored in one of three shapes — pick the one
-that matches what you want to express:
-
-1. **Legacy `export async function` + full YAML descriptor.** Author writes
-   `export async function foo(args, ctx, client)` and a sibling `<name>.yaml`
-   declaring `name:`, `inputSchema:`, `description:`. No type-surface upgrade; the
-   YAML is the source of truth. Continues to work unchanged for trailmaps that haven't
-   been migrated.
-
-2. **Typed `trailblaze.tool<I, O>(handler)` + full YAML descriptor.** Author writes
-   `export const foo = trailblaze.tool<I, O>(async (input, ctx) => ...)` and pairs it
-   with a sibling `<name>.yaml` declaring `name:`, `inputSchema:`, `description:`. The
-   runtime registers from the YAML; the per-trailmap `client.d.ts` upgrades the typed
-   surface from the analyzer. Use this when you want the typed authoring ergonomics
-   today but also need the Gradle plugin's build-time `.d.ts` emission to pick the
-   tool up (the build-time bundler doesn't yet read the analyzer).
-
-3. **Typed `trailblaze.tool<I, O>(handler)` + meta-only YAML (recommended for
-   daemon-runtime authoring; gated by build-time bundler support).** Author writes the
-   typed `.ts` declaration; the YAML carries only `script:` and `_meta:`. The runtime
-   registers via analyzer enrichment — `name:`, `inputSchema:`, and `description:` all
-   flow from the `.ts`'s typed declaration + TSDoc. The JVM host paths
-   (`WorkspaceCompileBootstrap`, `AppTargetDiscovery`, `CompileCommand`,
-   `TrailblazeHostYamlRunner`) wire the enrichment automatically when `bun` +
-   `ts-json-schema-generator` are available.
-
-   Trailmaps that go through the Gradle plugin's `bundleTrailblazeTrailmap` task (e.g. the
-   `ios-contacts` worked-example trailmap) must stay on mode 2 today — the build-time
-   bundler doesn't yet read analyzer enrichment, so a meta-only descriptor fails the
-   "scripted tool name 'X' referenced in target.tools: but no descriptor with that
-   name was discovered" check. Mode 3 is daemon-runtime-only until the bundler is
-   wired (deferred follow-up, see "What's not wired yet" below).
-
-In modes 2 and 3, the analyzer's TSDoc on the exported `const` wins over any
-YAML-derived description when both are present, because the TS source is canonical.
-
-**The authoring surface is dispatch-path-agnostic.** All three modes work for both
-in-process QuickJS tools (the default, `requiresHost: false`) AND sub-process host-only
-tools (`requiresHost: true`, used when a tool needs Node-only APIs like `node:fs`). The
-typed `trailblaze.tool<I, O>(handler)` shape is not coupled to a runtime — it's just an
-authoring convenience. The runtime decision is per-tool, made via the `_meta:` overlay,
-and is invisible to the typed handler itself.
-
-## Migrating an existing tool
-
-The mechanical conversion below documents the *target* shape. Existing tools authored
-against the legacy `export async function` shape can be flipped to the typed shape
-file-by-file. The `ios-contacts` example trailmap went through this migration; treat its
-tools as the worked references.
-
-Before:
-
-```ts
-import type { TrailblazeClient, TrailblazeContext } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString, requireSessionContext } from "./contacts_ios_shared";
-
-export interface SearchContactsArgs { /* ... */ }
-
-export async function contacts_ios_searchContacts(
-  args: SearchContactsArgs,
-  ctx: TrailblazeContext | undefined,
-  client: TrailblazeClient,
-): Promise<string> {
-  requireSessionContext(ctx);
-  // ... body uses client.tools.X(...)
-}
-```
-
-After:
-
-```ts
-import { trailblaze } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString } from "./contacts_ios_shared";
-
-export interface SearchContactsArgs { /* unchanged */ }
-
-export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
+export const myapp_writeArtifact = trailblaze.tool<WriteArtifactArgs>(
+  { requiresHost: true },
   async (input, ctx) => {
-    // requireSessionContext drops out — the typed `ToolContext` is always provided.
-    await ensureContactsRoot(ctx);
-    await ctx.tools.swipe({ direction: "DOWN" });
-    // ... body uses ctx.tools.X(...)
+    const fs = await import("node:fs/promises");
+    await fs.writeFile(input.path, input.body);
+    return `Wrote ${input.path}.`;
   },
 );
 ```
 
-Three other mechanical changes go with the rewrite:
+`requiresHost: true` also hides the tool from on-device sessions — the on-device runner
+skips registration entirely. Composition with other tools still works (the proxy routes
+through the same daemon), so a host-only tool can call into in-process tools and vice
+versa.
 
-- **Shared helpers**: refactor the trailmap's shared-helper module so helpers accept
-  `ctx: ToolContext` directly. Drop any `requireSessionContext` guard — the typed
-  surface guarantees `ctx`. `contacts_ios_shared.ts` is the worked example.
+## When you still need a sibling YAML
 
-- **YAML descriptor**: this is where the decision tree forks.
-  - **If your trailmap does NOT go through the Gradle `bundleTrailblazeTrailmap` task** (most
-    workspace trailmaps — the daemon discovers them directly): collapse the sibling YAML
-    to `script:` + `_meta:` only. The analyzer derives `name:`, `description:`, and
-    `inputSchema:` from the `.ts` declaration.
+The canonical shape is `.ts`-only. A sibling `<name>.yaml` is still supported in a
+handful of escape-hatch cases:
 
-    ```yaml
-    # Mode 3 — meta-only:
-    script: ./contacts_ios_searchContacts.ts
-    _meta:
-      trailblaze/supportedPlatforms: [ios]
-      trailblaze/requiresContext: true
-    ```
+- **Legacy `export async function` tools.** Trailmaps authored before the typed surface
+  landed pair each `.ts` with a full descriptor YAML (`name:`, `description:`,
+  `inputSchema:`). They keep working unchanged; see
+  [Scripted Tools — Legacy Reference](scripted_tools.md) for the schema. Migrate when
+  convenient.
+- **Multi-tool files.** A `.ts` that exports multiple `trailblaze.tool(...)`
+  declarations needs at most one YAML per export to register multiple names against the
+  same source file. Most authors keep one tool per file and don't hit this.
+- **Build-time bundler interop.** Trailmaps consumed by the Gradle plugin's
+  `bundleTrailblazeTrailmap` task (rare — used today by the bundled `clock` trailmap)
+  currently need a full descriptor YAML alongside the typed `.ts`. The daemon-time path
+  reads the analyzer directly and doesn't need the YAML; the build-time bundler will
+  catch up in a follow-up.
 
-  - **If your trailmap DOES go through `bundleTrailblazeTrailmap`** (the `ios-contacts`
-    worked-example trailmap is the canonical case — its `build.gradle.kts` declares the
-    bundler task): keep the full YAML (`name:`, `description:`, `inputSchema:`)
-    alongside the typed `.ts`. The build-time bundler doesn't yet read analyzer
-    enrichment, so a meta-only descriptor fails the "no descriptor with that name
-    was discovered" check at build time. The `.ts` still drives the typed surface
-    that the per-trailmap `client.d.ts` codegen emits. Once the bundler is wired
-    (deferred), trailmaps in this category can collapse to mode 3.
+If you don't recognize yourself in those three cases, you don't need a YAML — write the
+`.ts` and you're done.
 
-- **Unit tests**: legacy test files that drive the tool via
-  `myTool(args, ctx, client)` continue to work — the adapter returned by
-  `trailblaze.tool<I, O>` is still a 3-arg callable, and its internal forwarding to
-  `(input, ToolContext)` is transparent to callers.
+## Common errors
 
-## What's *not* wired yet
+| Error | What's wrong |
+|---|---|
+| `Tool not registered: foo (registered tools: alpha, beta)` | The tool wasn't in the runtime registry when the dispatch fired. Either you didn't list it under `target.tools:` in `trailmap.yaml`, or the daemon hasn't been restarted since you added the file. Re-run `trailblaze check` and restart the daemon. |
+| `ValidationError: tool 'foo' received invalid arguments — /query: must be string` | The agent sent a payload that doesn't match the interface. Often a sign the TSDoc on a field needs sharper guidance, or that a field marked required should be optional. The LLM self-corrects on the next round. |
+| `esbuild failed (exit 1) bundling scripted-tool source /path/to/foo.ts` | Syntax error or unresolved import in your `.ts`. The full esbuild stderr follows in the same message. |
+| `Trailmap '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...` | You put a pure-YAML tool path under `target.tools:`. That list is for scripted tools only. Drop the entry; the YAML tool auto-discovers. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
+| `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match what `target.tools:` is asking for. Either rename the export or update the manifest entry. |
+| `client.tools.<X>` is a `tsc` error in the IDE | The per-trailmap `trailblaze-client.d.ts` is stale or missing. Run `trailblaze check` — the codegen rewrites bindings against the current registry. |
 
-- **Build-time codegen for meta-only YAML.** Three of the four `SISTER-IMPL-TAG:
-  trailmap-scripted-tool-discovery` sites (`DaemonScriptedToolBundler`,
-  `TrailblazeTrailmapBundler`, `TrailblazeBundledConfigTasks`) don't yet admit meta-only
-  descriptors. The runtime loader (`TrailblazeProjectConfigLoader`) does, and the
-  daemon-time bundler reads pre-resolved `InlineScriptToolConfig`s from the loader so
-  it picks up the enrichment for free. Build-time codegen — Gradle `.d.ts` generation
-  and bundled-config YAML emission — currently fails on meta-only descriptors; until
-  it's wired, mode-3 authoring is daemon-runtime-only. Mode 2 (full YAML + typed `.ts`)
-  remains the workaround for trailmaps that need build-time emission.
+## Where to go next
 
-- **Selector grammar codegen.** Selector shapes used inside tool inputs (the
-  `androidAccessibility` / `iosHost` selector grammars) aren't yet emitted as
-  importable TypeScript types — they're surfaced today as opaque `Record<string,
-  unknown>` slots on the tool's `args` shape. Tracked separately on the selector-grammar
-  codegen track.
-
-- **Ajv runtime validation.** Strict validation of inputs against the codegen-emitted
-  schema is deferred. Today's runtime relies on the YAML-declared schema for arg
-  shape, which Kotlin tooling validates on dispatch. When this lands, the analyzer's
-  schema becomes the wire-side validation source too.
-
-- **`requires: "quickjs"` strict mode.** A future opt-in mode where authors mark a tool
-  as runtime-strict (must dispatch in-process QuickJS, fail loudly on host-subprocess
-  fallback) is on the roadmap. Today the runtime falls back transparently between the
-  two engines based on `requiresHost:`; strict mode would harden the contract for tools
-  that have engine-specific assumptions.
-
-- **Two-bundle consolidation.** The runtime ships two SDK bundles today —
-  `trailblaze-sdk-bundle.js` (IIFE for QuickJS) and `dist/index.js` (ESM-ish for
-  host-subprocess). A future PR will consolidate to a single runtime artifact shared
-  between both engines. The authoring-side type surface (`dist/index.d.ts`) is already
-  the single source of typing.
-
-- **Existing Kotlin-defined tools** continue to use `@TrailblazeToolClass` as before.
-  The typed authoring surface is purely about the TS side; nothing about the Kotlin
-  tool registration changes.
-
-## How this lands incrementally
-
-The typed surface and codegen landed first; mechanical trailmap migrations follow as each
-trailmap adopts the typed shape. Look for devlogs under `devlog/` directory tagged with
-`scripting-sdk` or `typed-authoring` for the current plan and progress notes. The
-[Trail YAML unified-format devlog](devlog/2026-05-22-trail-yaml-unified-syntax.md) covers
-adjacent work moving the framework toward a more declarative authoring story.
-
-Authoring against the typed surface today is forward-compatible with each follow-up as
-it lands — you won't need to revisit existing typed declarations to pick up the
-build-time codegen, strict-mode dispatch, or ajv validation once those PRs ship.
+- **[Your First Trailmap](your-first-trailmap.md)** — workspace-level walkthrough from
+  empty directory to running tool.
+- **[Trailmaps](trailmaps.md)** — manifest schema, dependencies + defaults, tool
+  flavors, discovery + precedence.
+- **[`examples/ios-contacts/README`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/README.md)**
+  / **[`examples/wikipedia/README`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/README.md)**
+  — the worked references this page draws from, with their own quick-starts and CI
+  notes.
+- **[Publishing a Trailmap](publishing-a-trailmap.md)** — when you want to share your
+  trailmap with other teams as a vendored bundle or an npm package.
+- **[`@trailblaze/scripting` Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md)**
+  — the conceptual background on why scripted tools exist and how they fit into the
+  agent loop.

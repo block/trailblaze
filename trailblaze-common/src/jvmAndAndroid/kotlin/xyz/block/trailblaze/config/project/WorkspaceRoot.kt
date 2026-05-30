@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.config.project
 
+import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -71,6 +72,29 @@ fun findWorkspaceRoot(fromPath: Path): WorkspaceRoot {
     current = current.parent
   }
   return WorkspaceRoot.Scratch(dir = startDir.toRealPathOrNormalized())
+}
+
+/**
+ * Builds a [WorkspaceRoot.Configured] directly from an explicit `trails/config` directory —
+ * e.g. the one named by `TRAILBLAZE_CONFIG_DIR` — when that directory carries its own
+ * `trailblaze.yaml` anchor. Returns `null` when it has no anchor of its own, so callers can
+ * fall back to [findWorkspaceRoot] walk-up.
+ *
+ * Unlike [findWorkspaceRoot], this does NOT walk up: an explicitly-named config dir is taken
+ * at face value as the workspace anchor. Paths are canonicalized via [toRealPathOrNormalized]
+ * so the result matches [findWorkspaceRoot]'s output and downstream comparisons hold across
+ * symlinked clones.
+ */
+fun workspaceRootFromConfigDir(configDir: File): WorkspaceRoot.Configured? {
+  val anchor = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME)
+  if (!anchor.isFile) return null
+  // `configDir` is the `<workspace>/trails/config` payload dir; its parent is the owning
+  // `trails/` directory that [WorkspaceRoot.Configured.dir] points at.
+  val trailsDir = configDir.parentFile ?: configDir
+  return WorkspaceRoot.Configured(
+    dir = trailsDir.toPath().toRealPathOrNormalized(),
+    configFile = anchor.toPath().toRealPathOrNormalized(),
+  )
 }
 
 /**

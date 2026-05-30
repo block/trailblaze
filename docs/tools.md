@@ -11,21 +11,23 @@ something the catalog doesn't have, you add **custom tools** to a workspace trai
 There are three flavors of custom tool. Pick by what kind of body you need to write:
 
 1. **Scripted (TypeScript) tool** — the recommended path for almost everyone. Declare
-   inputs and result shape as TypeScript interfaces, write the handler against the typed
-   `ctx.tools.<name>(args)` surface, and pair it with a sibling YAML descriptor. Use this
-   when the agent needs a custom command with branching, retries, async coordination, or
-   anything beyond raw YAML composition. Listed in `trailmap.yaml`'s `target.tools:`.
+   inputs and result shape as TypeScript interfaces and write the handler against the
+   typed `ctx.tools.<name>(args)` surface. One `.ts` file per tool; no per-tool YAML
+   descriptor. Use this when the agent needs a custom command with branching, retries,
+   async coordination, or anything beyond raw YAML composition. Tools are listed by
+   bare export name in `trailmap.yaml`'s `target.tools:`.
 
-   Start with [Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md) for
-   the canonical authoring shape; see [Trailmaps](trailmaps.md) for the manifest wiring
-   and the per-suffix file conventions.
+   Start with [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md) for the
+   canonical authoring shape and the worked iOS Contacts + Wikipedia examples; see
+   [Trailmaps](trailmaps.md) for the manifest wiring and the per-suffix file
+   conventions.
 
 2. **Pure-YAML composed tool** (`<trailmap>/tools/<id>.tool.yaml`) — a declarative
    composition that substitutes parameters into existing framework tool calls. No code.
    Auto-discovered; reference it by name from a toolset. Use for thin wrappers like
    "press back twice" or "open the search URL for `<topic>`" — the cases where adding a
    TypeScript handler would be more ceremony than the wrapper deserves. See
-   [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes--toolyaml-shortcutyaml-trailheadyaml).
+   [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
 
 3. **Kotlin-backed tool** (`@TrailblazeToolClass`-annotated class + `*.tool.yaml` in
    `class:` mode) — advanced / host-side state only. Use when you need to read host-side
@@ -75,13 +77,21 @@ authoring surface doesn't reach.
 
 ## Browsing the live tool catalog
 
-For the catalog of tools actually visible to a given trailmap — including framework
-built-ins resolved from its `platforms.<p>.tool_sets:`, its own scripted tools, and any
-tools its dependencies publish via `exports:` — look at the per-trailmap declaration
-rollup emitted by `trailblaze check` at `<trailmap>/tools/trailblaze-client.d.ts`. That
-file is the live, scoped source of truth: every entry has a typed signature, both
-YAML-defined and class-backed tools are represented, and the surface matches exactly
-what `client.tools.<name>(args)` autocompletes to inside that trailmap's scripted tool
-sources. There is no global cross-trailmap aggregator — per-trailmap slicing keeps
-autocomplete pollution out of your IDE and matches the runtime dispatch surface
-one-to-one.
+Once you've added a tool — or you're trying to figure out what's already available
+for a given target — there are two ways to inspect the live tool catalog the agent
+sees:
+
+- **From the CLI:** `trailblaze toolbox -d <platform> --target <trailmap-id>` lists
+  every tool the agent sees for that target, with descriptions. Add `--search <prefix>`
+  to filter.
+- **In your IDE:** open any `.ts` file under `<trailmap>/tools/` and start typing
+  `ctx.tools.` — autocomplete pulls from the per-trailmap declaration rollup at
+  `<trailmap>/tools/trailblaze-client.d.ts`. That file is emitted by
+  `trailblaze check` (and re-emitted on every daemon-aware command); if it's missing,
+  run `trailblaze check` once.
+
+Either surface includes framework built-ins resolved from the trailmap's
+`platforms.<p>.tool_sets:`, its own scripted tools, and any tools its dependencies
+publish via their `exports:` field. There's no global cross-trailmap aggregator —
+per-trailmap slicing keeps autocomplete pollution out of your IDE and matches the
+runtime dispatch surface one-to-one.

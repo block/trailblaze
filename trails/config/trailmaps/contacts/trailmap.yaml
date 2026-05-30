@@ -3,6 +3,11 @@
 # adopters running outside this repo do not see this target unless they declare a workspace
 # trailmap with the same id.
 #
+# LEARNING TO AUTHOR? This is the repo's own demo target — it backs the Android contacts trails
+# under `trails/contacts/` and carries only the Android launch tool here. For a standalone,
+# copy-me example project — typed `trailblaze.tool<Input, Output>()` tools with no `.yaml`
+# manifests, plus tool unit tests — see `examples/ios-contacts/` (the canonical mobile reference).
+#
 # The per-platform `tool_sets` and `drivers` come from the `trailblaze` framework trailmap's
 # `defaults:` map via dependency resolution — closest-wins inheritance. To override, set
 # the field explicitly on the platform; to add app-specific toolsets, list them in
@@ -12,27 +17,8 @@ dependencies:
   - trailblaze
 target:
   display_name: Contacts
-  # Target-scoped system prompt that nudges the LLM toward the contacts_ios_*
-  # scripted tools when a natural-language step matches a known task pattern
-  # ("search Contacts for X" → contacts_ios_searchContacts, etc.). Inlined at
-  # trailmap-load time from the file next to this manifest.
-  system_prompt_file: contacts-ios-system-prompt.md
   tools:
-    # Android trailhead.
     - contacts_android_launchApp
-    # --- iOS scripted tools ------------------------------------------------------
-    # Trailheads: deterministic starting points.
-    - contacts_ios_openApp
-    - contacts_ios_openContact
-    # Feature tools.
-    - contacts_ios_dismissKeyboardIfPresent
-    - contacts_ios_searchContacts
-    - contacts_ios_createContact
-    - contacts_ios_deleteContact
-    - contacts_ios_verifyContactStructure
-    - contacts_ios_addPhoneNumber
-    # Composition example: delegates to sibling scripted tools via client.tools.<name>().
-    - contacts_ios_searchAndVerify
   platforms:
     android:
       app_ids:

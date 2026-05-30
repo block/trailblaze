@@ -161,17 +161,27 @@ tools, and the workspace-vs-classpath precedence rule. Background:
 
 ### Scripted Tools (TypeScript)
 
-Custom tools, written in TypeScript, that drop into a trailmap with no Kotlin or Gradle
-build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`,
-`memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via
-the typed `client.tools.<name>(args)` surface to compose higher-level behavior. Tools
-execute in a QuickJS sandbox on-device or in a host subprocess.
+**Start here:** [Your First Trailmap](your-first-trailmap.md) walks one tool from an
+empty directory to a passing run. Once you're past the first run, the per-tool
+[Scripted Tools (TypeScript) reference](scripted-tools-typed-authoring.md) covers the
+authoring details.
 
-Recommended authoring surface:
-[Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md). Legacy reference
-(full YAML + `export async function`):
-[Scripted Tools — Legacy YAML + `export async function` Reference](scripted_tools.md).
-Background:
+What scripted tools give you: custom tools, written in TypeScript, that drop into a
+trailmap with no Kotlin code, no Gradle build, and no per-tool YAML descriptor. Declare
+inputs as a TypeScript interface, write the handler against the typed
+`ctx.tools.<name>(args)` composition surface, and the framework derives the schema, the
+LLM-facing description, and the IDE bindings from the `.ts` file itself. Tools execute
+in a QuickJS sandbox on-device by default, or in a host subprocess when they need
+Node-compatible APIs.
+
+Two worked target trailmaps live in the OSS tree as full-shape references to copy —
+[`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts) (iOS, host driver) and
+[`examples/wikipedia`](https://github.com/block/trailblaze/tree/main/examples/wikipedia) (web, Playwright Native). Each ships
+~9 scripted tools, a target-scoped system prompt, and ~20 trails exercising them.
+
+The older `export async function` + full-YAML-descriptor authoring shape stays
+documented as a [Legacy Reference](scripted_tools.md); existing legacy tools keep
+working unmodified — new authoring should use the typed shape. Background:
 [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md).
 
 ### Waypoints
@@ -233,9 +243,11 @@ and project context to the loop, which the built-in agent can't.
   [README](https://github.com/block/trailblaze#readme).
 - **Authoring trails?** See [Project Layout](project_layout.md) and
   [Configuration](configuration.md).
-- **Composing your own surface?** See [Trailmaps](trailmaps.md),
-  [Tool Authoring](tools.md), and
-  [Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md).
+- **Composing your own surface?** Start with [Your First Trailmap](your-first-trailmap.md) —
+  it's the workspace-to-passing-run walkthrough and links onward to the per-tool
+  [Scripted Tools (TypeScript) reference](scripted-tools-typed-authoring.md),
+  the [Trailmaps](trailmaps.md) manifest schema, and the [Trailblaze Tools](tools.md)
+  catalog of scripted / pure-YAML / Kotlin flavors.
 - **Customizing the LLM?** See [LLM Configuration](llm_configuration.md) and
   [Built-in Models](generated/LLM_MODELS.md).
 - **Going deep?** See [Architecture](architecture.md) and the [devlog](devlog/index.md).

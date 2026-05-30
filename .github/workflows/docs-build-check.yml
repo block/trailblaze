@@ -1,0 +1,38 @@
+name: Docs Build Check
+
+# Validates that the MkDocs site builds in --strict mode on PRs that touch docs or the
+# MkDocs config. This is the build-only counterpart to github-pages.yml (which deploys on
+# push to main) — it does NOT fetch report-gallery assets or deploy, so it exercises the
+# committed placeholders and catches strict-mode breakage (bad links, missing assets)
+# before merge.
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yaml'
+      - '.github/workflows/docs-build-check.yml'
+
+concurrency:
+  group: docs-build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install MkDocs
+        run: |
+          python -m pip install --upgrade pip
+          pip install mkdocs mkdocs-material
+
+      - name: Build MkDocs site (strict)
+        run: mkdocs build --strict

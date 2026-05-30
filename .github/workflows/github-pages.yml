@@ -9,6 +9,8 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  # Needed for the gh CLI to list/download artifacts from the latest successful trail run.
+  actions: read
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
@@ -32,6 +34,45 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install mkdocs mkdocs-material
+
+      - name: Fetch latest report-gallery assets
+        # Pull the report assets (storyboard.webp / timeline.webp / report.html) from the
+        # most recent SUCCESSFUL trail run on main and overwrite the committed placeholders
+        # in the build workspace. Because this workflow and the trail workflows both run on
+        # the same push, we intentionally use the previous green run — a one-commit lag.
+        #
+        # Best-effort: any miss (no successful run yet, expired artifact, fork without the
+        # token) leaves the committed placeholders in place so `mkdocs build --strict` still
+        # succeeds. Never fail the deploy over a missing showcase asset.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          fetch_assets() {
+            local workflow="$1" dest="$2"
+            local run_id
+            run_id="$(gh run list --workflow="$workflow" --branch main --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId')"
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "  no successful $workflow run found — keeping committed placeholders"
+              return 0
+            fi
+            local artifact="docs-report-${dest##*/}"
+            echo "  downloading $artifact from $workflow run $run_id → $dest"
+            local tmp; tmp="$(mktemp -d)"
+            if gh run download "$run_id" --name "$artifact" --dir "$tmp" 2>/dev/null; then
+              mkdir -p "$dest"
+              # Only overwrite the files we actually got; a partial set still beats a broken build.
+              for f in storyboard.webp timeline.webp report.html; do
+                [ -f "$tmp/$f" ] && cp -f "$tmp/$f" "$dest/$f" && echo "    ✓ $f"
+              done
+            else
+              echo "    artifact $artifact not available — keeping committed placeholders"
+            fi
+            rm -rf "$tmp"
+          }
+          fetch_assets "wikipedia-trails.yml" "docs/generated/reports/wikipedia"
 
       - name: Build MkDocs site
         run: mkdocs build --strict

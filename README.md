@@ -150,6 +150,25 @@ state, every device-acting command (`snapshot`, `tool`, `step`, `ask`, `verify`,
 supported — `tool`, `step`, `session start`, `mcp`) as a per-call override.
 (`blaze` remains accepted as a deprecated alias of `step`.)
 
+## Examples — copy one to start
+
+Runnable, standalone workspaces under [`examples/`](examples/) — each a complete template
+you can copy: typed `trailblaze.tool<Input, Output>()` tools auto-discovered from bare
+`.ts` files (no `.yaml` manifests), a trail suite, and tool unit tests.
+
+| Example | Platform | What it teaches |
+|---|---|---|
+| [`examples/ios-contacts`](examples/ios-contacts/) | iOS | Canonical mobile reference — 9 typed scripted tools, 18 trails, and tool unit tests (`*.test.ts`). |
+| [`examples/wikipedia`](examples/wikipedia/) | Web | Canonical web reference — 9 typed scripted tools driving live `en.wikipedia.org`, 28 trails. |
+| [`examples/playwright-native`](examples/playwright-native/) | Web | Smallest end-to-end scripted-tool setup, with a bundled sample app. |
+
+```bash
+./trailblaze check --workspace examples/ios-contacts   # materialize SDK + typed bindings (once)
+```
+
+See [`examples/README.md`](examples/README.md) for the full index, including sample target
+apps.
+
 ## Active Prototypes
 
 Trailblaze is moving fast. These are landing now and are worth knowing about even if
@@ -190,6 +209,7 @@ Full docs at **[block.github.io/trailblaze](https://block.github.io/trailblaze)*
 - [CLI Reference](docs/CLI.md) — Every command and flag
 - [Tool Authoring](docs/tools.md) — Add your own tools
 - [Configuration](docs/configuration.md) — Providers, devices, target apps
+- [Examples](examples/) — Runnable, copy-me workspaces (start with `ios-contacts` or `wikipedia`)
 
 (A longer Getting Started walkthrough is being rewritten to match the new direction.
 Until that lands, the README above is the canonical starting point.)

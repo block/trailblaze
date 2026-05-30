@@ -16,8 +16,9 @@ my-workspace/trails/config/
     └── myapp/
         ├── trailmap.yaml              # the manifest
         ├── tools/
-        │   ├── myapp_login.yaml          # one scripted tool per file
-        │   └── myapp_navigate.yaml
+        │   ├── myapp_login.ts            # one scripted tool per .ts file
+        │   ├── myapp_navigate.ts
+        │   └── myapp_shared.ts           # shared helpers (no `trailblaze.tool` export)
         ├── toolsets/                     # optional trailmap-local toolsets
         │   └── myapp_extras.yaml
         └── waypoints/                    # optional waypoints owned by this trailmap
@@ -37,9 +38,9 @@ trailmaps:
 id: myapp
 target:
   display_name: My App
-  tools:                                      # per-file scripted tool refs
-    - tools/myapp_login.yaml
-    - tools/myapp_navigate.yaml
+  tools:                                      # bare export names from tools/*.ts
+    - myapp_login
+    - myapp_navigate
   platforms:
     android:
       app_ids:
@@ -58,10 +59,17 @@ waypoints:
 
 ### Field reference
 
+> **Heads up on the two `tools` fields.** Top-level `tools:` (row below) lists
+> trailmap-relative *paths* to class-backed or pure-YAML composed tools.
+> `target.tools:` (a sub-field of `target:`) lists scripted TypeScript tools by their
+> **bare export name**. Same word, different shape — pick by which flavor you're
+> registering. See [Tool flavors](#tool-flavors-which-kind-do-i-write) below for the
+> rubric.
+
 | Field | Status | Purpose |
 | --- | --- | --- |
 | `id` | required | Unique trailmap id. Used for shadowing / overrides. |
-| `target` | optional | Embeds an `AppTargetYamlConfig` (id is inherited from the trailmap id when omitted). A trailmap without `target:` is treated as a library trailmap — it contributes via `defaults:` / `toolsets:` / `tools:` / `waypoints:` but isn't surfaced as a runnable target. `target.tools:` lists per-file scripted tool YAML paths under the trailmap directory. |
+| `target` | optional | Embeds an `AppTargetYamlConfig` (id is inherited from the trailmap id when omitted). A trailmap without `target:` is treated as a library trailmap — it contributes via `defaults:` / `toolsets:` / `tools:` / `waypoints:` but isn't surfaced as a runnable target. `target.tools:` lists scripted tools by their bare export name (one `.ts` per tool under `<trailmap>/tools/`). |
 | `target.system_prompt_file` | optional | Trailmap-relative path to a markdown / text file containing the target's system-prompt template. The trailmap loader (and the build-time generator) reads the file and inlines its content into the generated target YAML's `system_prompt:` field. Lets authors keep multi-paragraph prompts in a standalone editable file rather than an unwieldy YAML string. Inline `system_prompt:` is not supported on `target` — a trailmap manifest declaring it fails the load with a migration message. The file-only shape leaves room for future per-device or per-classifier prompt selection (e.g. `app-tablet.prompt.md`) without an authoring schema change. |
 | `dependencies` | optional | Trailmap ids this trailmap depends on. Transitive — depending on a trailmap pulls in its dependencies too. Resolves via closest-to-root-wins inheritance from each dep's `defaults:` (see below). |
 | `defaults` | optional | Per-platform defaults this trailmap contributes to consumers via dependency resolution. Same shape as `target.platforms`. Consumers with `dependencies: [<this trailmap>]` inherit any field they leave null. |
@@ -124,15 +132,24 @@ A trailmap can contribute two flavors of custom tool. They share the `<trailmap>
 directory but bind through entirely different mechanisms — easy to copy-paste-confuse,
 so this table is the rubric:
 
+> **Default to scripted TypeScript.** Reach for pure-YAML only when the tool is a
+> literal parameter substitution into an existing tool call — anything with a
+> conditional, retry, or two-step sequence is a scripted tool.
+
 | | **Scripted (TypeScript)** | **Pure-YAML composed** |
 | --- | --- | --- |
-| Filename | `<id>.yaml` + `<id>.ts` (pair) | `<id>.tool.yaml` (note the double suffix) |
-| Body | JavaScript/TypeScript in the sibling `.ts` | `tools:` block — declarative composition of existing tools |
-| Manifest entry | Listed under `target.tools:` in `trailmap.yaml` | **Auto-discovered** — do NOT list in `trailmap.yaml` |
-| Surfaced to a target via | Direct `target.tools:` reference | A toolset (`<workspace>/trails/config/toolsets/<id>.yaml` or `<trailmap>/toolsets/<id>.yaml`) that names the tool, declared from `platforms.<p>.tool_sets:` |
-| Param schema field | `inputSchema:` (map keyed by param name) | `parameters:` (list of `{name, type, required?, description?}`) |
-| Host vs on-device | Honors `requiresHost: true` on the descriptor (gate at registration time) | Workspace tools default to `requires_host: true` (config can't ship on-device); bundled framework `*.tool.yaml` runs on either side because the file is on both classpaths |
 | Pick when | You need branching, retries, async, multi-step orchestration | You need a thin wrapper that substitutes parameters into existing tool calls |
+| Filename | `<id>.ts` — one file per tool | `<id>.tool.yaml` (note the double suffix) |
+| Body | TypeScript in the `.ts`. The `trailblaze.tool<I, O>(spec, handler)` export carries everything (name from the export, schema from `<I>`, description from TSDoc). | `tools:` block — declarative composition of existing tools |
+| Manifest entry | Listed by **bare export name** under `target.tools:` in `trailmap.yaml` | **Auto-discovered** — do NOT list in `trailmap.yaml` |
+| Surfaced to a target via | Direct `target.tools:` reference | A toolset (`<workspace>/trails/config/toolsets/<id>.yaml` or `<trailmap>/toolsets/<id>.yaml`) that names the tool, declared from `platforms.<p>.tool_sets:` |
+| Param schema source | The `<I>` type parameter on the `trailblaze.tool<I, O>` call. Per-field TSDoc becomes per-field JSON Schema `description`. | `parameters:` (list of `{name, type, required?, description?}`) |
+| Host vs on-device | `requiresHost: true` on the typed spec — registration-time gate | Workspace tools default to `requires_host: true` (config can't ship on-device); bundled framework `*.tool.yaml` runs on either side because the file is on both classpaths |
+
+> **Older trailmaps still using `<id>.yaml` + `<id>.ts` pairs?** That shape continues to
+> work unmodified — see the [Scripted Tools — Legacy Reference](scripted_tools.md). New
+> tools should use the `.ts`-only canonical shape above; convert in place when
+> convenient.
 
 The two most common mistakes when authoring a trailmap from scratch:
 
@@ -151,42 +168,35 @@ The two most common mistakes when authoring a trailmap from scratch:
 
 ## Per-file scripted tools
 
-This section is the **schema reference**. For the recommended step-by-step authoring
-surface (TypeScript-interface-driven inputs and result shapes), see
-[Typed Authoring for Scripted Tools](scripted-tools-typed-authoring.md). For the legacy
-full-YAML + `export async function` shape, see
-[Scripted Tools — Legacy YAML + `export async function` Reference](scripted_tools.md).
+The canonical shape for scripted tools is a single `.ts` file per tool with a
+`trailblaze.tool<I, O>(spec, handler)` export. The export name is the dispatchable tool
+name; the TSDoc above it is the LLM-facing description; the `<I>` type parameter is the
+input schema. **No sibling YAML descriptor is required.**
 
-Each entry under `target.tools:` is a path to a YAML file with this shape:
+See [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md) for the full
+authoring reference, the IDE-typings pipeline, the testing helpers, and the worked
+iOS Contacts + Wikipedia examples.
+
+Each entry under `target.tools:` is the **bare export name** of a scripted tool:
 
 ```yaml
-script: ./examples/myapp/trails/config/tools/myapp_login.js
-name: myapp_login
-description: Sign into MyApp with the supplied credentials.
-_meta:
-  trailblaze/supportedPlatforms: [android]
-  trailblaze/requiresContext: true
-inputSchema:
-  email:
-    type: string
-    description: Email to enter into the login form.
-  password:
-    type: string
-    description: Password to enter into the login form.
+target:
+  tools:
+    - myapp_login                   # matches `export const myapp_login = trailblaze.tool(...)` in tools/myapp_login.ts
+    - myapp_navigate
 ```
 
-The trailmap loader translates the flat `inputSchema` into a JSON-Schema-conformant object
-(`{ type: object, properties: { ... }, required: [ ... ] }`) before handing it to the runtime.
-See [`TrailmapScriptedToolFile`](https://github.com/block/trailblaze/blob/main/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailmapScriptedToolFile.kt)
-for the field-level conventions:
+The trailmap loader walks `tools/` for every `.ts` that exports a `trailblaze.tool(...)`
+declaration; the names listed under `target.tools:` decide which of those are advertised
+to the agent for this target. Files in `tools/` that don't export a tool (shared
+helpers, type-only modules) are ignored at registration.
 
-- `required: true` is the per-property default — set `required: false` for optional params.
-- `enum: [a, b, c]` constrains a string parameter to a fixed set.
-- `_meta.trailblaze/supportedPlatforms` is case-insensitive (`[web]`, `[WEB]`, `[Web]` all
-  collapse to the canonical form at parse time).
-- `script:` paths resolve from the **JVM working directory** (typically the repo root), not
-  the trailmap directory — the subprocess execution model anchors at CWD. This is documented in
-  the kdoc on `TrailmapScriptedToolFile.script`.
+For trailmaps that haven't migrated yet, the legacy YAML-descriptor shape continues to
+work — each entry under `target.tools:` is then a bare name (resolved against the
+descriptor's `name:` field). See
+[Scripted Tools — Legacy Reference](scripted_tools.md) for the full descriptor schema
+and the field-level conventions in
+[`TrailmapScriptedToolFile.kt`](https://github.com/block/trailblaze/blob/main/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailmapScriptedToolFile.kt).
 
 ## Tool YAML file suffixes — `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`
 
@@ -401,12 +411,14 @@ becomes:
 trailmaps/myapp/
 ├── trailmap.yaml                       # id, target.display_name, target.tools refs, platforms
 └── tools/
-    └── myapp_login.yaml            # script, name, description, flat inputSchema
+    └── myapp_login.ts                  # typed `trailblaze.tool<I, O>(spec, handler)` export
 ```
 
 with the workspace's `trailblaze.yaml` adding `trailmaps: [trailmaps/myapp/trailmap.yaml]`.
+See [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md) for the per-tool
+authoring shape.
 
 The `targets/myapp.yaml` flat form is still supported for now (legacy-only); new authoring
 should use trailmaps. The flat-target tools list (`tools: [...]` with inline `InlineScriptToolConfig`
-entries) is preserved verbatim for legacy use, but the per-file `TrailmapScriptedToolFile` shape
-with flat `inputSchema` is the recommended path.
+entries) is preserved verbatim for legacy use, but the per-tool `.ts` shape is the
+recommended path.
