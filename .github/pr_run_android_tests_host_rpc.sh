@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Host-RPC path: drives the trail from the host via the Trailblaze CLI
-# (`./trailblaze trail …`). The CLI runs the agent loop in-process on the host
+# (`trailblaze trail …`). The CLI runs the agent loop in-process on the host
 # and dispatches device tools over RPC to its bundled on-device APK, which it
 # auto-installs over ADB. No `connectedDebugAndroidTest` and no separate
 # headless server are required.
+#
+# `trailblaze` resolves on $PATH because the workflow runs
+# `install-trailblaze-from-artifact.sh` against the upstream `build-uber-jar`
+# job's prebuilt JAR before invoking this script — every CLI call below
+# runs via `java -jar`, no Gradle compile or daemon start.
 # Note: intentionally not using set -e so that log collection always runs even if the test fails
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
 TRAILBLAZE_LOCAL_LOGS_DIR="$HOME/.trailblaze/logs"
@@ -25,23 +30,12 @@ echo "Installing TypeScript SDK devDependencies (esbuild)..."
 (cd sdks/typescript && bun install --frozen-lockfile) \
   || { echo "ERROR: bun install failed in sdks/typescript"; TEST_FAILED=true; }
 
-# Pre-compile the Trailblaze desktop module so the daemon starts within the
-# 110s port-ready window below. Without this, `./trailblaze app …` does a cold
-# Kotlin compile (4+ min on CI) inside the backgrounded process, the wait loop
-# times out, and the subsequent `trail` invocation triggers the launcher's
-# auto-start fallback — producing two concurrent `gradlew run` invocations
-# that have corrupted the Kotlin incremental cache on past runs.
-if [ "$TEST_FAILED" != "true" ]; then
-  echo "Pre-building Trailblaze desktop classes..."
-  ./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze desktop"; TEST_FAILED=true; }
-fi
-
 if [ "$TEST_FAILED" != "true" ]; then
   # Start the Trailblaze daemon in the background. `app --foreground --headless`
   # blocks the process, so we background it with `&` and poll /ping until ready.
   # The `trail` invocation below detects the running daemon and reuses it.
   echo "Starting Trailblaze daemon (app --foreground --headless)..."
-  ./trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
+  trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
   TRAILBLAZE_PID=$!
   echo "Trailblaze daemon started with PID: $TRAILBLAZE_PID"
   echo "Waiting for Trailblaze daemon to be ready on port 52525 (this may take up to 2 minutes)..."
@@ -71,7 +65,7 @@ if [ "$TEST_FAILED" != "true" ]; then
   echo "Running Trail via Trailblaze CLI..."
   # The trail has recorded tool sequences so LLM inference is never invoked.
   # The fake OPENAI_API_KEY from the workflow env satisfies the provider wiring.
-  ./trailblaze trail trails/clock/set-alarm-730am/android.trail.yaml || TEST_FAILED=true
+  trailblaze trail trails/clock/set-alarm-730am/android.trail.yaml || TEST_FAILED=true
 else
   echo "Skipping test execution because daemon failed to start"
 fi

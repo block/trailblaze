@@ -16,6 +16,80 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Pre-build the trailblaze uber JAR once, with the WASM report template
+  # embedded, and publish it as an artifact for the downstream test jobs to
+  # consume. Mirrors the trailblaze-internal `build-uber-jar` Buildkite step:
+  # downstream test jobs install the prebuilt JAR via
+  # `scripts/install-trailblaze-from-artifact.sh` instead of paying their own
+  # `./gradlew :trailblaze-desktop:jar` (~3–5 min cold) plus a cold daemon
+  # start via `./gradlew :trailblaze-desktop:run`. The installed `trailblaze`
+  # binary runs the JAR directly via `java -jar`, skipping Gradle entirely
+  # for every CLI invocation.
+  #
+  # `-Ptrailblaze.wasm=true` (via TRAILBLAZE_GRADLE_EXTRA_ARGS) bundles the
+  # WASM-rendered report template into the JAR's classpath, so every
+  # downstream `trailblaze report` invocation finds its template inside the
+  # uber JAR — no separate template download dance is required.
+  # (The internal repo keeps the CI JAR wasm-less and downloads the template
+  # as a sibling artifact; OSS keeps it simple and embeds.)
+  build-uber-jar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Android SDK
+        # trailblaze-desktop transitively depends on Android-targeted modules,
+        # so the Android Gradle Plugin needs an SDK to evaluate the build.
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Setup Bun
+        # `:trailblaze-desktop:releaseArtifacts` transitively triggers
+        # `:trailblaze-scripting-subprocess:installTrailblazeScriptingSdk`,
+        # which runs `bun install` to lay down the scripting SDK's
+        # node_modules ahead of JAR packaging.
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Build trailblaze uber JAR (with WASM template embedded)
+        # `install-trailblaze-source.sh` invokes
+        # `:trailblaze-desktop:releaseArtifacts`, which runs
+        # `packageUberJarForCurrentOS` and copies the launcher script
+        # alongside the JAR into `trailblaze-desktop/build/release/`.
+        # TRAILBLAZE_GRADLE_EXTRA_ARGS layers in `-Ptrailblaze.wasm=true` so
+        # the report template gets bundled into the JAR's classpath.
+        env:
+          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
+        run: ./scripts/install-trailblaze-source.sh
+
+      - name: Stage artifact contents
+        # `releaseArtifacts` lays down the JAR + launcher with stable names
+        # at `trailblaze-desktop/build/release/`. Copy them to a flat
+        # top-level staging dir so the upload step keeps the layout simple
+        # — `actions/download-artifact@v4` extracts into a directory whose
+        # contents match what was uploaded, and the install-from-artifact
+        # script expects `trailblaze.jar` + `trailblaze` side-by-side.
+        run: |
+          mkdir -p trailblaze-uber-jar
+          cp trailblaze-desktop/build/release/trailblaze.jar trailblaze-uber-jar/
+          cp trailblaze-desktop/build/release/trailblaze trailblaze-uber-jar/
+          ls -lh trailblaze-uber-jar/
+
+      - name: Upload uber JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+          if-no-files-found: error
+          retention-days: 7
+
   # Run Tests. Split into two parallel jobs so the slow
   # `:trailblaze-scripting-subprocess` test suite (~45min — spawns a `bun`/`tsx`
   # subprocess per test) doesn't gate the rest of the build behind a single
@@ -91,6 +165,7 @@ jobs:
   android-tests-on-device:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: build-uber-jar
     env:
       # These CI checks replay recorded trails, so LLM inference is never invoked.
       # A non-empty sentinel value is required to satisfy the provider/client wiring
@@ -123,6 +198,20 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download prebuilt uber JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+
+      - name: Install trailblaze from prebuilt artifact
+        # Lays down `~/.trailblaze/install/trailblaze.jar` + launcher, then
+        # symlinks `trailblaze` onto $PATH. Downstream `trailblaze` CLI
+        # invocations skip Gradle entirely and run `java -jar` directly.
+        env:
+          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
+        run: ./scripts/install-trailblaze-from-artifact.sh
 
       - name: Create and start emulator and run tests (Linux)
         if: runner.os == 'Linux'
@@ -168,12 +257,13 @@ jobs:
           echo "Tests failed - failing the workflow"
           exit 1
 
-  # Drives the trail from the host via the Trailblaze CLI (`./trailblaze trail …`).
+  # Drives the trail from the host via the Trailblaze CLI (`trailblaze trail …`).
   # Agent loop runs in-process on the host; tools dispatch over RPC to the bundled
   # on-device APK that the CLI auto-installs over ADB.
   android-tests-host-rpc:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    needs: build-uber-jar
     env:
       # Recordings-only — LLM is never invoked. See android-tests-on-device above.
       OPENAI_API_KEY: no-key-set
@@ -203,6 +293,17 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download prebuilt uber JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+
+      - name: Install trailblaze from prebuilt artifact
+        env:
+          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
+        run: ./scripts/install-trailblaze-from-artifact.sh
 
       - name: Create and start emulator and run tests (Linux)
         if: runner.os == 'Linux'

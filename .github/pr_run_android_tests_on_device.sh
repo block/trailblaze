@@ -18,33 +18,31 @@ echo "Starting Android Test Execution (on-device)"
 echo "Working directory: $(pwd)"
 echo "========================================="
 
-# Start Trailblaze server in background
-echo "Building Trailblaze server..."
-./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze server"; TEST_FAILED=true; }
-
-if [ "$TEST_FAILED" != "true" ]; then
-  echo "Starting Trailblaze server..."
-  # `app --foreground --headless` keeps the JVM in the foreground so backgrounding
-  # with `&` lets us poll the HTTPS port until ready. The `app` subcommand is required —
-  # bare `--headless` raises "Unknown option: '--headless'".
-  ./gradlew :trailblaze-desktop:run --args="app --foreground --headless" > /tmp/trailblaze.log 2>&1 &
-  TRAILBLAZE_PID=$!
-  echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-  echo "Waiting for Trailblaze server to be ready on port $TRAILBLAZE_HTTPS_PORT (this may take up to 2 minutes)..."
-  sleep 10
-  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
-  done
-  if ! nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1; then
-    echo "ERROR: Trailblaze server failed to start on port $TRAILBLAZE_HTTPS_PORT"
-    echo "=== Trailblaze logs ==="
-    cat /tmp/trailblaze.log
-    TEST_FAILED=true
-  else
-    echo "✓ Trailblaze server is running on port $TRAILBLAZE_HTTPS_PORT!"
-  fi
-  echo "========================================="
+# Start Trailblaze server in background. The CLI was installed onto $PATH by
+# the workflow's `install-trailblaze-from-artifact.sh` step (from the upstream
+# `build-uber-jar` job's prebuilt JAR), so `trailblaze` here runs via
+# `java -jar` — no Gradle compile, no daemon start. `app --foreground
+# --headless` keeps the JVM in the foreground so backgrounding with `&` lets
+# us poll the HTTPS port until ready. The `app` subcommand is required —
+# bare `--headless` raises "Unknown option: '--headless'".
+echo "Starting Trailblaze server..."
+trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
+TRAILBLAZE_PID=$!
+echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
+echo "Waiting for Trailblaze server to be ready on port $TRAILBLAZE_HTTPS_PORT (this may take up to 2 minutes)..."
+sleep 10
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
+done
+if ! nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1; then
+  echo "ERROR: Trailblaze server failed to start on port $TRAILBLAZE_HTTPS_PORT"
+  echo "=== Trailblaze logs ==="
+  cat /tmp/trailblaze.log
+  TEST_FAILED=true
+else
+  echo "✓ Trailblaze server is running on port $TRAILBLAZE_HTTPS_PORT!"
 fi
+echo "========================================="
 
 # Start capturing logcat
 echo "Starting logcat capture (filtering out noise)..."

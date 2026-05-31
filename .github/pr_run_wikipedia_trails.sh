@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Wikipedia trails: drives web-based Playwright trails from the host via the
-# Trailblaze CLI (`./trailblaze trail …`). No Android emulator required.
+# Trailblaze CLI (`trailblaze trail …`). No Android emulator required.
+#
+# `trailblaze` resolves on $PATH because the workflow runs
+# `install-trailblaze-from-artifact.sh` against the upstream `build-uber-jar`
+# job's prebuilt JAR before invoking this script — every CLI call below runs
+# via `java -jar`, no Gradle compile or daemon start.
 # Note: intentionally not using set -e so that log collection always runs even if the test fails
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
 TRAILBLAZE_LOCAL_LOGS_DIR="$HOME/.trailblaze/logs"
@@ -22,23 +27,12 @@ echo "Installing TypeScript SDK devDependencies (esbuild)..."
 (cd sdks/typescript && bun install --frozen-lockfile) \
   || { echo "ERROR: bun install failed in sdks/typescript"; TEST_FAILED=true; }
 
-# Export config dir before the first Gradle invocation so the Gradle daemon
-# starts with it in its environment.  JavaExec subprocesses inherit the daemon's
-# environment, not the caller's shell, so the export must precede the daemon's
-# first start (triggered by :trailblaze-desktop:jar below).
+# Export config dir before the first `trailblaze` invocation so the daemon
+# starts with it in its environment. Subprocesses inherit the daemon's
+# environment, not the caller's shell, so the export must precede the
+# daemon's first start (triggered by `trailblaze app …` below).
 export TRAILBLAZE_CONFIG_DIR="$(pwd)/examples/wikipedia/trails/config"
 echo "TRAILBLAZE_CONFIG_DIR=$TRAILBLAZE_CONFIG_DIR"
-
-# Pre-compile the Trailblaze desktop module so the daemon starts within the
-# 110s port-ready window below. Without this, `./trailblaze app …` does a cold
-# Kotlin compile (4+ min on CI) inside the backgrounded process, the wait loop
-# times out, and the subsequent `trail` invocation triggers the launcher's
-# auto-start fallback — producing two concurrent `gradlew run` invocations
-# that have corrupted the Kotlin incremental cache on past runs.
-if [ "$TEST_FAILED" != "true" ]; then
-  echo "Pre-building Trailblaze desktop classes..."
-  ./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze desktop"; TEST_FAILED=true; }
-fi
 
 # Pre-install Playwright Chromium so the browser is cached before the trail
 # runs.  The JVM Playwright library (version 1.50.0) and the npm package use the
@@ -56,7 +50,7 @@ if [ "$TEST_FAILED" != "true" ]; then
   # blocks the process, so we background it with `&` and poll /ping until ready.
   # The `trail` invocation below detects the running daemon and reuses it.
   echo "Starting Trailblaze daemon (app --foreground --headless)..."
-  ./trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
+  trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
   TRAILBLAZE_PID=$!
   echo "Trailblaze daemon started with PID: $TRAILBLAZE_PID"
   echo "Waiting for Trailblaze daemon to be ready on port 52525 (this may take up to 2 minutes)..."
@@ -79,7 +73,7 @@ if [ "$TEST_FAILED" != "true" ]; then
   echo "Running Wikipedia trail via Trailblaze CLI..."
   # The trail has recorded tool sequences so LLM inference is never invoked.
   # The fake OPENAI_API_KEY from the workflow env satisfies the provider wiring.
-  ./trailblaze trail trails/wikipedia/test-article-shakespeare/web.trail.yaml || TEST_FAILED=true
+  trailblaze trail trails/wikipedia/test-article-shakespeare/web.trail.yaml || TEST_FAILED=true
 else
   echo "Skipping test execution because daemon failed to start"
 fi
