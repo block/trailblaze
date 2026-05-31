@@ -12,6 +12,11 @@ remote_branch: gh-pages
 
 copyright: 'Copyright &copy; 2025 Block, Inc.'
 
+# Build hooks (see docs_hooks.py): fills missing per-trail report-gallery assets with the
+# committed generic placeholder so strict builds pass without committing per-trail binaries.
+hooks:
+  - docs_hooks.py
+
 theme:
   name: 'material'
   palette:

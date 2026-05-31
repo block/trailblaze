@@ -99,3 +99,7 @@ package-lock.json
 bun.lock
 bun.lockb
 !sdks/typescript/bun.lock
+# Report-gallery per-trail assets (docs/generated/reports/<trail>/): fetched from CI
+# artifacts at docs-build time or filled with the generic placeholder by docs_hooks.py.
+# Never committed — only the generic docs/images/report-pending.webp lives in the repo.
+docs/generated/reports/*/
