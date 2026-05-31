@@ -135,7 +135,12 @@ class DeviceListCommand : Callable<Int> {
 
       Console.info("")
       val byPlatform = devices.groupBy { it.platform }
-      Console.info("${devices.size} device(s) available. Pass --device on each device command:")
+      Console.info(
+        "${devices.size} device(s) available. " +
+          "In an interactive terminal, pin one with `trailblaze device connect <spec>` " +
+          "and subsequent commands inherit it. " +
+          "In a fresh-shell harness (Claude Code, CI), pass `--device <spec>` per call:",
+      )
       Console.info("")
       // Warm the classifier cache for all devices in parallel before formatting. The
       // synchronous per-device formatDeviceType calls below then hit the cache instantly
@@ -235,7 +240,7 @@ class DeviceListCommand : Callable<Int> {
 @Command(
   name = "connect",
   mixinStandardHelpOptions = true,
-  description = ["Connect a device + target to your session (use `eval $(...)` to pin TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)"],
+  description = ["Connect a device + target and pin them for this terminal so subsequent commands inherit the binding"],
 )
 class DeviceConnectCommand : Callable<Int> {
 
@@ -252,9 +257,9 @@ class DeviceConnectCommand : Callable<Int> {
     names = ["--target", "-t"],
     description = [
       "Target app to bind to this device's session (e.g. `default`, `sampleapp`). " +
-        "Optional. When set, `eval \$(trailblaze device connect ... --target X)` also " +
-        "exports \$TRAILBLAZE_TARGET so subsequent CLI calls in this shell re-apply " +
-        "the binding automatically.",
+        "Optional. When set, the target is recorded alongside the device in this " +
+        "terminal's pin so subsequent CLI calls re-apply the binding automatically " +
+        "until you `device disconnect` or pin a different target.",
     ],
   )
   var target: String? = null
@@ -369,12 +374,41 @@ class DeviceConnectCommand : Callable<Int> {
         Console.log("[device connect] MCP session pin threw: ${e.message}")
       }
 
-      // 5. Status messages → stderr so `eval $(trailblaze device connect ...)` doesn't
-      //    try to evaluate them as shell commands. Visible to interactive users either
-      //    way (stderr renders to the terminal even when stdout is being captured).
+      // 5. Pin the device for this terminal so subsequent commands default to
+      //    it without flags or env vars. The pin survives daemon restart
+      //    (it's a file under ~/.trailblaze keyed by the shell PID forwarded
+      //    by the `./trailblaze` wrapper as TRAILBLAZE_SHELL_PID). Older
+      //    wrappers that don't forward the PID skip this silently — the
+      //    daemon-side bind still happened in step 1, so a follow-up call
+      //    in the same shell still works via the `--device` flag or the
+      //    TRAILBLAZE_DEVICE env tier.
+      // Pass the resolved target through to the pin so a `device connect
+      // --target X` survives a daemon restart — the per-device override
+      // lives only in the daemon's in-memory SessionTargetRegistry, and
+      // without persisting the target alongside the device id every action
+      // command after a restart would degrade to workspace config.
+      writeShellDevicePinIfPossible(deviceIdString, resolvedTarget)
+
+      // 6. Status messages → stderr. Plain confirmation of what's now active
+      //    for this terminal. The historical `Pin to this shell: eval $(...)`
+      //    line is gone — the file-pin written in step 5 already does the
+      //    pinning, so directing the user at eval is misleading.
       val targetSuffix = resolvedTarget?.let { " (target=$it)" }.orEmpty()
-      Console.error("Connected $deviceIdString$targetSuffix.")
-      Console.error("Pin to this shell: eval \$(trailblaze device connect $deviceIdString${resolvedTarget?.let { " --target $it" }.orEmpty()})")
+      Console.error("Pinned $deviceIdString$targetSuffix for this terminal. Other terminals are independent.")
+      // Catch the agent-harness case: the wrapper passed TRAILBLAZE_INTERACTIVE=0
+      // because stdin isn't a tty. Claude Code's Bash tool, Cursor's shell, Codex,
+      // and CI all qualify. In those environments each subsequent CLI invocation
+      // is a fresh shell with a different PID, so the pin we just wrote is
+      // invisible to the next call — directing the agent at `--device` per call
+      // avoids the "I pinned it but it's not working" loop. Real humans in a
+      // real terminal have a tty and never see this notice.
+      if (!isInteractiveCaller()) {
+        Console.error(
+          "Note: this terminal looks non-interactive (AI agent, CI, or piped). " +
+            "The pin won't survive into fresh shells — pass " +
+            "`--device $deviceIdString` on each command instead.",
+        )
+      }
       // First-time OOBE discovery hint. Surface the `-s` / require-steps trade-off
       // exactly once per connect so authors learn the durable-step contract self-
       // heal needs, without nagging on every tool call (which is the "paperwork"
@@ -391,19 +425,12 @@ class DeviceConnectCommand : Callable<Int> {
         )
       }
 
-      // 6. Shell-evaluable lines → stdout via the shared helper. This is what
-      //    `eval $(...)` captures and runs in the parent shell to set
-      //    TRAILBLAZE_DEVICE (and, when a target was passed, TRAILBLAZE_TARGET)
-      //    for every subsequent CLI call in this terminal. The target export
-      //    is the cross-invocation cousin of the daemon-side per-device
-      //    override set in step 2: the daemon-side entry is wiped whenever a
-      //    fresh MCP session re-claims the device (PR #3463 follow-up), but
-      //    the env-pin survives because each new CLI invocation re-applies it
-      //    via [resolveCliTargetPin] inside [cliReusableWithDevice].
-      printShellExport("TRAILBLAZE_DEVICE", deviceIdString)
-      if (resolvedTarget != null) {
-        printShellExport("TRAILBLAZE_TARGET", resolvedTarget)
-      }
+      // Stdout is intentionally empty for this command now that the file-pin
+      // carries the binding. We used to print `export TRAILBLAZE_DEVICE=…`
+      // here so `eval $(...)` could lift it into the parent shell — that
+      // mechanism is obsolete with terminal-scoped pinning. Anyone who still
+      // wants the env var as a manual override can `export TRAILBLAZE_DEVICE=…`
+      // themselves; the resolver tier that reads it is unchanged.
 
       TrailblazeExitCode.SUCCESS.code
     }
@@ -411,33 +438,26 @@ class DeviceConnectCommand : Callable<Int> {
 }
 
 /**
- * Disconnect the current device and release its session.
+ * Disconnect the current device and clear this terminal's pin.
  *
- * Pair with `device connect`: `eval $(trailblaze device disconnect)` prints
- * `unset TRAILBLAZE_DEVICE` so the shell stops routing to a device the daemon
- * no longer holds open. Without the `eval` wrapper, the daemon still releases
- * the session but the shell's env var is left dangling (harmless — subsequent
- * commands will fail at the daemon with "no active session" or auto-rebind
- * once that path lands).
+ * Pair with `device connect`. After this runs, the resolver falls through to
+ * autodetect on subsequent CLI calls until a new `device connect` is issued.
  *
- * Symmetric clear: `device disconnect` ALWAYS emits both `unset TRAILBLAZE_DEVICE`
- * and `unset TRAILBLAZE_TARGET`, even when the prior `device connect` was bare
- * (no `--target`, so `TRAILBLAZE_TARGET` was not exported by that connect).
- * The contract is "the env-var lifecycle is owned by the connect/disconnect
- * pair as a unit" — leaving a stale TRAILBLAZE_TARGET behind after a
- * disconnect would silently contaminate the next `device connect` via
- * [resolveCliTargetPin]'s env-tier read. Users who manage `TRAILBLAZE_TARGET`
- * independently in their shell rc should set it AFTER any `device disconnect`
- * runs (or not use `eval $(...)` to consume the disconnect output).
+ * **Backwards-compat: legacy env-var unset on stdout.** For users still wiring
+ * `eval $(trailblaze device disconnect)` in their shell rc, this command also
+ * emits `unset TRAILBLAZE_DEVICE` and `unset TRAILBLAZE_TARGET` on stdout so
+ * the eval-pattern keeps working. The lines are vestigial — the file-pin write
+ * to `~/.trailblaze/shell-device-pins-<port>.json` is what the rest of the
+ * CLI consults — but harmless to keep for users mid-migration.
  *
  * Examples:
- *   eval $(trailblaze device disconnect)               - Release the bound device + clear env vars
- *   trailblaze device disconnect                       - Release the bound device (env vars untouched)
+ *   trailblaze device disconnect                       - Release the device + clear this terminal's pin
+ *   trailblaze device disconnect --device android/...  - Release a specific bound device by id
  */
 @Command(
   name = "disconnect",
   mixinStandardHelpOptions = true,
-  description = ["Disconnect a device (use `eval $(...)` to also clear TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET)"],
+  description = ["Disconnect a device and clear this terminal's pin"],
 )
 class DeviceDisconnectCommand : Callable<Int> {
 
@@ -446,7 +466,11 @@ class DeviceDisconnectCommand : Callable<Int> {
 
   @CommandLine.Option(
     names = ["-d", "--device"],
-    description = ["Device to disconnect. Defaults to \$TRAILBLAZE_DEVICE."],
+    description = [
+      "Device to disconnect. Defaults to `\$TRAILBLAZE_DEVICE` if set " +
+        "manually, otherwise this terminal's pin (set by " +
+        "`trailblaze device connect`).",
+    ],
   )
   var device: String? = null
 
@@ -456,31 +480,49 @@ class DeviceDisconnectCommand : Callable<Int> {
     // daemon's currently-bound session, a bare `device disconnect` from a fresh
     // shell that never connected anything would happily terminate work belonging
     // to another shell. Force the caller to name the device they're disconnecting.
+    // Resolve the device the caller wants to release. `resolveCliDevice` only
+    // covers --device and TRAILBLAZE_DEVICE; the file-pin written by
+    // `device connect` is the primary mechanism now, so we also consult it
+    // here. Without this, a user who connected via the file-pin and then
+    // typed `trailblaze device disconnect` (no flag, no env) would get the
+    // "needs a device" error instead of the obvious release.
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
     val expectedDevice = resolveCliDevice(device)
+      ?: run {
+        val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+        val pid = pidStr?.toLongOrNull()?.takeIf { it > 0 }
+        pid?.let {
+          (ShellDevicePinStore.resolvePin(ShellDevicePinStore.pinFileFor(port), it)
+            as? ShellDevicePinStore.PinLookup.Found)?.device
+        }
+      }
     if (expectedDevice.isNullOrBlank()) {
       Console.error(
-        "device disconnect needs a device to act on. Pass `--device <platform>` " +
-          "or set TRAILBLAZE_DEVICE first (typically via `eval \$(trailblaze " +
-          "device connect <platform>)`). This prevents accidentally stopping " +
-          "another shell's session in the multi-terminal case.",
+        "device disconnect needs a device to act on. This terminal has no pin " +
+          "(each terminal has its own — pinning in one doesn't show up in " +
+          "another). Pass `--device <platform>/<id>` to name a specific device " +
+          "to release, or run `trailblaze device list` to see what's currently " +
+          "bound and try `trailblaze device disconnect --device <id>`.",
       )
       return TrailblazeExitCode.MISUSE.code
     }
 
     return cliWithDaemon(verbose = false) { client ->
-      val port = CliConfigHelper.resolveEffectiveHttpPort()
       when (val outcome = stopBoundSessionIfMatches(client, expectedDevice)) {
         is StopBoundSessionResult.NoActiveSession -> {
           Console.error(
-            "No device currently bound on the daemon. Clearing TRAILBLAZE_DEVICE " +
-              "and TRAILBLAZE_TARGET in case they're stale.",
+            "No device currently bound on the daemon. Clearing this terminal's pin " +
+              "and any stale TRAILBLAZE_DEVICE / TRAILBLAZE_TARGET env vars.",
           )
           CliMcpClient.clearSession(port)
-          // Symmetric with TRAILBLAZE_DEVICE: when `device connect --target X`
-          // sets both env vars, `device disconnect` clears both. Leaving
-          // TRAILBLAZE_TARGET set while TRAILBLAZE_DEVICE is unset would let
-          // a stale target pin contaminate the next `device connect` in this
-          // shell via `cliReusableWithDevice`'s [resolveCliTargetPin] read.
+          // Clear the per-terminal file pin so the resolver doesn't keep
+          // returning a now-stale entry on subsequent calls.
+          clearShellDevicePinIfPossible()
+          // Symmetric env-var unsets are still emitted on stdout so legacy
+          // `eval $(trailblaze device disconnect)` workflows keep functioning
+          // for users who still wire that pattern in their shells. The
+          // env-var-via-stdout pathway is no longer required (file-pin
+          // handles it), but it's harmless and backwards-compatible.
           printShellUnset("TRAILBLAZE_DEVICE")
           printShellUnset("TRAILBLAZE_TARGET")
           TrailblazeExitCode.SUCCESS.code
@@ -489,10 +531,9 @@ class DeviceDisconnectCommand : Callable<Int> {
           Console.error(
             "Won't disconnect: you asked to release '$expectedDevice' but the " +
               "daemon's current session is bound to ${outcome.boundDevice.toFullyQualifiedDeviceId()}. " +
-              "Either another shell connected after you did, or TRAILBLAZE_DEVICE is stale. " +
-              "To release the other binding anyway: `trailblaze device disconnect " +
-              "--device ${outcome.boundDevice.toFullyQualifiedDeviceId()}`. " +
-              "To clear this shell's env vars only: `unset TRAILBLAZE_DEVICE TRAILBLAZE_TARGET`.",
+              "Either another terminal connected after you did, or this terminal's " +
+              "pin is stale. To release the other binding anyway: `trailblaze device " +
+              "disconnect --device ${outcome.boundDevice.toFullyQualifiedDeviceId()}`.",
           )
           TrailblazeExitCode.INFRA_FAILED.code
         }
@@ -505,7 +546,12 @@ class DeviceDisconnectCommand : Callable<Int> {
           // this shell would try to reattach to the now-closed session and fail
           // before auto-creating a new one. Mirrors `session stop`.
           CliMcpClient.clearSession(port)
+          // Clear the per-terminal file pin so subsequent commands fall back
+          // to autodetect (or a different terminal's pin) instead of trying
+          // to use this just-disconnected device.
+          clearShellDevicePinIfPossible()
           Console.error("Disconnected $expectedDevice.")
+          // See note above on legacy env-var unset.
           printShellUnset("TRAILBLAZE_DEVICE")
           printShellUnset("TRAILBLAZE_TARGET")
           TrailblazeExitCode.SUCCESS.code
@@ -525,9 +571,8 @@ class DeviceDisconnectCommand : Callable<Int> {
  * sets the new target. The daemon lazily starts a fresh session bound to the
  * new target on the next action command (`tool`, `step`, `snapshot`, etc.).
  *
- * TRAILBLAZE_DEVICE is unchanged: the device binding itself isn't moving, so
- * the shell env var that points at this device stays valid. No `eval $(...)`
- * wrapper is needed.
+ * The per-terminal pin's *device* doesn't move — only the bound target does
+ * — so rebind doesn't touch `~/.trailblaze/shell-device-pins-<port>.json`.
  *
  * Examples:
  *   trailblaze device rebind --target sampleapp
@@ -545,7 +590,11 @@ class DeviceRebindCommand : Callable<Int> {
 
   @CommandLine.Option(
     names = ["-d", "--device"],
-    description = ["Device to rebind. Defaults to \$TRAILBLAZE_DEVICE."],
+    description = [
+      "Device to rebind. Defaults to `\$TRAILBLAZE_DEVICE` if set " +
+        "manually, otherwise this terminal's pin (set by " +
+        "`trailblaze device connect`).",
+    ],
   )
   var device: String? = null
 
@@ -558,16 +607,24 @@ class DeviceRebindCommand : Callable<Int> {
 
   override fun call(): Int {
     // Same multi-terminal safety pin as `device disconnect`: refuse to operate
-    // without an explicit device identifier (flag or env var), so a bare
-    // `rebind` from a fresh shell can't accidentally tear down another
-    // shell's session on the way to swapping its target.
+    // without an explicit device identifier (flag or env var OR file-pin), so a
+    // bare `rebind` from a fresh shell with no pin can't accidentally tear down
+    // another shell's session on the way to swapping its target.
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
     val expectedDevice = resolveCliDevice(device)
+      ?: run {
+        val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+        val pid = pidStr?.toLongOrNull()?.takeIf { it > 0 }
+        pid?.let {
+          (ShellDevicePinStore.resolvePin(ShellDevicePinStore.pinFileFor(port), it)
+            as? ShellDevicePinStore.PinLookup.Found)?.device
+        }
+      }
     if (expectedDevice.isNullOrBlank()) {
       Console.error(
         "device rebind needs a device to act on. Pass `--device <platform>` " +
-          "or set TRAILBLAZE_DEVICE first (typically via `eval \$(trailblaze " +
-          "device connect <platform>)`). This prevents accidentally rebinding " +
-          "another shell's session in the multi-terminal case.",
+          "or `trailblaze device connect <platform>` first so this terminal " +
+          "knows what to rebind.",
       )
       return TrailblazeExitCode.MISUSE.code
     }
@@ -597,10 +654,9 @@ class DeviceRebindCommand : Callable<Int> {
         Console.error(
           "Won't rebind: you asked to rebind '$expectedDevice' but the " +
             "daemon's current session is bound to ${boundId.toFullyQualifiedDeviceId()}. " +
-            "Either another shell connected after you did, or TRAILBLAZE_DEVICE is stale. " +
-            "To rebind the other binding anyway: `trailblaze device rebind " +
-            "--device ${boundId.toFullyQualifiedDeviceId()} --target $newTarget`. " +
-            "To clear this shell's env var only: `unset TRAILBLAZE_DEVICE`.",
+            "Either another terminal connected after you did, or this terminal's " +
+            "pin is stale. To rebind the other binding anyway: `trailblaze device " +
+            "rebind --device ${boundId.toFullyQualifiedDeviceId()} --target $newTarget`.",
         )
         return@cliWithDaemon TrailblazeExitCode.INFRA_FAILED.code
       }
@@ -659,17 +715,24 @@ class DeviceRebindCommand : Callable<Int> {
         return@cliWithDaemon TrailblazeExitCode.INFRA_FAILED.code
       }
 
-      // Status to stderr — the device binding itself hasn't moved, so
-      // TRAILBLAZE_DEVICE is unchanged. The TARGET pin, however, has: emit a
-      // shell-evaluable `export TRAILBLAZE_TARGET=<new>` on stdout so
-      // `eval $(trailblaze device rebind --target X)` keeps the shell pin in
-      // sync with the daemon-side override we just set. Without this, the
-      // env var still says the OLD target and the next action command would
-      // re-apply it via [resolveCliTargetPin], silently undoing the rebind.
+      // Plain stderr confirmation. The device-side binding hasn't moved, so
+      // this terminal's pin (which keys on device, not target) stays valid;
+      // the new target is recorded daemon-side as a per-session override
+      // that the resolver re-applies on every subsequent CLI call. Legacy
+      // `eval $(trailblaze device rebind ...)` callers who relied on the
+      // stdout `export TRAILBLAZE_TARGET=…` line will need to update — the
+      // file-pin makes that mechanism redundant for the typical flow, and
+      // anyone who wants the env var as a manual override can `export` it.
       val deviceIdString = boundId.toFullyQualifiedDeviceId()
+      // Update the pin's target field. Without this, the next CLI call in
+      // this terminal would read the pin's OLD target (or null), call
+      // `setSessionTargetForBoundDevice` with the stale value, and silently
+      // undo the rebind. Note: this also writes a fresh pin for terminals
+      // that didn't have one (rebind via explicit --device from a shell
+      // that never ran connect) — which matches user intent: they just
+      // expressed a (device, target) binding for this shell.
+      writeShellDevicePinIfPossible(deviceIdString, newTarget)
       Console.error("Rebound $deviceIdString to target=$newTarget.")
-      Console.error("Pin to this shell: eval \$(trailblaze device rebind --device $deviceIdString --target $newTarget)")
-      printShellExport("TRAILBLAZE_TARGET", newTarget)
       TrailblazeExitCode.SUCCESS.code
     }
   }

@@ -128,7 +128,7 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web), platform/instance-id, or instance ID"]
+    description = [DEVICE_OPTION_DESCRIPTION]
   )
   var device: String? = null
 
@@ -481,15 +481,26 @@ open class TrailCommand : Callable<Int> {
     // fire for the multi-device / no-device cases (its message lists available devices in
     // the trail-runner-specific shape, which is more useful than the standard one here).
     //
+    // The inlined tier order mirrors `resolveDeviceWithAutodetect`:
+    //   1. `--device` flag (already handled above when non-blank)
+    //   2. `TRAILBLAZE_DEVICE` env var
+    //   3. This terminal's file-pin (added so `trailblaze device connect X` followed
+    //      by `trailblaze run …` inherits the device — pre-fix, the resolver skipped
+    //      straight from env to autodetect and a pinned multi-device shell hit the
+    //      multi-device error)
+    //   4. Autodetect (exactly one connected device)
+    //   5. Workspace config's `cliDevicePlatform` (trail-runner-specific)
+    //
     // Guard on `isNullOrBlank()` (not `== null`) so a stray `--device ""` /
-    // `--device " "` falls through to env/autodetect/config rather than being
+    // `--device " "` falls through to env/pin/autodetect/config rather than being
     // forwarded to the runner verbatim — letting a blank string slip through
     // would surface as a cryptic "Device '' not found" mid-pipeline. Same
     // treatment `resolveCliDevice` applies to the env var.
+    val port = parent.getEffectivePort()
     if (device.isNullOrBlank()) {
       device = resolveCliDevice(null)
+        ?: readShellPinDevice(port)
         ?: run {
-          val port = parent.getEffectivePort()
           val autodetected = runBlocking { autodetectSingleConnectedDevice(port) }
           if (autodetected is DeviceAutodetectResult.Resolved) {
             reportAutodetectedDevice(autodetected.deviceSpec)
@@ -1154,6 +1165,13 @@ open class TrailCommand : Callable<Int> {
     // Resolve target app: prefer trail config's `target` field, fall back to settings selection.
     // This ensures custom tools (e.g., myApp_launchSignedIn) are registered for the
     // correct app even when the desktop UI has a different app selected.
+    //
+    // Deliberately does NOT consult the per-terminal target pin (`resolveCliTargetPin`).
+    // Trails are reusable artifacts that travel between users and CI — if a trail needs
+    // a target, it declares one in its config. Inheriting the caller's terminal pin would
+    // make the same trail behave differently between developers, which defeats the
+    // determinism contract. The device pin IS consulted (above, in the resolver chain)
+    // because the device a trail runs on is operator-scoped, not trail-scoped.
     val targetTestApp = trailConfig?.target?.let { config.availableAppTargets.findById(it) }
       ?: app.deviceManager.getCurrentSelectedTargetApp()
     if (verbose) {

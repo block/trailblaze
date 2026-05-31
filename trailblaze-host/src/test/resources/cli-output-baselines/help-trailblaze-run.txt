@@ -56,8 +56,13 @@ removed in a future release.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)
-  -d, --device=<device>      Device: platform (android, ios, web),
-                               platform/instance-id, or instance ID
+  -d, --device=<device>      Device: platform (android, ios, web) or
+                               platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
+                               set (manual override; rare), otherwise this
+                               terminal's pin (set by `trailblaze device
+                               connect`). In a fresh-shell harness (Claude
+                               Code, Cursor, Codex, CI), pass --device on every
+                               call.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
                                driver from trail config.

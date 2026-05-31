@@ -8,8 +8,8 @@
 Usage: trailblaze device connect [-hV] [--headless=<headless>]
                                  [--mcp-session=<mcpSessionOverride>]
                                  [-t=<target>] <platform>
-Connect a device + target to your session (use `eval $(...)` to pin
-TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
+Connect a device + target and pin them for this terminal so subsequent commands
+inherit the binding
       <platform>          Device platform: ANDROID, IOS, or WEB (optionally
                             with instance: android/emulator-5554)
   -h, --help              Show this help message and exit.
@@ -29,8 +29,9 @@ TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
                             unbound MCP client (Claude Desktop, Cursor, Goose,
                             …). No-op when no MCP clients are connected.
   -t, --target=<target>   Target app to bind to this device's session (e.g.
-                            `default`, `sampleapp`). Optional. When set, `eval
-                            $(trailblaze device connect ... --target X)` also
-                            exports $TRAILBLAZE_TARGET so subsequent CLI calls
-                            in this shell re-apply the binding automatically.
+                            `default`, `sampleapp`). Optional. When set, the
+                            target is recorded alongside the device in this
+                            terminal's pin so subsequent CLI calls re-apply the
+                            binding automatically until you `device disconnect`
+                            or pin a different target.
   -V, --version           Print version information and exit.

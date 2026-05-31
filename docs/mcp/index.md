@@ -227,7 +227,7 @@ When you want the MCP session to land on a specific device + target without the 
 }
 ```
 
-Alternatively, drop the flags and inherit `TRAILBLAZE_DEVICE` from the shell that launches the MCP server (helpful when a CLI session pinned via `eval $(trailblaze device connect …)` is already in scope). Explicit `--device` / `--target` win over the env var.
+Alternatively, drop the flags and inherit the device pin from the terminal that launches the MCP server (helpful when you've already run `trailblaze device connect …` in that terminal). Explicit `--device` / `--target` win over the pin. `TRAILBLAZE_DEVICE` is also honored as a manual override — useful for CI agents that set the env var explicitly.
 
 ### Connecting from Cursor
 

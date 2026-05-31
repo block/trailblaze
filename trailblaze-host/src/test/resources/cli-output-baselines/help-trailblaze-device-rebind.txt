@@ -7,7 +7,9 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze device rebind [-hV] [-d=<device>] -t=<target>
 Change the target app for the currently-bound device
-  -d, --device=<device>   Device to rebind. Defaults to $TRAILBLAZE_DEVICE.
+  -d, --device=<device>   Device to rebind. Defaults to `$TRAILBLAZE_DEVICE` if
+                            set manually, otherwise this terminal's pin (set by
+                            `trailblaze device connect`).
   -h, --help              Show this help message and exit.
   -t, --target=<target>   New target app for the bound device (e.g. `default`,
                             `sampleapp`).

@@ -19,7 +19,12 @@ Browse available tools by target app and platform
                           Omit to show everything; trailheads and shortcuts
                             will be called out as headline sections above the
                             toolset listing.
-  -d, --device=<device>   Target device (e.g. android, android/emulator-5554).
+  -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
+                            Defaults to `$TRAILBLAZE_DEVICE` if set (manual
+                            override; rare), otherwise this terminal's pin (set
+                            by `trailblaze device connect`). In a fresh-shell
+                            harness (Claude Code, Cursor, Codex, CI), pass
+                            --device on every call.
       --detail            Show full parameter descriptions for all tools
   -h, --help              Show this help message and exit.
   -n, --name=<name>       Show details for a single tool by name

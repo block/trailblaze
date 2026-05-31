@@ -31,11 +31,15 @@ this repo — no mockup. Click through for the full interactive report, or brows
 
 ## Quickstart
 
+Install Trailblaze first ([Getting Started](getting_started.md) walks through it),
+then:
+
 ```bash
 trailblaze device list
 
-# Pin this shell to a device + target so subsequent calls inherit both from the env
-eval $(trailblaze device connect android --target default)
+# Pin this terminal to a device — subsequent calls inherit it.
+# Trailblaze remembers per-terminal, so other terminals stay independent.
+trailblaze device connect android
 
 # Read the screen — returns a UI tree with refs (e.g. ab42) your agent can target
 trailblaze snapshot

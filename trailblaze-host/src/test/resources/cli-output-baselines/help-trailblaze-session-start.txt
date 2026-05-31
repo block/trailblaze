@@ -10,7 +10,11 @@ Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] [-d=<device>]
                                 [--target=<target>] [--title=<title>]
 Start a new session with automatic video and log capture
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
-                            Defaults to $TRAILBLAZE_DEVICE.
+                            Defaults to `$TRAILBLAZE_DEVICE` if set (manual
+                            override; rare), otherwise this terminal's pin (set
+                            by `trailblaze device connect`). In a fresh-shell
+                            harness (Claude Code, Cursor, Codex, CI), pass
+                            --device on every call.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser
@@ -26,11 +30,12 @@ Start a new session with automatic video and log capture
                             future commands.
       --no-logs           Disable device log capture
       --no-video          Disable video capture
-      --target=<target>   Target app ID for this session's bound device. Scoped
-                            to the device as a daemon-process override (dies on
-                            daemon restart or device release). Defaults to
-                            `$TRAILBLAZE_TARGET` — typically set via `eval
-                            $(trailblaze device connect ... --target X)`. Pass
+      --target=<target>   Target app ID for this session's bound device.
+                            Defaults to `$TRAILBLAZE_TARGET` if set, otherwise
+                            the target you passed to `trailblaze device connect
+                            --target X` for this terminal (persists in this
+                            terminal's pin; cleared by `device disconnect`,
+                            replaced by `device rebind --target Y`). Pass
                             `--target=clear` to remove a previously-set
                             override. To set a persistent default, use
                             `trailblaze config target`.
