@@ -178,6 +178,112 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
+  fun `env config dir wins over a cwd workspace that owns a colliding trailmap id`() {
+    // Regression: mirrors the OSS CI hang reproduction. CWD is a workspace that itself
+    // owns a `wikipedia` trailmap (here: android-only). TRAILBLAZE_CONFIG_DIR points at
+    // a DIFFERENT workspace (here: an `examples/wikipedia/`-shaped tree) whose `wikipedia`
+    // trailmap registers a web-only YAML tool. The env-pointed workspace must win at every
+    // layer — discovered target, registered workspace YAML tools — so the env-pointed
+    // trail's tools register and dispatch doesn't hang. Without `TRAILBLAZE_CONFIG_DIR`
+    // suppressing cwd walk-up, the daemon would load the cwd workspace's tools instead
+    // (`cwd_android_tool` here, the equivalent of `calendar_android_*` / `contacts_ios_*`
+    // in the CI symptom) and the trail's `env_web_tool` reference would never resolve.
+    val cwdWorkspace = tempFolder.newFolder("cwd-workspace")
+    val cwdTrailmapDir = File(cwdWorkspace, "trails/config/trailmaps/wikipedia").apply { mkdirs() }
+    File(cwdTrailmapDir, "tools").mkdirs()
+    File(cwdTrailmapDir, "tools/cwd_android_tool.tool.yaml").writeText(
+      """
+      id: cwd_android_tool
+      description: Repo-root trailmap's android-only tool — must NOT register when env wins.
+      parameters: []
+      tools:
+        - maestro:
+            commands:
+              - back: {}
+      """.trimIndent(),
+    )
+    File(cwdTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: wikipedia
+      target:
+        display_name: CWD Android Wikipedia
+        platforms:
+          android:
+            app_ids:
+              - org.wikipedia
+      """.trimIndent(),
+    )
+    File(cwdWorkspace, "trails/config/trailblaze.yaml").apply {
+      parentFile.mkdirs()
+      writeText(
+        """
+        targets:
+          - wikipedia
+        """.trimIndent(),
+      )
+    }
+
+    val envWorkspace = tempFolder.newFolder("env-workspace")
+    val envTrailmapDir = File(envWorkspace, "trails/config/trailmaps/wikipedia").apply { mkdirs() }
+    File(envTrailmapDir, "tools").mkdirs()
+    File(envTrailmapDir, "tools/env_web_tool.tool.yaml").writeText(
+      """
+      id: env_web_tool
+      description: Env-pointed example workspace's web tool — must register and win.
+      parameters: []
+      tools:
+        - maestro:
+            commands:
+              - back: {}
+      """.trimIndent(),
+    )
+    File(envTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: wikipedia
+      target:
+        display_name: Env Web Wikipedia
+        platforms:
+          web: {}
+      """.trimIndent(),
+    )
+    val envConfigDir = File(envWorkspace, "trails/config").apply { mkdirs() }
+    File(envConfigDir, "trailblaze.yaml").writeText(
+      """
+      targets:
+        - wikipedia
+      """.trimIndent(),
+    )
+
+    val discovered = AppTargetDiscovery.discover(
+      workspaceConfigProvider = {
+        TrailblazeWorkspaceConfigResolver.resolve(
+          fromPath = cwdWorkspace.toPath(),
+          envReader = { envConfigDir.absolutePath },
+        )
+      },
+    )
+
+    // Target reflects env-workspace, not the cwd one with the colliding id.
+    val target = discovered.firstOrNull { it.id == "wikipedia" }
+    assertNotNull(target)
+    assertEquals("Env Web Wikipedia", target.displayName)
+
+    // Workspace YAML tool registration reflects env-workspace, not the cwd one.
+    val registeredNames = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+      .keys
+      .map { it.toolName }
+      .toSet()
+    assertTrue(
+      "env_web_tool" in registeredNames,
+      "env-pointed workspace's `env_web_tool` must register; got: $registeredNames",
+    )
+    assertTrue(
+      "cwd_android_tool" !in registeredNames,
+      "cwd workspace's `cwd_android_tool` must NOT register when env wins; got: $registeredNames",
+    )
+  }
+
+  @Test
   fun `malformed workspace trailblaze_yaml does not suppress sibling target discovery`() {
     val workspace = tempFolder.newFolder("workspace")
     File(workspace, "trails/config/trailblaze.yaml").apply {
