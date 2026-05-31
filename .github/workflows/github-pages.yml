@@ -72,7 +72,7 @@ jobs:
             fi
             rm -rf "$tmp"
           }
-          fetch_assets "wikipedia-trails.yml" "docs/generated/reports/wikipedia"
+          fetch_assets "wikipedia-trails.yml" "docs/report-assets/wikipedia"
 
       - name: Build MkDocs site
         run: mkdocs build --strict
