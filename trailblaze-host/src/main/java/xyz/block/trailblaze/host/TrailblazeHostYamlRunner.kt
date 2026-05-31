@@ -281,8 +281,8 @@ object TrailblazeHostYamlRunner {
         )
         onProgressMessage(
           "Skipping ${quickJsInlineTools.size} inline scripted tool(s): esbuild not found " +
-            "on PATH or under <repo>/sdks/typescript/node_modules/.bin/. " +
-            "Install esbuild or run `bun install` in the SDK dir.",
+            "on PATH or in the Trailblaze SDK's `node_modules/.bin/` (both the flat and " +
+            "nested repo layouts are checked). Install esbuild or run `bun install` in the SDK dir.",
         )
         emptyList()
       } else {
