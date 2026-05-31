@@ -4,9 +4,11 @@
 # trailmap with the same id.
 #
 # LEARNING TO AUTHOR? This is the repo's own demo target — it backs the Android contacts trails
-# under `trails/contacts/` and carries only the Android launch tool here. For a standalone,
-# copy-me example project — typed `trailblaze.tool<Input, Output>()` tools with no `.yaml`
-# manifests, plus tool unit tests — see `examples/ios-contacts/` (the canonical mobile reference).
+# under `trails/contacts/` and carries only the Android launch tool here, authored in the
+# current best-practice shape: a typed `trailblaze.tool(...)` declaration in a bare `.ts` file
+# (no `.yaml` manifest — the framework auto-discovers the export and reads its description from
+# the JSDoc). For a fuller, standalone, copy-me workspace — many typed tools plus tool unit
+# tests — see `examples/ios-contacts/` (the canonical mobile reference).
 #
 # The per-platform `tool_sets` and `drivers` come from the `trailblaze` framework trailmap's
 # `defaults:` map via dependency resolution — closest-wins inheritance. To override, set

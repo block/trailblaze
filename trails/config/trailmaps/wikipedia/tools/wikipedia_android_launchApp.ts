@@ -1,41 +1,42 @@
-// Custom scripted tool: launch the Wikipedia (en) app via Android shell commands.
-// See sibling clock_android_launchApp.ts for the full rationale on the choice of
-// `android_adbShell` over the Maestro-shaped `launchApp`, and `am start` over `monkey`.
-//
-// App-id resolution: `ctx.target.resolveAppId({ defaultAppId })` — a framework-
-// provided method that consults `ctx.target.resolvedAppId` (framework-resolved
-// at session start), falls back to `ctx.target.appIds[0]` (first declared
-// candidate), then to the caller's `defaultAppId` if neither is reachable.
-// Returns `undefined` when nothing's reachable and no default is supplied.
+import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Registered as `wikipedia_android_launchApp` by the workspace `wikipedia` trailmap.
+ * Force-stops the Wikipedia (en) app and re-launches it via the package's default
+ * launcher activity, so the next step starts from a clean app state. Equivalent to a
+ * Maestro `launchApp({ launchMode: FORCE_RESTART })` against `org.wikipedia`, but composed
+ * entirely from the dual-mode `android_adbShell` primitive so the same tool works on host-
+ * and on-device-dispatched scripted-tool sessions.
  *
- * @param {Record<string, never>} args
- * @param {import("@trailblaze/scripting").TrailblazeContext | undefined} ctx
- * @param {import("@trailblaze/scripting").TrailblazeClient} client
- * @returns {Promise<string>}
+ * Use this as the first step of any wikipedia trail that wants a fresh launch state. No
+ * arguments — the framework resolves the app id from the `wikipedia` trailmap manifest's
+ * `app_ids:` list against installed apps on the connected device.
  */
-export async function wikipedia_android_launchApp(args, ctx, client) {
-  if (!ctx) {
-    throw new Error("wikipedia_android_launchApp requires a live Trailblaze session context.");
-  }
-  const appId = ctx.target?.resolveAppId({ defaultAppId: "org.wikipedia" });
-  if (!appId) {
-    throw new Error("wikipedia_android_launchApp could not resolve an Android app id from ctx.target.");
-  }
+// Implementation notes — see the sibling clock_android_launchApp.ts for the full rationale
+// on `android_adbShell` over the Maestro-shaped `launchApp`, on `am start` over `monkey`,
+// and on the `ctx.target?.resolveAppId({ defaultAppId })` resolution order. `android_adbShell`
+// is dual-mode (`requiresHost: false`), so this tool needs no `requiresHost` and composes
+// cleanly on both deployment paths. `requiresContext: true` guarantees `ctx`; we still
+// optional-chain `ctx.target` for target-less sessions.
+export const wikipedia_android_launchApp = trailblaze.tool(
+  { supportedPlatforms: ["android"], requiresContext: true },
+  async (_input, ctx) => {
+    const appId = ctx.target?.resolveAppId({ defaultAppId: "org.wikipedia" });
+    if (!appId) {
+      throw new Error("wikipedia_android_launchApp could not resolve an Android app id from ctx.target.");
+    }
 
-  await client.tools.android_adbShell({
-    command: ["am", "force-stop", appId],
-  });
-  await client.tools.android_adbShell({
-    command: [
-      "am", "start",
-      "-a", "android.intent.action.MAIN",
-      "-c", "android.intent.category.LAUNCHER",
-      "-p", appId,
-    ],
-  });
+    await ctx.tools.android_adbShell({
+      command: ["am", "force-stop", appId],
+    });
+    await ctx.tools.android_adbShell({
+      command: [
+        "am", "start",
+        "-a", "android.intent.action.MAIN",
+        "-c", "android.intent.category.LAUNCHER",
+        "-p", appId,
+      ],
+    });
 
-  return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;
-}
+    return `Launched ${appId} (force-stop + am start MAIN/LAUNCHER).`;
+  },
+);

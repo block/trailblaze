@@ -4,9 +4,11 @@
 # trailmap with the same id.
 #
 # LEARNING TO AUTHOR? This is the repo's own demo target — it backs the Wikipedia web trails
-# under `trails/wikipedia/` and carries only the Android launch tool here. For a standalone,
-# copy-me example project — typed `trailblaze.tool<Input, Output>()` tools with no `.yaml`
-# manifests — see `examples/wikipedia/` (the canonical web reference).
+# under `trails/wikipedia/` and carries only the Android launch tool here, authored in the
+# current best-practice shape: a typed `trailblaze.tool(...)` declaration in a bare `.ts` file
+# (no `.yaml` manifest — the framework auto-discovers the export and reads its description from
+# the JSDoc). For a fuller, standalone, copy-me workspace — many typed tools plus tool unit
+# tests — see `examples/wikipedia/` (the canonical web reference).
 #
 # Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
 # framework trailmap via `dependencies: [trailblaze]`. Platforms that only need defaults are
