@@ -37,12 +37,22 @@ jobs:
 
       - name: Fetch latest report-gallery assets
         # Pull the report assets (storyboard.webp / timeline.webp / report.html) from the
-        # most recent SUCCESSFUL trail run on main and overwrite the committed placeholders
-        # in the build workspace. Because this workflow and the trail workflows both run on
-        # the same push, we intentionally use the previous green run — a one-commit lag.
+        # most recent trail run on main and overwrite the committed placeholders in the
+        # build workspace. Because this workflow and the trail workflows both run on the
+        # same push, we intentionally use the previous run — a one-commit lag.
         #
-        # Best-effort: any miss (no successful run yet, expired artifact, fork without the
-        # token) leaves the committed placeholders in place so `mkdocs build --strict` still
+        # We deliberately do NOT filter on `--status success`. The trail workflows
+        # (`wikipedia-trails.yml` etc.) gate their own success/failure on a terminal
+        # "Fail if trails failed" step that fires AFTER artifact upload, so a job marked
+        # `failure` can still carry usable assets. Falling back to the previous green run
+        # would let a single transient trail-side error stale-pin the docs gallery for
+        # days; instead we trust the artifact presence and let `gh run download` below
+        # decide. If the latest run truly produced nothing (genuine breakage upstream of
+        # the export), `gh run download` silently no-ops and the committed placeholders
+        # survive — same graceful fallback as a missing artifact.
+        #
+        # Best-effort: any miss (no run yet, expired artifact, fork without the token)
+        # leaves the committed placeholders in place so `mkdocs build --strict` still
         # succeeds. Never fail the deploy over a missing showcase asset.
         continue-on-error: true
         env:
@@ -52,7 +62,7 @@ jobs:
           fetch_assets() {
             local workflow="$1" dest="$2"
             local run_id
-            run_id="$(gh run list --workflow="$workflow" --branch main --status success \
+            run_id="$(gh run list --workflow="$workflow" --branch main \
               --limit 1 --json databaseId --jq '.[0].databaseId')"
             if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
               echo "  no successful $workflow run found — keeping committed placeholders"
