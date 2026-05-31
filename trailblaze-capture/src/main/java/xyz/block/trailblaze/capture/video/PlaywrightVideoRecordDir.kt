@@ -2,6 +2,10 @@ package xyz.block.trailblaze.capture.video
 
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import xyz.block.trailblaze.util.Console
 
 /**
  * Bridge between [PlaywrightVideoCapture] (in this module) and the Playwright browser
@@ -58,13 +62,61 @@ object PlaywrightVideoRecordDir {
     entries[deviceId]?.finalizer = null
   }
 
-  /** Runs the finalizer for [deviceId] if one is registered. Swallows callback exceptions. */
+  /**
+   * Runs the finalizer for [deviceId] if one is registered, bounded by
+   * [FINALIZER_TIMEOUT_MS]. Swallows callback exceptions and timeouts.
+   *
+   * The finalizer typically dispatches `BrowserContext.close()` onto a Playwright-
+   * affinity dispatcher via `runBlocking(playwrightDispatcher) { ... }` (see
+   * `PlaywrightBrowserManager.setFinalizer`). If that dispatcher is wedged (the
+   * known thread-affinity deadlock pattern flagged in `PlaywrightThreadBridge.kt`'s
+   * kdoc — "wedged a 1800s timeout on a 30-second test"), the `runBlocking` will
+   * never return. Caller-side coroutine cancellation (`withTimeoutOrNull`) does not
+   * help here because the blocking `runBlocking(dispatcher)` is not cooperatively
+   * cancellable — only a separate-thread bound + abandon does.
+   *
+   * On timeout we log + drop the in-flight flush and let the capture stream fall
+   * back to whatever was already written to disk. The Playwright `.webm` is
+   * append-only as the page runs, so the on-disk file is typically close to
+   * complete even when the close-and-finalize step fails. The thread is left to
+   * unwind on its own (the executor's daemon flag prevents JVM-shutdown hang);
+   * `future.cancel(true)` interrupts it best-effort.
+   */
   fun runFinalizer(deviceId: String) {
     val finalizer = entries[deviceId]?.finalizer ?: return
+    val executor = Executors.newSingleThreadExecutor { r ->
+      Thread(r, "playwright-video-finalizer-$deviceId").apply { isDaemon = true }
+    }
+    val future = executor.submit {
+      try {
+        finalizer()
+      } catch (_: Throwable) {
+        // Best-effort flush — capture stream will fall through to whatever is on disk.
+      }
+    }
     try {
-      finalizer()
+      future.get(FINALIZER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    } catch (_: TimeoutException) {
+      Console.log(
+        "[PlaywrightVideoRecordDir] finalizer for deviceId=$deviceId timed out after " +
+          "${FINALIZER_TIMEOUT_MS}ms — falling back to on-disk artifact",
+      )
+      future.cancel(true)
     } catch (_: Throwable) {
-      // Best-effort flush — capture stream will fall through to whatever is on disk.
+      // Other Future-side errors (InterruptedException, ExecutionException) — swallowed,
+      // preserving the existing "best-effort flush" contract.
+    } finally {
+      // Drop the executor reference; the daemon thread (if still running after a
+      // timeout) will not block JVM shutdown.
+      executor.shutdownNow()
     }
   }
+
+  /**
+   * Upper bound on a finalizer invocation. The legitimate path is fast (a few hundred
+   * ms for `BrowserContext.close()` + recreate); 30 s is generous enough to absorb a
+   * slow CI runner without letting a deadlock wedge the daemon's run-status pipeline
+   * the way the historical 1800s symptom did.
+   */
+  private const val FINALIZER_TIMEOUT_MS = 30_000L
 }
