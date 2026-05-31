@@ -490,8 +490,16 @@ class DaemonClient(
     /** Poll interval when waiting for daemon */
     const val POLL_INTERVAL_MS = 500L
 
-    /** Overall timeout for polling a run to completion (30 minutes) */
-    const val RUN_POLL_TIMEOUT_MS = 30 * 60 * 1000L
+    /**
+     * Overall timeout for polling a run to completion (10 minutes).
+     *
+     * Lowered from 30 min to 10 min so a wedged daemon fails fast and the next CI cycle
+     * starts sooner. The honest happy-path runtime for a single-trail CI session is well
+     * under 10 minutes (a Wikipedia trail completes in seconds; a long Cash flow in a
+     * couple of minutes), so 10 min gives a 3-5× headroom over the typical case while
+     * still cutting the failure-mode wait by 20 minutes vs. the historical 30 min.
+     */
+    const val RUN_POLL_TIMEOUT_MS = 10 * 60 * 1000L
 
     /**
      * Max consecutive poll errors before falling back to a /ping health check.

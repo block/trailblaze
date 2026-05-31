@@ -117,8 +117,8 @@ class DaemonClientPollResilienceTest {
   /**
    * 4xx is terminal — the new behavior must NOT retry + ping-reset on a 404,
    * because 404 means "unknown runId" (e.g. the daemon restarted and lost run
-   * state) and is unrecoverable. Pre-fix behavior would wait the full 30-min
-   * RUN_POLL_TIMEOUT_MS.
+   * state) and is unrecoverable. Pre-fix behavior would wait the full
+   * RUN_POLL_TIMEOUT_MS window.
    */
   @Test
   fun runAsync_returns404BodyImmediatelyWithoutRetryingOrPinging() {

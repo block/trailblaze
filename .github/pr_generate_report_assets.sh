@@ -5,9 +5,9 @@
 # build to embed on https://block.github.io/trailblaze/reports/.
 #
 # This is SEPARATE from pr_generate_trailblaze_report.sh (which builds the CI
-# `trailblaze_report.html` index via `:trailblaze-report:run`). Here we drive the
-# `trailblaze report` CLI subcommand, which is the only entry point wired to the
-# `--storyboard` / `--webp` exporters.
+# `trailblaze_report.html` index). Both scripts drive the `trailblaze report` CLI
+# subcommand off the prebuilt uber JAR; this one passes `--storyboard` / `--webp`,
+# which are wired only on that subcommand.
 #
 # Intentionally NOT `set -e`: a missing encoder or a flaky capture must never red the
 # trail job. We emit clear diagnostics and exit 0 so the workflow's upload step still
@@ -38,15 +38,11 @@ else
   echo "WARNING: ffmpeg with libwebp_anim not found — the animated timeline.webp will be skipped."
 fi
 
-# The report HTML (and therefore the storyboard/webp, which screenshot it via headless
-# Playwright) renders from the WASM report template. In CI `./trailblaze` runs via Gradle
-# WITHOUT -Ptrailblaze.wasm=true, so we must materialize the template to the build-output
-# path that ReportTemplateResolver checks (trailblaze-report/build/report-template/).
-echo "Building WASM report template..."
-./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true || {
-  echo "ERROR: failed to build WASM report template — reports would render blank. Aborting asset gen."
-  exit 0
-}
+# The WASM report template ships embedded in the prebuilt uber JAR (the
+# `build-uber-jar` workflow job invokes Gradle with -Ptrailblaze.wasm=true,
+# which makes `packageUberJarForCurrentOS` depend on `bundleReportTemplate`).
+# `trailblaze report` resolves it from the JAR's classpath, so no separate
+# template build step is needed here.
 
 # Resolve the single session this trail produced. Session logs are per-session dirs under
 # $LOGS_DIR; skip the sibling `reports/` output dir. Newest wins if there's more than one.
@@ -61,7 +57,7 @@ echo "Using session: $SESSION_ID"
 # --max-size caps the animated WebP so it stays light on the docs page and well under
 # any inline limits; the HTML report itself is not size-capped (it's a download/link-out).
 echo "Exporting storyboard + animated WebP + interactive report..."
-./trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
+trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
   --storyboard --webp --no-gif --max-size=8MB
 
 echo "========================================="

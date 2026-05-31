@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
+# Generate the CI `trailblaze_report.html` index for the trail run.
+#
+# Runs entirely off the prebuilt Trailblaze CLI installed on $PATH by the
+# upstream `build-uber-jar` job's `install-trailblaze-from-artifact.sh` step.
+# The WASM report template is bundled into the uber JAR's classpath (the
+# build-uber-jar job invokes Gradle with -Ptrailblaze.wasm=true), so there's
+# no separate `:trailblaze-ui:wasmJsBrowserProductionWebpack` /
+# `:trailblaze-report:run` Gradle dance — just one `trailblaze report` call.
 set -e
 
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
 
 echo "========================================="
 
-# Check if logs directory exists and has content before attempting report generation
 if [ ! -d "$TRAILBLAZE_LOGS_DIR" ] || [ -z "$(ls -A "$TRAILBLAZE_LOGS_DIR" 2>/dev/null)" ]; then
   echo "WARNING: No logs found in $TRAILBLAZE_LOGS_DIR - skipping report generation"
   echo "========================================="
   exit 0
 fi
 
-echo "Building Compose Web/WASM UI..."
-./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack -Ptrailblaze.wasm=true
-UI_EXIT_CODE=$?
-echo "UI build exit code: $UI_EXIT_CODE"
-
 echo "Generating Trailblaze report..."
-./gradlew :trailblaze-report:run --args="$TRAILBLAZE_LOGS_DIR" -Ptrailblaze.wasm=true
-REPORT_EXIT_CODE=$?
-echo "Report generation exit code: $REPORT_EXIT_CODE"
+trailblaze report --output-dir "$TRAILBLAZE_LOGS_DIR"
+
+# `trailblaze report --output-dir` writes `report.html` under the canonical name; the
+# downstream artifact step (.github/pr_create_artifacts.sh) and the workflow upload
+# paths still expect the legacy `trailblaze_report.html` name. Rename in place to
+# avoid cascading the change into four workflow files. Best-effort: a missing input
+# means the CLI emitted nothing (already logged above) and we just skip silently.
+if [ -f "$TRAILBLAZE_LOGS_DIR/report.html" ]; then
+  mv -f "$TRAILBLAZE_LOGS_DIR/report.html" "$TRAILBLAZE_LOGS_DIR/trailblaze_report.html"
+fi
 
 echo "Checking for generated report..."
 if [ -f "$TRAILBLAZE_LOGS_DIR/trailblaze_report.html" ]; then
@@ -29,6 +38,6 @@ if [ -f "$TRAILBLAZE_LOGS_DIR/trailblaze_report.html" ]; then
 else
   echo "✗ Report NOT found at expected location"
   echo "Searching for report files..."
-  find "$(pwd)" -name "trailblaze_report.html" -o -name "*report*.html" 2>/dev/null || echo "No report files found"
+  find "$(pwd)" -name "trailblaze_report.html" -o -name "report.html" -o -name "*report*.html" 2>/dev/null || echo "No report files found"
 fi
 echo "========================================="
