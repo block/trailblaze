@@ -50,6 +50,22 @@
                 androidAccessibility:
                   contentDescriptionRegex: "7"
           - tapOnElementBySelector:
+              # AOSP RadialTimePicker auto-advances from hour-view to minute-view
+              # on a real touch-up gesture, but the accessibility driver dispatches
+              # the hour tap as ACTION_CLICK against the `RadialPickerTouchHelper`
+              # virtual child — which snaps the hour value but does NOT trigger
+              # the auto-advance. Without an explicit transition the next tap
+              # ("30") would hunt for a minute label inside the hour view (which
+              # only carries content-desc "1"…"12") and time out. The header's
+              # `android:id/minutes` TextView is a real clickable view whose
+              # `ACTION_CLICK` deterministically switches the picker into minute
+              # view, and is a safe no-op when the picker is already there.
+              reason: Force the picker into minute view (no-op if already switched).
+              nodeSelector:
+                androidAccessibility:
+                  resourceIdRegex: "android:id/minutes"
+                  isClickable: true
+          - tapOnElementBySelector:
               reason: Select 30 as the minutes on the radial picker.
               nodeSelector:
                 androidAccessibility:
