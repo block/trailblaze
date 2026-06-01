@@ -11,6 +11,7 @@ import xyz.block.trailblaze.llm.config.LlmModelCostConfig
 import xyz.block.trailblaze.llm.config.LlmProviderConfig
 import xyz.block.trailblaze.llm.config.LlmProviderType
 import java.io.File
+import java.util.Locale
 
 /**
  * Generates documentation for all built-in LLM models that ship with Trailblaze.
@@ -143,6 +144,6 @@ class LlmConfigDocsGenerator(
   }
 
   private fun formatCost(cost: Double): String {
-    return if (cost == 0.0) "free" else "\$${String.format("%.2f", cost)}"
+    return if (cost == 0.0) "free" else "\$${String.format(Locale.US, "%.2f", cost)}"
   }
 }

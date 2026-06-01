@@ -8,6 +8,9 @@ import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.mcp.RecordedStep
+import xyz.block.trailblaze.mcp.RecordedStepType
 
 /**
  * Tests for [TrailFileManager] — the callers route trail enumeration through
@@ -152,5 +155,83 @@ class TrailFileManagerTest {
 
     assertEquals(1, page.totalCount, "excluded dirs leaked into listing: ${page.trails}")
     assertEquals("flows/login.trail.yaml", page.trails.single().path)
+  }
+
+  @Test
+  fun `trailNameToDirSlug collapses internal dash runs from spaced separators`() {
+    // The original sanitizer (`name.replace(" ", "-").lowercase()`) mapped each
+    // character of " - " to its own '-' and produced "cli-review-test---example.com".
+    // Pin the collapsed-run behavior so the run-collapse can't silently regress.
+    assertEquals(
+      "cli-review-test-example.com",
+      trailNameToDirSlug("CLI review test - example.com"),
+    )
+  }
+
+  @Test
+  fun `trailNameToDirSlug trims leading and trailing dashes`() {
+    assertEquals("trail", trailNameToDirSlug("  trail  "))
+    assertEquals("trail", trailNameToDirSlug("--trail--"))
+  }
+
+  @Test
+  fun `saveTrail rejects a blank-slug title before writing to disk`() {
+    // Regression for codex PR review on #3629: a title of " - " or "---" used to
+    // sanitize to "" and then `File(dir, "")` resolved to the trails root, so
+    // saveTrail would silently write `<platform>.trail.yaml` at the root,
+    // potentially clobbering an unrelated trail file. The empty-slug guard in
+    // validateTrailNameSlug closes that hole.
+    val sentinel = newTrail("android.trail.yaml") // a pre-existing top-level trail
+    val sentinelBytesBefore = sentinel.readBytes()
+
+    val steps = listOf(
+      RecordedStep(
+        type = RecordedStepType.STEP,
+        input = "Tap login",
+        result = "ok",
+        success = true,
+      ),
+    )
+    val result = manager().saveTrail(
+      name = " - ",
+      steps = steps,
+      platform = TrailblazeDevicePlatform.ANDROID,
+    )
+
+    assertTrue(!result.success, "blank-slug saveTrail should fail; got: $result")
+    val error = assertNotNull(result.error, "blank-slug saveTrail must surface an error message")
+    assertTrue(
+      error.contains("alphanumeric") || error.contains("empty slug"),
+      "error message should explain the blank-slug cause; got: $error",
+    )
+    assertEquals(
+      sentinelBytesBefore.toList(),
+      sentinel.readBytes().toList(),
+      "saveTrail must NOT overwrite a root-level sibling when the slug is blank",
+    )
+  }
+
+  @Test
+  fun `saveTrail rejects a dashes-only title that would sanitize to empty`() {
+    val steps = listOf(
+      RecordedStep(
+        type = RecordedStepType.STEP,
+        input = "Tap login",
+        result = "ok",
+        success = true,
+      ),
+    )
+    val result = manager().saveTrail(
+      name = "---",
+      steps = steps,
+      platform = TrailblazeDevicePlatform.ANDROID,
+    )
+
+    assertTrue(!result.success, "dashes-only saveTrail should fail; got: $result")
+    // No platform-named file should be created at the trails root either.
+    assertTrue(
+      !File(trailsDir, "android.trail.yaml").exists(),
+      "saveTrail must not create a root-level <platform>.trail.yaml on rejection",
+    )
   }
 }

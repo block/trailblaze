@@ -21,6 +21,53 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import java.io.File
 
 /**
+ * Convert a human trail title to the per-trail directory name used under
+ * `trails/`. Spaces become `-`, the result is lowercased, runs of `-` are
+ * collapsed to one, and leading/trailing `-` are trimmed.
+ *
+ *   "CLI review test - example.com" -> "cli-review-test-example.com"
+ *
+ * Path-traversal characters (`/`, `\`, `..`) are NOT stripped — the call site
+ * validates against those after slugging via [validateTrailNameSlug], so the
+ * slug stays a 1:1 transform the user can read.
+ *
+ * May return an empty string when the input is only spaces and/or hyphens
+ * (e.g. " - "). Callers MUST run the result through [validateTrailNameSlug]
+ * before using it as a directory name — without that check, `File(dir, "")`
+ * resolves to `dir` itself and the subsequent write would land in the trails
+ * root, potentially clobbering an unrelated file.
+ */
+internal fun trailNameToDirSlug(name: String): String =
+  name.replace(" ", "-").lowercase().replace(Regex("-+"), "-").trim('-')
+
+/**
+ * Reject trail-name slugs that aren't usable as a directory name. Returns
+ * `null` when the slug is acceptable, or a human-readable error string
+ * explaining why it isn't.
+ *
+ * Two failure modes:
+ *  - **Blank** — `trailNameToDirSlug` produced an empty string (the input was
+ *    only spaces and/or hyphens). Without this guard, `File(dir, "")`
+ *    resolves to `dir` and the trail YAML would be written at the trails
+ *    root, silently overwriting any sibling file with the same platform-based
+ *    filename.
+ *  - **Path traversal** — the slug contains `/`, `\`, `..`, or starts with
+ *    `.`. None of these can appear in a slug produced by
+ *    `trailNameToDirSlug` from a typed CLI title (spaces are mapped to `-`
+ *    and edges are trimmed), but the function also accepts pre-existing slug
+ *    inputs from the MCP tool surface, where a malicious caller could pass
+ *    `..` directly. The check stays defensive at the boundary regardless.
+ */
+internal fun validateTrailNameSlug(slug: String): String? = when {
+  slug.isBlank() ->
+    "Invalid trail name: must contain at least one alphanumeric character " +
+      "(the title sanitized to an empty slug — was it only spaces or hyphens?)"
+  slug.contains("/") || slug.contains("\\") || slug.contains("..") || slug.startsWith(".") ->
+    "Invalid trail name: must not contain path separators or '..' sequences"
+  else -> null
+}
+
+/**
  * Manages trail file operations: save, load, find, list.
  *
  * Handles conversion between:
@@ -92,15 +139,12 @@ class TrailFileManager(
     }
 
     try {
-      // Validate trail name doesn't contain path traversal components
-      val sanitizedName = name.replace(" ", "-").lowercase()
-      if (sanitizedName.contains("/") || sanitizedName.contains("\\") ||
-        sanitizedName.contains("..") || sanitizedName.startsWith(".")
-      ) {
-        return SaveResult(
-          success = false,
-          error = "Invalid trail name: must not contain path separators or '..' sequences",
-        )
+      // Validate trail name: empty (blank-after-slug) AND path-traversal cases
+      // both share the same guard so a `' - '`-only title can't land at the
+      // trails root and clobber a sibling file.
+      val sanitizedName = trailNameToDirSlug(name)
+      validateTrailNameSlug(sanitizedName)?.let { err ->
+        return SaveResult(success = false, error = err)
       }
 
       // Ensure directory exists
@@ -123,7 +167,7 @@ class TrailFileManager(
       }
 
       // Create subdirectory for the trail
-      val trailDir = File(dir, name.replace(" ", "-").lowercase())
+      val trailDir = File(dir, sanitizedName)
       if (!trailDir.exists()) {
         trailDir.mkdirs()
       }
@@ -594,7 +638,7 @@ class TrailFileManager(
 
     // Add config item
     val config = TrailConfig(
-      id = name.replace(" ", "-").lowercase(),
+      id = trailNameToDirSlug(name),
       title = name,
       source = TrailSource(type = TrailSourceType.HANDWRITTEN),
       metadata = fullMetadata,

@@ -251,7 +251,10 @@ class TrailMcpTool(
 
     // Write the YAML to disk
     return try {
-      val sanitizedName = trailName.replace(" ", "-").lowercase()
+      val sanitizedName = trailNameToDirSlug(trailName)
+      validateTrailNameSlug(sanitizedName)?.let { err ->
+        return TrailSaveResult(saved = false, error = err).toJson()
+      }
       val dir = File(trailsDirectory)
       if (!dir.exists()) dir.mkdirs()
 

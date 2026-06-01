@@ -801,8 +801,10 @@ open class TrailCommand : Callable<Int> {
             initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
           )
 
+          var lastProgress: String? = null
           val response = daemon.runSync(request) { progress ->
             Console.info(progress)
+            lastProgress = progress
           }
 
           if (response.success) {
@@ -824,7 +826,12 @@ open class TrailCommand : Callable<Int> {
               }
             }
           } else {
-            Console.error("❌ FAILED: ${response.error ?: "Unknown error"}")
+            val err = response.error ?: "Unknown error"
+            if (failureBodyAlreadyStreamed(lastProgress, err)) {
+              Console.error("❌ FAILED")
+            } else {
+              Console.error("❌ FAILED: $err")
+            }
             failed++
             worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.ASSERTION_FAILED.code)
           }
@@ -847,6 +854,28 @@ open class TrailCommand : Callable<Int> {
     System.out.flush()
     System.err.flush()
     exitProcess(if (failed > 0) worstExitCode else TrailblazeExitCode.SUCCESS.code)
+  }
+
+  /**
+   * Returns true when the run's terminal error body was already streamed via the
+   * progress callback. The runner emits the failure exception as a
+   * `[<device>] Error: <body>` progress message AND sets the same `<body>` on
+   * `response.error` / `TrailExecutionResult.Failed.errorMessage` — without
+   * this guard the `❌ FAILED:` line reprinted the full multi-line status
+   * block (prompt JSON, Status Type, Status JSON) verbatim.
+   *
+   * Matches when the trimmed progress message ENDS WITH the trimmed error
+   * body. The streamed progress is `[<device>] Error: <body>` and the
+   * response error is `<body>` alone, so a suffix match against the full
+   * body is strictly stronger than a first-line `contains` check (which
+   * would false-positive when a generic first line — "Error", "Failed",
+   * "Timeout" — appears anywhere in the progress stream). Prefix tolerance
+   * for the `[<device>] Error: ` head comes for free from `endsWith`.
+   */
+  internal fun failureBodyAlreadyStreamed(lastProgress: String?, error: String): Boolean {
+    if (lastProgress.isNullOrBlank() || error.isBlank()) return false
+    val trimmedError = error.trim()
+    return trimmedError.isNotEmpty() && lastProgress.trim().endsWith(trimmedError)
   }
 
   /** Moves a file, falling back to copy+delete when renameTo fails (e.g., cross-filesystem). */
@@ -1167,6 +1196,12 @@ open class TrailCommand : Callable<Int> {
     // Latch to wait for completion
     val completionLatch = CountDownLatch(1)
     var exitCode = TrailblazeExitCode.SUCCESS.code
+    // Tracks the last progress message streamed via `onProgressMessage` so the
+    // terminal `onComplete = Failed` branch can avoid restating the full
+    // exception body — the runner emits it as a progress update and ALSO sets
+    // it on `TrailExecutionResult.Failed.errorMessage`, which previously
+    // produced a duplicate multi-line failure block.
+    var lastProgress: String? = null
 
     // Resolve target app: prefer trail config's `target` field, fall back to settings selection.
     // This ensures custom tools (e.g., myApp_launchSignedIn) are registered for the
@@ -1190,6 +1225,7 @@ open class TrailCommand : Callable<Int> {
       targetTestApp = targetTestApp,
       onProgressMessage = { message ->
         Console.info(message)
+        lastProgress = message
       },
       onConnectionStatus = { status ->
         when (status) {
@@ -1228,7 +1264,12 @@ open class TrailCommand : Callable<Int> {
             // — that's an ASSERTION_FAILED (1) outcome, not an infra (2) one. Infra failures
             // are surfaced via the `onConnectionStatus` callback above (daemon/device
             // unreachable) and the interrupted/cancelled paths below.
-            Console.error("\n❌ Trail failed: ${result.errorMessage ?: "Unknown error"}")
+            val err = result.errorMessage ?: "Unknown error"
+            if (failureBodyAlreadyStreamed(lastProgress, err)) {
+              Console.error("\n❌ Trail failed")
+            } else {
+              Console.error("\n❌ Trail failed: $err")
+            }
             exitCode = TrailblazeExitCode.ASSERTION_FAILED.code
           }
           is TrailExecutionResult.Cancelled -> {

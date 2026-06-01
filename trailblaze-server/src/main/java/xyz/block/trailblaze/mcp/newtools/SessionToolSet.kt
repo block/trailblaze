@@ -504,7 +504,10 @@ class SessionToolSet(
     platform: TrailblazeDevicePlatform?,
   ): String {
     return try {
-      val sanitizedName = trailName.replace(" ", "-").lowercase()
+      val sanitizedName = trailNameToDirSlug(trailName)
+      validateTrailNameSlug(sanitizedName)?.let { err ->
+        return SessionResult(error = err).toJson()
+      }
       val dir = File(trailsDirectory)
       if (!dir.exists()) dir.mkdirs()
 
