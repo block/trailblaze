@@ -63,7 +63,7 @@ class ToolCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
+    description = [DEVICE_OPTION_DESCRIPTION],
   )
   var device: String? = null
 
@@ -166,6 +166,7 @@ class ToolCommand : Callable<Int> {
       device = device,
       webHeadless = headlessOption.resolve(),
       target = target,
+      verb = "Tool",
     ) { client ->
       // `yamlIsProvided` mirrors the top-of-call gate so a blank `--yaml` value
       // falls through to the `tap`-style toolName builder and the two input

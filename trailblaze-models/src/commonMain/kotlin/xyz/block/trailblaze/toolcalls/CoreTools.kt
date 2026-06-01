@@ -138,6 +138,12 @@ object CoreTools {
   const val WAIT = "wait"
 
   /**
+   * Wait until the accessibility tree changes from its entry baseline, then settles.
+   * Android-only today; other drivers degrade to a fixed timed wait.
+   */
+  const val WAIT_FOR_CHANGE = "waitForChange"
+
+  /**
    * Control network connectivity.
    */
   const val NETWORK_CONNECTION = "networkConnection"

@@ -280,24 +280,14 @@ class DeviceConnectCommandTest {
     )
   }
 
-  /**
-   * Captures the stdout produced by [block]. Uses `System.setOut` so the helper
-   * exercises the same path `println` (and hence [printShellExport]) takes in
-   * production. The previous test-only `tracked*ToolCall` getters on `McpProxy`
-   * were a workaround for this exact need; for the static `printShell*` helpers,
-   * capturing stdout directly is cleaner.
-   */
-  private inline fun captureStdout(block: () -> Unit): String {
-    val originalOut = System.out
-    val buf = java.io.ByteArrayOutputStream()
-    System.setOut(java.io.PrintStream(buf))
-    try {
-      block()
-    } finally {
-      System.setOut(originalOut)
-    }
-    return buf.toString()
-  }
+  // Stdout capture lives in [CaptureStdout.kt] (sibling to [CaptureStderr.kt]).
+  // The previous private copy here was duplicated across three CLI test files;
+  // centralized so future callers don't have to rediscover the
+  // `setOut(PrintStream)` / restore-in-finally idiom. The shared helper also
+  // documents that it does NOT redirect [Console.log] (which caches its
+  // PrintStream at class load) — the static `printShell*` helpers tested in
+  // this file use `println` directly, so the shared helper covers them
+  // correctly.
 
   // ---------------------------------------------------------------------------
   // resolveCliDevice — layered fallback for every action command's --device flag
@@ -461,5 +451,91 @@ class DeviceConnectCommandTest {
     val command = AskCommand()
     CommandLine(command).parseArgs("what", "is", "on", "screen")
     assertNull(command.device)
+  }
+
+  // ---------------------------------------------------------------------------
+  // buildPinHeaderLines — pure builder used by `device list` to surface the
+  // per-terminal pin at the top of the output. Pinning the wording here keeps
+  // tests independent of the JVM `Console` impl's class-load-cached
+  // `System.out` reference (which makes `Console.info` output un-redirectable
+  // via `System.setOut`).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `buildPinHeaderLines — matches-available pin renders confirmation plus unpin hint`() {
+    val available = setOf("android/emulator-5554", "ios/SIM-X")
+    val lines = DeviceListCommand.buildPinHeaderLines(
+      pinned = "ios/SIM-X",
+      availableSpecs = available,
+    )
+    assertEquals(
+      listOf(
+        "Pinned for this terminal: ios/SIM-X",
+        "  (run a device command without --device to use this; " +
+          "`trailblaze device disconnect` to unpin)",
+        "",
+      ),
+      lines,
+      "matches-available branch must print the pin spec, a parenthetical hint, and a trailing blank-line separator",
+    )
+  }
+
+  @Test
+  fun `buildPinHeaderLines — stale pin renders a single-line warning that points at the list below`() {
+    val available = setOf("android/emulator-5554")
+    val lines = DeviceListCommand.buildPinHeaderLines(
+      pinned = "ios/SIM-X",
+      availableSpecs = available,
+    )
+    assertEquals(
+      listOf(
+        "Pinned for this terminal: ios/SIM-X — but it's no longer connected. " +
+          "Pick one from the list below with `trailblaze device connect <spec>`.",
+        "",
+      ),
+      lines,
+      "stale-pin branch must surface the spec, an explanation, and a recovery hint that " +
+        "anchors on the list below (so the user doesn't have to run `device list` separately)",
+    )
+  }
+
+  @Test
+  fun `buildPinHeaderLines — empty available set renders the stale-pin branch`() {
+    // When the daemon reports no connected devices but a pin still exists,
+    // the stale branch should fire — the pin's device is by definition not
+    // in the (empty) available set.
+    val lines = DeviceListCommand.buildPinHeaderLines(
+      pinned = "android/emulator-5554",
+      availableSpecs = emptySet(),
+    )
+    kotlin.test.assertTrue(
+      lines.any { it.contains("no longer connected") },
+      "empty available set must route to the stale-pin branch",
+    )
+  }
+
+  @Test
+  fun `buildPinHeaderLines — pin match is case-insensitive`() {
+    // The rare `DeviceConnectCommand` fallback (`boundId?.toFullyQualifiedDeviceId() ?: platform`)
+    // persists the raw user-typed `platform` string when the daemon's
+    // `getBoundDeviceId` returns null — so a user who typed `Android` (mixed
+    // case) ends up with `Android` in the pin file while `availableSpecs`
+    // contains the daemon's lowercased `android/emulator-5554`. Without the
+    // ignore-case match, that valid pin would mis-route through the stale-pin
+    // branch on every `device list`. Pin the case-insensitive contract here
+    // so a refactor that re-tightens the comparison surfaces immediately.
+    val available = setOf("android/emulator-5554")
+    val lines = DeviceListCommand.buildPinHeaderLines(
+      pinned = "Android/Emulator-5554",
+      availableSpecs = available,
+    )
+    kotlin.test.assertTrue(
+      lines.first().startsWith("Pinned for this terminal:"),
+      "case-mismatched pin must still resolve as matches-available, not stale — first line was: ${lines.first()}",
+    )
+    kotlin.test.assertFalse(
+      lines.any { it.contains("no longer connected") },
+      "case-mismatched pin must NOT route through the stale-pin branch",
+    )
   }
 }

@@ -148,6 +148,9 @@ object AndroidLlmClientResolver {
    * from instrumentation args and constructing the appropriate client.
    */
   fun createClient(model: TrailblazeLlmModel): LLMClient {
+    // aiEnabled=false (recordings-only): never build a live client, so a no-recording step
+    // fails loudly instead of silently falling back to AI.
+    if (!InstrumentationArgUtil.isAiEnabled()) return NoOpLlmClient()
     if (model.trailblazeLlmProvider == TrailblazeLlmProvider.NONE) return NoOpLlmClient()
     // Koog 1.0.0: wrap the on-device Ktor HttpClient (with TLS / reverse-proxy plugin
     // for the instrumentation reverse-proxy endpoint) in a KoogHttpClient.Factory so

@@ -9,7 +9,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  */
 interface TrailblazeRule {
   /**
-   * Run a full Trailblaze test using the YAML test format
+   * Run a full Trailblaze test using the YAML test format.
+   *
+   * @param useRecordedSteps replay a step's recorded actions when present. When a step has no
+   *   recording, behavior depends on whether AI is enabled for the run: the agent fills the step in
+   *   if AI is enabled, otherwise the step fails loudly instead of silently calling the LLM.
    */
   fun run(testYaml: String, trailFilePath: String? = null, useRecordedSteps: Boolean = true)
 

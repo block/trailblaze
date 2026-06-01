@@ -13,7 +13,11 @@ Run a Trailblaze tool by name (e.g., tap, inputText)
       [<argPairs>...]     Tool arguments as key=value pairs (e.g., ref="Sign
                             In")
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
-                            Defaults to $TRAILBLAZE_DEVICE.
+                            Defaults to `$TRAILBLAZE_DEVICE` if set (manual
+                            override; rare), otherwise this terminal's pin (set
+                            by `trailblaze device connect`). In a fresh-shell
+                            harness (Claude Code, Cursor, Codex, CI), pass
+                            --device on every call.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser
@@ -35,11 +39,12 @@ Run a Trailblaze tool by name (e.g., tap, inputText)
                             require-steps true` is set.
                           (`--objective` / `-o` are deprecated aliases of
                             `--step` / `-s`.)
-      --target=<target>   Target app ID for this command's bound device. Scoped
-                            to the device as a daemon-process override (dies on
-                            daemon restart or device release). Defaults to
-                            `$TRAILBLAZE_TARGET` — typically set via `eval
-                            $(trailblaze device connect ... --target X)`. Pass
+      --target=<target>   Target app ID for this command's bound device.
+                            Defaults to `$TRAILBLAZE_TARGET` if set, otherwise
+                            the target you passed to `trailblaze device connect
+                            --target X` for this terminal (persists in this
+                            terminal's pin; cleared by `device disconnect`,
+                            replaced by `device rebind --target Y`). Pass
                             `--target=clear` to remove a previously-set
                             override for this device. To set a persistent
                             default, use `trailblaze config target`. List

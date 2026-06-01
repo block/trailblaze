@@ -11,7 +11,11 @@ Check a condition on screen and pass/fail (exit code 0/1, ideal for CI)
       <assertionWords>...   Assertion to verify (e.g., 'The Sign In button is
                               visible')
   -d, --device=<device>     Device: platform (android, ios, web) or
-                              platform/id. Defaults to $TRAILBLAZE_DEVICE.
+                              platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
+                              set (manual override; rare), otherwise this
+                              terminal's pin (set by `trailblaze device
+                              connect`). In a fresh-shell harness (Claude Code,
+                              Cursor, Codex, CI), pass --device on every call.
   -h, --help                Show this help message and exit.
       --headless=<headless> For --device web/...: launch the Playwright browser
                               headless. When omitted, auto-detects: headless on

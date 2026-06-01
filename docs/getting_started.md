@@ -66,32 +66,68 @@ cd trailblaze
 
 ## Connect a Device
 
-List what's connected, then pin this shell to one of them:
+List what's connected, then pin this terminal to one of them:
 
 ```bash
 trailblaze device list
 
-# Pin: exports TRAILBLAZE_DEVICE into the current shell so every follow-up call
-# inherits the device + target without repeating the flags.
-eval $(trailblaze device connect android --target default)
+# Pin: remembers this terminal's device + target so every follow-up call
+# inherits them without repeating the flags. Other terminals stay independent.
+trailblaze device connect android --target default
 ```
+
+The short form `android` works when only one Android device is connected; with
+two or more, use the fully-qualified `android/<id>` form shown by `device list`
+(same for `ios/<udid>`). `web` is always unambiguous.
 
 You'll see Android emulators (`android/emulator-5554`), iOS simulators
 (`ios/<simulator-id>`), and any web targets. After the pin, device-acting CLI
 calls that take a `-d/--device` flag (`snapshot`, `tool`, `blaze`, `ask`, `verify`,
-`session start`, `session stop`, `run`) read `TRAILBLAZE_DEVICE` from the env — no
+`session start`, `session stop`, `run`) inherit the pinned device automatically — no
 `-d <device>` flag needed. `session save` is implicit (saves the current session)
 and doesn't take `-d`. For CI / scripts that prefer determinism, pass `-d <platform>`
 (or `-d <platform>/<id>`) on each call as an override; explicit flags win over the
-env. `mcp` accepts `--device` / `--target` at startup to pre-bind the MCP session
+pin. `mcp` accepts `--device` / `--target` at startup to pre-bind the MCP session
 (so the agent's first tool call already has a device); workspace and setup commands
-(`config`, `app`, `device list`) don't take `-d`. `run` reads `TRAILBLAZE_DEVICE`
-just like the action commands, but each replay spawns a fresh session rather than
-reattaching to the pinned interactive one.
+(`config`, `app`, `device list`) don't take `-d`. `run` inherits the pin just like
+the action commands, but each replay spawns a fresh session rather than reattaching
+to the pinned interactive one.
+
+How the pin works under the hood: `trailblaze device connect` records this terminal's
+shell PID alongside the bound device in `~/.trailblaze/shell-device-pins-<port>.json`.
+Subsequent CLI calls from the same terminal look up that entry and use it as the
+default. The pin survives daemon restarts. Open a second terminal and it gets its
+own slot — pinning device A in one terminal doesn't leak into another. For scripts
+and CI where each call is a fresh shell, pass `--device <id>` on every command
+instead — the pin file is per-shell-PID and won't carry. (`TRAILBLAZE_DEVICE` is
+also honored as a manual override, but `--device` is the recommended form.)
+
+If your pinned device goes away (emulator killed, simulator shut down, USB cable
+unplugged), the next CLI call fails with the standard `Device bind failed`
+envelope and self-evicts the pin in the background, so the call *after* that
+falls through to autodetect — if exactly one device is connected, it'll be used
+silently; if zero or multiple, you get the appropriate error. Autodetect (the
+single-device convenience) doesn't write a pin either: it just uses the one
+connected device for that one call. Pinning is always an explicit
+`device connect` action.
+
+### Precedence between TRAILBLAZE_DEVICE and the file-pin
+
+Resolution order, highest priority first:
+
+1. Explicit `--device <id>` flag on the command.
+2. `TRAILBLAZE_DEVICE` environment variable (manual override; mostly relevant
+   for CI scripts that explicitly export it).
+3. This terminal's file-pin (written by `trailblaze device connect`).
+4. Autodetect when exactly one device is connected.
+
+So `export TRAILBLAZE_DEVICE=ios/<udid>` in your shell shadows the file-pin —
+useful if you want a per-shell override without disturbing the pinned device for
+the rest of your work. Unset the env var to fall back to the pin.
 
 To swap target without disconnecting, use `trailblaze device rebind --target <new>`. To
-release, `eval $(trailblaze device disconnect)` — the leading `eval $(...)` also unsets
-`TRAILBLAZE_DEVICE` in the parent shell so the next session starts clean.
+release, `trailblaze device disconnect` — clears this terminal's pin so the next
+session starts clean.
 
 ## Drive the Device
 
@@ -131,16 +167,16 @@ this into the agent's session:
 
 ```
 You have access to the `trailblaze` CLI. Use it to drive the connected device. First
-pin the shell to a device + target so subsequent calls don't have to repeat the flags:
-  - `eval $(trailblaze device connect <platform> --target <app>)` — pin once at start
+pin this terminal to a device + target so subsequent calls don't have to repeat the flags:
+  - `trailblaze device connect <platform> --target <app>` — pin once at start
   - `trailblaze session start --title "<short_name>"` — start a tracked session
     (captures video/logs, groups the steps for later save)
   - `trailblaze snapshot` — see what's on screen (UI tree with refs)
   - `trailblaze tool <name> <args> -s "<why>"` — take an action
-  - `trailblaze toolbox -d <platform>` — list available tools (toolbox still wants -d)
+  - `trailblaze toolbox` — list available tools (uses the pinned device automatically)
   - When done, `trailblaze session save` to write the recording out as a `.trail.yaml`,
     then `trailblaze session stop` to end the session. Optionally
-    `eval $(trailblaze device disconnect)` to release the device.
+    `trailblaze device disconnect` to release the device.
 ```
 
 If your agent can run a shell command, it can drive a device. No SDK to install, no

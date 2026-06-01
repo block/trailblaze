@@ -129,8 +129,9 @@ curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | 
 # List connected devices (Android emulator, iOS simulator, or web browser)
 trailblaze device list
 
-# Pin this shell to a device + target so subsequent calls inherit both from the env
-eval $(trailblaze device connect android --target default)
+# Pin this terminal to a device + target so subsequent calls inherit both.
+# Trailblaze remembers per-terminal — other terminals stay independent.
+trailblaze device connect android --target default
 
 # Read the screen — returns a view hierarchy with refs (e.g. ab42) the agent can target
 trailblaze snapshot
@@ -139,8 +140,8 @@ trailblaze snapshot
 # platform-specific selector strategy. Every action takes a --step for self-heal.
 trailblaze tool tap ref=ab42 -s "Tap sign in"
 
-# Done — release the device + clear TRAILBLAZE_DEVICE from this shell
-eval $(trailblaze device disconnect)
+# Done — release the device and clear this terminal's pin
+trailblaze device disconnect
 ```
 
 Paste those into Claude Code, Codex, Cursor, Goose, or anything that can run bash and

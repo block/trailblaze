@@ -83,7 +83,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
-| `app` | Start or stop the Trailblaze daemon (background service that drives devices) |
+| `app` | Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service) |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
 
@@ -110,10 +110,10 @@ trailblaze step [OPTIONS] [<<stepWords>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--verify` | Verify an assertion instead of taking an action (exit code 1 if assertion fails) | - |
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required for interactive step/verify execution. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--context` | Context from previous steps for situational awareness | - |
 | `-v`, `--verbose` | Enable verbose output (show daemon logs, MCP calls) | - |
-| `--target` | Target app ID for this command's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Defaults to `$TRAILBLAZE_TARGET` — typically set via `eval $(trailblaze device connect ... --target X)`. Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
+| `--target` | Target app ID for this command's bound device. Defaults to `$TRAILBLAZE_TARGET` if set, otherwise the target you passed to `trailblaze device connect --target X` for this terminal (persists in this terminal's pin; cleared by `device disconnect`, replaced by `device rebind --target Y`). Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
 | `--snapshot-details` | Comma-separated snapshot detail levels passed through to the daemon's step tool: BOUNDS, OFFSCREEN, OCCLUDED, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses the on-device accessibility-importance filter so RecyclerView children land in the captured trailblazeNodeTree. OCCLUDED is web-only and surfaces elements hidden under popups/modals so the captured tree includes what's actually behind the overlay. | - |
 | `--save` | Save current session as a trail file. Shows steps if --setup not specified. | - |
@@ -145,7 +145,7 @@ trailblaze ask [OPTIONS] <<questionWords>>
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-v`, `--verbose` | Enable verbose output (show daemon logs, MCP calls) | - |
 | `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -173,7 +173,7 @@ trailblaze verify [OPTIONS] <<assertionWords>>
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
 | `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
@@ -196,7 +196,7 @@ trailblaze snapshot [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--bounds` | Include bounding box {x,y,w,h} for each element | - |
 | `--offscreen` | Include offscreen elements marked (offscreen) | - |
@@ -231,10 +231,10 @@ trailblaze tool [OPTIONS] [<<toolName>>] [<<argPairs>>]
 |--------|-------------|---------|
 | `-s`, `--step`, `--objective`, `-o` | Natural language step — describe what, not how. If the UI changes, Trailblaze uses this to retry the step with AI. 'Navigate to Settings' survives a redesign; 'tap button at 200,400' does not. Optional by default; required when `trailblaze config require-steps true` is set. (`--objective` / `-o` are deprecated aliases of `--step` / `-s`.) | - |
 | `--yaml` | Raw YAML tool sequence (multiple tools in one call) | - |
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--no-screenshots`, `--text-only` | Skip screenshots — the LLM only sees the textual view hierarchy, no vision tokens, and disk logging of screenshots is skipped too. Faster and cheaper for short objectives where the visual layout doesn't matter; some tasks need vision and will degrade without it. | - |
-| `--target` | Target app ID for this command's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Defaults to `$TRAILBLAZE_TARGET` — typically set via `eval $(trailblaze device connect ... --target X)`. Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
+| `--target` | Target app ID for this command's bound device. Defaults to `$TRAILBLAZE_TARGET` if set, otherwise the target you passed to `trailblaze device connect --target X` for this terminal (persists in this terminal's pin; cleared by `device disconnect`, replaced by `device rebind --target Y`). Pass `--target=clear` to remove a previously-set override for this device. To set a persistent default, use `trailblaze config target`. List available targets with `trailblaze toolbox` (no args). | - |
 | `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -264,7 +264,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 | `--name`, `-n` | Show details for a single tool by name | - |
 | `--target`, `-t` | Target app to show tools for. Optional — defaults to $TRAILBLAZE_TARGET (per-shell pin), then the workspace `trailblaze config target`, falling back to the built-in 'default'. | - |
 | `--search`, `-s` | Substring search on tool name and description. | - |
-| `-d`, `--device` | Target device (e.g. android, android/emulator-5554). | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--detail` | Show full parameter descriptions for all tools | - |
 | `-v`, `--verbose` | Enable verbose output | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -286,14 +286,14 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to one trail per containing directory (recording preferred over NL when both are present). If omitted, defaults to the `trails/` directory at the workspace root (resolved by walking up from the current directory). | No |
+| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to one trail per containing directory (recording preferred over NL when both are present). Bare `trailblaze run` with no arguments is rejected as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to fan out under a workspace's trails directory. | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
-| `-d`, `--device` | Device: platform (android, ios, web), platform/instance-id, or instance ID | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
@@ -364,9 +364,9 @@ trailblaze session start [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--target` | Target app ID for this session's bound device. Scoped to the device as a daemon-process override (dies on daemon restart or device release). Defaults to `$TRAILBLAZE_TARGET` — typically set via `eval $(trailblaze device connect ... --target X)`. Pass `--target=clear` to remove a previously-set override. To set a persistent default, use `trailblaze config target`. | - |
+| `--target` | Target app ID for this session's bound device. Defaults to `$TRAILBLAZE_TARGET` if set, otherwise the target you passed to `trailblaze device connect --target X` for this terminal (persists in this terminal's pin; cleared by `device disconnect`, replaced by `device rebind --target Y`). Pass `--target=clear` to remove a previously-set override. To set a persistent default, use `trailblaze config target`. | - |
 | `--mode` | Working mode: trail or blaze. Saved to config for future commands. | - |
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--title` | Title for the session (used as trail name when saving) | - |
 | `--no-video` | Disable video capture | - |
 | `--no-logs` | Disable device log capture | - |
@@ -391,7 +391,7 @@ trailblaze session stop [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--save` | Save session as a trail before stopping | - |
 | `--title`, `-t` | Trail title when saving (overrides session title) | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -559,7 +559,7 @@ trailblaze session end [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
 | `--name`, `-n` | Save the recording as a trail before ending | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1250,7 +1250,7 @@ trailblaze device list [OPTIONS]
 
 ### `trailblaze device connect`
 
-Connect a device + target to your session (use `eval $(...)` to pin TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
+Connect a device + target and pin them for this terminal so subsequent commands inherit the binding
 
 **Synopsis:**
 
@@ -1268,7 +1268,7 @@ trailblaze device connect [OPTIONS] <<platform>>
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--target`, `-t` | Target app to bind to this device's session (e.g. `default`, `sampleapp`). Optional. When set, `eval $(trailblaze device connect ... --target X)` also exports $TRAILBLAZE_TARGET so subsequent CLI calls in this shell re-apply the binding automatically. | - |
+| `--target`, `-t` | Target app to bind to this device's session (e.g. `default`, `sampleapp`). Optional. When set, the target is recorded alongside the device in this terminal's pin so subsequent CLI calls re-apply the binding automatically until you `device disconnect` or pin a different target. | - |
 | `--mcp-session` | Explicit MCP session id to pin to this device (advanced). Default: pin the most-recently-active unbound MCP client (Claude Desktop, Cursor, Goose, …). No-op when no MCP clients are connected. | - |
 | `--headless` | For --device web/...: launch the Playwright browser headless. When omitted, auto-detects: headless on machines with no display (remote workstations, CI), headed otherwise. Falls back to the persisted `web-headless` config when a display is present (see `trailblaze config web-headless`). Pass --headless=false to force a visible browser, --headless=true to force headless. Ignored for non-web devices. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1290,7 +1290,7 @@ trailblaze device rebind [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device to rebind. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device to rebind. Defaults to `$TRAILBLAZE_DEVICE` if set manually, otherwise this terminal's pin (set by `trailblaze device connect`). | - |
 | `--target`, `-t` | New target app for the bound device (e.g. `default`, `sampleapp`). | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1299,7 +1299,7 @@ trailblaze device rebind [OPTIONS]
 
 ### `trailblaze device disconnect`
 
-Disconnect a device (use `eval $(...)` to also clear TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET)
+Disconnect a device and clear this terminal's pin
 
 **Synopsis:**
 
@@ -1311,7 +1311,7 @@ trailblaze device disconnect [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-d`, `--device` | Device to disconnect. Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Device to disconnect. Defaults to `$TRAILBLAZE_DEVICE` if set manually, otherwise this terminal's pin (set by `trailblaze device connect`). | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1381,7 +1381,7 @@ trailblaze show [OPTIONS]
 
 ### `trailblaze app`
 
-Start or stop the Trailblaze daemon (background service that drives devices)
+Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service)
 
 **Synopsis:**
 
@@ -1419,7 +1419,7 @@ trailblaze mcp [OPTIONS]
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
 | `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
 | `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
-| `-d`, `--device` | Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). Defaults to $TRAILBLAZE_DEVICE. | - |
+| `-d`, `--device` | Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). Defaults to whatever the launching terminal pinned via `trailblaze device connect`, or `$TRAILBLAZE_DEVICE` if set. | - |
 | `-t`, `--target` | Pin this MCP session to a target app on startup (e.g. default, sampleapp). Only meaningful with --device or $TRAILBLAZE_DEVICE. Defaults to $TRAILBLAZE_TARGET. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |

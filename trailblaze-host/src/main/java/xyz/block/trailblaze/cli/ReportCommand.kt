@@ -133,7 +133,7 @@ class ReportCommand : Callable<Int> {
       "Export the HTML report's timeline autoplay (the scrubbing view with step labels " +
         "and annotations) as an animated WebP. NOT the raw device recording. Path defaults " +
         "to <report-dir>/<session-id>.webp (or <output-dir>/timeline.webp when --output-dir " +
-        "is set). Typically 25–50% smaller than the equivalent --gif (24-bit color, " +
+        "is set). Typically 25–50%% smaller than the equivalent --gif (24-bit color, " +
         "inter-frame deltas) — useful when the GIF would push past GitHub's 10MB inline " +
         "attachment limit. GitHub renders animated WebP inline the same as GIF. " +
         "Single-session only — pass --id or --current. " +
@@ -189,7 +189,7 @@ class ReportCommand : Callable<Int> {
         "tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML " +
         "so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines " +
         "per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress " +
-        "(reduces total rendered height by ~20% on a typical session, at the cost of " +
+        "(reduces total rendered height by ~20%% on a typical session, at the cost of " +
         "less actionable per-cell labels). Has no effect without --storyboard.",
     ],
   )

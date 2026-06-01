@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 @Command(
   name = "app",
   mixinStandardHelpOptions = true,
-  description = ["Start or stop the Trailblaze daemon (background service that drives devices)"]
+  description = ["Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service)"]
 )
 open class AppCommand : Callable<Int> {
 

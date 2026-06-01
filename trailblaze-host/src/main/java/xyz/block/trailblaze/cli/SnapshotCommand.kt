@@ -22,7 +22,7 @@ class SnapshotCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
+    description = [DEVICE_OPTION_DESCRIPTION],
   )
   var device: String? = null
 
@@ -55,6 +55,7 @@ class SnapshotCommand : Callable<Int> {
       verbose = verbose,
       device = device,
       webHeadless = headlessOption.resolve(),
+      verb = "Snapshot",
     ) { client ->
       val yaml = "- takeSnapshot:\n    screenName: \"snap\""
       val details = buildList {

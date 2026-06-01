@@ -55,10 +55,26 @@ internal object CliCallerContext {
    * sync with the `env_json` allowlist in `scripts/trailblaze`):
    *
    *  - `TRAILBLAZE_DEVICE` — consumed by `resolveCliDevice` in
-   *    `CliInfrastructure.kt`. Set via `eval $(trailblaze device connect <id>)`.
+   *    `CliInfrastructure.kt`. Manual override / CI usage; the file-pin
+   *    written by `device connect` is the primary mechanism now.
    *  - `TRAILBLAZE_TARGET` — consumed by `envTrailblazeTarget` in
-   *    `CliInfrastructure.kt`. Set via `eval $(trailblaze device connect <id>
-   *    --target <name>)`.
+   *    `CliInfrastructure.kt`. Manual override; pair with [TRAILBLAZE_DEVICE]
+   *    for shell-scoped target pinning when the file-pin doesn't suffice.
+   *  - `TRAILBLAZE_SHELL_PID` — the user's interactive shell PID (captured
+   *    by the bash wrapper as `$PPID`). Consumed by [ShellDevicePinStore]
+   *    via `resolveDeviceWithAutodetect` in `CliInfrastructure.kt` to look
+   *    up the device pinned for this terminal in
+   *    `~/.trailblaze/shell-device-pins-<port>.json`. Without this var the
+   *    file-pin tier is skipped silently — older wrappers that don't set
+   *    it degrade to the env-var-or-autodetect behavior they always had.
+   *  - `TRAILBLAZE_INTERACTIVE` — `"1"` when the wrapper detected a tty on
+   *    stdin (human-in-a-terminal), `"0"` otherwise (AI agent harness, CI,
+   *    piped invocation, anything not a tty). Read by `device connect` to
+   *    decide whether to print a warning that the file-pin won't carry
+   *    across separate command invocations — irrelevant for humans (one
+   *    shell, one PID, pin works), critical for agents (each Bash-tool
+   *    call is a fresh shell with a different PID, pin invisible to
+   *    follow-ups). See [isInteractiveCaller] in `CliInfrastructure.kt`.
    *
    * Adding a new key requires three coordinated edits: this kdoc, the bash
    * shim's allowlist, and a `resolveCli*`/`env*` consumer in

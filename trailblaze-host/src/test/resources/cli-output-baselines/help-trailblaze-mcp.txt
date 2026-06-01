@@ -18,7 +18,9 @@ Quick setup:
   Windsurf:     Add to MCP config with command 'trailblaze mcp'
   -d, --device=<device>   Pin this MCP session to a device on startup (e.g.
                             android, android/emulator-5554). Defaults to
-                            $TRAILBLAZE_DEVICE.
+                            whatever the launching terminal pinned via
+                            `trailblaze device connect`, or
+                            `$TRAILBLAZE_DEVICE` if set.
       --direct, --no-daemon
                           Run as an in-process MCP server over STDIO instead of
                             the default proxy mode. Bypasses the Trailblaze

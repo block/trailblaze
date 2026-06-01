@@ -12,7 +12,11 @@ Capture the current screen's UI tree (fast, no AI, no actions)
                             filtered as non-interactive
       --bounds            Include bounding box {x,y,w,h} for each element
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
-                            Defaults to $TRAILBLAZE_DEVICE.
+                            Defaults to `$TRAILBLAZE_DEVICE` if set (manual
+                            override; rare), otherwise this terminal's pin (set
+                            by `trailblaze device connect`). In a fresh-shell
+                            harness (Claude Code, Cursor, Codex, CI), pass
+                            --device on every call.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser

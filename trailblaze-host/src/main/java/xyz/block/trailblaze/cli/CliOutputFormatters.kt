@@ -58,12 +58,41 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
     text.substring(screenshotIdx + screenshotMarker.length, screenshotEnd).trim()
   } else null
 
+  // Extract the daemon's status header — `**✓ Executed** — Tapped Checkout`,
+  // `**→ Analyzed** — …`, `**✅ Done** — …`, etc. (StepResult.toMarkdown). Without
+  // surfacing this, `trailblaze step "Tap Checkout"` ran silently — the user saw
+  // only the post-action screen summary and had to infer "what did the agent
+  // do?" from the diff between snapshots. Now the status verb + message land
+  // as a "→ Executed — Tapped Checkout" breadcrumb above the ### Screen block.
   val screenMarker = "**Screen:** "
   val screenIdx = text.indexOf(screenMarker)
+  val headerMatch = matchStatusHeader(if (screenIdx >= 0) text.substring(0, screenIdx) else text)
+  if (headerMatch != null) {
+    Console.info(headerMatch.formatted)
+  }
+
+  // Print the "middle slice" between the status header and the screen/screenshot
+  // markers. `StepResult.toMarkdown` puts `**Suggestion:** …` / `**Hint:** retry
+  // with hint=…` lines here on low-confidence and error-recovery steps. Without
+  // surfacing them, the user sees the breadcrumb and the post-state screen but
+  // never the actionable retry hint. Same logic covers the no-Screen case (a
+  // response that's only header + suggestion/hint) so that body isn't silently
+  // dropped either. Trims so a sole `\n\n` separator doesn't print as an empty
+  // blank line.
+  val bodyStart = headerMatch?.endIdx ?: 0
+  val bodyEnd = listOf(screenIdx, screenshotIdx).filter { it >= 0 }.minOrNull() ?: text.length
+  if (bodyStart < bodyEnd) {
+    val middle = text.substring(bodyStart, bodyEnd).trim()
+    if (middle.isNotEmpty() && (headerMatch != null || screenIdx < 0)) {
+      Console.info(middle)
+    }
+  }
+
   if (screenIdx >= 0) {
-    val screenText = text.substring(screenIdx + screenMarker.length).trim()
+    val screenEnd = if (screenshotIdx >= 0 && screenshotIdx > screenIdx) screenshotIdx else text.length
+    val screenText = text.substring(screenIdx + screenMarker.length, screenEnd).trim()
     formatScreenSummaryAgent(screenText)
-  } else if (screenshotPath == null) {
+  } else if (screenshotPath == null && headerMatch == null) {
     Console.info(text)
   }
 
@@ -71,6 +100,69 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
     Console.info("Screenshot: $screenshotPath")
   }
 }
+
+/**
+ * Outcome of parsing the leading `**<emoji> Verb** — message` status block
+ * out of a daemon markdown blob. [formatted] is the rendered breadcrumb
+ * (`→ Verb — message`); [endIdx] is the offset in the *original* input
+ * (before the leading-whitespace trim) one past the last consumed character,
+ * so callers can resume from there to surface any `**Suggestion:**` /
+ * `**Hint:**` lines that follow.
+ */
+internal data class StatusHeaderMatch(val formatted: String, val endIdx: Int)
+
+/**
+ * Convenience wrapper for callers that only need the formatted breadcrumb.
+ * Returns null when [prefix] doesn't lead with a status header. Used by
+ * tests and any consumer that doesn't care about resuming the parse.
+ */
+internal fun extractStatusHeader(prefix: String): String? =
+  matchStatusHeader(prefix)?.formatted
+
+/**
+ * Lift the leading `**<emoji> Verb** — message` status line out of a daemon
+ * markdown blob. Returns a [StatusHeaderMatch] with the rendered breadcrumb
+ * and the end offset in the original [prefix], or null if [prefix] doesn't
+ * lead with a status header.
+ */
+internal fun matchStatusHeader(prefix: String): StatusHeaderMatch? {
+  // Skip a leading-whitespace run, then require a `**` opener. The end-index
+  // we return is in the ORIGINAL prefix, so callers can resume from there
+  // even though our regex matched against the trimmed view.
+  val leadingWs = prefix.takeWhile { it.isWhitespace() }.length
+  val trimmed = prefix.substring(leadingWs)
+  if (!trimmed.startsWith("**")) return null
+
+  // No explicit emoji character class — the daemon uses ✓ / → / ⚠️ / ❌ / ✅
+  // today, but a future verb could ship a new emoji and we don't want to
+  // chase the regex every time. Match anything inside `**…**` and strip
+  // leading decoration after the fact. Crucially this avoids the U+FE0F
+  // variation-selector trap: `⚠️` is two codepoints (U+26A0 + U+FE0F) and
+  // a single-codepoint character class would consume only U+26A0, leaving
+  // U+FE0F to leak into the captured verb.
+  val match = Regex("""^\*\*([^*]+?)\*\*(?:[ \t]*—[ \t]*([^\n]+))?""")
+    .find(trimmed)
+    ?: return null
+
+  val rawVerb = match.groupValues[1]
+  val verb = rawVerb.trim().dropWhile { c ->
+    c.isWhitespace() ||
+      c.category in DECORATION_CATEGORIES ||
+      c.code == VARIATION_SELECTOR_16
+  }.trim()
+  val message = match.groupValues[2].trim()
+  val formatted = if (message.isNotEmpty()) "→ $verb — $message" else "→ $verb"
+  return StatusHeaderMatch(formatted = formatted, endIdx = leadingWs + match.range.last + 1)
+}
+
+private val DECORATION_CATEGORIES = setOf(
+  CharCategory.OTHER_SYMBOL,
+  CharCategory.MATH_SYMBOL,
+  CharCategory.MODIFIER_SYMBOL,
+  CharCategory.NON_SPACING_MARK,
+)
+
+private const val VARIATION_SELECTOR_16 = 0xFE0F
 
 /**
  * Format ask tool result with ### Answer section.
@@ -95,7 +187,11 @@ internal fun formatAskResultAgent(result: CliMcpClient.ToolResult) {
       Console.info("### Answer")
       Console.info(answer)
     }
-    if (screenSummary != null) {
+    // Suppress the ### Screen / ### Page block when its content duplicates the
+    // Answer. For "what's on screen?" style asks the LLM fills both fields with
+    // the same prose and the user reads two nearly-identical paragraphs.
+    // Mirrors the dedup in StepToolSet.StepResult.toMarkdown.
+    if (screenSummary != null && !screenSummaryDuplicatesAnswer(answer, screenSummary)) {
       formatScreenSummaryAgent(screenSummary)
     }
   } catch (_: Exception) {
@@ -136,9 +232,14 @@ internal fun formatVerifyResultAgent(result: CliMcpClient.ToolResult): Int {
       return TrailblazeExitCode.ASSERTION_FAILED.code
     }
   } catch (_: Exception) {
-    // Not JSON — parse markdown format from daemon (e.g., "**✅ PASSED** — reason")
+    // Not JSON — parse markdown format from daemon (e.g., "**✅ PASSED** — reason").
+    // Print the verdict ABOVE the screen summary so an interactive user sees the
+    // pass/fail at a glance instead of inferring it from $?. formatBlazeResultAgent
+    // intentionally only prints the screen — without the header, the markdown path
+    // is silent on the verdict even though the exit code is correct (PR #3620).
     val text = result.content
     val passed = parseVerifyPassedFromMarkdown(text)
+    Console.info(if (passed) "### Passed" else "### Failed")
     formatBlazeResultAgent(result)
     return if (passed) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   }
@@ -150,6 +251,26 @@ internal fun formatVerifyResultAgent(result: CliMcpClient.ToolResult): Int {
  */
 internal fun parseVerifyPassedFromMarkdown(text: String): Boolean {
   return "✅ PASSED" in text && "❌ FAILED" !in text
+}
+
+/**
+ * Return true when an ask response's `screenSummary` would just restate the
+ * `answer` field — the typical "what's on screen?" case where the LLM puts
+ * identical prose in both. Comparison is whitespace-collapsed equality only:
+ *
+ * - Substring containment was considered and rejected — "Search" suppressing
+ *   "Search results found" is the wrong call. Dedup should only fire when
+ *   the two fields are *effectively the same string*, not when one is a
+ *   prefix/suffix that omits potentially-important detail.
+ * - Blank-answer short-circuit guards against `"".contains("")` returning
+ *   true for any screen, which would silently suppress the whole screen
+ *   block whenever the LLM returned an empty answer.
+ */
+internal fun screenSummaryDuplicatesAnswer(answer: String?, screenSummary: String?): Boolean {
+  if (answer.isNullOrBlank() || screenSummary.isNullOrBlank()) return false
+  val a = answer.trim().replace(Regex("\\s+"), " ")
+  val s = screenSummary.trim().replace(Regex("\\s+"), " ")
+  return a == s
 }
 
 /**

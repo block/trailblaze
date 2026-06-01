@@ -6,8 +6,10 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze device disconnect [-hV] [-d=<device>]
-Disconnect a device (use `eval $(...)` to also clear TRAILBLAZE_DEVICE +
-TRAILBLAZE_TARGET)
-  -d, --device=<device>   Device to disconnect. Defaults to $TRAILBLAZE_DEVICE.
+Disconnect a device and clear this terminal's pin
+  -d, --device=<device>   Device to disconnect. Defaults to
+                            `$TRAILBLAZE_DEVICE` if set manually, otherwise
+                            this terminal's pin (set by `trailblaze device
+                            connect`).
   -h, --help              Show this help message and exit.
   -V, --version           Print version information and exit.

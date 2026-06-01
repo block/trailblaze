@@ -121,14 +121,53 @@ internal fun discoverTargetSummaries(): List<Pair<String, String>> {
  * different "list available targets" closer) so it keeps its own const —
  * see [TARGET_OPTION_DESCRIPTION_SESSION].
  */
+/**
+ * Single source of truth for the `-d` / `--device` option description on every
+ * device-acting command (`snapshot`, `tool`, `ask`, `verify`, `session start/stop/end`,
+ * `step`, `toolbox`).
+ *
+ * Per-command variants live alongside their command class (e.g. [McpCommand]'s
+ * `--device` is about pre-binding the MCP session at startup; [TrailCommand]
+ * `--device` is the dispatched-replay form). Use this constant on action
+ * commands where the semantics are "act on this device, defaulting to the
+ * terminal's pin."
+ *
+ * The wording deliberately puts the per-terminal file-pin first (the primary
+ * mechanism now), names `TRAILBLAZE_DEVICE` as a manual escape hatch, and
+ * spells out the agent-harness advice on the same line so an agent running
+ * `trailblaze tool --help` doesn't have to read three doc pages to discover
+ * "use `--device` on every call." The phrase "fresh-shell harness" is the
+ * lexicon the SKILL.md and the multi-device error envelope already use.
+ *
+ * Single line because picocli wraps for help rendering and the docs generator
+ * joins continuation lines with a space; embedded line breaks would land in
+ * the generated `docs/CLI.md` as literal newlines mid-cell.
+ */
+internal const val DEVICE_OPTION_DESCRIPTION: String =
+  "Device: platform (android, ios, web) or platform/id. " +
+    "Defaults to `\$TRAILBLAZE_DEVICE` if set (manual override; rare), " +
+    "otherwise this terminal's pin (set by `trailblaze device connect`). " +
+    "In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass " +
+    "--device on every call."
+
+/**
+ * Single source of truth for the `[ShellDevicePinStore]` log-line prefix used
+ * across the file-pin lifecycle (`writeShellDevicePinIfPossible`,
+ * `clearShellDevicePinIfPossible`, `clearShellDevicePinTargetIfPossible`, and
+ * the lazy stale-pin eviction in `evictShellPinIfMatches`). A const keeps
+ * the prefix consistent — operators grepping by it find every event.
+ */
+private const val SHELL_PIN_LOG_PREFIX = "[ShellDevicePinStore]"
+
 internal const val TARGET_OPTION_DESCRIPTION: String =
-  "Target app ID for this command's bound device. Scoped to the device " +
-    "as a daemon-process override (dies on daemon restart or device " +
-    "release). Defaults to `\$TRAILBLAZE_TARGET` — typically set via " +
-    "`eval \$(trailblaze device connect ... --target X)`. Pass " +
-    "`--target=clear` to remove a previously-set override for this " +
-    "device. To set a persistent default, use `trailblaze config " +
-    "target`. List available targets with `trailblaze toolbox` (no args)."
+  "Target app ID for this command's bound device. Defaults to " +
+    "`\$TRAILBLAZE_TARGET` if set, otherwise the target you passed to " +
+    "`trailblaze device connect --target X` for this terminal (persists in " +
+    "this terminal's pin; cleared by `device disconnect`, replaced by " +
+    "`device rebind --target Y`). Pass `--target=clear` to remove a " +
+    "previously-set override for this device. To set a persistent " +
+    "default, use `trailblaze config target`. List available targets " +
+    "with `trailblaze toolbox` (no args)."
 
 /**
  * Variant of [TARGET_OPTION_DESCRIPTION] for `session start` — same env-tier
@@ -137,12 +176,13 @@ internal const val TARGET_OPTION_DESCRIPTION: String =
  * "list available targets with toolbox" pointer.
  */
 internal const val TARGET_OPTION_DESCRIPTION_SESSION: String =
-  "Target app ID for this session's bound device. Scoped to the device " +
-    "as a daemon-process override (dies on daemon restart or device " +
-    "release). Defaults to `\$TRAILBLAZE_TARGET` — typically set via " +
-    "`eval \$(trailblaze device connect ... --target X)`. Pass " +
-    "`--target=clear` to remove a previously-set override. To set a " +
-    "persistent default, use `trailblaze config target`."
+  "Target app ID for this session's bound device. Defaults to " +
+    "`\$TRAILBLAZE_TARGET` if set, otherwise the target you passed to " +
+    "`trailblaze device connect --target X` for this terminal (persists in " +
+    "this terminal's pin; cleared by `device disconnect`, replaced by " +
+    "`device rebind --target Y`). Pass `--target=clear` to remove a " +
+    "previously-set override. To set a persistent default, use " +
+    "`trailblaze config target`."
 
 /**
  * How the effective `--target` value was chosen for one CLI invocation.
@@ -269,11 +309,20 @@ internal fun resolveCliTarget(flag: String?): ResolvedCliTarget {
 internal fun resolveCliTargetPin(flag: String?): String? {
   val normalized = normalizeTargetId(flag)
   // `--target=clear` is the explicit "remove the per-device override" signal.
-  // Returning null here (rather than falling through to the env tier) is what
-  // keeps the clear deterministic regardless of what `$TRAILBLAZE_TARGET` holds.
+  // Returning null here (rather than falling through to the env / pin tiers)
+  // is what keeps the clear deterministic — without this short-circuit a
+  // file-pinned target would silently re-establish the very binding the user
+  // is trying to clear.
   if (normalized == "clear") return null
   if (normalized != null) return normalized
-  return envTrailblazeTarget()
+  envTrailblazeTarget()?.let { return it }
+  // File-pin target tier: when the user passed `--target X` to a previous
+  // `device connect`, that X was persisted alongside the device id in the
+  // pin file. Re-applying it here ensures the per-device daemon override is
+  // re-established on every action command, surviving daemon restarts. The
+  // tier is silently skipped when the wrapper didn't forward
+  // TRAILBLAZE_SHELL_PID, or when the user pinned a device without --target.
+  return readShellPinTarget(CliConfigHelper.resolveEffectiveHttpPort())
 }
 
 /**
@@ -399,6 +448,248 @@ private fun envTrailblazeTarget(): String? =
 internal fun resolveCliDevice(flag: String?): String? =
   flag?.takeIf { it.isNotBlank() }
     ?: CliCallerContext.callerEnv("TRAILBLAZE_DEVICE")?.takeIf { it.isNotBlank() }
+
+/**
+ * True when the caller's wrapper detected a tty on stdin — typical of a
+ * human typing into a real terminal. False for AI agent harnesses (Claude
+ * Code / Cursor / Codex Bash tools), CI scripts, and piped invocations,
+ * where each command typically runs in a fresh shell with no parent-tty.
+ *
+ * Read by `device connect` to decide whether to warn that the file-pin
+ * won't carry across separate command invocations. We deliberately default
+ * to `false` on missing/blank env (older wrapper, direct-JVM use): missing
+ * the warning for a real human is mild noise ("Note: this terminal isn't
+ * interactive..." is technically wrong but harmless); missing it for an
+ * agent is a loop where the agent keeps re-pinning and failing.
+ */
+internal fun isInteractiveCaller(): Boolean =
+  CliCallerContext.callerEnv("TRAILBLAZE_INTERACTIVE")?.trim() == "1"
+
+/**
+ * Persist the [deviceId] (and optional [targetId]) as the pin for the caller's
+ * terminal, identified by the `TRAILBLAZE_SHELL_PID` env var forwarded by the
+ * bash wrapper.
+ *
+ * Persisting the target alongside the device is what makes
+ * `device connect --target X` survive a daemon restart — without it, the
+ * target lives only in the daemon's in-memory `SessionTargetRegistry` and
+ * silently degrades to workspace config on next `app --stop && app start`.
+ *
+ * Silently skips when:
+ *  - The wrapper didn't forward the PID (older wrapper, direct-JVM use, a
+ *    tool invoking the CLI outside `./trailblaze`).
+ *  - The pin file write throws (e.g. read-only home directory). The
+ *    daemon-side device bind still happened, so the user can still drive
+ *    the device for this one call via the resolver's existing flag/env
+ *    tiers — they just won't get persistence.
+ *
+ * Diagnostic message goes to `Console.log` (file log) on write failure so a
+ * read-only-home-directory bug surfaces without spamming the user's terminal.
+ */
+internal fun writeShellDevicePinIfPossible(deviceId: String, targetId: String? = null) {
+  val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+    ?: return
+  val pid = pidStr.toLongOrNull()?.takeIf { it > 0 } ?: return
+  try {
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+    ShellDevicePinStore.setPin(
+      file = ShellDevicePinStore.pinFileFor(port),
+      shellPid = pid,
+      device = deviceId,
+      target = targetId,
+    )
+  } catch (e: IllegalStateException) {
+    // `mutate()` throws IllegalStateException for filesystem-state problems
+    // it can't recover from automatically (e.g., the `.lock` path is a
+    // directory, or a symlink to one). The user-visible "Pinned $device for
+    // this terminal." line was already printed at this point — promote the
+    // failure to stderr so the user knows their pin DIDN'T land and they'll
+    // need `--device` on follow-up calls until they clean up the bad path.
+    // Debug log retained for the operator log trail.
+    Console.error(
+      "Warning: this terminal's device pin couldn't be written (${e.message}). " +
+        "The daemon-side bind succeeded, but subsequent commands in this terminal " +
+        "won't inherit the pin — pass `--device $deviceId` on each call until you fix " +
+        "the underlying filesystem state.",
+    )
+    Console.log("$SHELL_PIN_LOG_PREFIX failed to write pin for pid=$pid: ${e.message}")
+  } catch (e: Exception) {
+    Console.log("$SHELL_PIN_LOG_PREFIX failed to write pin for pid=$pid: ${e.message}")
+  }
+}
+
+/**
+ * Read the target from this terminal's file-pin. Returns null when there's no
+ * pin, when the pin doesn't include a target (user pinned bare with no
+ * `--target`), or when the wrapper didn't forward the shell PID. Used as a
+ * resolver tier in [resolveCliTargetPin] between the env var and null so a
+ * `device connect --target X` re-applies that X on every subsequent action
+ * command, surviving daemon restarts.
+ */
+private fun readShellPinTarget(port: Int): String? {
+  val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+    ?: return null
+  val pid = pidStr.toLongOrNull()?.takeIf { it > 0 } ?: return null
+  val lookup = ShellDevicePinStore.resolvePin(ShellDevicePinStore.pinFileFor(port), pid)
+  return (lookup as? ShellDevicePinStore.PinLookup.Found)?.target
+}
+
+/**
+ * Clear ONLY the target field on this terminal's pin, preserving the device
+ * binding. Called when the user passes `--target=clear` so the next action
+ * command doesn't re-read a stale target from the pin and silently undo the
+ * clear. Without this, the eviction-half of `--target=clear` only ran on the
+ * daemon side (via `setSessionTargetForBoundDevice("")`); the file-pin kept
+ * the original target and `resolveCliTargetPin` re-established it on the next
+ * call. See PR #3611 lead-dev-review finding #1.
+ *
+ * Silently skips when no pin exists for this PID (nothing to clear), when the
+ * PID isn't forwarded (same as the other shell-pin helpers), or when the
+ * write fails (logged at debug level). Symmetric with the other helpers:
+ * never throws, never blocks the action that triggered the clear.
+ */
+internal fun clearShellDevicePinTargetIfPossible() {
+  val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+    ?: return
+  val pid = pidStr.toLongOrNull()?.takeIf { it > 0 } ?: return
+  try {
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+    // Atomic clear: one `mutate()` lock window does read-then-write so a
+    // concurrent same-PID writer can't slip in between. No-ops when the
+    // entry is missing or already has target=null (saves a lock cycle in
+    // the common-after-first-clear case).
+    ShellDevicePinStore.clearPinTarget(
+      file = ShellDevicePinStore.pinFileFor(port),
+      shellPid = pid,
+    )
+    // Success path is observable too — paired with the failure log below
+    // so an operator triaging "user says --target=clear didn't stick" can
+    // verify the helper ran. Debug-level (Console.log → file) so it
+    // doesn't add interactive-user noise.
+    Console.log("$SHELL_PIN_LOG_PREFIX cleared target for pid=$pid")
+  } catch (e: Exception) {
+    Console.log("$SHELL_PIN_LOG_PREFIX failed to clear pin target for pid=$pid: ${e.message}")
+  }
+}
+
+/**
+ * Clear the pin entry for the caller's terminal (if any). Symmetric with
+ * [writeShellDevicePinIfPossible]; same silent-skip semantics on missing
+ * PID or write failure.
+ */
+internal fun clearShellDevicePinIfPossible() {
+  val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+    ?: return
+  val pid = pidStr.toLongOrNull()?.takeIf { it > 0 } ?: return
+  try {
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+    ShellDevicePinStore.clearPin(
+      file = ShellDevicePinStore.pinFileFor(port),
+      shellPid = pid,
+    )
+  } catch (e: Exception) {
+    Console.log("$SHELL_PIN_LOG_PREFIX failed to clear pin for pid=$pid: ${e.message}")
+  }
+}
+
+/**
+ * Lazy staleness handler for the per-terminal device pin. Clears the pin
+ * only when the failure says the device is gone — not on transient or
+ * contention failures. Used from the three `ensureDevice` failure sites
+ * ([cliReusableWithDevice] / [cliOneShotWithDevice] / [SessionStartCommand])
+ * so a pin pointing at a now-unplugged device self-evicts on first
+ * failure, instead of making every subsequent call repeat the same
+ * `Device bind failed` envelope.
+ *
+ * **Two gates, both required.**
+ *
+ * Match gate: the pin must point at the failed [deviceSpec] (case-
+ * insensitive). This stops a `--device ios/X` failure from evicting an
+ * unrelated `android/...` pin — the failure was about the flag, not the pin.
+ *
+ * Reason gate: the [deviceError] must read like a "device not found"
+ * message (substring match on `not found`, case-insensitive). The daemon's
+ * device-not-found path returns wording like
+ * `"Device 'ios/SIM-X' not found. Available: …"` or
+ * `"No mobile devices found. …"` (see [CliMcpClient.connectToDevice]).
+ * Everything else — `"Error: … is busy"` (another shell holds the device),
+ * `"Error connecting to device: …"` (transport blip), `"Session reports an
+ * existing device but device(INFO) returned no platform"` (daemon-state
+ * inconsistency) — is treated as transient and the pin survives. This
+ * narrowing closes a race Codex and Copilot flagged on PR #3621: a
+ * device-busy failure from another shell would otherwise have cleared
+ * this terminal's still-valid pin.
+ *
+ * Silent no-op when no PID is forwarded, when the pin is missing, when the
+ * pin points at a different device, when the error doesn't read as
+ * staleness, or when the underlying write fails — same swallow-everything
+ * contract as the other shell-pin helpers.
+ *
+ * **Ordering note.** Call sites invoke this function AFTER
+ * [reportCliError], so the `✗ Device bind failed` envelope lands first and
+ * the supplementary "Pin cleared for X" stderr line follows. The user
+ * reads "what failed" → "what was done about it" instead of an eviction
+ * notice floating above an unexplained failure.
+ */
+internal fun evictShellPinIfMatches(deviceSpec: String, deviceError: String) {
+  val port = CliConfigHelper.resolveEffectiveHttpPort()
+  val pinned = readShellPinDevice(port) ?: return
+  if (!pinned.equals(deviceSpec, ignoreCase = true)) return
+  if (!looksLikeDeviceNotFound(deviceError)) return
+  Console.error(
+    "Pin cleared for $pinned (the daemon couldn't find this device). " +
+      "Reconnect it and re-run `trailblaze device connect $pinned`, " +
+      "or pick a different one from `trailblaze device list`.",
+  )
+  Console.log("$SHELL_PIN_LOG_PREFIX evicted pin: device=$pinned ensureDevice reported not-found")
+  clearShellDevicePinIfPossible()
+}
+
+/**
+ * Pure predicate: does [deviceError] read as "the device isn't connected
+ * anymore" rather than "something else went wrong"?
+ *
+ * Two shapes the daemon emits from [CliMcpClient.connectToDevice] for the
+ * device-gone path:
+ *  - `"Device 'X' not found. Available: …"` / `"… Run 'trailblaze device list'."`
+ *    — matches on `not found`.
+ *  - `"No mobile devices found. Connect an Android device/emulator or start
+ *    an iOS simulator."` — matches on `no mobile devices found`.
+ *
+ * Everything else — busy / transport / state-inconsistency — does not.
+ * Centralizing the gate next to its sole caller keeps the substring shapes
+ * unit-testable and the eviction path readable.
+ */
+internal fun looksLikeDeviceNotFound(deviceError: String): Boolean =
+  deviceError.contains("not found", ignoreCase = true) ||
+    deviceError.contains("no mobile devices found", ignoreCase = true)
+
+/**
+ * Reads the per-terminal device pin written by `device connect`. Returns the
+ * pinned device spec when all of the following hold:
+ *  - The wrapper forwarded `TRAILBLAZE_SHELL_PID` (older wrappers skip this
+ *    tier silently, preserving the env-var-or-autodetect behavior they had);
+ *  - The PID is a valid positive integer;
+ *  - The pin file has an entry for this PID;
+ *  - The PID is still bound to a live OS process (the shell hasn't exited).
+ *
+ * Any other case returns null so the resolver falls through. The path is
+ * scoped to the daemon [port] so a custom-port daemon (`TRAILBLAZE_PORT=…`)
+ * gets its own pin map and doesn't see a default-port daemon's bindings
+ * pointing at device IDs it doesn't own.
+ *
+ * Note: this returns the pin *as recorded*. The resolver no longer pre-
+ * validates the pin against a live `device LIST` (that round-trip cost ~2s
+ * on every call). Staleness is detected lazily by [evictShellPinIfMatches]
+ * when [CliMcpClient.ensureDevice] rejects the bound device downstream.
+ */
+internal fun readShellPinDevice(port: Int): String? {
+  val pidStr = CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")?.takeIf { it.isNotBlank() }
+    ?: return null
+  val pid = pidStr.toLongOrNull()?.takeIf { it > 0 } ?: return null
+  val lookup = ShellDevicePinStore.resolvePin(ShellDevicePinStore.pinFileFor(port), pid)
+  return (lookup as? ShellDevicePinStore.PinLookup.Found)?.device
+}
 
 /**
  * Outcome of a connected-device autodetect probe — the tier consulted after
@@ -539,34 +830,88 @@ internal sealed class DeviceResolution {
  * Emits a one-line stderr notice on autodetect success so the user sees which
  * device was picked.
  */
+/**
+ * Emit the `✗ <verb> failed / reason: no devices connected / hint: …` envelope. Extracted
+ * so the verb-plumbing contract between [cliReusableWithDevice] / [cliOneShotWithDevice]
+ * and the rendered envelope can be unit-tested without spinning up a daemon to drive
+ * `resolveDeviceWithAutodetect` to the [DeviceAutodetectResult.NoDevices] branch.
+ */
+internal fun emitNoDevicesEnvelope(verb: String) {
+  reportCliError(
+    verb = verb,
+    reason = "no devices connected",
+    hint = "start an Android emulator (Android Studio AVD) or iOS simulator (Xcode), " +
+      "or run `trailblaze device connect web` to launch a browser",
+  )
+}
+
+/**
+ * Emit the `✗ <verb> failed / reason: multiple devices connected / hint: …` envelope plus
+ * the two trailing recovery lists (interactive `device connect` and per-call `--device`).
+ * Extracted alongside [emitNoDevicesEnvelope] for the same testability reason — the
+ * verb-plumbing regression that motivated this split lived precisely in the gap between
+ * "the resolver had a verb" and "the envelope rendered it."
+ */
+internal fun emitMultipleDevicesEnvelope(verb: String, specs: List<String>) {
+  reportCliError(
+    verb = verb,
+    reason = "multiple devices connected — pick one",
+    hint = "in an interactive terminal, pin one (subsequent commands inherit it):",
+  )
+  specs.forEach { spec -> Console.error("    trailblaze device connect $spec") }
+  Console.error("")
+  Console.error("  Or, for scripts and AI agents like Claude Code (each command runs in a fresh shell), append to your command:")
+  specs.forEach { spec -> Console.error("    --device $spec") }
+}
+
 internal suspend fun resolveDeviceWithAutodetect(
   flag: String?,
   port: Int,
   verb: String = "Command",
 ): DeviceResolution {
   resolveCliDevice(flag)?.let { return DeviceResolution.Resolved(it) }
-  return when (val r = autodetectSingleConnectedDevice(port)) {
+
+  // Per-terminal pin tier: trust the pin and return immediately. No daemon
+  // round-trip on the hot path.
+  //
+  // The previous shape validated the pin against a `device LIST` before
+  // honoring it, which cost a full one-shot MCP session (initialize handshake
+  // + tool registry hydration + LIST) — roughly two seconds on every
+  // pin-resolved call. For the common case (pin set, device still
+  // connected) that validation was pure overhead, doubling `trailblaze
+  // snapshot` from ~2.5s to ~4.5s when relying on the per-terminal pin vs.
+  // passing `--device` explicitly. See PR #3611.
+  //
+  // Staleness handling: when the pinned device is gone, [ensureDevice] will
+  // reject it from the wrapper below ([cliReusableWithDevice] /
+  // [cliOneShotWithDevice]). Those wrappers call [evictShellPinIfMatches]
+  // on failure so the next invocation falls back to autodetect rather than
+  // hitting the same stale pin again. The first call after the device
+  // disappears now surfaces a `Device bind failed` envelope instead of the
+  // friendlier "Pinned device X is no longer connected" message that
+  // validation used to print, but it does so at full speed — a one-time
+  // degraded message on a rare event is a fair trade for ~2s on every
+  // successful call.
+  readShellPinDevice(port)?.let { return DeviceResolution.Resolved(it) }
+
+  // No pin (and no flag, no env) — run autodetect for the OOBE
+  // single-connected-device case. This still costs the daemon round-trip,
+  // but only fires on first use before any pin exists; once the user runs
+  // `device connect`, subsequent calls skip this entirely via the pin tier
+  // above.
+  val autodetect = autodetectSingleConnectedDevice(port)
+
+  return when (val r = autodetect) {
     is DeviceAutodetectResult.Resolved -> {
       reportAutodetectedDevice(r.deviceSpec)
       DeviceResolution.Resolved(r.deviceSpec)
     }
     is DeviceAutodetectResult.NoDevices -> {
-      reportCliError(
-        verb = verb,
-        reason = "no devices connected",
-        hint = "connect a device first (Android: USB or emulator; iOS: simulator " +
-          "via Xcode; web: always available), or run " +
-          "`eval \$(trailblaze device connect <platform>)`",
-      )
+      emitNoDevicesEnvelope(verb)
       DeviceResolution.Misuse
     }
     is DeviceAutodetectResult.Multiple -> {
-      reportCliError(
-        verb = verb,
-        reason = "multiple devices connected — --device is required to pick one",
-        hint = "available: ${r.specs.joinToString(", ")}. Pass `--device <id>` or " +
-          "run `eval \$(trailblaze device connect <id>)` once to pin this shell",
-      )
+      emitMultipleDevicesEnvelope(verb, r.specs)
       DeviceResolution.Misuse
     }
     is DeviceAutodetectResult.DaemonUnreachable -> {
@@ -814,6 +1159,14 @@ fun cliOneShotWithDevice(
   verbose: Boolean,
   device: String?,
   webHeadless: Boolean = true,
+  /**
+   * User-facing verb used in the structured error envelope (e.g. "Snapshot" →
+   * `✗ Snapshot failed on …`). Defaults to the generic `"Command"` so callers
+   * that don't care still get a valid envelope, but every action command
+   * should pass its own verb so a multi-device / device-bind failure names
+   * the actual subcommand the user typed rather than a generic placeholder.
+   */
+  verb: String = "Command",
   action: suspend (CliMcpClient) -> Int,
 ): Int {
   if (!verbose) Console.enableQuietMode()
@@ -826,7 +1179,7 @@ fun cliOneShotWithDevice(
     // has already emitted the appropriate envelope; we exit with the right code
     // per [TrailblazeExitCode] policy (MISUSE for 0/multiple-devices,
     // INFRA_FAILED for daemon-unreachable / list-call-threw).
-    val resolvedDevice = when (val r = resolveDeviceWithAutodetect(flag = device, port = port)) {
+    val resolvedDevice = when (val r = resolveDeviceWithAutodetect(flag = device, port = port, verb = verb)) {
       is DeviceResolution.Resolved -> r.deviceSpec
       else -> return@runBlocking r.exitCodeFallback()
     }
@@ -843,9 +1196,13 @@ fun cliOneShotWithDevice(
           reason = deviceError,
           hint = "check `trailblaze device` for the list of connected devices",
         )
+        // Eviction runs AFTER the envelope so the user reads "what failed"
+        // before the supplementary "what was done about it" — see the kdoc
+        // on [evictShellPinIfMatches] for the ordering rationale.
+        evictShellPinIfMatches(resolvedDevice, deviceError)
         return@runBlocking INFRA_FAILED.code
       }
-      runActionWithIoEnvelope(target = resolvedDevice, action = { action(client) })
+      runActionWithIoEnvelope(target = resolvedDevice, verb = verb, action = { action(client) })
     }
   }
 }
@@ -870,6 +1227,14 @@ fun cliReusableWithDevice(
    * explicitly. See [CliMcpClient.setSessionTargetForBoundDevice].
    */
   target: String? = null,
+  /**
+   * User-facing verb used in the structured error envelope (e.g. "Snapshot" →
+   * `✗ Snapshot failed on …`). Defaults to the generic `"Command"` so callers
+   * that don't care still get a valid envelope, but every action command
+   * should pass its own verb so a multi-device / device-bind failure names
+   * the actual subcommand the user typed rather than a generic placeholder.
+   */
+  verb: String = "Command",
   action: suspend (CliMcpClient) -> Int,
 ): Int {
   if (!verbose) Console.enableQuietMode()
@@ -898,7 +1263,7 @@ fun cliReusableWithDevice(
     // has already emitted the appropriate envelope; we exit with the right code
     // per [TrailblazeExitCode] policy (MISUSE for 0/multiple-devices,
     // INFRA_FAILED for daemon-unreachable / list-call-threw).
-    val resolvedDevice = when (val r = resolveDeviceWithAutodetect(flag = device, port = port)) {
+    val resolvedDevice = when (val r = resolveDeviceWithAutodetect(flag = device, port = port, verb = verb)) {
       is DeviceResolution.Resolved -> r.deviceSpec
       else -> return@runBlocking r.exitCodeFallback()
     }
@@ -919,6 +1284,10 @@ fun cliReusableWithDevice(
           reason = deviceError,
           hint = "check `trailblaze device` for the list of connected devices",
         )
+        // Eviction runs AFTER the envelope so the user reads "what failed"
+        // before the supplementary "what was done about it" — see the kdoc
+        // on [evictShellPinIfMatches] for the ordering rationale.
+        evictShellPinIfMatches(resolvedDevice, deviceError)
         return@runBlocking INFRA_FAILED.code
       }
       // Tell the daemon to scope the target (or clear it) for this bound
@@ -933,6 +1302,15 @@ fun cliReusableWithDevice(
       // follow-up"). No-op when neither tier supplies a pin (we leave the
       // existing daemon-wide default in place).
       if (daemonCall.payload != null) {
+        // For `--target=clear`: clear the file-pin FIRST so that if the file
+        // write fails, the daemon-side override stays as the user's source
+        // of truth (preserving consistency rather than silently diverging).
+        // For a set (non-clear) target: the file-pin already reflects the
+        // pinned value via `device connect`'s write path, so we only need
+        // the daemon-side re-apply on each action call.
+        if (daemonCall.isClearRequest) {
+          clearShellDevicePinTargetIfPossible()
+        }
         val setError = client.setSessionTargetForBoundDevice(daemonCall.payload)
         if (setError != null) {
           // When the pin came from $TRAILBLAZE_TARGET (no explicit flag), the
@@ -964,7 +1342,7 @@ fun cliReusableWithDevice(
       // action fails partway — the recorded steps still belong to this
       // session.
       writeLastCliSessionScope(port, sessionScope)
-      runActionWithIoEnvelope(target = resolvedDevice, action = { action(client) })
+      runActionWithIoEnvelope(target = resolvedDevice, verb = verb, action = { action(client) })
     }
   }
 }
@@ -1007,12 +1385,13 @@ fun cliWithDaemon(
  */
 internal suspend fun runActionWithIoEnvelope(
   target: String?,
+  verb: String = "Command",
   action: suspend () -> Int,
 ): Int = try {
   action()
 } catch (e: java.io.IOException) {
   reportCliError(
-    verb = "Command",
+    verb = verb,
     target = target,
     reason = describeThrowableForUser(e),
     hint = "is the daemon running? try `trailblaze app start`",

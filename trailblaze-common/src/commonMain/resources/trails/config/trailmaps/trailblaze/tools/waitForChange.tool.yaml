@@ -1,0 +1,2 @@
+id: waitForChange
+class: xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool

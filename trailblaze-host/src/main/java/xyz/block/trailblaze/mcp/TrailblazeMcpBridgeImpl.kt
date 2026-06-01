@@ -37,6 +37,7 @@ import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.MCP_TEST_CLASS_NAME
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
@@ -1796,7 +1797,7 @@ class TrailblazeMcpBridgeImpl(
       trailFilePath = null,
       hasRecordedSteps = false,
       testMethodName = testName ?: "mcp_session",
-      testClassName = "MCP",
+      testClassName = MCP_TEST_CLASS_NAME,
       trailblazeDeviceInfo = deviceInfo,
       trailblazeDeviceId = deviceId,
       rawYaml = null,

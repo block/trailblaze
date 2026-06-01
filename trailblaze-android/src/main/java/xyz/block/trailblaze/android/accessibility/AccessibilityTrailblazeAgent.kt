@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.android.accessibility
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
@@ -215,6 +217,47 @@ class AccessibilityTrailblazeAgent(
       sessionProvider = sessionProvider,
       deviceManager = deviceManager,
     )
+  }
+
+  /**
+   * Waits for the accessibility tree to change relative to the baseline captured at entry,
+   * then settles. Captures the baseline event timestamp here (call entry) so it reflects the
+   * moment the step started rather than the moment the service loop begins polling.
+   *
+   * If the UI is already settled at entry (the reaction already happened and went quiet before
+   * this ran), succeeds immediately regardless of [requireChange]. [requireChange] only governs
+   * the timeout case: true → error, false → success.
+   */
+  override suspend fun waitForTreeChange(
+    timeoutMs: Long,
+    quietWindowMs: Long,
+    requireChange: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult {
+    val baselineEventTs = TrailblazeAccessibilityService.lastUiEventTimestampMs
+    val outcome = withContext(Dispatchers.IO) {
+      deviceManager.waitForChange(
+        baselineEventTs = baselineEventTs,
+        quietWindowMs = quietWindowMs,
+        timeoutMs = timeoutMs,
+      )
+    }
+    return when (outcome) {
+      TrailblazeAccessibilityService.WaitForChangeOutcome.ALREADY_SETTLED ->
+        TrailblazeToolResult.Success(message = "UI was already settled at entry")
+      TrailblazeAccessibilityService.WaitForChangeOutcome.CHANGED_AND_SETTLED ->
+        TrailblazeToolResult.Success(message = "UI changed and settled")
+      TrailblazeAccessibilityService.WaitForChangeOutcome.TIMED_OUT ->
+        if (requireChange) {
+          TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "UI did not change and settle within ${timeoutMs}ms",
+          )
+        } else {
+          TrailblazeToolResult.Success(
+            message = "No settled UI change within ${timeoutMs}ms; treated as a settle wait",
+          )
+        }
+    }
   }
 
   /** Provides the screen state using the accessibility service (no Maestro driver). */

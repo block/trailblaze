@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.newtools
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -9,9 +10,12 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -20,11 +24,14 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import java.io.File
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Tests for [SessionToolSet].
@@ -245,7 +252,139 @@ class SessionToolSetTest {
     val result = toolSet.session(action = SessionToolSet.SessionAction.SAVE)
     val json = Json.parseToJsonElement(result).jsonObject
 
-    assertContains(json["error"]!!.jsonPrimitive.content, "No title")
+    // Asserts the user-actionable CLI hint, not the MCP tool-name shape.
+    // The previous "No title" substring also matched the old (worse) wording
+    // — pinning the new phrasing here so a regression away from CLI-shaped
+    // guidance trips this test loudly instead of silently passing.
+    val err = json["error"]!!.jsonPrimitive.content
+    assertContains(err, "Trail title is required")
+    assertContains(err, "trailblaze session save")
+  }
+
+  @Test
+  fun `session SAVE for an iOS session writes ios-trail-yaml even when live context is Android`() = runTest {
+    // Regression guard for the OOBE-sweep bug: when `session save --id <ios-id>`
+    // fired after an Android command had touched the daemon, the filename
+    // platform came from the live `sessionContext.associatedDeviceId` (Android,
+    // last-touched) instead of the saved session's own SessionStarted log.
+    // Result: an iOS session's YAML — which correctly contained `platform: ios`
+    // inside — was written to a path ending `/android.trail.yaml`, contradicting
+    // the file content. Now the filename is keyed off the session's own log.
+
+    val logsDir = java.nio.file.Files.createTempDirectory("session-save-platform-").toFile()
+    val trailsDir = java.nio.file.Files.createTempDirectory("session-save-trails-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = logsDir, watchFileSystem = false)
+
+      // Persist a SessionStarted log for an iOS session. This is the source of
+      // truth `saveFromLogs` should consult — not the live sessionContext.
+      val iosSessionId = SessionId("2026_05_31_21_22_12_yaml_ios")
+      val iosDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = "E5BDD6FB-1C7C-46B7-A479-E8A772C3922D",
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+        ),
+        trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+        widthPixels = 1170,
+        heightPixels = 2532,
+        classifiers = emptyList(),
+      )
+      val sessionStartedLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus =
+          SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = null,
+            hasRecordedSteps = false,
+            testMethodName = "Pause the splash video",
+            testClassName = "MCP",
+            trailblazeDeviceInfo = iosDeviceInfo,
+            trailblazeDeviceId = iosDeviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+        session = iosSessionId,
+        timestamp = Clock.System.now(),
+      )
+      logsRepo.saveLogToDisk(sessionStartedLog)
+
+      // Need at least one recordable step in the session log for
+      // `saveFromLogs` to clear its "no recordable steps" guard. The cheapest
+      // shape that produces a non-empty trail body is an ObjectiveStart paired
+      // with an ObjectiveComplete carrying a non-blank step.
+      val pauseStep = xyz.block.trailblaze.yaml.DirectionStep(step = "Tap the pause button")
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.ObjectiveStartLog(
+          promptStep = pauseStep,
+          session = iosSessionId,
+          timestamp = Clock.System.now(),
+        ),
+      )
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.ObjectiveCompleteLog(
+          promptStep = pauseStep,
+          objectiveResult =
+            xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete(
+              llmExplanation = "Tapped pause",
+              statusData =
+                xyz.block.trailblaze.agent.model.AgentTaskStatusData(
+                  taskId = xyz.block.trailblaze.logs.model.TaskId.generate(),
+                  prompt = pauseStep.prompt,
+                  callCount = 1,
+                  taskStartTime = Clock.System.now(),
+                  totalDurationMs = 50,
+                ),
+            ),
+          session = iosSessionId,
+          timestamp = Clock.System.now(),
+        ),
+      )
+
+      // Live context points at an ANDROID device — this is the "last-touched
+      // device" state that the buggy code path keyed off. The mock bridge
+      // returns Android as the available device. If the fix regresses, the
+      // filename will end up `android.trail.yaml`.
+      val androidDeviceId = TrailblazeDeviceId(
+        instanceId = "emulator-5554",
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      )
+      val sessionContext = createSessionContext()
+      sessionContext.setAssociatedDevice(androidDeviceId)
+
+      val bridge = SessionTestBridge(activeSessionId = iosSessionId)
+
+      val toolSet = SessionToolSet(
+        sessionContext = sessionContext,
+        mcpBridge = bridge,
+        logsRepo = logsRepo,
+        sessionIdProvider = { iosSessionId },
+        trailsDirectory = trailsDir.absolutePath,
+      )
+
+      val result = toolSet.session(
+        action = SessionToolSet.SessionAction.SAVE,
+        id = iosSessionId.value,
+        title = "iOS pause test",
+      )
+      val json = Json.parseToJsonElement(result).jsonObject
+
+      val errMsg = json["error"]?.jsonPrimitive?.content
+      assertNull(
+        errMsg,
+        "save should succeed against the seeded session, got error: $errMsg",
+      )
+      val file = json["file"]?.jsonPrimitive?.content
+      assertNotNull(file, "save result should include a file path")
+      assertTrue(
+        file.endsWith("/ios.trail.yaml"),
+        "iOS session must write ios.trail.yaml; got: $file",
+      )
+      assertTrue(
+        File(file).readText().contains("platform: ios"),
+        "file content should mark the platform as ios; got: ${File(file).readText()}",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+      trailsDir.deleteRecursively()
+    }
   }
 
   @Test

@@ -23,6 +23,7 @@ import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.WaitForChangeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
@@ -607,6 +608,89 @@ class ToolSerializationTest {
           name = "wait",
           trailblazeTool = WaitForIdleSyncTrailblazeTool(
             timeToWaitInSeconds = 15,
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun deserializeWaitForChangeDefaults() {
+    val yaml = """
+- tools:
+    - waitForChange: {}
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "waitForChange",
+            trailblazeTool = WaitForChangeTrailblazeTool(),
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun deserializeWaitForChangeWithFields() {
+    val yaml = """
+- tools:
+    - waitForChange:
+        timeoutMs: 12000
+        quietWindowMs: 500
+        requireChange: false
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "waitForChange",
+            trailblazeTool = WaitForChangeTrailblazeTool(
+              timeoutMs = 12000,
+              quietWindowMs = 500,
+              requireChange = false,
+            ),
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun waitForChangeRoundTrip() {
+    val yaml = """
+- tools:
+    - waitForChange:
+        timeoutMs: 12000
+        quietWindowMs: 500
+        requireChange: false
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val reEncoded = trailblazeYaml.encodeToString(trailItems)
+
+    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
+    with(reDecoded) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "waitForChange",
+            trailblazeTool = WaitForChangeTrailblazeTool(
+              timeoutMs = 12000,
+              quietWindowMs = 500,
+              requireChange = false,
+            ),
           ),
         )
       }

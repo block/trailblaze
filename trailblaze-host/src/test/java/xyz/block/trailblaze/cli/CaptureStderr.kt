@@ -31,3 +31,24 @@ internal fun captureStderr(block: () -> Int): Pair<Int, String> {
     System.setErr(originalErr)
   }
 }
+
+/**
+ * Variant for callers that only care about the captured stderr, not an exit code —
+ * unit-testing pure rendering helpers (e.g. `emitNoDevicesEnvelope`) where the
+ * `Int`-returning shape would force a synthetic `0` at every call site.
+ *
+ * Kept as a distinct name (rather than an overload of [captureStderr]) because
+ * Kotlin treats `() -> Int` as assignable to `() -> Unit` — overloading the two
+ * makes every call site ambiguous at the lambda's `{ … }` boundary. Separate
+ * names sidestep the resolution.
+ *
+ * Same thread-safety caveat as [captureStderr]: `System.setErr` is process-global,
+ * so concurrent captures in the same JVM would interleave streams.
+ */
+internal fun captureStderrText(block: () -> Unit): String {
+  val (_, stderr) = captureStderr {
+    block()
+    0
+  }
+  return stderr
+}

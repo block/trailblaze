@@ -30,7 +30,7 @@ class VerifyCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
+    description = [DEVICE_OPTION_DESCRIPTION],
   )
   var device: String? = null
 
@@ -64,6 +64,7 @@ class VerifyCommand : Callable<Int> {
       verbose = verbose,
       device = device,
       webHeadless = headlessOption.resolve(),
+      verb = "Verify",
     ) { client ->
       val arguments = mutableMapOf<String, Any?>("objective" to assertion, "hint" to "VERIFY")
       if (noScreenshots) arguments["fast"] = true

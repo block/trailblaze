@@ -36,7 +36,7 @@ class AskCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."]
+    description = [DEVICE_OPTION_DESCRIPTION]
   )
   var device: String? = null
 
@@ -60,6 +60,7 @@ class AskCommand : Callable<Int> {
       verbose = verbose,
       device = device,
       webHeadless = headlessOption.resolve(),
+      verb = "Ask",
     ) { client ->
       val isNewDevice = !client.hasExistingDevice
       val result = client.callTool("ask", mapOf("question" to question))

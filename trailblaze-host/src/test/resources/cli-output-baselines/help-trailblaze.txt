@@ -40,8 +40,9 @@ Trailblaze - AI-powered device automation
   device       List and connect devices (Android, iOS, Web)
   show         Open the multi-device live grid (/devices/all) in your default
                  browser
-  app          Start or stop the Trailblaze daemon (background service that
-                 drives devices)
+  app          Launch the Trailblaze desktop app for viewing sessions and
+                 managing trails (use --headless for a daemon-only background
+                 service)
   mcp          Start a Model Context Protocol (MCP) server for AI agent
                  integration
   check        Validate a trailmap: materialize manifests, type-check

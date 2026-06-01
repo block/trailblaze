@@ -36,10 +36,11 @@ removed in a future release.
                                globs, or directories. Directories expand
                                recursively to one trail per containing
                                directory (recording preferred over NL when both
-                               are present). If omitted, defaults to the
-                               `trails/` directory at the workspace root
-                               (resolved by walking up from the current
-                               directory).
+                               are present). Bare `trailblaze run` with no
+                               arguments is rejected as a misuse — pass a `.
+                               trail.yaml` path or name a directory (e.g.
+                               `trails/`) to fan out under a workspace's trails
+                               directory.
   -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
                                TRAILBLAZE_RUNNER
       --capture-all          Enable all capture streams: video, logcat, network
@@ -56,8 +57,13 @@ removed in a future release.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)
-  -d, --device=<device>      Device: platform (android, ios, web),
-                               platform/instance-id, or instance ID
+  -d, --device=<device>      Device: platform (android, ios, web) or
+                               platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
+                               set (manual override; rare), otherwise this
+                               terminal's pin (set by `trailblaze device
+                               connect`). In a fresh-shell harness (Claude
+                               Code, Cursor, Codex, CI), pass --device on every
+                               call.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
                                driver from trail config.

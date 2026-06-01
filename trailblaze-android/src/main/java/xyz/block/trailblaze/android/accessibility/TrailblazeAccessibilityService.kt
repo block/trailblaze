@@ -98,6 +98,22 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     accessibilityServiceInstance = null
   }
 
+  /**
+   * Outcome of [waitForChangeSince]. Distinguishes "the UI was already quiet at entry" from
+   * "the UI was in flux, then changed and settled" so the caller doesn't treat an already-settled
+   * reaction as a missed change.
+   */
+  enum class WaitForChangeOutcome {
+    /** The UI was already settled at entry (last event older than the quiet window). */
+    ALREADY_SETTLED,
+
+    /** The UI was in flux at entry, then changed and settled within the timeout. */
+    CHANGED_AND_SETTLED,
+
+    /** The UI never changed-and-settled within the timeout. */
+    TIMED_OUT,
+  }
+
   companion object {
 
     /**
@@ -206,6 +222,61 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         if (timeSinceLastEvent >= quietWindowMs) {
           Console.log("UI settled after ${elapsed}ms (quiet for ${timeSinceLastEvent}ms)")
           return true
+        }
+
+        Thread.sleep(pollIntervalMs)
+      }
+    }
+
+    /**
+     * Two-phase "wait for the screen to change" against the live accessibility event stream.
+     *
+     * Fast path: if the UI is already settled at entry (the last UI event is older than
+     * [quietWindowMs]), returns [WaitForChangeOutcome.ALREADY_SETTLED] immediately — the reaction
+     * already happened and went quiet before this ran.
+     *
+     * Otherwise, Phase 1 (change): polls [lastUiEventTimestampMs] until it advances past
+     * [baselineEventTs] — i.e. a real TYPE_WINDOW_CONTENT_CHANGED / WINDOW_STATE_CHANGED /
+     * VIEW_SCROLLED / VIEW_CLICKED event fired after entry. Phase 2 (settle): once changed, waits
+     * for [quietWindowMs] of no further events before returning [WaitForChangeOutcome.CHANGED_AND_SETTLED].
+     * The whole thing is bounded by [timeoutMs]; if the tree never changes within the budget this
+     * returns [WaitForChangeOutcome.TIMED_OUT] and the caller decides whether that's an error.
+     *
+     * [baselineEventTs] is captured at the agent/tool layer at call entry (NOT here) so the
+     * baseline reflects the moment the step started, not the moment this method first runs.
+     */
+    fun waitForChangeSince(
+      baselineEventTs: Long,
+      quietWindowMs: Long,
+      timeoutMs: Long,
+    ): WaitForChangeOutcome {
+      val entryNow = Clock.System.now().toEpochMilliseconds()
+      if (entryNow - lastUiEventTimestampMs >= quietWindowMs) {
+        Console.log("waitForChangeSince: UI already settled at entry; returning immediately")
+        return WaitForChangeOutcome.ALREADY_SETTLED
+      }
+
+      val startTime = entryNow
+      val pollIntervalMs = 16L // ~1 frame at 60fps for responsive polling
+      var sawChange = false
+
+      while (true) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val elapsed = now - startTime
+        if (elapsed >= timeoutMs) {
+          Console.log("waitForChangeSince timed out after ${elapsed}ms (sawChange=$sawChange)")
+          return WaitForChangeOutcome.TIMED_OUT
+        }
+
+        val currentEventTs = lastUiEventTimestampMs
+        if (!sawChange) {
+          if (currentEventTs > baselineEventTs) {
+            sawChange = true
+            Console.log("waitForChangeSince observed change after ${elapsed}ms")
+          }
+        } else if (now - currentEventTs >= quietWindowMs) {
+          Console.log("waitForChangeSince settled after ${elapsed}ms (quiet for ${now - currentEventTs}ms)")
+          return WaitForChangeOutcome.CHANGED_AND_SETTLED
         }
 
         Thread.sleep(pollIntervalMs)

@@ -164,6 +164,23 @@ abstract class MaestroTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
+  /**
+   * Waits until the on-device UI tree changes relative to a baseline captured at call entry,
+   * then waits [quietWindowMs] of no further events to settle.
+   *
+   * Override in driver-specific agents that have event-driven quiescence (today: the Android
+   * accessibility driver). The default returns null to signal "this driver doesn't support
+   * change detection" so the calling tool can fall back to a plain timed wait.
+   *
+   * @return A [TrailblazeToolResult] if the driver handled the wait, or null when unsupported.
+   */
+  open suspend fun waitForTreeChange(
+    timeoutMs: Long,
+    quietWindowMs: Long,
+    requireChange: Boolean,
+    traceId: TraceId?,
+  ): TrailblazeToolResult? = null
+
   @Deprecated(
     message = "Use the suspend function runMaestroCommands() instead.",
     replaceWith = ReplaceWith("runMaestroCommands(maestroCommands, traceId)"),

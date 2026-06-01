@@ -68,7 +68,7 @@ class StepCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required for interactive step/verify execution."]
+    description = [DEVICE_OPTION_DESCRIPTION]
   )
   var device: String? = null
 
@@ -137,11 +137,19 @@ class StepCommand : Callable<Int> {
   override fun call(): Int {
     // Validate --setup and --no-setup require --save
     if ((setup != null || noSetup) && savePath == null) {
-      Console.error("Error: --setup and --no-setup require --save.")
+      reportCliError(
+        verb = "Step",
+        reason = "--setup / --no-setup require --save",
+        hint = "pass --save <path> to write the recorded session to disk, then add --setup or --no-setup",
+      )
       return TrailblazeExitCode.MISUSE.code
     }
     if (setup != null && noSetup) {
-      Console.error("Error: --setup and --no-setup are mutually exclusive.")
+      reportCliError(
+        verb = "Step",
+        reason = "--setup and --no-setup are mutually exclusive",
+        hint = "pass one or the other (or neither — without either flag, --save prints a wizard)",
+      )
       return TrailblazeExitCode.MISUSE.code
     }
 
@@ -153,7 +161,11 @@ class StepCommand : Callable<Int> {
     // Step description is always required (unless --save)
     val step = stepWords.joinToString(" ").trim()
     if (step.isEmpty()) {
-      Console.error("Error: step requires a description. Usage: trailblaze step \"Tap login\"")
+      reportCliError(
+        verb = "Step",
+        reason = "step requires a description",
+        hint = "describe what this step does, e.g. `trailblaze step \"Tap login\"`",
+      )
       return TrailblazeExitCode.MISUSE.code
     }
     // `require-steps` is satisfied by the positional step description — `step` can't be
@@ -167,6 +179,7 @@ class StepCommand : Callable<Int> {
       device = device,
       webHeadless = headlessOption.resolve(),
       target = target,
+      verb = "Step",
     ) { client ->
       // Execute the step. The MCP tool name matches the CLI verb name ("step") —
       // the wire-protocol rename landed in the same change as the CLI rename so

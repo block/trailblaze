@@ -11,6 +11,21 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailConfig
 
+/**
+ * Sentinel value stamped into [SessionInfo.testClass] (via `SessionStatus.Started.testClassName`)
+ * for sessions initiated through the MCP bridge — i.e. CLI commands like
+ * `trailblaze snapshot`, `ask`, `step` that don't run inside a JUnit harness and
+ * therefore have no real test class to record.
+ *
+ * Producer: `TrailblazeMcpBridgeImpl.emitSessionStartedLog` writes this value
+ * when constructing the session-started log.
+ *
+ * Consumer: [SessionInfo.displayName] short-circuits the `cls:name` template
+ * when [testClass] matches this constant, so user-facing surfaces (`session list`)
+ * don't expose the transport layer.
+ */
+const val MCP_TEST_CLASS_NAME: String = "MCP"
+
 @Serializable
 data class SessionInfo(
   val sessionId: SessionId,
@@ -35,15 +50,26 @@ data class SessionInfo(
   //                               → "EvaluationLongTest/tenKey"
   //  4. ClassName/method   — fully-qualified stable name for tool-based tests
   //  5. sessionId          — last resort (includes timestamp+random, not stable across runs)
+  //
+  // MCP-initiated sessions (`trailblaze snapshot`, `ask`, `step` over the CLI/MCP
+  // bridge) carry `testClass = MCP_TEST_CLASS_NAME` as a downstream marker — but
+  // rendering it verbatim leaks the transport layer in user-facing surfaces
+  // (`session list` showed labels like "MCP:Capture screen state"). Compute
+  // `displayTestClass` once with the marker normalized away, then both branches
+  // below share the same answer.
   @Transient
-  val displayName: String = trailConfig?.title
-    ?: trailConfig?.id
-    ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
-    ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
-      testClass?.let { cls -> "$cls:$name" } ?: name
-    }
-    ?: testClass
-    ?: sessionId.value
+  val displayName: String = run {
+    val displayTestClass = testClass
+      ?.takeIf { it.trim().uppercase() != MCP_TEST_CLASS_NAME }
+    trailConfig?.title
+      ?: trailConfig?.id
+      ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+      ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
+        displayTestClass?.let { cls -> "$cls:$name" } ?: name
+      }
+      ?: displayTestClass
+      ?: sessionId.value
+  }
 
   /**
    * Stable identifier used to group retries of the same test together. Distinct from

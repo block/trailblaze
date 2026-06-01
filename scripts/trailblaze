@@ -27,6 +27,47 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Capture the parent shell PID so the CLI can resolve "what device is pinned
+# for this terminal?" from a file in ~/.trailblaze instead of requiring the
+# user to wrap `trailblaze device connect` in `eval $(...)` to set
+# TRAILBLAZE_DEVICE in their shell. `$PPID` is the wrapper's parent — for
+# every interactive invocation that's the shell the user typed into; for
+# tmux/screen panes it's the per-pane shell; for CI scripts it's whatever
+# spawned this wrapper. Respect any pre-set value so nested invocations
+# (one Trailblaze command spawning another via a script) inherit the
+# outermost shell's identity rather than overwriting it.
+#
+# Consumed by `CliCallerContext.callerEnv("TRAILBLAZE_SHELL_PID")` and the
+# resolver tier in `CliInfrastructure.resolveDeviceWithAutodetect`. The
+# associated file is `~/.trailblaze/shell-device-pins-<port>.json` written
+# by `ShellDevicePinStore`.
+export TRAILBLAZE_SHELL_PID="${TRAILBLAZE_SHELL_PID:-$PPID}"
+
+# Detect whether this invocation comes from an interactive terminal. `[ -t 0 ]`
+# checks if stdin is a tty — true for a human typing commands, false for:
+#  - AI agent harnesses (Claude Code Bash tool, Cursor shell, Codex) — each
+#    command spawns a fresh shell that doesn't inherit a tty
+#  - CI scripts and pipelines (stdin redirected from /dev/null or a file)
+#  - Anything with stdin piped from another command
+#
+# Consumed by the JVM-side `device connect` to decide whether to warn the
+# caller that the file-pin won't carry across separate command invocations
+# (which it can't if each call is a fresh shell with a different PID). When
+# true, no warning — the human is in a real terminal where the pin works.
+# When false, the warning fires and steers the caller toward `--device` flags.
+#
+# Default of `0` (assume non-interactive) is the safer fallback: a missed
+# warning to a real human is mild noise; a missed warning to an agent is a
+# loop. Respects any pre-set value so a future tool that wants to override
+# the detection can.
+if [ -z "${TRAILBLAZE_INTERACTIVE:-}" ]; then
+  if [ -t 0 ]; then
+    export TRAILBLAZE_INTERACTIVE=1
+  else
+    export TRAILBLAZE_INTERACTIVE=0
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # JDK version check
 # ---------------------------------------------------------------------------
@@ -291,6 +332,12 @@ ipc_try_forward() {
     fi
     if [ -n "${TRAILBLAZE_TARGET:-}" ]; then
         env_json=$(jq --arg v "$TRAILBLAZE_TARGET" '. + {TRAILBLAZE_TARGET: $v}' <<<"$env_json") || return 1
+    fi
+    if [ -n "${TRAILBLAZE_SHELL_PID:-}" ]; then
+        env_json=$(jq --arg v "$TRAILBLAZE_SHELL_PID" '. + {TRAILBLAZE_SHELL_PID: $v}' <<<"$env_json") || return 1
+    fi
+    if [ -n "${TRAILBLAZE_INTERACTIVE:-}" ]; then
+        env_json=$(jq --arg v "$TRAILBLAZE_INTERACTIVE" '. + {TRAILBLAZE_INTERACTIVE: $v}' <<<"$env_json") || return 1
     fi
     # Send the user's interactive cwd alongside argv so commands that walk relative
     # paths (e.g. `waypoint --target` resolving the workspace anchor) anchor at the

@@ -333,8 +333,14 @@ class SessionToolSet(
       ?: sessionContext?.sessionTitle
       ?: sessionContext?.getCurrentTrailName()
     if (trailName == null) {
+      // Render a CLI-shaped hint by default; MCP callers see the same string but it's
+      // still actionable (the `--title` flag maps 1:1 to the tool's `title` arg in
+      // every CLI client). The previous wording exposed the raw MCP tool signature,
+      // which CLI users can't type.
       return SessionResult(
-        error = "No title for trail. Use session(action=SAVE, title='your title')",
+        error = "Trail title is required. Pass `--title '<your title>'` to " +
+          "`trailblaze session save` (or set a session title via " +
+          "`trailblaze session start --title '…'`).",
       ).toJson()
     }
 
@@ -397,7 +403,15 @@ class SessionToolSet(
       ).toJson()
     }
 
-    return writeTrailFile(trailName, yamlContent, platform)
+    // Prefer the SAVED session's own SessionStarted record over the live `platform`
+    // arg, which is sourced from sessionContext.associatedDeviceId (= the
+    // most-recently-touched device, not necessarily the one this session is for).
+    // Without this, `session save --id <ios-session>` after an Android command in
+    // the same daemon writes <name>/android.trail.yaml — file content correctly
+    // marked `platform: ios`, but the filename lies. Falls back to the live-context
+    // platform only when the session predates SessionStarted (very old logs).
+    val effectivePlatform = startedStatus?.trailblazeDeviceInfo?.platform ?: platform
+    return writeTrailFile(trailName, yamlContent, effectivePlatform)
   }
 
   private fun saveFromRecordedSteps(

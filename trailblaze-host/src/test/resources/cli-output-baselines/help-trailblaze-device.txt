@@ -11,10 +11,9 @@ List and connect devices (Android, iOS, Web)
   -V, --version   Print version information and exit.
 Commands:
   list        List available devices
-  connect     Connect a device + target to your session (use `eval $(...)` to
-                pin TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET to this shell)
+  connect     Connect a device + target and pin them for this terminal so
+                subsequent commands inherit the binding
   rebind      Change the target app for the currently-bound device
-  disconnect  Disconnect a device (use `eval $(...)` to also clear
-                TRAILBLAZE_DEVICE + TRAILBLAZE_TARGET)
+  disconnect  Disconnect a device and clear this terminal's pin
   create      Provision a device with a configured profile (web today; iOS /
                 Android future).

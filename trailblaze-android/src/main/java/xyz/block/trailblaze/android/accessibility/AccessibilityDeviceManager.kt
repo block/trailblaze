@@ -99,6 +99,22 @@ class AccessibilityDeviceManager(
     TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs)
   }
 
+  /**
+   * Waits for the UI tree to change relative to [baselineEventTs] (captured at the caller's
+   * entry), then settles for [quietWindowMs]. Returns the change outcome, distinguishing an
+   * already-settled entry from a change-then-settle and from a timeout.
+   */
+  fun waitForChange(
+    baselineEventTs: Long,
+    quietWindowMs: Long,
+    timeoutMs: Long,
+  ): TrailblazeAccessibilityService.WaitForChangeOutcome =
+    TrailblazeAccessibilityService.waitForChangeSince(
+      baselineEventTs = baselineEventTs,
+      quietWindowMs = quietWindowMs,
+      timeoutMs = timeoutMs,
+    )
+
   // --- Action dispatch ---
 
   /**

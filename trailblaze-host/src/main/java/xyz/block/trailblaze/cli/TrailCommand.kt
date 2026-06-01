@@ -10,7 +10,6 @@ import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
-import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -108,8 +107,9 @@ open class TrailCommand : Callable<Int> {
     description = [
       "Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories " +
         "expand recursively to one trail per containing directory (recording preferred over " +
-        "NL when both are present). If omitted, defaults to the `trails/` directory at the " +
-        "workspace root (resolved by walking up from the current directory).",
+        "NL when both are present). Bare `trailblaze run` with no arguments is rejected " +
+        "as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to " +
+        "fan out under a workspace's trails directory.",
     ],
   )
   var trailFiles: List<File> = emptyList()
@@ -128,7 +128,7 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web), platform/instance-id, or instance ID"]
+    description = [DEVICE_OPTION_DESCRIPTION]
   )
   var device: String? = null
 
@@ -382,11 +382,34 @@ open class TrailCommand : Callable<Int> {
       Console.enableQuietMode()
     }
 
+    // Emit the `trail` → `run` deprecation warning BEFORE the bare-args rejection so a
+    // user who fat-fingers `trailblaze trail` (with no args) still sees the deprecation
+    // signal. Pre-PR the warning fired on every invocation regardless of arg count;
+    // suppressing it here would silently erode the deprecation signal on the bare-args
+    // path. `wasInvokedViaTrailAlias()` is hardened against an uninitialized
+    // `commandSpec`, so the unit-test path (which constructs TrailCommand directly) is
+    // still safe.
     if (wasInvokedViaTrailAlias()) {
       Console.error(
         "Warning: 'trailblaze trail' is deprecated and will be removed in a future release. " +
           "Use 'trailblaze run' instead.",
       )
+    }
+
+    // Reject bare `trailblaze run` (no positional argument) before any other work — this
+    // used to default to `<workspace>/trails/` and silently fan out across every trail
+    // it found, which is a footgun for a curious "what does this do?" tap. Make the
+    // user opt in to fan-out explicitly by naming a directory (e.g. `trailblaze run
+    // trails/`). Uses the shared `Trail run` verb to match every other
+    // `reportCliError` callsite in this file.
+    if (trailFiles.isEmpty()) {
+      reportCliError(
+        verb = "Trail run",
+        reason = "no trail file or directory specified",
+        hint = "pass a .trail.yaml path (e.g. `trailblaze run flows/login.trail.yaml`) " +
+          "or a directory to fan out (e.g. `trailblaze run trails/`)",
+      )
+      return TrailblazeExitCode.MISUSE.code
     }
 
     // Resolve --llm shorthand: splits "provider/model" into llmProvider + llmModel.
@@ -481,15 +504,26 @@ open class TrailCommand : Callable<Int> {
     // fire for the multi-device / no-device cases (its message lists available devices in
     // the trail-runner-specific shape, which is more useful than the standard one here).
     //
+    // The inlined tier order mirrors `resolveDeviceWithAutodetect`:
+    //   1. `--device` flag (already handled above when non-blank)
+    //   2. `TRAILBLAZE_DEVICE` env var
+    //   3. This terminal's file-pin (added so `trailblaze device connect X` followed
+    //      by `trailblaze run …` inherits the device — pre-fix, the resolver skipped
+    //      straight from env to autodetect and a pinned multi-device shell hit the
+    //      multi-device error)
+    //   4. Autodetect (exactly one connected device)
+    //   5. Workspace config's `cliDevicePlatform` (trail-runner-specific)
+    //
     // Guard on `isNullOrBlank()` (not `== null`) so a stray `--device ""` /
-    // `--device " "` falls through to env/autodetect/config rather than being
+    // `--device " "` falls through to env/pin/autodetect/config rather than being
     // forwarded to the runner verbatim — letting a blank string slip through
     // would surface as a cryptic "Device '' not found" mid-pipeline. Same
     // treatment `resolveCliDevice` applies to the env var.
+    val port = parent.getEffectivePort()
     if (device.isNullOrBlank()) {
       device = resolveCliDevice(null)
+        ?: readShellPinDevice(port)
         ?: run {
-          val port = parent.getEffectivePort()
           val autodetected = runBlocking { autodetectSingleConnectedDevice(port) }
           if (autodetected is DeviceAutodetectResult.Resolved) {
             reportAutodetectedDevice(autodetected.deviceSpec)
@@ -497,23 +531,6 @@ open class TrailCommand : Callable<Int> {
           } else null
         }
         ?: CliConfigHelper.readConfig()?.cliDevicePlatform
-    }
-
-    // Default the trail argument when omitted: walk up from the *caller's* CWD to find the
-    // workspace root (the directory containing `trails/config/trailblaze.yaml`) and use its
-    // `trails/` dir. Convention-based defaulting matches pytest / cargo-test / Playwright /
-    // Jest — config tells the runner where tests live, the CLI just filters. Use
-    // [CliCallerContext.callerCwd] rather than `Paths.get("")` so daemon-forwarded invocations
-    // anchor on the caller's interactive cwd instead of the daemon process's cwd.
-    if (trailFiles.isEmpty()) {
-      val defaultDir = resolveDefaultTrailDir(CliCallerContext.callerCwd())
-      if (defaultDir == null) {
-        Console.error("Error: No trail file specified and no `trails/` directory found at the workspace root.")
-        Console.error("  Pass a trail file/directory explicitly, or run from a workspace containing a `trails/` directory.")
-        return TrailblazeExitCode.MISUSE.code
-      }
-      Console.info("No trail argument given; defaulting to ${defaultDir.absolutePath}")
-      trailFiles = listOf(defaultDir)
     }
 
     // Validate every argument: must exist and be either a recognized trail file
@@ -1154,6 +1171,13 @@ open class TrailCommand : Callable<Int> {
     // Resolve target app: prefer trail config's `target` field, fall back to settings selection.
     // This ensures custom tools (e.g., myApp_launchSignedIn) are registered for the
     // correct app even when the desktop UI has a different app selected.
+    //
+    // Deliberately does NOT consult the per-terminal target pin (`resolveCliTargetPin`).
+    // Trails are reusable artifacts that travel between users and CI — if a trail needs
+    // a target, it declares one in its config. Inheriting the caller's terminal pin would
+    // make the same trail behave differently between developers, which defeats the
+    // determinism contract. The device pin IS consulted (above, in the resolver chain)
+    // because the device a trail runs on is operator-scoped, not trail-scoped.
     val targetTestApp = trailConfig?.target?.let { config.availableAppTargets.findById(it) }
       ?: app.deviceManager.getCurrentSelectedTargetApp()
     if (verbose) {
@@ -1755,6 +1779,12 @@ open class TrailCommand : Callable<Int> {
    * `docs/internal/devlog/2026-05-26-cli-trail-to-run-rename.md`.
    */
   internal fun wasInvokedViaTrailAlias(): Boolean {
+    // Tests that construct TrailCommand directly (instead of going through picocli's
+    // CommandLine.execute) never populate the @Spec-injected `commandSpec` lateinit
+    // var — touching it would throw UninitializedPropertyAccessException. Treat the
+    // uninitialized case as "definitely not via the alias" so the early-warning block
+    // in [call] stays safe to call from direct-construction tests.
+    if (!::commandSpec.isInitialized) return false
     var root: CommandLine? = commandSpec.commandLine() ?: return false
     while (root?.parent != null) {
       root = root.parent
@@ -1902,35 +1932,6 @@ open class TrailCommand : Callable<Int> {
      */
     fun readSkipReason(file: File): String? =
       readResolvedTrailConfig(file)?.skip?.trim()?.takeIf { it.isNotEmpty() }
-
-    /**
-     * Resolves the default trail-search directory used when `trailblaze run` is invoked with
-     * no path argument. Walks up from [fromPath] to find the workspace root via
-     * [TrailblazeWorkspaceConfigResolver], then returns `<workspace-root>/trails/` if it
-     * exists. Returns null when no workspace can be resolved or the `trails/` directory is
-     * absent — callers should surface a clear error in that case.
-     *
-     * Both [WorkspaceRoot.Configured] (a real workspace with `trails/config/trailblaze.yaml`)
-     * and [WorkspaceRoot.Scratch] (a fallback workspace without a config file) are honored —
-     * the only thing this helper cares about is that some root resolves and contains a
-     * `trails/` directory next to it.
-     */
-    fun resolveDefaultTrailDir(fromPath: java.nio.file.Path): File? {
-      val resolved = try {
-        TrailblazeWorkspaceConfigResolver.resolve(fromPath)
-      } catch (_: Exception) {
-        return null
-      }
-      // [WorkspaceRoot.Configured.dir] is the `trails/` directory itself (the resolver anchors
-      // on `trails/config/trailblaze.yaml`); for [Scratch] there is no config, so we look for a
-      // `trails/` sibling under the start directory. Both branches return a candidate path —
-      // the final isDirectory check ensures we return null when the dir doesn't actually exist.
-      val trailsDir = when (val root = resolved.workspaceRoot) {
-        is WorkspaceRoot.Configured -> root.dir.toFile()
-        is WorkspaceRoot.Scratch -> root.dir.resolve("trails").toFile()
-      }
-      return trailsDir.takeIf { it.isDirectory }
-    }
 
     /**
      * Expands directory arguments to their contained trail files (`*.trail.yaml` + `blaze.yaml`)

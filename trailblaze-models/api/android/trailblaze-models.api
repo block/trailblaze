@@ -9759,6 +9759,7 @@ public final class xyz/block/trailblaze/logs/model/SessionInfo$Companion {
 }
 
 public final class xyz/block/trailblaze/logs/model/SessionInfoKt {
+	public static final field MCP_TEST_CLASS_NAME Ljava/lang/String;
 	public static final fun getSessionInfo (Ljava/util/List;)Lxyz/block/trailblaze/logs/model/SessionInfo;
 	public static final fun getSessionStartedInfo (Ljava/util/List;)Lxyz/block/trailblaze/logs/model/SessionStatus$Started;
 	public static final fun getSessionStatus (Ljava/util/List;)Lxyz/block/trailblaze/logs/model/SessionStatus;
@@ -11546,6 +11547,7 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field TAP_ON_ELEMENT Ljava/lang/String;
 	public static final field TAP_ON_POINT Ljava/lang/String;
 	public static final field WAIT Ljava/lang/String;
+	public static final field WAIT_FOR_CHANGE Ljava/lang/String;
 	public final fun isTapAction (Ljava/lang/String;)Z
 	public final fun isTextInputAction (Ljava/lang/String;)Z
 }

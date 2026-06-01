@@ -28,3 +28,4 @@ tools:
   - tap
   - tapOnPoint
   - wait
+  - waitForChange

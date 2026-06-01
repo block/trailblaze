@@ -98,6 +98,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
             .ifEmpty { toolLogsInWindow }
+            .let { dedupeLayerDuplicates(it) }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
           val toolWrappers = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
@@ -248,3 +249,55 @@ private fun fingerprintForDedup(
   return wrapper.name + "||" +
     rawYaml.lines().filterNot { it.trimStart().startsWith("reason:") }.joinToString("\n")
 }
+
+/**
+ * Collapses "layer-duplicate" tool logs — when one physical tool execution produces two
+ * `TrailblazeToolLog` entries because two layers of the execution pipeline each emit a log
+ * (the LLM-dispatch layer logs with a `llm-…` trace and the host/RPC executor logs with a
+ * `tool-…` trace). Both rows have identical toolName + args + success, differ only in trace
+ * ID prefix, and represent the same physical work — so the recording should serialize them
+ * once.
+ *
+ * Algorithm: group ALL logs (not just consecutive) by `(toolName, argsFingerprint, successful)`.
+ * Within a group, only the SPECIFIC `(llm, tool)` prefix pair triggers dedup — drop the
+ * `llm-…` entries and keep the `tool-…` ones (executor logs are the source of truth for
+ * driver activity). Other prefix combinations (`maestro-`, `mcp-`, no-prefix, etc.) do NOT
+ * trigger dedup, and same-prefix repeats (e.g. two `tool-…` entries from a deliberate
+ * digit-key replay) survive unchanged.
+ *
+ * Order-preserving: returns the input list minus the dropped entries, in input order.
+ */
+private fun dedupeLayerDuplicates(
+  logs: List<TrailblazeLog.TrailblazeToolLog>,
+): List<TrailblazeLog.TrailblazeToolLog> {
+  if (logs.size < 2) return logs
+  val groups = logs.groupBy {
+    Triple(it.toolName, it.trailblazeTool.argsFingerprint(), it.successful)
+  }
+  val dropped = mutableSetOf<TrailblazeLog.TrailblazeToolLog>()
+  for ((_, group) in groups) {
+    val prefixes = group.mapNotNull { tracePrefix(it.traceId?.traceId) }.toSet()
+    if ("llm" in prefixes && "tool" in prefixes) {
+      // Layer-duplicate signature confirmed. Drop the LLM-dispatch logs; the `tool-…`
+      // entries represent the actual executor work and carry the driver-event traces.
+      group.filterTo(dropped) { tracePrefix(it.traceId?.traceId) == "llm" }
+    }
+  }
+  return if (dropped.isEmpty()) logs else logs.filterNot { it in dropped }
+}
+
+/** Returns the origin token of a [TraceId] string ("llm" / "tool" / "maestro" / "mcp"), or
+ *  null when the input isn't a `prefix-uuid` shape. */
+private fun tracePrefix(traceId: String?): String? {
+  if (traceId.isNullOrEmpty()) return null
+  val dash = traceId.indexOf('-')
+  if (dash <= 0) return null
+  return traceId.substring(0, dash)
+}
+
+/** Fingerprint over the canonical JSON encoding of the tool's args. kotlinx.serialization's
+ *  `JsonObject.toString()` emits keys in insertion order and the same `OtherTrailblazeTool`
+ *  payload is produced by `toLogPayload()` on both layers of the duplicate, so the two encode
+ *  to identical strings. Used by [dedupeLayerDuplicates] to identify same-args entries. */
+private fun xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool.argsFingerprint(): String =
+  this.raw.toString()

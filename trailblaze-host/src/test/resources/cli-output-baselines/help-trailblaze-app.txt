@@ -6,7 +6,8 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze app [-hV] [--foreground] [--headless] [--status] [--stop]
-Start or stop the Trailblaze daemon (background service that drives devices)
+Launch the Trailblaze desktop app for viewing sessions and managing trails (use
+--headless for a daemon-only background service)
       --foreground   Run in foreground (blocks terminal). Use for debugging
                        with an attached IDE.
   -h, --help         Show this help message and exit.

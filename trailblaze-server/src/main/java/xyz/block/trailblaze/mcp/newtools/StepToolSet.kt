@@ -1148,7 +1148,22 @@ data class AskResult(
       append("**Answer:** $answer")
     }
 
-    if (screenSummary != null) {
+    // Suppress **Screen:** when it duplicates **Answer:**. For "what's on screen?"
+    // style questions the LLM puts the same description in both fields and the user
+    // sees two near-identical paragraphs.
+    //
+    // Equality on whitespace-collapsed strings only — substring containment was tried
+    // and rejected. The risk: a short answer like "Search" would suppress a longer
+    // screen "Search results for…" that the user actually needs. Exact-match-after-
+    // normalize keeps the dedup safe (only triggers when the two fields really
+    // restate each other) at the cost of letting through edge cases where one side
+    // adds a parenthetical detail — which is the right call: the user keeps the
+    // detail.
+    val answerNorm = answer?.takeIf { it.isNotBlank() }?.let { collapseWhitespace(it) }
+    val screenNorm = screenSummary?.takeIf { it.isNotBlank() }?.let { collapseWhitespace(it) }
+    val screenDuplicatesAnswer = answerNorm != null && screenNorm != null && answerNorm == screenNorm
+
+    if (screenSummary != null && !screenDuplicatesAnswer) {
       append("\n\n**Screen:** $screenSummary")
     }
 
@@ -1160,6 +1175,9 @@ data class AskResult(
       append("\n\n**View Hierarchy:**\n$viewHierarchy")
     }
   }
+
+  private fun collapseWhitespace(s: String): String =
+    s.trim().replace(Regex("\\s+"), " ")
 }
 
 /** Recognized values for the [StepToolSet.blaze] `hint` parameter. */
