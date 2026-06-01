@@ -85,7 +85,7 @@ class ToolboxCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION],
+    description = ["Target device (e.g. android, android/emulator-5554)."],
   )
   var device: String? = null
 

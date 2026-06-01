@@ -83,6 +83,16 @@ object PlaywrightVideoRecordDir {
    * `future.cancel(true)` interrupts it best-effort.
    */
   fun runFinalizer(deviceId: String) {
+    runFinalizer(deviceId, FINALIZER_TIMEOUT_MS)
+  }
+
+  /**
+   * Timeout-injectable variant of [runFinalizer]. Visible for testing so the bounded-return
+   * guarantee (a wedged finalizer must not hang the caller) can be exercised without waiting
+   * the full production [FINALIZER_TIMEOUT_MS]. Production callers use the no-argument overload
+   * above; [timeoutMs] is only varied from tests.
+   */
+  internal fun runFinalizer(deviceId: String, timeoutMs: Long) {
     val finalizer = entries[deviceId]?.finalizer ?: return
     val executor = Executors.newSingleThreadExecutor { r ->
       Thread(r, "playwright-video-finalizer-$deviceId").apply { isDaemon = true }
@@ -95,11 +105,11 @@ object PlaywrightVideoRecordDir {
       }
     }
     try {
-      future.get(FINALIZER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+      future.get(timeoutMs, TimeUnit.MILLISECONDS)
     } catch (_: TimeoutException) {
       Console.log(
         "[PlaywrightVideoRecordDir] finalizer for deviceId=$deviceId timed out after " +
-          "${FINALIZER_TIMEOUT_MS}ms — falling back to on-disk artifact",
+          "${timeoutMs}ms — falling back to on-disk artifact",
       )
       future.cancel(true)
     } catch (_: Throwable) {

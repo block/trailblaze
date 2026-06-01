@@ -2,11 +2,15 @@ package xyz.block.trailblaze.capture.video
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.system.measureTimeMillis
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class PlaywrightVideoRecordDirTest {
 
@@ -96,5 +100,35 @@ class PlaywrightVideoRecordDirTest {
     PlaywrightVideoRecordDir.clearFinalizer(device1)
     PlaywrightVideoRecordDir.runFinalizer(device1)
     assertEquals(0, calls.get())
+  }
+
+  @Test
+  fun `runFinalizer returns within the timeout bound when the callback wedges`() {
+    // Regression guard for the deadlock fix: a finalizer whose BrowserContext.close() never
+    // returns (the Playwright thread-affinity deadlock) must NOT hang the caller. runFinalizer
+    // bounds the wait and abandons the wedged daemon thread instead of blocking indefinitely.
+    val started = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    PlaywrightVideoRecordDir.setRecordDir(device1, tmp())
+    PlaywrightVideoRecordDir.setFinalizer(device1) {
+      started.countDown()
+      // Block far longer than the (test-shortened) timeout. Without the bound, runFinalizer
+      // would sit here for the full 30s; with it, the await is interrupted by cancel(true).
+      release.await(30, TimeUnit.SECONDS)
+    }
+
+    val elapsedMs = measureTimeMillis {
+      PlaywrightVideoRecordDir.runFinalizer(device1, timeoutMs = 100L)
+    }
+
+    assertTrue(
+      started.await(5, TimeUnit.SECONDS),
+      "finalizer callback should have started",
+    )
+    assertTrue(
+      elapsedMs < 5_000,
+      "runFinalizer should return shortly after the 100ms bound, but took ${elapsedMs}ms",
+    )
+    release.countDown() // belt-and-suspenders: let the daemon thread unwind if not interrupted
   }
 }

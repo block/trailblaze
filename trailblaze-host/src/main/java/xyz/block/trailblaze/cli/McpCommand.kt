@@ -70,8 +70,7 @@ class McpCommand : Callable<Int> {
     names = ["-d", "--device"],
     description = [
       "Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). " +
-        "Defaults to whatever the launching terminal pinned via " +
-        "`trailblaze device connect`, or `\$TRAILBLAZE_DEVICE` if set.",
+        "Defaults to \$TRAILBLAZE_DEVICE.",
     ],
   )
   var device: String? = null

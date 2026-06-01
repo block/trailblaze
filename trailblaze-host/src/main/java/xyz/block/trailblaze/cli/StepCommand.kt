@@ -68,7 +68,7 @@ class StepCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION]
+    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required for interactive step/verify execution."]
   )
   var device: String? = null
 

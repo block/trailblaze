@@ -36,7 +36,7 @@ class AskCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION]
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."]
   )
   var device: String? = null
 

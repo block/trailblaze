@@ -100,7 +100,7 @@ class SessionStartCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
   var device: String? = null
 
@@ -200,11 +200,6 @@ class SessionStartCommand : Callable<Int> {
         // supplies a value. `--target=clear` (flag-only) sends an empty
         // string to clear the override.
         if (daemonCall.payload != null) {
-          // Same ordering as cliReusableWithDevice: file-pin clear FIRST so a
-          // file write failure doesn't leave the daemon and file diverged.
-          if (daemonCall.isClearRequest) {
-            clearShellDevicePinTargetIfPossible()
-          }
           val setError = it.setSessionTargetForBoundDevice(daemonCall.payload)
           if (setError != null) {
             Console.error(setError)
@@ -263,7 +258,7 @@ class SessionStopCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
   var device: String? = null
 
@@ -624,7 +619,7 @@ class SessionEndCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION],
+    description = ["Device: platform (android, ios, web) or platform/id. Defaults to \$TRAILBLAZE_DEVICE."],
   )
   var device: String? = null
 

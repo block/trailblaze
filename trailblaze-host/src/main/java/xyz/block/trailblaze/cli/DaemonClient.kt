@@ -495,7 +495,7 @@ class DaemonClient(
      *
      * Lowered from 30 min to 10 min so a wedged daemon fails fast and the next CI cycle
      * starts sooner. The honest happy-path runtime for a single-trail CI session is well
-     * under 10 minutes (a Wikipedia trail completes in seconds; a long Cash flow in a
+     * under 10 minutes (a Wikipedia trail completes in seconds; a long multi-screen flow in a
      * couple of minutes), so 10 min gives a 3-5× headroom over the typical case while
      * still cutting the failure-mode wait by 20 minutes vs. the historical 30 min.
      */
