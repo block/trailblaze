@@ -19,6 +19,36 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Grants an Android AppOps permission to the specified app via `appops set <appId> <op> allow`. Use for the privileged-operation class — MANAGE_EXTERNAL_STORAGE, SYSTEM_ALERT_WINDOW, REQUEST_INSTALL_PACKAGES, WRITE_SETTINGS, ACCESS_NOTIFICATIONS, PICTURE_IN_PICTURE. For standard `dangerous` runtime permissions (CAMERA, BLUETOOTH_CONNECT, etc.) use `android_grantPermission` instead — the two mechanisms aren't interchangeable.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    android_grantAppOpsPermission: {
+      args: {
+        /** The Android package id of the target app (e.g. `com.example.app`). */
+        appId: string;
+        /** The AppOps operation name to grant (e.g. `MANAGE_EXTERNAL_STORAGE`, `SYSTEM_ALERT_WINDOW`, `REQUEST_INSTALL_PACKAGES`). The op is the bare AppOps name, NOT the `android.permission.*` form — `appops set` rejects the prefixed form. See `android.app.AppOpsManager` for the full op enumeration. */
+        permission: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Grants a standard Android runtime (dangerous) permission to the specified app via `pm grant`. Use BEFORE launching the app to suppress the OS permission dialog. For AppOps-class permissions (MANAGE_EXTERNAL_STORAGE, SYSTEM_ALERT_WINDOW, etc.) use `android_grantAppOpsPermission` instead.
+     *
+     * @trailblazeHiddenFromLlm
+     */
+    android_grantPermission: {
+      args: {
+        /** The Android package id of the target app (e.g. `com.example.app`). */
+        appId: string;
+        /** The fully-qualified Android permission to grant (e.g. `android.permission.CAMERA`, `android.permission.BLUETOOTH_CONNECT`). Must be a `protectionLevel="dangerous"` runtime permission declared in the target's manifest — otherwise `pm grant` no-ops and the tool still returns success (matches the executor's permissive-superset contract). */
+        permission: string;
+      };
+      result: string;
+    };
+
+    /**
      * Sends a broadcast intent to the connected Android device.
      *
      * @trailblazeHiddenFromLlm

@@ -1057,18 +1057,46 @@ class PlaywrightScreenState(
    * Populates [ViewHierarchyTreeNode.centerPoint] and [ViewHierarchyTreeNode.dimensions] so
    * the UI Inspector's hover overlay can highlight elements on the screenshot.
    */
+  /**
+   * Tracks whether we've already logged the budget-exceeded warning for THIS screen-state
+   * instance. Per-instance (not companion-level) so each state capture gets one warning;
+   * a session that traverses several Wikipedia-class pages logs once per page rather than
+   * once globally.
+   */
+  private var enrichmentBudgetExceededLogged = false
+
   private fun enrichViewHierarchyWithBounds(
     tree: ViewHierarchyTreeNode,
   ): ViewHierarchyTreeNode {
     // Build ARIA descriptor occurrence counts to disambiguate duplicate elements
     val descriptorOccurrences = mutableMapOf<String, Int>()
-    return enrichNodeWithLocatorBounds(tree, descriptorOccurrences)
+    val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
+    return enrichNodeWithLocatorBounds(tree, descriptorOccurrences, deadlineMs)
   }
 
   private fun enrichNodeWithLocatorBounds(
     node: ViewHierarchyTreeNode,
     descriptorOccurrences: MutableMap<String, Int>,
+    deadlineMs: Long,
   ): ViewHierarchyTreeNode {
+    // Bail out of every Playwright RPC once we've blown the wall-clock budget. Returning
+    // the unenriched subtree preserves the structural shape for the timeline-viewer
+    // inspector overlay — bounds may be missing for some nodes, but `boundingBox != null`
+    // is already a tolerated state at the consumer side (see line 1098 below). The
+    // alternative — letting the recursion run to completion — locks the next tool's
+    // pre-action log path for many minutes on content-heavy pages. Log once per affected
+    // screen-state so future "missing bounds" investigations have a greppable anchor.
+    if (System.currentTimeMillis() > deadlineMs) {
+      if (!enrichmentBudgetExceededLogged) {
+        Console.log(
+          "[PlaywrightScreenState] viewHierarchy enrichment budget (${ENRICHMENT_BUDGET_MS}ms) " +
+            "exceeded — returning partial bounds for remaining nodes."
+        )
+        enrichmentBudgetExceededLogged = true
+      }
+      return node
+    }
+
     val role = node.className ?: "generic"
     val name = node.text
 
@@ -1106,9 +1134,10 @@ class PlaywrightScreenState(
       // Resolution failed — leave without bounds
     }
 
-    // Enrich children recursively
+    // Enrich children recursively, threading the same deadline so the whole tree's
+    // enrichment shares one wall-clock budget (not a per-node budget).
     val enrichedChildren = node.children.map { child ->
-      enrichNodeWithLocatorBounds(child, descriptorOccurrences)
+      enrichNodeWithLocatorBounds(child, descriptorOccurrences, deadlineMs)
     }
 
     return if (bLeft != null && bTop != null && bRight != null && bBottom != null) {
@@ -1192,6 +1221,26 @@ class PlaywrightScreenState(
 
     /** Maximum number of hidden CSS-targetable elements to surface to the LLM. */
     private const val MAX_HIDDEN_CSS_ELEMENTS = 50
+
+    /**
+     * Wall-clock cap on per-screen-state `viewHierarchy` enrichment.
+     *
+     * `enrichViewHierarchyWithBounds` issues one synchronous Playwright `Locator.count()` +
+     * `boundingBox()` RPC per node in the ARIA tree. On a typical app page (a few hundred
+     * nodes at ~100 ms/RPC) that finishes in a few seconds; on a content-heavy page
+     * (Wikipedia article, ~thousands of nodes) the serial RPC traffic stretches into many
+     * minutes and wedges the next tool's pre-action diagnostic log path.
+     *
+     * 5 s comfortably covers the normal case; pages that blow the budget bail out and
+     * ship partial bounds rather than locking the agent loop. Downstream consumers
+     * already tolerate `bounds == null` (see `boundingBox != null` check around line
+     * 1098), so the contract is preserved.
+     *
+     * Caught in the field by a Wikipedia trail hanging for 10+ minutes on every CI run —
+     * thread dump pinned the wedge inside `LocatorImpl.count()` called from
+     * `enrichNodeWithLocatorBounds` in tight recursion across a ~thousand-node tree.
+     */
+    private const val ENRICHMENT_BUDGET_MS = 5_000L
 
     /** Pattern matching element ID references like [e42] in compact element list text. */
     private val ELEMENT_ID_PATTERN = Regex("""\[e(\d+)]""")
