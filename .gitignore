@@ -71,12 +71,12 @@ node_modules/
 # files are unaffected by these ignore rules. The framework regenerates it
 # idempotently for the same toolset.
 **/trails/config/trailmaps/*/tools/trailblaze-client.d.ts
-/trails/.trailblaze/
+**/trails/.trailblaze/
 
 # Daemon-emitted compiled-target output (`trailblaze check` writes per-target YAML
 # bundles here from the workspace's `trailmaps/` definitions). Generated and lazy-rebundled
 # at daemon init, never edited by hand.
-/trails/config/dist/
+**/trails/config/dist/
 
 # Daemon local data — settings JSON, cache, in-progress logs. Created in the working
 # tree when the daemon's `appDataDirectory` points at the repo (developer convenience
