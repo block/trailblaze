@@ -68,11 +68,18 @@ if [ -z "${TRAILBLAZE_INTERACTIVE:-}" ]; then
   fi
 fi
 
+# Respect JAVA_HOME (required by homebrew)
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  JAVA_BIN="$JAVA_HOME/bin/java"
+else
+  JAVA_BIN="java"
+fi
+
 # ---------------------------------------------------------------------------
 # JDK version check
 # ---------------------------------------------------------------------------
 
-JAVA_VERSION=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+JAVA_VERSION=$("$JAVA_BIN" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
 if [ -n "$JAVA_VERSION" ] && [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
   echo "ERROR: Trailblaze requires JDK 17 or later, but found JDK ${JAVA_VERSION}." >&2
   exit 1
@@ -145,12 +152,12 @@ tb_ensure_cds_archive() {
   # generate time rather than pretend it doesn't exist. If the verification
   # command fails, we discard the broken archive and the caller falls back to
   # plain JAR mode for that JAR/JDK combination.
-  if java $TRAILBLAZE_JVM_ARGS -XX:DumpLoadedClassList="$classlist" \
+  if "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:DumpLoadedClassList="$classlist" \
          -jar "$jar" config show >/dev/null 2>&1 \
-     && java $TRAILBLAZE_JVM_ARGS -XX:SharedClassListFile="$classlist" \
+     && "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:SharedClassListFile="$classlist" \
          -XX:SharedArchiveFile="$tmp_jsa" -Xshare:dump \
          -jar "$jar" >/dev/null 2>&1 \
-     && java $TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile="$tmp_jsa" -Xshare:auto \
+     && "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile="$tmp_jsa" -Xshare:auto \
          -jar "$jar" trail --help >/dev/null 2>&1 \
      && mv -f "$tmp_jsa" "$jsa"; then
     rm -f "$classlist"
@@ -172,11 +179,11 @@ fi
 # All functions accept variadic args to preserve quoting (e.g., YAML with newlines).
 if ! declare -f tb_run > /dev/null 2>&1; then
   tb_run() {
-    java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
+    "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
   }
 
   tb_run_background() {
-    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
+    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
   }
 
   tb_run_quiet() {
@@ -185,11 +192,11 @@ if ! declare -f tb_run > /dev/null 2>&1; then
   }
 
   tb_run_exec_quiet() {
-    exec java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
+    exec "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
   }
 
   tb_run_background_quiet() {
-    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
+    nohup "$JAVA_BIN" $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
   }
 fi
 

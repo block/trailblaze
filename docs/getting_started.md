@@ -45,6 +45,12 @@ replay → compose your own agent surface.** You can stop at any rung.
 ## Install
 
 ```bash
+brew install block/tap/trailblaze
+```
+
+Or install from the GitHub release:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 

@@ -63,3 +63,25 @@ jobs:
             trailblaze-desktop/build/compose/jars-shrunk/trailblaze.jar
             scripts/trailblaze
           generate_release_notes: true
+
+      - name: Generate Homebrew Dispatch Token
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: homebrew-dispatch-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BLOCK_HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.BLOCK_HOMEBREW_TAP_PRIVATE_KEY }}
+          owner: block
+          repositories: homebrew-tap
+
+      - name: Trigger Homebrew Formula Bump
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ steps.homebrew-dispatch-token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run bump-formula.yaml \
+            --repo block/homebrew-tap \
+            -f repo=block/trailblaze \
+            -f formula=trailblaze \
+            -f "tag=$TAG"

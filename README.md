@@ -109,6 +109,12 @@ version) adapts as the landscape changes.
 ## Install
 
 ```bash
+brew install block/tap/trailblaze
+```
+
+Or install from the GitHub release:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
