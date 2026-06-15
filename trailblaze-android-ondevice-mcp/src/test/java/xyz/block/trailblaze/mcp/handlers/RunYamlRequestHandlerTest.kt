@@ -260,6 +260,41 @@ class RunYamlRequestHandlerTest {
     }
 
   /**
+   * Defense-in-depth for the 15-min stall: when the originating HTTP call coroutine is
+   * cancelled (host crash / adb-forward break) while awaiting completion, the handler must
+   * cancel the launched job rather than letting it run to [HANDLER_AWAIT_CAP_MS]. The
+   * launched job lives in the standalone backgroundScope, so it only unwinds if `handle`
+   * actively cancels it on its own cancellation.
+   */
+  @Test
+  fun `originating call cancellation cancels the launched job before the handler cap`() = runTest {
+    val hungCallbackReleased = CompletableDeferred<Unit>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ ->
+        try {
+          awaitCancellation()
+        } finally {
+          hungCallbackReleased.complete(Unit)
+        }
+      },
+    )
+
+    val dispatch = async { handler.handle(testRequest.copy(awaitCompletion = true)) }
+
+    // Let the launched job start and the await begin, then simulate the originating HTTP
+    // call dropping — well before HANDLER_AWAIT_CAP_MS.
+    advanceUntilIdle()
+    dispatch.cancel()
+    advanceUntilIdle()
+
+    assertTrue(
+      hungCallbackReleased.isCompleted,
+      "Launched job was not cancelled when the originating call was cancelled — it would " +
+        "have stalled to HANDLER_AWAIT_CAP_MS",
+    )
+  }
+
+  /**
    * Fire-and-forget dispatch (`awaitCompletion = false`): handler must return immediately
    * with `success = null` (the fire-and-forget sentinel) and an empty `memorySnapshot`
    * (memory sync requires a round-trip; fire-and-forget has no completion event to attach

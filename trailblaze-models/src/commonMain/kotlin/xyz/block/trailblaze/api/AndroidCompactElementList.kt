@@ -199,15 +199,42 @@ object AndroidCompactElementList {
 
     // Skip system UI
     if (props.packageName?.startsWith("com.android.systemui") == true) return
-    // Skip non-visible nodes (count as offscreen if they have content)
+
+    val scrolledAway = isOffscreen(node, screenHeight)
+
+    // Skip non-visible nodes (count as offscreen if they have content). A scrolled-away
+    // editable field still gets a scroll-to-reveal affordance instead of being dropped.
+    //
+    // Important: invisible container nodes are skipped but their children are still
+    // recursed. Android's accessibility framework marks certain Compose interop
+    // containers (e.g. ViewFactoryHolder) as isVisibleToUser=false even when their
+    // children — including bottom-sheet modal content and overlay buttons — are
+    // individually visible. A hard return here would silently drop those entire
+    // subtrees, making the modal and its action targets invisible to the LLM.
     if (!props.isVisibleToUser && !includeOffscreen) {
+      if (scrolledAway && props.isEditable) {
+        lines.add(scrollToRevealLine(node, props, screenHeight, depth))
+        return
+      }
       if (props.hasIdentifiableProperties) offscreenCounter()
+      // Don't emit this node, but recurse into children — they carry their own
+      // isVisibleToUser values and may be individually visible (e.g. modal sheet
+      // rendered inside a ViewFactoryHolder whose wrapper is marked invisible).
+      for (child in node.children) {
+        buildRecursive(
+          child, depth, lines, elementNodeIds, elementBounds, refMapping,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+        )
+      }
       return
     }
 
     // Track offscreen-but-visible elements (e.g., below the fold in a scroll view)
-    val offscreen = isOffscreen(node, screenHeight)
-    if (offscreen && !includeOffscreen && isMeaningful(props, resolveLabel(props))) {
+    if (scrolledAway && !includeOffscreen && isMeaningful(props, resolveLabel(props))) {
+      if (props.isEditable) {
+        lines.add(scrollToRevealLine(node, props, screenHeight, depth))
+        return
+      }
       offscreenCounter()
       return
     }
@@ -265,7 +292,18 @@ object AndroidCompactElementList {
       for (child in node.children) {
         val childProps = AndroidNodeProps.of(child) ?: continue
         if (childProps.packageName?.startsWith("com.android.systemui") == true) continue
-        if (!childProps.isVisibleToUser) continue
+        if (!childProps.isVisibleToUser) {
+          // Invisible child — skip emitting it but still recurse into its own children
+          // so visible grandchildren (e.g. inside a Compose ViewFactoryHolder wrapper)
+          // still surface as refs. Consistent with the same treatment in the main path.
+          for (grandchild in child.children) {
+            buildRecursive(
+              grandchild, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
+              refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
+            )
+          }
+          continue
+        }
         val childLabel = resolveLabel(childProps)
         val childInteractive = childProps.isClickable || childProps.isEditable ||
           childProps.isCheckable || childProps.isHeading
@@ -437,8 +475,14 @@ object AndroidCompactElementList {
   private fun hasVisibleDescendants(node: TrailblazeNode): Boolean {
     for (child in node.children) {
       val props = AndroidNodeProps.of(child) ?: continue
-      if (!props.isVisibleToUser) continue
       if (props.packageName?.startsWith("com.android.systemui") == true) continue
+      if (!props.isVisibleToUser) {
+        // Invisible wrapper — look through it so a container whose only visible
+        // content sits inside a ViewFactoryHolder (isVisibleToUser=false) is still
+        // correctly detected as having visible descendants and emitted with a header.
+        if (hasVisibleDescendants(child)) return true
+        continue
+      }
       if (props.isImportantForAccessibility) return true
       if (hasVisibleDescendants(child)) return true
     }
@@ -452,6 +496,35 @@ object AndroidCompactElementList {
   /** Checks if an element is below the visible screen area. */
   private fun isOffscreen(node: TrailblazeNode, screenHeight: Int): Boolean =
     CompactElementListUtils.isOffscreen(node, screenHeight)
+
+  /**
+   * Emits a non-tappable affordance for a scrolled-away editable field so the agent
+   * learns the search target exists and must scroll to it, without being handed an
+   * off-screen ref it could tap. Scoped to editable nodes only — never plain clickables.
+   */
+  private fun scrollToRevealLine(
+    node: TrailblazeNode,
+    props: AndroidNodeProps,
+    screenHeight: Int,
+    depth: Int,
+  ): String {
+    val direction = when {
+      (node.bounds?.bottom ?: 0) <= 0 -> "scroll up"
+      (node.bounds?.top ?: 0) >= screenHeight -> "scroll down"
+      else -> "scroll down"
+    }
+    val rawClass = props.className?.substringAfterLast('.') ?: ""
+    val shortClass = if (rawClass in GENERIC_CLASSES) "" else rawClass
+    val label = resolveLabel(props) ?: resolveChildLabel(node, props)
+    val descriptor = when {
+      label != null && shortClass.isNotEmpty() -> "$shortClass \"$label\""
+      label != null -> "\"$label\""
+      shortClass.isNotEmpty() -> shortClass
+      else -> ""
+    }
+    val indent = "  ".repeat(depth)
+    return "$indent($direction to reveal) $descriptor".trimEnd()
+  }
 
   /**
    * Android scrollable container classes that get a "ClassName [N items]:" header.

@@ -14,8 +14,11 @@ import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -74,6 +77,26 @@ data class AssertVisibleBySelectorTrailblazeTool(
    * entirely — Maestro's own assert timeout is always used there.
    */
   val timeoutMs: Long? = null,
+  /**
+   * Optional value-equality check applied AFTER the visibility check passes. When set, the
+   * resolved element's driver-native text (text → contentDescription → accessibilityText/
+   * label/ariaName, depending on the driver) must equal this string after whitespace
+   * trimming on both sides. Case-sensitive. When null, only presence is enforced — the
+   * pre-modernization behavior.
+   *
+   * Folded onto this tool (rather than a separate `assertVisibleWithText` replay class)
+   * so the LLM-facing surface stays one tool with one optional field instead of forking
+   * the family.
+   */
+  val expectedText: String? = null,
+  /**
+   * How [expectedText] is compared against the live element text at replay. [TextMatchMode.EXACT]
+   * keeps the original strict-equality pin; [TextMatchMode.PREFIX] / [TextMatchMode.REGEX] let a
+   * capture keep a stable head while tolerating volatile tails (e.g. live item counts). Defaults
+   * to [TextMatchMode.EXACT] so trails recorded before this field deserialize to the original
+   * behavior, and (with `encodeDefaults = false`) EXACT captures don't write the field at all.
+   */
+  val textMatchMode: TextMatchMode = TextMatchMode.EXACT,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
     val maestroSelector = lowerToMaestroSelector(selector, nodeSelector)
@@ -81,9 +104,19 @@ data class AssertVisibleBySelectorTrailblazeTool(
         "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with neither " +
           "`selector` nor `nodeSelector` set — malformed recording.",
       )
-    return listOf(
-      AssertConditionCommand(condition = Condition(visible = maestroSelector.toMaestroElementSelector())),
-    )
+    // When expectedText is set on the legacy fallback path, narrow the Maestro selector to
+    // also require that text — that's the closest analogue to selector-pinned text equality
+    // the Maestro path can express. Drivers that support the modern node-selector path
+    // (accessibility, etc.) hit the richer post-pass check in execute() below.
+    //
+    // textMatchMode controls how that text becomes the Maestro textRegex: EXACT pins the full
+    // interpolated value (byte-identical to the original behavior); PREFIX escapes only the
+    // stable head so a volatile tail (e.g. live item count) can't fail the match; REGEX passes
+    // the value through as the regex pattern directly.
+    val maestroElement = maestroSelector.toMaestroElementSelector().let { base ->
+      if (expectedText != null) base.copy(textRegex = maestroTextRegexFor(memory)) else base
+    }
+    return listOf(AssertConditionCommand(condition = Condition(visible = maestroElement)))
   }
 
   override suspend fun execute(
@@ -148,8 +181,151 @@ data class AssertVisibleBySelectorTrailblazeTool(
         ?: nodeSelector?.androidMaestro?.resourceIdRegex
         ?: nodeSelector?.iosMaestro?.resourceIdRegex
         ?: "element"
+      // When expectedText is set, the visibility check above only confirmed the element is
+      // present. Now re-resolve against a fresh tree to read the matched element's text
+      // and assert equality with the expected value. Soft-fall back to the visibility result
+      // if no tree is available (the Maestro path above already enforced textRegex, so a
+      // success there implies the text matched).
+      if (expectedText != null) {
+        return verifyTextEquality(toolExecutionContext, desc, result)
+      }
       return TrailblazeToolResult.Success(message = "Verified '$desc' visible")
     }
     return result
+  }
+
+  /**
+   * Post-pass text-equality check, invoked only when [expectedText] is set. The
+   * visibility check has already passed at this point; this method re-resolves the
+   * selector against the live tree, reads the matched element's driver-native text, and
+   * compares to [expectedText] after whitespace trimming on both sides. Returns a
+   * surfaceable [TrailblazeToolResult.Error] on mismatch.
+   */
+  private fun verifyTextEquality(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+    desc: String,
+    visibilityResult: TrailblazeToolResult,
+  ): TrailblazeToolResult {
+    val fresh = toolExecutionContext.screenStateProvider?.invoke() ?: toolExecutionContext.screenState
+    val tree = fresh?.trailblazeNodeTree ?: return visibilityResult
+    val effective = nodeSelector
+      ?: selector?.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
+      ?: return visibilityResult
+
+    val matched = when (
+      val r = TrailblazeNodeSelectorResolver.resolve(tree, effective)
+    ) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> r.node
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> r.nodes.first()
+      // Visibility check said the element was there but the post-pass re-resolution
+      // didn't find it. Don't surface as a failure — would be flaky on drivers where
+      // the tree changes between the wait + re-read.
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> return visibilityResult
+    }
+
+    val expected = toolExecutionContext.memory.interpolateVariables(expectedText!!).trim()
+    // Pick the candidate set whose text we compare against `expected`. The candidate
+    // depends on the structural predicates on the selector:
+    //
+    //   - `containsChild` / `containsDescendants`: the candidate(s) are the descendants
+    //     that satisfy the inner selector, NOT any node in the matched container's
+    //     subtree. This binds the text check to the structurally-selected element so
+    //     a sibling or unrelated descendant with the same text can't accidentally pass
+    //     the assertion (Codex review on #3660).
+    //
+    //   - no structural predicate: the candidate is `matched` itself. The pre-fix
+    //     behavior (read the matched node's own text) is preserved when the selector
+    //     directly targets a leaf.
+    val candidates = collectTextCandidates(matched, effective)
+    val foundText = candidates.asSequence()
+      .mapNotNull { it.extractText()?.trim() }
+      .firstOrNull { matchesExpected(it, expected) }
+    return if (foundText != null) {
+      TrailblazeToolResult.Success(message = "Verified '$desc' shows text='$expected'")
+    } else {
+      val candidateTexts = candidates.mapNotNull { it.extractText()?.trim() }
+        .filter { it.isNotBlank() }
+      val sample = candidateTexts.take(5).joinToString(", ") { "'$it'" }
+      TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "assertVisible: element matched '$desc' but expected text '$expected' " +
+          "not found on the selector-matched element(s). " +
+          (if (sample.isNotEmpty()) "Actual text(s): $sample" else "Matched element has no readable text."),
+      )
+    }
+  }
+
+  /**
+   * Compares a live element's [actual] text against the (already-interpolated, trimmed)
+   * [expected] value using [textMatchMode]. EXACT preserves the original strict equality. A
+   * malformed REGEX pattern is treated as a non-match (surfaced as a normal assertion failure)
+   * rather than thrown, so one bad hand-authored pattern can't turn replay into an infra error.
+   */
+  private fun matchesExpected(actual: String, expected: String): Boolean = when (textMatchMode) {
+    TextMatchMode.EXACT -> actual == expected
+    TextMatchMode.PREFIX -> actual.startsWith(expected)
+    TextMatchMode.REGEX -> runCatching { Regex(expected).matches(actual) }.getOrDefault(false)
+  }
+
+  /**
+   * Builds the Maestro `textRegex` for the legacy fallback path from [expectedText] under
+   * [textMatchMode]. EXACT pins the full interpolated value (unchanged from the original
+   * behavior); PREFIX escapes the stable head and allows any volatile tail (incl. newlines)
+   * so the count etc. can't fail the match regardless of Maestro's anchoring; REGEX forwards
+   * the value as the pattern, escaping it to a literal if it doesn't compile so Maestro never
+   * receives a malformed pattern (which would surface as an execution error, not a clean miss).
+   */
+  private fun maestroTextRegexFor(memory: AgentMemory): String {
+    val interpolated = memory.interpolateVariables(expectedText!!)
+    return when (textMatchMode) {
+      TextMatchMode.EXACT -> interpolated
+      TextMatchMode.PREFIX -> Regex.escape(interpolated) + "[\\s\\S]*"
+      TextMatchMode.REGEX ->
+        if (runCatching { Regex(interpolated) }.isSuccess) interpolated else Regex.escape(interpolated)
+    }
+  }
+
+  /**
+   * Returns the nodes whose text should be compared against `expectedText` for an
+   * assertVisible-with-text check.
+   *
+   * - If the selector carries `containsChild` or `containsDescendants`, those inner
+   *   selectors identify the specific descendants the user is structurally pointing at
+   *   — the text check binds to those. Resolving each inner against `matched.children`
+   *   (not `matched` itself) avoids the matched outer container leaking into the candidate
+   *   set if it happens to coincidentally satisfy the inner predicate.
+   * - Otherwise the matched element is itself the leaf and is the only candidate.
+   */
+  private fun collectTextCandidates(
+    matched: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+  ): List<TrailblazeNode> {
+    val innerSelectors = buildList {
+      selector.containsChild?.let { add(it) }
+      selector.containsDescendants?.let { addAll(it) }
+    }
+    if (innerSelectors.isEmpty()) return listOf(matched)
+    val out = LinkedHashSet<TrailblazeNode>()
+    for (inner in innerSelectors) {
+      for (child in matched.children) {
+        when (val r = TrailblazeNodeSelectorResolver.resolve(child, inner)) {
+          is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> out += r.node
+          is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> out += r.nodes
+          is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {}
+        }
+      }
+    }
+    // If a containsChild/containsDescendants predicate was present but didn't re-resolve
+    // (tree drift between visibility check and post-pass), fall back to the matched
+    // element rather than auto-passing the assertion.
+    return if (out.isEmpty()) listOf(matched) else out.toList()
+  }
+
+  private fun TrailblazeNode.extractText(): String? = when (val d = driverDetail) {
+    is DriverNodeDetail.AndroidAccessibility -> d.text ?: d.contentDescription ?: d.labeledByText
+    is DriverNodeDetail.AndroidMaestro -> d.text ?: d.accessibilityText
+    is DriverNodeDetail.IosMaestro -> d.text ?: d.accessibilityText
+    is DriverNodeDetail.IosAxe -> d.label
+    is DriverNodeDetail.Web -> d.ariaName
+    else -> null
   }
 }

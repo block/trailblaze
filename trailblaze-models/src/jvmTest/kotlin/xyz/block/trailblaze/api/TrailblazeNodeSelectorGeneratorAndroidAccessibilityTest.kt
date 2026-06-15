@@ -3,6 +3,7 @@ package xyz.block.trailblaze.api
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSelectorGeneratorTestBase() {
@@ -448,7 +449,11 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
   // -- Strategy 21: index fallback --
 
   @Test
-  fun `index fallback for identical nodes`() {
+  fun `index fallback for identical nodes keeps the className anchor alongside index`() {
+    // Three nodes that share className=View — disambiguable only by position.
+    // The selector must carry an index, but it should NOT be purely positional:
+    // the className anchor is retained so the ordinal isn't naked (a bare index
+    // shifts whenever anything before the target changes).
     nextId = 1L
     val node1 = node(
       detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
@@ -469,6 +474,40 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
     val selector = assertUniqueMatch(root, node2)
     assertNotNull(selector.index, "Expected index-based selector for identical nodes")
+    val match = selector.driverMatch as? DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match, "index must be paired with a content/structural anchor, not be naked")
+    assertEquals("android.view.View", match.classNameRegex)
+  }
+
+  @Test
+  fun `index fallback for truly attribute-less nodes is a bare index`() {
+    // No matchable attributes at all (no text/contentDescription/className/
+    // resourceId/uniqueId) — there is nothing to anchor on, so a bare index is
+    // the legitimate last resort.
+    nextId = 1L
+    val node1 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+    )
+    val node2 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 50, 100, 100),
+    )
+    val node3 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 150),
+    )
+    val root = node(
+      children = listOf(node1, node2, node3),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 150),
+    )
+
+    val selector = assertUniqueMatch(root, node2)
+    assertNotNull(selector.index, "Expected index-based selector for identical nodes")
+    assertNull(
+      selector.driverMatch,
+      "attribute-less nodes have no anchor — bare index is the legitimate last resort",
+    )
   }
 
   // -- Degenerate: single node tree --

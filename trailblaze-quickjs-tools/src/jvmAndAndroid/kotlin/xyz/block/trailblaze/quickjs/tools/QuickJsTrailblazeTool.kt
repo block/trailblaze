@@ -30,7 +30,27 @@ class QuickJsTrailblazeTool(
   internal val advertisedName: ToolName,
   /** LLM-supplied args, decoded from the tool-call's `arguments` JSON. */
   internal val args: JsonObject,
+  /**
+   * Session-scoped binding for this tool's host. When non-null, [execute] sets
+   * [SessionScopedHostBinding.activeContext] for the duration of the QuickJS evaluation so
+   * nested `client.callTool(...)` calls from inside the bundle can resolve the session context.
+   *
+   * Required for the koog dispatch path (LLM agent → [buildKoogTool] argsSerializer →
+   * [execute] directly). Without it, the QuickJS `asyncFunction` callback fires on
+   * [kotlinx.coroutines.Dispatchers.Default] where the [ToolExecutionContextThreadLocal] is
+   * null and [SessionScopedHostBinding.activeContext] was never set, causing every nested
+   * `trailblaze.call(...)` to return "no execution context installed".
+   *
+   * The [ContextSettingScriptedTool][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]
+   * wrapper (used by the `tools:` trail-item / [decodeToolCall] path) sets [activeContext]
+   * from outside; when [binding] is non-null here, both paths set it and the outer wrapper's
+   * finally-clear is a harmless no-op after the inner finally already cleared it.
+   */
+  internal val binding: SessionScopedHostBinding? = null,
 ) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
+
+  constructor(host: QuickJsToolHost, advertisedName: ToolName, args: JsonObject) :
+    this(host, advertisedName, args, null)
 
   override val advertisedToolName: String get() = advertisedName.toolName
 
@@ -43,6 +63,13 @@ class QuickJsTrailblazeTool(
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val ctx = buildCtxEnvelope(toolExecutionContext)
+    // Install the session context on the binding so nested client.callTool() calls from inside
+    // the JS bundle can resolve it via SessionScopedHostBinding.callFromBundle. The QuickJS
+    // asyncFunction callback fires on Dispatchers.Default (a different thread) so
+    // ToolExecutionContextThreadLocal is unreliable there; @Volatile activeContext is the only
+    // mechanism that crosses the thread boundary safely. Clear in finally so a failed dispatch
+    // doesn't leak the context into a subsequent unrelated dispatch on the same binding.
+    binding?.activeContext = toolExecutionContext
     return try {
       val resultJson = host.callTool(advertisedName.toolName, args, ctx)
       resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
@@ -53,6 +80,8 @@ class QuickJsTrailblazeTool(
       throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, this)
+    } finally {
+      binding?.activeContext = null
     }
   }
 

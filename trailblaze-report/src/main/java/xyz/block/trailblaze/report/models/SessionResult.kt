@@ -88,6 +88,9 @@ data class SessionResult(
   /** Failure reasons from replaced attempts (populated during dedup when this result superseded earlier failures) */
   val replaced_failure_reasons: List<String> = emptyList(),
 
+  /** Priority label for this test (e.g. "P0", "P1", "P2"). Null when not set. */
+  val priority: String? = null,
+
   // === CI Provenance (per-session) ===
   /**
    * CI job ID that produced this session — typically the provider's per-step UUID. Captured

@@ -741,6 +741,41 @@ class BlazeGoalPlanner(
       )
     }
 
+    // Step 5b: Target discipline — when the step's named target isn't among the tappable
+    // refs, don't let the LLM tap an unrelated clickable (the Hardware-Hub trap). Either the
+    // target is scrolled off (affordance present → scroll toward it) or it isn't on this
+    // screen at all (surface the wrong-screen signal and stop).
+    val screenText = screenState.viewHierarchyTextRepresentation
+    when (
+      detectTargetMissingRecovery(
+        objective = currentObjective,
+        screenText = screenText,
+        recommendedTool = analysis.recommendedTool,
+      )
+    ) {
+      // Skip the distractor tap and steer the NEXT analysis to scroll the named direction.
+      // buildProgressSummary surfaces the latest reflection note into the next iteration's
+      // prompt, so this directive reaches the analyzer before it chooses again.
+      TargetMissingRecovery.SCROLL_TO_REVEAL -> {
+        val direction = extractTargetPhrase(currentObjective)
+          ?.let { scrollDirectionFromAffordance(it, screenText) }
+          ?: "down"
+        return state.copy(
+          iteration = state.iteration + 1,
+          reflectionNotes = state.reflectionNotes +
+            "[Target discipline] The named target is off-screen. Do NOT tap an unrelated " +
+            "element — scroll $direction to reveal it, then act on it.",
+        )
+      }
+      TargetMissingRecovery.WRONG_SCREEN -> return state.copy(
+        stuck = true,
+        stuckReason = WRONG_SCREEN_MESSAGE,
+        screenSummary = analysis.screenSummary,
+        iteration = state.iteration + 1,
+      )
+      TargetMissingRecovery.PROCEED -> Unit
+    }
+
     // Step 6: Add low-confidence reflection note before execution
     val stateForExecution = if (config.enableReflection && analysis.confidence == Confidence.LOW) {
       val reflectionNote = "Low confidence on iteration ${state.iteration + 1}: " +

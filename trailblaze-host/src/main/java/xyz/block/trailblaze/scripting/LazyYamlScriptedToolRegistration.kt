@@ -58,18 +58,22 @@ class LazyYamlScriptedToolRegistration private constructor(
     // back to String rather than crashing session startup. Mirrors the leniency applied
     // by [BundleToolRegistration.buildKoogTool] for the on-device QuickJS path.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = QuickJsToolSerializer(name, host)
+    // Pass the binding to the serializer so the decoded QuickJsTrailblazeTool carries it into
+    // execute(). This fixes the LLM dispatch path (koogTool.decodeArgs → QuickJsTrailblazeTool →
+    // agent.runTrailblazeTools) where the tool was previously executed without a
+    // ContextSettingScriptedTool wrapper and thus never set binding.activeContext — causing the
+    // QuickJS asyncFunction callback (Dispatchers.Default) to find null context and return
+    // "no execution context installed" for every nested client.callTool() call.
+    val serializer = QuickJsToolSerializer(name, host, binding)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
       executeTool = { args: QuickJsTrailblazeTool ->
         val context = trailblazeToolContextProvider()
-        // Set the context directly on the binding for the duration of this dispatch so
-        // any `client.callTool(...)` from inside the bundled handler can resolve through
-        // the binding — see `SessionScopedHostBinding.activeContext` for why we bypass
-        // the ThreadLocal here (QuickJS's async-binding scope doesn't inherit
-        // `asContextElement` propagation, so the ThreadLocal is unreliable in that
-        // callback).
+        // args already carries binding (via QuickJsToolSerializer); args.execute(context) will
+        // set binding.activeContext internally. The explicit set/clear below is a belt-and-
+        // suspenders guard for any future caller that reaches this lambda directly (e.g. koog
+        // itself executing the tool rather than going through agent.runTrailblazeTools).
         binding.activeContext = context
         val result = try {
           args.execute(context)

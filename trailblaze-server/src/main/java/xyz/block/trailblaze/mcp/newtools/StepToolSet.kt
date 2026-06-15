@@ -382,7 +382,17 @@ class StepToolSet(
     val recommendationContext = RecommendationContext(
       objective = objective,
       progressSummary = context,
-      hint = if (isVerify) "Verify this assertion using read-only tools only. Do not tap, swipe, or type." else null,
+      hint = if (isVerify) {
+        // Verify steps must leave a recording: call at least one assertion tool that returns
+        // success, otherwise the captured trail has empty recording.tools for the verify and
+        // strict-replay has nothing to validate. Visual reasoning alone is not enough.
+        "Verify this assertion using read-only tools only. Do not tap, swipe, or type. " +
+          "You MUST call at least one assertion tool (e.g. assertVisibleBySelector, " +
+          "assertVisibleWithText, or assertWithAI) AND have it return success before marking " +
+          "the objective complete. Visual inspection alone is NOT a valid verification — the " +
+          "captured trail needs a concrete assertion tool call on record so the trail can be " +
+          "replayed deterministically."
+      } else null,
       attemptNumber = 1,
       fast = isFast,
     )

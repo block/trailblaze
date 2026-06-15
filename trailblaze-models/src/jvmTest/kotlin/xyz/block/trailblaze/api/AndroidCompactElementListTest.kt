@@ -694,6 +694,177 @@ class AndroidCompactElementListTest {
     assertContains(result.text, "EditText \"Email\"")
   }
 
+  // -- Scroll-to-reveal affordance for offscreen editable fields --
+
+  @Test
+  fun `offscreen editable field above viewport emits scroll up to reveal with no ref`() {
+    val search = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.EditText",
+        hintText = "Search all items",
+        isEditable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, -120, 200, -70),
+    )
+    val root = node(children = listOf(search))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "(scroll up to reveal) EditText \"Search all items\"")
+    assertTrue(
+      result.elementNodeIds.isEmpty(),
+      "Offscreen editable affordance must not get a ref. Actual:\n${result.text}",
+    )
+    assertTrue(
+      !result.text.contains("[ref"),
+      "Scroll-to-reveal line must not carry a [ref]. Actual:\n${result.text}",
+    )
+  }
+
+  @Test
+  fun `offscreen editable field below viewport emits scroll down to reveal`() {
+    val search = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.EditText",
+        hintText = "Search all items",
+        isEditable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 900, 200, 950),
+    )
+    val root = node(children = listOf(search))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "(scroll down to reveal) EditText \"Search all items\"")
+    assertTrue(result.elementNodeIds.isEmpty())
+  }
+
+  @Test
+  fun `offscreen editable field hidden behind overlay still emits scroll to reveal`() {
+    // Trips gate 203 (isVisibleToUser=false) rather than gate 210; the bounds-based
+    // offscreen signal still classifies it as scrolled-away, so the affordance must fire.
+    val search = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.EditText",
+        hintText = "Search all items",
+        isEditable = true,
+        isVisibleToUser = false,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 900, 200, 950),
+    )
+    val root = node(children = listOf(search))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "(scroll down to reveal) EditText \"Search all items\"")
+    assertTrue(result.elementNodeIds.isEmpty())
+  }
+
+  @Test
+  fun `on-screen editable field still gets a normal ref`() {
+    val search = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.EditText",
+        hintText = "Search all items",
+        isEditable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 100, 200, 150),
+    )
+    val root = node(children = listOf(search))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "EditText \"Search all items\"")
+    assertTrue(!result.text.contains("scroll"), "On-screen field must not get an affordance line")
+    assertTrue(result.elementNodeIds.contains(0L), "On-screen editable should still get a ref")
+  }
+
+  @Test
+  fun `offscreen non-interactive node only increments hidden counter`() {
+    val label = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        text = "Section header",
+        isClickable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 900, 200, 950),
+    )
+    val root = node(children = listOf(label))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertTrue(!result.text.contains("scroll"), "Non-editable offscreen node must not emit an affordance")
+    assertContains(result.text, "offscreen elements hidden")
+    assertTrue(result.elementNodeIds.isEmpty())
+  }
+
+  // -- Invisible container with visible children --
+
+  @Test
+  fun `visible children of invisible container still appear in compact list`() {
+    // Reproduces a real-world failure where a Compose ViewFactoryHolder wrapper is
+    // isVisibleToUser=false but its children (modal title and Dismiss button) have the
+    // default isVisibleToUser=true. The compact list must recurse into children rather
+    // than dropping the entire subtree.
+    val dismissButton = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.Button",
+        contentDescription = "Dismiss",
+        isClickable = true,
+        isEnabled = true,
+        // isVisibleToUser defaults to true
+      ),
+    )
+    val modalTitle = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        text = "Finish setting up your account",
+      ),
+    )
+    val invisibleContainer = node(
+      bounds = TrailblazeNode.Bounds(0, 135, 1080, 2132),
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "androidx.compose.ui.viewinterop.ViewFactoryHolder",
+        isVisibleToUser = false,
+      ),
+      children = listOf(modalTitle, dismissButton),
+    )
+    val navItem = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.Button",
+        contentDescription = "Checkout",
+        isClickable = true,
+      ),
+    )
+    val root = node(children = listOf(invisibleContainer, navItem))
+    val result = AndroidCompactElementList.build(root)
+
+    // Dismiss must be emitted as a ref-labeled interactive element, not just as
+    // plain text — the agent needs a ref to be able to act on it.
+    assertTrue(
+      result.elementNodeIds.contains(dismissButton.nodeId),
+      "Dismiss button must be emitted as a ref-labeled element",
+    )
+    assertContains(result.text, "Checkout")
+    assertTrue(
+      !result.text.contains("ViewFactoryHolder"),
+      "Invisible container itself must not be emitted",
+    )
+  }
+
+  @Test
+  fun `invisible leaf node is still filtered out`() {
+    // A leaf node (no children) with isVisibleToUser=false should still be excluded —
+    // only the "recurse into children" part is the new behaviour; the node itself is skipped.
+    val hidden = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.Button",
+        contentDescription = "Hidden",
+        isClickable = true,
+        isVisibleToUser = false,
+      ),
+    )
+    val root = node(children = listOf(hidden))
+    val result = AndroidCompactElementList.build(root)
+
+    assertTrue(!result.text.contains("Hidden"), "Invisible leaf node must not appear")
+  }
+
   @Test
   fun `hintText equal to text does not duplicate`() {
     // Some inputs echo hint into text; don't render "Search: Search".

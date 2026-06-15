@@ -40,6 +40,14 @@ object AndroidHostAdbUtils {
       Console.log("[AndroidHostAdbUtils] short-call timeout overridden via TRAILBLAZE_ADB_TIMEOUT_MS=$it")
     } ?: 10_000L
 
+  // LLM provider tokens reach the device as `trailblaze.llm.auth.token.<provider>` args; redact
+  // their values so CI shell-command log artifacts don't leak live credentials.
+  private val AUTH_TOKEN_ARG_REGEX =
+    Regex("""('?trailblaze\.llm\.auth\.token\.[^'\s]+'?\s+)((?:'[^']*'|\\'|[^\s'])+)""")
+
+  internal fun redactSecretsForLog(command: String): String =
+    AUTH_TOKEN_ARG_REGEX.replace(command) { "${it.groupValues[1]}<redacted>" }
+
   // Drains the Dadb client cache and any active port forwards on JVM exit. Without this, a
   // long-running daemon (`./trailblaze app start`) leaves dadb sockets and host-side forward
   // listeners open until the OS reclaims them on process death. The legacy ProcessBuilder model
@@ -445,7 +453,7 @@ object AndroidHostAdbUtils {
    */
   fun execAdbShellCommand(deviceId: TrailblazeDeviceId, args: List<String>): String {
     val command = args.joinToString(" ")
-    Console.log("adb shell $command")
+    Console.log("adb shell ${redactSecretsForLog(command)}")
     return withDadb(deviceId) { dadb ->
       val response = dadb.shell(command)
       if (response.errorOutput.isEmpty()) response.output else response.allOutput
@@ -465,7 +473,8 @@ object AndroidHostAdbUtils {
     timeoutMs: Long = DEFAULT_SHORT_CALL_TIMEOUT_MS,
   ): String? {
     val command = args.joinToString(" ")
-    Console.log("adb shell ($timeoutMs ms timeout) $command")
+    val redactedCommand = redactSecretsForLog(command)
+    Console.log("adb shell ($timeoutMs ms timeout) $redactedCommand")
     val resultRef = AtomicReference<String?>()
     val errorRef = AtomicReference<Throwable?>()
     val worker = thread(name = "dadb-shell-timed", isDaemon = true) {
@@ -495,14 +504,14 @@ object AndroidHostAdbUtils {
       // — the contract is "data unavailable" — but the diagnostic is now accurate.
       Console.log(
         "[AndroidHostAdbUtils] adb shell failed (${error.javaClass.simpleName}: " +
-          "${error.message}) — command: $command",
+          "${error.message}) — command: $redactedCommand",
       )
       return null
     }
     if (worker.isAlive) {
       Console.log(
         "[AndroidHostAdbUtils] adb shell timed out after ${timeoutMs}ms — " +
-          "evicting dadb client: $command",
+          "evicting dadb client: $redactedCommand",
       )
       dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
       worker.interrupt()
@@ -555,7 +564,7 @@ object AndroidHostAdbUtils {
     onLine: (String) -> Unit,
     onExit: ((exitCode: Int) -> Unit)? = null,
   ): AutoCloseable {
-    Console.log("adb shell (streaming) $command")
+    Console.log("adb shell (streaming) ${redactSecretsForLog(command)}")
     val stream = withDadb(deviceId) { it.openShell(command) }
     val decoder = StreamingLineDecoder(onLine)
     val readerThread = thread(name = "dadb-shell-stream", isDaemon = true) {
@@ -649,7 +658,7 @@ object AndroidHostAdbUtils {
     command: String,
     outputFile: File,
   ): AutoCloseable {
-    Console.log("adb shell (streaming -> ${outputFile.name}) $command")
+    Console.log("adb shell (streaming -> ${outputFile.name}) ${redactSecretsForLog(command)}")
     val stream = withDadb(deviceId) { it.openShell(command) }
     // Open the file *after* the stream and close the stream if we can't open the file —
     // otherwise an open shell stream leaks any time the file system rejects us

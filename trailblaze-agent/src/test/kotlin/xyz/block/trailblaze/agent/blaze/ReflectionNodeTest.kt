@@ -475,6 +475,151 @@ class ReflectionNodeTest {
     assertNotNull(result.progressAssessment)
   }
 
+  // ====== TARGET DISCIPLINE (Hardware-Hub trap) ======
+
+  @Test
+  fun `target absent with scroll affordance recommends scrolling not tapping`() {
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      (scroll up to reveal) EditText "Search all items"
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "tapOnElementByNodeId",
+    )
+
+    assertEquals(TargetMissingRecovery.SCROLL_TO_REVEAL, result)
+  }
+
+  @Test
+  fun `target absent with no affordance surfaces wrong-screen signal`() {
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      [c101] Button "Charge"
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.WRONG_SCREEN, result)
+  }
+
+  @Test
+  fun `target present on screen proceeds with the action`() {
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      [c101] EditText "Search all items"
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.PROCEED, result)
+  }
+
+  @Test
+  fun `non-tap actions are never intercepted`() {
+    val screen = "[c100] ImageView \"Open Hardware Hub\""
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "scroll",
+    )
+
+    assertEquals(TargetMissingRecovery.PROCEED, result)
+  }
+
+  @Test
+  fun `objective with no identifiable target proceeds`() {
+    val screen = "[c100] ImageView \"Open Hardware Hub\""
+
+    val result = detectTargetMissingRecovery(
+      objective = "go back",
+      screenText = screen,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.PROCEED, result)
+  }
+
+  @Test
+  fun `null screen text is not treated as wrong screen`() {
+    // Drivers like Android HOST mode leave viewHierarchyTextRepresentation null and feed
+    // the analyzer a tree/JSON fallback — absence of compact text must not stop the step.
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Save\" button",
+      screenText = null,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.PROCEED, result)
+  }
+
+  @Test
+  fun `target on a non-interactive label line without a ref does not count as present`() {
+    // A static label "Search all items" with no ref marker is not tappable, so the guard
+    // must not let the distractor tap through — with no affordance it's a wrong screen.
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      "Search all items"
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.WRONG_SCREEN, result)
+  }
+
+  @Test
+  fun `state annotation brackets are not mistaken for ref markers`() {
+    // `[disabled]` is a state annotation, not a ref marker; a target on an annotated but
+    // unreffed line still must not count as a tappable ref.
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      TextView "Search all items" [disabled]
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Tap the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "tap",
+    )
+
+    assertEquals(TargetMissingRecovery.WRONG_SCREEN, result)
+  }
+
+  @Test
+  fun `scroll direction is read from the affordance line`() {
+    val screenUp = "(scroll up to reveal) EditText \"Search all items\""
+    val screenDown = "(scroll down to reveal) EditText \"Search all items\""
+
+    assertEquals("up", scrollDirectionFromAffordance("Search all items", screenUp))
+    assertEquals("down", scrollDirectionFromAffordance("Search all items", screenDown))
+    assertEquals("down", scrollDirectionFromAffordance("Search all items", null))
+  }
+
+  @Test
+  fun `extractTargetPhrase prefers quoted phrase`() {
+    assertEquals("Search all items", extractTargetPhrase("Tap the \"Search all items\" field"))
+  }
+
+  @Test
+  fun `extractTargetPhrase falls back to noun phrase after verb`() {
+    assertEquals("Library", extractTargetPhrase("Open the Library button"))
+  }
+
   @Test
   fun `should calculate success rate correctly`() {
     val actions = listOf(

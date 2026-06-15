@@ -114,6 +114,24 @@ data class TapTrailblazeTool(
       // both the user's intent (the ref points at the meaningful element) and the OS's
       // touch-routing target.
       val accessibilityHitTestNode = tree.hitTest(center.first, center.second) ?: targetNode
+      // [tap-divergence] log: when hitTest at the target's centerPoint returns a
+      // different node than the LLM picked by `ref`, the recorded selector will
+      // describe the hitTest winner rather than the LLM's intended target. This is
+      // the documented round-trip invariant (the OS routes the actual tap at this
+      // coordinate too), but on screens where adjacent rows share overlapping bounds
+      // or a wrapper's center sits over a non-target child, the LLM's intent and
+      // the recorded selector diverge — producing a selector that semantically
+      // doesn't match the NL step. Logging both nodes here makes that observable
+      // in every future capture; the bug was previously invisible because the
+      // recorded selector "looked correct" relative to the resolved coordinate.
+      if (accessibilityHitTestNode.ref != targetNode.ref) {
+        Console.log(
+          "[tap-divergence] ref='$ref' wanted=${targetNode.describe()} " +
+            "hit_ref=${accessibilityHitTestNode.ref} " +
+            "hit=${accessibilityHitTestNode.describe()} " +
+            "reasoning=${reasoning ?: "(none)"}"
+        )
+      }
       val accessibilityNodeSelector = TrailblazeNodeSelectorGenerator.findBestSelector(
         tree,
         accessibilityHitTestNode,

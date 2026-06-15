@@ -18,7 +18,10 @@ object SslConfig {
     // Store the keystore under ~/.trailblaze/ so it works regardless of the working directory.
     // Previously used a relative "build/keystore.jks" path which failed when the daemon was
     // launched from a directory without a build/ folder (e.g., via the MCP stdio proxy).
-    val trailblazeDir = File(System.getProperty("user.home"), ".trailblaze")
+    // TRAILBLAZE_HOME lets concurrent daemons isolate the keystore dir; otherwise N daemons
+    // racing to generate/read one shared keystore.jks on boot can crash before binding.
+    val trailblazeDir = System.getenv("TRAILBLAZE_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) }
+      ?: File(System.getProperty("user.home"), ".trailblaze")
     trailblazeDir.mkdirs()
     val keyStoreFile = File(trailblazeDir, "keystore.jks")
 

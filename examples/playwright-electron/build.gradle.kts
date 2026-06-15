@@ -33,9 +33,18 @@ val npmInstallElectron by tasks.registering(Exec::class) {
   onlyIf { gradle.taskGraph.hasTask(tasks.test.get()) }
 }
 
+val downloadElectronBinary by tasks.registering(Exec::class) {
+  description = "Download the Electron platform binary"
+  workingDir = sampleAppDir
+  commandLine("sh", "provision-electron.sh")
+  dependsOn(npmInstallElectron)
+  outputs.upToDateWhen { false }
+  onlyIf { gradle.taskGraph.hasTask(tasks.test.get()) }
+}
+
 tasks.test {
   useJUnitPlatform()
-  dependsOn(npmInstallElectron)
+  dependsOn(downloadElectronBinary)
   workingDir = rootProject.projectDir.resolve("opensource")
 
   // Pass paths to the Electron binary and app directory

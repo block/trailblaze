@@ -147,6 +147,17 @@ internal object TrailblazeNodeSelectorMinimizer {
     return when {
       minimized === match -> selector
       minimized.isEmpty() -> {
+        // Clearing the match here would leave a purely-positional selector when
+        // the selector still carries an index. A naked ordinal shifts whenever
+        // anything before the target changes, so retain the single most-stable
+        // anchor instead — re-adding one field only narrows the empty-match set,
+        // which already resolved uniquely.
+        if (selector.index != null) {
+          val anchor = keepMostStableField(match)
+          if (!anchor.isEmpty()) return selector.replaceDriverMatch(anchor)
+          // No non-null field existed on the original match (attribute-less node):
+          // a bare index is the legitimate last resort. Fall through to clearing.
+        }
         val withoutMatch = selector.clearDriverMatch()
         // Double-check uniqueness: a no-op-match selector should still resolve
         // uniquely since every empty-match candidate already passed `stillUnique`
@@ -157,6 +168,16 @@ internal object TrailblazeNodeSelectorMinimizer {
       else -> selector.replaceDriverMatch(minimized)
     }
   }
+
+  /**
+   * Reduces [match] to its single most-stable non-null field. The per-driver
+   * greedy drop tries fields least-stable → most-stable; gating each drop on
+   * "at least one field still set" keeps dropping until only the single
+   * most-stable field remains (dropping that last one would empty the match and
+   * is rejected). Returns an empty match when [match] had no non-null fields.
+   */
+  private fun keepMostStableField(match: DriverNodeMatch): DriverNodeMatch =
+    minimizeMatch(match) { candidate -> !candidate.isEmpty() }
 
   /**
    * Dispatch helper — the per-driver minimizers all follow the same shape but

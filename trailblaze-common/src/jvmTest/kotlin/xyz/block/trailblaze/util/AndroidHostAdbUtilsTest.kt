@@ -400,6 +400,46 @@ class AndroidHostAdbUtilsTest {
     )
   }
 
+  // ── redactSecretsForLog ──────────────────────────────────────────────────
+  // LLM provider tokens passed as `trailblaze.llm.auth.token.<provider>` args must never reach
+  // the logged command — CI archives shell-command logs as downloadable build artifacts.
+
+  @Test
+  fun authTokenArgValuesAreRedactedInLoggedCommand() {
+    val command =
+      "am instrument -e 'trailblaze.reverseProxy' 'true' " +
+        "-e 'trailblaze.llm.auth.token.acme' 'SECRET_A' " +
+        "-e 'trailblaze.llm.auth.token.openai' 'SECRET_B' app/Runner"
+    assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(
+      "am instrument -e 'trailblaze.reverseProxy' 'true' " +
+        "-e 'trailblaze.llm.auth.token.acme' <redacted> " +
+        "-e 'trailblaze.llm.auth.token.openai' <redacted> app/Runner",
+    )
+  }
+
+  @Test
+  fun authTokenArgValueIsRedactedWhenUnquoted() {
+    val command = "am instrument -e trailblaze.llm.auth.token.openai SECRET_B app/Runner"
+    assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(
+      "am instrument -e trailblaze.llm.auth.token.openai <redacted> app/Runner",
+    )
+  }
+
+  @Test
+  fun commandsWithoutAuthTokenArgsArePassedThroughUnchanged() {
+    val command = "getprop ro.build.version.sdk"
+    assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(command)
+  }
+
+  @Test
+  fun authTokenArgWithEmbeddedSingleQuoteIsFullyRedacted() {
+    // shellEscape of a token containing a single quote: abc'def -> 'abc'\''def'.
+    val command = "am instrument -e 'trailblaze.llm.auth.token.openai' 'abc'\\''def' app/Runner"
+    assertThat(AndroidHostAdbUtils.redactSecretsForLog(command)).isEqualTo(
+      "am instrument -e 'trailblaze.llm.auth.token.openai' <redacted> app/Runner",
+    )
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────
 
   /** Tiny env-var fixture so callers can write `env("KEY" to "value", ...)`. */

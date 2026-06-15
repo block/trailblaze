@@ -285,10 +285,15 @@ class AccessibilityDeviceManager(
    * `waitForIdle()` is not a blind sleep — it returns immediately once the event stream has
    * been quiet for the platform's idle window. No content events fire → no extra wait.
    */
-  private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R = try {
-    action()
-  } finally {
-    awaitSettle()
+  private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R {
+    // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore SHOW_MODE_AUTO
+    // before the next dispatch so subsequent inputText/tap actions see a normally-behaving IMF.
+    TrailblazeAccessibilityService.restoreSoftKeyboardIfPending()
+    return try {
+      action()
+    } finally {
+      awaitSettle()
+    }
   }
 
   /** Taps at the given coordinates and waits for the UI to settle. */
@@ -462,11 +467,18 @@ class AccessibilityDeviceManager(
   // --- Keyboard ---
 
   /**
-   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard], which gates
-   * GLOBAL_ACTION_BACK on [isKeyboardVisible] so it only fires when there's actually a
-   * keyboard to dismiss. Throws on failure rather than silently logging — earlier versions
-   * fell back to ACTION_CLEAR_FOCUS, which is a no-op against modern soft keyboards and
-   * caused trails to report success without dismissing anything.
+   * Dismisses the soft IME via [TrailblazeAccessibilityService.hideKeyboard]. The dispatch
+   * step (sending GLOBAL_ACTION_BACK through the accessibility service) is fatal on
+   * failure — that means the accessibility service rejected the action, which is real
+   * framework misuse.
+   *
+   * The post-check (waiting for the IME window to actually leave) is best-effort: a
+   * Compose `BackHandler` registered on a modal can consume BACK before the IME framework
+   * sees it, and the IME stays up. The framework asked for a hide and did everything it
+   * can. Log a warning and return — the caller decides what to do next. The downstream
+   * safety net for this is [executeTapOnElement]'s pre-tap IME-occlusion check, which
+   * catches the silent-mis-tap case at the actual point of impact (the tap), not at the
+   * housekeeping that came before it.
    */
   fun hideKeyboard() {
     val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
@@ -480,7 +492,11 @@ class AccessibilityDeviceManager(
     // FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES would otherwise let a stuck keyboard
     // pass the post-check). See `waitForImeDismissed` for the full rationale.
     if (!TrailblazeAccessibilityService.waitForImeDismissed(timeoutMs = HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS)) {
-      error("hideKeyboard failed: IME window still present after dismissal attempt")
+      Console.log(
+        "[hideKeyboard] IME window still present after dismissal attempt — proceeding. " +
+          "If a subsequent tap target falls inside the IME's window bounds, the pre-tap " +
+          "occlusion check will fail there with a clear error.",
+      )
     }
   }
 
@@ -543,6 +559,81 @@ class AccessibilityDeviceManager(
   // --- Private helpers ---
 
   /**
+   * Pre-tap safety net for the case where the soft IME refused to dismiss (e.g. a Compose
+   * modal that consumes BACK before the IME framework sees it). If the resolved tap
+   * coordinate falls inside the live IME window's screen bounds, dispatching the tap there
+   * would land the touch on the keyboard instead of the intended target — the silent
+   * mis-tap codex correctly worried about when we made [hideKeyboard]'s post-check
+   * non-fatal.
+   *
+   * Two layers of detection:
+   * 1. `imeWindowBoundsInScreen()` gives us the IME's bounds when accessibility window
+   *    enumeration is healthy. We do a precise contains-point check.
+   * 2. When `imeWindowBoundsInScreen()` returns null because window enumeration is
+   *    degraded (some accessibility-service flag combinations leak null windows lists),
+   *    we fall back to `isImeShownAuthoritative()` (dumpsys) — if the IME is up but we
+   *    can't measure it, treat the tap as conservatively occluded.
+   *
+   * On detection, try one more dismissal, then re-check. If still occluded (or still
+   * indeterminate-but-shown), fail loudly with a message that names the target and the
+   * coordinate. That's the actual product failure ("the framework can't reach this
+   * target because the keyboard won't get out of the way") surfaced at the point where
+   * it actually matters.
+   *
+   * When no IME signal exists at all (the common case), this is a no-op.
+   */
+  private fun failIfTapPointOccludedByIme(x: Int, y: Int, targetDescription: String) {
+    val firstSignal = imeOcclusionSignal(x, y)
+    if (firstSignal == null) return
+    Console.log(
+      "[ime-occlusion] resolved tap target ($x, $y) is occluded by the IME ($firstSignal) " +
+        "— re-attempting dismissal before failing.",
+    )
+    try {
+      hideKeyboard()
+    } catch (e: Exception) {
+      // Even GLOBAL_ACTION_BACK refused — propagate so caller sees the real reason.
+      error(
+        "Tap target '$targetDescription' at ($x, $y) is occluded by the soft IME " +
+          "($firstSignal), and the accessibility service refused GLOBAL_ACTION_BACK: ${e.message}",
+      )
+    }
+    val secondSignal = imeOcclusionSignal(x, y)
+    if (secondSignal != null) {
+      error(
+        "Tap target '$targetDescription' at ($x, $y) is occluded by the soft IME " +
+          "($secondSignal), which would not dismiss. Tap would land on the keyboard " +
+          "instead of the intended target. (Likely cause: a modal screen whose " +
+          "BackHandler consumes GLOBAL_ACTION_BACK before the IME framework sees it.)",
+      )
+    }
+    Console.log(
+      "[ime-occlusion] retry-dismiss cleared the keyboard; resuming tap dispatch.",
+    )
+  }
+
+  /**
+   * Returns a non-null description of the occlusion signal when (x, y) is occluded by the
+   * IME, or null when the tap point is clear. Combines the precise window-bounds check
+   * (when available) with the authoritative dumpsys fallback (for the degraded-windows
+   * case codex correctly flagged).
+   */
+  private fun imeOcclusionSignal(x: Int, y: Int): String? {
+    val bounds = TrailblazeAccessibilityService.imeWindowBoundsInScreen()
+    if (bounds != null) {
+      return if (bounds.contains(x, y)) "window bounds $bounds" else null
+    }
+    // No bounds available — windows enumeration may be degraded. Fall back to dumpsys
+    // for the conservative shown/not-shown signal. If shown, we can't know whether
+    // (x, y) is occluded specifically; conservatively treat as occluded.
+    return if (TrailblazeAccessibilityService.isImeShownAuthoritative()) {
+      "dumpsys reports IME shown but window bounds unavailable (windows enumeration degraded)"
+    } else {
+      null
+    }
+  }
+
+  /**
    * Resolves element via [TrailblazeNodeSelector] and taps on the matched element,
    * with fallback to recorded coordinates.
    */
@@ -566,6 +657,7 @@ class AccessibilityDeviceManager(
             val center = result.node.centerPoint()
               ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
             Console.log("Resolved via TrailblazeNode: ${action.nodeSelector.description()} at (${center.first}, ${center.second})")
+            failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
             tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
@@ -576,6 +668,7 @@ class AccessibilityDeviceManager(
             Console.log(
               "TrailblazeNode selector matched ${result.nodes.size} elements, using first at (${center.first}, ${center.second})"
             )
+            failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
             tapOrLongPressOnResolvedNode(first, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
@@ -598,6 +691,14 @@ class AccessibilityDeviceManager(
     if (action.fallbackX != null && action.fallbackY != null) {
       Console.log(
         "Using fallback coordinates (${action.fallbackX}, ${action.fallbackY})"
+      )
+      // Apply the same pre-tap occlusion check on the coordinate-fallback path that the
+      // selector-resolved branches use. Without it, a recorded-coordinate tap on a
+      // BackHandler-modal screen would silently land on the still-visible IME.
+      failIfTapPointOccludedByIme(
+        action.fallbackX,
+        action.fallbackY,
+        "fallback coordinates for ${action.nodeSelector.description()}",
       )
       tapOrLongPress(action.fallbackX, action.fallbackY, action.longPress)
       return ExecutionResult(resolvedX = action.fallbackX, resolvedY = action.fallbackY)

@@ -32,11 +32,13 @@ data class InputTextTrailblazeTool(
    *
    * **Pass `false` from interactive / live-forwarding paths** (the wasm `/devices` viewer's
    * per-keystroke flush). The user is still typing — they don't want the keyboard
-   * dismissed after every word. And with the daemon's `AndroidSoftKeyboardSuppressor`
-   * active, there is no soft keyboard to hide; `HideKeyboardCommand` on Android falls
-   * through to a `BACK` keycode that navigates the current activity backwards instead.
-   * That's how "typing 'sam' navigated away from the screen" reproduced — Sam's repro on
-   * PR #3021 caught it.
+   * dismissed after every word. And on the accessibility driver the daemon's `inputText`
+   * routes through `ACTION_SET_TEXT` directly on the focused node, which sidesteps the
+   * soft IME entirely on the happy path (no synthesized key events ever bring up a
+   * keyboard window). With no soft keyboard up, `HideKeyboardCommand` falls through to
+   * a `BACK` keycode that navigates the current activity backwards instead. That's how
+   * "typing 'sam' navigated away from the screen" reproduced — Sam's repro on PR #3021
+   * caught it.
    *
    * Recorded trail YAMLs continue to omit this field, so replay keeps the existing
    * dismiss-keyboard behavior intact. Only direct in-process callers that pass `false`

@@ -40,6 +40,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 
 /**
  * Lightweight STDIO-to-HTTP proxy for MCP.
@@ -160,8 +161,9 @@ class McpProxy(
     val stdoutForTransport = System.out
     val origStderr = System.err
 
-    // File-based logging to ~/.trailblaze/mcp.log (stderr may be swallowed by MCP clients)
-    val logDir = File(System.getProperty("user.home"), ".trailblaze")
+    // File-based logging to the app data dir's mcp.log (stderr may be swallowed by MCP clients).
+    // Goes through getDefaultAppDataDirectory() so TRAILBLAZE_HOME isolation is honored.
+    val logDir = TrailblazeDesktopUtil.getDefaultAppDataDirectory()
     logDir.mkdirs()
     val logFile = File(logDir, "mcp.log")
     val logWriter = PrintWriter(java.io.FileOutputStream(logFile, true), true)

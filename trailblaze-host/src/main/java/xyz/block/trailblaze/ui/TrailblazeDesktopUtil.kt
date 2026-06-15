@@ -108,6 +108,9 @@ object TrailblazeDesktopUtil {
    * @return The default app data directory: ~/.trailblaze
    */
   fun getDefaultAppDataDirectory(): File {
+    // TRAILBLAZE_HOME lets multiple daemons on one host isolate their state dir (logs, TLS
+    // keystore); without it concurrent daemons race the shared keystore and one dies on boot.
+    System.getenv("TRAILBLAZE_HOME")?.takeIf { it.isNotBlank() }?.let { return File(it) }
     return File(System.getProperty("user.home"), DOT_TRAILBLAZE_DIR_NAME)
   }
 

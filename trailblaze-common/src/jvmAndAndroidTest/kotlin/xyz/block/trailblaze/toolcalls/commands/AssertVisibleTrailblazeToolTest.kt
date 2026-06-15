@@ -137,6 +137,81 @@ class AssertVisibleTrailblazeToolTest {
   }
 
   @Test
+  fun `expectedText propagates through to AssertVisibleBySelector on the maestro path`() {
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidMaestro(),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          ref = "y778",
+          bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+          driverDetail = DriverNodeDetail.AndroidMaestro(text = "Charge \$5.00"),
+        ),
+      ),
+    )
+    val viewHierarchy = ViewHierarchyTreeNode(
+      nodeId = 1,
+      centerPoint = "500,500",
+      dimensions = "1000x1000",
+      children = listOf(
+        ViewHierarchyTreeNode(
+          nodeId = 2,
+          text = "Charge \$5.00",
+          centerPoint = "200,230",
+          dimensions = "200x60",
+        ),
+      ),
+    )
+    val context = contextWithTree(
+      trailblazeNodeTree = trailblazeTree,
+      viewHierarchy = viewHierarchy,
+    )
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(
+        ref = "y778",
+        expectedText = "Charge \$5.00",
+        reasoning = "verify the checkout total",
+      ).toExecutableTrailblazeTools(context).single(),
+    )
+    assertEquals("Charge \$5.00", delegated.expectedText)
+    // The visibility-only fields still propagate as before so non-expectedText callers
+    // are unaffected.
+    assertEquals("verify the checkout total", delegated.reason)
+    assertNotNull(delegated.nodeSelector)
+  }
+
+  @Test
+  fun `expectedText propagates through on the accessibility path with nodeSelector-only`() {
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          ref = "y778",
+          bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+          driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Active"),
+        ),
+      ),
+    )
+    val context = contextWithTree(trailblazeNodeTree = trailblazeTree)
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(
+        ref = "y778",
+        expectedText = "Active",
+      ).toExecutableTrailblazeTools(context).single(),
+    )
+    assertEquals("Active", delegated.expectedText)
+    assertEquals(null, delegated.selector)
+    assertNotNull(delegated.nodeSelector)
+  }
+
+  @Test
   fun `accessibility driver emits nodeSelector-only with no legacy selector`() {
     val trailblazeTree = TrailblazeNode(
       nodeId = 1,

@@ -95,6 +95,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
   override fun onDestroy() {
     super.onDestroy()
+    restoreSoftKeyboardIfPending()
     accessibilityServiceInstance = null
   }
 
@@ -506,8 +507,69 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       return windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
     }
 
+    /**
+     * Returns the screen-space bounds of the currently-visible soft IME window, or `null`
+     * if no IME window is enumerated. Used by [AccessibilityDeviceManager]'s pre-tap
+     * occlusion check to detect when a resolved tap coordinate is going to land on the
+     * keyboard instead of the intended target — the silent-mis-tap scenario that occurs
+     * on screens where the IME refuses to dismiss (e.g. Compose modals that consume BACK).
+     */
+    fun imeWindowBoundsInScreen(): android.graphics.Rect? {
+      val windows = getServiceWindows() ?: return null
+      val imeWindow = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        ?: return null
+      val rect = android.graphics.Rect()
+      imeWindow.getBoundsInScreen(rect)
+      return rect.takeIf { !it.isEmpty }
+    }
+
+    /**
+     * Companion check for [imeWindowBoundsInScreen] — returns true when the soft IME is
+     * currently up according to the authoritative `dumpsys input_method` signal, even
+     * when [getServiceWindows] is degraded (returns `null` under certain accessibility
+     * service flags). This is the same dumpsys gate [waitForImeDismissed] uses; exposing
+     * it here lets the pre-tap occlusion check fail conservatively when we can't measure
+     * the IME's bounds but know it's present.
+     */
+    fun isImeShownAuthoritative(): Boolean = isImeShownViaDumpsys()
+
+    /**
+     * Tracks whether the most recent [hideKeyboard] call put the soft IME into
+     * `SHOW_MODE_HIDDEN`. Cleared on the next dispatched action (via
+     * [restoreSoftKeyboardIfPending]) so the suppression is scoped to "the moment after
+     * hideKeyboard" rather than sticking globally until the service unbinds.
+     */
+    private val softKeyboardHideRequested = AtomicBoolean(false)
+
+    /**
+     * Reads `TRAILBLAZE_IME_DISMISS_VIA_SHOW_MODE`. When set, [hideKeyboard] routes the
+     * dismissal through `SoftKeyboardController.setShowMode(SHOW_MODE_HIDDEN)` instead of
+     * a synthetic BACK key — bypassing Compose `BackHandler` callbacks that otherwise eat
+     * the BACK before the IME framework can hide the keyboard. Read on every call so an
+     * oncall can flip it on a running daemon without restarting.
+     */
+    private fun imeDismissViaShowModeEnabled(): Boolean {
+      val raw = System.getenv("TRAILBLAZE_IME_DISMISS_VIA_SHOW_MODE")?.lowercase()
+      return raw == "1" || raw == "true"
+    }
+
+    /**
+     * Restores the soft keyboard to `SHOW_MODE_AUTO` if a prior [hideKeyboard] put it in
+     * `SHOW_MODE_HIDDEN`. Called at the start of [AccessibilityDeviceManager]'s next
+     * dispatch and from [onDestroy]. No-op when no hide is pending or the service is gone.
+     */
+    internal fun restoreSoftKeyboardIfPending() {
+      if (!softKeyboardHideRequested.compareAndSet(true, false)) return
+      val service = accessibilityServiceInstance ?: return
+      try {
+        service.softKeyboardController.setShowMode(AccessibilityService.SHOW_MODE_AUTO)
+      } catch (e: Exception) {
+        Console.log("[hideKeyboard] restore to SHOW_MODE_AUTO failed: ${e.message}")
+      }
+    }
+
     fun hideKeyboard(): Boolean {
-      // Gate GLOBAL_ACTION_BACK on an authoritative IME-up check. Two signals, in order:
+      // Gate dismissal on an authoritative IME-up check. Two signals, in order:
       //   1. [isImeWindowVisible] — strict windows-only, in-process and cheap.
       //   2. `dumpsys input_method` — authoritative shell fallback for environments where
       //      [getServiceWindows] is degraded (empty / SecurityException) under
@@ -516,7 +578,26 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       // editable after the IME is dismissed and would cause back-to-back hideKeyboard
       // calls to navigate back out of the current screen.
       if (!isImeWindowVisible() && !isImeShownViaDumpsys()) return true
-      return requireService().performGlobalAction(GLOBAL_ACTION_BACK)
+      val service = requireService()
+      if (imeDismissViaShowModeEnabled()) {
+        // SHOW_MODE_HIDDEN talks straight to ImeVisibilityStateComputer over the
+        // accessibility client binder — never dispatches a KeyEvent, so the modal's
+        // BackHandler / OnBackPressedCallback can't swallow the dismissal. Sticky until
+        // restored; [restoreSoftKeyboardIfPending] flips it back on the next dispatch.
+        val accepted =
+          try {
+            service.softKeyboardController.setShowMode(AccessibilityService.SHOW_MODE_HIDDEN)
+          } catch (e: Exception) {
+            Console.log("[hideKeyboard] setShowMode threw: ${e.message}")
+            false
+          }
+        if (accepted) {
+          softKeyboardHideRequested.set(true)
+          return true
+        }
+        Console.log("[hideKeyboard] SHOW_MODE_HIDDEN rejected — falling back to GLOBAL_ACTION_BACK")
+      }
+      return service.performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     /**

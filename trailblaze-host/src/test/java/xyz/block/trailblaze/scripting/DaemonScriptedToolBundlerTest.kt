@@ -594,6 +594,9 @@ class DaemonScriptedToolBundlerTest {
     // have left behind.
     val staleWrapper = File(src.parentFile, "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}stale1234.ts")
     staleWrapper.writeText("// pretend this is a leftover from a SIGKILLed daemon")
+    // Age it past the sweep's min-age floor so it reads as a genuine crash leftover. The sweep
+    // deliberately spares recent wrappers (a concurrent daemon's live esbuild entry point).
+    staleWrapper.setLastModified(System.currentTimeMillis() - 60L * 60 * 1000)
     assertTrue(staleWrapper.isFile, "stale wrapper sentinel must exist before bundleOne")
 
     bundler.bundleOne(src, toolName = "doSomething")
@@ -617,6 +620,8 @@ class DaemonScriptedToolBundlerTest {
     val src1 = writeTinyTs("sweep-once-1.ts", exportName = "first")
     val firstStale = File(src1.parentFile, "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}stale-before-first.ts")
     firstStale.writeText("// stale from a previous JVM crash")
+    // Age it past the sweep's min-age floor — a real crash leftover is old.
+    firstStale.setLastModified(System.currentTimeMillis() - 60L * 60 * 1000)
     bundler.bundleOne(src1, toolName = "first")
     assertTrue(
       !firstStale.exists(),
@@ -637,6 +642,30 @@ class DaemonScriptedToolBundlerTest {
       concurrentlyActiveWrapper.exists(),
       "second call in same dir must NOT re-sweep; concurrent-wrapper stand-in was deleted at " +
         concurrentlyActiveWrapper.absolutePath,
+    )
+  }
+
+  @Test
+  fun `stale-wrapper sweep spares recent wrappers from concurrent daemons`() = runBlocking {
+    // Multi-daemon safety: a second daemon (separate JVM) may have a live wrapper in the shared
+    // source dir when THIS JVM runs its first sweep. The per-(JVM, dir) dedup can't see across
+    // processes, so the sweep must spare wrappers younger than the esbuild timeout (mtime-based,
+    // process-independent). Pins the fix for the cross-JVM "Could not resolve
+    // .trailblaze-wrapper-*" race observed when one daemon-per-copy bundles in the same dir.
+    assumeEsbuildPresent()
+    val src = writeTinyTs("sweep-recent-peer.ts", exportName = "doSomething")
+    val recentPeerWrapper = File(
+      src.parentFile,
+      "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}peer-live.ts",
+    )
+    // Freshly written (current mtime) = younger than the sweep's min-age floor.
+    recentPeerWrapper.writeText("// a concurrent daemon's in-flight wrapper — must survive the sweep")
+
+    bundler.bundleOne(src, toolName = "doSomething")
+
+    assertTrue(
+      recentPeerWrapper.exists(),
+      "sweep must spare a recent (live concurrent-daemon) wrapper; deleted at ${recentPeerWrapper.absolutePath}",
     )
   }
 

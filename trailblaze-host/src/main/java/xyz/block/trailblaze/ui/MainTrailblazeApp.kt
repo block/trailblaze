@@ -108,6 +108,13 @@ class MainTrailblazeApp(
      * The window can be shown later via the tray menu.
      */
     headless: Boolean = false,
+    /**
+     * Optional extra Ktor routes registered on the daemon alongside the built-in
+     * ones. Lets a downstream desktop edition add its own daemon endpoints without
+     * trailblaze-host — the lower layer — having to depend on them. OSS callers
+     * leave this null.
+     */
+    extraDaemonRoutes: (io.ktor.server.routing.Routing.() -> Unit)? = null,
   ) {
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
 
@@ -142,7 +149,10 @@ class MainTrailblazeApp(
         port = portManager.httpPort,
         httpsPort = portManager.httpsPort,
         wait = true,
-        additionalRouteRegistration = allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager),
+        additionalRouteRegistration = {
+          allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
+          extraDaemonRoutes?.invoke(this)
+        },
       )
       return
     }
@@ -161,7 +171,10 @@ class MainTrailblazeApp(
           port = portManager.httpPort,
           httpsPort = portManager.httpsPort,
           wait = false,
-          additionalRouteRegistration = allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager),
+          additionalRouteRegistration = {
+            allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
+            extraDaemonRoutes?.invoke(this)
+          },
         )
       }
 

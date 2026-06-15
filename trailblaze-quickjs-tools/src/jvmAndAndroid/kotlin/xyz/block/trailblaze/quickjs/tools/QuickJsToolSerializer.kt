@@ -16,11 +16,20 @@ import xyz.block.trailblaze.toolcalls.ToolName
  *
  * Mirror of the legacy module's `BundleToolSerializer`, but the constructed tool dispatches
  * via a [QuickJsToolHost] rather than an MCP `Client`.
+ *
+ * [binding] should be supplied whenever this serializer is used on the koog dispatch path
+ * (i.e. from [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration.buildKoogTool]).
+ * The binding is forwarded to [QuickJsTrailblazeTool] so [QuickJsTrailblazeTool.execute]
+ * can set [SessionScopedHostBinding.activeContext] before the QuickJS evaluation starts —
+ * see [QuickJsTrailblazeTool.binding] for the full rationale.
  */
 class QuickJsToolSerializer(
   private val advertisedName: ToolName,
   private val host: QuickJsToolHost,
+  private val binding: SessionScopedHostBinding? = null,
 ) : KSerializer<QuickJsTrailblazeTool> {
+
+  constructor(advertisedName: ToolName, host: QuickJsToolHost) : this(advertisedName, host, null)
 
   override val descriptor: SerialDescriptor =
     buildClassSerialDescriptor("quickjs:${advertisedName.toolName}")
@@ -30,7 +39,7 @@ class QuickJsToolSerializer(
       ?: error("QuickJsToolSerializer requires JSON decoding (got ${decoder::class.simpleName}).")
     val argsElement = jsonDecoder.decodeJsonElement()
     val args = argsElement as? JsonObject ?: JsonObject(emptyMap())
-    return QuickJsTrailblazeTool(host = host, advertisedName = advertisedName, args = args)
+    return QuickJsTrailblazeTool(host = host, advertisedName = advertisedName, args = args, binding = binding)
   }
 
   override fun serialize(encoder: Encoder, value: QuickJsTrailblazeTool) {

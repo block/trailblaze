@@ -13,6 +13,7 @@ drivers:
   - android-ondevice-accessibility
   - ios-host
 tools:
+  - clearText
   - eraseText
   - hideKeyboard
   - inputText

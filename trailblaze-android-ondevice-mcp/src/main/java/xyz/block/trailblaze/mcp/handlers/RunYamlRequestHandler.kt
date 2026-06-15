@@ -370,7 +370,14 @@ class RunYamlRequestHandler(
       setCurrentJob(job)
 
       if (request.awaitCompletion) {
-        val resolved = withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) { outcome.await() }
+        // The launched job lives in the standalone backgroundScope; tie it to this await so an
+        // originating HTTP-call cancellation cancels it instead of stalling to the handler cap.
+        val resolved = try {
+          withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) { outcome.await() }
+        } catch (e: CancellationException) {
+          job.cancel(CancellationException("Originating HTTP call cancelled before completion"))
+          throw e
+        }
         if (resolved == null) {
           // Hard cap so a hung tool can't tie up an HTTP socket indefinitely. Cancel the job
           // and launch a background cleanup: the launched block's catch path exits via
@@ -434,6 +441,10 @@ class RunYamlRequestHandler(
       // progress events. Enforced by RunYamlResponse's init-block require. Pass `emptyMap()`
       // explicitly (rather than relying on the default) for symmetry with the sync paths.
       RpcResult.Success(RunYamlResponse(sessionId = session.sessionId, memorySnapshot = emptyMap()))
+    } catch (e: CancellationException) {
+      // Caller disconnect (the HTTP call was cancelled) isn't a test failure — propagate the
+      // cancellation instead of recording a failed session. Mirrors the launched-job catch above.
+      throw e
     } catch (e: Exception) {
       sessionManager.endSession(
         session = session,

@@ -133,9 +133,20 @@ class LogsRepo(
               ensureWatchingSession(sessionId)
               sessionInfoWatcherJobs[sessionId] = fileOperationScope.launch {
                 getSessionLogsFlow(sessionId).collect {
-                  // When an active session's logs change, refresh SessionInfo
-                  _sessionInfoFlow.value = sessionsFlow.value.mapNotNull { sid ->
-                    if (sid in sessionInfoWatcherJobs) getSessionInfo(sid) else getSessionInfoDirect(sid)
+                  // When an active session's logs change, refresh SessionInfo.
+                  // Reuse the existing cached SessionInfo for completed (non-watched)
+                  // sessions — their logs don't change, so there is no reason to
+                  // re-read their log files from disk on every update.
+                  // Use update{} for an atomic read-compute-write so concurrent log
+                  // events from multiple in-progress sessions don't clobber each other.
+                  _sessionInfoFlow.update { currentInfo ->
+                    val cachedInfoById = currentInfo.associateBy { it.sessionId }
+                    sessionsFlow.value.mapNotNull { sid ->
+                      when {
+                        sid in sessionInfoWatcherJobs -> getSessionInfo(sid)
+                        else -> cachedInfoById[sid] ?: getSessionInfoDirect(sid)
+                      }
+                    }
                   }
                 }
               }
@@ -429,6 +440,7 @@ class LogsRepo(
               }
 
               val removedSessions = previousSessionIds.toSet() - currentSessionIds.toSet()
+              val addedSessions = currentSessionIds.toSet() - previousSessionIds.toSet()
 
               // Clean up flows for removed sessions
               removedSessions.forEach { sessionId ->
@@ -437,6 +449,15 @@ class LogsRepo(
 
               // Update the flow with new session list
               _sessionsFlow.value = currentSessionIds
+
+              // For each newly detected session directory, schedule retries so the
+              // session surfaces in _sessionInfoFlow once its first log is written.
+              // Directory creation and the first log write are not atomic — the
+              // sessionsFlow.collect handler may call getSessionInfoDirect before any
+              // log files exist, getting null and silently dropping the session with
+              // no retry path. scheduleSessionInfoRetry fixes that by polling until
+              // info resolves or a generous deadline is reached.
+              addedSessions.forEach { sessionId -> scheduleSessionInfoRetry(sessionId) }
             } catch (e: Exception) {
               Console.log("[LogsRepo] Error processing session list event: ${e.message}")
               e.printStackTrace()
@@ -445,6 +466,60 @@ class LogsRepo(
         } catch (e: Exception) {
           Console.log("[LogsRepo] Flow collection ended for session list: ${e.message}")
         }
+      }
+    }
+  }
+
+  /**
+   * Schedules a series of retries to surface a newly-detected session once its
+   * first log file is written.
+   *
+   * There is an inherent race between the filesystem event that signals directory
+   * creation and the daemon writing the first status log into that directory.
+   * [sessionsFlow.collect] calls [getSessionInfoDirect] immediately on detection;
+   * if no parseable log exists yet, it returns null and the session is silently
+   * dropped from [_sessionInfoFlow] with no retry path.
+   *
+   * This function closes that gap by polling with exponential back-off.  Each
+   * attempt reads log files directly from disk; on success it patches
+   * [_sessionInfoFlow] immediately, replacing any stale entry.  The next
+   * [sessionsFlow.collect] emission will then find the session already present
+   * and re-evaluate it normally.
+   *
+   * Back-off schedule: 500 ms → 1 s → 2 s → 4 s → 8 s → 16 s (≈ 31.5 s total).
+   * Fast local runs typically resolve on the first attempt; slower CI or
+   * download scenarios resolve within a few retries.
+   */
+  private fun scheduleSessionInfoRetry(sessionId: SessionId) {
+    fileOperationScope.launch {
+      var delayMs = 500L
+      repeat(6) {
+        delay(delayMs)
+        val info = getSessionInfoDirect(sessionId)
+        if (info == null) {
+          delayMs = minOf(delayMs * 2, 30_000L)
+          return@repeat
+        }
+        // Rebuild _sessionInfoFlow in sessionsFlow order, replacing or inserting
+        // the resolved info. update{} makes the read-compute-write atomic.
+        // The guard on currentSessionIds prevents re-adding a session that was
+        // deleted from the filesystem while this retry coroutine was in flight —
+        // the retry may have read valid logs just before deletion, but sessionsFlow
+        // will no longer list the session, so it should not appear in the UI.
+        _sessionInfoFlow.update { current ->
+          val currentSessionIds = sessionsFlow.value
+          if (sessionId !in currentSessionIds) {
+            // Session removed while retry was running; sessionsFlow.collect will
+            // have already cleaned _sessionInfoFlow — leave it untouched.
+            current
+          } else {
+            // Merge resolved info into the current snapshot, then project through
+            // currentSessionIds to preserve order and exclude stale entries.
+            val merged = current.associateBy { it.sessionId } + (sessionId to info)
+            currentSessionIds.mapNotNull { sid -> merged[sid] }
+          }
+        }
+        return@launch
       }
     }
   }

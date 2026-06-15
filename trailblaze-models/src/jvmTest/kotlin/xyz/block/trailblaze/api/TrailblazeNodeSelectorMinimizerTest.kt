@@ -488,6 +488,142 @@ class TrailblazeNodeSelectorMinimizerTest : TrailblazeNodeSelectorGeneratorTestB
   }
 
   // ---------------------------------------------------------------------------
+  // Index-carrying selectors must keep an anchor (never collapse to bare index).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `index-carrying selector retains the most-stable anchor instead of collapsing to bare index`() {
+    // Every node — root included — shares className=View, so the class predicate
+    // is a no-op: the class-filtered index equals the global index. Dropping
+    // className keeps the target unique under `{index}` alone, so the pre-fix
+    // minimizer stripped className and emitted a purely-positional `{index: 2}`.
+    // Post-fix, because the selector carries an index, the most-stable surviving
+    // match field (className here) must be retained as an anchor.
+    //
+    // Distinct stacked bounds make the resolver's top-then-left sort
+    // deterministic. The root sorts first (top=0), so the target (the 2nd child,
+    // top=100) lands at global index 2.
+    nextId = 1L
+    val node1 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      bounds = TrailblazeNode.Bounds(0, 10, 100, 50),
+    )
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 150),
+    )
+    val node3 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      bounds = TrailblazeNode.Bounds(0, 200, 100, 250),
+    )
+    val root = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 300),
+      children = listOf(node1, target, node3),
+    )
+
+    val raw = TrailblazeNodeSelector(
+      androidAccessibility = DriverNodeMatch.AndroidAccessibility(classNameRegex = "android\\.view\\.View"),
+      index = 2,
+    )
+    assertTrue(isUniqueMatch(root, target, raw))
+
+    val minimized = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+
+    assertEquals(2, minimized.index, "index must survive — it's the disambiguator")
+    val match = minimized.driverMatch as? DriverNodeMatch.AndroidAccessibility
+    assertNotNull(
+      match,
+      "an index-carrying selector must keep a content/structural anchor, never collapse to bare index",
+    )
+    assertEquals(
+      "android\\.view\\.View",
+      match.classNameRegex,
+      "the most-stable surviving match field must be retained alongside the index",
+    )
+    assertTrue(
+      isUniqueMatch(root, target, minimized),
+      "anchor + index must still uniquely resolve to target",
+    )
+  }
+
+  @Test
+  fun `attribute-less node still collapses to bare index as the legitimate last resort`() {
+    // A genuinely attribute-less node — no text/contentDescription/className/
+    // resourceId/uniqueId. There is no anchor to retain, so a bare `{index}` is
+    // the only thing the minimizer can emit. This proves the keep-an-anchor
+    // guard does not over-fix the legitimate attribute-less fallback.
+    //
+    // Distinct stacked bounds make the resolver's sort deterministic; the root
+    // (top=0) sorts first, so the target (2nd child, top=100) is global index 2.
+    nextId = 1L
+    val node1 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 10, 100, 50),
+    )
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 150),
+    )
+    val node3 = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 200, 100, 250),
+    )
+    val root = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 300),
+      children = listOf(node1, target, node3),
+    )
+
+    val raw = TrailblazeNodeSelector(index = 2)
+    assertTrue(isUniqueMatch(root, target, raw))
+
+    val minimized = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+
+    assertEquals(2, minimized.index, "index must survive")
+    assertNull(
+      minimized.driverMatch,
+      "an attribute-less node has no anchor to retain — bare index is the legitimate last resort",
+    )
+  }
+
+  @Test
+  fun `selector with no index still clears an empty match to a pure content selector`() {
+    // No index on the selector — when the match minimizes to empty (the
+    // containsChild predicate alone disambiguates), clearing the empty shell is
+    // correct: a pure content/relationship selector is not positional, so the
+    // keep-an-anchor guard must not fire here.
+    nextId = 1L
+    val childA = node(detail = DriverNodeDetail.AndroidAccessibility(text = "UniqueChild"))
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      children = listOf(childA),
+    )
+    val sibling = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View"),
+      children = listOf(node(detail = DriverNodeDetail.AndroidAccessibility(text = "Other"))),
+    )
+    val root = node(children = listOf(target, sibling))
+
+    val raw = TrailblazeNodeSelector(
+      androidAccessibility = DriverNodeMatch.AndroidAccessibility(classNameRegex = "android\\.view\\.View"),
+      containsChild = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "UniqueChild"),
+      ),
+    )
+    assertTrue(isUniqueMatch(root, target, raw))
+
+    val minimized = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+
+    assertNull(minimized.index, "no index was present — none should appear")
+    assertNull(
+      minimized.driverMatch,
+      "with no index, an empty match clears to a pure content/relationship selector",
+    )
+    assertNotNull(minimized.containsChild, "containsChild is the load-bearing disambiguator")
+  }
+
+  // ---------------------------------------------------------------------------
   // Idempotence.
   // ---------------------------------------------------------------------------
 

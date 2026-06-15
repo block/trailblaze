@@ -44,6 +44,7 @@ kotlinx-serialization = "1.10.0"
 ktor = "3.3.3"
 logback = "1.5.21"
 maestro = "2.3.0"
+micrometer = "1.15.12"
 mcp-sdk = "0.11.1"
 multiplatformMarkdownRenderer = "0.39.2"
 multiplatformSettings = "1.3.0"
@@ -125,6 +126,7 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-client-core-jvm = { module = "io.ktor:ktor-client-core-jvm", version.ref = "ktor" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-js = { module = "io.ktor:ktor-client-js", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 kotlin-csv = { module = "com.github.doyaaaaaken:kotlin-csv-jvm", version.ref = "kotlin-csv" }
 kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
 ktor-http = { module = "io.ktor:ktor-http", version.ref = "ktor" }

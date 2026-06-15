@@ -150,11 +150,13 @@ class OnDeviceRpcDeviceScreenStream(
   override suspend fun inputText(text: String) {
     // `hideKeyboardAfter = false` — this stream's `inputText` serves the wasm `/devices`
     // viewer's *live typing* path. The default tool behavior (hide the soft keyboard after
-    // typing) is correct for batch trail runs but wrong here: with the soft keyboard
-    // suppressed by [AndroidSoftKeyboardSuppressor], `HideKeyboardCommand` on Android falls
-    // through to a `BACK` keycode that navigates the current activity away. Sam's repro on
-    // PR #3021: typing "sam" navigated the device back. Recorded trail YAMLs continue to
-    // omit the flag, so replay still dismisses the keyboard between steps as expected.
+    // typing) is correct for batch trail runs but wrong here: on the accessibility driver
+    // the daemon's `inputText` routes through `ACTION_SET_TEXT` directly on the focused
+    // node, which sidesteps the soft IME entirely on the happy path. With no soft IME
+    // window up, `HideKeyboardCommand` falls through to a `BACK` keycode that navigates
+    // the current activity away. Sam's repro on PR #3021: typing "sam" navigated the
+    // device back. Recorded trail YAMLs continue to omit the flag, so replay still
+    // dismisses the keyboard between steps as expected.
     dispatchTool(InputTextTrailblazeTool(text = text, hideKeyboardAfter = false))
   }
 

@@ -110,6 +110,14 @@ data class TrailblazeServerState(
      * signals or any cross-cutting network behavior.
      */
     val captureNetworkTraffic: Boolean = false,
+    /**
+     * When true, the desktop app connects the device's analytics agent for the
+     * duration of a run so events emitted during the trail can be surfaced in the
+     * run timeline. Only yields events for an instrumented build; a plain app
+     * captures nothing. Off by default. The actual capture mechanism is wired in
+     * by the desktop app (kept out of this generic model).
+     */
+    val captureAnalytics: Boolean = false,
     // Last navigation route (restored on app restart)
     val lastRoute: String? = null, // Qualified class name of the last visited route
     // Self-test server: expose the live desktop window as a Compose RPC test target

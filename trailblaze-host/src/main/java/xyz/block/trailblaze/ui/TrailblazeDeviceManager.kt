@@ -267,6 +267,17 @@ class TrailblazeDeviceManager(
     referrer: TrailblazeReferrer,
     agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     traceId: TraceId? = null,
+    // Optional per-run overrides (Run-config dialog). All default to the
+    // prior in-app behavior, so existing callers are unaffected:
+    //   selfHeal=null → keep TrailblazeConfig's default; useRecordedSteps=false →
+    //   LLM-drives (unchanged); maxLlmCalls=null → runner default; memory seeds empty.
+    selfHeal: Boolean? = null,
+    useRecordedSteps: Boolean = false,
+    maxLlmCalls: Int? = null,
+    initialMemorySeeds: Map<String, String> = emptyMap(),
+    initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
+    // Per-run override (Run-config dialog); null = appConfig default.
+    captureNetworkTrafficOverride: Boolean? = null,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
@@ -284,28 +295,34 @@ class TrailblazeDeviceManager(
     } catch (_: Exception) {
       null
     }
+    val baseConfig = TrailblazeConfig(
+      overrideSessionId = existingSessionId,
+      sendSessionStartLog = sendSessionStartLog,
+      sendSessionEndLog = sendSessionEndLog,
+      browserHeadless = !settingsState.appConfig.showWebBrowser,
+      preferHostAgent = settingsState.appConfig.preferHostAgent,
+      captureNetworkTraffic = captureNetworkTrafficOverride ?: settingsState.appConfig.captureNetworkTraffic,
+    )
     val runYamlRequest = RunYamlRequest(
       yaml = yamlToRun,
       // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
       // The class name will be auto-derived from testSectionName metadata
       testName = "test",
-      useRecordedSteps = false,
+      useRecordedSteps = useRecordedSteps,
       trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
       targetAppName = settingsState.appConfig.selectedTargetAppId,
       trailFilePath = null,
-      config = TrailblazeConfig(
-        overrideSessionId = existingSessionId,
-        sendSessionStartLog = sendSessionStartLog,
-        sendSessionEndLog = sendSessionEndLog,
-        browserHeadless = !settingsState.appConfig.showWebBrowser,
-        preferHostAgent = settingsState.appConfig.preferHostAgent,
-        captureNetworkTraffic = settingsState.appConfig.captureNetworkTraffic,
-      ),
+      // Only override selfHeal when the caller set it; otherwise keep the config default.
+      config = if (selfHeal != null) baseConfig.copy(selfHeal = selfHeal) else baseConfig,
       trailblazeDeviceId = trailblazeDeviceId,
       driverType = trailConfigDriver,
       referrer = referrer,
       agentImplementation = agentImplementation,
       traceId = traceId,
+      // RunYamlRequest rejects maxLlmCalls with MULTI_AGENT_V3 and non-positive values.
+      maxLlmCalls = maxLlmCalls?.takeIf { it > 0 && agentImplementation != AgentImplementation.MULTI_AGENT_V3 },
+      initialMemorySeeds = initialMemorySeeds,
+      initialMemorySensitiveSeeds = initialMemorySensitiveSeeds,
     )
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = forceStopTargetApp,
@@ -343,7 +360,12 @@ class TrailblazeDeviceManager(
     trailblazeDeviceId: TrailblazeDeviceId,
     forceNewSession: Boolean = false,
     sessionIdPrefix: String = "session",
-    deviceSummary: TrailblazeConnectedDeviceSummary? = null
+    deviceSummary: TrailblazeConnectedDeviceSummary? = null,
+    // Optional per-run capture overrides (Run-config dialog). null = fall back to
+    // the daemon's appConfig default, so existing callers are unaffected.
+    captureVideoOverride: Boolean? = null,
+    captureLogcatOverride: Boolean? = null,
+    captureIosLogsOverride: Boolean? = null,
   ): DeviceSessionResolution {
     // Two-phase to keep `startForSession` (which can block on adb/ffmpeg/xcrun
     // startup) OUTSIDE `sessionCreationLock` — otherwise every concurrent session
@@ -375,9 +397,9 @@ class TrailblazeDeviceManager(
       // coordinator's reservation pattern makes that second call a no-op so the
       // appConfig-derived options here are what win for MCP-only paths.
       captureOptions = CaptureOptions(
-        captureVideo = true,
-        captureLogcat = appConfig.captureLogcat,
-        captureIosLogs = appConfig.captureIosLogs,
+        captureVideo = captureVideoOverride ?: true,
+        captureLogcat = captureLogcatOverride ?: appConfig.captureLogcat,
+        captureIosLogs = captureIosLogsOverride ?: appConfig.captureIosLogs,
         spriteFrameFps = 2,
         spriteFrameHeight = 720,
         spriteQuality = 80,

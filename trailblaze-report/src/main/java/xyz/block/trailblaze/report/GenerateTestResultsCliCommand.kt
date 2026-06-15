@@ -229,6 +229,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             ci_job_id = hostCiContext.ci_job_id,
             logs_zip_filename = hostCiContext.logs_zip_filename,
             logs_zip_url = hostCiContext.logs_zip_url,
+            priority = sessionInfo.trailConfig?.priority,
           )
         )
       } catch (e: Exception) {
@@ -338,6 +339,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       devices = getEnvList("TRAILBLAZE_DEVICES"),
       android_build_url = getEnv("ANDROID_BUILD_URL"),
       ios_build_url = getEnv("IOS_BUILD_URL"),
+      android_build_version = getEnv("ANDROID_BUILD_VERSION"),
+      ios_build_version = getEnv("IOS_BUILD_VERSION"),
       retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
       ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
       // Source of truth is the `TRAILBLAZE_SELF_HEAL_ENABLED` env var that a CI pipeline runner

@@ -135,13 +135,35 @@ object PrecompiledApkInstaller {
     null
   }
 
+  /**
+   * Builds the marker-write command. [AndroidHostAdbUtils.execAdbShellCommand] space-joins argv
+   * into a single device-shell command, so the prior `sh -c "<cmd> '…' > path"` wrapper re-split
+   * into a bare `sh -c <cmd>` — the SHA argument was dropped, a blank line was written, and reuse
+   * was silently defeated on every run. A direct `printf %s <sha> > path` survives the join (the
+   * SHA is hex, nothing shell-special) and writes the value verbatim.
+   */
+  internal fun shaMarkerWriteArgs(sha: String): List<String> =
+    listOf("printf", "%s", sha, ">", DEVICE_SHA_MARKER_PATH)
+
   private fun writeShaMarkerToDevice(trailblazeDeviceId: TrailblazeDeviceId) {
     val sha = bundledApkSha ?: return
     try {
       AndroidHostAdbUtils.execAdbShellCommand(
         deviceId = trailblazeDeviceId,
-        args = listOf("sh", "-c", "echo '$sha' > $DEVICE_SHA_MARKER_PATH"),
+        args = shaMarkerWriteArgs(sha),
       )
+      // Read back so a silent write failure (how this regressed) is visible rather than
+      // quietly reinstalling every run.
+      val readBack = AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = trailblazeDeviceId,
+        args = listOf("cat", DEVICE_SHA_MARKER_PATH),
+      ).trim()
+      if (readBack != sha) {
+        Console.log(
+          "APK SHA marker did not persist (read back '$readBack', expected '$sha') — the " +
+            "on-device server will be reinstalled every run.",
+        )
+      }
     } catch (e: Exception) {
       Console.log("Failed to write APK SHA marker to device: ${e.message}")
     }

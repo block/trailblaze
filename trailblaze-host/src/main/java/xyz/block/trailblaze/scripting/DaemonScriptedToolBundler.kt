@@ -416,11 +416,20 @@ class DaemonScriptedToolBundler(
     // re-triggering the sweep on every subsequent first-bundle. Individual delete
     // failures are already swallowed by the inner `runCatching` so wrapping the
     // outer block is purely defensive against `listFiles` itself throwing.
+    // Cross-JVM guard for the multi-daemon case: the per-JVM `sweptParentDirs` dedup only
+    // serializes sweeps WITHIN one daemon. When several daemons (separate JVMs) bundle in the
+    // same source dir — e.g. one daemon per parallel CI copy — each JVM still sweeps once, and
+    // those sweeps race across processes. So only delete wrappers OLDER than the esbuild
+    // timeout: a peer's live wrapper is at most ~2 min old; a crash-leaked one is far older.
+    val staleWrapperFloorMs = System.currentTimeMillis() - STALE_WRAPPER_MIN_AGE_MS
     scriptPath.parentFile?.canonicalFile?.let { parentDir ->
       sweptParentDirs.computeIfAbsent(parentDir) {
         runCatching {
           val swept = parentDir
-            .listFiles { f -> f.name.startsWith(WRAPPER_FILENAME_PREFIX) && f.name.endsWith(".ts") }
+            .listFiles { f ->
+              f.name.startsWith(WRAPPER_FILENAME_PREFIX) && f.name.endsWith(".ts") &&
+                f.lastModified() < staleWrapperFloorMs
+            }
             ?.filter { runCatching { it.delete() }.getOrDefault(false) }
             ?.size
             ?: 0
@@ -818,6 +827,13 @@ class DaemonScriptedToolBundler(
      * the two stay in sync.
      */
     internal const val WRAPPER_FILENAME_PREFIX: String = ".trailblaze-wrapper-"
+
+    /**
+     * Minimum age before the stale-wrapper sweep deletes a `.trailblaze-wrapper-*.ts`. Must
+     * exceed the esbuild bundle timeout (2 min, see [runEsbuild]) so that when several daemons
+     * (separate JVMs) bundle in one source dir, no daemon sweeps a live peer's wrapper.
+     */
+    private val STALE_WRAPPER_MIN_AGE_MS: Long = TimeUnit.MINUTES.toMillis(10)
 
     /**
      * Map of script-parent directories this JVM has already swept for stale wrapper
