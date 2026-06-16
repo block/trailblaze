@@ -21,7 +21,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * JVM implementation of RecordingsRepo that saves recordings to the file system.
  *
- * All trails are stored directly under the trails directory (e.g., trails/testrail/suite_123/...).
+ * All trails are stored directly under the trails directory (e.g., trails/regression/suite_123/...).
  *
  * @param trailsDirectory The root directory for all trails. Defaults to ~/.trailblaze/trails
  */
@@ -57,7 +57,7 @@ class RecordedTrailsRepoJvm(
       val directoryPath: String
       val fileName: String
       if (trailConfig.id != null) {
-        // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
+        // trailConfig.id is the trail path (e.g., "regression/suite_123/section_456/case_789")
         // The directory IS the trail identity, so filename is just platform-classifiers
         val trailPath = trailConfig.id!!
         // Prepend save subdirectory if configured, otherwise save at root
@@ -99,7 +99,7 @@ class RecordedTrailsRepoJvm(
   override fun getExistingTrails(sessionInfo: SessionInfo): List<ExistingTrail> {
     val trailConfig = sessionInfo.trailConfig ?: TrailConfig()
 
-    // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
+    // trailConfig.id is the trail path (e.g., "regression/suite_123/section_456/case_789")
     // The directory IS the trail identity
     val trailPath = trailConfig.id ?: return emptyList()
 
@@ -133,7 +133,7 @@ class RecordedTrailsRepoJvm(
   }
 
   override fun getWatchDirectoryForSession(sessionInfo: SessionInfo): String? {
-    // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
+    // trailConfig.id is the trail path (e.g., "regression/suite_123/section_456/case_789")
     val trailPath = sessionInfo.trailConfig?.id ?: return null
 
     // Return the directory if it exists

@@ -7,8 +7,8 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze results show [-hV] [--all-devices] [--json] [--latest]
                                [--device=<profile>] [--repo=<repo>] <case-id>
-Show the recorded result for a TestRail case ID
-      <case-id>            TestRail case ID, e.g. C12345. Case-insensitive; the
+Show the recorded result for a test case ID
+      <case-id>            Test-case ID, e.g. C12345. Case-insensitive; the
                              leading `C` is required.
       --all-devices        Print a one-line summary for every device profile
                              that has a recorded result for this case.

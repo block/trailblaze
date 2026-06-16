@@ -8,14 +8,13 @@
 Usage: trailblaze results [-hV] [--all-devices] [--json] [--latest]
                           [--device=<profile>] [--repo=<repo>] [<case-id>]
                           [COMMAND]
-Query the persisted test-result index for a TestRail case. Passing a positional
+Query the persisted test-result index for a test case. Passing a positional
 `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is
 equivalent to the explicit `trailblaze results show <case-id>` form — picocli
 routes the bare case-id straight to the `show` subcommand.
-      [<case-id>]          TestRail case ID. When supplied without a
-                             subcommand, this routes to `show <case-id>`.
-                             Case-insensitive; the leading `C` is required (e.
-                             g. C12345).
+      [<case-id>]          Test-case ID. When supplied without a subcommand,
+                             this routes to `show <case-id>`. Case-insensitive;
+                             the leading `C` is required (e.g. C12345).
       --all-devices        Forwarded to `show --all-devices`.
       --device=<profile>   Forwarded to `show --device`. See `trailblaze
                              results show --help` for the full flag set.
@@ -25,4 +24,4 @@ routes the bare case-id straight to the `show` subcommand.
       --repo=<repo>        Forwarded to `show --repo`.
   -V, --version            Print version information and exit.
 Commands:
-  show  Show the recorded result for a TestRail case ID
+  show  Show the recorded result for a test case ID

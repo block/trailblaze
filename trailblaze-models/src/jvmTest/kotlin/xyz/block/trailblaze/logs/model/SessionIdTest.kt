@@ -24,20 +24,20 @@ class SessionIdTest {
   }
 
   @Test
-  fun `sanitized preserves long TestRail-style suffixes without truncation`() {
+  fun `sanitized preserves long external-style suffixes without truncation`() {
     // Regression pin: the previous 100-char cap dropped __suite/__section/__case
     // suffixes that downstream result-mapping tooling relies on.
-    val longTestRailId =
+    val longExternalId =
       "2026_04_20_11_16_18_example_suite_long_test_name_" +
         "verify_that_the_action_buttons_appear_for_active_items" +
         "__suite_1__section_2__case_3_1234"
 
-    val sanitized = SessionId.sanitized(longTestRailId)
+    val sanitized = SessionId.sanitized(longExternalId)
 
-    assertEquals(longTestRailId.length, sanitized.value.length)
+    assertEquals(longExternalId.length, sanitized.value.length)
     assertTrue(
       sanitized.value.contains("__suite_1__section_2__case_3"),
-      "TestRail suffix must survive sanitization; got: ${sanitized.value}",
+      "Long suite/section/case suffix must survive sanitization; got: ${sanitized.value}",
     )
   }
 

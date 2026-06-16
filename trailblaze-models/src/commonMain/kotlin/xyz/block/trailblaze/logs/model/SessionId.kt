@@ -60,7 +60,7 @@ value class SessionId(val value: String) {
      * override — otherwise host and device would write to two different session
      * directories.
      *
-     * Does **not** truncate: the full input (including long TestRail
+     * Does **not** truncate: the full input (including long external
      * `__suite__section__case` suffixes) is preserved so downstream tooling can
      * map session IDs back to test identifiers.
      */

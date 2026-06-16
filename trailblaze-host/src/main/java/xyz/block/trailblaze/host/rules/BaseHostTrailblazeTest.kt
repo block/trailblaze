@@ -379,7 +379,7 @@ abstract class BaseHostTrailblazeTest(
   }
 
   /**
-   * The title of the trail currently being executed (e.g. TestRail case name).
+   * The title of the trail currently being executed (e.g. an external test-case name).
    *
    * Updated at the start of each [runTrail] call so [MultiAgentV3TestAgentRunner] can
    * forward it as [RecommendationContext.overallObjective] for every step. This lets the

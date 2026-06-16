@@ -9,7 +9,7 @@ import xyz.block.trailblaze.ui.composables.TestItemCard
 
 /**
  * A card displaying a trail with its variants.
- * Uses the shared TestItemCard for consistent UX with TestRail views.
+ * Uses the shared TestItemCard for consistent UX with test-case views.
  *
  * @param trail The trail to display
  * @param isSelected Whether this trail is currently selected

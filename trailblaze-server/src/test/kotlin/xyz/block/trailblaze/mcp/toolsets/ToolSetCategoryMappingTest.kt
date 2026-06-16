@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
  * Contract tests for the new bundled category resolvers on [ToolSetCategoryMapping].
  *
  * These pin the shape the production consumers (DirectMcpToolExecutor, SubagentOrchestrator,
- * inner-agent fallback in TrailblazeMcpServer, DynamicToolSetManager) rely on — namely that
+ * inner-agent fallback in TrailblazeMcpServer) rely on — namely that
  * `resolve(...)` covers both class-backed and YAML-defined tools in one call, so a class-only
  * refactor can't silently drop the YAML half like the pressBack migration did.
  */

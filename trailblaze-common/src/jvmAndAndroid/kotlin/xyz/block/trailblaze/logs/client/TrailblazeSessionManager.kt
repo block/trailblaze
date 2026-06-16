@@ -294,7 +294,7 @@ class TrailblazeSessionManager(
      *
      * Format: `YYYY_MM_DD_HH_MM_SS_<seed>_<random>`, sanitized via [SessionId.sanitized].
      *
-     * The full test name (including TestRail suite/section/case suffixes) is
+     * The full test name (including external suite/section/case suffixes) is
      * preserved so downstream tooling can reliably map session IDs back to test
      * identifiers. Both host-generated and externally-provided IDs flow through
      * [SessionId.sanitized] so a host-generated ID passed to the on-device handler

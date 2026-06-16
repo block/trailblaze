@@ -24,7 +24,7 @@ import xyz.block.trailblaze.yaml.PromptStep
  * @param v3Runner The underlying V3 runner
  * @param screenStateProvider Provider for current screen state
  * @param sessionIdProvider Provider for the current session ID
- * @param caseTitleProvider Returns the current test case title (e.g. TestRail case name).
+ * @param caseTitleProvider Returns the current test case title (e.g. an external test-case name).
  *   Invoked per step so the title can change between trails when the runner is reused.
  *   The value is forwarded as [RecommendationContext.overallObjective] so the inner agent
  *   can detect impossible steps early instead of exhausting all retries.

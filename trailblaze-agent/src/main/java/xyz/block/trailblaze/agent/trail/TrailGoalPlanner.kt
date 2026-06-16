@@ -70,7 +70,7 @@ class TrailStepPlanner(
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
   private val initialActionHistory: List<String> = emptyList(),
   /**
-   * The overall test case title (e.g. TestRail case name) that encompasses all steps.
+   * The overall test case title (e.g. an external test-case name) that encompasses all steps.
    *
    * When non-null, this is passed as [RecommendationContext.overallObjective] so the inner
    * agent can reason about each step in the context of the broader test goal. This enables

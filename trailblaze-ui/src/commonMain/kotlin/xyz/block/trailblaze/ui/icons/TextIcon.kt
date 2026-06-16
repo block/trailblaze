@@ -16,8 +16,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * TestRail icon showing "TR" text
- * Simple and clear representation for TestRail
+ * Renders a short text label (e.g. "TR") inside a rounded badge.
+ * A simple, clear text-based icon for sources that have no brand glyph.
  */
 @Composable
 fun TextIcon(

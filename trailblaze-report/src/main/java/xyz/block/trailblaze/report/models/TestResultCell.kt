@@ -30,7 +30,7 @@ import kotlinx.serialization.Serializable
  *     writer should preserve unknown fields from the existing on-disk file (see how
  *     `TestResultsRepoPublisher.writeCellFile` merges into existing content) so a vN reader
  *     can still find the fields it expects.
- * @property test_case_id Identifier for the case (e.g. `C12345` for TestRail). Path-partitioned
+ * @property test_case_id Identifier for the case (e.g. `C12345`). Path-partitioned
  *   in the index repo so `git log results/testrail/<id>/<device>/latest.json` shows that
  *   cell's full history.
  * @property device Device profile the case ran on (e.g. `android-phone`). One cell per

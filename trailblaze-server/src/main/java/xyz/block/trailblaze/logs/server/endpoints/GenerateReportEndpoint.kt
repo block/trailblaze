@@ -157,7 +157,7 @@ object GenerateReportEndpoint {
   /**
    * Hashes [input] to a fixed-length hex string suitable for use in a filename.
    * Keeps `trailblaze_live_report_<hash>.html` under common 255-byte filename
-   * limits regardless of how long the session id is (TestRail-style ids in
+   * limits regardless of how long the session id is (externally-sourced ids in
    * particular can be very long).
    */
   private fun shortHash(input: String): String {

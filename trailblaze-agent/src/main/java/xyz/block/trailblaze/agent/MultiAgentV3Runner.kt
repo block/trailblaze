@@ -262,7 +262,7 @@ class MultiAgentV3Runner private constructor(
     sessionId: SessionId = TrailblazeSessionManager.generateSessionId("trail"),
     initialActionHistory: List<String> = emptyList(),
     /**
-     * The overall test case title (e.g. TestRail case name) that encompasses all steps.
+     * The overall test case title (e.g. an external test-case name) that encompasses all steps.
      *
      * Passed as [RecommendationContext.overallObjective] so the inner agent can reason
      * about each step in the context of the broader test goal and detect impossible

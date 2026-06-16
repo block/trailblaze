@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Shared card component for displaying test items (trails or test cases).
- * Used by both TrailsBrowser and TestRail views for consistent UX.
+ * Used by both the trails browser and test-case views for consistent UX.
  *
  * @param title The title of the test item (optional - if null, id becomes primary)
  * @param id The unique identifier / path of the test item

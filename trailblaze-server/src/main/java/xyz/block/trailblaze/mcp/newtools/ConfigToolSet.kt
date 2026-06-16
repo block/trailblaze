@@ -14,7 +14,6 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
-import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -230,13 +229,6 @@ class ConfigToolSet(
         sessionContext?.viewHierarchyVerbosity = verbosity
         null
       }
-      KEY_TOOL_LOADING_STRATEGY -> {
-        val strategy =
-          ToolLoadingStrategy.entries.find { it.name.equals(value, ignoreCase = true) }
-            ?: return "Invalid strategy: $value"
-        sessionContext?.toolLoadingStrategy = strategy
-        null
-      }
       KEY_TOOL_PROFILE -> {
         val profile = McpToolProfile.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid tool profile: $value"
@@ -270,7 +262,6 @@ class ConfigToolSet(
     const val KEY_AGENT_IMPLEMENTATION = "agentImplementation"
     const val KEY_SCREENSHOT_FORMAT = "screenshotFormat"
     const val KEY_VIEW_HIERARCHY_VERBOSITY = "viewHierarchyVerbosity"
-    const val KEY_TOOL_LOADING_STRATEGY = "toolLoadingStrategy"
     const val KEY_MODE = "mode"
     const val KEY_TOOL_PROFILE = "toolProfile"
 
@@ -308,7 +299,6 @@ class ConfigToolSet(
         values[KEY_MODE] = ctx.mode.name
         values[KEY_SCREENSHOT_FORMAT] = ctx.screenshotFormat.name
         values[KEY_VIEW_HIERARCHY_VERBOSITY] = ctx.viewHierarchyVerbosity.name
-        values[KEY_TOOL_LOADING_STRATEGY] = ctx.toolLoadingStrategy.name
         values[KEY_TOOL_PROFILE] = ctx.toolProfile.name
       }
 
@@ -371,11 +361,6 @@ class ConfigToolSet(
         key = KEY_VIEW_HIERARCHY_VERBOSITY,
         description = "Detail level for view hierarchy data",
         validValues = ViewHierarchyVerbosity.entries.map { it.name },
-      ),
-      ConfigKeyDef(
-        key = KEY_TOOL_LOADING_STRATEGY,
-        description = "How tools are loaded (ALL_TOOLS or PROGRESSIVE)",
-        validValues = ToolLoadingStrategy.entries.map { it.name },
       ),
       ConfigKeyDef(
         key = KEY_TOOL_PROFILE,

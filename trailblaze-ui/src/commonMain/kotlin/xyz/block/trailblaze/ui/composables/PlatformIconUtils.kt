@@ -67,7 +67,7 @@ fun TrailblazeDevicePlatform.getIcon(): ImageVector = when (this) {
  * Returns the appropriate icon for a trail source type, or null if none.
  * - HANDWRITTEN: Person icon (manually written test)
  * - GENERATED: SmartToy/robot icon (AI-generated test)
- * - TESTRAIL: No icon (default/external source)
+ * - Other sources: No icon (default/external source)
  */
 fun TrailSourceType.getIcon(): ImageVector? = when (this) {
   TrailSourceType.HANDWRITTEN -> Icons.Default.Person

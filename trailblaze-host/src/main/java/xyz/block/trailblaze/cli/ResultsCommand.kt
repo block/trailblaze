@@ -26,7 +26,7 @@ import java.util.concurrent.Callable
 /**
  * Query persisted test results from a flat-file index repo.
  *
- * The index repo is a key-value store on GitHub: two JSON files per (TestRail case, device
+ * The index repo is a key-value store on GitHub: two JSON files per (test case, device
  * profile) cell at
  *   `results/testrail/<caseId>/<device>/latest.json`        (every terminal run)
  *   `results/testrail/<caseId>/<device>/latest_success.json` (passing runs only)
@@ -52,7 +52,7 @@ import java.util.concurrent.Callable
   name = "results",
   mixinStandardHelpOptions = true,
   description = [
-    "Query the persisted test-result index for a TestRail case. " +
+    "Query the persisted test-result index for a test case. " +
       "Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) " +
       "is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes " +
       "the bare case-id straight to the `show` subcommand.",
@@ -76,7 +76,7 @@ class ResultsCommand : Callable<Int> {
     arity = "0..1",
     paramLabel = "<case-id>",
     description = [
-      "TestRail case ID. When supplied without a subcommand, this routes to `show <case-id>`. " +
+      "Test-case ID. When supplied without a subcommand, this routes to `show <case-id>`. " +
         "Case-insensitive; the leading `C` is required (e.g. C12345).",
     ],
   )
@@ -153,7 +153,7 @@ class ResultsCommand : Callable<Int> {
 @Command(
   name = "show",
   mixinStandardHelpOptions = true,
-  description = ["Show the recorded result for a TestRail case ID"],
+  description = ["Show the recorded result for a test case ID"],
 )
 class ResultsShowCommand : Callable<Int> {
 
@@ -177,7 +177,7 @@ class ResultsShowCommand : Callable<Int> {
     arity = "1",
     paramLabel = "<case-id>",
     description = [
-      "TestRail case ID, e.g. C12345. Case-insensitive; the leading `C` is required.",
+      "Test-case ID, e.g. C12345. Case-insensitive; the leading `C` is required.",
     ],
   )
   lateinit var caseId: String

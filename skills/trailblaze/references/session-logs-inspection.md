@@ -250,7 +250,7 @@ trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/logs/client/Trailbl
 ```
 
 When a new log type lands or fields change, that file is the source of truth — update this
-reference and `scripts/testrail-build-analysis/analyze.py` accordingly.
+reference accordingly.
 
 ## Related references
 

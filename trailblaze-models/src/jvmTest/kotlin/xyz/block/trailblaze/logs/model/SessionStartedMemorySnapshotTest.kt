@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  *  3. A legacy JSON envelope written BEFORE these fields existed (no
  *     `resolvedInitialMemory` / `sensitiveMemoryKeys` keys present) still decodes —
  *     the defaults kick in. This is what makes the field addition backwards-compatible
- *     for session logs already on disk and in TestRail uploads.
+ *     for session logs already on disk and in external test-result uploads.
  */
 class SessionStartedMemorySnapshotTest {
 

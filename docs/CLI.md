@@ -79,7 +79,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
-| `results` | Query the persisted test-result index for a TestRail case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
+| `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
@@ -997,7 +997,7 @@ trailblaze waypoint shortcut verify [OPTIONS]
 
 ### `trailblaze results`
 
-Query the persisted test-result index for a TestRail case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand.
+Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand.
 
 **Synopsis:**
 
@@ -1010,7 +1010,7 @@ trailblaze results show
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<case-id>>` | TestRail case ID. When supplied without a subcommand, this routes to `show <case-id>`. Case-insensitive; the leading `C` is required (e.g. C12345). | No |
+| `<<case-id>>` | Test-case ID. When supplied without a subcommand, this routes to `show <case-id>`. Case-insensitive; the leading `C` is required (e.g. C12345). | No |
 
 **Options:**
 
@@ -1028,7 +1028,7 @@ trailblaze results show
 
 ### `trailblaze results show`
 
-Show the recorded result for a TestRail case ID
+Show the recorded result for a test case ID
 
 **Synopsis:**
 
@@ -1040,7 +1040,7 @@ trailblaze results show [OPTIONS] <<case-id>>
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<case-id>>` | TestRail case ID, e.g. C12345. Case-insensitive; the leading `C` is required. | Yes |
+| `<<case-id>>` | Test-case ID, e.g. C12345. Case-insensitive; the leading `C` is required. | Yes |
 
 **Options:**
 

@@ -54,6 +54,10 @@ subprojects {
 // Apply shared git version computation
 apply(from = "gradle/git-version.gradle.kts")
 
+// Apply shared dependency-resolution security overrides (single source of truth,
+// shared with the internal root build).
+apply(from = "gradle/dependency-security.gradle.kts")
+
 subprojects
   .forEach {
     it.plugins.withId("com.android.library") {

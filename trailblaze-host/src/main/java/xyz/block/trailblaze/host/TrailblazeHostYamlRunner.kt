@@ -1593,7 +1593,7 @@ object TrailblazeHostYamlRunner {
     if (promptSteps.isEmpty()) {
       throw TrailblazeException(
         "Trail has no executable prompt steps — this would be a false positive pass. " +
-          "Add steps to this trail file or the TestRail case.",
+          "Add steps to this trail file or the source test case.",
       )
     }
 

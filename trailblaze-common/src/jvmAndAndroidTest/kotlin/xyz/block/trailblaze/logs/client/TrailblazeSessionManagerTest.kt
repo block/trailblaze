@@ -15,7 +15,7 @@ class TrailblazeSessionManagerTest {
     val sessionId = generateSessionId(longSeed)
 
     assert(sessionId.value.contains("__suite_1__section_2__case_3")) {
-      "TestRail-style suffix must survive generateSessionId; got: ${sessionId.value}"
+      "Long suite/section/case suffix must survive generateSessionId; got: ${sessionId.value}"
     }
     assert(sessionId.value.length > 200) {
       "Expected un-truncated session id; got length ${sessionId.value.length}"
@@ -23,9 +23,9 @@ class TrailblazeSessionManagerTest {
   }
 
   @Test
-  fun `createSessionWithId preserves long TestRail IDs without truncation`() {
+  fun `createSessionWithId preserves long external IDs without truncation`() {
     // Regression pin: the previous 100-char cap on externally-provided override
-    // IDs also dropped TestRail suffixes. Now both paths go through the single
+    // IDs also dropped long suite/section/case suffixes. Now both paths go through the single
     // SessionId.sanitized source of truth.
     val longOverride = SessionId(
       "2026_04_20_11_16_18_example_suite_long_test_name_" +

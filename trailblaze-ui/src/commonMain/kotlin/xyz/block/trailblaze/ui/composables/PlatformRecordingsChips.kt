@@ -44,7 +44,7 @@ import xyz.block.trailblaze.yaml.TrailSourceType
 
 /**
  * Common data class representing a recording's platform and classifier information.
- * Used to share UI components between TrailCard and TestRailCard.
+ * Used to share UI components across trail and test-case cards.
  */
 data class RecordingDisplayInfo(
   /**

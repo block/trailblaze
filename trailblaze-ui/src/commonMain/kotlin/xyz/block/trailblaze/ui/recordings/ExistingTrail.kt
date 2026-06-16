@@ -8,7 +8,7 @@ import xyz.block.trailblaze.recordings.TrailRecordings
  *
  * @param absolutePath The absolute path to the trail file
  * @param relativePath The path relative to the trails directory
- *                     (e.g., "testrail/suite_123/section_456/case_789/ios-iphone.trail.yaml")
+ *                     (e.g., "regression/suite_123/section_456/case_789/ios-iphone.trail.yaml")
  * @param fileName The name of the file (e.g., "ios-iphone.trail.yaml" or "trailblaze.yaml")
  */
 data class ExistingTrail(

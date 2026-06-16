@@ -420,7 +420,7 @@ open class AndroidTrailblazeRule(
   private val agentImplementation: AgentImplementation = InstrumentationArgUtil.agentImplementation()
 
   /**
-   * Title of the trail currently executing (e.g. TestRail case name).
+   * Title of the trail currently executing (e.g. an external test-case name).
    *
    * Set at [runSuspend] entry before any step runs, then forwarded via
    * [caseTitleProvider] in the V3 runner so the inner agent receives the

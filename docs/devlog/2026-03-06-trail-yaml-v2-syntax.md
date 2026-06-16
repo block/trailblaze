@@ -55,7 +55,7 @@ The `trailhead` is everything about the starting point: what this trail is, how 
 ```yaml
 # ── Trailhead: identity, configuration, and setup ──────────────────
 trailhead:
-  id: testrail/suite_71172/section_838052/case_4837714
+  id: regression/suite_71172/section_838052/case_4837714
   title: Verify user cannot load more than $2,000 onto a Gift Card within 24 hours
   priority: P0
 
@@ -79,7 +79,7 @@ trailhead:
   metadata:
     caseId: "4837714"
     sectionId: "838052"
-    testRailUrl: https://testrail.example.com/index.php?/cases/view/12345
+    sourceUrl: https://tracker.example.com/cases/view/12345
 
   # Setup objectives (checkpoint for recording iteration)
   setup:
@@ -375,7 +375,7 @@ This part of the original v2 design (CLI flows that walk authors through picking
   - Optional `--target=<T> --platform=<P>` to narrow.
 - The implementation noun stays `tool` everywhere: `TrailblazeTool` (Kotlin class), `./trailblaze toolbox` (CLI), `./trailblaze tool <name>` (invocation), `tools:` (YAML key). The TOOLS section in the listing is the same word as the implementation type — the overload is harmless because section descriptions disambiguate the role.
 - Plain-text output for now; structured output (YAML / JSON) deferred until a concrete need surfaces.
-- Specific funnel surfaces (interactive flows in `./trailblaze blaze`, scaffolding defaults, the on-demand pipeline's TestRail → trail generator) are NOT settled here. They will be designed against a working discovery surface first.
+- Specific funnel surfaces (interactive flows in `./trailblaze blaze`, scaffolding defaults, the on-demand pipeline's external-test-case → trail generator) are NOT settled here. They will be designed against a working discovery surface first.
 
 The principle the funnel work will hold to: **make it easy to do things the right way.** Discovery comes first so authors can SEE what's available; funneling them through workflows is a follow-on once discovery is solid.
 
@@ -412,7 +412,7 @@ trailhead:
 **NL-only `blaze.yaml` (recorder materializes `tools:` on first run):**
 ```yaml
 config:
-  id: testrail/suite_71172/section_946176/case_5552497
+  id: regression/suite_71172/section_946176/case_5552497
   target: myapp
   platform: android
 trailhead:
@@ -439,7 +439,7 @@ Parses and runs. Soft warning at lint time; no failure.
 
 ### Open questions for follow-up devlogs
 
-1. **Funnel design** — how the authoring surfaces (`./trailblaze blaze`, scaffolding, the TestRail generator) walk authors through trailhead selection. Discovery via `./trailblaze toolbox trailheads` is the foundation; the workflow design happens after that lands.
+1. **Funnel design** — how the authoring surfaces (`./trailblaze blaze`, scaffolding, the test-case generator) walk authors through trailhead selection. Discovery via `./trailblaze toolbox trailheads` is the foundation; the workflow design happens after that lands.
 2. **Default trailhead per target** — each registered target needs a designated default trailhead tool (e.g. `myapp` defaults to `myapp_launchAppSignedInWithAccount(key: defaults/standard-account)`). Lives in a registry of some kind; format TBD.
 3. **`@LLMDescription` audit** — for the existing trailhead-tagged tool classes, ensure each description is decision-grade. Some are; others need a pass.
 4. **Validation lint behavior** — `./trailblaze toolbox trailheads`-based lint warnings vs CI-gating. Default warn-only; opt-in `--strict` for teams that want PR-blocking.

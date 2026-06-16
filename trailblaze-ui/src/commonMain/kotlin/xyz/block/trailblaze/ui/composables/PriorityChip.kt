@@ -8,7 +8,7 @@ import androidx.compose.runtime.Composable
 
 /**
  * Chip component for displaying priority levels with color-coded styling.
- * Used by both TrailsBrowser and TestRail views for consistent UX.
+ * Used by both the trails browser and test-case views for consistent UX.
  *
  * @param priorityShortName The priority identifier (e.g., "P0", "P1", "P2", "P3", "P4", "Smoke")
  */

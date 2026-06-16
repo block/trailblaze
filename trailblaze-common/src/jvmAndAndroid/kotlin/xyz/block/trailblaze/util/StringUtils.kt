@@ -29,7 +29,7 @@ fun toPascalCaseIdentifier(input: String, prefixIfStartsWithDigit: String = "C")
  *
  * Not for session IDs. For session-ID sanitization use
  * `SessionId.sanitized` — it is idempotent and preserves long suffixes
- * (e.g., TestRail `__suite__section__case`), which this helper would
+ * (e.g., an external `__suite__section__case` identifier), which this helper would
  * collapse into a single underscore.
  */
 fun toSnakeCaseIdentifier(input: String, prefixIfStartsWithDigit: String = "c_"): String {

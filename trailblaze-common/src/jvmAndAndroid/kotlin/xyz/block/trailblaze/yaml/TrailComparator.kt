@@ -106,7 +106,7 @@ class TrailComparator {
   /**
    * Compare two trails and return a detailed comparison result.
    *
-   * @param expected The expected/reference trail items (e.g., from TestRail)
+   * @param expected The expected/reference trail items (e.g., from an external test-management system)
    * @param actual The actual trail items (e.g., from a recorded trail file)
    * @param compareConfig Whether to compare config blocks (default: true)
    * @return A [TrailComparisonResult] containing any differences found

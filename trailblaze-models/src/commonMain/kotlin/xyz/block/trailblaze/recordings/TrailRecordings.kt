@@ -13,7 +13,7 @@ object TrailRecordings {
    * ```
    * trails/
    * └── generated/                                    <- Subdirectory (configurable)
-   *     └── testrail/suite_123/section_456/case_789/  <- Trail ID (directory = trail identity)
+   *     └── regression/suite_123/section_456/case_789/  <- Trail ID (directory = trail identity)
    *         ├── blaze.yaml (or trailblaze.yaml)         <- Source of truth: NL steps (no recordings)
    *         ├── ios-iphone.trail.yaml                 <- Recording for iOS iPhone
    *         ├── ios-ipad.trail.yaml                   <- Recording for iOS iPad
@@ -23,7 +23,7 @@ object TrailRecordings {
    * Trail directory structure (without subdirectories - open source default):
    * ```
    * trails/
-   * └── testrail/suite_123/section_456/case_789/      <- Trail ID (directory = trail identity)
+   * └── regression/suite_123/section_456/case_789/      <- Trail ID (directory = trail identity)
    *     ├── blaze.yaml (or trailblaze.yaml)
    *     ├── ios-iphone.trail.yaml
    *     └── android.trail.yaml

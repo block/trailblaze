@@ -989,11 +989,11 @@ class TrailblazeRecordingGeneratorTest {
   @Test
   fun roundTripFullTrailFile() {
     val config = TrailConfig(
-      id = "testrail/suite_123/case_456",
+      id = "regression/suite_123/case_456",
       title = "User can log in",
       priority = "P0",
       context = "Account email: test@example.com",
-      metadata = mapOf("testRailCaseId" to "456"),
+      metadata = mapOf("caseId" to "456"),
     )
     val promptsYaml = """
       |- prompts:
@@ -1045,11 +1045,11 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(decoded.size).isEqualTo(3) // config + tools + prompts
 
     val decodedConfig = (decoded[0] as TrailYamlItem.ConfigTrailItem).config
-    assertThat(decodedConfig.id).isEqualTo("testrail/suite_123/case_456")
+    assertThat(decodedConfig.id).isEqualTo("regression/suite_123/case_456")
     assertThat(decodedConfig.title).isEqualTo("User can log in")
     assertThat(decodedConfig.priority).isEqualTo("P0")
     assertThat(decodedConfig.context).isEqualTo("Account email: test@example.com")
-    assertThat(decodedConfig.metadata).isEqualTo(mapOf("testRailCaseId" to "456"))
+    assertThat(decodedConfig.metadata).isEqualTo(mapOf("caseId" to "456"))
 
     val decodedTools = (decoded[1] as TrailYamlItem.ToolTrailItem).tools
     assertThat(decodedTools.size).isEqualTo(1)

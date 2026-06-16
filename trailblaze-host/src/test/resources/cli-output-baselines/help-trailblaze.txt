@@ -30,9 +30,9 @@ Trailblaze - AI-powered device automation
                  the exit code.
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
-  results      Query the persisted test-result index for a TestRail case.
-                 Passing a positional `<case-id>` (e.g. `trailblaze results
-                 C12345 --device android-phone`) is equivalent to the explicit
+  results      Query the persisted test-result index for a test case. Passing a
+                 positional `<case-id>` (e.g. `trailblaze results C12345
+                 --device android-phone`) is equivalent to the explicit
                  `trailblaze results show <case-id>` form — picocli routes the
                  bare case-id straight to the `show` subcommand.
   config       View and set configuration (target app, device defaults, AI
