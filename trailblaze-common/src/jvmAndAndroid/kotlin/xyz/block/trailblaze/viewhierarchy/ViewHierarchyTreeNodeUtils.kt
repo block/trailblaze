@@ -1,7 +1,7 @@
 package xyz.block.trailblaze.viewhierarchy
 
 import maestro.DeviceInfo
-import maestro.Platform
+import maestro.device.Platform
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.collectAllClickableAndEnabledElements

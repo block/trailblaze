@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.os.Environment
 import kotlinx.datetime.Clock
 import maestro.DeviceInfo
-import maestro.Platform
+import maestro.device.Platform
 import org.junit.Test
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils

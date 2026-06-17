@@ -697,7 +697,9 @@ Call with an empty list to reset to only the core tools.""",
     val classNames = resolved.toolClasses
       .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
       .map { it.simpleName?.removeSuffix("TrailblazeTool")?.removeSuffix("Tool") ?: it.toString() }
-    val toolNames = classNames + resolved.yamlToolNames.map { it.toolName }
+    val toolNames = classNames +
+      resolved.yamlToolNames.map { it.toolName } +
+      resolved.scriptedToolNames.map { it.toolName }
     return buildString {
       appendLine("Active tool sets updated.")
       appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")

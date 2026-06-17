@@ -103,6 +103,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toTrailblazeToolDescriptorWithSource
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -540,6 +541,7 @@ class TrailblazeMcpServer(
       val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
         customToolClasses = collectCustomToolClasses(driverType),
         customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames,
+        customScriptedToolNames = resolvedFromTrailmap.scriptedToolNames,
         excludedToolClasses = target.getExcludedToolsForDriver(driverType),
         catalog = TrailblazeToolSetCatalog.defaultEntries(),
         driverType = driverType,
@@ -1921,8 +1923,7 @@ class TrailblazeMcpServer(
         {
           val runtimeState = runBlocking { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) }
           if (runtimeState != null) {
-            runtimeState.toolRepo.getCurrentToolDescriptors()
-              .map { it.toTrailblazeToolDescriptor() }
+            runtimeState.toolRepo.getCurrentTrailblazeToolDescriptors()
           } else {
           val driverType = mcpBridge.getDriverType()
           // Resolve the active device the same way every register-side
@@ -1960,7 +1961,7 @@ class TrailblazeMcpServer(
           // Custom tools first so the LLM sees app-specific tools (e.g., sign-in)
           // before generic alternatives (e.g., launchApp), improving selection.
           val classDescriptors = (customToolClasses + builtInToolClasses - excludedToolClasses)
-            .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+            .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
           // Yaml-defined tools only ride along on the fallback (Android/iOS) path — the
           // bridge path is a complete driver-specific replacement (e.g. Playwright), and
           // driver-compatibility filtering for yaml tools lives in the catalog, not here.
@@ -1974,9 +1975,9 @@ class TrailblazeMcpServer(
               activeTarget.getExcludedYamlToolNamesForDriver(driverType)
             } else emptySet()
             val builtInYamlNames = resolvedFromTrailmap?.yamlToolNames ?: emptySet()
-            KoogToolExt.buildDescriptorsForYamlDefined(
+            KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(
               (customYamlNames + builtInYamlNames - excludedYamlNames).toSet(),
-            ).map { it.toTrailblazeToolDescriptor() }
+            )
           }
           val allTools = classDescriptors + yamlDescriptors
           Console.log(

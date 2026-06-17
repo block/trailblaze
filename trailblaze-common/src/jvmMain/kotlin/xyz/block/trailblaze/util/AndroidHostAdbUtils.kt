@@ -151,6 +151,12 @@ object AndroidHostAdbUtils {
    * The eviction-and-retry path is logged: a device that briefly disconnects and reconnects with a
    * new transport id is the most useful diagnostic point in the whole abstraction, so operators
    * debugging "why did this call slow down" should see exactly what happened.
+   *
+   * This handles a transport that *throws* (IOException). A transport that *hangs* — a wedged device,
+   * or a stale transport that never errors — is recovered separately, and only for short, idempotent,
+   * time-bounded calls, in [execAdbShellCommandWithTimeout]'s reconnect-on-timeout. The bulk/streaming
+   * paths (pull/push/streamingShell) deliberately don't reconnect-on-timeout: they have no bounded
+   * deadline that could distinguish "slow" from "hung".
    */
   private fun <T> withDadb(deviceId: TrailblazeDeviceId, block: (Dadb) -> T): T {
     val serial = deviceId.instanceId
@@ -461,11 +467,31 @@ object AndroidHostAdbUtils {
   }
 
   /**
+   * Outcome of a single bounded shell attempt. [TIMED_OUT] is deliberately distinct from [FAILED]:
+   * only a timeout — the symptom of a stale/wedged transport that *hangs* instead of throwing — is
+   * safe and worthwhile to retry against a freshly-reconnected client. A [FAILED] attempt threw,
+   * which for a possibly-non-idempotent command we must not silently re-run.
+   */
+  internal enum class ShellAttemptOutcome { SUCCESS, FAILED, TIMED_OUT }
+
+  internal data class ShellAttemptResult(val value: String?, val outcome: ShellAttemptOutcome)
+
+  /**
    * Like [execAdbShellCommand] but bounded by [timeoutMs]. On timeout the cached dadb client is
-   * evicted (forcing the read to abort and the next call to reconnect) and `null` is returned so
-   * the caller can decide whether the missing data is fatal or recoverable. Use for short-lived
-   * shell calls that previously had explicit timeouts (e.g. `getprop` during device discovery,
-   * `logcat -d` for the MCP logcat tool).
+   * evicted and the call is retried ONCE against a freshly-reconnected client before giving up.
+   *
+   * The retry is the dadb analog of what the `adb` binary does transparently: reconnect a stale
+   * transport. When an emulator dies and a new one boots on the same serial (new transport id), or
+   * adbd briefly wedges, the cached dadb transport *hangs* on the next read rather than throwing an
+   * [IOException] — so [withDadb]'s IOException-only retry never fires and the call would otherwise
+   * just time out and return null. Evicting on timeout and reconnecting once recovers that case
+   * (the "device disappeared from discovery / a single tap hung for minutes" failure mode).
+   *
+   * If the retry also times out (or the command genuinely failed), `null` is returned so the caller
+   * can decide whether the missing data is fatal or recoverable. Use only for short-lived,
+   * idempotent shell calls that previously had explicit timeouts (`getprop` during device
+   * discovery, `logcat -d` for the MCP logcat tool, port-forward removal) — a retry must not be
+   * able to double-execute a side effect.
    */
   fun execAdbShellCommandWithTimeout(
     deviceId: TrailblazeDeviceId,
@@ -475,6 +501,50 @@ object AndroidHostAdbUtils {
     val command = args.joinToString(" ")
     val redactedCommand = redactSecretsForLog(command)
     Console.log("adb shell ($timeoutMs ms timeout) $redactedCommand")
+    return execWithReconnectOnTimeout {
+      runSingleAdbShellAttempt(deviceId, command, redactedCommand, timeoutMs)
+    }
+  }
+
+  /**
+   * Retry policy for [execAdbShellCommandWithTimeout], extracted as pure control flow so it is
+   * unit-testable without real threads or a live device. Runs [attempt] up to [maxAttempts] times,
+   * returning early on any non-[ShellAttemptOutcome.TIMED_OUT] outcome (a success, or a thrown
+   * command error — both terminal). Only a timeout retries, because only a wedged/stale transport
+   * benefits from reconnecting; the per-attempt eviction that makes the next attempt reconnect with
+   * a fresh transport happens inside [attempt]. Returns the last attempt's value.
+   */
+  internal fun execWithReconnectOnTimeout(
+    maxAttempts: Int = 2,
+    attempt: () -> ShellAttemptResult,
+  ): String? {
+    var last: ShellAttemptResult? = null
+    repeat(maxAttempts) { i ->
+      val result = attempt()
+      last = result
+      if (result.outcome != ShellAttemptOutcome.TIMED_OUT) return result.value
+      if (i < maxAttempts - 1) {
+        Console.log(
+          "[AndroidHostAdbUtils] adb shell timed out — reconnecting and retrying " +
+            "(attempt ${i + 2} of $maxAttempts)",
+        )
+      }
+    }
+    return last?.value
+  }
+
+  /**
+   * Runs one bounded `adb shell` attempt on a daemon worker thread. On a wall-clock timeout the
+   * cached dadb client is evicted (so the *next* attempt reconnects with a fresh transport) and the
+   * worker is interrupted; the outcome is reported so [execWithReconnectOnTimeout] can decide
+   * whether to retry.
+   */
+  private fun runSingleAdbShellAttempt(
+    deviceId: TrailblazeDeviceId,
+    command: String,
+    redactedCommand: String,
+    timeoutMs: Long,
+  ): ShellAttemptResult {
     val resultRef = AtomicReference<String?>()
     val errorRef = AtomicReference<Throwable?>()
     val worker = thread(name = "dadb-shell-timed", isDaemon = true) {
@@ -489,13 +559,23 @@ object AndroidHostAdbUtils {
         errorRef.set(t)
       }
     }
-    worker.join(timeoutMs)
+    try {
+      worker.join(timeoutMs)
+    } catch (e: InterruptedException) {
+      // The calling thread was interrupted while waiting (e.g. discovery's name-resolution pool was
+      // shut down after its deadline). Restore the interrupt flag, abandon the wedged worker and its
+      // possibly-stale client, and report a terminal failure — interruption means "stop", not "retry".
+      Thread.currentThread().interrupt()
+      dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
+      worker.interrupt()
+      return ShellAttemptResult(null, ShellAttemptOutcome.FAILED)
+    }
     // If the worker finished while we were waking up — even if it raced with the deadline —
     // prefer the result it produced over evicting the client. The thin window between
     // `join(timeoutMs)` returning and `isAlive` being checked is real; checking the result
     // first means we never throw away a successful client just because it cut it close.
     val result = resultRef.get()
-    if (result != null) return result
+    if (result != null) return ShellAttemptResult(result, ShellAttemptOutcome.SUCCESS)
     val error = errorRef.get()
     if (error != null) {
       // Worker completed with an exception (the underlying shell call threw). Distinguish
@@ -506,7 +586,7 @@ object AndroidHostAdbUtils {
         "[AndroidHostAdbUtils] adb shell failed (${error.javaClass.simpleName}: " +
           "${error.message}) — command: $redactedCommand",
       )
-      return null
+      return ShellAttemptResult(null, ShellAttemptOutcome.FAILED)
     }
     if (worker.isAlive) {
       Console.log(
@@ -514,9 +594,16 @@ object AndroidHostAdbUtils {
           "evicting dadb client: $redactedCommand",
       )
       dadbClients.remove(deviceId.instanceId)?.let { runCatching { it.close() } }
+      // interrupt() may not unblock a worker parked in a dadb socket read (native I/O ignores the
+      // interrupt flag); the daemon thread then lingers until that read returns or errors. Bounded in
+      // practice — the device either responds or the socket eventually faults — and the thread is a
+      // daemon, so it never blocks JVM exit. A hard cap would require a dadb-level socket-read timeout.
       worker.interrupt()
+      return ShellAttemptResult(null, ShellAttemptOutcome.TIMED_OUT)
     }
-    return null
+    // Worker finished with neither a result nor an exception (the block legitimately returned null).
+    // Terminal "no data" — not a timeout — so we don't retry a call that already completed.
+    return ShellAttemptResult(null, ShellAttemptOutcome.SUCCESS)
   }
 
   /**

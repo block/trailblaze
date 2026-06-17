@@ -12,8 +12,10 @@ import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMa
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.viewmatcher.models.ElementMatches
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.jvm.isAccessible
+import kotlinx.coroutines.runBlocking
 
 /**
  * This class allows us to call Maestro's internal implementations for element matching to guarantee uniqueness
@@ -102,8 +104,14 @@ object ElementMatcherUsingMaestro {
     // Replicate Orchestra's findElement logic for childOf handling
     // Source: https://github.com/mobile-dev-inc/Maestro/blob/42ae01049fc1e3466ad4ba45414b7bb25a19c899/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt#L1168-L1182
     val searchHierarchy: ViewHierarchy = if (elementSelector.childOf != null) {
-      // When childOf is specified, we need to find the parent element first and search within it
-      findElementViewHierarchyMethod.call(orchestra, elementSelector.childOf, 0L) as ViewHierarchy
+      // When childOf is specified, we need to find the parent element first and search within it.
+      // findElementViewHierarchy became a suspend fun in Maestro 2.6.1 (our vendored on-device
+      // Orchestra matches that signature), so invoke it through reflection's suspend-aware
+      // callSuspend inside runBlocking. We're resolving against a static snapshot with a 0L
+      // timeout, so this never actually blocks on device I/O.
+      runBlocking {
+        findElementViewHierarchyMethod.callSuspend(orchestra, elementSelector.childOf, 0L) as ViewHierarchy
+      }
     } else {
       viewHierarchy
     }

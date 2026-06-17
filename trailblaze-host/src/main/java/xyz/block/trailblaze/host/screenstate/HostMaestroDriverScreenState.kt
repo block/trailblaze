@@ -2,7 +2,7 @@ package xyz.block.trailblaze.host.screenstate
 
 import maestro.DeviceInfo
 import maestro.Driver
-import maestro.Platform
+import maestro.device.Platform
 import maestro.TreeNode
 import maestro.filterOutOfBounds
 import okio.Buffer

@@ -2,6 +2,8 @@ package xyz.block.trailblaze.config
 
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceType
 
 /**
  * Builds a [TrailblazeToolDescriptor] from a `tools:` mode [ToolYamlConfig], without reflection.
@@ -14,7 +16,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
  * Required parameters land in [TrailblazeToolDescriptor.requiredParameters]; non-required ones
  * (defaulted or optional) land in [TrailblazeToolDescriptor.optionalParameters].
  */
-fun ToolYamlConfig.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor {
+fun ToolYamlConfig.toTrailblazeToolDescriptor(
+  source: TrailblazeToolSourceDescriptor? = TrailblazeToolSourceDescriptor(
+    type = TrailblazeToolSourceType.YAML,
+    identifier = id,
+  ),
+): TrailblazeToolDescriptor {
   require(mode == ToolYamlConfig.Mode.TOOLS) {
     "toTrailblazeToolDescriptor() is only valid for 'tools:' mode YAML configs; tool '$id' is in $mode mode."
   }
@@ -25,6 +32,7 @@ fun ToolYamlConfig.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor {
     description = description?.trim()?.takeIf { it.isNotBlank() },
     requiredParameters = required,
     optionalParameters = optional,
+    source = source,
   )
 }
 

@@ -181,7 +181,7 @@ class LoggingDriver(
     delegate.launchApp(appId, launchArguments)
   }
 
-  override fun setOrientation(orientation: maestro.DeviceOrientation) {
+  override fun setOrientation(orientation: maestro.device.DeviceOrientation) {
     delegate.setOrientation(orientation)
   }
 

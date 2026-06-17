@@ -5,9 +5,9 @@ import maestro.Point
 import maestro.UiElement
 
 /**
- * Last Update from Maestro v2.3.0
- * https://github.com/mobile-dev-inc/Maestro/blob/cli-2.3.0/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
- * In v2.3.0 this function is available at maestro.orchestra.util.calculateElementRelativePoint
+ * Last Update from Maestro v2.6.1
+ * https://github.com/mobile-dev-inc/Maestro/blob/cli-2.6.1/maestro-orchestra/src/main/java/maestro/orchestra/util/ElementCoordinateUtil.kt
+ * In v2.6.1 this function is available at maestro.orchestra.util.calculateElementRelativePoint
  * but we keep a local copy to avoid depending on the internal utility package.
  * SEE THE README.md in this package for details on modifications from OSS version
  */

@@ -2,7 +2,7 @@ package xyz.block.trailblaze.maestro
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
-import maestro.DeviceOrientation
+import maestro.device.DeviceOrientation
 import maestro.KeyCode
 import maestro.ScrollDirection
 import maestro.SwipeDirection
@@ -32,6 +32,7 @@ import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.TravelCommand
+import maestro.orchestra.WaitForAnimationToEndCommand
 import maestro.orchestra.yaml.YamlCommandReader
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -50,6 +51,28 @@ class MaestroCommandToYamlSerializerTest {
     SetOrientationCommand(
       orientation = DeviceOrientation.LANDSCAPE_LEFT,
     ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  // Maestro 2.6.1 changed WaitForAnimationToEndCommand.timeout from Long? to String?. Round-trip it
+  // through the serializer + Maestro's YAML parser to confirm the String timeout survives.
+  @Test
+  fun `waitForAnimationToEnd command with timeout`() {
+    WaitForAnimationToEndCommand(timeout = "2000").also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun `waitForAnimationToEnd command without timeout`() {
+    WaitForAnimationToEndCommand(timeout = null).also { command ->
       convertCommandsToYamlAndParseAndCompare(
         commandToSerialize = command,
         expected = command,

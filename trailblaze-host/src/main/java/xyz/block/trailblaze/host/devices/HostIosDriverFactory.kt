@@ -4,7 +4,8 @@ import device.SimctlIOSDevice
 import ios.LocalIOSDevice
 import ios.devicectl.DeviceControlIOSDevice
 import ios.xctest.XCTestIOSDevice
-import maestro.DeviceOrientation
+import kotlinx.coroutines.runBlocking
+import maestro.device.DeviceOrientation
 import maestro.Driver
 import maestro.Maestro
 import maestro.device.Device
@@ -21,6 +22,7 @@ import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import java.io.File
 import java.nio.file.Paths
 import kotlin.io.path.pathString
 import xyz.block.trailblaze.util.Console
@@ -150,6 +152,13 @@ internal object HostIosDriverFactory {
       deviceType = iOSDeviceType,
       iOSDriverConfig = iOSDriverConfig,
       deviceController = deviceController,
+      // Maestro 2.6.1 added a required logsDir for the XCUITest (xcodebuild) subprocess logs.
+      // Trailblaze routes its own diagnostics through Console/Tracer, so point this at an
+      // ephemeral temp dir rather than wiring in Maestro's DebugLogStore (which would also
+      // stand up Maestro's file-logging machinery as a side effect). Scope it per device+port so
+      // concurrent or back-to-back iOS sessions don't interleave logs into one growing directory.
+      logsDir = File(System.getProperty("java.io.tmpdir"), "trailblaze-xctest-logs/$deviceId-$targetPort")
+        .apply { mkdirs() },
     )
 
     val xcTestDriverClient = XCTestDriverClient(
@@ -209,15 +218,17 @@ internal object HostIosDriverFactory {
       }
     }
 
-    // Auto-rotate iPads to landscape.
-    // iPads are detected by their shortest screen dimension (>= 1536px).
+    // Auto-rotate iPads to landscape. iPads are detected by their shortest screen dimension using the
+    // same canonical threshold as TrailblazeHostDeviceClassifier (shared constant, not a magic number).
     // This must happen after driver init because creating a new XCTest session resets orientation.
     try {
-      val info = maestro.deviceInfo()
-      val minDimension = minOf(info.widthPixels, info.heightPixels)
-      if (minDimension >= 1536) {
-        Console.log("iPad detected (${info.widthPixels}x${info.heightPixels}) — setting landscape orientation")
-        maestro.setOrientation(DeviceOrientation.LANDSCAPE_LEFT)
+      runBlocking {
+        val info = maestro.deviceInfo()
+        val minDimension = minOf(info.widthPixels, info.heightPixels)
+        if (minDimension >= TrailblazeHostDeviceClassifier.TABLET_MIN_SHORTEST_SIDE_PX) {
+          Console.log("iPad detected (${info.widthPixels}x${info.heightPixels}) — setting landscape orientation")
+          maestro.setOrientation(DeviceOrientation.LANDSCAPE_LEFT)
+        }
       }
     } catch (e: Exception) {
       Console.log("Warning: Failed to detect device type or set orientation: ${e.message}")

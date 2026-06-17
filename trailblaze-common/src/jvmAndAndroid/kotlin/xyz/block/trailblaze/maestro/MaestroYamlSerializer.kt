@@ -506,7 +506,7 @@ object MaestroYamlSerializer {
       MaestroCommandYamlNode(
         type = "setOrientation",
         stringProps = mutableMapOf<String, String>().apply {
-          put("orientation", command.orientation.name)
+          put("orientation", command.orientation)
         },
       )
     }

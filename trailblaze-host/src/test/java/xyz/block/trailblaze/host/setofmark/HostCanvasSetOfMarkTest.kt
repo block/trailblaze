@@ -1,7 +1,7 @@
 package xyz.block.trailblaze.host.setofmark
 
 import maestro.DeviceInfo
-import maestro.Platform
+import maestro.device.Platform
 import org.junit.Test
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.TrailblazeNode

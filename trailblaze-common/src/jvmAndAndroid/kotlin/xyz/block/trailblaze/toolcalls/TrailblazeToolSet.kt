@@ -23,6 +23,7 @@ abstract class TrailblazeToolSet(
     .firstOrNull()?.description ?: this::class.simpleName ?: error("Add a @TrailblazeToolSetClass annotation"),
   val toolClasses: Set<KClass<out TrailblazeTool>>,
   val yamlToolNames: Set<ToolName> = emptySet(),
+  val scriptedToolNames: Set<ToolName> = emptySet(),
   val supportedDriverTypes: Set<TrailblazeDriverType>? = null,
 ) {
 
@@ -31,11 +32,14 @@ abstract class TrailblazeToolSet(
     DynamicToolSet(
       toolClasses = this.toolClasses + otherToolSet.toolClasses,
       yamlToolNames = this.yamlToolNames + otherToolSet.yamlToolNames,
+      scriptedToolNames = this.scriptedToolNames + otherToolSet.scriptedToolNames,
     )
 
   fun asTools(): Set<KClass<out TrailblazeTool>> = toolClasses
 
   fun asYamlToolNames(): Set<ToolName> = yamlToolNames
+
+  fun asScriptedToolNames(): Set<ToolName> = scriptedToolNames
 
   companion object {
 
@@ -78,16 +82,24 @@ abstract class TrailblazeToolSet(
     override val name: String,
     toolClasses: Set<KClass<out TrailblazeTool>>,
     yamlToolNames: Set<ToolName> = emptySet(),
-  ) : TrailblazeToolSet(name = name, toolClasses = toolClasses, yamlToolNames = yamlToolNames)
+    scriptedToolNames: Set<ToolName> = emptySet(),
+  ) : TrailblazeToolSet(
+    name = name,
+    toolClasses = toolClasses,
+    yamlToolNames = yamlToolNames,
+    scriptedToolNames = scriptedToolNames,
+  )
 
   @TrailblazeToolSetClass("Toolset meant for combining multiple sets together")
   class DynamicToolSet(
     toolClasses: Set<KClass<out TrailblazeTool>>,
     name: String = "Dynamic Toolset",
     yamlToolNames: Set<ToolName> = emptySet(),
+    scriptedToolNames: Set<ToolName> = emptySet(),
   ) : TrailblazeToolSet(
     name = name,
     toolClasses = toolClasses,
     yamlToolNames = yamlToolNames,
+    scriptedToolNames = scriptedToolNames,
   )
 }

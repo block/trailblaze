@@ -149,7 +149,7 @@ class MaestroCommandToAxeActionConverterTest {
 
   @Test
   fun `WaitForAnimationToEndCommand uses provided timeout`() {
-    val cmd = WaitForAnimationToEndCommand(timeout = 2000L)
+    val cmd = WaitForAnimationToEndCommand(timeout = "2000")
     val action = assertIs<AxeAction.WaitForSettle>(MaestroCommandToAxeActionConverter.convert(cmd).single())
     assertEquals(2000L, action.timeoutMs)
   }
@@ -157,6 +157,15 @@ class MaestroCommandToAxeActionConverterTest {
   @Test
   fun `WaitForAnimationToEndCommand falls back to 5000ms when timeout is null`() {
     val cmd = WaitForAnimationToEndCommand(timeout = null)
+    val action = assertIs<AxeAction.WaitForSettle>(MaestroCommandToAxeActionConverter.convert(cmd).single())
+    assertEquals(5_000L, action.timeoutMs)
+  }
+
+  @Test
+  fun `WaitForAnimationToEndCommand falls back to 5000ms when timeout is non-numeric`() {
+    // Maestro 2.6.1's timeout is a String and may be an unresolved expression; the converter must
+    // degrade to the default rather than throwing NumberFormatException.
+    val cmd = WaitForAnimationToEndCommand(timeout = "\${animationTimeout}")
     val action = assertIs<AxeAction.WaitForSettle>(MaestroCommandToAxeActionConverter.convert(cmd).single())
     assertEquals(5_000L, action.timeoutMs)
   }

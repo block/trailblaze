@@ -29,6 +29,7 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
 import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -71,6 +72,8 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
+import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
@@ -87,6 +90,8 @@ import xyz.block.trailblaze.scripting.ScriptedToolImportAnalyzer
 import xyz.block.trailblaze.scripting.partitionByImportClosure
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -255,11 +260,11 @@ object TrailblazeHostYamlRunner {
     // Routing on `requiresHost` would push those tools through MCP where their
     // `client.callTool` composition can't find the host tools the LLM-noise filter hides
     // — exactly the bug #2749 set out to fix. Runtime selection is a separate concern.
-    val inlineToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
-    val (nodeApiInlineTools, quickJsInlineTools) = inlineToolConfigs.partition { tool ->
+    val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
+    val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
       ScriptedToolRuntime.resolve(tool.script, tool.runtime) == ScriptedToolRuntime.SUBPROCESS
     }
-    val inlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
+    val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
       val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
       if (esbuildBinary == null) {
         // Use `Console.info` (not `Console.log`) so this critical breadcrumb survives the
@@ -335,6 +340,19 @@ object TrailblazeHostYamlRunner {
       emptyList()
     }
 
+    // 1b. Toolset-delivered scripted tools — pre-compiled QuickJS bundles loaded from
+    // classpath. These bypass the esbuild pipeline entirely: their `.bundle.js` is committed
+    // at build time (via `bundleFrameworkScriptedTools`) and self-registers on
+    // `globalThis.__trailblazeTools` at eval, so `QuickJsToolHost.connect()` picks them up
+    // the same way it picks up esbuild-produced bundles.
+    val toolsetRegistrations = registerToolsetScriptedToolBundles(
+      toolRepo = toolRepo,
+      targetToolConfigs = targetToolConfigs,
+      sessionId = sessionId,
+      sessionDir = sessionDir,
+    )
+    val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
+
     // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective
     // runtime is SUBPROCESS — selected via `runtime: subprocess` on the descriptor or via
     // the default `.js`/`.mjs`/`.cjs` extension heuristic (see [ScriptedToolRuntime.resolve]).
@@ -390,6 +408,109 @@ object TrailblazeHostYamlRunner {
       inlineRegistrations = inlineRegistrations,
       toolRepo = toolRepo,
     )
+  }
+
+  /**
+   * Loads pre-compiled QuickJS bundles for toolset-delivered scripted tools and registers
+   * them as [LazyYamlScriptedToolRegistration]s — bypassing the esbuild pipeline entirely.
+   *
+   * Each framework scripted tool commits a `.bundle.js` alongside its `.ts` source (produced
+   * by the `bundleFrameworkScriptedTools` Gradle task). This method loads those bundles from
+   * the classpath, writes them to session-scoped temp files, and feeds them to
+   * [LazyYamlScriptedToolRegistration.create] the same way the esbuild pipeline does for
+   * target-declared tools.
+   *
+   * Deduplicates against [targetToolConfigs] — a scripted tool already present in the
+   * target's `tools:` list is not re-registered here, so the target-declared version wins.
+   */
+  private suspend fun registerToolsetScriptedToolBundles(
+    toolRepo: TrailblazeToolRepo,
+    targetToolConfigs: List<InlineScriptToolConfig>,
+    sessionId: SessionId,
+    sessionDir: File,
+  ): List<LazyYamlScriptedToolRegistration> {
+    // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
+    // initially-active toolsets'. A toolset enabled later via `setActiveToolSets` is then
+    // already dispatchable (advertisement stays gated to the active set in TrailblazeToolRepo).
+    val toolsetNames = toolRepo.allCatalogScriptedToolNames
+    if (toolsetNames.isEmpty()) return emptyList()
+
+    // Target-declared scripted tools (target.tools:) are bundled separately and win on name
+    // collision, so don't re-register them here.
+    val targetNames = targetToolConfigs.map { ToolName(it.name) }.toSet()
+    val newNames = toolsetNames - targetNames
+    if (newNames.isEmpty()) return emptyList()
+
+    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
+
+    try {
+      for (name in newNames) {
+        val discovered = descriptorsByName[name]
+        if (discovered == null) {
+          Console.log(
+            "[TrailblazeHostYamlRunner] Toolset scripted tool '${name.toolName}' has no " +
+              "matching descriptor — skipping. Ensure a descriptor YAML with an explicit " +
+              "`name: ${name.toolName}` exists under a trailmap's `tools/` directory.",
+          )
+          continue
+        }
+
+        // Shared with the on-device path so the descriptor->bundle naming rule can't drift.
+        val bundleResourcePath = ScriptedToolNameDiscoverer.bundleResourcePath(discovered)
+
+        val bundleJs =
+          javaClass.classLoader?.getResourceAsStream(bundleResourcePath)
+            ?.bufferedReader()
+            ?.use { it.readText() }
+        if (bundleJs == null) {
+          Console.log(
+            "[TrailblazeHostYamlRunner] Toolset scripted tool '${name.toolName}': " +
+              "pre-compiled bundle not found on classpath at '$bundleResourcePath' — " +
+              "skipping. Run `./gradlew :trailblaze-common:bundleFrameworkScriptedTools` " +
+              "to regenerate.",
+          )
+          continue
+        }
+
+        val toolConfig = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull {
+          ToolName(it.name) == name
+        } ?: continue
+
+        val bundleDir = File(sessionDir, "toolset-bundles")
+        bundleDir.mkdirs()
+        val bundleFile = File(bundleDir, "${name.toolName}.bundle.js")
+        bundleFile.writeText(bundleJs)
+
+        accumulated += LazyYamlScriptedToolRegistration.create(
+          toolConfig = toolConfig,
+          bundlePath = bundleFile,
+          toolRepo = toolRepo,
+          sessionId = sessionId,
+        )
+      }
+
+      if (accumulated.isNotEmpty()) {
+        toolRepo.addDynamicTools(accumulated)
+        Console.log(
+          "[TrailblazeHostYamlRunner] Registered ${accumulated.size} toolset-delivered " +
+            "scripted tool(s) from pre-compiled bundles: " +
+            accumulated.joinToString { it.name.toolName },
+        )
+      }
+    } catch (e: Throwable) {
+      Console.log(
+        "[TrailblazeHostYamlRunner] Rolling back ${accumulated.size} toolset-delivered " +
+          "scripted-tool registration(s) due to startup failure: " +
+          "${e::class.simpleName}: ${e.message}",
+      )
+      for (reg in accumulated) {
+        runCatching { reg.dispose() }
+      }
+      throw e
+    }
+
+    return accumulated
   }
 
   /**

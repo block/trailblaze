@@ -60,6 +60,22 @@ class YamlToolSetResolutionTest {
   }
 
   @Test
+  fun `collision between class-backed and scripted names fails fast`() {
+    val existingClass = resolver.resolveOrNull("hideKeyboard")
+      ?: error("hideKeyboard should be class-backed for this test to make sense")
+    val exception = assertFailsWith<IllegalArgumentException> {
+      ToolNameResolver(
+        knownTools = mapOf(ToolName("hideKeyboard") to existingClass),
+        knownScriptedToolNames = setOf(ToolName("hideKeyboard")),
+      )
+    }
+    assertTrue(
+      exception.message?.contains("class-backed vs scripted") == true,
+      "Expected a class-backed-vs-scripted collision error, got: ${exception.message}",
+    )
+  }
+
+  @Test
   fun `core_interaction toolset resolves eraseText through the YAML backing`() {
     val yaml = """
       id: test_core

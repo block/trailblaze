@@ -4,16 +4,17 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.reflect.KClass
 
 /**
- * Central registry for all available tools across all providers.
+ * Compatibility wrapper for the previous public tool registry API.
  *
- * Aggregates tools from multiple sources:
- * - Kotlin-registered tools (via [TrailblazeToolRepo])
- * - MCP-discovered tools
- * - File-based or runtime-registered dynamic tools
- *
- * This is the single source of truth for "what tools are available" and
- * supports dynamic grouping via [TrailblazeToolSet].
+ * New code should use [TrailblazeToolRepo] for execution and
+ * [TrailblazeToolRepo.getCurrentTrailblazeToolDescriptors] for catalog/debug discovery. This
+ * type is retained only so downstream source imports and already-compiled consumers do not break
+ * immediately while the API is retired.
  */
+@Deprecated(
+  message = "Use TrailblazeToolRepo for tool execution and descriptor discovery.",
+  replaceWith = ReplaceWith("TrailblazeToolRepo"),
+)
 class TrailblazeToolRegistry {
 
   private val kotlinToolClasses = mutableSetOf<KClass<out TrailblazeTool>>()
@@ -52,8 +53,8 @@ class TrailblazeToolRegistry {
   }
 
   /**
-   * Returns tool sets that support the given driver type.
-   * Tool sets with null supportedDriverTypes are considered universal.
+   * Returns tool sets that support the given driver type. Tool sets with null supportedDriverTypes
+   * are considered universal.
    */
   fun getToolSetsForDriver(driverType: TrailblazeDriverType): List<TrailblazeToolSet> =
     toolSets.filter { it.supportedDriverTypes?.contains(driverType) != false }

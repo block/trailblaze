@@ -20,7 +20,7 @@ class TrailblazeHostDeviceClassifier(
     // - Tablets in portrait: shortest side ≥ ~1536 px
     val initialMaestroDeviceInfo = maestroDeviceInfoProvider()
     val minPx = minOf(initialMaestroDeviceInfo.widthPixels, initialMaestroDeviceInfo.heightPixels)
-    val isTablet = minPx >= 1536
+    val isTablet = minPx >= TABLET_MIN_SHORTEST_SIDE_PX
     val isLandscape = initialMaestroDeviceInfo.widthPixels > initialMaestroDeviceInfo.heightPixels
     val orientation =
       if (isLandscape) TrailblazeDeviceOrientation.LANDSCAPE else TrailblazeDeviceOrientation.PORTRAIT
@@ -55,4 +55,13 @@ class TrailblazeHostDeviceClassifier(
   }
 
   override fun getDeviceClassifiers(): List<TrailblazeDeviceClassifier> = trailblazeDeviceClassifiers
+
+  companion object {
+    /**
+     * Shortest screen side, in pixels, at or above which a device is classified as a tablet / iPad.
+     * Canonical threshold for the host — also reused by [HostIosDriverFactory]'s iPad auto-rotate
+     * check so the boundary lives in exactly one place.
+     */
+    const val TABLET_MIN_SHORTEST_SIDE_PX = 1536
+  }
 }

@@ -12,10 +12,10 @@ import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.UiDeviceExt.clickExt
 import maestro.Capability
 import maestro.DeviceInfo
-import maestro.DeviceOrientation
+import maestro.device.DeviceOrientation
 import maestro.Driver
 import maestro.KeyCode
-import maestro.Platform
+import maestro.device.Platform
 import maestro.Point
 import maestro.ScreenRecording
 import maestro.SwipeDirection

@@ -48,6 +48,7 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.config.McpServerConfig
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -666,6 +667,7 @@ open class AndroidTrailblazeRule(
     // a cancelled run would leak the QuickJS native allocation plus the dynamic-tool
     // registrations into the next session's tool repo.
     var launchedQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
+    var toolsetQuickjsRuntime: LaunchedQuickJsToolRuntime? = null
 
     // Track the last `Success` across all trail items so the on-device handler can mirror its
     // `message` / `structuredContent` onto the RPC response envelope. Mirrors
@@ -673,16 +675,22 @@ open class AndroidTrailblazeRule(
     // terminal Success is what the host's `client.callTool(...)` consumer expects.
     var lastToolSuccess: TrailblazeToolResult.Success? = null
     try {
+      val sessionId = (trailblazeLoggingRule.session
+        ?: error("Session not available for QuickJS bundle launch")).sessionId
       if (quickjsToolBundles.isNotEmpty()) {
         launchedQuickjsRuntime = QuickJsToolBundleLauncher.launchAll(
           bundles = quickjsToolBundles,
           deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-          sessionId = (trailblazeLoggingRule.session
-            ?: error("Session not available for QuickJS bundle launch")).sessionId,
+          sessionId = sessionId,
           toolRepo = trailblazeToolRepo,
           bundleSourceResolver = quickjsBundleSourceResolver,
         )
       }
+
+      toolsetQuickjsRuntime = launchToolsetScriptedToolBundles(
+        toolRepo = trailblazeToolRepo,
+        sessionId = sessionId,
+      )
 
       trailItems.forEach { item ->
         val itemResult = when (item) {
@@ -709,13 +717,62 @@ open class AndroidTrailblazeRule(
         }
       }
     } finally {
-      launchedQuickjsRuntime?.let { runtime ->
-        withContext(NonCancellable) {
-          runCatching { runtime.shutdownAll() }
-        }
+      withContext(NonCancellable) {
+        launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
+        toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
       }
     }
     return lastToolSuccess
+  }
+
+  /**
+   * Loads pre-compiled QuickJS bundles for toolset-delivered scripted tools from the APK's
+   * assets and registers them via [QuickJsToolBundleLauncher]. Mirrors the host-side
+   * `registerToolsetScriptedToolBundles` in [TrailblazeHostYamlRunner].
+   */
+  private suspend fun launchToolsetScriptedToolBundles(
+    toolRepo: TrailblazeToolRepo,
+    sessionId: xyz.block.trailblaze.logs.model.SessionId,
+  ): LaunchedQuickJsToolRuntime? {
+    // Drop any name already registered as a dynamic tool earlier this session (e.g. via
+    // `quickjsToolBundles` / target.tools:). Re-registering a name hard-fails in
+    // `addDynamicTools` (collision guard), and it would invert the host-side precedence where
+    // target-declared tools win over toolset-delivered ones.
+    // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
+    // initially-active toolsets' — so a toolset enabled later via `setActiveToolSets` is already
+    // dispatchable on-device (advertisement stays gated to the active set in TrailblazeToolRepo).
+    val alreadyRegistered = toolRepo.getRegisteredDynamicTools().keys
+    val toolsetNames = toolRepo.allCatalogScriptedToolNames - alreadyRegistered
+    if (toolsetNames.isEmpty()) return null
+
+    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    val bundleConfigs = mutableListOf<McpServerConfig>()
+
+    for (name in toolsetNames) {
+      val discovered = descriptorsByName[name]
+      if (discovered == null) {
+        // Mirror the host-side breadcrumb: without it the tool appears enabled at higher
+        // layers but no bundle launches, so it silently never dispatches on-device.
+        Console.log(
+          "[toolset-scripted] no descriptor found on-device for scripted tool " +
+            "'${name.toolName}' named by an active toolset — skipping its bundle. Confirm the " +
+            "tool's descriptor YAML + .bundle.js ship in the on-device assets.",
+        )
+        continue
+      }
+      // Shared with the host path so the descriptor->bundle naming rule can't drift.
+      bundleConfigs += McpServerConfig(script = ScriptedToolNameDiscoverer.bundleResourcePath(discovered))
+    }
+
+    if (bundleConfigs.isEmpty()) return null
+
+    return QuickJsToolBundleLauncher.launchAll(
+      bundles = bundleConfigs,
+      deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { entry -> AndroidAssetBundleSource(assetPath = entry.script!!) },
+    )
   }
 
   override fun run(

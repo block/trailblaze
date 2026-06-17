@@ -27,6 +27,7 @@ tools:
   - swipe
   - takeSnapshot
   - tap
+  - longPress
   - tapOnPoint
   - wait
   - waitForChange

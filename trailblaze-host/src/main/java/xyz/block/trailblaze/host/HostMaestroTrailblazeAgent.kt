@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.host
 
-import maestro.Platform
+import maestro.device.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.MaestroTrailblazeAgent

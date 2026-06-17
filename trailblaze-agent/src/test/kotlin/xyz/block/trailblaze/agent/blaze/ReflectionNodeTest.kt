@@ -510,6 +510,50 @@ class ReflectionNodeTest {
   }
 
   @Test
+  fun `longPress engages the target-missing guard like tap`() {
+    // Regression: the first-class `longPress` tool is name-distinct from `tap`, but it must
+    // still engage the wrong-screen guard so "long press X" can't fall through to holding an
+    // unrelated element when the target is absent from the screen.
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      [c101] Button "Charge"
+    """.trimIndent()
+
+    val result = detectTargetMissingRecovery(
+      objective = "Long press the \"Search all items\" field",
+      screenText = screen,
+      recommendedTool = "longPress",
+    )
+
+    assertEquals(TargetMissingRecovery.WRONG_SCREEN, result)
+  }
+
+  @Test
+  fun `unquoted long-press and press-and-hold objectives extract their target`() {
+    // The most common phrasing has no quotes ("Long press the X"); the target parser must
+    // recognize the long-press verbs so the wrong-screen guard still fires for them.
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      [c101] Button "Charge"
+    """.trimIndent()
+
+    listOf(
+      "Long press the Search all items field",
+      "long-press the Search all items field",
+      "Press and hold the Search all items field",
+      "press-and-hold the Search all items field",
+      "Tap and hold the Search all items field",
+      "tap-and-hold the Search all items field",
+    ).forEach { objective ->
+      assertEquals(
+        TargetMissingRecovery.WRONG_SCREEN,
+        detectTargetMissingRecovery(objective, screen, "longPress"),
+        "expected wrong-screen recovery for: $objective",
+      )
+    }
+  }
+
+  @Test
   fun `target present on screen proceeds with the action`() {
     val screen = """
       [c100] ImageView "Open Hardware Hub"

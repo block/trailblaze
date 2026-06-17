@@ -7,6 +7,7 @@ import xyz.block.trailblaze.viewmatcher.matching.CenterPointMatcher
 import xyz.block.trailblaze.viewmatcher.matching.ElementMatcherUsingMaestro
 import xyz.block.trailblaze.viewmatcher.models.ElementMatches
 import xyz.block.trailblaze.viewmatcher.search.ParentChildSelectorFinder
+import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 
 /**
  * Context object that holds all the state needed for selector search strategies.
@@ -90,5 +91,21 @@ internal class SelectorSearchContext(
     val targetNormalized = target.clearAllNodeIdsForThisAndAllChildren()
     val matchNormalized = match.viewHierarchyTreeNode.clearAllNodeIdsForThisAndAllChildren()
     return matchNormalized.compareEqualityBasedOnBoundsNotDimensions(targetNormalized)
+  }
+
+  /**
+   * Whether Maestro would deterministically tap [target] when resolving this match.
+   *
+   * Looser than [isCorrectTarget]: in addition to an exact single match, this accepts a multi-match
+   * where the target is the sole *clickable* node (see [deterministicTapTarget]) — `clickableFirst()`
+   * then guarantees Maestro taps it. Used by strategies (e.g. [UniqueChildStrategy]) that build
+   * `containsChild` selectors for clickable wrappers, where Maestro 2.6.1's broader `containsChild`
+   * semantics make an otherwise-good selector match several parents.
+   */
+  fun tapTargetIsCorrect(match: ElementMatches): Boolean {
+    val tapNode = match.deterministicTapTarget()?.toViewHierarchyTreeNode() ?: return false
+    val targetNormalized = target.clearAllNodeIdsForThisAndAllChildren()
+    return tapNode.clearAllNodeIdsForThisAndAllChildren()
+      .compareEqualityBasedOnBoundsNotDimensions(targetNormalized)
   }
 }

@@ -59,6 +59,17 @@ class TrailblazeToolRepo(
     .toMutableSet()
 
   /**
+   * Scripted (`.ts` / `.js`) tool names the LLM should see via active toolsets. These are
+   * dispatched through [registeredDynamicTools] (registered at session start by the bundling
+   * layer), but TRACKED here so [setActiveToolSets] can swap the advertised set and the
+   * acknowledgement message includes accurate counts. Symmetric with [registeredYamlToolNames]
+   * for the scripted-tool case.
+   */
+  private val registeredScriptedToolNames: MutableSet<ToolName> = trailblazeToolSet
+    .asScriptedToolNames()
+    .toMutableSet()
+
+  /**
    * Session-scoped dynamic tool registrations (subprocess MCP today; future bundled on-device
    * runtimes plug in here too). Keyed by [ToolName] so lookups can't be accidentally mixed
    * with raw-string identifiers from other sources. Participates in [asToolRegistry],
@@ -92,12 +103,46 @@ class TrailblazeToolRepo(
     registeredYamlToolNames.filter { it !in catalogYamlToolNames }.toSet()
   }
 
+  /**
+   * Scripted tool names that are not part of the catalog. Preserved across
+   * [setActiveToolSets] calls alongside [extraToolClasses] and [extraYamlToolNames].
+   */
+  private val extraScriptedToolNames: Set<ToolName> by lazy {
+    val catalogScriptedToolNames = toolSetCatalog
+      ?.flatMap { it.scriptedToolNames }
+      ?.toSet()
+      ?: emptySet()
+    registeredScriptedToolNames.filter { it !in catalogScriptedToolNames }.toSet()
+  }
+
   fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.toSet()
   }
 
   fun getRegisteredYamlToolNames(): Set<ToolName> = synchronized(registeredTrailblazeToolClasses) {
     registeredYamlToolNames.toSet()
+  }
+
+  fun getRegisteredScriptedToolNames(): Set<ToolName> = synchronized(registeredTrailblazeToolClasses) {
+    registeredScriptedToolNames.toSet()
+  }
+
+  /**
+   * Every scripted tool name the catalog could deliver for this repo's driver — i.e. the union of
+   * `scriptedToolNames` across all (driver-compatible) toolsets, not just the active ones.
+   *
+   * The bundling layer registers a dynamic tool for EACH of these at session start (not just the
+   * initially-active set), so a toolset enabled later via [setActiveToolSets] can still dispatch
+   * its scripted tools. Advertisement is still gated to the active set ([advertisedDynamic]), so
+   * registering-but-not-advertising a scripted tool from an inactive toolset is harmless.
+   */
+  val allCatalogScriptedToolNames: Set<ToolName> by lazy {
+    val catalog = toolSetCatalog ?: return@lazy emptySet()
+    if (driverType != null) {
+      TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(driverType, catalog)
+    } else {
+      catalog.flatMap { it.scriptedToolNames }.toSet()
+    }
   }
 
   fun getRegisteredDynamicTools(): Map<ToolName, DynamicTrailblazeToolRegistration> =
@@ -112,13 +157,31 @@ class TrailblazeToolRepo(
     val toolClasses: Set<KClass<out TrailblazeTool>>,
     val yamlToolNames: Set<ToolName>,
     val dynamic: Map<ToolName, DynamicTrailblazeToolRegistration>,
-  )
+    /** Scripted tool names advertised right now (from the active toolsets). */
+    val activeScriptedToolNames: Set<ToolName>,
+    /** Every scripted tool name the catalog could deliver (active or not). */
+    val allCatalogScriptedToolNames: Set<ToolName>,
+  ) {
+    /**
+     * Dynamic registrations visible to the LLM right now: every dynamic tool EXCEPT scripted
+     * tools whose toolset isn't active. A scripted tool is registered for dispatch as soon as its
+     * bundle loads (so recorded replays + active calls work via [toolCallToTrailblazeTool]), but
+     * only ADVERTISED when its toolset is active — that's the toolset gating. Non-scripted dynamic
+     * tools (subprocess MCP, target-declared scripted tools) are always advertised.
+     */
+    fun advertisedDynamic(): List<DynamicTrailblazeToolRegistration> =
+      dynamic.entries
+        .filter { (name, _) -> name !in allCatalogScriptedToolNames || name in activeScriptedToolNames }
+        .map { it.value }
+  }
 
   private fun snapshotRegisteredTools(): RegisteredToolsSnapshot = synchronized(registeredTrailblazeToolClasses) {
     RegisteredToolsSnapshot(
       toolClasses = registeredTrailblazeToolClasses.toSet(),
       yamlToolNames = registeredYamlToolNames.toSet(),
       dynamic = registeredDynamicTools.toMap(),
+      activeScriptedToolNames = registeredScriptedToolNames.toSet(),
+      allCatalogScriptedToolNames = allCatalogScriptedToolNames,
     )
   }
 
@@ -131,8 +194,9 @@ class TrailblazeToolRepo(
       if (snapshot.yamlToolNames.isNotEmpty()) {
         tools(KoogToolExt.buildKoogToolsForYamlDefined(snapshot.yamlToolNames, trailblazeToolContextProvider))
       }
-      if (snapshot.dynamic.isNotEmpty()) {
-        tools(snapshot.dynamic.values.map { it.buildKoogTool(trailblazeToolContextProvider) })
+      val advertisedDynamic = snapshot.advertisedDynamic()
+      if (advertisedDynamic.isNotEmpty()) {
+        tools(advertisedDynamic.map { it.buildKoogTool(trailblazeToolContextProvider) })
       }
     }
   }
@@ -153,6 +217,7 @@ class TrailblazeToolRepo(
   fun addTrailblazeToolSet(trailblazeToolSet: TrailblazeToolSet) = synchronized(registeredTrailblazeToolClasses) {
     addTrailblazeTools(*trailblazeToolSet.asTools().toTypedArray())
     registeredYamlToolNames.addAll(trailblazeToolSet.asYamlToolNames())
+    registeredScriptedToolNames.addAll(trailblazeToolSet.asScriptedToolNames())
   }
 
   /**
@@ -207,6 +272,7 @@ class TrailblazeToolRepo(
   fun removeAllTrailblazeTools() = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.clear()
     registeredYamlToolNames.clear()
+    registeredScriptedToolNames.clear()
     registeredDynamicTools.clear()
   }
 
@@ -231,12 +297,23 @@ class TrailblazeToolRepo(
     val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, toolSetIds, catalog)
     val newToolClasses = resolved.toolClasses + extraToolClasses
     val newYamlToolNames = resolved.yamlToolNames + extraYamlToolNames
+    val newScriptedToolNames = resolved.scriptedToolNames + extraScriptedToolNames
     val dynamicToolCount = synchronized(registeredTrailblazeToolClasses) {
       registeredTrailblazeToolClasses.clear()
       registeredTrailblazeToolClasses.addAll(newToolClasses)
       registeredYamlToolNames.clear()
       registeredYamlToolNames.addAll(newYamlToolNames)
-      registeredDynamicTools.size
+      registeredScriptedToolNames.clear()
+      registeredScriptedToolNames.addAll(newScriptedToolNames)
+      // Count only the dynamic tools that are ADVERTISED under the new active set: every dynamic
+      // tool except scripted tools whose toolset isn't active (those are registered for dispatch
+      // but hidden). This matches the gated surface in [getCurrentToolDescriptors] /
+      // [asToolRegistry], so the acknowledgement count reflects what the LLM actually sees — and
+      // scripted tools aren't double-counted (they're in `registeredDynamicTools`, not added again
+      // via `newScriptedToolNames`).
+      registeredDynamicTools.keys.count {
+        it !in allCatalogScriptedToolNames || it in newScriptedToolNames
+      }
     }
     val totalTools = newToolClasses.size + newYamlToolNames.size + dynamicToolCount
     val driverLabel = "[driver=${driverType?.name ?: "none"}]"
@@ -513,15 +590,21 @@ class TrailblazeToolRepo(
   }
 
   fun getCurrentToolDescriptors(): List<ToolDescriptor> {
-    val snapshot = snapshotRegisteredTools()
-    val classDescriptors = snapshot.toolClasses.mapNotNull { it.toKoogToolDescriptor() }
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames)
-    // Subprocess / other runtime-discovered tools use the lenient projection: an MCP server
-    // can legitimately advertise an `array` / `object` parameter type that the LLM-tool
-    // schema doesn't model today, and registration shouldn't crash on that.
-    val dynamicDescriptors = snapshot.dynamic.values.map {
-      it.trailblazeDescriptor.toKoogToolDescriptor(strict = false)
+    return getCurrentTrailblazeToolDescriptors().map {
+      it.toKoogToolDescriptor(strict = false)
     }
+  }
+
+  /**
+   * Trailblaze-native descriptor view for catalog/debug surfaces. Unlike [getCurrentToolDescriptors],
+   * this preserves source metadata so callers can classify tools as Kotlin, YAML, TypeScript,
+   * JavaScript, or generic dynamic registrations without re-inferring provenance from names.
+   */
+  fun getCurrentTrailblazeToolDescriptors(): List<TrailblazeToolDescriptor> {
+    val snapshot = snapshotRegisteredTools()
+    val classDescriptors = snapshot.toolClasses.mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
+    val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(snapshot.yamlToolNames)
+    val dynamicDescriptors = snapshot.advertisedDynamic().map { it.trailblazeDescriptor }
     return classDescriptors + yamlDescriptors + dynamicDescriptors
   }
 
@@ -547,6 +630,7 @@ class TrailblazeToolRepo(
     fun withDynamicToolSets(
       customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
       customYamlToolNames: Set<ToolName> = emptySet(),
+      customScriptedToolNames: Set<ToolName> = emptySet(),
       excludedToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
       catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
       driverType: TrailblazeDriverType? = null,
@@ -561,6 +645,7 @@ class TrailblazeToolRepo(
           name = "Core Tool Set",
           toolClasses = coreTools.toolClasses + customToolClasses - excludedToolClasses,
           yamlToolNames = coreTools.yamlToolNames + customYamlToolNames,
+          scriptedToolNames = coreTools.scriptedToolNames + customScriptedToolNames,
         ),
         toolSetCatalog = catalog,
         driverType = driverType,

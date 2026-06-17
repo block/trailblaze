@@ -20,7 +20,14 @@ androidx-test-monitor = "1.8.0"
 gson = "2.13.2"
 jackson = "2.21.2"
 jansi = "2.4.1"
-jetbrains-compose-multiplatform = "1.11.0-alpha04"
+jetbrains-compose-multiplatform = "1.11.1"
+# Compose Multiplatform's Material3 module ships on a separate, lagging track from the umbrella
+# version — there is no material3 1.11.0/1.11.1 stable. CMP 1.11.1's paired Material3 release is
+# 1.11.0-alpha07 (its transitive Compose floor is 1.11.0-beta03, so the umbrella 1.11.1 wins cleanly
+# for the shared modules). Pinned separately, like compose-material-icons-extended below. When
+# bumping `jetbrains-compose-multiplatform`, re-check the matching material3 version in the CMP
+# release notes rather than assuming lockstep.
+jetbrains-compose-material3 = "1.11.0-alpha07"
 compose-material-icons-extended = "1.7.3"
 jsoup = "1.21.2"
 junit = "4.13.2"
@@ -40,10 +47,10 @@ kotlin-csv = "1.10.0"
 kotlin = "2.3.20"
 kotlinpoet = "2.2.0"
 kotlinx-datetime = "0.7.1-0.6.x-compat" # Compat build providing kotlinx.datetime.Clock alongside kotlin.time.Clock
-kotlinx-serialization = "1.10.0"
+kotlinx-serialization = "1.11.0"
 ktor = "3.3.3"
 logback = "1.5.21"
-maestro = "2.3.0"
+maestro = "2.6.1"
 micrometer = "1.15.12"
 mcp-sdk = "0.11.1"
 multiplatformMarkdownRenderer = "0.39.2"
@@ -57,7 +64,7 @@ playwright = "1.59.0"
 proguardGradle = "7.8.2"
 slf4j = "2.0.17"
 slf4j-android = "1.7.36"
-skiko = "0.144.4" # Must match Compose Multiplatform's expected Skiko version
+skiko = "0.144.6" # Must match Compose Multiplatform's expected Skiko version (CMP 1.11.1 → skiko 0.144.6)
 spotless = "8.1.0"
 testParameterInjector = "1.20"
 truth = "1.4.5"
@@ -92,7 +99,7 @@ coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.r
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "jetbrains-compose-multiplatform" }
 compose-components-ui-tooling-preview = { module = "org.jetbrains.compose.components:components-ui-tooling-preview", version.ref = "jetbrains-compose-multiplatform" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "jetbrains-compose-multiplatform" }
-compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jetbrains-compose-multiplatform" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "jetbrains-compose-material3" }
 compose-navigation = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "compose-navigation" }
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "jetbrains-compose-multiplatform" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "jetbrains-compose-multiplatform" }

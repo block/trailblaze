@@ -229,6 +229,83 @@ class TapSelectorV2Test {
   }
 
   @Test
+  fun `STRATEGY 3 - clickable wrapper with ambiguous child text resolves via unique clickable tap`() {
+    // Setup: two wrappers each holding a "Delivery" label, but only the target is clickable — e.g. a
+    // dropdown trigger vs. a non-clickable list-row label. The child text is NOT globally unique, so
+    // `containsChild: Delivery` matches both wrappers. Under Maestro 2.6.1 that is a multi-match, but
+    // Maestro's clickableFirst() deterministically taps the sole clickable match, so the semantic
+    // selector still reliably hits the target.
+    // Expected: containsChild by the child text — no parent scoping, and crucially no brittle index.
+    val target = createNode(
+      nodeId = 1,
+      clickable = true,
+      centerX = 200,
+      centerY = 200,
+      children = listOf(createNode(nodeId = 2, text = "Delivery")),
+    )
+    val nonClickableTwin = createNode(
+      nodeId = 3,
+      clickable = false,
+      centerX = 800,
+      centerY = 800,
+      children = listOf(createNode(nodeId = 4, text = "Delivery")),
+    )
+    val root = createNode(nodeId = 0, children = listOf(target, nonClickableTwin))
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    assertEquals("Delivery", result.containsChild?.textRegex)
+    assertNull(result.childOf)
+    assertNull(result.index)
+  }
+
+  @Test
+  fun `STRATEGY 3 - multiple clickable wrappers with same child text disambiguate by parent`() {
+    // Setup: two CLICKABLE wrappers both holding "Delivery", under distinct identifiable parents.
+    // Because more than one match is clickable, the unique-clickable tap shortcut must NOT fire — the
+    // selector has to scope by parent. This guards the precedence: an exact single-match (here, the
+    // parent-scoped selector) is always preferred, and the deterministic-tap relaxation is only a
+    // fallback. Without that ordering we'd silently drop disambiguation a real screen needs.
+    val target = createNode(
+      nodeId = 1,
+      clickable = true,
+      centerX = 200,
+      centerY = 200,
+      children = listOf(createNode(nodeId = 2, text = "Delivery")),
+    )
+    val sectionA = createNode(nodeId = 10, resourceId = "section_a", children = listOf(target))
+    val clickableTwin = createNode(
+      nodeId = 3,
+      clickable = true,
+      centerX = 800,
+      centerY = 800,
+      children = listOf(createNode(nodeId = 4, text = "Delivery")),
+    )
+    val sectionB = createNode(nodeId = 11, resourceId = "section_b", children = listOf(clickableTwin))
+    val root = createNode(nodeId = 0, children = listOf(sectionA, sectionB))
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    assertEquals("Delivery", result.containsChild?.textRegex)
+    assertNotNull(result.childOf)
+    assertEquals("section_a", result.childOf?.idRegex)
+  }
+
+  @Test
   fun `STRATEGY 4 - target with unique descendants`() {
     // Setup: Two product cards with different nested content
     // - Both cards have same text "Product Card" so they're not distinguishable by properties alone

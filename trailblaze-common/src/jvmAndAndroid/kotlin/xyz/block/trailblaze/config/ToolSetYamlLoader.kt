@@ -12,14 +12,17 @@ import kotlin.reflect.KClass
 
 /**
  * A toolset whose tool names have been resolved to their backing implementations. Splits into
- * class-backed tools ([resolvedToolClasses]) and YAML-defined tools ([resolvedYamlToolNames]) —
- * the name-based authoring surface doesn't distinguish, but the runtime does.
+ * class-backed tools ([resolvedToolClasses]), YAML-defined tools ([resolvedYamlToolNames]), and
+ * scripted (`.ts` / `.js`) tools ([resolvedScriptedToolNames]) — the name-based authoring surface
+ * doesn't distinguish, but the runtime does (scripted names are advertised like YAML names but
+ * dispatched through the per-session scripted-tool runtime).
  */
 data class ResolvedToolSet(
   val config: ToolSetYamlConfig,
   val resolvedToolClasses: Set<KClass<out TrailblazeTool>>,
   val compatibleDriverTypes: Set<TrailblazeDriverType>,
   val resolvedYamlToolNames: Set<ToolName> = emptySet(),
+  val resolvedScriptedToolNames: Set<ToolName> = emptySet(),
 ) {
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
     compatibleDriverTypes.isEmpty() || driverType in compatibleDriverTypes
@@ -29,6 +32,7 @@ data class ResolvedToolSet(
     description = config.description,
     toolClasses = resolvedToolClasses,
     yamlToolNames = resolvedYamlToolNames,
+    scriptedToolNames = resolvedScriptedToolNames,
     alwaysEnabled = config.alwaysEnabled,
     compatibleDriverTypes = compatibleDriverTypes,
   )
@@ -146,6 +150,7 @@ object ToolSetYamlLoader {
       resolvedToolClasses = partitioned.classBacked,
       compatibleDriverTypes = driverTypes,
       resolvedYamlToolNames = partitioned.yamlDefinedNames,
+      resolvedScriptedToolNames = partitioned.scriptedToolNames,
     )
   }
 }

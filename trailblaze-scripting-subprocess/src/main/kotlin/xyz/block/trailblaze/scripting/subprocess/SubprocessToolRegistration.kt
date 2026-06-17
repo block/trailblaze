@@ -10,6 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceDescriptor
 
 /**
  * [DynamicTrailblazeToolRegistration] backed by a subprocess-advertised MCP tool.
@@ -32,6 +33,7 @@ class SubprocessToolRegistration(
    * null the tool dispatches without populating the `_meta` envelope or registering.
    */
   private val callbackContext: JsScriptingCallbackContext? = null,
+  private val source: TrailblazeToolSourceDescriptor? = null,
 ) : DynamicTrailblazeToolRegistration {
 
   /**
@@ -50,7 +52,7 @@ class SubprocessToolRegistration(
     registered.inputSchema.toTrailblazeToolDescriptor(
       name = registered.advertisedName.toolName,
       description = registered.description,
-    )
+    ).copy(source = source)
 
   override fun buildKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,

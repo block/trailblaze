@@ -14,12 +14,15 @@ import kotlin.reflect.KClass
  *
  * Trailblaze uses a flat global namespace for tool names — a name resolves to exactly
  * one backing implementation, regardless of whether that's a Kotlin [KClass] (`class:` mode
- * YAML config) or a pure-YAML composition (`tools:` mode YAML config). Future TypeScript/QuickJS
- * tools will slot into the same namespace.
+ * YAML config), a pure-YAML composition (`tools:` mode YAML config), or a scripted
+ * (`.ts` / `.js`) tool declared by a per-trailmap descriptor and discovered via
+ * [ScriptedToolNameDiscoverer].
  *
  * Toolset YAML files like `core_interaction.yaml` list tools by bare name; this resolver
- * looks each name up across both backings so authors never have to think about whether a tool
- * is class-backed or YAML-defined.
+ * looks each name up across all three backings so authors never have to think about whether a
+ * tool is class-backed, YAML-defined, or scripted. A scripted tool listed in a toolset
+ * resolves here so it gets *advertised* like any other tool; its `.ts` is still bundled and
+ * dispatched through the per-session scripted-tool machinery (the resolver only owns names).
  *
  * Collisions between backings are surfaced at construction time.
  *
@@ -29,13 +32,29 @@ import kotlin.reflect.KClass
 class ToolNameResolver(
   private val knownTools: Map<ToolName, KClass<out TrailblazeTool>>,
   private val knownYamlToolNames: Set<ToolName> = emptySet(),
+  private val knownScriptedToolNames: Set<ToolName> = emptySet(),
 ) {
 
   init {
-    val overlap = knownTools.keys.intersect(knownYamlToolNames)
-    require(overlap.isEmpty()) {
-      "Tool name collision(s) between class-backed and YAML-defined tools: " +
-        "${overlap.map { it.toolName }.sorted()}. Each name must bind to exactly one backing."
+    // Each name must bind to exactly one backing across all three. Check each pairwise overlap
+    // so the diagnostic names which two backings collided (the fix differs: rename a class vs.
+    // rename a YAML/scripted descriptor).
+    val classVsYaml = knownTools.keys.intersect(knownYamlToolNames)
+    val classVsScripted = knownTools.keys.intersect(knownScriptedToolNames)
+    val yamlVsScripted = knownYamlToolNames.intersect(knownScriptedToolNames)
+    require(classVsYaml.isEmpty() && classVsScripted.isEmpty() && yamlVsScripted.isEmpty()) {
+      buildString {
+        append("Tool name collision(s) — each name must bind to exactly one backing.")
+        if (classVsYaml.isNotEmpty()) {
+          append(" class-backed vs YAML-defined: ${classVsYaml.map { it.toolName }.sorted()}.")
+        }
+        if (classVsScripted.isNotEmpty()) {
+          append(" class-backed vs scripted: ${classVsScripted.map { it.toolName }.sorted()}.")
+        }
+        if (yamlVsScripted.isNotEmpty()) {
+          append(" YAML-defined vs scripted: ${yamlVsScripted.map { it.toolName }.sorted()}.")
+        }
+      }
     }
   }
 
@@ -69,10 +88,19 @@ class ToolNameResolver(
     ToolName(name).takeIf { it in knownYamlToolNames }
 
   /**
-   * Returns true if [name] is known under either backing.
+   * Returns the typed canonical [ToolName] if [name] refers to a scripted (`.ts` / `.js`) tool
+   * declared by a per-trailmap descriptor (discovered via [ScriptedToolNameDiscoverer]),
+   * otherwise null.
    */
-  fun isKnown(name: String): Boolean =
-    ToolName(name) in knownTools.keys || ToolName(name) in knownYamlToolNames
+  fun resolveScriptedNameOrNull(name: String): ToolName? =
+    ToolName(name).takeIf { it in knownScriptedToolNames }
+
+  /**
+   * Returns true if [name] is known under any backing (class-backed, YAML-defined, or scripted).
+   */
+  fun isKnown(name: String): Boolean = ToolName(name).let {
+    it in knownTools.keys || it in knownYamlToolNames || it in knownScriptedToolNames
+  }
 
   /**
    * Resolves a list of tool names. All must be class-backed and found.
@@ -90,23 +118,32 @@ class ToolNameResolver(
     partitionLenient(names, context).classBacked
 
   /**
-   * Result of splitting a list of tool names by backing. `yamlDefinedNames` is typed as
-   * [ToolName] — the YAML-wire layer (`tools: List<String>` in toolset configs) is the one
-   * legitimate place raw strings become typed identifiers; everything downstream of this
-   * should stay on [ToolName] to avoid mixing raw-string tool identifiers with typed ones.
+   * Result of splitting a list of tool names by backing. `yamlDefinedNames` and
+   * `scriptedToolNames` are typed as [ToolName] — the YAML-wire layer (`tools: List<String>` in
+   * toolset configs) is the one legitimate place raw strings become typed identifiers; everything
+   * downstream of this should stay on [ToolName] to avoid mixing raw-string tool identifiers with
+   * typed ones.
+   *
+   * `scriptedToolNames` are names that resolved to a scripted (`.ts` / `.js`) tool descriptor.
+   * They're advertised to the LLM like YAML-defined names, but dispatched through the per-session
+   * scripted-tool runtime (host bun/QuickJS, on-device QuickJS bundle) rather than the
+   * YAML-composition executor — kept separate so the bundling layer knows which names need a
+   * scripted runtime.
    */
   data class Partitioned(
     val classBacked: Set<KClass<out TrailblazeTool>>,
     val yamlDefinedNames: Set<ToolName>,
+    val scriptedToolNames: Set<ToolName> = emptySet(),
   )
 
   /**
-   * Splits a list of tool names into class-backed and YAML-defined. Unknown names log a
-   * warning and are skipped.
+   * Splits a list of tool names into class-backed, YAML-defined, and scripted. Unknown names log
+   * a warning and are skipped.
    */
   fun partitionLenient(names: List<String>, context: String = ""): Partitioned {
     val classBacked = mutableSetOf<KClass<out TrailblazeTool>>()
     val yamlNames = mutableSetOf<ToolName>()
+    val scriptedNames = mutableSetOf<ToolName>()
     for (name in names) {
       val toolName = ToolName(name)
       val klass = knownTools[toolName]
@@ -118,20 +155,30 @@ class ToolNameResolver(
         yamlNames.add(toolName)
         continue
       }
+      if (toolName in knownScriptedToolNames) {
+        scriptedNames.add(toolName)
+        continue
+      }
       val ctx = if (context.isNotEmpty()) " (in $context)" else ""
       Console.log("Warning: Unknown tool name '$name'$ctx — skipping")
     }
-    return Partitioned(classBacked = classBacked, yamlDefinedNames = yamlNames)
+    return Partitioned(
+      classBacked = classBacked,
+      yamlDefinedNames = yamlNames,
+      scriptedToolNames = scriptedNames,
+    )
   }
 
   /**
-   * Returns a new resolver with additional tool classes merged in.
+   * Returns a new resolver with additional tool classes merged in. YAML-defined and scripted
+   * name sets carry through unchanged.
    */
   fun withAdditionalTools(
     extra: Map<ToolName, KClass<out TrailblazeTool>>,
   ): ToolNameResolver = ToolNameResolver(
     knownTools = knownTools + extra,
     knownYamlToolNames = knownYamlToolNames,
+    knownScriptedToolNames = knownScriptedToolNames,
   )
 
   companion object {
@@ -147,6 +194,7 @@ class ToolNameResolver(
     ): ToolNameResolver = ToolNameResolver(
       knownTools = ToolYamlLoader.discoverAndLoadAll(resourceSource) + customToolClasses,
       knownYamlToolNames = TrailblazeSerializationInitializer.buildYamlDefinedTools().keys,
+      knownScriptedToolNames = ScriptedToolNameDiscoverer.discoverAllNames(resourceSource),
     )
 
     /**

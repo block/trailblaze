@@ -23,6 +23,60 @@ data class TrailblazeToolParameterDescriptor(
 )
 
 /**
+ * Debug/catalog metadata describing where a tool descriptor came from.
+ *
+ * Execution does not branch on this value; it is intentionally descriptive so tool discovery
+ * surfaces can answer questions like "is this Kotlin, YAML, or TypeScript-backed?" without
+ * re-inferring provenance from names or runtime registration shape.
+ */
+@Serializable
+data class TrailblazeToolSourceDescriptor(
+  val type: TrailblazeToolSourceType,
+  /**
+   * Human-readable source identifier. For Kotlin this is the implementing class FQCN; for
+   * YAML/scripted tools this is usually the best available path or resource identifier.
+   */
+  val identifier: String? = null,
+  /** Kotlin implementation class, when the source is class-backed. */
+  val className: String? = null,
+  /** YAML descriptor path/resource, when known. */
+  val yamlPath: String? = null,
+  /** Script source path, when known for TypeScript/JavaScript scripted tools. */
+  val scriptPath: String? = null,
+)
+
+@Serializable
+enum class TrailblazeToolSourceType {
+  KOTLIN,
+  YAML,
+  TYPESCRIPT,
+  JAVASCRIPT,
+  DYNAMIC,
+}
+
+fun trailblazeToolSourceForScript(
+  scriptPath: String,
+  identifier: String? = scriptPath,
+  yamlPath: String? = null,
+): TrailblazeToolSourceDescriptor {
+  val sourceType = when {
+    scriptPath.endsWith(".ts", ignoreCase = true) || scriptPath.endsWith(".tsx", ignoreCase = true) ->
+      TrailblazeToolSourceType.TYPESCRIPT
+    scriptPath.endsWith(".js", ignoreCase = true) ||
+      scriptPath.endsWith(".mjs", ignoreCase = true) ||
+      scriptPath.endsWith(".cjs", ignoreCase = true) ->
+      TrailblazeToolSourceType.JAVASCRIPT
+    else -> TrailblazeToolSourceType.DYNAMIC
+  }
+  return TrailblazeToolSourceDescriptor(
+    type = sourceType,
+    identifier = identifier,
+    yamlPath = yamlPath,
+    scriptPath = scriptPath,
+  )
+}
+
+/**
  * [kotlin.io.Serializable] Mirror of [ai.koog.agents.core.tools.ToolDescriptor]
  *
  * Capability flags that live on [TrailblazeToolClass] (`surfaceToLlm`,
@@ -42,4 +96,5 @@ data class TrailblazeToolDescriptor(
   val description: String? = null,
   val requiredParameters: List<TrailblazeToolParameterDescriptor> = emptyList(),
   val optionalParameters: List<TrailblazeToolParameterDescriptor> = emptyList(),
+  val source: TrailblazeToolSourceDescriptor? = null,
 )

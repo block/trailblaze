@@ -8,20 +8,29 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.datetime.Instant
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Test
+import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.report.models.CiSummaryReport
+import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
+import xyz.block.trailblaze.report.models.TriageReport
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 
@@ -754,6 +763,318 @@ class GenerateTestResultsCliCommandTest {
     } finally {
       logsDir.deleteRecursively()
     }
+  }
+
+  @Test
+  fun `recorded session that made an LLM call is reported as RECORDING_WITH_AI`() {
+    // End-to-end guard for the AI_ONLY-mislabel fix: a recorded trail (hasRecordedSteps = true)
+    // that emits even one TrailblazeLlmRequestLog must surface as RECORDING_WITH_AI, not AI_ONLY.
+    // This pins the production wiring the ExecutionMode.classify unit tests can't: that the call
+    // site passes hasRecordedSteps, AND that SessionRecordingInfo.fromLogs still maps "has an LLM
+    // request log" -> available = false (made LLM calls).
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_04_23_recorded_with_ai_session")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/recorded-with-verify.trail.yaml",
+            hasRecordedSteps = true,
+            testMethodName = "recordedWithVerifyTest",
+            testClassName = "WebRecordedWithVerifyTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-04-23T18:10:00Z"),
+        ),
+      )
+      // One LLM request (e.g. an LLM-backed `verify`) inside an otherwise-recorded trail.
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeLlmRequestLog.json",
+        log = llmRequestLog(sessionId, Instant.parse("2026-04-23T18:10:02Z")),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "003_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-04-23T18:10:05Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val result = report.results.single()
+      assertEquals(ExecutionMode.RECORDING_WITH_AI, result.execution_mode)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `normalizeFailureSignature strips variable content and keeps only the first line`() {
+    val cmd = GenerateTestResultsCliCommand()
+
+    // null -> stable placeholder so all reason-less failures group together
+    assertEquals("(no failure reason)", cmd.normalizeFailureSignature(null))
+
+    // session ids collapse to a stable token
+    assertEquals(
+      "Trail failed for <session_id>",
+      cmd.normalizeFailureSignature("Trail failed for 2026_06_15_14_03_22_sampleSession"),
+    )
+
+    // hex addresses and long hex hashes
+    assertEquals("NPE at <addr>", cmd.normalizeFailureSignature("NPE at 0xDEADBEEF"))
+    assertEquals(
+      "artifact <hash> missing",
+      cmd.normalizeFailureSignature("artifact a1b2c3d4e5f6 missing"),
+    )
+
+    // absolute file paths
+    assertEquals(
+      "could not read <path>",
+      cmd.normalizeFailureSignature("could not read /var/folders/xy/abc/screenshot.png"),
+    )
+
+    // Multi-line reasons keep only the headline (first line), not the trailing stack trace.
+    // This is the behavior the comment promised but the original ordering (collapse-then-split)
+    // did not deliver — newlines became spaces, so the whole reason survived as one line.
+    assertEquals(
+      "Element not found: More",
+      cmd.normalizeFailureSignature("Element not found: More\n  at Foo.bar()\n  at Baz.qux()"),
+    )
+
+    // Two failures that differ only by their session id normalize to the same signature, so
+    // they group together in the triage report.
+    assertEquals(
+      cmd.normalizeFailureSignature("Trail failed for 2026_06_15_14_03_22_alpha"),
+      cmd.normalizeFailureSignature("Trail failed for 2026_06_14_09_11_00_bravo"),
+    )
+  }
+
+  @Test
+  fun `triage report counts genuine retries but not all-passing duplicate logs`() {
+    val logsDir = Files.createTempDirectory("trailblaze-triage-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // Group 1: genuine flaky — failed first, passed on the retry.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_flaky_attempt1"),
+        trailFilePath = "trails/sample-app/flaky.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 3_000, exceptionMessage = "Element not found: More"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_flaky_attempt2"),
+        trailFilePath = "trails/sample-app/flaky.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+
+      // Group 2: all-passing duplicate logs — both attempts passed, with NO prior failure.
+      // The old `total_attempts > 1` heuristic would wrongly count this as passed-on-retry;
+      // keying on replaced_failure_reasons must NOT.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_dupe_attempt1"),
+        trailFilePath = "trails/sample-app/dupe.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_dupe_attempt2"),
+        trailFilePath = "trails/sample-app/dupe.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+
+      // Group 3: persistent failure — failed on every attempt.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_broken_attempt1"),
+        trailFilePath = "trails/sample-app/broken.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 2_000, exceptionMessage = "Delivery not visible"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_broken_attempt2"),
+        trailFilePath = "trails/sample-app/broken.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 2_000, exceptionMessage = "Delivery not visible"),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON", "--triage"),
+        )
+      }
+
+      // The standard report is always deduplicated (no flag needed): 6 attempts -> 3 test cases.
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(3, report.results.size)
+
+      // --triage emits the triage report alongside the standard report.
+      val triageFile = File(logsDir, "trailblaze_triage_report.json")
+      assertTrue(triageFile.exists(), "triage report should be written")
+      val triage = json.decodeFromString<TriageReport>(triageFile.readText())
+
+      // Each retry group collapses to a single test case.
+      assertEquals(3, triage.summary.total_test_cases)
+      assertEquals(2, triage.summary.passed)
+      assertEquals(1, triage.summary.failed)
+
+      // Only the genuine flaky counts as passed-on-retry; the all-passing duplicate must not.
+      assertEquals(1, triage.retries.passed_on_retry)
+      assertEquals(1, triage.retries.failed_after_retries)
+      assertEquals(6, triage.retries.total_attempts)
+      assertEquals(3, triage.retries.unique_test_cases)
+
+      // Exactly one failing signature group (the persistent failure) covering all failures.
+      assertEquals(1, triage.failure_signatures.size)
+      assertEquals(1, triage.failure_signatures.single().count)
+      assertEquals(1.0, triage.failure_signatures.single().share)
+
+      // by_platform axis: 2 passed / 1 failed on web.
+      val webBucket = triage.failure_axes.by_platform["web"]
+      assertEquals(2, webBucket?.passed)
+      assertEquals(1, webBucket?.failed)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `without --triage the report is deduplicated but no triage file is written`() {
+    // Triage is opt-in (it's a combined/cross-device aggregation, emitted only by the
+    // aggregation step). A plain run still deduplicates retries — it just doesn't write the
+    // triage artifact.
+    val logsDir = Files.createTempDirectory("trailblaze-no-triage-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_flaky_attempt1"),
+        trailFilePath = "trails/sample-app/flaky.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 3_000, exceptionMessage = "Element not found: More"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_flaky_attempt2"),
+        trailFilePath = "trails/sample-app/flaky.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      // Still deduplicated: the two attempts collapse to one passing test.
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(1, report.results.size)
+      assertEquals(Outcome.PASSED, report.results.single().outcome)
+
+      // But no triage artifact without --triage.
+      assertFalse(
+        File(logsDir, "trailblaze_triage_report.json").exists(),
+        "triage report should not be written without --triage",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  /** A minimal [TrailblazeLog.TrailblazeLlmRequestLog] — only its presence matters here. */
+  private fun llmRequestLog(
+    sessionId: SessionId,
+    timestamp: Instant,
+  ): TrailblazeLog.TrailblazeLlmRequestLog = TrailblazeLog.TrailblazeLlmRequestLog(
+    agentTaskStatus = AgentTaskStatus.InProgress(
+      statusData = AgentTaskStatusData(
+        taskId = TaskId.generate(),
+        prompt = "verify the screen",
+        callCount = 0,
+        taskStartTime = timestamp,
+        totalDurationMs = 0,
+      ),
+    ),
+    viewHierarchy = ViewHierarchyTreeNode(),
+    instructions = "",
+    trailblazeLlmModel = TrailblazeLlmModels.GPT_4O_MINI,
+    llmMessages = emptyList(),
+    llmResponse = emptyList(),
+    actions = emptyList(),
+    toolOptions = emptyList(),
+    screenshotFile = null,
+    durationMs = 0,
+    session = sessionId,
+    timestamp = timestamp,
+    traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
+    deviceHeight = 0,
+    deviceWidth = 0,
+  )
+
+  /** Writes a single trail run (Started + Ended status logs) for a session under [logsDir]. */
+  private fun writeTrailRun(
+    logsDir: File,
+    deviceInfo: TrailblazeDeviceInfo,
+    sessionId: SessionId,
+    trailFilePath: String,
+    startedAt: String,
+    ended: SessionStatus.Ended,
+  ) {
+    writeLog(
+      logsDir = logsDir,
+      sessionId = sessionId,
+      fileName = "001_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = trailFilePath,
+          hasRecordedSteps = false,
+          testMethodName = "run",
+          testClassName = "WebTrailTest",
+          trailblazeDeviceInfo = deviceInfo,
+          trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+          rawYaml = null,
+        ),
+        session = sessionId,
+        timestamp = Instant.parse(startedAt),
+      ),
+    )
+    writeLog(
+      logsDir = logsDir,
+      sessionId = sessionId,
+      fileName = "002_TrailblazeSessionStatusChangeLog.json",
+      log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = ended,
+        session = sessionId,
+        // Ended must be strictly after Started, otherwise the latest-status resolution is
+        // ambiguous and the run can be read as still-Started (non-PASSED).
+        timestamp = Instant.parse(startedAt).plus(10.seconds),
+      ),
+    )
   }
 
   private fun writeLog(

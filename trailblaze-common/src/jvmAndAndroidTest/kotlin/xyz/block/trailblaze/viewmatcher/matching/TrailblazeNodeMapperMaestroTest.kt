@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import maestro.Platform
+import maestro.device.Platform
 import maestro.TreeNode
 import xyz.block.trailblaze.api.DriverNodeDetail
 

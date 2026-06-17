@@ -8,6 +8,7 @@ import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 import kotlin.reflect.full.hasAnnotation
@@ -126,6 +127,35 @@ object KoogToolExt {
     }
   }
 
+  /**
+   * Trailblaze-native descriptor variant of [buildDescriptorsForYamlDefined] that preserves
+   * source metadata for catalog/debug surfaces. The Koog descriptor path intentionally drops
+   * this metadata because execution does not depend on it.
+   */
+  fun buildTrailblazeDescriptorsForYamlDefined(yamlToolNames: Set<ToolName>): List<TrailblazeToolDescriptor> =
+    buildTrailblazeDescriptorsForYamlDefined(
+      yamlToolNames = yamlToolNames,
+      configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools(),
+    )
+
+  internal fun buildTrailblazeDescriptorsForYamlDefined(
+    yamlToolNames: Set<ToolName>,
+    configsByName: Map<ToolName, ToolYamlConfig>,
+  ): List<TrailblazeToolDescriptor> {
+    if (yamlToolNames.isEmpty()) return emptyList()
+    return yamlToolNames.mapNotNull { name ->
+      val config = configsByName[name]
+      if (config == null) {
+        Console.log(
+          "buildTrailblazeDescriptorsForYamlDefined: no YAML config registered for tool '${name.toolName}' — skipping.",
+        )
+        return@mapNotNull null
+      }
+      if (config.surfaceToLlm == false) return@mapNotNull null
+      config.toTrailblazeToolDescriptor()
+    }
+  }
+
   private fun buildYamlDefinedKoogTool(
     config: ToolYamlConfig,
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
@@ -147,3 +177,12 @@ object KoogToolExt {
     )
   }
 }
+
+fun KClass<out TrailblazeTool>.toTrailblazeToolDescriptorWithSource(): TrailblazeToolDescriptor? =
+  toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.copy(
+    source = TrailblazeToolSourceDescriptor(
+      type = TrailblazeToolSourceType.KOTLIN,
+      identifier = qualifiedName,
+      className = qualifiedName,
+    ),
+  )

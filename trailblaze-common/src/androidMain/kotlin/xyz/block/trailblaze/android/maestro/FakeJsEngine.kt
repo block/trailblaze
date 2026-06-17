@@ -25,6 +25,7 @@ class FakeJsEngine : JsEngine {
     env: Map<String, String>,
     sourceName: String,
     runInSubScope: Boolean,
+    scriptDir: String?,
   ): Any? {
     Console.log("evaluateScript")
     return null

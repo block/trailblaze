@@ -510,7 +510,7 @@ GUIDELINES:
    */
   private fun getAvailableToolDescriptors(): List<TrailblazeToolDescriptor> {
     if (trailblazeToolRepo != null) {
-      return trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+      return trailblazeToolRepo.getCurrentTrailblazeToolDescriptors()
     }
     // Fallback: class-backed tools only. YAML-defined tools need a repo to resolve.
     return TrailblazeToolSet.DefaultLlmTrailblazeTools.mapNotNull { toolClass ->

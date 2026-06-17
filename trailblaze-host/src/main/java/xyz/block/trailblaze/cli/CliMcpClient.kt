@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class CliMcpClient(
   private val serverUrl: String = "http://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT}/mcp",
-  private val requestTimeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+  private val requestTimeoutMs: Long = resolveRequestTimeoutMs(),
   private val toolProfile: String = "MINIMAL",
   /**
    * Optional value for the `X-Trailblaze-Origin` header sent on initialize.
@@ -944,8 +944,37 @@ class CliMcpClient(
     // unit-test asserts the two values still match.
     const val CLIENT_NAME: String = xyz.block.trailblaze.mcp.TRAILBLAZE_CLI_CLIENT_NAME
     const val CONNECT_TIMEOUT_MS = 10_000L
-    const val DEFAULT_REQUEST_TIMEOUT_MS = 180_000L // 3 minutes for agent operations
+
+    // Long by default because agent operations (`blaze`/`ask`/`verify`) legitimately run the
+    // multi-round-trip agent loop on the daemon and can take minutes. A direct device `tool` call
+    // (tap/snapshot) should never need this long — when a device wedges it would otherwise hang the
+    // full 3 minutes — so the value is overridable via REQUEST_TIMEOUT_ENV for fast-fail without a
+    // rebuild (mirrors TRAILBLAZE_ADB_TIMEOUT_MS). A future refinement could default direct tool
+    // calls to a shorter per-call timeout while keeping agent ops long.
+    const val DEFAULT_REQUEST_TIMEOUT_MS = 180_000L
+    const val REQUEST_TIMEOUT_ENV = "TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS"
     const val CLEANUP_TIMEOUT_MS = 5_000L
+
+    /**
+     * Resolves the per-request MCP timeout (applied to both request and socket timeouts). Defaults
+     * to [DEFAULT_REQUEST_TIMEOUT_MS]; an operator triaging a wedged device can lower it via
+     * [REQUEST_TIMEOUT_ENV] (e.g. `TRAILBLAZE_MCP_REQUEST_TIMEOUT_MS=15000`) so a hung call fails
+     * fast instead of blocking for 3 minutes. Malformed or non-positive values fall back to the
+     * default with a warning. [getenv] is injectable so the parse branches are unit-testable.
+     */
+    internal fun resolveRequestTimeoutMs(getenv: (String) -> String? = System::getenv): Long {
+      val raw = getenv(REQUEST_TIMEOUT_ENV)?.takeIf { it.isNotBlank() } ?: return DEFAULT_REQUEST_TIMEOUT_MS
+      val parsed = raw.toLongOrNull()
+      if (parsed == null || parsed <= 0) {
+        Console.error(
+          "[CliMcpClient] $REQUEST_TIMEOUT_ENV='$raw' is not a positive number of milliseconds; " +
+            "using default ${DEFAULT_REQUEST_TIMEOUT_MS}ms",
+        )
+        return DEFAULT_REQUEST_TIMEOUT_MS
+      }
+      Console.error("[CliMcpClient] MCP request timeout overridden via $REQUEST_TIMEOUT_ENV=${parsed}ms")
+      return parsed
+    }
     const val MCP_ACCEPT_HEADER_VALUE = "application/json, text/event-stream"
     const val MCP_SESSION_ID_HEADER = "mcp-session-id"
     /** Header carrying a human-readable description of where the session came from. */

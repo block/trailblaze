@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import xyz.block.trailblaze.util.Console
 import java.io.File
 
@@ -187,6 +188,7 @@ object McpSubprocessRuntimeLauncher {
             registered = reg,
             sessionProvider = { session },
             callbackContext = callbackContext,
+            source = entry.source ?: trailblazeToolSourceForScript(spawned.scriptFile.absolutePath),
           )
         }
       }

@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.scripting.bundle.SdkBundleResource
+import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import java.io.File
 
 /**
@@ -79,7 +80,10 @@ object InlineScriptToolServerSynthesizer {
           sdkBundleFile = sdkBundleFile,
         ),
       )
-      McpServerConfig(script = wrapperFile.absolutePath)
+      McpServerConfig(
+        script = wrapperFile.absolutePath,
+        source = trailblazeToolSourceForScript(authorFile.absolutePath),
+      )
     }
   }
 

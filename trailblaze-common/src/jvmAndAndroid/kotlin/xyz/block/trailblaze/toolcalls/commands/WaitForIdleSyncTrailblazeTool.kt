@@ -25,7 +25,7 @@ data class WaitForIdleSyncTrailblazeTool(
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     WaitForAnimationToEndCommand(
-      timeout = timeToWaitInSeconds.toLong() * 1000L,
+      timeout = (timeToWaitInSeconds.toLong() * 1000L).toString(),
     ),
   )
 

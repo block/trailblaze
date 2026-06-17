@@ -31,10 +31,16 @@ import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
-import xyz.block.trailblaze.report.models.RecordingSkipReason
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
+import xyz.block.trailblaze.report.models.AxisBucket
+import xyz.block.trailblaze.report.models.CrossPlatformMismatch
+import xyz.block.trailblaze.report.models.FailureAxes
+import xyz.block.trailblaze.report.models.FailureSignatureGroup
+import xyz.block.trailblaze.report.models.RetrySummary
+import xyz.block.trailblaze.report.models.TriageReport
+import xyz.block.trailblaze.report.models.TriageSummary
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -59,6 +65,13 @@ import kotlin.io.path.Path
  * - TRAILBLAZE_TARGET_APP
  * - TRAILBLAZE_BUILD_TYPE
  * - TRAILBLAZE_DEVICES
+ * - ANDROID_BUILD_URL / IOS_BUILD_URL
+ * - ANDROID_BUILD_VERSION / IOS_BUILD_VERSION
+ * - ANDROID_BUILD_GIT_SHA / IOS_BUILD_GIT_SHA
+ * - ANDROID_BUILD_SOURCE_REPO / IOS_BUILD_SOURCE_REPO
+ * - ANDROID_BUILD_BRANCH / IOS_BUILD_BRANCH
+ * - ANDROID_BUILD_PR_NUMBER / IOS_BUILD_PR_NUMBER
+ * - TRAIL_SOURCE_TYPE / TRAIL_SOURCE_REPO / TRAIL_SOURCE_REF
  * - BUILDKITE_BUILD_URL / CI_BUILD_URL
  * - BUILDKITE_BUILD_NUMBER / CI_BUILD_NUMBER
  * - BUILDKITE_ORGANIZATION_SLUG / CI_ORGANIZATION_SLUG
@@ -83,8 +96,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
   ).default(Path("./logs"))
 
   private val verbose by option(
-    help = "Show detailed information for each test",
-  ).flag(default = true)
+    help = "Show detailed information for each test. Pass --no-verbose to suppress the per-test listing.",
+  ).flag("--no-verbose", default = true)
 
   private val outputArg by argument(
     name = "output",
@@ -100,10 +113,13 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
   ).enum<OutputFormat>()
     .default(OutputFormat.JSON)
 
-  private val shouldDeduplicateRetries by option(
-    "--dedup",
-    help = "Collapse retried tests into a single result, keeping the best outcome. " +
-      "Use in CI when retries are configured. Omit for local/live reports to see all runs.",
+  private val triageMode by option(
+    "--triage",
+    help = "Also write trailblaze_triage_report.json — pre-computed cross-test failure analysis " +
+      "(retry summary, failure-signature concentration, multi-axis breakdown, cross-platform " +
+      "mismatches). Intended for the combined/aggregation report step where results from every " +
+      "device and shard are present; the cross-cutting analysis is meaningless on a single-shard " +
+      "run (it would see one device and empty mismatches). Deduplication happens regardless.",
   ).flag(default = false)
 
   private val logsDir: File get() = logsDirArg.toFile()
@@ -206,9 +222,10 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             title = title,
             test_key = testKey,
             platform = platform,
-            execution_mode = determineExecutionMode(
+            execution_mode = ExecutionMode.classify(
               status = sessionInfo.latestStatus,
-              sessionRecordingInfo = sessionRecordingInfo
+              hasRecordedSteps = sessionInfo.hasRecordedSteps,
+              recordingInfo = sessionRecordingInfo,
             ),
             trail_source = determineTrailSource(sessionInfo.trailConfig),
             device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
@@ -217,7 +234,6 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             failure_reason = extractFailureReason(sessionInfo.latestStatus),
             device_log_excerpt = deviceLogExcerpt,
             has_recorded_steps = sessionInfo.hasRecordedSteps,
-            recording_available = sessionRecordingInfo.available,
             recording_skip_reason = sessionRecordingInfo.skipReason,
             duration_ms = sessionInfo.durationMs,
             llm_call_count = countLlmCalls(logs),
@@ -237,13 +253,11 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       }
     }
 
-    // Only deduplicate when explicitly requested (e.g. CI final reports).
-    // Local and live HTML reports keep all runs visible.
-    val finalResults = if (shouldDeduplicateRetries) {
-      deduplicateRetries(sessionResults)
-    } else {
-      sessionResults
-    }
+    // Always deduplicate retries: collapse every attempt of a test into a single result, keeping
+    // the best outcome (see [deduplicateRetries]). This is the only correct test-case-level view —
+    // counting raw attempts double-counts retries. The kept result carries the retry metadata
+    // (attempt, total_attempts, replaced_session_ids, replaced_failure_reasons) so nothing is lost.
+    val finalResults = deduplicateRetries(sessionResults)
 
     // Print summary to console
     printSummary(finalResults, errors)
@@ -275,6 +289,19 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       val toolUsageFile = File(logsDir, "trailblaze_tool_usage.html")
       toolUsageFile.writeText(wrapMarkdownInHtml(markdown))
       Console.log("🔧 Tool usage report written to: ${toolUsageFile.absolutePath}")
+    }
+
+    // Emit the triage report only when asked (--triage). It's a build-level aggregation —
+    // cross-platform mismatches, by-device/by-platform axes, failure-signature concentration —
+    // so it's only meaningful at the combined/aggregation step where every device's and shard's
+    // results are present. On a single-shard run it would see one device and empty mismatches,
+    // so the combined-report scripts opt in and the per-shard ones don't. The work itself is a
+    // pure in-memory pass over the already-deduplicated results.
+    if (triageMode) {
+      val triageReport = buildTriageReport(metadata, sessionResults, finalResults)
+      val triageOutput = File(logsDir, "trailblaze_triage_report.json")
+      triageOutput.writeText(jsonSerializer.encodeToString(value = triageReport))
+      Console.log("🔍 Triage report written to: ${triageOutput.absolutePath}")
     }
 
     // Store the generated report for subclasses to access
@@ -333,6 +360,14 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       it.isNotEmpty()
     } ?: emptyList()
 
+    // Trail source: a git trail repo emits TRAIL_SOURCE_REPO/REF (the combined / deferred report
+    // steps re-emit them). When a repo is present we label the type "git"; otherwise the type is
+    // left to an explicit TRAIL_SOURCE_TYPE env (set by the CI pipeline) or null.
+    val trailSourceRepo = getEnv("TRAIL_SOURCE_REPO")
+    val trailSourceRef = getEnv("TRAIL_SOURCE_REF")
+    val trailSourceType =
+      getEnv("TRAIL_SOURCE_TYPE") ?: if (trailSourceRepo != null) "git" else null
+
     return CiRunMetadata(
       target_app = getEnv("TRAILBLAZE_TARGET_APP") ?: "",
       build_type = getEnv("TRAILBLAZE_BUILD_TYPE") ?: "",
@@ -341,6 +376,17 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       ios_build_url = getEnv("IOS_BUILD_URL"),
       android_build_version = getEnv("ANDROID_BUILD_VERSION"),
       ios_build_version = getEnv("IOS_BUILD_VERSION"),
+      android_build_git_sha = getEnv("ANDROID_BUILD_GIT_SHA"),
+      ios_build_git_sha = getEnv("IOS_BUILD_GIT_SHA"),
+      android_build_source_repo = getEnv("ANDROID_BUILD_SOURCE_REPO"),
+      ios_build_source_repo = getEnv("IOS_BUILD_SOURCE_REPO"),
+      android_build_branch = getEnv("ANDROID_BUILD_BRANCH"),
+      ios_build_branch = getEnv("IOS_BUILD_BRANCH"),
+      android_build_pr_number = getEnv("ANDROID_BUILD_PR_NUMBER"),
+      ios_build_pr_number = getEnv("IOS_BUILD_PR_NUMBER"),
+      trail_source_type = trailSourceType,
+      trail_source_repo = trailSourceRepo,
+      trail_source_ref = trailSourceRef,
       retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
       ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
       // Source of truth is the `TRAILBLAZE_SELF_HEAL_ENABLED` env var that a CI pipeline runner
@@ -369,18 +415,6 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     is SessionStatus.Ended.MaxCallsLimitReached -> Outcome.MAX_CALLS_REACHED
     is SessionStatus.Started -> Outcome.ERROR
     is SessionStatus.Unknown -> Outcome.ERROR
-  }
-
-  private fun determineExecutionMode(status: SessionStatus, sessionRecordingInfo: SessionRecordingInfo): ExecutionMode {
-    return when {
-      status is SessionStatus.Ended.SucceededWithSelfHeal -> ExecutionMode.SELF_HEAL
-      status is SessionStatus.Ended.FailedWithSelfHeal -> ExecutionMode.SELF_HEAL
-      sessionRecordingInfo.usedSelfHeal -> ExecutionMode.SELF_HEAL
-      sessionRecordingInfo.skipReason == RecordingSkipReason.DISABLED_BY_CONFIG -> ExecutionMode.RECORDING_SKIPPED
-      sessionRecordingInfo.available -> ExecutionMode.RECORDING_ONLY
-      !sessionRecordingInfo.available -> ExecutionMode.AI_ONLY
-      else -> ExecutionMode.UNKNOWN
-    }
   }
 
   private fun extractFailureReason(status: SessionStatus): String? = when (status) {
@@ -827,6 +861,164 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       appendLine("════════════════════════════════════════════════════════════")
     }
     Console.log(output)
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Triage analysis functions — pure over List<SessionResult>, no side effects
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private fun buildTriageReport(
+    metadata: CiRunMetadata,
+    allAttempts: List<SessionResult>,
+    deduped: List<SessionResult>,
+  ): TriageReport {
+    val passed = deduped.count { it.outcome == Outcome.PASSED }
+    val failed = deduped.size - passed
+    val passRate = if (deduped.isNotEmpty()) passed.toDouble() / deduped.size else 0.0
+
+    return TriageReport(
+      metadata = metadata,
+      summary = TriageSummary(
+        total_test_cases = deduped.size,
+        passed = passed,
+        failed = failed,
+        pass_rate = passRate,
+      ),
+      retries = buildRetrySummary(allAttempts, deduped),
+      failure_signatures = buildFailureSignatures(deduped),
+      failure_axes = buildFailureAxes(deduped),
+      cross_platform_mismatches = findCrossPlatformMismatches(deduped),
+      test_cases = deduped,
+    )
+  }
+
+  private fun buildRetrySummary(
+    allAttempts: List<SessionResult>,
+    deduped: List<SessionResult>,
+  ): RetrySummary {
+    // A test only counts as "retried" if an earlier attempt actually FAILED. We can't key this
+    // off `total_attempts > 1`: deduplicateRetries() sets total_attempts = group size for every
+    // grouped attempt regardless of outcome, so all-passing reruns or a session whose logs were
+    // uploaded twice would inflate the flaky count without any real prior failure. The reliable
+    // signal is `replaced_failure_reasons`, which deduplicateRetries() populates only from the
+    // non-kept attempts that carried a failure reason — so it is non-empty exactly when a genuine
+    // failed attempt was superseded.
+    val passedOnRetry = deduped.count {
+      it.outcome == Outcome.PASSED && it.replaced_failure_reasons.isNotEmpty()
+    }
+    val failedAfterRetries = deduped.count {
+      it.outcome != Outcome.PASSED && it.replaced_failure_reasons.isNotEmpty()
+    }
+    return RetrySummary(
+      total_attempts = allAttempts.size,
+      unique_test_cases = deduped.size,
+      passed_on_retry = passedOnRetry,
+      failed_after_retries = failedAfterRetries,
+    )
+  }
+
+  private fun buildFailureSignatures(deduped: List<SessionResult>): List<FailureSignatureGroup> {
+    val failures = deduped.filter { it.outcome != Outcome.PASSED }
+    if (failures.isEmpty()) return emptyList()
+
+    return failures
+      .groupBy { normalizeFailureSignature(it.failure_reason) }
+      .map { (signature, tests) ->
+        FailureSignatureGroup(
+          signature = signature,
+          count = tests.size,
+          share = tests.size.toDouble() / failures.size,
+          affected_tests = tests.map { it.title }.distinct(),
+        )
+      }
+      .sortedByDescending { it.count }
+  }
+
+  private fun buildFailureAxes(deduped: List<SessionResult>): FailureAxes {
+    return FailureAxes(
+      by_platform = buildAxisBuckets(deduped) { it.platform },
+      by_device = buildAxisBuckets(deduped) { it.device_classifier ?: "unknown" },
+      by_execution_mode = buildAxisBuckets(deduped) { it.execution_mode.name },
+    )
+  }
+
+  private fun buildAxisBuckets(
+    results: List<SessionResult>,
+    keySelector: (SessionResult) -> String,
+  ): Map<String, AxisBucket> {
+    return results
+      .groupBy(keySelector)
+      .mapValues { (_, group) ->
+        val passed = group.count { it.outcome == Outcome.PASSED }
+        val total = group.size
+        AxisBucket(
+          passed = passed,
+          failed = total - passed,
+          total = total,
+          pass_rate = if (total > 0) passed.toDouble() / total else 0.0,
+        )
+      }
+  }
+
+  private fun findCrossPlatformMismatches(deduped: List<SessionResult>): List<CrossPlatformMismatch> {
+    // Group by test identity (test_key or title), then check if it passes on some
+    // devices but fails on others
+    return deduped
+      .groupBy { it.test_key ?: it.title }
+      .mapNotNull { (key, results) ->
+        val passedOn = results
+          .filter { it.outcome == Outcome.PASSED }
+          .map { it.device_classifier ?: it.platform }
+          .distinct()
+        val failedOn = results
+          .filter { it.outcome != Outcome.PASSED }
+          .map { it.device_classifier ?: it.platform }
+          .distinct()
+
+        // Only report as a mismatch if it passes on at least one and fails on at least one
+        if (passedOn.isNotEmpty() && failedOn.isNotEmpty()) {
+          CrossPlatformMismatch(
+            test_title = results.first().title,
+            test_key = results.first().test_key,
+            passed_on = passedOn,
+            failed_on = failedOn,
+          )
+        } else {
+          null
+        }
+      }
+      .sortedByDescending { it.failed_on.size }
+  }
+
+  /**
+   * Normalize a failure reason into a groupable signature by stripping
+   * variable content (session IDs, timestamps, file paths, hex addresses).
+   *
+   * The first line is taken up front — before any whitespace collapsing — so multi-line
+   * reasons (stack traces, multi-paragraph messages) group on their headline rather than
+   * being concatenated into one long run. `internal` for direct unit testing.
+   */
+  internal fun normalizeFailureSignature(reason: String?): String {
+    if (reason == null) return "(no failure reason)"
+
+    return reason
+      .trim()
+      // Take the first line only, before whitespace is collapsed (otherwise newlines become
+      // spaces and the whole multi-line reason survives as a single line).
+      .lineSequence().first()
+      // Strip session IDs (long underscore-separated timestamps + identifiers)
+      .replace(Regex("""\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}_[\w]+"""), "<session_id>")
+      // Strip hex addresses / hashes
+      .replace(Regex("""0x[0-9a-fA-F]+"""), "<addr>")
+      .replace(Regex("""[0-9a-f]{8,}"""), "<hash>")
+      // Strip absolute file paths
+      .replace(Regex("""(/[\w.\-]+)+/?"""), "<path>")
+      // Strip numeric IDs and timestamps
+      .replace(Regex("""\d{10,}"""), "<id>")
+      // Collapse any remaining whitespace, then cap the signature length
+      .replace(Regex("""\s+"""), " ")
+      .trim()
+      .take(200)
   }
 }
 

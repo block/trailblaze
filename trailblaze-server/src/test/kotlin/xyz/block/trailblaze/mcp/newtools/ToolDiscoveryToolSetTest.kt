@@ -25,6 +25,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceType
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
@@ -91,7 +92,7 @@ class ToolDiscoveryToolSetTest {
 
     override fun getInlineScriptTools(): List<InlineScriptToolConfig> = listOf(
       InlineScriptToolConfig(
-        script = "./tools/web_inline.js",
+        script = "./tools/web_inline.ts",
         name = "web_inline_script_tool",
         description = "Drive a sample web page through an inline script tool",
         meta = buildJsonObject {
@@ -1257,6 +1258,23 @@ class ToolDiscoveryToolSetTest {
     val toolNames = scriptedGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
 
     assertContains(toolNames, "web_inline_script_tool")
+  }
+
+  @Test
+  fun `TARGET mode details classify inline TypeScript scripted tools`() = runTest {
+    val toolSet = createToolSet(
+      allTargets = setOf(inlineToolTarget),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(target = "inlineapp", detail = true)
+    val typed = json.decodeFromString(ToolDiscoveryTargetResult.serializer(), result)
+    val descriptor = typed.toolGroups
+      ?.flatMap { it.toolDetails ?: emptyList() }
+      ?.firstOrNull { it.name == "web_inline_script_tool" }
+    assertNotNull(descriptor, "Inline scripted tool should be returned with detail=true")
+    assertEquals(TrailblazeToolSourceType.TYPESCRIPT, descriptor.source?.type)
+    assertEquals("./tools/web_inline.ts", descriptor.source?.scriptPath)
   }
 
   @Test

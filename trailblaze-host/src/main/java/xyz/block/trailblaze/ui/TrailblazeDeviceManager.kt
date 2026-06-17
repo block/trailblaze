@@ -21,6 +21,7 @@ import java.net.URI
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import maestro.Driver
@@ -1273,7 +1274,26 @@ class TrailblazeDeviceManager(
     const val PLAYWRIGHT_NATIVE_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_NATIVE
     const val PLAYWRIGHT_ELECTRON_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_ELECTRON
 
-    private const val DEVICE_DISCOVERY_TIMEOUT_SECONDS = 10L
+    internal const val DEVICE_DISCOVERY_TIMEOUT_SECONDS = 10L
+
+    // Per-property cosmetic name probe (`getprop` avd_name / product model). Kept strictly less than
+    // the overall discovery budget (DEVICE_DISCOVERY_TIMEOUT_SECONDS) so a single wedged probe can't
+    // starve discovery of every device — guarded by DeviceNameResolutionTest. Note the
+    // reconnect-on-timeout in AndroidHostAdbUtils means a wedged probe can cost up to 2x this before
+    // falling back, which is why naming runs in parallel under its own budget below.
+    internal const val DEVICE_NAME_RESOLUTION_TIMEOUT_MS = 2_000L
+
+    // Total wall-clock budget discovery spends WAITING for display-name resolution across ALL
+    // devices — a single shared deadline (see listConnectedAdbDevices), NOT a per-device cap. It does
+    // not bound the underlying probe work (which can run longer: up to 3 properties x 2 attempts x
+    // DEVICE_NAME_RESOLUTION_TIMEOUT_MS with the reconnect retry); that work is simply abandoned and
+    // the device falls back to its serial name. Kept comfortably under DEVICE_DISCOVERY_TIMEOUT_
+    // SECONDS so naming can never blow the overall discovery budget, regardless of device count.
+    private const val DEVICE_NAME_RESOLUTION_BUDGET_MS = 6_000L
+
+    // Cap on concurrent name-resolution threads so a host with many devices attached doesn't spawn an
+    // unbounded daemon pool; device counts are normally 1-3.
+    private const val MAX_NAME_RESOLUTION_THREADS = 8
 
     /**
      * Runs a blocking operation with a timeout. Returns null if it times out or fails.
@@ -1342,14 +1362,82 @@ class TrailblazeDeviceManager(
      * uses the product model. Falls back to the serial number if resolution fails.
      */
     internal fun listConnectedAdbDevices(): List<Pair<String, String>> {
-      return try {
-        AndroidHostAdbUtils.listConnectedAdbDevices().map { device ->
-          device.instanceId to resolveAndroidDeviceName(device.instanceId)
-        }
+      // Enumeration is authoritative: `host:devices` is fast and already filters to `device`-state
+      // serials (offline/unauthorized dropped upstream). The human-readable name is *cosmetic* and
+      // must never remove a confirmed device — a slow/wedged `getprop avd_name` previously sank the
+      // entire Android discovery, because the per-probe timeout equalled the overall discovery
+      // budget, so the discovery future timed out, returned emptyList, and a perfectly healthy
+      // device "disappeared" from `device list`. (Paired with the reconnect-on-timeout fix in
+      // AndroidHostAdbUtils for the stale-transport case.)
+      val serials = try {
+        AndroidHostAdbUtils.listConnectedAdbDevices().map { it.instanceId }
       } catch (e: Exception) {
         Console.log("[loadDevices] [Android] adb devices failed: ${e.message}")
-        emptyList()
+        return emptyList()
       }
+      if (serials.isEmpty()) return emptyList()
+      // Resolve names concurrently and best-effort on a dedicated, bounded daemon pool — NOT the
+      // ForkJoin common pool, whose threads we'd otherwise tie up on blocking ADB probes and starve
+      // unrelated parallel work. Each probe is short-bounded (DEVICE_NAME_RESOLUTION_TIMEOUT_MS,
+      // strictly < the overall discovery budget); a slow/failed name only degrades the device's
+      // label to its serial, never its presence.
+      val executor = Executors.newFixedThreadPool(
+        serials.size.coerceAtMost(MAX_NAME_RESOLUTION_THREADS),
+      ) { r -> Thread(r, "device-name-resolve").apply { isDaemon = true } }
+      return try {
+        val nameFutures = serials.associateWith { serial ->
+          executor.submit(Callable { resolveAndroidDeviceName(serial) })
+        }
+        awaitNamesUnderSharedDeadline(
+          serials = serials,
+          budgetMs = DEVICE_NAME_RESOLUTION_BUDGET_MS,
+        ) { serial -> nameFutures.getValue(serial) }
+      } finally {
+        executor.shutdownNow()
+      }
+    }
+
+    /**
+     * Awaits the per-device name [futureFor]s under a SINGLE shared deadline (computed once from
+     * [budgetMs]), pairing each serial with its resolved name and falling back to the serial when a
+     * future doesn't finish in the time remaining to that deadline. The shared deadline — rather than
+     * a fresh budget per `.get()` — is what stops several slow devices from accumulating waits past
+     * the outer discovery budget and dropping every device (the "device disappears" regression).
+     *
+     * [nowNanos] is injected so the deadline behaviour is unit-testable without a real clock or a
+     * thread pool.
+     */
+    internal fun awaitNamesUnderSharedDeadline(
+      serials: List<String>,
+      budgetMs: Long,
+      nowNanos: () -> Long = System::nanoTime,
+      futureFor: (String) -> Future<String>,
+    ): List<Pair<String, String>> {
+      val deadlineNanos = nowNanos() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
+      return buildAndroidDeviceList(serials) { serial ->
+        try {
+          val remainingMs = (deadlineNanos - nowNanos()) / 1_000_000
+          if (remainingMs <= 0) null
+          else futureFor(serial).get(remainingMs, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+          null
+        }
+      }
+    }
+
+    /**
+     * Pure policy: pair every confirmed-present [serials] entry with a display name, falling back to
+     * the serial when [resolveName] returns null/blank or throws. This guards the invariant that
+     * naming is best-effort and *never* removes a device from discovery — the fix for a wedged
+     * cosmetic `getprop` silently dropping a healthy device — so it is unit-tested directly with no
+     * device required.
+     */
+    internal fun buildAndroidDeviceList(
+      serials: List<String>,
+      resolveName: (String) -> String?,
+    ): List<Pair<String, String>> = serials.map { serial ->
+      val name = runCatching { resolveName(serial) }.getOrNull()?.takeIf { it.isNotBlank() } ?: serial
+      serial to name
     }
 
     /**
@@ -1373,12 +1461,14 @@ class TrailblazeDeviceManager(
 
     private fun queryAdbProperty(deviceId: TrailblazeDeviceId, property: String): String? {
       return try {
-        // Bounded so a single unresponsive device cannot block discovery for all devices —
-        // matches the legacy `process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, SECONDS)` guard.
+        // Cosmetic probe — bounded well under the overall discovery budget
+        // (DEVICE_DISCOVERY_TIMEOUT_SECONDS) so a single wedged `getprop` can't starve discovery of
+        // every device. A failure here only degrades the device's display name (it falls back to the
+        // serial in buildAndroidDeviceList), never its presence in the list.
         val value = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
           deviceId = deviceId,
           args = listOf("getprop", property),
-          timeoutMs = DEVICE_DISCOVERY_TIMEOUT_SECONDS * 1_000L,
+          timeoutMs = DEVICE_NAME_RESOLUTION_TIMEOUT_MS,
         )?.trim()
         value?.takeIf { it.isNotEmpty() && !it.startsWith("error:", ignoreCase = true) }
       } catch (_: Exception) {

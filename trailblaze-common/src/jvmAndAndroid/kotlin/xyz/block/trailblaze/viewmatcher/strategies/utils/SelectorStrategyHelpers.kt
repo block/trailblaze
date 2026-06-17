@@ -23,27 +23,32 @@ internal object SelectorStrategyHelpers {
    * @param selectorBuilder Builds the selector with the given parent (or null for no parent)
    * @return Matching selector if found, null otherwise
    */
+  private fun SelectorSearchContext.isStrictMatch(match: ElementMatches): Boolean =
+    match is ElementMatches.SingleMatch && isCorrectTarget(match)
+
   fun tryWithAndWithoutParent(
     context: SelectorSearchContext,
     parentSelector: TrailblazeElementSelector?,
+    acceptDeterministicTap: Boolean = false,
     selectorBuilder: (parent: TrailblazeElementSelector?) -> TrailblazeElementSelector,
   ): TrailblazeElementSelector? {
-    // Try without parent first (simpler selector)
     val selectorWithoutParent = selectorBuilder(null)
     val matchesWithoutParent = context.getMatches(selectorWithoutParent)
+    val selectorWithParent = parentSelector?.let { selectorBuilder(it) }
+    val matchesWithParent = selectorWithParent?.let { context.getMatches(it) }
 
-    if (matchesWithoutParent is ElementMatches.SingleMatch && context.isCorrectTarget(matchesWithoutParent)) {
-      return matchesWithoutParent.trailblazeElementSelector
-    }
+    // Prefer an exact single match — first the simpler bare selector, then the parent-scoped one.
+    if (context.isStrictMatch(matchesWithoutParent)) return selectorWithoutParent
+    if (matchesWithParent != null && context.isStrictMatch(matchesWithParent)) return selectorWithParent
 
-    // Try with parent constraint
-    if (parentSelector != null) {
-      val selectorWithParent = selectorBuilder(parentSelector)
-      val matchesWithParent = context.getMatches(selectorWithParent)
-
-      if (matchesWithParent is ElementMatches.SingleMatch && context.isCorrectTarget(matchesWithParent)) {
-        return matchesWithParent.trailblazeElementSelector
-      }
+    // Fallback (opt-in): no exact single match exists, but Maestro still taps the target
+    // deterministically because it's the sole clickable match (see SelectorSearchContext.tapTargetIsCorrect).
+    // This keeps a semantic `containsChild` selector for clickable wrappers under Maestro 2.6.1's
+    // broader `containsChild`, rather than dropping to a brittle positional `index`. Tried only after
+    // the strict attempts so parent-scoped disambiguation is never discarded when it is available.
+    if (acceptDeterministicTap) {
+      if (context.tapTargetIsCorrect(matchesWithoutParent)) return selectorWithoutParent
+      if (matchesWithParent != null && context.tapTargetIsCorrect(matchesWithParent)) return selectorWithParent
     }
 
     return null
@@ -65,23 +70,27 @@ internal object SelectorStrategyHelpers {
     results: MutableList<TrailblazeElementSelector>,
     targetLeafSelector: TrailblazeElementSelector,
     parentSelector: TrailblazeElementSelector?,
+    acceptDeterministicTap: Boolean = false,
     selectorBuilder: (parent: TrailblazeElementSelector?) -> TrailblazeElementSelector,
   ) {
-    // Try without parent first (simpler selector)
     val selectorWithoutParent = selectorBuilder(null)
     val matchesWithoutParent = context.getMatches(selectorWithoutParent)
+    val selectorWithParent = parentSelector?.let { selectorBuilder(it) }
+    val matchesWithParent = selectorWithParent?.let { context.getMatches(it) }
 
-    if (matchesWithoutParent is ElementMatches.SingleMatch && context.isCorrectTarget(matchesWithoutParent)) {
-      results.add(matchesWithoutParent.trailblazeElementSelector)
-    }
+    // Exact single matches first (bare selector, then parent-scoped).
+    if (context.isStrictMatch(matchesWithoutParent)) results.add(selectorWithoutParent)
+    if (matchesWithParent != null && context.isStrictMatch(matchesWithParent)) results.add(selectorWithParent)
 
-    // Try with parent constraint
-    if (parentSelector != null) {
-      val selectorWithParent = selectorBuilder(parentSelector)
-      val matchesWithParent = context.getMatches(selectorWithParent)
-
-      if (matchesWithParent is ElementMatches.SingleMatch && context.isCorrectTarget(matchesWithParent)) {
-        results.add(matchesWithParent.trailblazeElementSelector)
+    // Then deterministic-clickable-tap fallbacks (opt-in), skipping any already added.
+    if (acceptDeterministicTap) {
+      if (selectorWithoutParent !in results && context.tapTargetIsCorrect(matchesWithoutParent)) {
+        results.add(selectorWithoutParent)
+      }
+      if (selectorWithParent != null && selectorWithParent !in results &&
+        context.tapTargetIsCorrect(matchesWithParent!!)
+      ) {
+        results.add(selectorWithParent)
       }
     }
   }

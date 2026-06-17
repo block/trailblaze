@@ -62,7 +62,9 @@ object MaestroCommandToAxeActionConverter {
       listOf(AxeAction.Tap(10, 80))
     }
     is ScrollCommand -> listOf(AxeAction.ScrollDown) // matches Maestro's default forward scroll
-    is WaitForAnimationToEndCommand -> listOf(AxeAction.WaitForSettle(timeoutMs = command.timeout ?: 5_000L))
+    // timeout is a String in Maestro 2.6.1 and may be a non-numeric expression; degrade to the
+    // default rather than throwing NumberFormatException on this alternate-driver path.
+    is WaitForAnimationToEndCommand -> listOf(AxeAction.WaitForSettle(timeoutMs = command.timeout?.toLongOrNull() ?: 5_000L))
     is AssertConditionCommand -> convertAssertCondition(command)
     is LaunchAppCommand -> listOf(AxeAction.LaunchApp(command.appId))
     is StopAppCommand -> listOf(AxeAction.StopApp(command.appId))

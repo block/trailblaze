@@ -23,7 +23,6 @@ import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
-import xyz.block.trailblaze.report.models.RecordingSkipReason
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
@@ -512,7 +511,7 @@ open class CliReportGenerator {
       title = title,
       test_key = sessionInfo.stableTestKey,
       platform = platform,
-      execution_mode = determineExecutionMode(status, recordingInfo),
+      execution_mode = ExecutionMode.classify(status, sessionInfo.hasRecordedSteps, recordingInfo),
       trail_source = determineTrailSource(sessionInfo.trailConfig),
       device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
         ?.joinToString("-") { it.classifier },
@@ -520,7 +519,6 @@ open class CliReportGenerator {
       failure_reason = extractJsonFailureReason(status),
       device_log_excerpt = deviceLogExcerpt,
       has_recorded_steps = sessionInfo.hasRecordedSteps,
-      recording_available = recordingInfo.available,
       recording_skip_reason = recordingInfo.skipReason,
       duration_ms = sessionInfo.durationMs,
       llm_call_count = countLlmCalls(logs),
@@ -533,19 +531,6 @@ open class CliReportGenerator {
   } catch (e: Exception) {
     Console.error("Warning: failed to build result for session ${sessionId.value}: ${e.message}")
     null
-  }
-
-  private fun determineExecutionMode(
-    status: SessionStatus,
-    recordingInfo: SessionRecordingInfo,
-  ): ExecutionMode = when {
-    status is SessionStatus.Ended.SucceededWithSelfHeal -> ExecutionMode.SELF_HEAL
-    status is SessionStatus.Ended.FailedWithSelfHeal -> ExecutionMode.SELF_HEAL
-    recordingInfo.usedSelfHeal -> ExecutionMode.SELF_HEAL
-    recordingInfo.skipReason == RecordingSkipReason.DISABLED_BY_CONFIG -> ExecutionMode.RECORDING_SKIPPED
-    recordingInfo.available -> ExecutionMode.RECORDING_ONLY
-    !recordingInfo.available -> ExecutionMode.AI_ONLY
-    else -> ExecutionMode.UNKNOWN
   }
 
   private fun determineTrailSource(trailConfig: TrailConfig?): String =

@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.viewmatcher.matching
 
-import maestro.Platform
+import maestro.device.Platform
 import maestro.TreeNode
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode

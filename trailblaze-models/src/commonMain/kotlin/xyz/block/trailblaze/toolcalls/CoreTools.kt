@@ -206,6 +206,7 @@ object CoreTools {
   /** Well-known tool names that represent tap/click actions. */
   private val TAP_NAMES = setOf(
     TAP,                       // "tap"                      — Trailblaze core (ref-based)
+    LONG_PRESS,                // "longPress"                — Trailblaze core (ref-based hold)
     TAP_ON_POINT,              // "tapOnPoint"              — Trailblaze core
     TAP_ON_ELEMENT,            // "tapOnElement"             — Trailblaze core
     "click",                   // AndroidWorld canonical

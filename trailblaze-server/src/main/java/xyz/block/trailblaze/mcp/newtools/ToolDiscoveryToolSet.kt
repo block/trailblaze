@@ -27,10 +27,10 @@ import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
-import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.toTrailblazeToolDescriptorWithSource
+import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 
@@ -708,14 +708,14 @@ class ToolDiscoveryToolSet(
     driverType: TrailblazeDriverType?,
   ): Set<String> {
     val systemExclusions = SYSTEM_INTERNAL_TOOLS.mapNotNull {
-      it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.name
+      it.toTrailblazeToolDescriptorWithSource()?.name
     }.toSet()
 
     if (driverType == null || target == null) return systemExclusions
 
     val targetExclusions = try {
       val classExclusions = target.getExcludedToolsForDriver(driverType)
-        .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.name }
+        .mapNotNull { it.toTrailblazeToolDescriptorWithSource()?.name }
       // YAML-defined exclusions ride alongside class-backed ones so a target's
       // `excluded_tools: [pressBack]` is respected by the discovery layer.
       val yamlExclusions = target.getExcludedYamlToolNamesForDriver(driverType)
@@ -738,11 +738,10 @@ class ToolDiscoveryToolSet(
   ): List<TrailblazeToolDescriptor> {
     val resolved = ToolSetCategoryMapping.resolve(category)
     val classDescriptors = resolved.toolClasses
-      .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+      .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
     // Include YAML-defined tools (e.g. `pressBack` in NAVIGATION) so discovery output
     // matches what the executor will actually accept.
-    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(resolved.yamlToolNames)
-      .map { it.toTrailblazeToolDescriptor() }
+    val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(resolved.yamlToolNames)
     return (classDescriptors + yamlDescriptors).sortedWith(compareBy { it.name })
   }
 
@@ -760,10 +759,9 @@ class ToolDiscoveryToolSet(
   ): List<TrailblazeToolDescriptor> {
     return try {
       val classDescriptors = target.getCustomToolsForDriver(driverType)
-        .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+        .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
       val yamlDescriptors = KoogToolExt
-        .buildDescriptorsForYamlDefined(target.getCustomYamlToolNamesForDriver(driverType))
-        .map { it.toTrailblazeToolDescriptor() }
+        .buildTrailblazeDescriptorsForYamlDefined(target.getCustomYamlToolNamesForDriver(driverType))
       (classDescriptors + yamlDescriptors + getInlineToolDescriptors(target, driverType))
         .distinctBy { it.name }
         .sortedWith(compareBy { it.name })
@@ -789,12 +787,11 @@ class ToolDiscoveryToolSet(
       val classDescriptors = driverTypes
         .flatMap { driverType -> target.getCustomToolsForDriver(driverType) }
         .distinct()
-        .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+        .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
       val yamlNames = driverTypes
         .flatMap { driverType -> target.getCustomYamlToolNamesForDriver(driverType) }
         .toSet()
-      val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(yamlNames)
-        .map { it.toTrailblazeToolDescriptor() }
+      val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(yamlNames)
       (classDescriptors + yamlDescriptors + getInlineToolDescriptorsForPlatform(target, platform))
         .distinctBy { it.name }
         .sortedWith(compareBy { it.name })
@@ -892,6 +889,7 @@ class ToolDiscoveryToolSet(
       description = tool.description,
       requiredParameters = required,
       optionalParameters = optional,
+      source = trailblazeToolSourceForScript(tool.script),
     )
   }
 
@@ -1088,8 +1086,7 @@ data class ToolDiscoverySearchMatch(
  */
 internal fun TrailblazeHostAppTarget.ToolGroup.toMergedDescriptors(): List<TrailblazeToolDescriptor> {
   val classDescriptors = toolClasses
-    .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-  val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(yamlToolNames)
-    .map { it.toTrailblazeToolDescriptor() }
+    .mapNotNull { it.toTrailblazeToolDescriptorWithSource() }
+  val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(yamlToolNames)
   return (classDescriptors + yamlDescriptors).distinctBy { it.name }
 }

@@ -17,11 +17,14 @@ data class ToolSetCatalogEntry(
   val description: String,
   val toolClasses: Set<KClass<out TrailblazeTool>>,
   val yamlToolNames: Set<ToolName> = emptySet(),
+  val scriptedToolNames: Set<ToolName> = emptySet(),
   val alwaysEnabled: Boolean = false,
   val compatibleDriverTypes: Set<TrailblazeDriverType> = emptySet(),
 ) {
   val toolNames: List<String> by lazy {
-    toolClasses.map { it.toolName().toolName } + yamlToolNames.map { it.toolName }
+    toolClasses.map { it.toolName().toolName } +
+      yamlToolNames.map { it.toolName } +
+      scriptedToolNames.map { it.toolName }
   }
 
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
@@ -29,16 +32,21 @@ data class ToolSetCatalogEntry(
 }
 
 /**
- * The result of [TrailblazeToolSetCatalog.resolve] — both the Kotlin-backed tool classes and the
- * names of YAML-defined (`tools:` mode) tools that should be reachable to the LLM.
+ * The result of [TrailblazeToolSetCatalog.resolve] — the Kotlin-backed tool classes plus the
+ * names of YAML-defined (`tools:` mode) and scripted (`.ts` / `.js`) tools that should be
+ * reachable to the LLM.
  *
  * YAML-defined tools don't have a KClass because their behavior is composed from primitives in
  * a YAML file; they are identified by their `id:` string and constructed at execute time via
- * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool].
+ * [xyz.block.trailblaze.config.YamlDefinedTrailblazeTool]. Scripted tools likewise have no
+ * KClass — they're authored in TypeScript/JS and dispatched through the per-session scripted-tool
+ * runtime (host bun/QuickJS, on-device QuickJS bundle). Both are advertised to the LLM by name;
+ * the separation lets the bundling layer tell which names need a scripted runtime registered.
  */
 data class ResolvedToolSet(
   val toolClasses: Set<KClass<out TrailblazeTool>>,
   val yamlToolNames: Set<ToolName> = emptySet(),
+  val scriptedToolNames: Set<ToolName> = emptySet(),
 )
 
 /**
@@ -155,7 +163,12 @@ object TrailblazeToolSetCatalog {
     val selected = catalog.filter { it.alwaysEnabled || it.id in requestedIds }
     val toolClasses = selected.flatMap { it.toolClasses }.toSet()
     val yamlToolNames = selected.flatMap { it.yamlToolNames }.toSet()
-    return ResolvedToolSet(toolClasses = toolClasses, yamlToolNames = yamlToolNames)
+    val scriptedToolNames = selected.flatMap { it.scriptedToolNames }.toSet()
+    return ResolvedToolSet(
+      toolClasses = toolClasses,
+      yamlToolNames = yamlToolNames,
+      scriptedToolNames = scriptedToolNames,
+    )
   }
 
   /**
@@ -187,6 +200,20 @@ object TrailblazeToolSetCatalog {
     id: String,
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<ToolName> = catalog.firstOrNull { it.id == id }?.yamlToolNames ?: emptySet()
+
+  /**
+   * Returns the scripted (`.ts` / `.js`) tool names for a single catalog entry's [id], ignoring
+   * the `alwaysEnabled` auto-inclusion [resolve] performs. Symmetric with [entryYamlToolNames] for
+   * the scripted-tool case — a toolset can list a scripted tool by bare name (resolved via
+   * [xyz.block.trailblaze.config.ScriptedToolNameDiscoverer]); the per-session scripted-tool
+   * runtime is responsible for bundling + dispatching it.
+   *
+   * Returns an empty set if [id] is not in the catalog.
+   */
+  fun entryScriptedToolNames(
+    id: String,
+    catalog: List<ToolSetCatalogEntry> = defaultEntries(),
+  ): Set<ToolName> = catalog.firstOrNull { it.id == id }?.scriptedToolNames ?: emptySet()
 
   /**
    * Returns catalog entries compatible with [driverType] (i.e. entries whose YAML `drivers:`
@@ -272,6 +299,19 @@ object TrailblazeToolSetCatalog {
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<ToolName> =
     compatibleEntries(driverType, catalog).flatMap { it.yamlToolNames }.toSet()
+
+  /**
+   * Returns every scripted (`.ts` / `.js`) tool name from the catalog compatible with
+   * [driverType]. Symmetric with [defaultYamlToolNamesForDriver] for the scripted-tool case.
+   *
+   * Use this whenever a caller wants the default driver-compatible scripted tools that toolsets
+   * deliver, so the per-session scripted-tool runtime can ensure each is bundled + registered.
+   */
+  fun defaultScriptedToolNamesForDriver(
+    driverType: TrailblazeDriverType,
+    catalog: List<ToolSetCatalogEntry> = defaultEntries(),
+  ): Set<ToolName> =
+    compatibleEntries(driverType, catalog).flatMap { it.scriptedToolNames }.toSet()
 
   /**
    * Formats the catalog as a human-readable summary for embedding in tool descriptions.

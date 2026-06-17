@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
-import maestro.DeviceOrientation
+import maestro.device.DeviceOrientation
 import maestro.KeyCode
 import maestro.ScrollDirection
 import maestro.SwipeDirection
@@ -76,7 +76,9 @@ object MaestroCommandConverter {
       is ScrollCommand -> listOf(AccessibilityAction.ScrollForward)
       is PressKeyCommand -> convertPressKey(command)
       is WaitForAnimationToEndCommand ->
-        listOf(AccessibilityAction.WaitForSettle(timeoutMs = command.timeout ?: 5_000L))
+        // timeout is a String in Maestro 2.6.1 and may be a non-numeric expression; degrade to the
+        // default rather than throwing NumberFormatException on this alternate-driver path.
+        listOf(AccessibilityAction.WaitForSettle(timeoutMs = command.timeout?.toLongOrNull() ?: 5_000L))
       is AssertConditionCommand -> convertAssertCondition(command)
       is SetClipboardCommand -> listOf(AccessibilityAction.SetClipboard(command.text))
       is PasteTextCommand -> listOf(AccessibilityAction.PasteText)
@@ -91,7 +93,7 @@ object MaestroCommandConverter {
       is OpenLinkCommand -> listOf(AccessibilityAction.OpenLink(command.link))
       is SetOrientationCommand -> listOf(
         AccessibilityAction.SetOrientation(
-          rotation = when (command.orientation) {
+          rotation = when (command.resolvedOrientation()) {
             DeviceOrientation.PORTRAIT -> 0
             DeviceOrientation.LANDSCAPE_LEFT -> 1
             DeviceOrientation.UPSIDE_DOWN -> 2

@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import maestro.DeviceInfo
-import maestro.Platform
+import maestro.device.Platform
 import xyz.block.trailblaze.android.MemoryDiagnostics
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenshotScalingConfig

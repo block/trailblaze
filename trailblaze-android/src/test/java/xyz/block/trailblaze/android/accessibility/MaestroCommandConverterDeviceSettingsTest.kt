@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import maestro.DeviceOrientation
+import maestro.device.DeviceOrientation
 import maestro.ScrollDirection
 import maestro.orchestra.AirplaneValue
 import maestro.orchestra.ElementSelector

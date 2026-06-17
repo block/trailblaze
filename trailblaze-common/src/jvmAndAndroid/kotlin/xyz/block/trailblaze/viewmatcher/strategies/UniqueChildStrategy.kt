@@ -26,6 +26,7 @@ internal object UniqueChildStrategy : SelectorStrategy {
       SelectorStrategyHelpers.tryWithAndWithoutParent(
         context = context,
         parentSelector = uniqueParent,
+        acceptDeterministicTap = true,
       ) { parent ->
         val targetLeafSelectorNonNull = (targetLeafSelector ?: TrailblazeElementSelector())
         targetLeafSelectorNonNull.copy(childOf = parent, containsChild = globallyUniqueChild)
@@ -37,6 +38,7 @@ internal object UniqueChildStrategy : SelectorStrategy {
       SelectorStrategyHelpers.tryWithAndWithoutParent(
         context = context,
         parentSelector = uniqueParent,
+        acceptDeterministicTap = true,
       ) { parent ->
         val targetLeafSelectorNonNull = (targetLeafSelector ?: TrailblazeElementSelector())
         targetLeafSelectorNonNull.copy(childOf = parent, containsChild = bestChild)
@@ -65,6 +67,7 @@ internal object UniqueChildStrategy : SelectorStrategy {
           results = results,
           targetLeafSelector = targetLeafSelector,
           parentSelector = uniqueParent,
+          acceptDeterministicTap = true,
         ) { parent ->
           targetLeafSelector.copy(childOf = parent, containsChild = globallyUniqueChild)
         }
@@ -77,6 +80,7 @@ internal object UniqueChildStrategy : SelectorStrategy {
           results = results,
           targetLeafSelector = targetLeafSelector,
           parentSelector = uniqueParent,
+          acceptDeterministicTap = true,
         ) { parent ->
           targetLeafSelector.copy(childOf = parent, containsChild = bestChild)
         }

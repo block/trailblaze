@@ -63,7 +63,7 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
       name = this.name,
       description = this.description.takeIf { it.isNotBlank() },
       optionalParameters = this.optionalParameters.map { it.toTrailblazeToolParameterDescriptor() },
-      requiredParameters = this.requiredParameters.map { it.toTrailblazeToolParameterDescriptor() }
+      requiredParameters = this.requiredParameters.map { it.toTrailblazeToolParameterDescriptor() },
     )
 
     /**

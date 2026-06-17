@@ -203,11 +203,14 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
 }
 
 fun main(args: Array<String>) {
-  // Filter out flags specific to GenerateTestResultsCliCommand
-  val reportArgs = args.filter { it != "--dedup" }.toTypedArray()
+  // The HTML report command understands neither --dedup (removed; dedup is now unconditional) nor
+  // the test-results-only --triage flag — strip both before handing args to it.
+  val reportArgs = args.filterNot { it == "--dedup" || it == "--triage" }.toTypedArray()
   GenerateReportCliCommand().main(reportArgs)
-  // Filter out flags that are specific to GenerateReportCliCommand
-  val filteredArgs = args.filter { it != "--use-relative-image-urls" }.toTypedArray()
+  // The test-results command dropped --dedup and doesn't know the HTML-only
+  // --use-relative-image-urls; --triage is still a valid flag here and must pass through.
+  val filteredArgs = args.filterNot { it == "--use-relative-image-urls" || it == "--dedup" }
+    .toTypedArray()
   GenerateTestResultsCliCommand().main(argv = filteredArgs)
 }
 

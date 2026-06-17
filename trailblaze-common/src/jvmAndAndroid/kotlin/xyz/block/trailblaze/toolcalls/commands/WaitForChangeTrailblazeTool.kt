@@ -49,7 +49,7 @@ data class WaitForChangeTrailblazeTool(
         errorMessage = "waitForChange could not run: no agent available to perform the wait",
       )
     val result = agentForFallback.runMaestroCommands(
-      maestroCommands = listOf(WaitForAnimationToEndCommand(timeout = timeoutMs)),
+      maestroCommands = listOf(WaitForAnimationToEndCommand(timeout = timeoutMs.toString())),
       traceId = toolExecutionContext.traceId,
     )
     if (result is TrailblazeToolResult.Success) {

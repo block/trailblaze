@@ -4,6 +4,7 @@ import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.messageContains
@@ -39,6 +40,31 @@ class TrailblazeToolRepoDynamicTest {
     repo.addDynamicTools(listOf(stubRegistration("external_fetch")))
     val names = repo.getCurrentToolDescriptors().map { it.name }
     assertThat(names).contains("external_fetch")
+  }
+
+  @Test fun `getCurrentTrailblazeToolDescriptors preserves source metadata`() {
+    val repo = TrailblazeToolRepo(
+      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "has-tap",
+        toolClasses = setOf(TapTrailblazeTool::class),
+      ),
+    )
+    repo.addDynamicTools(
+      listOf(
+        stubRegistration(
+          "external_fetch",
+          source = trailblazeToolSourceForScript("/tmp/external_fetch.ts"),
+        )
+      )
+    )
+
+    val descriptors = repo.getCurrentTrailblazeToolDescriptors().associateBy { it.name }
+    assertThat(descriptors[TapTrailblazeTool::class.toolName().toolName]?.source?.type)
+      .isEqualTo(TrailblazeToolSourceType.KOTLIN)
+    assertThat(descriptors["external_fetch"]?.source?.type)
+      .isEqualTo(TrailblazeToolSourceType.TYPESCRIPT)
+    assertThat(descriptors["external_fetch"]?.source?.scriptPath)
+      .isEqualTo("/tmp/external_fetch.ts")
   }
 
   @Test fun `duplicate dynamic registration errors`() {
@@ -187,6 +213,52 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(repo.getRegisteredDynamicTools().keys.toList()).isEqualTo(beforeSwap)
   }
 
+  @Test fun `scripted dynamic tools are advertised only when their toolset is active`() {
+    // P1: the bundling layer registers a dynamic tool for EVERY catalog scripted tool at session
+    // start (so late activation can dispatch), but a scripted tool is only ADVERTISED when its
+    // toolset is active. Here a single opt-in toolset delivers `canary_scripted` by name.
+    val scriptedName = ToolName("canary_scripted")
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "canary",
+        description = "canary",
+        toolClasses = emptySet(),
+        scriptedToolNames = setOf(scriptedName),
+        alwaysEnabled = false,
+      ),
+    )
+    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = catalog)
+    repo.addDynamicTools(listOf(stubRegistration(scriptedName.toolName)))
+
+    // Inactive toolset: registered (dispatchable) but NOT advertised to the LLM.
+    assertThat(repo.getRegisteredDynamicTools().keys).contains(scriptedName)
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain(scriptedName.toolName)
+    // Still dispatchable directly — e.g. a recorded-trail replay that bypasses advertisement.
+    assertThat(repo.toolCallToTrailblazeTool(scriptedName.toolName, "{}"))
+      .isInstanceOf(StubDynamicTool::class)
+
+    // Activate the toolset → now advertised.
+    repo.setActiveToolSets(listOf("canary"))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains(scriptedName.toolName)
+
+    // Deactivate → hidden again, but still registered + dispatchable.
+    repo.setActiveToolSets(emptyList())
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain(scriptedName.toolName)
+    assertThat(repo.getRegisteredDynamicTools().keys).contains(scriptedName)
+  }
+
+  @Test fun `non-scripted dynamic tools are advertised regardless of active toolsets`() {
+    // A subprocess-MCP / target-declared dynamic tool isn't a catalog scripted name, so the gate
+    // never hides it — it's advertised even with no opt-in toolsets active.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = TrailblazeToolSetCatalog.defaultEntries(),
+    )
+    repo.addDynamicTools(listOf(stubRegistration("subprocess_mcp_tool")))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
+    repo.setActiveToolSets(emptyList())
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
+  }
+
   // --- helpers ---
 
   @Serializable
@@ -202,11 +274,14 @@ class TrailblazeToolRepoDynamicTest {
   @TrailblazeToolClass(name = "test_non_llm", surfaceToLlm = false)
   private data class NonLlmTool(val reason: String) : TrailblazeTool
 
-  private fun stubRegistration(toolName: String): DynamicTrailblazeToolRegistration =
+  private fun stubRegistration(
+    toolName: String,
+    source: TrailblazeToolSourceDescriptor? = null,
+  ): DynamicTrailblazeToolRegistration =
     object : DynamicTrailblazeToolRegistration {
       override val name: ToolName = ToolName(toolName)
       override val trailblazeDescriptor: TrailblazeToolDescriptor =
-        TrailblazeToolDescriptor(name = toolName)
+        TrailblazeToolDescriptor(name = toolName, source = source)
 
       override fun buildKoogTool(
         trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,

@@ -7,7 +7,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import maestro.DeviceInfo
-import maestro.Platform
+import maestro.device.Platform
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
@@ -181,6 +181,23 @@ class AndroidOnDeviceUiAutomatorScreenState(
       throw e
     }
 
+    // Compose semantics-collapse recovery (UiAutomator/instrumentation path only) — see
+    // [recoverCollapsedComposeTree] for the full rationale. Shares the enclosing init's 60s
+    // budget (the recovery deadline is the sooner of its own cap and the init deadline) so a
+    // capture that already spent most of initBudgetMs stabilizing can't be pushed past the 60s
+    // init cap by recovery. The screenshot is untouched — the content renders fine; only its
+    // semantics export lagged.
+    lastViewHierarchyOriginal?.let { current ->
+      val recoveryDeadlineMs = minOf(
+        System.currentTimeMillis() + COMPOSE_COLLAPSE_RECOVERY_BUDGET_MS,
+        initStartMs + initBudgetMs,
+      )
+      recoverCollapsedComposeTree(current, deviceWidth, deviceHeight, recoveryDeadlineMs)?.let { (vh, tree) ->
+        lastViewHierarchyOriginal = vh
+        lastMaestroTree = tree
+      }
+    }
+
     // Ensure these are set after the loop
     viewHierarchy =
       lastViewHierarchyOriginal ?: throw IllegalStateException("Failed to get view hierarchy")
@@ -249,6 +266,98 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
   companion object {
 
+    /**
+     * Max refresh+settle re-dump attempts when a collapsed Compose content pane is detected.
+     * A single refresh resolves the common stale-cache case; the extra attempts cover a
+     * semantics export that is still propagating. Bounded so a genuinely unrecoverable
+     * (app-side) collapse can't spin.
+     */
+    private const val COMPOSE_COLLAPSE_RECOVERY_ATTEMPTS = 3
+
+    /**
+     * Wall-clock ceiling for the whole collapse-recovery loop. Guards the pathological case
+     * where each accessibility-tree re-dump rides its own 30s IPC timeout on a wedged device —
+     * without this, three timed-out dumps could add 90s to a single capture.
+     */
+    private const val COMPOSE_COLLAPSE_RECOVERY_BUDGET_MS = 15_000L
+
+    /**
+     * Compose semantics-collapse recovery for the UiAutomator/instrumentation capture path.
+     *
+     * The UiAutomator dump reads UiAutomation's *cached* AccessibilityNodeInfo tree without
+     * refreshing it. When a full-screen Compose content pane (ComposeView) exports its
+     * accessibility semantics *after* UiAutomation cached the pane's pre-semantics (childless)
+     * node, the dump serves that stale node: the whole main screen shows up as a single opaque
+     * View while sibling native/Compose views render normally — breaking every selector that
+     * targets the main content. The accessibility-driver capture never hits this because it
+     * refresh()es every node (busting the cache).
+     *
+     * The stabilization loop in [init] cannot catch this: it accepts once two dumps *match* (the
+     * screen stopped changing), but a collapsed surface is perfectly stable — it stays collapsed
+     * for tens of seconds. Stability is not completeness, so completeness is checked here.
+     *
+     * Retries (refresh + settle) until the surface is no longer collapsed or [deadlineMs] passes,
+     * adopting a re-dump only if it is un-collapsed AND not smaller than [current] — a genuine
+     * recovery only ADDS the missing subtree, so a degenerate/truncated dump (a timed-out walk, or
+     * `visibleOnly` filtering out the window root) is rejected in favor of [current], which at
+     * least retains the nav bar.
+     *
+     * @return the recovered (viewHierarchy, maestroTree) pair to adopt, or null if [current]
+     *   wasn't collapsed or couldn't be recovered within the budget. The unrecoverable case is
+     *   logged loudly and attributably (rather than silently returning a one-node screen) so an
+     *   app-side surface that genuinely never exports semantics is debuggable.
+     */
+    private fun recoverCollapsedComposeTree(
+      current: ViewHierarchyTreeNode,
+      deviceWidth: Int,
+      deviceHeight: Int,
+      deadlineMs: Long,
+    ): Pair<ViewHierarchyTreeNode, maestro.TreeNode>? {
+      val collapsedNode =
+        ComposeSemanticsCollapseDetector.detectCollapsedComposeSurface(current, deviceWidth, deviceHeight)
+          ?: return null
+      Console.log(
+        "[compose-collapse] Detected collapsed ComposeView (${collapsedNode.resourceId ?: "no-id"}); " +
+          "recovering via refresh()ing accessibility-tree walk (up to $COMPOSE_COLLAPSE_RECOVERY_ATTEMPTS attempts).",
+      )
+      val originalSize = current.aggregate().size
+      var attempt = 0
+      while (attempt < COMPOSE_COLLAPSE_RECOVERY_ATTEMPTS && System.currentTimeMillis() < deadlineMs) {
+        attempt++
+        // Let any in-flight recomposition / semantics export settle before re-reading.
+        // waitForIdle() returns as soon as the accessibility-event stream is quiet — not a sleep.
+        runCatching { withUiDevice { waitForIdle() } }
+        // visibleOnly=true so recovery preserves dumpWindowHierarchy()'s visibility filtering —
+        // we only want to bust the stale cache, not broaden the tree to hidden nodes.
+        val refreshedXml = dumpViewHierarchyFromAccessibilityTree(visibleOnly = true) ?: continue
+        val refreshedMaestro =
+          MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
+            viewHiearchyXml = refreshedXml,
+            excludeKeyboardElements = false,
+          )
+        val refreshedVh = refreshedMaestro.toViewHierarchyTreeNode()?.relabelWithFreshIds() ?: continue
+        val stillCollapsed =
+          ComposeSemanticsCollapseDetector.detectCollapsedComposeSurface(refreshedVh, deviceWidth, deviceHeight)
+        when {
+          stillCollapsed != null ->
+            Console.log("[compose-collapse] Attempt $attempt still collapsed; retrying.")
+          refreshedVh.aggregate().size < originalSize ->
+            Console.log("[compose-collapse] Attempt $attempt re-dump un-collapsed but smaller than original; rejecting, retrying.")
+          else -> {
+            Console.log("[compose-collapse] Recovered on attempt $attempt: ComposeView semantics present.")
+            return refreshedVh to refreshedMaestro
+          }
+        }
+      }
+      Console.log(
+        "[compose-collapse] UNRECOVERED after $attempt attempt(s): main-content ComposeView " +
+          "(${collapsedNode.resourceId ?: "no-id"}) still exports no semantics. Returning best-effort " +
+          "capture; selectors against the main content will not resolve. Likely a slow or app-side " +
+          "semantics export (e.g. a legacy View-hosted Compose pane), not a stale-cache miss.",
+      )
+      return null
+    }
+
     private inline fun <T> traceOnDeviceUiAutomatorScreenState(name: String, block: () -> T): T = traceRecorder.trace(name, "OnDeviceUiAutomatorScreenState", emptyMap(), block)
 
     fun dumpViewHierarchy(): String = traceOnDeviceUiAutomatorScreenState("dumpViewHierarchy") {
@@ -285,6 +394,11 @@ class AndroidOnDeviceUiAutomatorScreenState(
       val standardTextNodeCount = countTextNodes(standardDump)
       if (standardTextNodeCount < TEXT_NODE_FALLBACK_THRESHOLD) {
         Console.log("[dumpViewHierarchy] Sparse dump ($standardTextNodeCount text nodes); activating accessibility-tree fallback.")
+        // visibleOnly defaults to false here ON PURPOSE — the sparse case wants the invisible
+        // ViewFactoryHolder content that dumpWindowHierarchy() skipped. This is the opposite
+        // intent from the Compose-collapse recovery in recoverCollapsedComposeTree(), which passes
+        // visibleOnly=true to preserve visibility filtering. Same dump helper, deliberately
+        // different filtering per caller.
         val fallbackDump = dumpViewHierarchyFromAccessibilityTree()
         if (fallbackDump != null) {
           fallbackDump
@@ -392,8 +506,14 @@ class AndroidOnDeviceUiAutomatorScreenState(
      *
      * Returns null on timeout or if [getRootInActiveWindow] returns null, signalling the caller
      * to fall back to the standard (sparse) dump rather than throwing.
+     *
+     * @param visibleOnly when true, skip nodes (and their subtrees) where
+     *   [AccessibilityNodeInfo.isVisibleToUser] is false, matching [UiDevice.dumpWindowHierarchy]'s
+     *   visibility filtering. The sparse-dump fallback uses `false` (it *wants* the invisible
+     *   ViewFactoryHolder content `dumpWindowHierarchy` skipped); the Compose-collapse recovery
+     *   uses `true` so it only busts the stale cache without broadening the tree to hidden nodes.
      */
-    private fun dumpViewHierarchyFromAccessibilityTree(): String? {
+    private fun dumpViewHierarchyFromAccessibilityTree(visibleOnly: Boolean = false): String? {
       val executor = Executors.newSingleThreadExecutor()
       val future = executor.submit(Callable {
         val root = withUiAutomation { rootInActiveWindow }
@@ -405,7 +525,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
           buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
             append("<hierarchy rotation=\"0\">\n")
-            dumpAccessibilityNodeToXml(root, this, 0)
+            dumpAccessibilityNodeToXml(root, this, 0, visibleOnly)
             append("</hierarchy>")
           }
         } finally {
@@ -423,7 +543,20 @@ class AndroidOnDeviceUiAutomatorScreenState(
       }
     }
 
-    private fun dumpAccessibilityNodeToXml(node: AccessibilityNodeInfo, sb: StringBuilder, index: Int) {
+    private fun dumpAccessibilityNodeToXml(node: AccessibilityNodeInfo, sb: StringBuilder, index: Int, visibleOnly: Boolean) {
+      // Bust UiAutomation's cached AccessibilityNodeInfo for this node before reading it. Compose
+      // exports a ComposeView's semantic children lazily; if UiAutomation cached the node before
+      // those semantics existed, the getChild() walk below would replay the stale (childless)
+      // subtree. refresh() forces a re-fetch from the source window — the same cache-bust the
+      // accessibility-service capture path (refreshTreeInPlace) relies on. Best-effort: a false
+      // return means the source view is gone, in which case the last-cached fields are still our
+      // best available data, so we keep reading.
+      node.refresh()
+      // When visibleOnly, skip this node and its subtree if it isn't visible to the user — mirrors
+      // dumpWindowHierarchy()'s AccessibilityNodeInfoDumper filtering so a recovered tree doesn't
+      // expose hidden nodes that the standard capture would have dropped. Checked after refresh()
+      // so isVisibleToUser reflects the live view state.
+      if (visibleOnly && !node.isVisibleToUser) return
       val bounds = Rect()
       node.getBoundsInScreen(bounds)
       val text = escapeXmlAttribute(node.text?.toString() ?: "")
@@ -450,7 +583,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       for (i in 0 until node.childCount) {
         val child = node.getChild(i)
         if (child != null) {
-          dumpAccessibilityNodeToXml(child, sb, i)
+          dumpAccessibilityNodeToXml(child, sb, i, visibleOnly)
           child.recycle()
         }
       }

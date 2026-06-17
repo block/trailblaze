@@ -54,11 +54,13 @@ data class SessionResult(
   val device_log_excerpt: String? = null,
 
   // === Recording Info ===
-  /** Whether the trail YAML contained recorded steps (recording.tools blocks) */
+  /**
+   * Whether the trail YAML contained recorded steps (recording.tools blocks). This is the
+   * canonical "is this a recorded trail?" signal — computed from the authored trail at session
+   * start, independent of how many LLM calls the run made. Query/group on this boolean; it is
+   * `true` for both [ExecutionMode.RECORDING_ONLY] and [ExecutionMode.RECORDING_WITH_AI].
+   */
   val has_recorded_steps: Boolean = false,
-
-  /** Whether a valid recording was found on disk for this platform */
-  val recording_available: Boolean = false,
 
   /** Reason recording wasn't used (if applicable) */
   val recording_skip_reason: RecordingSkipReason? = null,

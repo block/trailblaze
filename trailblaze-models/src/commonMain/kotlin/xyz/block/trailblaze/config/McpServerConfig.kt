@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.config
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSourceDescriptor
 
 /**
  * Declaration of a single MCP server that contributes tools to the Trailblaze
@@ -55,9 +56,15 @@ data class McpServerConfig(
    * so no escaping is required. Host-agent only. Mutually exclusive with [script]. [env]
    * configures the spawn environment. **Schema reserved; the current landing does not yet
    * implement `command:` spawns.**
-   */
+  */
   val command: List<String>? = null,
   val env: Map<String, String>? = null,
+  /**
+   * Optional debug/catalog provenance for tools advertised by this server. Execution ignores
+   * this value; registration threads it into descriptors so discovery surfaces can show where
+   * dynamically-advertised tools came from.
+   */
+  val source: TrailblazeToolSourceDescriptor? = null,
 ) {
   init {
     require((script?.isNotBlank() == true) xor (command?.isNotEmpty() == true)) {

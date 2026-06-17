@@ -374,8 +374,8 @@ enum class TargetMissingRecovery {
 const val WRONG_SCREEN_MESSAGE: String =
   "target not found on this screen — you may be on the wrong screen; this step may need to be revised"
 
-/** Tap-style tool name fragments. Matches `tap`, `tapOnElementByNodeId`, `compose_click`, etc. */
-private val TAP_TOOL_FRAGMENTS = listOf("tap", "click")
+/** Tap-style tool name fragments. Matches `tap`, `tapOnElementByNodeId`, `longPress`, `compose_click`, etc. */
+private val TAP_TOOL_FRAGMENTS = listOf("tap", "click", "longpress")
 
 /**
  * Decides whether the agent should avoid tapping an unrelated clickable when the step's named
@@ -454,7 +454,10 @@ internal fun extractTargetPhrase(objective: String): String? {
   Regex("[\"“']([^\"”']{2,})[\"”']").find(objective)?.let { return it.groupValues[1].trim() }
 
   val verb = Regex(
-    "^\\s*(?:tap|click|select|find|search\\s+for|open|choose|press)\\s+(?:on\\s+|the\\s+)*(.+)$",
+    // Multi-word hold phrasings ("tap and hold", "press-and-hold", "long press") precede the
+    // bare `tap`/`press` verbs so the full phrase wins the alternation — otherwise bare `tap`
+    // would match "tap and hold the X" and capture "and hold the X" as the target.
+    "^\\s*(?:tap[\\s-]+and[\\s-]+hold|press[\\s-]+and[\\s-]+hold|long[\\s-]?press|tap|click|select|find|search\\s+for|open|choose|press)\\s+(?:on\\s+|the\\s+)*(.+)$",
     RegexOption.IGNORE_CASE,
   ).find(objective) ?: return null
 

@@ -440,6 +440,64 @@ class AndroidHostAdbUtilsTest {
     )
   }
 
+  // ── execWithReconnectOnTimeout (reconnect-on-timeout retry policy) ───────
+  //
+  // The dadb hardening: a *hung* shell call (stale/wedged transport that doesn't throw) now evicts
+  // the client and retries once against a fresh connection, where previously it returned null after
+  // one attempt. Only a timeout retries — a success or a thrown command error is terminal, because a
+  // retry must not double-execute a possibly-non-idempotent command.
+
+  @Test
+  fun reconnectRetrySucceedsOnFirstAttemptWithoutRetrying() {
+    var calls = 0
+    val value = AndroidHostAdbUtils.execWithReconnectOnTimeout {
+      calls++
+      AndroidHostAdbUtils.ShellAttemptResult("ok", AndroidHostAdbUtils.ShellAttemptOutcome.SUCCESS)
+    }
+    assertThat(value).isEqualTo("ok")
+    assertThat(calls).isEqualTo(1)
+  }
+
+  @Test
+  fun reconnectRetryDoesNotRetryOnCommandFailure() {
+    // A thrown command error is terminal — retrying could double-execute a non-idempotent command.
+    var calls = 0
+    val value = AndroidHostAdbUtils.execWithReconnectOnTimeout {
+      calls++
+      AndroidHostAdbUtils.ShellAttemptResult(null, AndroidHostAdbUtils.ShellAttemptOutcome.FAILED)
+    }
+    assertThat(value).isNull()
+    assertThat(calls).isEqualTo(1)
+  }
+
+  @Test
+  fun reconnectRetryRecoversAfterASingleTimeout() {
+    // The headline fix: the first attempt hangs (stale transport), the second reconnects and wins.
+    var calls = 0
+    val value = AndroidHostAdbUtils.execWithReconnectOnTimeout {
+      calls++
+      if (calls == 1) {
+        AndroidHostAdbUtils.ShellAttemptResult(null, AndroidHostAdbUtils.ShellAttemptOutcome.TIMED_OUT)
+      } else {
+        AndroidHostAdbUtils.ShellAttemptResult("recovered", AndroidHostAdbUtils.ShellAttemptOutcome.SUCCESS)
+      }
+    }
+    assertThat(value).isEqualTo("recovered")
+    assertThat(calls).isEqualTo(2)
+  }
+
+  @Test
+  fun reconnectRetryGivesUpAfterMaxAttemptsOfTimeout() {
+    // A genuinely wedged device times out on both attempts: capped at 2, returns null (no loop).
+    var calls = 0
+    val value = AndroidHostAdbUtils.execWithReconnectOnTimeout {
+      calls++
+      AndroidHostAdbUtils.ShellAttemptResult(null, AndroidHostAdbUtils.ShellAttemptOutcome.TIMED_OUT)
+    }
+    assertThat(value).isNull()
+    assertThat(calls).isEqualTo(2)
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────
 
   /** Tiny env-var fixture so callers can write `env("KEY" to "value", ...)`. */
