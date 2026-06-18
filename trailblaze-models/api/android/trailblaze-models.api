@@ -5243,7 +5243,7 @@ public final class xyz/block/trailblaze/config/ScriptedToolRuntime : java/lang/E
 }
 
 public final class xyz/block/trailblaze/config/ScriptedToolRuntime$Companion {
-	public final fun resolve (Ljava/lang/String;Lxyz/block/trailblaze/config/ScriptedToolRuntime;)Lxyz/block/trailblaze/config/ScriptedToolRuntime;
+	public final fun resolve (Lxyz/block/trailblaze/config/ScriptedToolRuntime;)Lxyz/block/trailblaze/config/ScriptedToolRuntime;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -10157,6 +10157,7 @@ public final class xyz/block/trailblaze/logs/model/TrailblazeLlmMessage$Companio
 public final class xyz/block/trailblaze/mcp/AgentImplementation : java/lang/Enum {
 	public static final field Companion Lxyz/block/trailblaze/mcp/AgentImplementation$Companion;
 	public static final field DEFAULT_NAME Ljava/lang/String;
+	public static final field KOOG_STRATEGY_GRAPH Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static final field MULTI_AGENT_V3 Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static final field TRAILBLAZE_RUNNER Lxyz/block/trailblaze/mcp/AgentImplementation;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;

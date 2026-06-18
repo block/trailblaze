@@ -80,11 +80,14 @@ object TrailblazeContextEnvelope {
 
   /**
    * Runtime tag stamped onto `_meta.trailblaze.runtime` for invocations dispatched through
-   * the on-device QuickJS bundle runtime (`:trailblaze-scripting-bundle`). TS SDK consumers
-   * read this to pick the in-process callback transport (`globalThis.__trailblazeCallback`)
-   * instead of HTTP fetch. Absent on subprocess / daemon paths — their callback channel is
-   * the `/scripting/callback` HTTP endpoint, which the SDK dispatches to by default when
-   * [TrailblazeContext.baseUrl] is populated.
+   * the on-device QuickJS bundle runtime. TS SDK consumers read this to pick the in-process
+   * callback transport (`globalThis.__trailblazeCallback`) instead of HTTP fetch.
+   *
+   * NOTE: the in-process callback transport this tag selects is not wired yet — its host-side
+   * binding installer (`QuickJsBridge`) does not exist (see the 2026-06-17 "Consolidate
+   * scripted-tool surfaces" decision). Until it lands, only the subprocess / daemon path is
+   * live: that callback channel is the `/scripting/callback` HTTP endpoint, which the SDK
+   * dispatches to by default when [TrailblazeContext.baseUrl] is populated.
    */
   const val RUNTIME_ONDEVICE: String = "ondevice"
 

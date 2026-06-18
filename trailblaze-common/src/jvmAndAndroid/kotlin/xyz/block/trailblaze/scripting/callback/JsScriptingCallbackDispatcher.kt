@@ -10,19 +10,20 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * Shared core for dispatching a `tools/call`-style callback against the live
- * [JsScriptingInvocationRegistry]. Two call sites wrap this:
+ * [JsScriptingInvocationRegistry].
  *
- *  - [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint] — the daemon's
- *    HTTP `/scripting/callback` endpoint for subprocess-spawned `@trailblaze/scripting`
- *    tools. Adds HTTP-specific concerns around this core (loopback gate, body-size cap,
- *    JSON framing).
- *  - The on-device `__trailblazeCallback` QuickJS binding in `:trailblaze-scripting-bundle`
- *    — calls directly into this dispatcher with no HTTP layer.
+ * Wrapped by [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint] — the
+ * daemon's HTTP `/scripting/callback` endpoint for subprocess-spawned `@trailblaze/scripting`
+ * tools, which adds HTTP-specific concerns around this core (loopback gate, body-size cap,
+ * JSON framing). **That subprocess/HTTP path is the only callback transport wired today.**
  *
- * Keeping the session-match check, depth gate, timeout, and [TrailblazeToolResult] mapping
- * in one place guarantees both transports produce identical semantics. Otherwise drift
- * between host-subprocess and on-device behavior would surface as debugging misery for
- * tool authors whose handlers are supposed to run identically in both modes.
+ * A second, in-process transport — an on-device `__trailblazeCallback` QuickJS binding that
+ * would call directly into this dispatcher with no HTTP layer — is the planned MCP-free
+ * composition path, but its host-side installer (`QuickJsBridge`) does not exist yet (see the
+ * 2026-06-17 "Consolidate scripted-tool surfaces" decision). The session-match check, depth
+ * gate, timeout, and [TrailblazeToolResult] mapping live here precisely so that when the
+ * in-process transport lands it produces identical semantics to the HTTP path with no second
+ * copy.
  */
 object JsScriptingCallbackDispatcher {
 
@@ -36,10 +37,10 @@ object JsScriptingCallbackDispatcher {
    *
    * Default [maxDepth] / [timeoutMs] resolve from the same system properties the HTTP
    * endpoint's knobs point at ([CALLBACK_MAX_DEPTH_PROPERTY], [CALLBACK_TIMEOUT_MS_PROPERTY]),
-   * falling back to the shared constants on unset/invalid values. This keeps the HTTP
-   * (daemon) and in-process (on-device) transports honoring the same `-D` overrides — a
-   * deployment that bumps the timeout for the subprocess path automatically gets the same
-   * timeout on-device without a second configuration surface.
+   * falling back to the shared constants on unset/invalid values. Resolving them here (rather
+   * than only in the HTTP endpoint) means the planned in-process on-device transport will
+   * honor the same `-D` overrides automatically once it lands, without a second configuration
+   * surface.
    */
   suspend fun dispatch(
     request: JsScriptingCallbackRequest,

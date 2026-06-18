@@ -17,7 +17,15 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import kotlinx.datetime.Clock
+import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 
 /**
@@ -43,6 +51,20 @@ class QuickJsToolBundleLauncherTest {
   )
 
   private var launchedRuntime: LaunchedQuickJsToolRuntime? = null
+
+  // Minimal execution context for driving a registered tool's execute() directly — the path
+  // that installs the binding's activeContext (a raw host.callTool bypasses it). Mirrors the
+  // builder in SessionScopedHostBindingTest.
+  private fun buildContext(): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+    screenState = null,
+    traceId = TraceId.generate(TraceOrigin.TOOL),
+    trailblazeDeviceInfo = deviceInfo,
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = sessionId, startTime = Clock.System.now())
+    },
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    memory = AgentMemory(),
+  )
 
   @AfterTest
   fun teardown() {
@@ -341,20 +363,25 @@ class QuickJsToolBundleLauncherTest {
   }
 
   @Test
-  fun `default host binding returns a structured not-yet-wired error envelope`() = runBlocking {
-    // Pins the placeholder host-binding contract: the launcher-installed binding always
-    // returns a well-formed TrailblazeToolResult with isError=true rather than
-    // deadlocking, throwing, or returning malformed JSON. A future PR replaces this with
-    // a real cross-tool dispatch path; this test should fail then and be rewritten.
+  fun `composing a tool from the same bundle is refused by the re-entry guard`() = runBlocking {
+    // Replaces the old "not-yet-wired" stub test. The launcher now installs a live
+    // SessionScopedHostBinding per bundle and threads it into each registered tool, so a
+    // tool's execute() sets activeContext and a nested trailblaze.call(...) dispatches through
+    // the repo. Composing a tool in the SAME bundle, though, would re-enter the shared QuickJS
+    // host's non-reentrant evalMutex and deadlock — so the binding refuses it with a structured
+    // envelope. This exercises the whole launcher path end to end: register → execute →
+    // activeContext set → callFromBundle → same-host guard. (If the binding weren't wired we'd
+    // see the old "not yet wired"; if activeContext weren't set we'd see "no execution context".)
     val bundleJs = """
       const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
-      tools["caller"] = {
-        name: "caller",
+      tools["inner"] = { name: "inner", spec: {}, handler: async () => ({ content: [{ type: "text", text: "inner-ran" }] }) };
+      tools["outer"] = {
+        name: "outer",
         spec: {},
         handler: async () => {
-          const json = await globalThis.__trailblazeCall("nope", JSON.stringify({}));
+          const json = await globalThis.__trailblazeCall("inner", JSON.stringify({}));
           const env = JSON.parse(json);
-          return { content: [{ type: "text", text: env.isError ? "got-error:" + env.content[0].text : "ok" }] };
+          return { content: [{ type: "text", text: env.isError ? "blocked:" + env.error : "ran:" + JSON.stringify(env) }] };
         },
       };
     """.trimIndent()
@@ -367,10 +394,14 @@ class QuickJsToolBundleLauncherTest {
     )
     launchedRuntime = runtime
 
-    val response = runtime.hosts.single().callTool("caller", buildJsonObject { put("x", 1) })
-    val text = ((response["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive).content
-    assertTrue("expected the not-yet-wired envelope, got: $text") {
-      text.startsWith("got-error:") && "not yet wired" in text
+    // Execute through the registration (not host.callTool directly) so the tool's execute()
+    // installs activeContext on the binding — the path the LLM / koog dispatch actually takes.
+    val outer = toolRepo.toolCallToTrailblazeToolUnfiltered("outer", "{}")
+    assertNotNull(outer, "expected the launcher to register the 'outer' tool")
+    val result = (outer as QuickJsTrailblazeTool).execute(buildContext())
+
+    assertTrue("expected the same-bundle re-entry guard to fire; got: $result") {
+      result.toString().contains("same bundle")
     }
   }
 

@@ -50,6 +50,14 @@ kotlin {
       implementation(libs.kotlinx.serialization.core)
     }
 
+    jvmMain.dependencies {
+      // Align kotlin-reflect with the rest of the Kotlin toolchain (2.4.0). Koog pulls
+      // kotlin-bom:2.3.10, whose constraint otherwise pins kotlin-reflect to 2.3.10 on the JVM
+      // target while the compiler bumps kotlin-stdlib to 2.4.0 — keep the runtime artifacts in
+      // lockstep. JVM-only; the wasmJs target is unaffected.
+      implementation(libs.kotlin.reflect)
+    }
+
     jvmTest.dependencies {
       implementation(libs.kotlin.test.junit4)
     }

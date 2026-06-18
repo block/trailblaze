@@ -554,6 +554,90 @@ class ReflectionNodeTest {
   }
 
   @Test
+  fun `dragTo engages the target-missing guard on the drag SOURCE`() {
+    // A drag must start from a present element; the guard checks the SOURCE ("X" in
+    // "drag X to Y"), not the destination. Source absent + no affordance → wrong screen.
+    val screen = """
+      [c100] ImageView "Open Hardware Hub"
+      [c101] Button "Charge"
+    """.trimIndent()
+
+    listOf(
+      "Drag the \"Coffee\" item to the cart",
+      "drag the Coffee item to the Favorites list",
+      "drag Coffee onto Favorites",
+      // Quoted DESTINATION must not be mistaken for the source — still checks "Coffee".
+      "Drag Coffee to \"Favorites\"",
+    ).forEach { objective ->
+      assertEquals(
+        TargetMissingRecovery.WRONG_SCREEN,
+        detectTargetMissingRecovery(objective, screen, "dragTo"),
+        "expected wrong-screen recovery for: $objective",
+      )
+    }
+  }
+
+  @Test
+  fun `dragTo proceeds when the drag source is present, ignoring an absent destination`() {
+    // What matters is the SOURCE is present and draggable; the destination may be offscreen
+    // or not a named element.
+    val screen = """
+      [c200] TextView "Coffee"
+      [c201] Button "Charge"
+    """.trimIndent()
+    assertEquals(
+      TargetMissingRecovery.PROCEED,
+      detectTargetMissingRecovery("drag Coffee to Favorites", screen, "dragTo"),
+    )
+    // Source present, destination quoted-and-absent: the guard must validate the SOURCE,
+    // not the quoted destination, so this proceeds rather than false-firing wrong-screen.
+    assertEquals(
+      TargetMissingRecovery.PROCEED,
+      detectTargetMissingRecovery("drag Coffee to \"Favorites\"", screen, "dragTo"),
+    )
+    // Container-noun suffix ("Coffee item") is normalized to "Coffee" so it still matches the
+    // snapshot's "Coffee" label rather than falsely reporting the source missing.
+    assertEquals(
+      TargetMissingRecovery.PROCEED,
+      detectTargetMissingRecovery("drag the Coffee item to Favorites", screen, "dragTo"),
+    )
+  }
+
+  @Test
+  fun `container-noun suffix stripping is scoped to drag sources, not tap targets`() {
+    // Regression: drag-source normalization ("Coffee item" → "Coffee") must NOT leak into
+    // generic tap/select targets. "Tap the Gift card" must look for "Gift card", not "Gift" —
+    // otherwise a bare "Gift" distractor would satisfy the guard and let the agent tap it.
+    val screen = """
+      [c100] TextView "Gift"
+      [c101] Button "Charge"
+    """.trimIndent()
+    assertEquals(
+      TargetMissingRecovery.WRONG_SCREEN,
+      detectTargetMissingRecovery("Tap the Gift card", screen, "tap"),
+      "tap target 'Gift card' must not be stripped to 'Gift'",
+    )
+  }
+
+  @Test
+  fun `directional and manipulation drags are not treated as element-target steps`() {
+    // Drags that aren't "drag X to Y" (pull-to-refresh, slider/carousel nudges) have no named
+    // source element — they must PROCEED, not trip the wrong-screen guard on a movement phrase.
+    val screen = "[c100] ImageView \"Open Hardware Hub\""
+    listOf(
+      "drag down to refresh",
+      "drag the slider right a bit",
+      "drag left slightly",
+    ).forEach { objective ->
+      assertEquals(
+        TargetMissingRecovery.PROCEED,
+        detectTargetMissingRecovery(objective, screen, "dragTo"),
+        "expected PROCEED (no element target) for: $objective",
+      )
+    }
+  }
+
+  @Test
   fun `target present on screen proceeds with the action`() {
     val screen = """
       [c100] ImageView "Open Hardware Hub"

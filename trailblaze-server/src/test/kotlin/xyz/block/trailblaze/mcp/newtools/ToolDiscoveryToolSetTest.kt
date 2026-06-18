@@ -458,7 +458,7 @@ class ToolDiscoveryToolSetTest {
    * recognizes it as the platform-tools source (was renamed from `"none"` → `"default"`).
    *
    * Mirrors the production YAML-backed target (`default.yaml`) where the toolsets reference some
-   * tools by class binding (e.g. `openUrl`) and others by name only (e.g. `eraseText`, `pressBack`
+   * tools by class binding (e.g. `hideKeyboard`) and others by name only (e.g. `eraseText`, `pressBack`
    * in `core_interaction.yaml` / `navigation.yaml`).
    */
   private class MixedNoneTarget(
@@ -485,10 +485,10 @@ class ToolDiscoveryToolSetTest {
     // formerly `none.yaml`), its single tool group exposes BOTH class-backed and YAML-defined
     // tools. Before the fix, buildPlatformToolsets only iterated `group.toolClasses` and
     // silently dropped name-only entries like `eraseText` and `pressBack` — even though a class
-    // tool in the same group (`openUrl` here) made `groups.isNotEmpty()` true and bypassed the
+    // tool in the same group (`hideKeyboard` here) made `groups.isNotEmpty()` true and bypassed the
     // working DISCOVERABLE_CATEGORIES fallback.
     val defaultTarget = MixedNoneTarget(
-      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
       yamlNames = setOf(ToolName("pressBack"), ToolName("eraseText")),
     )
     val toolSet = createToolSet(allTargets = setOf(defaultTarget))
@@ -507,7 +507,7 @@ class ToolDiscoveryToolSetTest {
     )
 
     val tools = defaultGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
-    assertContains(tools, "openUrl", "Class-backed openUrl should still appear in default listing. Got: $tools")
+    assertContains(tools, "hideKeyboard", "Class-backed hideKeyboard should still appear in default listing. Got: $tools")
     assertContains(tools, "pressBack", "YAML-defined pressBack should appear in default listing. Got: $tools")
     assertContains(tools, "eraseText", "YAML-defined eraseText should appear in default listing. Got: $tools")
   }
@@ -522,7 +522,7 @@ class ToolDiscoveryToolSetTest {
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
     ): Set<KClass<out TrailblazeTool>> =
-      setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+      setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class)
 
     override fun getCustomYamlToolNamesForDriver(
       driverType: TrailblazeDriverType,
@@ -560,7 +560,7 @@ class ToolDiscoveryToolSetTest {
       "Excluded YAML-defined pressBack must NOT appear in default listing. Got: $tools",
     )
     assertContains(tools, "eraseText", "Non-excluded YAML tool eraseText should still appear. Got: $tools")
-    assertContains(tools, "openUrl", "Non-excluded class tool openUrl should still appear. Got: $tools")
+    assertContains(tools, "hideKeyboard", "Non-excluded class tool hideKeyboard should still appear. Got: $tools")
   }
 
   @Test
@@ -571,8 +571,8 @@ class ToolDiscoveryToolSetTest {
     val collidingGroup = TrailblazeHostAppTarget.ToolGroup(
       id = "collide",
       description = "test",
-      toolClasses = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
-      yamlToolNames = setOf(ToolName("openUrl"), ToolName("pressBack")),
+      toolClasses = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
+      yamlToolNames = setOf(ToolName("hideKeyboard"), ToolName("pressBack")),
     )
 
     val descriptors = collidingGroup.toMergedDescriptors()
@@ -582,7 +582,7 @@ class ToolDiscoveryToolSetTest {
       names.size, names.toSet().size,
       "toMergedDescriptors must dedupe by name. Got duplicates in: $names",
     )
-    assertContains(names, "openUrl")
+    assertContains(names, "hideKeyboard")
     assertContains(names, "pressBack")
   }
 
@@ -717,7 +717,7 @@ class ToolDiscoveryToolSetTest {
   // SEARCH iterated raw categories and ignored the target's excluded-tools list —
   // INDEX mode always filtered but SEARCH did not.
 
-  /** Test target that excludes [OpenUrlTrailblazeTool] when connected to a Web driver. */
+  /** Test target that excludes [HideKeyboardTrailblazeTool] when connected to a Web driver. */
   private class WebFilteringTarget : TrailblazeHostAppTarget(
     id = "webfiltered",
     displayName = "Web Filtered Target",
@@ -732,7 +732,7 @@ class ToolDiscoveryToolSetTest {
       driverType: TrailblazeDriverType,
     ): Set<KClass<out TrailblazeTool>> =
       if (driverType.platform == TrailblazeDevicePlatform.WEB) {
-        setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+        setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class)
       } else {
         emptySet()
       }
@@ -748,22 +748,22 @@ class ToolDiscoveryToolSetTest {
       currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
     )
 
-    val result = toolSet.toolbox(search = "openUrl")
+    val result = toolSet.toolbox(search = "hideKeyboard")
     val obj = json.parseToJsonElement(result).jsonObject
 
-    // openUrl is excluded for the Web driver — search must not return it.
+    // hideKeyboard is excluded for the Web driver — search must not return it.
     val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
     val toolNames =
       matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
     assertTrue(
-      toolNames.none { it.equals("openUrl", ignoreCase = true) },
-      "openUrl should be filtered out for Web driver. Got: $toolNames",
+      toolNames.none { it.equals("hideKeyboard", ignoreCase = true) },
+      "hideKeyboard should be filtered out for Web driver. Got: $toolNames",
     )
   }
 
   @Test
   fun `SEARCH includes tools not filtered for the current driver`() = runTest {
-    // Same target, but now connected via Android — openUrl is NOT excluded,
+    // Same target, but now connected via Android — hideKeyboard is NOT excluded,
     // so it should appear in search results.
     val webTarget = WebFilteringTarget()
     val toolSet = ToolDiscoveryToolSet(
@@ -773,15 +773,15 @@ class ToolDiscoveryToolSetTest {
       currentDriverTypeProvider = { TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION },
     )
 
-    val result = toolSet.toolbox(search = "openUrl")
+    val result = toolSet.toolbox(search = "hideKeyboard")
     val obj = json.parseToJsonElement(result).jsonObject
 
     val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
     val toolNames =
       matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
     assertTrue(
-      toolNames.any { it.equals("openUrl", ignoreCase = true) },
-      "openUrl should appear for Android driver. Got: $toolNames",
+      toolNames.any { it.equals("hideKeyboard", ignoreCase = true) },
+      "hideKeyboard should appear for Android driver. Got: $toolNames",
     )
   }
 
@@ -857,7 +857,7 @@ class ToolDiscoveryToolSetTest {
       TrailblazeDevicePlatform.IOS ->
         setOf(xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool::class)
       TrailblazeDevicePlatform.WEB ->
-        setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+        setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class)
       else -> emptySet()
     }
   }
@@ -891,7 +891,11 @@ class ToolDiscoveryToolSetTest {
       it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
     }
     assertContains(allTools, "launchApp", "Android tool must appear. Got: $allTools")
-    assertTrue("openUrl" !in allTools, "Web-only tool must NOT appear. Got: $allTools")
+    assertTrue(
+      "hideKeyboard" !in allTools,
+      "This fixture's web-platform sentinel tool (hideKeyboard) must NOT appear under the " +
+        "Android filter. Got: $allTools",
+    )
   }
 
   @Test
@@ -911,7 +915,12 @@ class ToolDiscoveryToolSetTest {
     val allTools = toolGroups.flatMap {
       it.jsonObject["tools"]?.jsonArray?.map { tn -> tn.jsonPrimitive.content } ?: emptyList()
     }
-    assertContains(allTools, "openUrl", "Web tool must appear. Got: $allTools")
+    assertContains(
+      allTools,
+      "hideKeyboard",
+      "This fixture's web-platform sentinel tool (hideKeyboard) must appear under the web filter. " +
+        "Got: $allTools",
+    )
     assertTrue("launchApp" !in allTools, "Android-only tool must NOT appear. Got: $allTools")
   }
 
@@ -974,7 +983,7 @@ class ToolDiscoveryToolSetTest {
     // daemon-connected `ANDROID_ONDEVICE_INSTRUMENTATION` driver survives a matching
     // `--device=android` rather than being flattened to `DEFAULT_ANDROID`.
     val defaultTarget = MixedNoneTarget(
-      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
       yamlNames = setOf(ToolName("pressBack")),
     )
     val toolSet = createToolSet(
@@ -1000,7 +1009,7 @@ class ToolDiscoveryToolSetTest {
     // an MCP client) reaches for it with an unrelated daemon driver active, the override
     // branch must still resolve correctly.
     val defaultTarget = MixedNoneTarget(
-      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
       yamlNames = setOf(ToolName("pressBack")),
     )
     val toolSet = createToolSet(
@@ -1222,7 +1231,7 @@ class ToolDiscoveryToolSetTest {
     // with --target=default which routes through INDEX). Before the fix, the header read
     // `(Android)` while the platform-toolset list contained web tools — a contradiction.
     val defaultTarget = MixedNoneTarget(
-      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
       yamlNames = setOf(ToolName("pressBack")),
     )
     val toolSet = createToolSet(

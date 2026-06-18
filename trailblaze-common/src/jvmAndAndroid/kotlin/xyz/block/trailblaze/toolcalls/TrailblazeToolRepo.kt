@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.KoogToolExt.hasSerializableAnnotation
 import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
+import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogToolsWithExecutor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.util.Console
@@ -197,6 +198,39 @@ class TrailblazeToolRepo(
       val advertisedDynamic = snapshot.advertisedDynamic()
       if (advertisedDynamic.isNotEmpty()) {
         tools(advertisedDynamic.map { it.buildKoogTool(trailblazeToolContextProvider) })
+      }
+    }
+  }
+
+  /**
+   * Executor-routed [ToolRegistry] for agent-driven, in-process Koog loops (e.g. the
+   * [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] web path).
+   *
+   * Differs from [asToolRegistry] only in how class-backed and YAML-defined tool calls are
+   * EXECUTED: instead of calling `tool.execute(context)` directly, each decoded tool is
+   * dispatched through [toolDispatcher] — typically `agent.runTrailblazeTools(listOf(tool), …)`.
+   * That route is mandatory for driver-specific tools (Playwright / Compose) whose own
+   * `execute` throws and is only reachable via their agent. Routing through the agent also
+   * preserves the side-effect `logToolExecution` / session logging the strategy-graph agent
+   * relies on, so session logs happen exactly as they do on the legacy
+   * [xyz.block.trailblaze.agent.TrailblazeRunner] path.
+   *
+   * Dynamic (subprocess-MCP) tools keep the context-provider path — their `execute` round-trips
+   * through their own transport, not the driver agent, so [trailblazeToolContextProvider] (used
+   * only for those) is still required.
+   */
+  fun asToolRegistry(
+    toolDispatcher: suspend (TrailblazeTool) -> String,
+    trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  ): ToolRegistry {
+    val snapshot = snapshotRegisteredTools()
+    return ToolRegistry {
+      tools((snapshot.toolClasses + verifyTools).toKoogToolsWithExecutor(toolDispatcher))
+      if (snapshot.yamlToolNames.isNotEmpty()) {
+        tools(KoogToolExt.buildKoogToolsForYamlDefinedWithExecutor(snapshot.yamlToolNames, toolDispatcher))
+      }
+      if (snapshot.dynamic.isNotEmpty()) {
+        tools(snapshot.dynamic.values.map { it.buildKoogTool(trailblazeToolContextProvider) })
       }
     }
   }

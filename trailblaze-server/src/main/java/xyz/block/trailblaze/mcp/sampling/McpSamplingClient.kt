@@ -7,6 +7,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Role
 import io.modelcontextprotocol.kotlin.sdk.types.SamplingMessage
+import io.modelcontextprotocol.kotlin.sdk.types.SamplingMessageContent
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -95,10 +96,7 @@ class McpSamplingClient(
 
     return try {
       val result = session.createMessage(request)
-      val responseText = when (val content = result.content) {
-        is TextContent -> content.text
-        else -> result.content.toString()
-      }
+      val responseText = extractSamplingResponseText(result.content)
 
       SamplingResult.Text(
         completion = responseText,
@@ -163,10 +161,7 @@ class McpSamplingClient(
 
     return try {
       val result = session.createMessage(request)
-      val responseText = when (val content = result.content) {
-        is TextContent -> content.text
-        else -> result.content.toString()
-      }
+      val responseText = extractSamplingResponseText(result.content)
 
       // Parse the JSON tool call from the response
       parseToolCallResponse(responseText, result.model)
@@ -378,3 +373,18 @@ data class ScreenStateForSampling(
   val deviceWidth: Int = 0,
   val deviceHeight: Int = 0,
 )
+
+/**
+ * Extracts the assistant's reply text from a sampling result's content.
+ *
+ * MCP SDK 0.13.0 changed `CreateMessageResult.content` from a single content object to a
+ * `List<SamplingMessageContent>`. The model's textual reply may therefore arrive split across
+ * multiple [TextContent] parts; we concatenate them verbatim (no separator) so chunked text is
+ * reconstructed exactly as the model produced it. When the client returns only non-text content
+ * (e.g. image/audio) or an empty list, we fall back to the list's string representation so the
+ * degenerate case is still surfaced to the caller rather than silently dropped.
+ */
+internal fun extractSamplingResponseText(content: List<SamplingMessageContent>): String =
+  content.filterIsInstance<TextContent>()
+    .joinToString(separator = "") { it.text }
+    .ifEmpty { content.toString() }

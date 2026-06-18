@@ -15,17 +15,15 @@ import xyz.block.trailblaze.llm.config.bundledConfigResourceSource
 data class ToolSetCatalogEntry(
   val id: String,
   val description: String,
-  val toolClasses: Set<KClass<out TrailblazeTool>>,
-  val yamlToolNames: Set<ToolName> = emptySet(),
-  val scriptedToolNames: Set<ToolName> = emptySet(),
+  override val toolClasses: Set<KClass<out TrailblazeTool>>,
+  override val yamlToolNames: Set<ToolName> = emptySet(),
+  override val scriptedToolNames: Set<ToolName> = emptySet(),
   val alwaysEnabled: Boolean = false,
   val compatibleDriverTypes: Set<TrailblazeDriverType> = emptySet(),
-) {
-  val toolNames: List<String> by lazy {
-    toolClasses.map { it.toolName().toolName } +
-      yamlToolNames.map { it.toolName } +
-      scriptedToolNames.map { it.toolName }
-  }
+) : TrailblazeToolSurface {
+  // The reference union — class-backed, YAML-defined, and scripted names together, via the single
+  // [allToolNames] accessor so this can't drift from how every other surface enumerates tools.
+  val toolNames: List<String> by lazy { allToolNames.map { it.toolName } }
 
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
     compatibleDriverTypes.isEmpty() || driverType in compatibleDriverTypes
@@ -44,10 +42,10 @@ data class ToolSetCatalogEntry(
  * the separation lets the bundling layer tell which names need a scripted runtime registered.
  */
 data class ResolvedToolSet(
-  val toolClasses: Set<KClass<out TrailblazeTool>>,
-  val yamlToolNames: Set<ToolName> = emptySet(),
-  val scriptedToolNames: Set<ToolName> = emptySet(),
-)
+  override val toolClasses: Set<KClass<out TrailblazeTool>>,
+  override val yamlToolNames: Set<ToolName> = emptySet(),
+  override val scriptedToolNames: Set<ToolName> = emptySet(),
+) : TrailblazeToolSurface
 
 /**
  * Catalog of available TrailblazeTool sets that can be dynamically enabled/disabled.

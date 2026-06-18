@@ -21,11 +21,11 @@ abstract class TrailblazeToolSet(
   open val name: String = this::class.annotations
     .filterIsInstance<TrailblazeToolSetClass>()
     .firstOrNull()?.description ?: this::class.simpleName ?: error("Add a @TrailblazeToolSetClass annotation"),
-  val toolClasses: Set<KClass<out TrailblazeTool>>,
-  val yamlToolNames: Set<ToolName> = emptySet(),
-  val scriptedToolNames: Set<ToolName> = emptySet(),
+  override val toolClasses: Set<KClass<out TrailblazeTool>>,
+  override val yamlToolNames: Set<ToolName> = emptySet(),
+  override val scriptedToolNames: Set<ToolName> = emptySet(),
   val supportedDriverTypes: Set<TrailblazeDriverType>? = null,
-) {
+) : TrailblazeToolSurface {
 
   // Provide a way to add multiple tool sets together
   operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet =

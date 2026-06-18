@@ -220,6 +220,64 @@ class DesktopYamlRunner(
         }
 
         sessionId = when {
+          // Opt-in Koog strategy-graph agent. Top priority so it short-circuits the driver-based
+          // routing below for every platform/driver when the run explicitly asks for it.
+          //
+          // The agent now drives the device IN-PROCESS for the WEB (Playwright-native) path:
+          // [TrailblazeHostYamlRunner.runHostYaml] → `runPlaywrightNativeYaml` →
+          // `BasePlaywrightNativeTest.runTrailblazeYamlSuspend` branches on
+          // `runYamlRequest.agentImplementation` and, for KOOG_STRATEGY_GRAPH, runs prompt steps
+          // through [KoogStrategyGraphAgent.createInProcess] against a Trailblaze-owned
+          // `ToolRegistry`. Tool calls flow through the same `PlaywrightTrailblazeAgent` executor
+          // (and therefore the same logging/session) the legacy runner uses — no MCP
+          // self-connection, so none of the re-entrancy deadlock that pattern caused.
+          //
+          // This in-process host seam covers web (Playwright), Revyl (Android + iOS), Electron, and
+          // the local-device Maestro iOS path via `runHostYaml`. Android ON-DEVICE drivers
+          // (instrumentation/accessibility) are EXCLUDED from this branch on purpose: those need
+          // the device attached via the on-device RPC server, which `runHostYaml`'s Maestro path
+          // can't provide (it can't see the emulator the on-device setup registers). They instead
+          // run the Koog agent ON THE DEVICE by default — the Koog agent now ships in
+          // trailblaze-common, so the on-device RunYamlRequestHandler runs it in-process (see the
+          // on-device branch below). `preferHostAgent` opts back into running the loop host-side and
+          // dispatching each tool over RPC (`runHostTrailblazeRunnerWithOnDeviceRpc`).
+          // Compose still falls back to the legacy runner (its agent isn't a BaseTrailblazeAgent).
+          // The earlier MCP-self-connection approach (and the deadlock it hit) is the reason the
+          // in-process executor route exists; see [KoogStrategyGraphAgent].
+          runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH &&
+            trailblazeDriverType !in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
+            prefixedProgressMessage(
+              "KOOG_STRATEGY_GRAPH selected — running the in-process Koog strategy-graph agent " +
+                "(web, Revyl, Electron, and local Maestro iOS paths via runHostYaml).",
+            )
+
+            val hostSessionId = TrailblazeHostYamlRunner.runHostYaml(
+              dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+              runOnHostParams = RunOnHostParams(
+                runYamlRequest = runYamlRequest,
+                device = connectedTrailblazeDevice,
+                onProgressMessage = prefixedProgressMessage,
+                forceStopTargetApp = forceStopTargetApp,
+                targetTestApp = targetTestApp,
+                additionalInstrumentationArgs = { emptyMap() },
+                composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
+                referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
+                noLogging = desktopAppRunYamlParams.noLogging,
+              ),
+              deviceManager = trailblazeDeviceManager,
+            )
+
+            // Mirror the neighboring branches' session/connection bookkeeping: fire the
+            // capture activator for the resolved session and report instrumentation-running.
+            hostSessionId?.let { captureSessionStarted(it) }
+            onConnectionStatus(
+              DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
+                trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+              ),
+            )
+            hostSessionId
+          }
+
           // V3 on host with accessibility driver: run planner/analyzer on the host JVM,
           // send individual tool calls to the on-device accessibility server via RPC.
           trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY &&
@@ -249,6 +307,13 @@ class DesktopYamlRunner(
           // Host agent with on-device driver (accessibility or instrumentation): run the
           // agent loop on the host JVM, send individual tool calls to the device via RPC.
           // The device executes each tool using whichever driver is selected.
+          //
+          // This is the opt-in `preferHostAgent` path. KOOG_STRATEGY_GRAPH no longer forces it:
+          // the Koog agent now ships in trailblaze-common and runs ON-DEVICE by default (next
+          // branch). Set `preferHostAgent` to keep the Koog reasoning loop (and its growing
+          // history) on the host instead of the device — useful when device memory pressure is a
+          // concern; runHostTrailblazeRunnerWithOnDeviceRpc still runs the Koog graph host-side
+          // when this path is taken.
           trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES &&
             runYamlRequest.agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
             runYamlRequest.config.preferHostAgent -> {
@@ -275,7 +340,10 @@ class DesktopYamlRunner(
           }
 
           // On-device agent: send entire YAML to device, agent loop runs on-device.
-          // Used when preferHostAgent=false or for instrumentation driver fallback.
+          // Used when preferHostAgent=false or for instrumentation driver fallback. This is the
+          // default for KOOG_STRATEGY_GRAPH on Android on-device drivers: the request (carrying
+          // agentImplementation) goes to the device's RunYamlRequestHandler, which runs the Koog
+          // strategy-graph agent in-process via AndroidTrailblazeRule.
           trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()

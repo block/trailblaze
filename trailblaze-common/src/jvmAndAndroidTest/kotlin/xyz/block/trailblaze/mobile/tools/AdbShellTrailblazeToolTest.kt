@@ -5,6 +5,7 @@ import assertk.assertions.contains
 import assertk.assertions.hasLength
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotInstanceOf
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
@@ -183,7 +184,7 @@ class AdbShellTrailblazeToolTest {
     // `HostLocalExecutableTrailblazeTool` to the implements list would silently regress
     // the dual-mode property; this test would still pass the ExecutableTrailblazeTool
     // check above (since HostLocalExecutableTrailblazeTool extends it).
-    assertk.assertThat(tool !is HostLocalExecutableTrailblazeTool).isEqualTo(true)
+    assertThat(tool).isNotInstanceOf(HostLocalExecutableTrailblazeTool::class)
 
     val annotation = AdbShellTrailblazeTool::class.java.getAnnotation(TrailblazeToolClass::class.java)!!
     assertThat(annotation.name).isEqualTo("android_adbShell")

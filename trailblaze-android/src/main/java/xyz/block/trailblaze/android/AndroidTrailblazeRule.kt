@@ -42,6 +42,7 @@ import xyz.block.trailblaze.android.agent.KoogLlmSamplingSource
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
@@ -196,6 +197,25 @@ open class AndroidTrailblazeRule(
    * agent then carries it and its device-resolved app id through to every execution context.
    */
   private val target: TrailblazeHostAppTarget? = null,
+  /**
+   * Per-run override for which [AgentImplementation] drives prompt steps. When null (the default,
+   * e.g. a direct `@Rule` instrumentation test), the agent is read from the `trailblaze.agent`
+   * instrumentation arg via [InstrumentationArgUtil.agentImplementation]. The on-device RPC path
+   * threads the host's [xyz.block.trailblaze.llm.RunYamlRequest.agentImplementation] in here so a
+   * `--agent KOOG_STRATEGY_GRAPH` selection made on the host CLI takes effect on-device for that
+   * request without depending on a process-wide instrumentation arg.
+   */
+  private val agentImplementationOverride: AgentImplementation? = null,
+  /**
+   * The session tool repo to register scripted-tool bundles into AND dispatch against. When a
+   * caller supplies an [agentOverride] it MUST pass the same repo it constructed that agent with
+   * here, so the bundle launcher registers `openUrl` & friends into the very repo the override
+   * agent resolves against. Without this the override agent carries a null/foreign repo and every
+   * toolset-delivered scripted tool fails "Unknown tool" at dispatch even though it was registered.
+   * Null (the no-override path) → the rule builds one from [customToolClasses] and threads it into
+   * the agent it constructs itself.
+   */
+  trailblazeToolRepoOverride: TrailblazeToolRepo? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
@@ -266,6 +286,14 @@ open class AndroidTrailblazeRule(
    * Resolved lazily so [trailblazeLoggingRule] is fully initialized before we read
    * [TrailblazeAndroidLoggingRule.driverTypeOverride].
    */
+  // Declared BEFORE [trailblazeAgent] so the lazy agent initializer reads a fully-assigned repo.
+  // Prefer the caller-supplied [trailblazeToolRepoOverride] — when an [agentOverride] is present,
+  // that's the repo the override agent was built with, so the launcher must register into it.
+  private val trailblazeToolRepo =
+    trailblazeToolRepoOverride
+      ?: customToolClasses?.toTrailblazeToolRepo()
+      ?: TrailblazeToolRepo.withDynamicToolSets()
+
   val trailblazeAgent: MaestroTrailblazeAgent by lazy {
     agentOverride ?: when (trailblazeLoggingRule.driverTypeOverride) {
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> AccessibilityTrailblazeAgent(
@@ -284,6 +312,9 @@ open class AndroidTrailblazeRule(
         // no [target] was supplied — the documented `ctx.target === undefined` shape.
         resolvedTarget = resolvedTargetForSession,
         appId = appIdForSession,
+        // Same repo the launcher registers scripted tools into (see launchToolsetScriptedToolBundles)
+        // so the agent resolves `openUrl` & friends at dispatch instead of failing "Unknown tool".
+        trailblazeToolRepo = trailblazeToolRepo,
       )
       else -> AndroidMaestroTrailblazeAgent(
         trailblazeLogger = trailblazeLoggingRule.logger,
@@ -301,12 +332,11 @@ open class AndroidTrailblazeRule(
         // `ctx.target` populated regardless of which Android driver the trail picked.
         resolvedTarget = resolvedTargetForSession,
         appId = appIdForSession,
+        // Same repo the launcher registers scripted tools into so the agent resolves them at dispatch.
+        trailblazeToolRepo = trailblazeToolRepo,
       )
     }
   }
-
-  private val trailblazeToolRepo =
-    customToolClasses?.toTrailblazeToolRepo() ?: TrailblazeToolRepo.withDynamicToolSets()
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
     // Source of truth is the *agent* the rule will dispatch through, not the driver type
@@ -414,11 +444,15 @@ open class AndroidTrailblazeRule(
   )
 
   /**
-   * Agent implementation selected via instrumentation arg `-e trailblaze.agent`.
-   * Defaults to [AgentImplementation.TRAILBLAZE_RUNNER] (legacy, stable).
-   * Set to `MULTI_AGENT_V3` to opt into the multi-agent V3 architecture.
+   * Agent implementation selected via [agentImplementationOverride] (the on-device RPC path) or,
+   * when that's null, the instrumentation arg `-e trailblaze.agent` via
+   * [InstrumentationArgUtil.agentImplementation]. Defaults to
+   * [AgentImplementation.TRAILBLAZE_RUNNER] (legacy, stable). `MULTI_AGENT_V3` opts into the
+   * multi-agent V3 architecture; `KOOG_STRATEGY_GRAPH` runs the Koog strategy-graph agent for
+   * live prompt steps (see [runSuspend]).
    */
-  private val agentImplementation: AgentImplementation = InstrumentationArgUtil.agentImplementation()
+  private val agentImplementation: AgentImplementation =
+    agentImplementationOverride ?: InstrumentationArgUtil.agentImplementation()
 
   /**
    * Title of the trail currently executing (e.g. an external test-case name).
@@ -439,6 +473,10 @@ open class AndroidTrailblazeRule(
   private val trailblazeRunner: TestAgentRunner by lazy {
     when (agentImplementation) {
       AgentImplementation.MULTI_AGENT_V3 -> createV3Runner()
+      // KOOG is a first-class [TestAgentRunner] like V3, so it rides the same per-step trail loop
+      // ([TrailblazeRunnerUtil.runPromptSuspend]) and therefore gets deterministic recorded-replay
+      // for free — recordings replay (zero LLM) and only unrecorded steps reach the Koog brain.
+      AgentImplementation.KOOG_STRATEGY_GRAPH -> createKoogRunner()
       else -> TrailblazeRunner(
         trailblazeToolRepo = trailblazeToolRepo,
         trailblazeLlmModel = trailblazeLlmModel,
@@ -695,6 +733,9 @@ open class AndroidTrailblazeRule(
       trailItems.forEach { item ->
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
+            // Agent-agnostic: runPrompt replays recorded steps deterministically (zero LLM) and
+            // delegates only the unrecorded steps to the configured [trailblazeRunner] — legacy,
+            // V3, or KOOG. The agent choice never changes how recordings are handled.
             trailblazeRunnerUtil.runPrompt(
               prompts = item.promptSteps,
               useRecordedSteps = useRecordedSteps,
@@ -799,6 +840,32 @@ open class AndroidTrailblazeRule(
       elementComparator = elementComparator,
       screenStateProvider = screenStateProvider,
     ).result
+
+  /**
+   * Builds the [KOOG_STRATEGY_GRAPH][AgentImplementation.KOOG_STRATEGY_GRAPH] brain as a
+   * [TestAgentRunner], so it plugs into the same per-step trail loop as the legacy/V3 runners and
+   * inherits deterministic recorded-replay from [TrailblazeRunnerUtil.runPromptSuspend]. Wired with
+   * this rule's on-device driver agent, tool repo, screen-state provider, and LLM client — so every
+   * tool the Koog graph calls executes through the exact same dispatch (settle, node-selector
+   * enrichment, session logging) the legacy on-device runner uses. Only the reasoning loop differs.
+   *
+   * The system prompt mirrors the host mobile path: the legacy base + default-platform prompt via
+   * [TrailblazeRunner.composeSystemPrompt], with the session's toolset catalog inlined.
+   */
+  private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
+    agent = trailblazeAgent,
+    toolRepo = trailblazeToolRepo,
+    screenStateProvider = screenStateProvider,
+    elementComparator = elementComparator,
+    llmClient = llmClient,
+    trailblazeLlmModel = trailblazeLlmModel,
+    logger = trailblazeLoggingRule.logger,
+    sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
+    maxLlmCalls = maxLlmCalls,
+    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(
+      toolSetCatalog = trailblazeToolRepo.toolSetCatalog,
+    ),
+  )
 
   @Deprecated("Prefer the suspend version.")
   private fun runMaestroCommandsBlocking(maestroCommands: List<Command>): TrailblazeToolResult =

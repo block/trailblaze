@@ -109,17 +109,12 @@ data class TrailmapScriptedToolFile(
    */
   val supportedPlatforms: List<String>? = null,
   /**
-   * Explicit runtime override (`subprocess` or `inProcess`) — see [ScriptedToolRuntime].
+   * Runtime selector (`subprocess` or `inProcess`) — see [ScriptedToolRuntime].
    *
-   * When set, this overrides the default extension-based routing in
-   * `TrailblazeHostYamlRunner`: `.js` / `.mjs` / `.cjs` → subprocess, everything else
-   * (notably `.ts`) → in-process QuickJS. Set this to `subprocess` if you author a `.ts`
-   * file but need Node APIs (`node:fs`, `node:child_process`, file locks, etc.) — bun runs
-   * `.ts` natively, so the subprocess path is the right runtime; the extension just doesn't
-   * tell the framework that.
-   *
-   * `null` (default) preserves the legacy extension-based behaviour so existing descriptors
-   * keep working without modification.
+   * `null` (the default) means in-process QuickJS. Set this to `subprocess` only when the
+   * tool's own code needs Node APIs (`node:fs`, `node:child_process`, file locks, etc.); bun
+   * runs `.ts` natively. There is no extension heuristic — a `.js` / `.mjs` / `.cjs` file is
+   * NOT auto-routed to a subprocess, so a Node-API tool must declare `runtime: subprocess`.
    */
   val runtime: ScriptedToolRuntime? = null,
   /**

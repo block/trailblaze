@@ -23,11 +23,11 @@ on execution model:
 
 ## How it's wired
 
-- Tool descriptors under `<trailmap>/tools/` opt into this runtime via `runtime:
-  subprocess` (explicit) or by using a `.js`/`.mjs`/`.cjs` entrypoint (the
-  default extension heuristic, see `ScriptedToolRuntime.resolve`). The
-  framework synthesizes an MCP wrapper script per tool at session start.
-  (`requiresHost: true` is a separate, on-device visibility gate — not the
+- Tool descriptors under `<trailmap>/tools/` opt into this runtime via an explicit
+  `runtime: subprocess` (see `ScriptedToolRuntime.resolve`). There is no extension
+  heuristic — in-process QuickJS is the default, and a `.js`/`.mjs`/`.cjs` entrypoint is
+  not auto-routed here. The framework synthesizes an MCP wrapper script per tool at session
+  start. (`requiresHost: true` is a separate, on-device visibility gate — not the
   runtime selector.)
 - At session start, Trailblaze spawns the subprocess, runs the MCP handshake
   (`initialize` → `tools/list`), and registers each returned tool under the name

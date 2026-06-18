@@ -23,6 +23,9 @@ class AndroidMaestroTrailblazeAgent(
   captureNetworkTraffic: Boolean = false,
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
+  // Threaded to the base so an `OtherTrailblazeTool` (e.g. a toolset-delivered scripted tool like
+  // `openUrl`) resolves through this repo's dynamic-tool registrations before driver dispatch.
+  trailblazeToolRepo: xyz.block.trailblaze.toolcalls.TrailblazeToolRepo? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -32,6 +35,7 @@ class AndroidMaestroTrailblazeAgent(
   captureNetworkTraffic = captureNetworkTraffic,
   resolvedTarget = resolvedTarget,
   appId = appId,
+  trailblazeToolRepo = trailblazeToolRepo,
 ) {
   override suspend fun executeMaestroCommands(commands: List<Command>, traceId: TraceId?): TrailblazeToolResult = MaestroUiAutomatorRunner.runCommands(
     commands = commands,

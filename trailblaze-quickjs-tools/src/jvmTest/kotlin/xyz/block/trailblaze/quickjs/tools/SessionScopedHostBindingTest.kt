@@ -284,9 +284,8 @@ class SessionScopedHostBindingTest {
     val ctx = buildContext()
     SessionScopedHostBinding.installContext(ctx)
     try {
-      // A direct call must NOT throw — the contract documented on QuickJsRepoHostBinding
-      // is JSON-on-every-path so the awaiting JS handler sees a well-formed envelope
-      // rather than an opaque transport error.
+      // A direct call must NOT throw — the HostBinding contract is JSON-on-every-path so the
+      // awaiting JS handler sees a well-formed envelope rather than an opaque transport error.
       val outcome = runCatching {
         binding.callFromBundle("not_registered_anywhere", """{}""")
       }

@@ -1,0 +1,10 @@
+script: ./openUrl.ts
+name: openUrl
+description: Opens the browser to the provided url.
+supportedPlatforms:
+  - android
+  - ios
+inputSchema:
+  url:
+    type: string
+    description: The URL to open that starts with https

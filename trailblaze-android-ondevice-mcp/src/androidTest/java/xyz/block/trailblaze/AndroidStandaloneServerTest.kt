@@ -56,6 +56,9 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       trailblazeLoggingRule = trailblazeLoggingRule,
       agentMemoryOverride = agentMemory,
       maxLlmCalls = runYamlRequest.maxLlmCalls,
+      // Honor the agent the host selected for THIS request (e.g. --agent KOOG_STRATEGY_GRAPH),
+      // rather than the process-wide `trailblaze.agent` instrumentation arg.
+      agentImplementationOverride = runYamlRequest.agentImplementation,
     )
     var lastToolSuccess: TrailblazeToolResult.Success? = null
     startInTestCoroutineScope {

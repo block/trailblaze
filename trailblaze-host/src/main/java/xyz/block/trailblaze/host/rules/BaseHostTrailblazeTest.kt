@@ -23,7 +23,10 @@ import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
 import xyz.block.trailblaze.agent.MultiAgentV3Runner
 import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
+import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
+import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
 import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -261,6 +264,7 @@ abstract class BaseHostTrailblazeTest(
   val trailblazeRunner: TestAgentRunner by lazy {
     when (agentImplementation) {
       AgentImplementation.MULTI_AGENT_V3 -> createV3Runner()
+      AgentImplementation.KOOG_STRATEGY_GRAPH -> createKoogRunner()
       else -> createLegacyRunner()
     }
   }
@@ -495,6 +499,8 @@ abstract class BaseHostTrailblazeTest(
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->
+          // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
+          // steps to the configured runner (legacy / V3 / KOOG). Default (TRAILBLAZE_RUNNER) unchanged.
           trailblazeRunnerUtil.runPromptSuspend(
             prompts = item.promptSteps,
             useRecordedSteps = useRecordedSteps,
@@ -529,6 +535,30 @@ abstract class BaseHostTrailblazeTest(
   private fun resolveSelfHealFromEnvOrConfig(): Boolean =
     System.getenv(TRAILBLAZE_SELF_HEAL_ENABLED_ENV)?.lowercase()?.toBooleanStrictOrNull()
       ?: config.selfHeal
+
+  /**
+   * Builds the [KOOG_STRATEGY_GRAPH][AgentImplementation.KOOG_STRATEGY_GRAPH] brain as a
+   * [KoogTestAgentRunner] for this Maestro host path (local Android + iOS). It does NOT run the
+   * prompt loop itself — the loop lives in [TrailblazeRunnerUtil.runPromptSuspend], which replays
+   * recorded steps and only delegates unrecorded ones to this runner. [trailblazeAgent] is a
+   * [BaseTrailblazeAgent] for every Maestro target; the system prompt is composed exactly as
+   * [createLegacyRunner] composes it for this path.
+   */
+  private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
+    agent = trailblazeAgent,
+    toolRepo = toolRepo,
+    screenStateProvider = hostRunner.screenStateProvider,
+    elementComparator = elementComparator,
+    llmClient = dynamicLlmClient.createLlmClient(),
+    trailblazeLlmModel = trailblazeLlmModel,
+    logger = loggingRule.logger,
+    sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+    maxLlmCalls = null,
+    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(
+      platformPrompt = systemPromptTemplate,
+      toolSetCatalog = toolRepo.toolSetCatalog,
+    ),
+  )
 
   fun runTools(tools: List<TrailblazeTool>): TrailblazeToolResult = trailblazeRunnerUtil.runTrailblazeTool(tools)
 

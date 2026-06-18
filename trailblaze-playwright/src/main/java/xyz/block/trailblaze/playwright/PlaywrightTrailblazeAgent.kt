@@ -39,7 +39,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -87,6 +86,9 @@ class PlaywrightTrailblazeAgent(
   var workingDirectory: java.io.File? = null
 
   val screenStateProvider: () -> ScreenState = { browserManager.getScreenState() }
+
+  // buildKoogToolExecutionContext now lives on BaseTrailblazeAgent (shared by every driver agent),
+  // delegating to this agent's buildExecutionContext override.
 
   override fun buildExecutionContext(
     traceId: TraceId,
@@ -150,11 +152,6 @@ class PlaywrightTrailblazeAgent(
         }
       }
       // Map cross-platform Maestro tools to their Playwright equivalents
-      is OpenUrlTrailblazeTool -> {
-        toolsExecuted.add(tool)
-        val navigateTool = PlaywrightNativeNavigateTool(url = tool.url, reasoning = tool.reasoning)
-        executePlaywrightToolBlocking(navigateTool, context)
-      }
       is LaunchAppTrailblazeTool -> {
         // launchApp is a no-op on web — the browser is already open
         toolsExecuted.add(tool)

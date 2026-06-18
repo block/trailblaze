@@ -41,6 +41,61 @@ object KoogToolExt {
   }
 
   /**
+   * Executor-routed variant of [toKoogTools]. Instead of calling `tool.execute(context)`
+   * directly (which throws for driver-specific tools like [PlaywrightExecutableTool] /
+   * `ComposeExecutableTool` whose `execute` is implemented only via their agent), each tool
+   * call is dispatched through [toolDispatcher] — typically `agent.runTrailblazeTools(...)`.
+   * That route is what gives driver-correct execution (Playwright thread affinity + settle,
+   * node-selector enrichment) plus the side-effect `logToolExecution` / session logging the
+   * in-process Koog-strategy-graph agent relies on.
+   */
+  fun Set<KClass<out TrailblazeTool>>.toKoogToolsWithExecutor(
+    toolDispatcher: suspend (TrailblazeTool) -> String,
+  ): List<TrailblazeKoogTool<out TrailblazeTool>> = this
+    .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
+    .map { trailblazeToolClass ->
+      TrailblazeKoogTool(trailblazeToolClass) { args: TrailblazeTool ->
+        // The dispatcher returns the full LLM-facing message — including the fresh post-action
+        // screen — so the agent perceives the latest screen via Koog's native tool-result
+        // channel. The prune node then keeps only this latest hierarchy in context.
+        toolDispatcher(args)
+      }
+    }
+
+  /**
+   * Executor-routed variant of [buildKoogToolsForYamlDefined]. Mirrors
+   * [toKoogToolsWithExecutor]: each YAML-defined tool call is dispatched through
+   * [toolDispatcher] (the agent) rather than executed inline against a context.
+   */
+  fun buildKoogToolsForYamlDefinedWithExecutor(
+    yamlToolNames: Set<ToolName>,
+    toolDispatcher: suspend (TrailblazeTool) -> String,
+  ): List<TrailblazeKoogTool<out TrailblazeTool>> {
+    if (yamlToolNames.isEmpty()) return emptyList()
+    val configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+    return yamlToolNames.mapNotNull { name ->
+      val config = configsByName[name]
+      if (config == null) {
+        Console.log(
+          "buildKoogToolsForYamlDefinedWithExecutor: no YAML config registered for tool " +
+            "'${name.toolName}' — skipping.",
+        )
+        return@mapNotNull null
+      }
+      if (config.surfaceToLlm == false) return@mapNotNull null
+      val descriptor = config.toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = true)
+      val serializer = YamlDefinedToolSerializer(config)
+      TrailblazeKoogTool(
+        argsSerializer = serializer,
+        descriptor = descriptor,
+        executeTool = { args: YamlDefinedTrailblazeTool ->
+          toolDispatcher(args)
+        },
+      )
+    }
+  }
+
+  /**
    * Builds Koog tools for YAML-defined (`tools:` mode) tools referenced by name. Each tool's
    * descriptor and arg serializer come from the [ToolYamlConfig] loaded at startup; each tool
    * shares the [YamlDefinedTrailblazeTool] implementation class, differentiated at execute time

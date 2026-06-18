@@ -26,6 +26,14 @@ class QuickJsToolRegistration(
   internal val host: QuickJsToolHost,
   /** What the bundle advertised when [QuickJsToolHost.listTools] was called. */
   internal val spec: RegisteredToolSpec,
+  /**
+   * Session-scoped binding for this tool's host. Forwarded to [QuickJsToolSerializer] so the
+   * constructed [QuickJsTrailblazeTool] sets [SessionScopedHostBinding.activeContext] around
+   * its QuickJS evaluation — the only mechanism that survives the `asyncFunction` callback's
+   * thread hop and lets a nested `trailblaze.call(...)` resolve the session context. Null on
+   * paths that don't support cross-tool composition.
+   */
+  internal val binding: SessionScopedHostBinding? = null,
 ) : DynamicTrailblazeToolRegistration {
 
   override val name: ToolName = ToolName(spec.name)
@@ -39,7 +47,7 @@ class QuickJsToolRegistration(
     // doesn't model today (`array`, `object`, etc.) — those fall back to String rather than
     // crashing session startup. Same posture the legacy MCP-bundle registration takes.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = QuickJsToolSerializer(name, host)
+    val serializer = QuickJsToolSerializer(name, host, binding)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -52,7 +60,7 @@ class QuickJsToolRegistration(
   }
 
   override fun decodeToolCall(argumentsJson: String): TrailblazeTool {
-    val serializer = QuickJsToolSerializer(name, host)
+    val serializer = QuickJsToolSerializer(name, host, binding)
     return Json.decodeFromString(serializer, argumentsJson)
   }
 }

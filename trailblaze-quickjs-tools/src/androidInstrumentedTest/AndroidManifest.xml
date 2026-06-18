@@ -17,6 +17,17 @@
        unaffected because AGP's stock `androidTest` source set is not renamed there. -->
   <uses-sdk tools:overrideLibrary="
       ai.koog.agents.core,
+      ai.koog.koog.agents,
+      ai.koog.agents.features.memory,
+      ai.koog.agents.features.opentelemetry,
+      ai.koog.agents.features.snapshot,
+      ai.koog.agents.features.tokenizer,
+      ai.koog.agents.mcp.metadata,
+      ai.koog.embeddings.llm,
+      ai.koog.prompt.cache.files,
+      ai.koog.prompt.cache.model,
+      ai.koog.prompt.executor.cached,
+      ai.koog.prompt.xml,
       ai.koog.agents.ext,
       ai.koog.agents.features.event.handler,
       ai.koog.agents.features.trace,

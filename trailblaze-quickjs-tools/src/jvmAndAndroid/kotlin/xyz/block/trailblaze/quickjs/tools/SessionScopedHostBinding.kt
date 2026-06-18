@@ -18,8 +18,8 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * Live [HostBinding] that dispatches `trailblaze.call(name, args)` from inside an author
- * bundle through the session's [TrailblazeToolRepo]. Replaces the stub returns in
- * [QuickJsRepoHostBinding] for inline scripted-tool composition.
+ * bundle through the session's [TrailblazeToolRepo]. This is the wired composition path for
+ * inline scripted tools — host daemon and on-device QuickJS alike.
  *
  * ### Resolution flow
  *
@@ -40,8 +40,8 @@ import xyz.block.trailblaze.util.Console
  *
  * ### Failure modes
  *
- * Per the [HostBinding] contract documented on [QuickJsRepoHostBinding], this binding
- * **never throws back to JS**. Every failure path produces a structured envelope JSON
+ * Per the [HostBinding] contract, this binding **never throws back to JS**. Every failure
+ * path produces a structured envelope JSON
  * `{"isError":true,"error":"<message>"}` so the awaiting handler sees a well-formed
  * response on the JS side instead of an opaque transport error. Failure cases:
  *
@@ -83,6 +83,20 @@ class SessionScopedHostBinding(
    */
   @Volatile
   var activeContext: TrailblazeToolExecutionContext? = null
+
+  /**
+   * The QuickJS host this binding is installed into, when launched by
+   * [QuickJsToolBundleLauncher]. Set so [callFromBundle] can refuse to dispatch a resolved
+   * tool that lives in this *same* host: re-entering [QuickJsToolHost.callTool] while the
+   * outer call still holds the host's non-reentrant `evalMutex` deadlocks (and would clobber
+   * the outer call's `__trailblazeLastResult` global). Composing a tool in a *different*
+   * bundle (different host) or a host/driver tool (no QuickJS re-entry, e.g. `maestro`) is
+   * unaffected. Null on the host daemon path
+   * ([LazyYamlScriptedToolRegistration][xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]),
+   * which isolates each tool in its own host so same-host re-entry can't arise there.
+   */
+  @Volatile
+  var ownHost: QuickJsToolHost? = null
 
   override suspend fun callFromBundle(name: String, argsJson: String): String {
     // Prefer the directly-set [activeContext] (used by the in-process scripted-tool
@@ -151,9 +165,9 @@ class SessionScopedHostBinding(
       // Catches IllegalStateException (the standard "not found" path is null-returned by
       // toolCallToTrailblazeToolUnfiltered, so anything reaching here is a different kind
       // of state issue) AND any unchecked exception thrown out of a custom KSerializer
-      // (NPE, IllegalArgumentException, NumberFormatException, …). The binding's contract
-      // documented on QuickJsRepoHostBinding is JSON-on-every-path; a propagated unchecked
-      // throw would surface to the JS side as an opaque transport error.
+      // (NPE, IllegalArgumentException, NumberFormatException, …). The HostBinding contract
+      // is JSON-on-every-path; a propagated unchecked throw would surface to the JS side as
+      // an opaque transport error.
       Console.log(
         "[SessionScopedHostBinding] CALL_LOOKUP_FAIL tool=$name session=${sessionId.value} " +
           "reason=${e::class.simpleName}: ${e.message}",
@@ -169,6 +183,28 @@ class SessionScopedHostBinding(
       )
       return errorEnvelope(
         "trailblaze.call('$name'): no tool registered with that name",
+      )
+    }
+
+    // Same-host re-entry guard. Dispatching a tool that lives in this binding's own QuickJS
+    // host would re-enter [QuickJsToolHost.callTool] while the outer call still holds the
+    // host's non-reentrant evalMutex — a deadlock. Refuse with a structured envelope instead.
+    // Cross-bundle composition (different host) and host/driver tools (not a
+    // [QuickJsTrailblazeTool]) fall through and dispatch normally. `ownHost` is null on the
+    // host daemon path, so this guard is a no-op there.
+    val reentryHost = ownHost
+    if (reentryHost != null && resolved is QuickJsTrailblazeTool && resolved.host === reentryHost) {
+      Console.log(
+        "[SessionScopedHostBinding] SAME_HOST_REENTRY tool=$name session=${sessionId.value} " +
+          "— refusing same-bundle compose (would deadlock the shared QuickJS engine)",
+      )
+      return errorEnvelope(
+        "trailblaze.call('$name'): composing a tool from the same bundle is not supported " +
+          "(it would deadlock the shared QuickJS engine). If '$name' lives in this same file, " +
+          "call its logic as a plain local function instead of round-tripping through " +
+          "trailblaze.call — same-file reuse is a utility call, not a framework-dispatched tool. " +
+          "If you want it dispatched and logged as its own tool, move it to a separate bundle. " +
+          "Calling a host/driver tool also works (no QuickJS re-entry).",
       )
     }
 

@@ -62,6 +62,14 @@ gradlePlugin {
       id = "trailblaze.selector-ts-codegen"
       implementationClass = "TrailblazeSelectorTsCodegenPlugin"
     }
+    // Descriptor-walking DTO codegen: emits a `.ts` of every `@Serializable` model transitively
+    // reachable from a consumer-supplied root list, so Kotlin stays canonical and TS is derived.
+    // Sibling of `selector-ts-codegen`, but runs the generator via JavaExec (it needs the compiled
+    // classes for kotlinx.serialization descriptors) rather than in-process source-text parsing.
+    create("dto-ts-codegen") {
+      id = "trailblaze.dto-ts-codegen"
+      implementationClass = "TrailblazeDtoTsCodegenPlugin"
+    }
   }
 }
 

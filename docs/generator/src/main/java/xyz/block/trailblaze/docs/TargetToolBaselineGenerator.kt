@@ -9,7 +9,9 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.AppTargetYamlLoader
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ResolvedToolSet
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ToolNameResolver
+import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
@@ -21,6 +23,8 @@ import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.Header
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.allToolNames
 import xyz.block.trailblaze.toolcalls.toolName
 import java.io.File
 
@@ -198,12 +202,25 @@ class TargetToolBaselineGenerator(
 
     val toolEntries = mutableMapOf<String, ToolEntry>()
 
-    // From toolsets — both class-backed and YAML-defined tools are addressed by bare name.
+    // Scripted-tool configs by name — used for the matrix `script:` label and the per-tool sidecar.
+    // Populated from BOTH delivery mechanisms: toolset-delivered scripted tools (resolved from the
+    // catalog descriptor in the loop below) and target-declared `target.tools:` ones (further down).
+    val scriptedToolsByName = mutableMapOf<String, InlineScriptToolConfig>()
+    val discoveredScriptedByName =
+      runCatching { ScriptedToolNameDiscoverer.discoverDescriptorsByName() }.getOrNull().orEmpty()
+
+    // From toolsets — class-backed, YAML-defined, AND scripted tools are all addressed by bare name.
+    // A scripted tool delivered via a toolset (e.g. `openUrl` in `navigation`) lands in the toolset's
+    // `resolvedScriptedToolNames`, NOT its class/yaml buckets — reading only the first two would drop
+    // it from every target doc even though the runtime advertises + dispatches it. (It's not "different
+    // because it's scripted"; it's the first scripted tool delivered via a toolset rather than via a
+    // target's own `tools:` list.)
     for ((tsId, scopedDrivers) in toolSetDriverScope) {
       val toolSet = allToolSets[tsId] ?: continue
-      val namesFromToolSet =
-        toolSet.resolvedToolClasses.map { it.toolName().toolName } +
-          toolSet.resolvedYamlToolNames.map { it.toolName }
+      val scriptedNames = toolSet.resolvedScriptedToolNames.map { it.toolName }
+      // The complete surface via the single union accessor — class-backed, YAML-defined, AND
+      // scripted, so a toolset-delivered scripted tool can't fall out of the target docs.
+      val namesFromToolSet = toolSet.allToolNames.map { it.toolName }
       for (toolName in namesFromToolSet) {
         val entry = toolEntries.getOrPut(toolName) { ToolEntry() }
         entry.toolSets.add(tsId)
@@ -214,6 +231,15 @@ class TargetToolBaselineGenerator(
           } else {
             entry.availableOn.add(dt)
           }
+        }
+      }
+      // Resolve each toolset-delivered scripted tool's config so its sidecar renders — these aren't
+      // in `target.tools:`, so the target-declared loop below won't populate them.
+      scriptedNames.forEach { name ->
+        if (scriptedToolsByName.containsKey(name)) return@forEach
+        val discovered = discoveredScriptedByName[ToolName(name)] ?: return@forEach
+        discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name }?.let {
+          scriptedToolsByName[name] = it
         }
       }
     }
@@ -246,7 +272,7 @@ class TargetToolBaselineGenerator(
     //
     // Label as `script:<filename>` — "this tool came from a JS/TS module," with the
     // filename being the `.ts`/`.js` script the descriptor's `script:` points at.
-    val scriptedToolsByName = mutableMapOf<String, InlineScriptToolConfig>()
+    // (`scriptedToolsByName` is declared above so toolset-delivered scripted tools populate it too.)
     config.tools?.forEach { inlineScript ->
       val toolName = inlineScript.name
       val scriptFile = File(inlineScript.script)

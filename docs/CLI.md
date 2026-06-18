@@ -1092,7 +1092,7 @@ trailblaze config reset
 | `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. or 'none' to disable |
 | `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
 | `target` | Target app for device connections and custom tools | App target ID. Run 'trailblaze config target' to see all. |
-| `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3 |
+| `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3, KOOG_STRATEGY_GRAPH |
 | `android-driver` | Android driver type | accessibility, instrumentation |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |

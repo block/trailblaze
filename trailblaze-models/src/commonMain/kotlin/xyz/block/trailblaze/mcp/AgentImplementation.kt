@@ -40,6 +40,20 @@ enum class AgentImplementation {
    * @see https://arxiv.org/abs/2508.15144
    */
   MULTI_AGENT_V3,
+
+  /**
+   * Single Koog `strategy { }` graph that owns the agent reasoning loop — orchestration,
+   * tool dispatch, and (over time) replanning / recovery / history compression — with
+   * Trailblaze owning the domain (screen state, drivers, deterministic replay).
+   *
+   * Opt-in and non-default: selected via the `trailblaze.agent` instrumentation arg, the
+   * desktop run request, or the settings dropdown. Lets us build and A/B the Koog-native
+   * loop against [TRAILBLAZE_RUNNER] per session without changing anyone's default path.
+   *
+   * Intended successor to [MULTI_AGENT_V3] — add opt-in, prove via eval, then collapse the
+   * hand-rolled loops onto this one.
+   */
+  KOOG_STRATEGY_GRAPH,
   ;
 
   companion object {

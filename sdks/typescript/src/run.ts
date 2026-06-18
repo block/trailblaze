@@ -30,8 +30,9 @@ export interface RunOptions {
  * Skipped on the on-device bundle runtime: `BundleRuntimePrelude` already installs a
  * `console` shim that routes every method through a Kotlin binding to logcat. Re-wrapping
  * would double-indirect for no benefit. We detect the bundle runtime by the presence of
- * `globalThis.__trailblazeCallback` (installed by `QuickJsBridge` before the author bundle
- * evaluates).
+ * `globalThis.__trailblazeCallback`. NOTE: that binding's host-side installer (`QuickJsBridge`)
+ * is not built yet (see the 2026-06-17 "Consolidate scripted-tool surfaces" decision), so this
+ * detection never matches on-device today — the guard simply runs everywhere until it lands.
  *
  * Authors who actually want to write to stdout can still use `process.stdout.write(...)`
  * directly; this just protects the casual `console.log` case.

@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotInstanceOf
 import kotlin.test.assertIs
 import kotlin.test.fail
 import kotlinx.coroutines.runBlocking
@@ -80,7 +81,7 @@ class AndroidGrantPermissionToolsTest {
     // on both sides.
     val tool = AndroidGrantPermissionTrailblazeTool(appId = "com.example.app", permission = "android.permission.CAMERA")
     assertThat(tool).isInstanceOf(ExecutableTrailblazeTool::class)
-    assertk.assertThat(tool !is HostLocalExecutableTrailblazeTool).isEqualTo(true)
+    assertThat(tool).isNotInstanceOf(HostLocalExecutableTrailblazeTool::class)
 
     val annotation = AndroidGrantPermissionTrailblazeTool::class.java
       .getAnnotation(TrailblazeToolClass::class.java)
@@ -127,7 +128,7 @@ class AndroidGrantPermissionToolsTest {
       permission = "MANAGE_EXTERNAL_STORAGE",
     )
     assertThat(tool).isInstanceOf(ExecutableTrailblazeTool::class)
-    assertk.assertThat(tool !is HostLocalExecutableTrailblazeTool).isEqualTo(true)
+    assertThat(tool).isNotInstanceOf(HostLocalExecutableTrailblazeTool::class)
 
     val annotation = AndroidGrantAppOpsPermissionTrailblazeTool::class.java
       .getAnnotation(TrailblazeToolClass::class.java)

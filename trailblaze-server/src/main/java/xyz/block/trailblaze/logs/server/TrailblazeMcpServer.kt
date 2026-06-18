@@ -115,6 +115,8 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
@@ -486,10 +488,21 @@ class TrailblazeMcpServer(
 
   private suspend fun clearSessionScriptToolRuntime(sessionId: String) {
     val existing = sessionScriptToolRuntimeBySession.remove(sessionId) ?: return
-    runCatching { existing.runtime.shutdownAll() }
+    runCatching { existing.runtime?.shutdownAll() }
       .onFailure {
         Console.log("[TrailblazeMcpServer] Failed to shut down scripted runtime for $sessionId: ${it.message}")
       }
+    // Free each in-process QuickJS engine (idempotent; otherwise the engine + its retained JS
+    // allocations leak for the daemon's lifetime).
+    for (reg in existing.inProcessRegistrations) {
+      runCatching { reg.dispose() }
+        .onFailure {
+          Console.log(
+            "[TrailblazeMcpServer] Failed to dispose in-process scripted tool " +
+              "'${reg.name.toolName}' for $sessionId: ${it.message}",
+          )
+        }
+    }
   }
 
   private suspend fun ensureSessionScriptToolRuntime(sessionId: String): SessionScriptToolRuntimeState? {
@@ -501,11 +514,11 @@ class TrailblazeMcpServer(
         clearSessionScriptToolRuntime(sessionId)
         return@withLock null
       }
+      // Inline scripted tools (target.tools:) — synthesized as a subprocess below. We no longer bail
+      // when this is empty: a session with NO inline tools can still need the catalog/framework
+      // scripted tools (e.g. openUrl) launched in-process. The combined-empty check happens after we
+      // know what the catalog can deliver.
       val inlineTools = target.getInlineScriptTools()
-      if (inlineTools.isEmpty()) {
-        clearSessionScriptToolRuntime(sessionId)
-        return@withLock null
-      }
 
       val deviceSummary = mcpBridge.getAvailableDevices().firstOrNull { it.trailblazeDeviceId == deviceId }
       val driverType = deviceSummary?.trailblazeDriverType ?: mcpBridge.getDriverType() ?: return@withLock null
@@ -548,24 +561,55 @@ class TrailblazeMcpServer(
       )
       val launchSessionId = SessionId.sanitized("${sessionId}_${target.id}_${driverType.yamlKey}_script_tools")
       val sessionDir = logsRepo.getSessionDir(launchSessionId)
-      val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
-        tools = inlineTools,
-        outputDir = File(sessionDir, "inline-script-tools"),
-      )
-      val runtime = McpSubprocessRuntimeLauncher.launchAll(
-        mcpServers = inlineToolServers,
-        deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
-        config = TrailblazeConfig.DEFAULT,
-        sessionId = launchSessionId,
-        sessionLogDir = sessionDir,
+
+      // Catalog/framework scripted tools (e.g. openUrl) the catalog could deliver. Launch them
+      // in-process through the SHARED QuickJS launcher — the SAME path the host runner uses — so a
+      // scripted tool dispatches host-local (its nested framework `client.callTool(...)` calls route
+      // back through the driver agent) instead of through a `bun` subprocess. This is the unification
+      // that makes "in-process by default" (#3819) hold on the daemon, not just the host. Inline
+      // tools (target.tools:) are excluded here and synthesized as a subprocess below; tools that opt
+      // into `runtime: subprocess` are skipped by the launcher itself.
+      val inProcessRegistrations = InProcessScriptedToolLauncher.launch(
         toolRepo = toolRepo,
-        baseUrl = JsScriptingCallbackBaseUrl.get(),
+        sessionId = launchSessionId,
+        sessionDir = sessionDir,
+        toolNames = toolRepo.allCatalogScriptedToolNames,
+        skipNames = inlineTools.map { ToolName(it.name) }.toSet(),
+        logPrefix = "[TrailblazeMcpServer]",
       )
+
+      // Inline scripted tools (target.tools:) keep going through the subprocess synthesizer.
+      val runtime = if (inlineTools.isNotEmpty()) {
+        val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
+          tools = inlineTools,
+          outputDir = File(sessionDir, "inline-script-tools"),
+        )
+        McpSubprocessRuntimeLauncher.launchAll(
+          mcpServers = inlineToolServers,
+          deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
+          config = TrailblazeConfig.DEFAULT,
+          sessionId = launchSessionId,
+          sessionLogDir = sessionDir,
+          toolRepo = toolRepo,
+          baseUrl = JsScriptingCallbackBaseUrl.get(),
+        )
+      } else {
+        null
+      }
+
+      // Nothing to run — don't cache an empty runtime; let the caller fall back to the static
+      // class/YAML descriptor path.
+      if (inProcessRegistrations.isEmpty() && runtime == null) {
+        clearSessionScriptToolRuntime(sessionId)
+        return@withLock null
+      }
+
       val state = SessionScriptToolRuntimeState(
         targetId = target.id,
         driverType = driverType,
         toolRepo = toolRepo,
         runtime = runtime,
+        inProcessRegistrations = inProcessRegistrations,
       )
       sessionScriptToolRuntimeBySession[sessionId] = state
       state
@@ -581,7 +625,11 @@ class TrailblazeMcpServer(
     val targetId: String,
     val driverType: TrailblazeDriverType,
     val toolRepo: TrailblazeToolRepo,
-    val runtime: LaunchedSubprocessRuntime,
+    // Subprocess runtime for inline `target.tools:` (and `runtime: subprocess`) tools. Null when a
+    // session has only in-process catalog/framework scripted tools (e.g. openUrl) and no inline ones.
+    val runtime: LaunchedSubprocessRuntime?,
+    // In-process QuickJS registrations for catalog/framework scripted tools, disposed at session end.
+    val inProcessRegistrations: List<LazyYamlScriptedToolRegistration> = emptyList(),
   )
 
   private val sessionScriptToolRuntimeBySession = ConcurrentHashMap<String, SessionScriptToolRuntimeState>()
@@ -1016,7 +1064,7 @@ class TrailblazeMcpServer(
       // Always provide properties (even if empty) - Goose client expects properties to be present
       // Previously we used ToolSchema() for empty tools, but this omits the "properties" field
       // which causes Goose to fail with "Cannot convert undefined or null to object"
-      val inputSchema = ToolSchema(properties, required)
+      val inputSchema = ToolSchema(properties = properties, required = required)
 
       mcpServer.addTool(
         name = tool.descriptor.name,

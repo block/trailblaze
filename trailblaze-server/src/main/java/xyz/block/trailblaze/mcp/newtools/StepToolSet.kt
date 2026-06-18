@@ -36,6 +36,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -632,8 +633,19 @@ class StepToolSet(
     // Reject unknown tool names — `OtherTrailblazeTool` means the name still wasn't
     // in the registry after the dynamic-repo resolve attempt above. "Unknown tool"
     // is in the CLI's `MISUSE_MARKERS` list.
+    //
+    // EXCEPTION: a name that's a known scripted catalog tool (e.g. `openUrl` — a scripted tool
+    // since it moved off Kotlin) but didn't resolve here is NOT unknown — it's a real tool that
+    // simply isn't launched/available for the current driver. Let those fall through to the
+    // device/target validity gate below, which emits the actionable `web_navigate` hint instead
+    // of the generic "Unknown tool" message. Without this, every driver-restricted scripted tool
+    // requested on the wrong driver would surface as a confusing typo-style error.
+    val knownScriptedToolNames = TrailblazeToolSetCatalog.defaultEntries()
+      .flatMap { it.scriptedToolNames }
+      .map { it.toolName }
+      .toSet()
     val unknownTools = resolvedToolWrappers
-      .filter { it.trailblazeTool is OtherTrailblazeTool }
+      .filter { it.trailblazeTool is OtherTrailblazeTool && it.name !in knownScriptedToolNames }
       .map { it.name }
     if (unknownTools.isNotEmpty()) {
       val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: " +

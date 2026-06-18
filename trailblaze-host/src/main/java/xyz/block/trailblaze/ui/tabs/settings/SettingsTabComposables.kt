@@ -557,7 +557,8 @@ object SettingsTabComposables {
         var showAgentImplMenu by remember { mutableStateOf(false) }
         val agentImplOptions = listOf(
           AgentImplementation.TRAILBLAZE_RUNNER to "TrailblazeRunner (Legacy)",
-          AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3"
+          AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3",
+          AgentImplementation.KOOG_STRATEGY_GRAPH to "Koog Strategy Graph (experimental)"
         )
         val currentAgentImplLabel =
           agentImplOptions.find { it.first == serverState.appConfig.agentImplementation }?.second

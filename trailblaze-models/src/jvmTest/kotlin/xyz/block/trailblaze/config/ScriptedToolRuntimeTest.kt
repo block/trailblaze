@@ -4,56 +4,38 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Pins the single source of truth for runtime routing of scripted tools:
+ * Pins the runtime-routing policy for scripted tools:
  *
- *  - Explicit `runtime:` on the descriptor always wins, regardless of extension.
- *  - Otherwise: `.js` / `.mjs` / `.cjs` → subprocess; everything else → in-process QuickJS.
+ *  - Default (no explicit `runtime:`) is IN_PROCESS, unconditionally.
+ *  - SUBPROCESS is opt-in only — chosen exactly when the descriptor declares it.
+ *  - There is no extension heuristic; a `.js` file is NOT auto-routed to a subprocess.
  *
  * The production routing site (`TrailblazeHostYamlRunner`) delegates to
- * [ScriptedToolRuntime.resolve] so a regression here surfaces as a failed unit test
- * rather than as an opaque "tool fails on first `fs.readFileSync` call" runtime error.
+ * [ScriptedToolRuntime.resolve] so a regression here surfaces as a failed unit test rather
+ * than an opaque "tool fails on first `node:fs` call" runtime error.
  */
 class ScriptedToolRuntimeTest {
 
   @Test
-  fun `explicit subprocess override wins over a typescript extension`() {
+  fun `explicit subprocess override is honored`() {
     assertEquals(
       ScriptedToolRuntime.SUBPROCESS,
-      ScriptedToolRuntime.resolve("./foo.ts", ScriptedToolRuntime.SUBPROCESS),
+      ScriptedToolRuntime.resolve(ScriptedToolRuntime.SUBPROCESS),
     )
   }
 
   @Test
-  fun `explicit inProcess override wins over a javascript extension`() {
+  fun `explicit inProcess override is honored`() {
     assertEquals(
       ScriptedToolRuntime.IN_PROCESS,
-      ScriptedToolRuntime.resolve("./foo.js", ScriptedToolRuntime.IN_PROCESS),
+      ScriptedToolRuntime.resolve(ScriptedToolRuntime.IN_PROCESS),
     )
   }
 
   @Test
-  fun `null override falls back to extension for js mjs cjs`() {
-    // Each Node-conventional extension routes to subprocess so authors who pre-compiled
-    // to JS (or use ESM .mjs / CJS .cjs) automatically get the Node runtime they expect.
-    assertEquals(ScriptedToolRuntime.SUBPROCESS, ScriptedToolRuntime.resolve("./foo.js", null))
-    assertEquals(ScriptedToolRuntime.SUBPROCESS, ScriptedToolRuntime.resolve("./foo.mjs", null))
-    assertEquals(ScriptedToolRuntime.SUBPROCESS, ScriptedToolRuntime.resolve("./foo.cjs", null))
-  }
-
-  @Test
-  fun `null override falls back to in-process for ts and unknown extensions`() {
-    assertEquals(ScriptedToolRuntime.IN_PROCESS, ScriptedToolRuntime.resolve("./foo.ts", null))
-    assertEquals(ScriptedToolRuntime.IN_PROCESS, ScriptedToolRuntime.resolve("./foo.tsx", null))
-    // Fall-through case — keep the contract conservative for surprising suffixes so the
-    // QuickJS bundler is what surfaces the error, not a silent reroute to subprocess.
-    assertEquals(ScriptedToolRuntime.IN_PROCESS, ScriptedToolRuntime.resolve("./foo.kt", null))
-  }
-
-  @Test
-  fun `extension matching is case-insensitive`() {
-    // Authors copy paths from Finder / Windows Explorer; tolerate `.JS` so a stray
-    // uppercase doesn't silently reroute a Node-API-dependent tool to QuickJS.
-    assertEquals(ScriptedToolRuntime.SUBPROCESS, ScriptedToolRuntime.resolve("./Foo.JS", null))
-    assertEquals(ScriptedToolRuntime.IN_PROCESS, ScriptedToolRuntime.resolve("./Foo.TS", null))
+  fun `null override defaults to in-process`() {
+    // The default is in-process, full stop — subprocess is never inferred from the script's
+    // name or anything else. A tool that needs Node APIs must declare `runtime: subprocess`.
+    assertEquals(ScriptedToolRuntime.IN_PROCESS, ScriptedToolRuntime.resolve(null))
   }
 }

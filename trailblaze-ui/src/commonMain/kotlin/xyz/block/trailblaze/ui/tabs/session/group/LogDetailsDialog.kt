@@ -327,6 +327,7 @@ fun ChatHistoryDialog(
                     color = when (ctx.agentImplementation) {
                       AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
                       AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2)
+                      AgentImplementation.KOOG_STRATEGY_GRAPH -> Color(0xFF00897B)
                     }
                   )
                 }

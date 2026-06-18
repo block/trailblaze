@@ -44,15 +44,18 @@ koog = "1.0.0"
 # Expect API breakage between beta-minor bumps; non-beta-stream modules promise backwards-compat in 1.x.
 koog-beta = "1.0.0-beta"
 kotlin-csv = "1.10.0"
-kotlin = "2.3.20"
+kotlin = "2.4.0"
 kotlinpoet = "2.2.0"
 kotlinx-datetime = "0.7.1-0.6.x-compat" # Compat build providing kotlinx.datetime.Clock alongside kotlin.time.Clock
 kotlinx-serialization = "1.11.0"
-ktor = "3.3.3"
+ktor = "3.5.0" # Server engine drives the whole netty graph (core + codec-http2) to one aligned 4.2.x line.
 logback = "1.5.21"
 maestro = "2.6.1"
 micrometer = "1.15.12"
-mcp-sdk = "0.11.1"
+# 0.13.0 introduced two breaking changes adapted in TrailblazeMcpServer/TrailblazeToolToMcpBridge/
+# ProfilerMcpServer (ToolSchema gained a leading `schema` param → use named args) and McpSamplingClient
+# (CreateMessageResult.content is now a List<SamplingMessageContent>, not a single content object).
+mcp-sdk = "0.13.0"
 multiplatformMarkdownRenderer = "0.39.2"
 multiplatformSettings = "1.3.0"
 okhttp = "5.3.2"

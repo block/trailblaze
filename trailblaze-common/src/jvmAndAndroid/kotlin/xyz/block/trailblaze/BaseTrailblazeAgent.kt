@@ -69,6 +69,24 @@ abstract class BaseTrailblazeAgent(
   ): TrailblazeToolExecutionContext
 
   /**
+   * Public entry to [buildExecutionContext] for callers outside the standard [runTrailblazeTools]
+   * dispatch path — notably the in-process Koog strategy-graph agent, which hands a per-call
+   * execution context to `TrailblazeToolRepo.asToolRegistry` for the rare dynamic (subprocess-MCP)
+   * tools that execute against a context rather than through this agent. Captures a fresh screen
+   * state via [screenStateProvider] when a tool reads `context.screenState`. Lives on the base (not
+   * a single driver) so every driver agent — web, Revyl, on-device — can be driven by the Koog
+   * strategy graph through the same seam.
+   */
+  fun buildKoogToolExecutionContext(
+    traceId: TraceId?,
+    screenStateProvider: () -> ScreenState,
+  ): TrailblazeToolExecutionContext = buildExecutionContext(
+    traceId = traceId ?: TraceId.generate(TraceOrigin.TOOL),
+    screenState = null,
+    screenStateProvider = screenStateProvider,
+  )
+
+  /**
    * Dispatch a single tool. Implementations must add the tool (or its
    * expanded sub-tools for [DelegatingTrailblazeTool]) to [toolsExecuted].
    */

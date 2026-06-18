@@ -8,6 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.toolcalls.allToolNames
 /**
  * Generates a source-backed guide for the current external-config story used by the desktop/CLI
  * binary.
@@ -299,7 +300,10 @@ class ExternalConfigDocsGenerator(
             .sorted()
             .ifEmpty { listOf("all drivers") }
             .joinToString(", ") { "`$it`" }
-          val toolCount = toolSet.resolvedToolClasses.size + toolSet.resolvedYamlToolNames.size
+          // The complete advertised surface, via the single union accessor: class-backed,
+          // YAML-defined, AND scripted tools (e.g. `openUrl` in `navigation`). Reading the
+          // partitions by hand is what undercounted every toolset that ships a scripted tool.
+          val toolCount = toolSet.allToolNames.size
           appendLine(
             "| `${toolSet.config.id}` | ${yesNo(toolSet.config.alwaysEnabled)} | $drivers | $toolCount |",
           )
@@ -367,11 +371,10 @@ class ExternalConfigDocsGenerator(
         appendLine()
         appendLine(
           "Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime " +
-            "selection happens per descriptor: set `runtime: subprocess` (or use a `.js` / " +
-            "`.mjs` / `.cjs` entrypoint) to dispatch through a host bun/node subprocess for " +
-            "full Node APIs; the default routes through the in-process QuickJS runtime. " +
-            "`requiresHost: true` is a separate, on-device visibility gate — not a runtime " +
-            "selector.",
+            "selection happens per descriptor: tools run in-process (QuickJS) by default; set " +
+            "`runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. " +
+            "The file extension is not a runtime hint. `requiresHost: true` is a separate, " +
+            "on-device visibility gate — not a runtime selector.",
         )
         appendLine()
 

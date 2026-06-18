@@ -29,7 +29,6 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
-import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
 import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -68,12 +67,13 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
+import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
@@ -84,6 +84,7 @@ import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generate
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
+import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.ScriptedToolImportAnalyzer
@@ -246,11 +247,10 @@ object TrailblazeHostYamlRunner {
     //    `runCommand`/`mobile_clearAppData` from scripted-tool composition is bypassed via
     //    [SessionScopedHostBinding].
     //
-    // **Routing rule**: explicit `runtime:` on the descriptor wins; otherwise fall back to
-    // the legacy extension-based heuristic (`.js`/`.mjs`/`.cjs` → subprocess, everything
-    // else → QuickJS). The explicit field is what lets a `.ts` author opt into the
-    // subprocess runtime — bun and tsx run `.ts` natively, but without the override the
-    // extension would push them at QuickJS where `node:fs` is unavailable.
+    // **Routing rule**: a tool runs in-process (QuickJS) unless its descriptor explicitly sets
+    // `runtime: subprocess`. There is no extension heuristic — a `.js`/`.mjs`/`.cjs` file is NOT
+    // auto-routed to a subprocess. In-process orchestration over framework tools is the default;
+    // a tool opts into bun/Node only when its own code needs `node:fs`, `node:child_process`, etc.
     //
     // **Why not `requiresHost: true`?** `_meta.trailblaze/requiresHost` is the
     // LLM-visibility hint ("hide this from on-device") — it's set on tools whose
@@ -262,7 +262,7 @@ object TrailblazeHostYamlRunner {
     // — exactly the bug #2749 set out to fix. Runtime selection is a separate concern.
     val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
     val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
-      ScriptedToolRuntime.resolve(tool.script, tool.runtime) == ScriptedToolRuntime.SUBPROCESS
+      ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS
     }
     val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
       val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
@@ -354,10 +354,10 @@ object TrailblazeHostYamlRunner {
     val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
 
     // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective
-    // runtime is SUBPROCESS — selected via `runtime: subprocess` on the descriptor or via
-    // the default `.js`/`.mjs`/`.cjs` extension heuristic (see [ScriptedToolRuntime.resolve]).
-    // These run the handler in Node/Bun where Node APIs exist; this is what authors of
-    // `sampleapp_writeArtifact.js`-style tools have always relied on. If subprocess launch
+    // runtime is SUBPROCESS — selected only via an explicit `runtime: subprocess` on the
+    // descriptor (see [ScriptedToolRuntime.resolve]; there is no extension heuristic).
+    // These run the handler in Node/Bun where Node APIs exist; this is what a tool like
+    // `sampleapp_writeArtifact` (which declares `runtime: subprocess`) relies on. If subprocess launch
     // throws after the QuickJS-path inline registrations succeeded, the inline regs are
     // stranded in the toolRepo with no cleanup handle — catch + dispose them before
     // rethrowing so the same partial-construction guarantee applies across both blocks.
@@ -432,85 +432,20 @@ object TrailblazeHostYamlRunner {
     // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
     // initially-active toolsets'. A toolset enabled later via `setActiveToolSets` is then
     // already dispatchable (advertisement stays gated to the active set in TrailblazeToolRepo).
-    val toolsetNames = toolRepo.allCatalogScriptedToolNames
-    if (toolsetNames.isEmpty()) return emptyList()
-
-    // Target-declared scripted tools (target.tools:) are bundled separately and win on name
-    // collision, so don't re-register them here.
-    val targetNames = targetToolConfigs.map { ToolName(it.name) }.toSet()
-    val newNames = toolsetNames - targetNames
-    if (newNames.isEmpty()) return emptyList()
-
-    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
-    val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
-
-    try {
-      for (name in newNames) {
-        val discovered = descriptorsByName[name]
-        if (discovered == null) {
-          Console.log(
-            "[TrailblazeHostYamlRunner] Toolset scripted tool '${name.toolName}' has no " +
-              "matching descriptor — skipping. Ensure a descriptor YAML with an explicit " +
-              "`name: ${name.toolName}` exists under a trailmap's `tools/` directory.",
-          )
-          continue
-        }
-
-        // Shared with the on-device path so the descriptor->bundle naming rule can't drift.
-        val bundleResourcePath = ScriptedToolNameDiscoverer.bundleResourcePath(discovered)
-
-        val bundleJs =
-          javaClass.classLoader?.getResourceAsStream(bundleResourcePath)
-            ?.bufferedReader()
-            ?.use { it.readText() }
-        if (bundleJs == null) {
-          Console.log(
-            "[TrailblazeHostYamlRunner] Toolset scripted tool '${name.toolName}': " +
-              "pre-compiled bundle not found on classpath at '$bundleResourcePath' — " +
-              "skipping. Run `./gradlew :trailblaze-common:bundleFrameworkScriptedTools` " +
-              "to regenerate.",
-          )
-          continue
-        }
-
-        val toolConfig = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull {
-          ToolName(it.name) == name
-        } ?: continue
-
-        val bundleDir = File(sessionDir, "toolset-bundles")
-        bundleDir.mkdirs()
-        val bundleFile = File(bundleDir, "${name.toolName}.bundle.js")
-        bundleFile.writeText(bundleJs)
-
-        accumulated += LazyYamlScriptedToolRegistration.create(
-          toolConfig = toolConfig,
-          bundlePath = bundleFile,
-          toolRepo = toolRepo,
-          sessionId = sessionId,
-        )
-      }
-
-      if (accumulated.isNotEmpty()) {
-        toolRepo.addDynamicTools(accumulated)
-        Console.log(
-          "[TrailblazeHostYamlRunner] Registered ${accumulated.size} toolset-delivered " +
-            "scripted tool(s) from pre-compiled bundles: " +
-            accumulated.joinToString { it.name.toolName },
-        )
-      }
-    } catch (e: Throwable) {
-      Console.log(
-        "[TrailblazeHostYamlRunner] Rolling back ${accumulated.size} toolset-delivered " +
-          "scripted-tool registration(s) due to startup failure: " +
-          "${e::class.simpleName}: ${e.message}",
-      )
-      for (reg in accumulated) {
-        runCatching { reg.dispose() }
-      }
-      throw e
-    }
-
-    return accumulated
+    //
+    // Delegates to the SHARED in-process launcher (also used by the MCP daemon) so the host and
+    // daemon can't drift into two implementations of the same QuickJS dispatch. Target-declared
+    // scripted tools (target.tools:) are bundled separately and win on name collision, so they're
+    // passed as skipNames here.
+    return InProcessScriptedToolLauncher.launch(
+      toolRepo = toolRepo,
+      sessionId = sessionId,
+      sessionDir = sessionDir,
+      toolNames = toolRepo.allCatalogScriptedToolNames,
+      skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
+      classLoader = javaClass.classLoader,
+      logPrefix = "[TrailblazeHostYamlRunner]",
+    )
   }
 
   /**
@@ -760,6 +695,9 @@ object TrailblazeHostYamlRunner {
         traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+        // Routes prompt steps through the in-process Koog strategy-graph agent when the run
+        // opted in (AgentImplementation.KOOG_STRATEGY_GRAPH); otherwise the legacy runner.
+        agentImplementation = runYamlRequest.agentImplementation,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -895,6 +833,7 @@ object TrailblazeHostYamlRunner {
         traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+        agentImplementation = runYamlRequest.agentImplementation,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -1163,6 +1102,10 @@ object TrailblazeHostYamlRunner {
 
       for (item in trailItems) {
         val itemResult = when (item) {
+          // NOTE: Compose has no KOOG_STRATEGY_GRAPH branch. The shared Koog seam needs a
+          // BaseTrailblazeAgent (for the tool-execution context), but ComposeRpcTrailblazeAgent
+          // implements TrailblazeAgent/TrailblazeAgentContext directly and isn't one — so KOOG
+          // falls back to the legacy runner here until Compose's agent is migrated.
           is TrailYamlItem.PromptsTrailItem ->
             trailblazeRunnerUtil.runPromptSuspend(
               prompts = item.promptSteps,
@@ -1314,25 +1257,43 @@ object TrailblazeHostYamlRunner {
         trailblazeToolRepo = toolRepo,
       )
 
-      val trailblazeRunner = TrailblazeRunner(
-        screenStateProvider = screenStateProvider,
-        agent = agent,
-        llmClient = dynamicLlmClient.createLlmClient(),
-        trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-        trailblazeToolRepo = toolRepo,
-        trailblazeLogger = loggingRule.logger,
-        sessionProvider = {
-          loggingRule.session ?: error("Session not available - ensure test is running")
-        },
-        maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-      )
-
       val elementComparator = TrailblazeElementComparator(
         screenStateProvider = screenStateProvider,
         llmClient = dynamicLlmClient.createLlmClient(),
         trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
         toolRepo = toolRepo,
       )
+
+      // Brain selection (legacy or KOOG). Recordings replay uniformly via the runner-util below
+      // regardless of agent — only unrecorded steps reach the selected brain.
+      val trailblazeRunner: TestAgentRunner =
+        if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
+          KoogTestAgentRunner(
+            agent = agent,
+            toolRepo = toolRepo,
+            screenStateProvider = screenStateProvider,
+            elementComparator = elementComparator,
+            llmClient = dynamicLlmClient.createLlmClient(),
+            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+            logger = loggingRule.logger,
+            sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+            maxLlmCalls = runYamlRequest.maxLlmCalls,
+            systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(toolSetCatalog = toolRepo.toolSetCatalog),
+          )
+        } else {
+          TrailblazeRunner(
+            screenStateProvider = screenStateProvider,
+            agent = agent,
+            llmClient = dynamicLlmClient.createLlmClient(),
+            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+            trailblazeToolRepo = toolRepo,
+            trailblazeLogger = loggingRule.logger,
+            sessionProvider = {
+              loggingRule.session ?: error("Session not available - ensure test is running")
+            },
+            maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
+          )
+        }
 
       val trailblazeYaml = createTrailblazeYaml(
         customTrailblazeToolClasses = revylToolSet.toolClasses,
@@ -1435,6 +1396,8 @@ object TrailblazeHostYamlRunner {
         for (item in trailItems) {
           val itemResult = when (item) {
             is TrailYamlItem.PromptsTrailItem ->
+              // Agent-agnostic: replays recorded steps deterministically and delegates only
+              // unrecorded steps to the selected runner (legacy / KOOG). Default unchanged.
               trailblazeRunnerUtil.runPromptSuspend(
                 prompts = item.promptSteps,
                 useRecordedSteps = runYamlRequest.useRecordedSteps,
@@ -1541,6 +1504,12 @@ object TrailblazeHostYamlRunner {
       appTarget = runOnHostParams.targetTestApp,
       explicitDeviceId = trailblazeDeviceId,
     ) {
+      // Honor the agent implementation chosen for THIS run (CLI --agent / settings / request),
+      // overriding BaseHostTrailblazeTest's JUnit-eval system-property default so
+      // KOOG_STRATEGY_GRAPH takes effect on this local-device (Maestro) path — Android and iOS —
+      // exactly like the web / Revyl / on-device paths. Default (TRAILBLAZE_RUNNER) is unchanged.
+      override val agentImplementation: AgentImplementation = runYamlRequest.agentImplementation
+
       override fun ensureTargetAppIsStopped() {
         // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
         // membership-style Set<String>.
@@ -2185,23 +2154,42 @@ object TrailblazeHostYamlRunner {
       appId = appIdForSession,
     )
 
-    val runner = TrailblazeRunner(
-      agent = agent,
-      screenStateProvider = agent.screenStateProvider,
-      llmClient = llmClient,
-      trailblazeLlmModel = trailblazeLlmModel,
-      trailblazeToolRepo = toolRepo,
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = { loggingRule.session ?: error("Session not available") },
-      maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-    )
-
     val elementComparator = TrailblazeElementComparator(
       screenStateProvider = agent.screenStateProvider,
       llmClient = llmClient,
       trailblazeLlmModel = trailblazeLlmModel,
       toolRepo = toolRepo,
     )
+
+    // Brain selection (legacy or KOOG). This is the `preferHostAgent` host-driven path: the loop
+    // runs on the host and dispatches tools to the device over RPC. Recordings replay uniformly via
+    // the runner-util regardless of agent — only unrecorded steps reach the selected brain.
+    val runner: TestAgentRunner =
+      if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
+        KoogTestAgentRunner(
+          agent = agent,
+          toolRepo = toolRepo,
+          screenStateProvider = agent.screenStateProvider,
+          elementComparator = elementComparator,
+          llmClient = llmClient,
+          trailblazeLlmModel = trailblazeLlmModel,
+          logger = loggingRule.logger,
+          sessionProvider = { loggingRule.session ?: error("Session not available") },
+          maxLlmCalls = runYamlRequest.maxLlmCalls,
+          systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(toolSetCatalog = toolRepo.toolSetCatalog),
+        )
+      } else {
+        TrailblazeRunner(
+          agent = agent,
+          screenStateProvider = agent.screenStateProvider,
+          llmClient = llmClient,
+          trailblazeLlmModel = trailblazeLlmModel,
+          trailblazeToolRepo = toolRepo,
+          trailblazeLogger = loggingRule.logger,
+          sessionProvider = { loggingRule.session ?: error("Session not available") },
+          maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
+        )
+      }
 
     // Per-tool screen capture for Maestro→accessibility migration. Read from env var
     // (`TRAILBLAZE_CAPTURE_SECONDARY_TREE=true`) since the host runner doesn't currently
@@ -2386,9 +2374,13 @@ object TrailblazeHostYamlRunner {
       for (item in trailItems) {
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
+            // Agent-agnostic: replays recorded steps deterministically and delegates only
+            // unrecorded steps to the selected runner (legacy / KOOG). Honor the request's
+            // useRecordedSteps (like the Revyl path) so a forced live re-blaze isn't silently
+            // replayed here. Default unchanged.
             runnerUtil.runPromptSuspend(
               prompts = item.promptSteps,
-              useRecordedSteps = true,
+              useRecordedSteps = runYamlRequest.useRecordedSteps,
               selfHeal = runYamlRequest.config.selfHeal,
             )
           is TrailYamlItem.ToolTrailItem ->

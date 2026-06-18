@@ -132,7 +132,7 @@ class TrailblazeToolToMcpBridge(
       Console.log("  Required: $required")
 
       // Always provide properties (even if empty) - Goose client expects properties to be present
-      val inputSchema = ToolSchema(properties, required)
+      val inputSchema = ToolSchema(properties = properties, required = required)
 
       mcpServer.addTool(
         name = descriptor.name,

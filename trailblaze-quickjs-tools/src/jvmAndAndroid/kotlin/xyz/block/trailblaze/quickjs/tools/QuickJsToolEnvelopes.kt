@@ -14,8 +14,8 @@ import kotlinx.serialization.json.JsonElement
  * Sam called this out during PR review — "data class + kotlinx serialization?" / "Hard
  * coded strings always is a smell." Used by:
  *
- *  - [QuickJsRepoHostBinding] — produces error envelopes when `trailblaze.call(...)` is
- *    not yet wired.
+ *  - [SessionScopedHostBinding] — produces error envelopes when a `trailblaze.call(...)`
+ *    composition fails (unknown tool, no context, same-bundle re-entry, tool error).
  *  - [QuickJsTrailblazeTool] — produces the `ctx` envelope handed to handlers, and
  *    deserializes the result envelope the bundle returns.
  *  - [JsonObject.toTrailblazeToolResult] — consumes the result envelope.

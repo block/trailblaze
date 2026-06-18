@@ -23,22 +23,21 @@ import java.io.File
  * This lets trail files be environment-agnostic: set `BASE_URL` to point at a PR branch
  * dev server; leave it unset to fall back to a caller-provided default (e.g., staging).
  *
- * ### Deferred variables (runtime session memory)
+ * ### Runtime variables (session memory)
  *
- * Variables in [deferredVariablesFromEnv] (or a caller-supplied `deferredVariables` set) are
- * intentionally NOT resolved at this layer — their `{{var}}` placeholders pass through to the
- * runner. They are populated at execution time by host-local trail tools that write to session
- * memory and substituted at runtime by [xyz.block.trailblaze.AgentMemory.interpolateVariables],
- * which understands both `${var}` and `{{var}}` syntax. This unblocks recording-verification
- * for trails whose values can only be known per-run.
+ * Any `{{VAR}}` that cannot be resolved is left as a `{{var}}` literal — no error is thrown.
+ * The trail runner substitutes these at execution time via
+ * [xyz.block.trailblaze.AgentMemory.interpolateVariables], which understands both `${var}` and
+ * `{{var}}` syntax. This covers any variable populated at runtime (e.g. `rememberWithAi`,
+ * custom scripted tools) without requiring a per-tool allowlist in the resolver.
  *
- * The default deferred set is read from the `TRAILBLAZE_DEFERRED_VARIABLES` environment
- * variable (comma-separated). Empty when unset. Callers may also pass an explicit set.
+ * The `TRAILBLAZE_DEFERRED_VARIABLES` env var (comma-separated) names variables that should be
+ * excluded from env-var lookup even when set in the process environment. Use this when a variable
+ * name collides with a real env var that must not be substituted at load time.
  *
  * Example:
  * ```bash
- * # In a CI script that drives `trailblaze run …`
- * export TRAILBLAZE_DEFERRED_VARIABLES="user_email,user_pin"
+ * export TRAILBLAZE_DEFERRED_VARIABLES="HOME"  # prevent {{HOME}} from being env-expanded
  * ```
  */
 object TrailYamlTemplateResolver {
@@ -52,11 +51,6 @@ object TrailYamlTemplateResolver {
    * Re-reads each call (vs caching) so test code that mutates the environment between runs sees
    * the updated value, and so there is no first-touch ordering hazard relative to when the
    * caller exports the env var.
-   *
-   * Pre-resolution leaves `{{var}}` placeholders for these names untouched; runtime substitution
-   * handles them via [xyz.block.trailblaze.AgentMemory.interpolateVariables]. Configure via env
-   * var rather than hard-coding so app-specific session-memory keys stay in the consumers that
-   * own them, not in this framework.
    */
   fun deferredVariablesFromEnv(): Set<String> =
     System.getenv(DEFERRED_VARIABLES_ENV_VAR)
@@ -69,12 +63,15 @@ object TrailYamlTemplateResolver {
   /**
    * Resolves template variables in the given YAML content.
    *
+   * Variables that cannot be resolved (not in [additionalValues], not a built-in, not an env var)
+   * are left as `{{var}}` literals for the trail runner to substitute at execution time.
+   *
    * @param yaml the raw YAML content that may contain `{{VARIABLE}}` placeholders
    * @param trailFile optional trail file reference (reserved for future path-relative variables)
    * @param additionalValues default values for template variables; environment variables override these
-   * @param deferredVariables variables to leave untouched at load time so the runtime can substitute
-   *        them later via session memory; defaults to [deferredVariablesFromEnv]
-   * @return the YAML with all non-deferred template variables resolved
+   * @param deferredVariables variables to skip env-var lookup for, even if set in the environment;
+   *        their `{{var}}` placeholders pass through unconditionally; defaults to [deferredVariablesFromEnv]
+   * @return the YAML with all resolvable template variables substituted; unresolvable ones unchanged
    */
   fun resolve(
     yaml: String,
@@ -85,12 +82,11 @@ object TrailYamlTemplateResolver {
     val requiredVariables = TemplatingUtil.getRequiredTemplateVariables(yaml)
     if (requiredVariables.isEmpty()) return yaml
 
-    // Only resolve what the runtime won't inject later.
     val resolvable = requiredVariables - deferredVariables
 
     val values = buildMap<String, String> {
       // 1. Caller-supplied defaults (lowest priority)
-      putAll(additionalValues)
+      putAll(additionalValues.filterKeys { it in resolvable })
       // 2. Built-in: CWD
       if ("CWD" in resolvable && "CWD" !in this) {
         put("CWD", System.getProperty("user.dir"))
@@ -102,6 +98,8 @@ object TrailYamlTemplateResolver {
       }
     }
 
-    return TemplatingUtil.replaceVariables(yaml, values, deferred = deferredVariables)
+    // Any variable that remains unresolved passes through as a {{var}} literal.
+    val effectiveDeferredVariables = deferredVariables + (requiredVariables - values.keys)
+    return TemplatingUtil.replaceVariables(yaml, values, deferred = effectiveDeferredVariables)
   }
 }

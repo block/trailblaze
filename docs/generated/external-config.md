@@ -156,7 +156,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 5 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 2 |
-| `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 18 |
+| `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 19 |
 | `memory` | No | `all drivers` | 8 |
 | `meta` | Yes | `all drivers` | 2 |
 | `mobile_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 4 |
@@ -215,7 +215,7 @@ target:
     - yourTool
 ```
 
-Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime selection happens per descriptor: set `runtime: subprocess` (or use a `.js` / `.mjs` / `.cjs` entrypoint) to dispatch through a host bun/node subprocess for full Node APIs; the default routes through the in-process QuickJS runtime. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
+Each name resolves to a sibling `<trailmap>/tools/<name>.yaml` descriptor. Runtime selection happens per descriptor: tools run in-process (QuickJS) by default; set `runtime: subprocess` to dispatch through a host bun subprocess for full Node APIs. The file extension is not a runtime hint. `requiresHost: true` is a separate, on-device visibility gate — not a runtime selector.
 
 ## Distribution Pattern for Pre-Vetted Target Trailmaps
 

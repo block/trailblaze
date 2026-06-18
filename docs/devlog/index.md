@@ -11,6 +11,8 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-06-17 | [Can the Kotlin Compiler Emit Our TypeScript Bindings Natively?](2026-06-17-kotlin-native-ts-bindings-spike.md) | Decision |
+| 2026-06-17 | [Consolidate scripted-tool surfaces: one SDK, per-tool runtime drives transport](2026-06-17-consolidate-scripted-tool-surfaces.md) | Decision |
 | 2026-05-28 | [Bun is the sole JavaScript runtime](2026-05-28-bun-only-runtime.md) | Devlog |
 | 2026-05-27 | [Trailmap-scoped tool naming](2026-05-27-trailmap-scoped-tool-naming.md) | Decision |
 | 2026-05-26 | [Playwright tool shims should be code-generated from the Playwright Java SDK](2026-05-26-playwright-tool-shim-codegen.md) | Decision |

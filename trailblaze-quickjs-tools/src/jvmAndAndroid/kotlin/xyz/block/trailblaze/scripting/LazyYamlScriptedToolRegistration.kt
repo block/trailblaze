@@ -103,12 +103,23 @@ class LazyYamlScriptedToolRegistration private constructor(
    * (`HostAccessibilityRpcClient`, `BaseTrailblazeAgent`) recognize the wrapper as
    * host-only the same way they recognize the inner tool — without this, wrapping would
    * hide the host-local marker and the tool would be RPC'd to the device.
+   *
+   * Also implements [RawArgumentTrailblazeTool][xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool]
+   * by delegating to [inner] so the wrapper survives a YAML round-trip WITH its arguments. The
+   * daemon's host-driver dispatch (e.g. iOS-host) YAML-encodes the resolved tool and re-runs it via
+   * `runYaml`; without exposing `rawToolArguments`, the wrapper hits the serializer's generic
+   * `::class.serializer()` fallback (it isn't `@Serializable`), which drops every argument — the tool
+   * then re-decodes + executes with empty args (e.g. `openUrl` runs but sees no `url`). Surfacing the
+   * inner tool's args makes the serializer take the `RawArgumentTrailblazeTool` branch, which encodes
+   * `name: {args}` so the round-trip preserves them.
    */
   private class ContextSettingScriptedTool(
     private val inner: QuickJsTrailblazeTool,
     private val binding: SessionScopedHostBinding,
-  ) : xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool {
+  ) : xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool,
+    xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool {
     override val advertisedToolName: String get() = inner.advertisedToolName
+    override val rawToolArguments: JsonObject get() = inner.rawToolArguments
 
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
@@ -249,6 +260,15 @@ class LazyYamlScriptedToolRegistration private constructor(
       )
       return LazyYamlScriptedToolRegistration(toolConfig, host, binding)
     }
+
+    /**
+     * Public, launch-free descriptor builder for advertise-time surfaces that need a scripted
+     * tool's [TrailblazeToolDescriptor] WITHOUT connecting a QuickJS engine (e.g. a synchronous
+     * `getAvailableTools()` that advertises before any dispatch). Delegates to [buildDescriptor]
+     * so the advertised shape matches what a launched registration would carry.
+     */
+    fun buildScriptedToolDescriptor(config: InlineScriptToolConfig): TrailblazeToolDescriptor =
+      buildDescriptor(config)
 
     /**
      * Builds a [TrailblazeToolDescriptor] from the YAML-declared `inputSchema:` block.

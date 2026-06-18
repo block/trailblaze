@@ -7,6 +7,7 @@ import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 
@@ -23,7 +24,14 @@ data class ResolvedToolSet(
   val compatibleDriverTypes: Set<TrailblazeDriverType>,
   val resolvedYamlToolNames: Set<ToolName> = emptySet(),
   val resolvedScriptedToolNames: Set<ToolName> = emptySet(),
-) {
+) : TrailblazeToolSurface {
+  // The interface uses unprefixed names; this loader-local type prefixes them with `resolved*`.
+  // Alias overrides let it satisfy [TrailblazeToolSurface] (and so expose `allToolNames`) without
+  // renaming its public fields.
+  override val toolClasses: Set<KClass<out TrailblazeTool>> get() = resolvedToolClasses
+  override val yamlToolNames: Set<ToolName> get() = resolvedYamlToolNames
+  override val scriptedToolNames: Set<ToolName> get() = resolvedScriptedToolNames
+
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
     compatibleDriverTypes.isEmpty() || driverType in compatibleDriverTypes
 

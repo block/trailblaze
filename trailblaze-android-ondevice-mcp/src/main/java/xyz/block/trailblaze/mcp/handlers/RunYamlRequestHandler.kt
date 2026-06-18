@@ -286,6 +286,23 @@ class RunYamlRequestHandler(
                 callbackResult.session
               }
             }
+
+            AgentImplementation.KOOG_STRATEGY_GRAPH -> {
+              // KOOG_STRATEGY_GRAPH now runs on-device: the agent + its dispatch seam live in
+              // trailblaze-common (jvmAndAndroid), so the same TrailblazeRunner callback path drives
+              // it. We keep agentImplementation = KOOG on the forwarded request so the on-device
+              // AndroidTrailblazeRule selects the Koog strategy-graph agent for live prompt steps
+              // (see AndroidTrailblazeRule.runSuspend). Only the Started-log is suppressed, exactly
+              // like the TRAILBLAZE_RUNNER branch above.
+              Console.log("[RunYamlRequestHandler] Using KOOG_STRATEGY_GRAPH (on-device)")
+              val requestWithStartLogSuppressed = request.copy(
+                config = request.config.copy(sendSessionStartLog = false),
+              )
+              val callbackResult =
+                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
+              lastToolSuccess = callbackResult.lastToolSuccess
+              callbackResult.session
+            }
           }
 
           // Post-settle intentionally omitted. The previous version called waitForSettled()

@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.util
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -56,27 +55,19 @@ class TrailYamlTemplateResolverTest {
   }
 
   @Test
-  fun nonDeferredTypoStillThrows() {
-    val yaml = "- step: hi {{user_email}} and {{TYPO_VAR}}"
+  fun unknownVariablePassesThroughAsLiteral() {
+    // Any {{VAR}} that cannot be resolved is left as-is rather than throwing.
+    // The trail runner substitutes it at execution time from session memory.
+    val yaml = "- step: hi {{user_email}} and {{RUNTIME_VAR}}"
 
-    val ex = assertThrows(IllegalStateException::class.java) {
-      TrailYamlTemplateResolver.resolve(
-        yaml = yaml,
-        additionalValues = emptyMap(),
-        deferredVariables = setOf("user_email"),
-      )
-    }
-    val missingLine = ex.message!!
-      .lines()
-      .single { it.startsWith("Missing required template variables:") }
-    assertTrue(
-      "Real missing var should be flagged. Got: $missingLine",
-      missingLine.contains("TYPO_VAR"),
+    val resolved = TrailYamlTemplateResolver.resolve(
+      yaml = yaml,
+      additionalValues = emptyMap(),
+      deferredVariables = setOf("user_email"),
     )
-    assertTrue(
-      "Deferred var should NOT be flagged as missing. Got: $missingLine",
-      !missingLine.contains("user_email"),
-    )
+
+    assertTrue("unresolved var should pass through", resolved.contains("{{RUNTIME_VAR}}"))
+    assertTrue("explicitly deferred var should pass through", resolved.contains("{{user_email}}"))
   }
 
   @Test

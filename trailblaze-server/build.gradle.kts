@@ -14,13 +14,7 @@ configurations.all {
 
 dependencies {
   api(libs.ktor.server.core)
-  api(libs.ktor.server.netty) {
-    exclude(group = "io.netty", module = "netty-codec-http2")
-    because("Maestro has binary incompatible code with the new version of netty-codec-http2, so we use the old version from maestro")
-  }
-  api("io.netty:netty-codec-http2:4.1.79.Final") {
-    because("Maestro has binary incompatible code with the new version of netty-codec-http2, so we use the old version from maestro")
-  }
+  api(libs.ktor.server.netty)
 
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-common"))
@@ -28,6 +22,10 @@ dependencies {
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-scripting-mcp-common"))
   implementation(project(":trailblaze-scripting-subprocess"))
+  // In-process QuickJS launcher for catalog/framework scripted tools (e.g. openUrl). The daemon
+  // shares the SAME in-process registration the host path uses (LazyYamlScriptedToolRegistration)
+  // rather than synthesizing a subprocess — see InProcessScriptedToolLauncher.
+  implementation(project(":trailblaze-quickjs-tools"))
 
   implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)

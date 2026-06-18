@@ -22,6 +22,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
 import xyz.block.trailblaze.toolcalls.KoogToolExt
@@ -742,7 +743,10 @@ class ToolDiscoveryToolSet(
     // Include YAML-defined tools (e.g. `pressBack` in NAVIGATION) so discovery output
     // matches what the executor will actually accept.
     val yamlDescriptors = KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(resolved.yamlToolNames)
-    return (classDescriptors + yamlDescriptors).sortedWith(compareBy { it.name })
+    // Include scripted tools (e.g. `openUrl` in NAVIGATION) so discovery output matches the
+    // executor's accepted set; built from the catalog YAML without launching a QuickJS engine.
+    val scriptedDescriptors = InProcessScriptedToolLauncher.describe(resolved.scriptedToolNames)
+    return (classDescriptors + yamlDescriptors + scriptedDescriptors).sortedWith(compareBy { it.name })
   }
 
   /**

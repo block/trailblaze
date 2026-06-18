@@ -1,5 +1,13 @@
 // `@trailblaze/tools` — the entire on-device-compatible authoring contract.
 //
+// ⚠️ SLATED FOR REMOVAL. This SDK exists only to provide MCP-free in-process authoring. Per the
+// 2026-06-17 "Consolidate scripted-tool surfaces" decision, that capability is being folded into
+// `@trailblaze/scripting` (one author surface; per-tool `runtime:` picks the transport). New tools
+// should use `@trailblaze/scripting`; this `@trailblaze/tools` package is to be deleted once the
+// in-process composition path lands and the few remaining consumers migrate. (Its
+// `:trailblaze-quickjs-tools` runtime module is NOT being deleted — the QuickJsToolHost engine is
+// reused to back the consolidated in-process runtime.)
+//
 // Authors write:
 //
 //   import { trailblaze } from "@trailblaze/tools";
@@ -14,8 +22,9 @@
 //
 // **Why no MCP.** The runtime that consumes these tools is QuickJS embedded in a Kotlin
 // process — there is no process boundary, no transport to abstract. MCP exists to bridge
-// boundaries that don't exist here. See the `2026-04-30-scripted-tools-not-mcp` devlog for
-// the full reasoning.
+// boundaries that don't exist here. (The often-cited `2026-04-30-scripted-tools-not-mcp` devlog
+// was never actually written; the surviving rationale lives in the 2026-06-17 "Consolidate
+// scripted-tool surfaces" decision.)
 //
 // **Same engine, host or device.** A tool authored against this SDK runs in QuickJS whether
 // it's executing in a host-embedded engine (CLI / desktop daemon) or on an Android device.
@@ -140,18 +149,60 @@ async function callOtherTool(
 }
 
 /**
- * The single namespace authors interact with. Flat by design — `tool` to register, `call` to
- * compose. No `run`, no `connect`, no transport setup; the runtime drives everything.
+ * Type-safe surface for composing other Trailblaze tools — `trailblaze.tools.<name>(args)`.
+ *
+ * This interface is intentionally near-empty in the SDK: it carries only the hand-seeded entries
+ * needed today, and is **augmented (via declaration merging) by generated bindings** — a
+ * `trailblaze-tools.d.ts` emitted per trailmap from the tool catalog + the scripted-tool analyzer,
+ * mirroring the `client.tools.<name>` surface `@trailblaze/scripting` already generates. An author
+ * writing `trailblaze.tools.maestro({...})` gets a checked tool name and arg shape instead of the
+ * stringly-typed `call("maestro", {...})`.
+ *
+ * Until the generator lands (tracked as a follow-up), only the seeded entries below are typed;
+ * everything else still requires the lower-level [callOtherTool] path.
+ */
+export interface TrailblazeTools {
+  /**
+   * Run raw Maestro commands (the cross-platform `maestro` passthrough). `commands` is an open
+   * Maestro-DSL array, so it stays loosely typed even here — the win is the checked tool name.
+   */
+  maestro(args: { commands: Array<Record<string, unknown>> }): Promise<TrailblazeToolResult>;
+}
+
+/**
+ * Runtime backing for [TrailblazeTools]: every property access returns a function that forwards to
+ * [callOtherTool] under the tool's own name. The static types come from [TrailblazeTools] (+ its
+ * generated augmentations); the runtime is this one generic Proxy, so new tools need no SDK change.
+ */
+function createToolsProxy(): TrailblazeTools {
+  return new Proxy({} as TrailblazeTools, {
+    get(_target, name) {
+      if (typeof name !== "string") return undefined;
+      return (args: Record<string, unknown>) => callOtherTool(name, args);
+    },
+  });
+}
+
+/**
+ * The single namespace authors interact with. `tool` to register, `tools.<name>` to compose
+ * type-safely. The stringly-typed `call` remains for the untyped escape hatch (slated to become
+ * internal once the generated `tools` surface covers every framework tool).
  */
 export const trailblaze = {
   /** Register a tool with the runtime. Idempotent — re-registering with the same name overwrites. */
   tool(name: string, spec: TrailblazeToolSpec, handler: TrailblazeToolHandler): void {
     registry()[name] = { name, spec, handler };
   },
-  /** Call another tool from inside a handler. Throws if the host binding isn't installed. */
+  /** Type-safe tool composition: `trailblaze.tools.maestro({...})`. Prefer this over [call]. */
+  tools: createToolsProxy(),
+  /**
+   * Low-level untyped composition by string name. Prefer [tools] — this exists only for tools the
+   * generated typed surface doesn't cover yet, and is slated to become internal.
+   */
   call: callOtherTool,
 };
 
 /** Direct named exports for authors who prefer `import { tool } from "@trailblaze/tools"`. */
 export const tool = trailblaze.tool;
+export const tools = trailblaze.tools;
 export const call = trailblaze.call;

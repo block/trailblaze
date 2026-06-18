@@ -24,6 +24,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -86,6 +87,39 @@ class RunYamlRequestHandlerTest {
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
     assertEquals(true, result.data.success)
     assertNull(result.data.errorMessage)
+  }
+
+  /**
+   * KOOG_STRATEGY_GRAPH now runs on-device, so the handler must route it through the SAME
+   * `runTrailblazeYaml` callback as TRAILBLAZE_RUNNER (no silent fallback) — forwarding the request
+   * with the Started log suppressed AND the agent selection PRESERVED (not relabeled to
+   * TRAILBLAZE_RUNNER), so AndroidTrailblazeRule picks the Koog strategy-graph agent for live
+   * prompt steps.
+   */
+  @Test
+  fun `KOOG_STRATEGY_GRAPH routes to the on-device callback preserving the agent selection`() = runTest {
+    var forwarded: RunYamlRequest? = null
+    val handler = createHandler(
+      runTrailblazeYaml = { request, session, _ ->
+        forwarded = request
+        RunYamlCallbackResult(session = session)
+      },
+    )
+
+    val result = handler.handle(
+      testRequest.copy(
+        agentImplementation = AgentImplementation.KOOG_STRATEGY_GRAPH,
+        awaitCompletion = true,
+      ),
+    )
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(true, result.data.success)
+    assertNotNull(forwarded, "runTrailblazeYaml callback was not invoked for KOOG_STRATEGY_GRAPH")
+    // Agent selection preserved so the device actually runs Koog (was previously relabeled away).
+    assertEquals(AgentImplementation.KOOG_STRATEGY_GRAPH, forwarded!!.agentImplementation)
+    // Started log suppressed in the forwarded request (handler already emitted it), as for legacy.
+    assertFalse(forwarded!!.config.sendSessionStartLog)
   }
 
   /**

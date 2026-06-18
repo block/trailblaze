@@ -98,14 +98,16 @@ object QuickJsToolBundleLauncher {
    *   from the local filesystem. On-device, pass a resolver that returns an
    *   [AndroidAssetBundleSource][AndroidAssetBundleSource] (or wraps the path however the
    *   caller wants).
-   * @param hostBindingFactory produces a [HostBinding] for each bundle so `trailblaze.call`
-   *   from inside a handler can be wired by the caller. The current default
-   *   ([defaultHostBinding]) does **not** dispatch through [toolRepo]; it returns the
-   *   structured "not yet wired" error envelope (see [QuickJsRepoHostBinding] for the
-   *   rationale). Cross-tool composition is a follow-up — see the rollout context in
-   *   the module README. Pass `null` from the factory to skip binding installation
-   *   entirely; handlers that try to compose will then throw the SDK's "no binding
-   *   installed" error at the call site.
+   *
+   * Each bundle gets one [SessionScopedHostBinding] installed into its host, so
+   * `trailblaze.call(...)` from inside a handler dispatches through [toolRepo] with the
+   * session's execution context (the framework layer — distinct from a plain local function
+   * call, which never leaves the engine). Because the framework gives each tool its own
+   * bundle/engine, tool-to-tool composition is normally cross-engine and chains to any depth.
+   * Composing a tool from the *same* bundle is refused (it would deadlock the host's shared
+   * evalMutex): for same-file logic reuse call a plain local function; for a genuinely
+   * separate tool put it in its own bundle; a host/driver tool (e.g. `maestro`) also works
+   * since it doesn't re-enter QuickJS.
    */
   suspend fun launchAll(
     bundles: List<McpServerConfig>,
@@ -114,7 +116,6 @@ object QuickJsToolBundleLauncher {
     toolRepo: TrailblazeToolRepo,
     preferHostAgent: Boolean = false,
     bundleSourceResolver: (McpServerConfig) -> BundleSource = ::defaultBundleSourceResolver,
-    hostBindingFactory: (McpServerConfig) -> HostBinding? = { defaultHostBinding(toolRepo, sessionId) },
   ): LaunchedQuickJsToolRuntime {
     val bundleable = bundles.filter { it.isBundleable }
     if (bundleable.isEmpty()) {
@@ -152,11 +153,20 @@ object QuickJsToolBundleLauncher {
           "[QuickJsToolBundleLauncher] LOADING session=${sessionId.value} " +
             "bundle=${index + 1}/${bundleable.size} filename=${source.filename}",
         )
+        // One live binding per bundle: installed into the host so a handler's
+        // `trailblaze.call(...)` dispatches through [toolRepo], and forwarded to each
+        // [QuickJsToolRegistration] so the tool sets [SessionScopedHostBinding.activeContext]
+        // around its evaluation (the only mechanism that survives the asyncFunction callback's
+        // thread hop — see [QuickJsTrailblazeTool.binding]).
+        val binding = SessionScopedHostBinding(toolRepo, sessionId)
         val host = QuickJsToolHost.connect(
           bundleJs = source.read(),
           bundleFilename = source.filename,
-          hostBinding = hostBindingFactory(entry),
+          hostBinding = binding,
         )
+        // Give the binding its own host so it can refuse a same-bundle compose (which would
+        // deadlock the shared evalMutex) instead of hanging the session.
+        binding.ownHost = host
         started += host
         startedFilenames += source.filename
 
@@ -175,6 +185,7 @@ object QuickJsToolBundleLauncher {
           pendingRegistrations += QuickJsToolRegistration(
             host = host,
             spec = spec,
+            binding = binding,
           )
         }
       }
@@ -217,17 +228,4 @@ object QuickJsToolBundleLauncher {
     }
     return BundleSource.FromFile(scriptPath)
   }
-
-  /**
-   * Default [HostBinding] — surfaces a structured "not yet wired" envelope to bundled
-   * handlers that call `trailblaze.call(...)`, so authors get a well-formed
-   * `TrailblazeToolResult` (isError=true) instead of either a deadlock (re-entering
-   * `host.callTool` collides with the host's evalMutex) or the SDK's "no binding
-   * installed" surprise. See [QuickJsRepoHostBinding]'s kdoc for the rationale; real
-   * cross-tool composition is a follow-up tracked by the module README.
-   */
-  private fun defaultHostBinding(
-    toolRepo: TrailblazeToolRepo,
-    sessionId: SessionId,
-  ): HostBinding = QuickJsRepoHostBinding(toolRepo, sessionId)
 }

@@ -374,8 +374,8 @@ enum class TargetMissingRecovery {
 const val WRONG_SCREEN_MESSAGE: String =
   "target not found on this screen — you may be on the wrong screen; this step may need to be revised"
 
-/** Tap-style tool name fragments. Matches `tap`, `tapOnElementByNodeId`, `longPress`, `compose_click`, etc. */
-private val TAP_TOOL_FRAGMENTS = listOf("tap", "click", "longpress")
+/** Tap-style tool name fragments. Matches `tap`, `tapOnElementByNodeId`, `longPress`, `dragTo`, `compose_click`, etc. */
+private val TAP_TOOL_FRAGMENTS = listOf("tap", "click", "longpress", "drag")
 
 /**
  * Decides whether the agent should avoid tapping an unrelated clickable when the step's named
@@ -451,6 +451,20 @@ fun scrollDirectionFromAffordance(target: String, screenText: String?): String {
  * target can be identified (e.g. "go back", "scroll down") — those steps are left to proceed.
  */
 internal fun extractTargetPhrase(objective: String): String? {
+  // Element drag ("drag X to/onto Y") → validate the SOURCE X. Parse this BEFORE the generic
+  // matchers so a quoted DESTINATION ("drag Coffee to \"Favorites\"") isn't returned as the
+  // target. A quoted source is taken verbatim (it may itself contain "to", e.g.
+  // "drag \"Coffee to go\" to the cart"); otherwise take the phrase up to " to "/" onto " (the
+  // trailing \S requires a real destination to follow). Drag phrasings WITHOUT "drag … to …"
+  // (directional, slider/carousel — "drag the slider right", "drag down to refresh") have no
+  // named source: they fall through to null → PROCEED rather than matching a generic verb.
+  // Both forms require a "to"/"onto" destination so directional manipulations of a named
+  // control ("drag \"Volume\" right", "drag the slider left") stay out of the guard.
+  Regex("^\\s*drag\\s+(?:the\\s+)?[\"“']([^\"”']{2,})[\"”']\\s+(?:on)?to\\s+\\S", RegexOption.IGNORE_CASE)
+    .find(objective)?.let { return cleanupDragSource(it.groupValues[1]) }
+  Regex("^\\s*drag\\s+(?:the\\s+)?(.+?)\\s+(?:on)?to\\s+\\S", RegexOption.IGNORE_CASE)
+    .find(objective)?.let { return cleanupDragSource(it.groupValues[1].trim()) }
+
   Regex("[\"“']([^\"”']{2,})[\"”']").find(objective)?.let { return it.groupValues[1].trim() }
 
   val verb = Regex(
@@ -461,15 +475,33 @@ internal fun extractTargetPhrase(objective: String): String? {
     RegexOption.IGNORE_CASE,
   ).find(objective) ?: return null
 
-  return verb.groupValues[1]
-    .trim()
-    .removeSuffix(".")
-    .removeSuffix(" field")
-    .removeSuffix(" button")
-    .removeSuffix(" icon")
-    .trim()
-    .takeIf { it.length >= 2 }
+  return cleanupTargetPhrase(verb.groupValues[1])
 }
+
+private val DIRECTION_WORDS = setOf("up", "down", "left", "right")
+
+private fun cleanupTargetPhrase(raw: String): String? = raw
+  .trim()
+  .removeSuffix(".")
+  .removeSuffix(" field")
+  .removeSuffix(" button")
+  .removeSuffix(" icon")
+  .trim()
+  // A bare direction ("drag down to refresh", "swipe up") is a gesture, not an element target.
+  .takeIf { it.length >= 2 && it.lowercase() !in DIRECTION_WORDS }
+
+// Drag sources are often phrased with a container noun ("the Coffee item") while the snapshot
+// labels just the content ("Coffee"). These suffixes are stripped for DRAG SOURCES ONLY —
+// applying them to generic tap/select targets would over-shorten (e.g. "Gift card button" →
+// "Gift") and let the wrong-screen guard match a distractor.
+private fun cleanupDragSource(raw: String): String? = cleanupTargetPhrase(
+  raw.trim()
+    .removeSuffix(" item")
+    .removeSuffix(" row")
+    .removeSuffix(" card")
+    .removeSuffix(" tile")
+    .removeSuffix(" handle"),
+)
 
 /**
  * Determines whether reflection should be triggered based on state.

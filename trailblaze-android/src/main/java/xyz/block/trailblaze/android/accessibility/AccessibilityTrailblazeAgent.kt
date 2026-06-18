@@ -46,6 +46,11 @@ class AccessibilityTrailblazeAgent(
   memory: AgentMemory = AgentMemory(),
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
+  // Threaded to the base so an `OtherTrailblazeTool` (e.g. a toolset-delivered scripted tool like
+  // `openUrl`) resolves through this repo's dynamic-tool registrations before driver dispatch.
+  // Without it, the on-device launcher registers the scripted tool into the session repo but the
+  // dispatching agent resolves against a null repo → "Unknown tool" at execution.
+  trailblazeToolRepo: xyz.block.trailblaze.toolcalls.TrailblazeToolRepo? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -53,6 +58,7 @@ class AccessibilityTrailblazeAgent(
   memory = memory,
   resolvedTarget = resolvedTarget,
   appId = appId,
+  trailblazeToolRepo = trailblazeToolRepo,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true

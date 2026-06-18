@@ -1,13 +1,19 @@
 # Per-file scripted tool for the Sample App trailmap — host-only example.
 #
-# `requiresHost: true` is the YAML shortcut for `_meta: { trailblaze/requiresHost: true }`.
-# It marks the tool as host-only — the on-device agent skips it at registration so this tool
-# only loads under the host subprocess runtime (where Node APIs like `node:fs/promises`
-# exist) and is invisible to the on-device QuickJS bundle (where they don't).
+# Two INDEPENDENT flags are at play, and they do different things:
+#  - `requiresHost: true` is a *visibility* gate (shortcut for `_meta: { trailblaze/requiresHost: true }`):
+#    the on-device agent skips this tool at registration, so it's invisible to the on-device bundle.
+#    On its own it does NOT select a Node runtime.
+#  - `runtime: subprocess` (below) is the *runtime* selector: it dispatches the handler to a host
+#    bun subprocess, where Node APIs like `node:fs/promises` exist. That's what this tool needs.
 script: ./sampleapp_writeArtifact.js
 name: sampleapp_writeArtifact
 description: Write a text artifact to a per-session tmp directory on the host machine.
 requiresHost: true
+# This handler uses `node:fs/promises`, so it must run in the host subprocess (bun) runtime.
+# Subprocess is opt-in only: without this flag the tool would default to in-process QuickJS,
+# where `node:fs` doesn't exist. (The `.js` extension no longer implies subprocess.)
+runtime: subprocess
 inputSchema:
   relativePath:
     type: string

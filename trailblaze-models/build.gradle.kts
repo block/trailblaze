@@ -25,6 +25,25 @@ plugins {
   // DriverNodeMatch.* + MatchDescriptor + TrailblazeNode.Bounds) is the spec; the
   // generated TS file is the derived artifact consumed by `@trailblaze/scripting`.
   id("trailblaze.selector-ts-codegen")
+  // Registers `generateDtoTs` / `verifyDtoTs` for the descriptor-walking DTO codegen. Here it
+  // emits TypeScript for the daemon's /rpc/<Name> request/response types (see
+  // xyz.block.trailblaze.codegen.HostRpcDtoTsBindings) so a TypeScript UI can call the same typed
+  // RPC the Kotlin/Wasm UI uses. Unlike selector-ts-codegen (source-text), this runs the generator
+  // via JavaExec because kotlinx.serialization descriptors need the compiled classes.
+  id("trailblaze.dto-ts-codegen")
+}
+
+trailblazeDtoTsCodegen {
+  mainClass.set("xyz.block.trailblaze.codegen.HostRpcDtoTsBindingsKt")
+  // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
+  // after this extension block, so resolve the compilation lazily at execution time.
+  codegenClasspath.from(
+    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
+    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
+  )
+  generatedTsFile.set(
+    layout.projectDirectory.file("../sdks/typescript/src/generated/host-rpc-dtos.ts"),
+  )
 }
 
 trailblazeSelectorTsCodegen {

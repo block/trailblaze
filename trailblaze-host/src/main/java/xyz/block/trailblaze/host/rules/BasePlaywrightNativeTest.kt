@@ -4,6 +4,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.agent.KoogStrategyGraphAgent
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
@@ -13,6 +15,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
+import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
+import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -176,6 +180,24 @@ open class BasePlaywrightNativeTest(
     )
   }
 
+  // KOOG brain as a [TestAgentRunner], parallel to the legacy runner above. Stable lazy so trail
+  // `config.context` (appendToSystemPrompt) persists across steps. Selected per-run in [runTrail];
+  // it rides the same [TrailblazeRunnerUtil.runPromptSuspend] loop, so recordings replay uniformly.
+  private val koogRunner: KoogTestAgentRunner by lazy {
+    KoogTestAgentRunner(
+      agent = playwrightAgent,
+      toolRepo = toolRepo,
+      screenStateProvider = browserManager::getScreenState,
+      elementComparator = elementComparator,
+      llmClient = dynamicLlmClient.createLlmClient(),
+      trailblazeLlmModel = trailblazeLlmModel,
+      logger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      maxLlmCalls = maxLlmCalls,
+      systemPromptTemplate = systemPromptTemplate,
+    )
+  }
+
   private val elementComparator by lazy {
     TrailblazeElementComparator(
       screenStateProvider = browserManager::getScreenState,
@@ -188,23 +210,26 @@ open class BasePlaywrightNativeTest(
   private val trailblazeYaml = TrailblazeYaml.Default
   private var currentToolTraceId: TraceId? = null
 
-  private val trailblazeRunnerUtil by lazy {
-    TrailblazeRunnerUtil(
-      trailblazeRunner = trailblazeRunner,
-      runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        playwrightAgent.runTrailblazeTools(
-          tools = trailblazeTools,
-          traceId = currentToolTraceId,
-          screenState = browserManager.getScreenState(),
-          elementComparator = elementComparator,
-          screenStateProvider = browserManager::getScreenState,
-        ).result
-      },
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-      sessionUpdater = { loggingRule.setSession(it) },
-    )
-  }
+  // The runner-util (deterministic replay + tool dispatch) is identical regardless of agent — only
+  // the wrapped brain differs — so build one per runner. Recordings replay the same either way.
+  private fun runnerUtilFor(runner: TestAgentRunner): TrailblazeRunnerUtil = TrailblazeRunnerUtil(
+    trailblazeRunner = runner,
+    runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
+      playwrightAgent.runTrailblazeTools(
+        tools = trailblazeTools,
+        traceId = currentToolTraceId,
+        screenState = browserManager.getScreenState(),
+        elementComparator = elementComparator,
+        screenStateProvider = browserManager::getScreenState,
+      ).result
+    },
+    trailblazeLogger = loggingRule.logger,
+    sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+    sessionUpdater = { loggingRule.setSession(it) },
+  )
+
+  private val trailblazeRunnerUtil by lazy { runnerUtilFor(trailblazeRunner) }
+  private val koogRunnerUtil by lazy { runnerUtilFor(koogRunner) }
 
   private suspend fun runTrail(
     trailItems: List<TrailYamlItem>,
@@ -213,19 +238,25 @@ open class BasePlaywrightNativeTest(
     // adoption, Playwright-layer settling (PlaywrightPageManager.dispatchAndAwaitSettle)
     // no longer branches on this flag — both modes settle via request-tracking.
     useRecordedSteps: Boolean,
+    agentImplementation: AgentImplementation,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ) {
+    // Pick the brain (legacy or KOOG); recordings are replayed identically by the runner-util either
+    // way — only unrecorded steps reach the selected agent.
+    val koog = agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH
+    val activeRunner: TestAgentRunner = if (koog) koogRunner else trailblazeRunner
+    val activeRunnerUtil = if (koog) koogRunnerUtil else trailblazeRunnerUtil
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->
-          trailblazeRunnerUtil.runPromptSuspend(
+          activeRunnerUtil.runPromptSuspend(
             prompts = item.promptSteps,
             useRecordedSteps = useRecordedSteps,
             selfHeal = config.selfHeal,
             onStepProgress = onStepProgress,
           )
-        is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+        is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+        is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
       }
       if (itemResult is TrailblazeToolResult.Error) {
         throw TrailblazeException(itemResult.errorMessage)
@@ -240,6 +271,13 @@ open class BasePlaywrightNativeTest(
     traceId: TraceId? = null,
     useRecordedSteps: Boolean = true,
     sendSessionStartLog: Boolean,
+    /**
+     * Which agent owns the reasoning loop for prompt steps. Defaults to the framework default
+     * ([AgentImplementation.TRAILBLAZE_RUNNER]). When [AgentImplementation.KOOG_STRATEGY_GRAPH],
+     * prompt steps run through the in-process [KoogStrategyGraphAgent] instead of the legacy
+     * [TrailblazeRunner]; tool / config items are unaffected.
+     */
+    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     // Run the entire agent loop on the Playwright thread to maintain thread affinity.
@@ -322,7 +360,7 @@ open class BasePlaywrightNativeTest(
       )
     }
     try {
-      runTrail(trailItems, useRecordedSteps, onStepProgress)
+      runTrail(trailItems, useRecordedSteps, agentImplementation, onStepProgress)
     } finally {
       currentToolTraceId = null
     }

@@ -267,7 +267,10 @@ interface TrailblazeClientImpl {
    *  - **Host** (tool runs as a daemon-spawned subprocess): HTTP POST to
    *    `${ctx.baseUrl}/scripting/callback`.
    *  - **On-device** (tool runs inside the Android QuickJS bundle — `ctx.runtime === "ondevice"`):
-   *    in-process `globalThis.__trailblazeCallback` binding. No HTTP server is involved.
+   *    in-process `globalThis.__trailblazeCallback` binding, no HTTP server involved. NOTE: this
+   *    transport is not wired yet — its host-side installer (`QuickJsBridge`) does not exist, so
+   *    on-device composition currently fails fast. See the 2026-06-17 "Consolidate scripted-tool
+   *    surfaces" decision for the plan to build it.
    *
    * The request/response shape is identical across transports; only the framing differs.
    * Error messages surface the transport source (HTTP URL or `__trailblazeCallback`) so you

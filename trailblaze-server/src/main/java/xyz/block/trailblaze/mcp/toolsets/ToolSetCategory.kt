@@ -238,6 +238,34 @@ object ToolSetCategoryMapping {
   }
 
   /**
+   * Gets the scripted (`.ts`/`.js`) tool names for a category — tools authored in TypeScript and
+   * dispatched through the per-session scripted-tool runtime (no Kotlin class, no YAML body).
+   * Parallel to [getToolClasses] / [getYamlToolNames]; e.g. `navigation` includes `openUrl`.
+   * Routes through [TrailblazeToolSetCatalog.entryScriptedToolNames] so MCP sees the same scripted
+   * surface every other catalog consumer does. Without this, converting a catalog tool from
+   * Kotlin/YAML to a scripted `.ts` silently drops it from the category-based MCP surface
+   * (`DirectMcpToolExecutor`, `ToolDiscoveryToolSet`).
+   */
+  fun getScriptedToolNames(category: ToolSetCategory): Set<ToolName> {
+    return when (category) {
+      ToolSetCategory.CORE_INTERACTION -> TrailblazeToolSetCatalog.entryScriptedToolNames("core_interaction")
+      ToolSetCategory.NAVIGATION -> TrailblazeToolSetCatalog.entryScriptedToolNames("navigation")
+      ToolSetCategory.OBSERVATION -> TrailblazeToolSetCatalog.entryScriptedToolNames("observation")
+      ToolSetCategory.VERIFICATION -> TrailblazeToolSetCatalog.entryScriptedToolNames("verification")
+      ToolSetCategory.MEMORY -> TrailblazeToolSetCatalog.entryScriptedToolNames("memory")
+      ToolSetCategory.SESSION -> emptySet()
+      ToolSetCategory.ALL -> TrailblazeToolSetCatalog.defaultEntries().flatMap { it.scriptedToolNames }.toSet()
+    }
+  }
+
+  /**
+   * Gets the combined scripted tool names for multiple categories.
+   */
+  fun getScriptedToolNames(categories: Set<ToolSetCategory>): Set<ToolName> {
+    return categories.flatMap { getScriptedToolNames(it) }.toSet()
+  }
+
+  /**
    * Class set + YAML-defined tool names for a single category, bundled so callers can't
    * accidentally consume only half. Prefer this over the split [getToolClasses] /
    * [getYamlToolNames] pair when you need a complete tool surface — every live MCP entrypoint
@@ -253,6 +281,7 @@ object ToolSetCategoryMapping {
   fun resolve(category: ToolSetCategory): ResolvedToolSet = ResolvedToolSet(
     toolClasses = getToolClasses(category),
     yamlToolNames = getYamlToolNames(category),
+    scriptedToolNames = getScriptedToolNames(category),
   )
 
   /**
@@ -262,6 +291,7 @@ object ToolSetCategoryMapping {
   fun resolve(categories: Set<ToolSetCategory>): ResolvedToolSet = ResolvedToolSet(
     toolClasses = getToolClasses(categories),
     yamlToolNames = getYamlToolNames(categories),
+    scriptedToolNames = getScriptedToolNames(categories),
   )
 
 }

@@ -5,9 +5,17 @@ advertised tools into Trailblaze's `TrailblazeToolRepo`. No MCP framing — the
 runtime reads `globalThis.__trailblazeTools` directly and dispatches via
 `QuickJsToolHost.callTool(name, args, ctx)`.
 
-This is the MCP-free counterpart to `:trailblaze-scripting-bundle` (the legacy
-MCP-shaped path). Both are wired into `AndroidTrailblazeRule` today; the legacy
-path will be retired in a follow-up once consumers have migrated.
+This is the MCP-free QuickJS runtime, and the runtime `AndroidTrailblazeRule`
+launches on-device today.
+
+> **Direction reversed (2026-06-17).** An earlier version of this note called
+> `@trailblaze/scripting` the "legacy" MCP-shaped path slated for retirement. That is no longer
+> the plan. Per the "Consolidate scripted-tool surfaces" decision (`docs/devlog/`), the single
+> surviving author surface is `@trailblaze/scripting`; the `@trailblaze/tools` SDK is the one slated
+> for removal, once its MCP-free in-process composition (the `__trailblazeCallback` binding) is
+> folded into that surface. This module's QuickJS engine wrapper (`QuickJsToolHost`) is expected to
+> be **reused** to back the single in-process runtime — the code below largely survives even though
+> the separate SDK does not.
 
 ## Reading order
 

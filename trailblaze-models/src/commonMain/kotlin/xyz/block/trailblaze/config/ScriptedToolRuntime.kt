@@ -18,19 +18,20 @@ import kotlinx.serialization.Serializable
  *    the on-device `:trailblaze-scripting-bundle`.
  *
  * **Default routing (when [TrailmapScriptedToolFile.runtime] / [InlineScriptToolConfig.runtime]
- * is `null`)** is extension-based: `.js` / `.mjs` / `.cjs` → [SUBPROCESS]; everything else
- * (notably `.ts`) → [IN_PROCESS]. The extension heuristic remains for backwards compatibility
- * with the descriptors that pre-date this field. Authors who want explicit control —
- * particularly authors who want to use `.ts` syntax under bun where it's natively
- * supported — set this field on the descriptor.
+ * is `null`) is [IN_PROCESS], unconditionally.** [SUBPROCESS] is opt-in only — a tool gets it
+ * exactly when its descriptor declares `runtime: subprocess`. There is no extension heuristic;
+ * a `.js` file is *not* auto-routed to a subprocess.
  *
- * Example use cases:
+ * This makes orchestration the default. Scripted tools mostly compose framework/driver tools
+ * (which do the real system work inside Trailblaze), so in-process QuickJS is the right home for
+ * almost all of them. A tool needs [SUBPROCESS] only when its *own* TypeScript touches Node APIs
+ * (`node:fs`, `node:child_process`, …) — and since a device can't spawn a subprocess, such a tool
+ * is host-only by nature. Requiring the explicit flag keeps that the rare, visible exception.
  *
- *  - `runtime: subprocess` with `script: ./foo.ts` — TypeScript author who needs `node:fs`
- *    for an on-disk cache. Without the override, `.ts` would route to QuickJS and `fs`
- *    would be missing.
- *  - `runtime: inProcess` with `script: ./bar.js` — JS author who wants the faster
- *    in-process path despite the conventional extension default. Rare, but legal.
+ * Example:
+ *
+ *  - `runtime: subprocess` with `script: ./writeArtifact.ts` — a tool that itself writes files
+ *    via `node:fs`. Without the explicit flag it defaults to QuickJS, where `node:fs` is absent.
  */
 @Serializable
 enum class ScriptedToolRuntime {
@@ -45,21 +46,14 @@ enum class ScriptedToolRuntime {
 
   companion object {
     /**
-     * Resolves the effective runtime for a scripted tool: the explicit [override] if set,
-     * otherwise the extension-based default derived from [scriptPath] (`.js`/`.mjs`/`.cjs`
-     * → [SUBPROCESS]; everything else → [IN_PROCESS]).
+     * Resolves the effective runtime for a scripted tool: the explicit [override] if the
+     * descriptor declared one, otherwise [IN_PROCESS]. [SUBPROCESS] is never inferred — it is
+     * chosen only when a descriptor explicitly sets `runtime: subprocess`.
      *
-     * Single source of truth shared by `TrailblazeHostYamlRunner` (the production routing
-     * site) and the unit tests that pin the routing contract. Putting the decision here
-     * rather than inline in the runner means the test suite can exercise every branch of
-     * the rule without spinning up the runner.
+     * Single source of truth shared by `TrailblazeHostYamlRunner` (the production routing site)
+     * and the unit tests that pin the routing contract — the policy ("in-process unless
+     * explicitly subprocess") lives in one testable place.
      */
-    fun resolve(scriptPath: String, override: ScriptedToolRuntime?): ScriptedToolRuntime {
-      if (override != null) return override
-      val lowered = scriptPath.lowercase()
-      val nodeExtension =
-        lowered.endsWith(".js") || lowered.endsWith(".mjs") || lowered.endsWith(".cjs")
-      return if (nodeExtension) SUBPROCESS else IN_PROCESS
-    }
+    fun resolve(override: ScriptedToolRuntime?): ScriptedToolRuntime = override ?: IN_PROCESS
   }
 }
