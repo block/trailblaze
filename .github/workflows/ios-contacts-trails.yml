@@ -162,6 +162,22 @@ jobs:
         continue-on-error: true
         run: ./.github/pr_generate_trailblaze_report.sh
 
+      - name: Install ffmpeg (for the animated-timeline WebP)
+        # macOS runners don't ship ffmpeg; the docs gallery's animated timeline.webp is
+        # muxed via `ffmpeg -c:v libwebp_anim`. The storyboard WebP uses bundled libwebp
+        # and needs no ffmpeg, so a brew hiccup only degrades the animation, never the run.
+        if: always()
+        continue-on-error: true
+        run: brew install ffmpeg
+
+      - name: Generate docs report-gallery assets
+        # Storyboard + animated-timeline WebP + interactive HTML report, consumed by the
+        # GitHub Pages build for the Report Gallery. continue-on-error so a flaky encoder
+        # never reds the trail job; the docs fall back to the last-published asset.
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_generate_report_assets.sh
+
       - name: Create artifacts
         if: always()
         continue-on-error: true
@@ -175,6 +191,16 @@ jobs:
           path: |
             trailblaze-logs.zip
             trailblaze_report.html
+
+      - name: Upload docs report-gallery assets
+        # Dedicated, predictably-named artifact the GitHub Pages workflow downloads from
+        # the latest completed run on main (artifact name == docs-report-<slug>).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-report-ios-contacts
+          path: report-assets/
+          if-no-files-found: warn
 
       - name: Fail if trails failed
         if: steps.run-trails.outcome == 'failure'
