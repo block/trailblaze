@@ -35,64 +35,78 @@ jobs:
           python -m pip install --upgrade pip
           pip install mkdocs mkdocs-material
 
-      - name: Fetch latest report-gallery assets
-        # Pull the report assets (storyboard.webp / timeline.webp / report.html) from the
-        # most recent COMPLETED trail run on main and overwrite the committed placeholders
-        # in the build workspace.
+      - name: Fetch report-gallery assets
+        # The landing page and Report Gallery embed per-trail assets (storyboard.webp /
+        # timeline.webp / report.html) that are NOT committed — they are produced by the
+        # trail workflows (`wikipedia-trails.yml` etc.) and pulled in here at build time.
+        # Two tiers, fresh-then-last-good, so the gallery never shows the "generating"
+        # placeholder once a real report has ever been published:
         #
-        # IMPORTANT — same-push race: this workflow and the trail workflows
-        # (`wikipedia-trails.yml` etc.) are triggered by the SAME push to main. This
-        # deploy finishes in ~1 minute; the trail run takes ~15. So the run for the
-        # current push is still in progress (no artifact uploaded yet) while we fetch.
-        # We therefore select from COMPLETED runs only and walk them newest-first, using
-        # the first whose artifact actually downloads — i.e. the previous push's run, a
-        # deliberate one-commit lag. (The earlier `--limit 1` with no status filter
-        # always resolved to the in-progress current-push run, so the download silently
-        # no-op'd and the docs gallery showed the "generating" placeholder on every push.)
+        #   1) FRESH — the most recent COMPLETED trail run that carries the artifact.
+        #      Critical: this deploy and the trail workflows are triggered by the SAME
+        #      push to main, but this deploy finishes in ~1 min while the trail run takes
+        #      ~15, so the current push's run is still in progress (no artifact uploaded
+        #      yet). We therefore select from COMPLETED runs only and walk newest-first —
+        #      i.e. the previous push's run, a deliberate one-commit lag. (The old
+        #      `--limit 1` with no status filter always resolved to the in-progress
+        #      current-push run, so the download silently no-op'd and the gallery showed
+        #      the placeholder on every push.) We do NOT filter on `--status success`:
+        #      the trail workflow marks itself `failure` in a terminal step that runs
+        #      AFTER artifact upload, so a `failure` run can still carry usable assets.
         #
-        # We deliberately do NOT filter on `--status success`. The trail workflows gate
-        # their own success/failure on a terminal "Fail if trails failed" step that fires
-        # AFTER artifact upload, so a job marked `failure` can still carry usable assets.
-        # Walking several completed runs also rides over a run that completed but failed
-        # before the upload step.
+        #   2) LAST-GOOD — anything tier 1 didn't get is backfilled from the currently
+        #      PUBLISHED site, which already serves the last successfully deployed assets.
+        #      This makes the showcase durable against an expired artifact or a stretch of
+        #      runs that produced nothing: once a real report is live, it stays live.
         #
-        # Best-effort: any miss (no completed run yet, expired artifacts, fork without the
-        # token) leaves the committed placeholders in place so `mkdocs build --strict`
-        # still succeeds. Never fail the deploy over a missing showcase asset.
+        # Anything still missing after both tiers (only before the first-ever successful
+        # run) is filled with the committed placeholder by docs_hooks.py, and we emit a
+        # ::warning:: so the gap is visible in the Actions log rather than silent. This
+        # step is best-effort (continue-on-error) and never fails the deploy.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          # Base URL of the published site; tier 2 pulls the last-good assets from here.
+          SITE_BASE: https://block.github.io/trailblaze/report-assets
         run: |
           set -uo pipefail
           fetch_assets() {
             local workflow="$1" dest="$2"
-            local artifact="docs-report-${dest##*/}"
-            local run_ids
+            local slug="${dest##*/}"
+            local artifact="docs-report-$slug"
+            local files="storyboard.webp timeline.webp report.html"
+            mkdir -p "$dest"
+
+            # Tier 1: freshest completed run carrying the artifact (newest-first walk).
+            local run_ids run_id tmp f any
             run_ids="$(gh run list --workflow="$workflow" --branch main --status completed \
               --limit 10 --json databaseId --jq '.[].databaseId')"
-            if [ -z "$run_ids" ]; then
-              echo "  no completed $workflow run found — keeping committed placeholders"
-              return 0
-            fi
-            local run_id tmp
             for run_id in $run_ids; do
               tmp="$(mktemp -d)"
               if gh run download "$run_id" --name "$artifact" --dir "$tmp" 2>/dev/null; then
-                mkdir -p "$dest"
-                local got=0
-                # Only overwrite the files we actually got; a partial set still beats a broken build.
-                for f in storyboard.webp timeline.webp report.html; do
-                  [ -f "$tmp/$f" ] && cp -f "$tmp/$f" "$dest/$f" && echo "    ✓ $f" && got=1
+                any=0
+                for f in $files; do
+                  [ -f "$tmp/$f" ] && cp -f "$tmp/$f" "$dest/$f" && echo "    ✓ $f (fresh, run $run_id)" && any=1
                 done
-                if [ "$got" = 1 ]; then
-                  echo "  used $workflow run $run_id → $dest"
-                  rm -rf "$tmp"
-                  return 0
+                rm -rf "$tmp"
+                [ "$any" = 1 ] && break
+              else
+                rm -rf "$tmp"
+              fi
+            done
+
+            # Tier 2: backfill anything still missing from the last-published site.
+            for f in $files; do
+              if [ ! -f "$dest/$f" ]; then
+                if curl -fsSL "$SITE_BASE/$slug/$f" -o "$dest/$f.tmp" 2>/dev/null; then
+                  mv -f "$dest/$f.tmp" "$dest/$f"
+                  echo "    ✓ $f (last-published site)"
+                else
+                  rm -f "$dest/$f.tmp"
+                  echo "::warning::$slug/$f unavailable from both a completed $workflow run and the published site; committed placeholder will be used (expected only before the first successful run)"
                 fi
               fi
-              rm -rf "$tmp"
             done
-            echo "    no usable $artifact in the last 10 completed runs — keeping committed placeholders"
           }
           fetch_assets "wikipedia-trails.yml" "docs/report-assets/wikipedia"
 
