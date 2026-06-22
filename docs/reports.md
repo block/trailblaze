@@ -6,9 +6,9 @@ title: Report Gallery
 
 Every Trailblaze run produces a rich, replayable session. The reports below are **not
 mockups** — they are generated automatically by Trailblaze's own CI on each push to
-`main`, exported straight from the example trails in this repository and embedded here
-by the docs build. What you see is exactly what your agent or CI produces locally with
-`trailblaze report`.
+`main`, exported straight from the example and showcase trails in this repository and
+embedded here by the docs build — one per platform (Android, iOS, web). What you see is
+exactly what your agent or CI produces locally with `trailblaze report`.
 
 Three export formats are shown for each trail:
 
@@ -28,6 +28,42 @@ Three export formats are shown for each trail:
     open offline, or attach to a PR; embedding it inline doesn't do it justice, so the
     animations link out to the real thing.
 
+## Set an alarm (Android)
+
+A recorded Android trail driving the system Clock app to set a 7:30 AM alarm, replayed on
+an emulator via Trailblaze's host-RPC Android driver — no LLM at replay time. Source:
+[`trails/clock/set-alarm-730am`](https://github.com/block/trailblaze/tree/main/trails/clock/set-alarm-730am).
+
+### Storyboard
+
+[![Set-alarm clock trail storyboard — every step tiled into a grid](report-assets/clock/storyboard.webp)](report-assets/clock/report.html)
+
+### Timeline
+
+[![Set-alarm clock trail timeline — animated walkthrough of each step](report-assets/clock/timeline.webp)](report-assets/clock/report.html)
+
+[**Open the full interactive report →**](report-assets/clock/report.html)
+
+---
+
+## Contacts (iOS)
+
+A recorded iOS trail exercising the system Contacts app — searching for, opening, and
+verifying a contact — replayed on an iOS simulator, with no LLM at replay time. Source:
+[`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts).
+
+### Storyboard
+
+[![iOS Contacts trail storyboard — every step tiled into a grid](report-assets/ios-contacts/storyboard.webp)](report-assets/ios-contacts/report.html)
+
+### Timeline
+
+[![iOS Contacts trail timeline — animated walkthrough of each step](report-assets/ios-contacts/timeline.webp)](report-assets/ios-contacts/report.html)
+
+[**Open the full interactive report →**](report-assets/ios-contacts/report.html)
+
+---
+
 ## Wikipedia (web)
 
 A recorded web trail driven through Playwright against live `en.wikipedia.org` — no
@@ -43,11 +79,6 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 [![Wikipedia trail timeline — animated walkthrough of each step](report-assets/wikipedia/timeline.webp)](report-assets/wikipedia/report.html)
 
 [**Open the full interactive report →**](report-assets/wikipedia/report.html)
-
----
-
-More examples — iOS Contacts and the Android sample app — land here as their trail
-workflows are wired into the gallery pipeline.
 
 *Want this for your own app? Every `trailblaze run` produces a session you can export
 the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
