@@ -4,6 +4,7 @@
 #
 # Usage:
 #   ./trailblaze                     - Launch desktop GUI
+#   ./trailblaze --stop              - Stop the daemon
 #   ./trailblaze app --headless      - Start headless daemon
 #   ./trailblaze app --stop          - Stop the daemon
 #   ./trailblaze blaze "objective"   - Take a UI action (auto-starts daemon)
@@ -588,7 +589,7 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
     RUN_EXIT=$?
 
     # Keep daemon alive for all commands so subsequent runs reuse it.
-    # Use `./trailblaze app --stop` to shut it down explicitly.
+    # Use `./trailblaze --stop` to shut it down explicitly.
     exit $RUN_EXIT
 elif [ ${#ARGS_ARRAY[@]} -gt 0 ]; then
     # CLI command mode (config, auth, etc.)

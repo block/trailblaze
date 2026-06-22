@@ -5,9 +5,10 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze [-hV] [COMMAND]
+Usage: trailblaze [-hV] [--stop] [COMMAND]
 Trailblaze - AI-powered device automation
   -h, --help      Show this help message and exit.
+      --stop      Stop the running daemon and exit.
   -V, --version   Print version information and exit.
 
   step, blaze  Run one step — describe what you want, the built-in agent picks

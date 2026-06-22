@@ -62,6 +62,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--stop` | Stop the running daemon and exit. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

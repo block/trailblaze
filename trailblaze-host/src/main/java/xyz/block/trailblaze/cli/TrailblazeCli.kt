@@ -44,6 +44,7 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  *
  * Usage:
  *   trailblaze                     - Show help
+ *   trailblaze --stop              - Stop the daemon
  *   trailblaze app                 - Launch desktop GUI
  *   trailblaze app --headless      - Start headless daemon
  *   trailblaze config target myapp                                 - Set target app
@@ -462,6 +463,12 @@ class TrailblazeCliCommand(
   )
   internal var showAll: Boolean = false
 
+  @CommandLine.Option(
+    names = ["--stop"],
+    description = ["Stop the running daemon and exit."],
+  )
+  internal var stop: Boolean = false
+
   /**
    * Returns the effective HTTP port.
    *
@@ -486,6 +493,10 @@ class TrailblazeCliCommand(
   }
 
   override fun call(): Int {
+    if (stop) {
+      return shutdownDaemonAndWait(getEffectivePort())
+    }
+
     // No subcommand → show help. Use `trailblaze app` to launch the desktop GUI.
     //
     // Mirror the renderer wiring that `TrailblazeCli.run` and `executeForDaemon` apply to

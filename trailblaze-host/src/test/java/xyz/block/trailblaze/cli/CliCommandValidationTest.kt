@@ -26,6 +26,18 @@ import kotlin.test.assertTrue
  */
 class CliCommandValidationTest {
 
+  @Test
+  fun `root parses --stop as a daemon shutdown request`() {
+    val root = TrailblazeCliCommand(
+      appProvider = { error("appProvider must not be invoked during option parsing") },
+      configProvider = { error("configProvider must not be invoked during option parsing") },
+    )
+
+    CommandLine(root).parseArgs("--stop")
+
+    assertTrue(root.stop, "`trailblaze --stop` must route through the root shutdown path")
+  }
+
   /**
    * Runs [block] with `trailblaze.appdata.dir` pointed at a fresh, throwaway
    * directory so the test can mutate `CliConfigHelper` without leaking state to
