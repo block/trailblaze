@@ -109,6 +109,7 @@ dependencies {
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-server"))
   implementation(project(":trailblaze-ui"))
+  implementation(libs.jna)
 
   // Compose dependencies for JVM UI code moved from trailblaze-ui
   implementation(compose.desktop.currentOs)

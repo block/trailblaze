@@ -3,6 +3,9 @@ package xyz.block.trailblaze.ui
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlMap
+import com.sun.jna.NativeLibrary
+import com.sun.jna.NativeLong
+import com.sun.jna.Pointer
 import xyz.block.trailblaze.bundle.yaml.YamlEmitter
 import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -24,6 +27,10 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import xyz.block.trailblaze.util.Console
 
 object TrailblazeDesktopUtil {
+
+  private val trailblazeAppIcon by lazy {
+    ImageIO.read(TrailblazeDesktopUtil::class.java.classLoader.getResource("icons/icon.png"))
+  }
 
   /**
    * Aborts startup with a clear error if the current OS+arch is not one we ship
@@ -181,10 +188,36 @@ object TrailblazeDesktopUtil {
   fun setAppConfigForTrailblaze() {
     if (Taskbar.isTaskbarSupported()) {
       // This sets the icon shown in the macOS Dock and app switcher
+      Taskbar.getTaskbar().iconImage = trailblazeAppIcon
+    }
+  }
 
-      Taskbar.getTaskbar().apply {
-        iconImage = ImageIO.read(TrailblazeDesktopUtil::class.java.classLoader.getResource("icons/icon.png"))
+  /**
+   * Shows or hides Trailblaze in the macOS Dock and app switcher.
+   *
+   * A hidden Trailblaze window should behave as a menu-bar accessory: the daemon and tray icon
+   * keep running, but there is no inert Dock icon. Switching back to the regular activation
+   * policy before showing the window restores normal Dock and app-switcher behavior.
+   *
+   * AWT exposes APIs for setting the Dock icon image, but not for changing the application's
+   * activation policy. Use the Objective-C runtime to call `NSApplication.setActivationPolicy`.
+   * Other desktop platforms intentionally keep their existing taskbar behavior.
+   */
+  internal fun setDockIconVisible(visible: Boolean) {
+    if (DesktopOsType.current() != DesktopOsType.MAC_OS) return
+
+    try {
+      MacOsApplication.setActivationPolicy(
+        if (visible) MacOsApplication.REGULAR else MacOsApplication.ACCESSORY,
+      )
+      if (visible) {
+        // Switching from accessory back to regular recreates the Dock tile with the JVM
+        // executable's generic icon. Reapply Trailblaze's image after the policy transition.
+        setAppConfigForTrailblaze()
       }
+    } catch (e: Exception) {
+      // Losing the dynamic Dock behavior should not take down the daemon or its tray icon.
+      Console.log("Unable to update the macOS Dock icon visibility: ${e.message}")
     }
   }
 
@@ -404,5 +437,33 @@ object TrailblazeDesktopUtil {
     val gooseUrl = "goose://recipe?config=$recipeEncoded"
     Console.log(gooseUrl)
     openInDefaultBrowser(gooseUrl)
+  }
+
+  private object MacOsApplication {
+    const val REGULAR = 0L
+    const val ACCESSORY = 1L
+
+    private val objectiveC by lazy { NativeLibrary.getInstance("objc") }
+    private val getClass by lazy { objectiveC.getFunction("objc_getClass") }
+    private val registerSelector by lazy { objectiveC.getFunction("sel_registerName") }
+    private val sendMessage by lazy { objectiveC.getFunction("objc_msgSend") }
+
+    fun setActivationPolicy(policy: Long) {
+      val applicationClass = getClass.invokePointer(arrayOf("NSApplication"))
+      check(applicationClass != Pointer.NULL) { "NSApplication class is unavailable" }
+
+      val application = sendMessage.invokePointer(
+        arrayOf(applicationClass, selector("sharedApplication")),
+      )
+      check(application != Pointer.NULL) { "NSApplication.sharedApplication is unavailable" }
+
+      val succeeded = sendMessage.invokeInt(
+        arrayOf(application, selector("setActivationPolicy:"), NativeLong(policy)),
+      ) != 0
+      check(succeeded) { "NSApplication rejected activation policy $policy" }
+    }
+
+    private fun selector(name: String): Pointer =
+      registerSelector.invokePointer(arrayOf(name))
   }
 }

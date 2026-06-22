@@ -20,6 +20,7 @@ androidx-test-monitor = "1.8.0"
 gson = "2.13.2"
 jackson = "2.21.2"
 jansi = "2.4.1"
+jna = "5.14.0"
 jetbrains-compose-multiplatform = "1.11.1"
 # Compose Multiplatform's Material3 module ships on a separate, lagging track from the umbrella
 # version — there is no material3 1.11.0/1.11.1 stable. CMP 1.11.1's paired Material3 release is
@@ -121,6 +122,7 @@ gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 jackson-dataformat-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }
 jansi = { module = "org.fusesource.jansi:jansi", version.ref = "jansi" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 junit = { module = "junit:junit", version.ref = "junit" }
 junit5-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit5" }

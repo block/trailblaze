@@ -116,7 +116,11 @@ class MainTrailblazeApp(
      */
     extraDaemonRoutes: (io.ktor.server.routing.Routing.() -> Unit)? = null,
   ) {
+    val initiallyVisible = !headless && ALWAYS_SHOW_WINDOW
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
+    // Apply this immediately after configuring the Taskbar so a headless daemon never lingers
+    // in the Dock while the rest of the application initializes.
+    TrailblazeDesktopUtil.setDockIconVisible(initiallyVisible)
 
     // Set the logs directory for the FileSystemImageLoader
     setLogsDirectory(logsRepo.logsDir)
@@ -189,8 +193,13 @@ class MainTrailblazeApp(
       val currentServerState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
       
       // Window visibility state - starts hidden in headless mode, visible otherwise.
-      // ALWAYS_SHOW_WINDOW overrides headless to improve app discoverability on macOS.
-      var windowVisible by remember { mutableStateOf(if (headless) false else ALWAYS_SHOW_WINDOW) }
+      var windowVisible by remember { mutableStateOf(initiallyVisible) }
+
+      // On macOS, a hidden window makes Trailblaze an accessory app (tray icon only). Restoring
+      // the regular policy when the window is shown also restores its Dock/app-switcher icon.
+      LaunchedEffect(windowVisible) {
+        TrailblazeDesktopUtil.setDockIconVisible(windowVisible)
+      }
       
       // Track the AWT window for bringing to front
       var awtWindow by remember { mutableStateOf<Window?>(null) }
