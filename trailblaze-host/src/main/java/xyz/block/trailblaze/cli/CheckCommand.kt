@@ -266,18 +266,16 @@ class CheckCommand : Callable<Int> {
       )
       return
     }
-    // Preflight: even when the shim exists, it depends on
-    // `ts-json-schema-generator` + `typescript` under `<sdkDir>/node_modules/`.
-    // A fresh checkout that hasn't run `bun install` under the SDK has the
-    // shim but no resolvable deps — invoking bun would yield an
-    // `ERR_MODULE_NOT_FOUND` for every trailmap. Skip cleanly with the same
-    // message shape the analyzer-runnable assume in the test suite uses.
-    val tsjsg = File(sdkDir, "node_modules/ts-json-schema-generator")
-    if (!tsjsg.isDirectory) {
+    // Preflight: the shim's deps must be resolvable — either a real SDK tree with
+    // `ts-json-schema-generator` + `typescript` under `<sdkDir>/node_modules/`, OR the
+    // framework-bundled self-contained shim (deps inlined). A bare shim with neither would
+    // invoke bun and yield `ERR_MODULE_NOT_FOUND` for every trailmap. Skip cleanly with the
+    // same message shape the analyzer-runnable assume in the test suite uses.
+    if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) {
       Console.info(
         "[ScriptedToolDefinitionAnalyzer] Skipping typed-scripted-tool extraction — " +
-          "ts-json-schema-generator not installed under ${sdkDir.absolutePath}/node_modules; " +
-          "run `bun install` in sdks/typescript to enable.",
+          "ts-json-schema-generator not installed under ${sdkDir.absolutePath}/node_modules " +
+          "and no bundled analyzer shim present; run `bun install` in sdks/typescript to enable.",
       )
       return
     }

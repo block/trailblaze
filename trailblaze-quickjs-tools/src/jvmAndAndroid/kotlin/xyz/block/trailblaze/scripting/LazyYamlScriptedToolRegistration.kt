@@ -3,12 +3,15 @@ package xyz.block.trailblaze.scripting
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
+import xyz.block.trailblaze.quickjs.tools.QuickJsToolMeta
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolSerializer
 import xyz.block.trailblaze.quickjs.tools.QuickJsTrailblazeTool
 import xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding
@@ -50,6 +53,25 @@ class LazyYamlScriptedToolRegistration private constructor(
 
   override val trailblazeDescriptor: TrailblazeToolDescriptor = buildDescriptor(toolConfig)
 
+  // Honor BOTH the typed [InlineScriptToolConfig] field AND the namespaced `_meta` key, combined by
+  // opt-out AND (a `false` from either side wins). The typed field is the source of truth for the
+  // analyzer / top-level-shortcut authoring paths, but a descriptor can also carry a raw
+  // `_meta.trailblaze/surfaceToLlm:false` (or `isRecordable:false`) without the shortcut — and the
+  // on-device QuickJS launcher reads that `_meta` (via [QuickJsToolMeta]). Consulting it here keeps
+  // the host in-process path consistent with on-device for that authoring shape.
+  private val configMeta: QuickJsToolMeta =
+    QuickJsToolMeta.fromSpec(buildJsonObject { toolConfig.meta?.let { put("_meta", it) } })
+  private val effectiveSurfaceToLlm: Boolean = toolConfig.surfaceToLlm && configMeta.surfaceToLlm
+  private val effectiveIsRecordable: Boolean = toolConfig.isRecordable && configMeta.isRecordable
+
+  /**
+   * 1:1 with the scripted tool's declared `surfaceToLlm` (`@TrailblazeToolClass.surfaceToLlm`
+   * equivalent). When `false`, [TrailblazeToolRepo.advertisedDynamic] drops this registration
+   * from the LLM's tool menu while keeping it dispatchable by name (composed by a parent tool)
+   * and resolvable for recorded replays.
+   */
+  override val surfaceToLlm: Boolean get() = effectiveSurfaceToLlm
+
   override fun buildKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
   ): TrailblazeKoogTool<out TrailblazeTool> {
@@ -64,7 +86,7 @@ class LazyYamlScriptedToolRegistration private constructor(
     // ContextSettingScriptedTool wrapper and thus never set binding.activeContext — causing the
     // QuickJS asyncFunction callback (Dispatchers.Default) to find null context and return
     // "no execution context installed" for every nested client.callTool() call.
-    val serializer = QuickJsToolSerializer(name, host, binding)
+    val serializer = QuickJsToolSerializer(name, host, binding, effectiveIsRecordable)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -86,7 +108,11 @@ class LazyYamlScriptedToolRegistration private constructor(
   }
 
   override fun decodeToolCall(argumentsJson: String): TrailblazeTool {
-    val serializer = QuickJsToolSerializer(name, host)
+    // Thread `isRecordable` onto the decoded QuickJsTrailblazeTool via the serializer so the
+    // inner tool carries the recording opt-out on its own `toolMetadata` (the wrapper delegates
+    // to it). Keeping the override on the inner tool — rather than on the wrapper — means both
+    // dispatch paths agree and matches the on-device path's type-preserving approach.
+    val serializer = QuickJsToolSerializer(name, host, isRecordable = effectiveIsRecordable)
     val inner = Json.decodeFromString(serializer, argumentsJson) as QuickJsTrailblazeTool
     // Wrap the deserialized `QuickJsTrailblazeTool` so its outer `execute(...)` sets the
     // binding's active context before delegating to the host dispatch — same rationale
@@ -112,6 +138,11 @@ class LazyYamlScriptedToolRegistration private constructor(
    * then re-decodes + executes with empty args (e.g. `openUrl` runs but sees no `url`). Surfacing the
    * inner tool's args makes the serializer take the `RawArgumentTrailblazeTool` branch, which encodes
    * `name: {args}` so the round-trip preserves them.
+   *
+   * Delegates [toolMetadata] to [inner] so the recording opt-out the decoded [QuickJsTrailblazeTool]
+   * carries (threaded via [QuickJsToolSerializer]) flows through the wrapper — `getIsRecordableFromAnnotation`
+   * reads the WRAPPER's metadata, since the wrapper is the tool object both LLM dispatch and by-name
+   * `invokeFrameworkTool` dispatch log (both resolve through [decodeToolCall]).
    */
   private class ContextSettingScriptedTool(
     private val inner: QuickJsTrailblazeTool,
@@ -120,6 +151,8 @@ class LazyYamlScriptedToolRegistration private constructor(
     xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool {
     override val advertisedToolName: String get() = inner.advertisedToolName
     override val rawToolArguments: JsonObject get() = inner.rawToolArguments
+    override val toolMetadata: xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata?
+      get() = inner.toolMetadata
 
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,

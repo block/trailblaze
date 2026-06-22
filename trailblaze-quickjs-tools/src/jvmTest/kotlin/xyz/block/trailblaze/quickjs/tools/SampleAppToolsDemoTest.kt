@@ -23,7 +23,7 @@ import org.junit.Assume.assumeTrue
  *     `globalThis.__trailblazeTools` directly via plain JS.
  *  2. **On-device-compatible TS** —
  *     `examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/quickjs-tools/typed.ts`.
- *     Imports `@trailblaze/tools` (the tiny non-MCP SDK). Bundled by the
+ *     Imports `@trailblaze/scripting` aliased to the slim in-process profile. Bundled by the
  *     `trailblaze.author-tool-bundle` Gradle plugin; the produced `.bundle.js` is read via
  *     the `trailblaze.test.sampleAppTypedBundle` system property and evaluated in QuickJS.
  *  3. **Host-only TS** —
@@ -38,7 +38,7 @@ import org.junit.Assume.assumeTrue
  */
 class SampleAppToolsDemoTest {
 
-  // Resolve sample-app paths against whatever directory contains `sdks/typescript-tools/package.json`
+  // Resolve sample-app paths against whatever directory contains `sdks/typescript/package.json`
   // directly. That marker lives at the repo root in the flat release layout, and at
   // the framework-source ancestor in a nested layout — same source code works
   // in either, no per-layout literal needed.
@@ -117,11 +117,17 @@ class SampleAppToolsDemoTest {
     )
 
     val bundleJs = bundleFile.readText()
-    // Negative size assertion — the new SDK is ~50 lines; if the bundle is huge, the alias
-    // didn't bind and something else got inlined. 8 KB is generous headroom for the tool
-    // definitions plus the inlined SDK source.
+    // Profile assertion — `@trailblaze/scripting` must bind to the SLIM in-process entry, not the
+    // full ~1.2 MB MCP SDK. The slim profile inlines the typed-authoring core (tool-core + memory +
+    // the synthesized registration wrapper), which lands around ~9 KB for these two tools — far
+    // below the full SDK. The hard signal is the absence of `@modelcontextprotocol`; the size cap
+    // (32 KB — ~37× below the full SDK, ~3.5× headroom over today's bundle) is the coarse backstop
+    // that catches an accidental repoint at the full profile.
+    assertTrue("bundle should NOT inline the MCP SDK — slim alias didn't bind") {
+      !bundleJs.contains("@modelcontextprotocol")
+    }
     assertTrue("bundle suspiciously large (${bundleJs.length} bytes) — alias may not have bound") {
-      bundleJs.length < 8_000
+      bundleJs.length < 32_000
     }
 
     val host =
@@ -130,7 +136,7 @@ class SampleAppToolsDemoTest {
     val names = host.listTools().map { it.name }.toSet()
     // Anchor the contract that the plugin produced something *useful*, not just a non-empty
     // file. A bundle that's syntactically valid JS but registers zero tools — e.g. a refactor
-    // that drops the `@trailblaze/tools` alias and tree-shakes the registrations away — would
+    // that drops the `@trailblaze/scripting` alias and tree-shakes the registrations away — would
     // still pass the size check above but fail this assertion with a clear "no tools registered"
     // message instead of the per-tool `Tool not registered` surprises that follow.
     assertTrue("plugin output should register at least one tool, got $names") { names.isNotEmpty() }
@@ -164,20 +170,20 @@ class SampleAppToolsDemoTest {
   // ---------- Flavor 3: Host-only TS source exists and is well-formed ----------
 
   @Test
-  fun `host-only TS source uses the same @trailblaze tools SDK and is host-only because of node imports`() {
-    // The unified-SDK move: host-only tools use the SAME `@trailblaze/tools` import as
+  fun `host-only TS source uses the one @trailblaze scripting SDK and is host-only because of node imports`() {
+    // The single-SDK move: host-only tools use the SAME `@trailblaze/scripting` import as
     // on-device-compatible ones. What makes a tool host-only is reaching for `node:*`
     // modules inside the handler body, not picking a different SDK package. This test
     // pins that invariant — a regression that re-introduces a separate "host SDK" import
-    // would fire here.
+    // (e.g. the retired `@trailblaze/tools`) would fire here.
     val toolsTs = File(sampleAppHostToolsDir, "tools.ts")
     assumeTrue("sample-app host-tools/tools.ts missing at ${toolsTs.absolutePath}", toolsTs.isFile)
     val src = toolsTs.readText()
-    assertTrue("host-only sample should import @trailblaze/tools (single SDK)") {
-      src.contains("from \"@trailblaze/tools\"")
+    assertTrue("host-only sample should import @trailblaze/scripting (single SDK)") {
+      src.contains("from \"@trailblaze/scripting\"")
     }
-    assertTrue("host-only sample should NOT import any other Trailblaze SDK package") {
-      !src.contains("from \"@trailblaze/scripting\"")
+    assertTrue("host-only sample should NOT import the retired @trailblaze/tools SDK") {
+      !src.contains("from \"@trailblaze/tools\"")
     }
     assertTrue("host-only sample should import a `node:` module to justify host-only-ness") {
       src.contains("from \"node:")
@@ -188,18 +194,18 @@ class SampleAppToolsDemoTest {
 
   /**
    * Walk up from the test's working directory until we find a directory whose
-   * `sdks/typescript-tools/package.json` exists. That directory is the framework-source
+   * `sdks/typescript/package.json` exists. That directory is the framework-source
    * root. Works in any layout that places the SDK packages under `sdks/` at the framework
    * root; no layout-specific path prefix appears in this source code.
    */
   private fun locateFrameworkRoot(): File {
     var dir: File? = File(System.getProperty("user.dir"))
     while (dir != null) {
-      if (File(dir, "sdks/typescript-tools/package.json").isFile) return dir
+      if (File(dir, "sdks/typescript/package.json").isFile) return dir
       dir = dir.parentFile
     }
     error(
-      "could not locate framework root — no `sdks/typescript-tools/package.json` in any " +
+      "could not locate framework root — no `sdks/typescript/package.json` in any " +
         "ancestor of ${System.getProperty("user.dir")}",
     )
   }

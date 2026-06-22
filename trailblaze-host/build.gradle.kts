@@ -290,6 +290,24 @@ val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
   into(layout.buildDirectory.dir("generated-resources/typecheck/trails/config/typecheck/typescript"))
 }
 
+// Stage the single shared scripted-tool registration-wrapper template as a JAR resource so
+// `DaemonScriptedToolBundler.synthesizeWrapper` can read it from the classpath at daemon time —
+// always present regardless of how esbuild was resolved (the daemon may pick esbuild up from PATH
+// rather than the SDK's node_modules, in which case the SDK directory can't be located by walk-up).
+//
+// Source of truth: `sdks/typescript/tools/in-process-wrapper-template.mjs`. The two Gradle bundlers
+// (`build-logic`'s BundleAuthorToolsTask and `:trailblaze-common`'s framework bundler) read the same
+// committed file directly off disk; this Copy stages it onto the classpath so the runtime module
+// reaches the identical template without a filesystem walk. Keeping ONE committed template is what
+// retires the old SISTER-IMPL-TAG triplication of the wrapper JS.
+val copyScriptedToolWrapperTemplate by tasks.registering(Copy::class) {
+  group = "trailblaze"
+  description = "Stages the shared scripted-tool registration-wrapper template into this module's JAR resources."
+  // Path relative to `:trailblaze-host` project dir → `../sdks/typescript/tools/...`
+  from(layout.projectDirectory.file("../sdks/typescript/tools/in-process-wrapper-template.mjs"))
+  into(layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper/xyz/block/trailblaze/scripting"))
+}
+
 // Add generated resources to source sets
 sourceSets {
   main {
@@ -297,12 +315,16 @@ sourceSets {
     resources.srcDir(
       copyTypescriptCompilerResources.map { layout.buildDirectory.dir("generated-resources/typecheck").get() },
     )
+    resources.srcDir(
+      copyScriptedToolWrapperTemplate.map { layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper").get() },
+    )
   }
 }
 
 tasks.named("processResources") {
   dependsOn(generateVersionProperties)
   dependsOn(copyTypescriptCompilerResources)
+  dependsOn(copyScriptedToolWrapperTemplate)
 }
 
 dependencyGuard {

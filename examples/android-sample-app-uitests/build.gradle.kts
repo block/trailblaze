@@ -49,7 +49,7 @@ val stageSampleAppEvalTrails =
     into("${stagedTrailAssets.get().asFile}/eval/android/sample-app")
   }
 
-// Stage the typed `@trailblaze/tools` bundle at a stable test-APK asset path so
+// Stage the typed `@trailblaze/scripting` bundle at a stable test-APK asset path so
 // `QuickJsToolBundleOnDeviceTest` can load it via `AndroidAssetBundleSource`. Sourced
 // from the bundling plugin's output so the build is the single source of truth — no
 // checked-in pre-built bundle to drift. The `trailblaze.quickjs-bundle-assets` plugin

@@ -1,3 +1,4 @@
+import java.io.File
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -42,7 +43,7 @@ trailblazeDtoTsCodegen {
     provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
   )
   generatedTsFile.set(
-    layout.projectDirectory.file("../sdks/typescript/src/generated/host-rpc-dtos.ts"),
+    layout.projectDirectory.file("../sdks/typescript/src/generated/host-rpc.ts"),
   )
 }
 
@@ -270,6 +271,64 @@ val copyTypescriptSdkResources by tasks.registering(Copy::class) {
 
 kotlin.sourceSets.commonMain.get().resources.srcDir(
   copyTypescriptSdkResources.map { layout.buildDirectory.dir("generated-resources/sdk").get() },
+)
+
+// Bundle the scripted-tool analyzer shim (`extract-tool-defs.mjs`) together with its npm
+// deps (`ts-json-schema-generator` + `typescript`) into ONE self-contained file via
+// `bun build`, shipped at JAR resource `trails/config/analyzer/extract-tool-defs.mjs`.
+//
+// **Why.** The analyzer extracts each typed tool's JSON Schema by running that shim under
+// `bun`. In a source checkout the shim resolves its deps from `sdks/typescript/node_modules/`,
+// but an INSTALLED CLI (Homebrew / source-install) has no SDK source tree on disk — so typed
+// authoring failed out of the box with "scripted-tool analyzer unavailable". Shipping a
+// self-contained bundle lets `ScriptedToolDefinitionAnalyzer.resolveSdkDir` extract it to
+// `~/.trailblaze/analyzer/` and run it with only `bun` on PATH — no `node_modules`, no
+// `bun install`. Mirrors the SDK `.d.ts` bundle above.
+//
+// **Built at build time, not committed** (the minified bundle is ~7 MB). Guarded by
+// `onlyIf` so a fresh checkout that hasn't run `bun install` in `sdks/typescript/` (or a
+// build host without `bun` on PATH) still builds — the resource is simply absent and the
+// runtime surfaces the same clean "analyzer unavailable" message it already does. Same
+// tolerance posture as `copyTypescriptCompilerResources` in `:trailblaze-host`.
+val bundleScriptedToolAnalyzerShim by tasks.registering(Exec::class) {
+  group = "trailblaze"
+  description = "Bundles the scripted-tool analyzer shim into a self-contained .mjs for the JAR."
+  val sdkDir = layout.projectDirectory.dir("../sdks/typescript")
+  val shimSrc = sdkDir.file("tools/extract-tool-defs.mjs")
+  val tsjsgDir = sdkDir.dir("node_modules/ts-json-schema-generator")
+  val outFile = layout.buildDirectory.file(
+    "generated-resources/analyzer/trails/config/analyzer/extract-tool-defs.mjs",
+  )
+  inputs.file(shimSrc)
+  inputs.dir(tsjsgDir).optional(true)
+  outputs.file(outFile)
+  // Skip cleanly when the SDK deps aren't installed or `bun` isn't on PATH — never break
+  // an unrelated host build over a payload the runtime degrades around.
+  onlyIf {
+    tsjsgDir.asFile.exists() &&
+      (System.getenv("PATH")?.split(File.pathSeparator)
+        ?.any { File(it, "bun").canExecute() } == true)
+  }
+  workingDir = sdkDir.asFile
+  doFirst { outFile.get().asFile.parentFile.mkdirs() }
+  commandLine(
+    "bun", "build", "tools/extract-tool-defs.mjs",
+    "--bundle", "--minify", "--target=bun",
+    "--outfile", outFile.get().asFile.absolutePath,
+  )
+  // Fail loudly if `bun build` exits 0 but writes nothing/partial — better a broken build
+  // than a JAR that silently ships an empty shim the runtime would choke on per-trailmap.
+  doLast {
+    val out = outFile.get().asFile
+    require(out.isFile && out.length() > 0L) {
+      "bundleScriptedToolAnalyzerShim: `bun build` produced no usable output at $out " +
+        "(${if (out.exists()) "${out.length()} bytes" else "missing"})."
+    }
+  }
+}
+
+kotlin.sourceSets.commonMain.get().resources.srcDir(
+  bundleScriptedToolAnalyzerShim.map { layout.buildDirectory.dir("generated-resources/analyzer").get() },
 )
 
 // `verifyTrailblazeSdkDtsBundle` is NOT wired into `check` — it requires

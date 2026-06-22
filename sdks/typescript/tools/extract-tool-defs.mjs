@@ -101,11 +101,12 @@ const TRAILBLAZE_SDK_PACKAGE =
  *
  * SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set must stay
  * in lockstep with:
- *   - `sdks/typescript/src/tool.ts`                       (the SDK's TS surface)
+ *   - `sdks/typescript/src/tool-core.ts`                  (the SDK's TS surface — `TrailblazeTypedToolSpec`)
  *   - `trailblaze-host/.../AnalyzerScriptedToolEnrichment.kt`
  *     `projectAnalyzerSpec`                              (Kotlin projection into `_meta`)
- *   - `.../TrailblazeToolMeta.fromJsonObject`            (runtime parser)
- * Adding a new field to `TrailblazeTypedToolSpec` requires updating all four
+ *   - `.../TrailblazeToolMeta.fromJsonObject`            (MCP/subprocess runtime parser)
+ *   - `.../QuickJsToolMeta.fromSpec`                     (in-process runtime parser)
+ * Adding a new field to `TrailblazeTypedToolSpec` requires updating all these
  * sites; there is no compile-time check that they agree.
  */
 const RECOGNIZED_SPEC_FIELDS = new Set([
@@ -113,6 +114,8 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "requiresContext",
   "requiresHost",
   "supportedDrivers",
+  "surfaceToLlm",
+  "isRecordable",
 ]);
 
 /**

@@ -1433,6 +1433,40 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — surfaceToLlm and isRecordable are extracted when authored`() = runBlocking {
+    // Parallel coverage for the two flags this PR added to the recognized
+    // `TrailblazeTypedToolSpec` field set (RECOGNIZED_SPEC_FIELDS). Without
+    // extraction, an author's `.ts`-declared `surfaceToLlm: false` /
+    // `isRecordable: false` would never reach the enrichment layer's typed slots
+    // or the runtime `_meta`, so a hidden / non-recordable internal step would be
+    // advertised + recorded anyway. Pins the end-to-end extractor contract.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-surface-record-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "internalStepTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const internalStepTool = trailblaze.tool<I, O>(
+        |  { surfaceToLlm: false, isRecordable: false },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    assertEquals(JsonPrimitive(false), spec["surfaceToLlm"])
+    assertEquals(JsonPrimitive(false), spec["isRecordable"])
+    // Fields not authored on the call site stay absent (defaults applied downstream).
+    assertNull(spec["requiresHost"], "expected requiresHost absent when not authored")
+    assertNull(spec["supportedPlatforms"], "expected supportedPlatforms absent when not authored")
+  }
+
+  @Test
   fun `bare-handler overload — spec is null when no spec object is passed`() = runBlocking {
     // The bare-handler form (arg 0 is an arrow/function) carries no spec, so
     // `ScriptedToolDefinition.spec` must be null — never an empty object. The

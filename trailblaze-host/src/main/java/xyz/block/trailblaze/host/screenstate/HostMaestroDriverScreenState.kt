@@ -8,6 +8,7 @@ import maestro.filterOutOfBounds
 import okio.Buffer
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.CompactScreenElements
+import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -117,23 +118,67 @@ class HostMaestroDriverScreenState(
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
-  /** Cached compact elements result — shared between text representation and annotation elements. */
-  private val compactElements: CompactScreenElements? by lazy {
-    val tree = stableTrailblazeNodeTree ?: return@lazy null
-    when (deviceInfo.platform) {
-      Platform.IOS -> CompactScreenElements.buildForIos(tree, screenHeight = deviceHeight, screenWidth = deviceWidth)
-      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+  /** Builds the compact element list at the given [details] for this driver's platform. */
+  private fun buildCompactElements(details: Set<SnapshotDetail>): CompactScreenElements? {
+    val tree = stableTrailblazeNodeTree ?: return null
+    return when (deviceInfo.platform) {
+      Platform.IOS -> CompactScreenElements.buildForIos(tree, details, screenHeight = deviceHeight, screenWidth = deviceWidth)
+      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, details, screenHeight = deviceHeight)
       else -> null
     }
   }
 
+  /** Cached compact elements result — shared between text representation and annotation elements. */
+  private val compactElements: CompactScreenElements? by lazy { buildCompactElements(emptySet()) }
+
+  /**
+   * Fuller render ([DETAILED_REF_DETAILS] = ALL_ELEMENTS + OFFSCREEN) used to widen the ref map
+   * applied to [trailblazeNodeTree] — see there — and reused by the detail-aware
+   * [viewHierarchyTextRepresentation] overload when it's asked for exactly that set (the
+   * `requestDetailedViewHierarchy` request) so we don't build it twice.
+   */
+  private val detailedRefCompactElements: CompactScreenElements? by lazy {
+    buildCompactElements(DETAILED_REF_DETAILS)
+  }
+
   override val trailblazeNodeTree: TrailblazeNode? by lazy {
     val tree = stableTrailblazeNodeTree ?: return@lazy null
-    compactElements?.applyRefsToTree(tree) ?: tree
+    val compact = compactElements
+    val detailed = detailedRefCompactElements
+    if (compact == null && detailed == null) return@lazy tree
+    // Layer refs so EVERY element the agent can see is resolvable by `tap`: start from the fuller
+    // ALL_ELEMENTS+OFFSCREEN render (covers the non-interactable + off-screen nodes that
+    // `requestDetailedViewHierarchy` surfaces but the lean compact view omits), then let the
+    // compact render's refs win for the elements it shows, so per-turn compact-view taps are
+    // byte-identical to before. Without the detailed layer, a ref shown only by the detailed tool
+    // wouldn't be in this tree and `tap` would fail with "Element ref … not found".
+    // refMapping is ref->nodeId; withRefs wants nodeId->ref.
+    val nodeIdToRef = LinkedHashMap<Long, String>()
+    detailed?.refMapping?.forEach { (ref, nodeId) -> nodeIdToRef[nodeId] = ref }
+    compact?.refMapping?.forEach { (ref, nodeId) -> nodeIdToRef[nodeId] = ref }
+    tree.withRefs(nodeIdToRef)
   }
 
   override val viewHierarchyTextRepresentation: String? by lazy {
     compactElements?.buildTextRepresentation(foregroundAppId)
+  }
+
+  /**
+   * Detail-aware re-render. The default ([viewHierarchyTextRepresentation]) lists only the
+   * "meaningful" (interactable / content-bearing) elements to keep per-turn context small; callers
+   * that want more (e.g. the `requestDetailedViewHierarchy` tool requesting
+   * [DETAILED_REF_DETAILS], or the snapshot CLI's `--bounds` / `--offscreen` / `--all`) get a
+   * compact list rebuilt at the requested detail. Refs are content-hashed, so the `[ref]` ids here
+   * match the ones in the default view for the same element — and [trailblazeNodeTree] carries refs
+   * for these fuller elements too, so the agent taps by ref either way. Empty [details] returns the
+   * cached default text unchanged.
+   */
+  override fun viewHierarchyTextRepresentation(details: Set<SnapshotDetail>): String? {
+    if (details.isEmpty()) return viewHierarchyTextRepresentation
+    // Reuse the cached fuller render when asked for exactly the detailed-ref set (the
+    // `requestDetailedViewHierarchy` request); otherwise build for the requested details.
+    val rendered = if (details == DETAILED_REF_DETAILS) detailedRefCompactElements else buildCompactElements(details)
+    return rendered?.buildTextRepresentation(foregroundAppId) ?: viewHierarchyTextRepresentation
   }
 
   override val annotationElements: List<AnnotationElement>? by lazy {
@@ -221,6 +266,14 @@ class HostMaestroDriverScreenState(
   }
 
   companion object {
+    /**
+     * The "full hierarchy" detail set: bypass the meaningful-element filter ([SnapshotDetail.ALL_ELEMENTS])
+     * AND include off-screen elements ([SnapshotDetail.OFFSCREEN]). Used to widen [trailblazeNodeTree]'s
+     * ref map and reused by the detail-aware [viewHierarchyTextRepresentation] — kept in one place so
+     * the `requestDetailedViewHierarchy` tool's request maps to the cached render rather than a rebuild.
+     */
+    private val DETAILED_REF_DETAILS = setOf(SnapshotDetail.ALL_ELEMENTS, SnapshotDetail.OFFSCREEN)
+
     /**
      * Detects the iOS device orientation from the view hierarchy by finding status bar elements
      * and checking their position, then rotates the screenshot to match the VH coordinate system.

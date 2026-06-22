@@ -144,6 +144,54 @@ class QuickJsToolMetaTest {
   }
 
   @Test
+  fun `surfaceToLlm and isRecordable default to true and are not registration gates`() {
+    val noMeta = QuickJsToolMeta.fromSpec(buildJsonObject { put("description", "tool") })
+    assertTrue(noMeta.surfaceToLlm)
+    assertTrue(noMeta.isRecordable)
+
+    // Explicit false must parse — but must NOT gate registration (the tool still registers for
+    // by-name dispatch + recorded-replay resolution; it's only dropped from advertisement /
+    // recording downstream).
+    val hidden = QuickJsToolMeta.fromSpec(
+      buildJsonObject {
+        put(
+          "_meta",
+          buildJsonObject {
+            put("trailblaze/surfaceToLlm", false)
+            put("trailblaze/isRecordable", false)
+          },
+        )
+      },
+    )
+    assertFalse(hidden.surfaceToLlm)
+    assertFalse(hidden.isRecordable)
+    assertTrue(
+      hidden.shouldRegister(TrailblazeDriverType.DEFAULT_ANDROID, preferHostAgent = false),
+      "surfaceToLlm=false / isRecordable=false must NOT block registration",
+    )
+    assertTrue(
+      hidden.shouldRegister(TrailblazeDriverType.DEFAULT_ANDROID, preferHostAgent = true),
+    )
+  }
+
+  @Test
+  fun `non-boolean surfaceToLlm and isRecordable fall back to true`() {
+    val malformed = QuickJsToolMeta.fromSpec(
+      buildJsonObject {
+        put(
+          "_meta",
+          buildJsonObject {
+            put("trailblaze/surfaceToLlm", "nope")
+            put("trailblaze/isRecordable", buildJsonArray { /* wrong shape */ })
+          },
+        )
+      },
+    )
+    assertTrue(malformed.surfaceToLlm)
+    assertTrue(malformed.isRecordable)
+  }
+
+  @Test
   fun `meta is plain JsonObject`() {
     // Sanity: fromSpec doesn't require any specific JsonObject impl; works with the basic builder.
     val spec: JsonObject = buildJsonObject {

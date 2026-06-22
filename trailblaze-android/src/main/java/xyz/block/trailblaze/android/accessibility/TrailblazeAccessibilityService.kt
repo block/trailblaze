@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.hardware.HardwareBuffer
 import android.os.Bundle
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -316,7 +317,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * through the full 5s assertion poll). Measured per-test cost of the refresh walk
      * was within noise across before/after CI runs.
      */
-    fun getRootNodeInfo(): AccessibilityNodeInfo? {
+    fun getRootNodeInfo(awaitStable: Boolean = true): AccessibilityNodeInfo? {
+      if (awaitStable) awaitTreeStable()
       val root = getApplicationWindowRoot() ?: return null
       refreshTreeInPlace(root)
       return root
@@ -416,6 +418,115 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         )
       }
       return windows
+    }
+
+    /** Sample cadence (~2 frames @60Hz) while waiting for the captured tree to stop changing. */
+    private const val STABILITY_FRAME_MS = 32L
+
+    /**
+     * The tree signature must stay UNCHANGED for at least this long before the screen counts as
+     * settled. A quiet WINDOW (not a single matching sample interval) is required because a slow or
+     * janky transition — e.g. ~30fps, or any animation advancing less often than once per
+     * [STABILITY_FRAME_MS] under load — can leave the tree momentarily identical across one interval
+     * and then move again. Measuring elapsed quiet rather than a sample count keeps this
+     * frame-rate-independent. Spans ~2.5 sample intervals.
+     */
+    private const val STABILITY_QUIET_MS = 80L
+
+    /** Hard cap on the stability wait — a perpetually-animating screen proceeds instead of blocking. */
+    private const val STABILITY_MAX_WAIT_MS = 1000L
+
+    /** Max tree depth walked when hashing the structural signature. */
+    private const val STABILITY_MAX_DEPTH = 60
+
+    /** Non-zero FNV-style seed for the rolling tree signature. */
+    private const val SIGNATURE_SEED = 1125899906842597L
+
+    /**
+     * Capture-time settle gate. Before a snapshot is built, briefly wait (hard-capped) for the
+     * captured accessibility tree to stop changing, so the snapshot the runtime reasons about and
+     * resolves selectors against carries final bounds — not the mid-transition coordinates that
+     * drop nodes or land taps off-target during a Compose bottom-sheet / dialog / screen animation.
+     *
+     * Unlike a window-level signal, this works for Compose single-activity (intra-window)
+     * navigation: it folds every node's bounds + class + text length into a cheap structural
+     * [treeSignature] and waits until that signature stays unchanged for [STABILITY_QUIET_MS] — the
+     * out-of-process analog of Playwright's "same bounding box across consecutive animation frames"
+     * actionability gate. Requiring a quiet window (not a single matching interval) keeps a slow or
+     * janky transition from reading as stable while a frame merely hasn't advanced yet. A fresh
+     * window root is read per sample, so bounds reflect the live on-screen position.
+     *
+     * Hard-capped by [STABILITY_MAX_WAIT_MS] so a perpetual animation (e.g. an infinite spinner)
+     * proceeds rather than blocking forever. Disable with `TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY=1`
+     * (read per-call, flippable on a running daemon). The event-quiet [waitForSettled] path stays
+     * intact as a complementary first-pass signal.
+     */
+    private fun awaitTreeStable() {
+      if (treeStabilityGateDisabled()) return
+      val startUptimeMs = SystemClock.uptimeMillis()
+      val deadlineUptimeMs = startUptimeMs + STABILITY_MAX_WAIT_MS
+      var previousSignature: Long? = null
+      var lastChangeUptimeMs = startUptimeMs
+      while (true) {
+        val root = getApplicationWindowRoot() ?: return
+        val signature = try {
+          treeSignature(root)
+        } finally {
+          root.recycle()
+        }
+        val now = SystemClock.uptimeMillis()
+        if (signature != previousSignature) {
+          previousSignature = signature
+          lastChangeUptimeMs = now
+        } else if (now - lastChangeUptimeMs >= STABILITY_QUIET_MS) {
+          Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
+          return
+        }
+        if (now >= deadlineUptimeMs) {
+          Console.log("[settle] tree still changing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
+          return
+        }
+        Thread.sleep(STABILITY_FRAME_MS)
+      }
+    }
+
+    /**
+     * Cheap structural signature of the live tree under [root]: a rolling hash of each reachable
+     * node's screen bounds + class name + text length, bounded by [STABILITY_MAX_DEPTH]. Two equal
+     * consecutive signatures mean the UI stopped moving; an animating node shifts its bounds and so
+     * changes the hash frame-to-frame.
+     */
+    private fun treeSignature(root: AccessibilityNodeInfo): Long {
+      var signature = SIGNATURE_SEED
+      fun visit(node: AccessibilityNodeInfo, depth: Int) {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        signature = mixNodeIntoSignature(
+          signature,
+          bounds.left,
+          bounds.top,
+          bounds.right,
+          bounds.bottom,
+          node.className,
+          node.text,
+        )
+        if (depth >= STABILITY_MAX_DEPTH) return
+        for (i in 0 until node.childCount) {
+          val child = node.getChild(i) ?: continue
+          try {
+            visit(child, depth + 1)
+          } finally {
+            child.recycle()
+          }
+        }
+      }
+      visit(root, 0)
+      return signature
+    }
+
+    private fun treeStabilityGateDisabled(): Boolean {
+      val raw = System.getenv("TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY")?.lowercase()
+      return raw == "1" || raw == "true"
     }
 
     /**
@@ -1239,5 +1350,33 @@ class TrailblazeAccessibilityService : AccessibilityService() {
   }
 
   override fun onInterrupt() {}
+}
+
+private const val FNV_PRIME = 1099511628211L
+
+/**
+ * Pure per-node mixing for the capture-time tree-stability gate (see the service's
+ * `treeSignature` / `awaitTreeStable`). Folds one node's screen bounds + class + text length into
+ * a rolling FNV-style hash. Bounds-sensitive: any change to a node's position or size changes the
+ * result, so an animating tree yields a different signature frame-to-frame and a settled tree
+ * yields a stable one. Side-effect-free so it is unit-testable without a device (see
+ * [TreeSignatureTest]).
+ */
+internal fun mixNodeIntoSignature(
+  accumulator: Long,
+  left: Int,
+  top: Int,
+  right: Int,
+  bottom: Int,
+  className: CharSequence?,
+  text: CharSequence?,
+): Long {
+  var hash = accumulator
+  for (edge in intArrayOf(left, top, right, bottom)) {
+    hash = (hash xor edge.toLong()) * FNV_PRIME
+  }
+  hash = (hash xor (className?.toString()?.hashCode()?.toLong() ?: 0L)) * FNV_PRIME
+  hash = (hash xor (text?.length?.toLong() ?: 0L)) * FNV_PRIME
+  return hash
 }
 

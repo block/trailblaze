@@ -18,6 +18,16 @@ broadcasts, app launches, Maestro commands) are framework/driver tools that exec
 Trailblaze (Kotlin); the TypeScript just composes them. MCP stops being an author-facing concept
 — it survives only as the wire protocol for the rare subprocess boundary.
 
+> **Status — DONE (2026-06).** This collapse has shipped. `@trailblaze/scripting` was split into
+> two bundle *profiles* from one authoring surface — the slim in-process entry
+> (`sdks/typescript/src/in-process.ts`) and the full subprocess entry — and the in-process bundlers
+> (`DaemonScriptedToolBundler`, the build-logic `BundleAuthorToolsTask`, and the `:trailblaze-common`
+> framework bundler) alias `@trailblaze/scripting` to the slim entry. The three former
+> `@trailblaze/tools` consumers (`openUrl` + the two sample-app tool files) were migrated to the
+> typed `export const X = trailblaze.tool<I>(...)` form, and **the `@trailblaze/tools` package
+> (`sdks/typescript-tools/`) has been deleted.** The references to it below describe the
+> pre-collapse state and are kept as a historical record.
+
 ## Verified current state (the baseline that motivated this)
 
 From code, not kdoc. Both surfaces target QuickJS, but the docs over-claimed what each does:

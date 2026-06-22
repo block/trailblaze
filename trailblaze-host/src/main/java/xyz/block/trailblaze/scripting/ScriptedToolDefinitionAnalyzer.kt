@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.Console
 
 /**
  * Default subprocess timeout for [ScriptedToolDefinitionAnalyzer]. Overridable via
@@ -485,8 +486,122 @@ open class ScriptedToolDefinitionAnalyzer(
         }
         current = current.parentFile
       }
-      return null
+      // No SDK source tree on disk — the common case for an installed CLI. Fall back to the
+      // self-contained analyzer shim bundled into the framework JAR, extracted to a stable
+      // cache dir. Returns null only when the JAR didn't ship the bundle (a dev build that
+      // skipped `bundleScriptedToolAnalyzerShim`), preserving the prior "analyzer
+      // unavailable" degradation.
+      return resolveBundledAnalyzerSdkDir()
     }
+
+    /**
+     * JAR-resource path of the self-contained analyzer shim — `extract-tool-defs.mjs` with
+     * `ts-json-schema-generator` + `typescript` bundled in by `:trailblaze-models`'s
+     * `bundleScriptedToolAnalyzerShim` task. Absent in dev builds that skipped that task.
+     */
+    internal const val BUNDLED_ANALYZER_SHIM_RESOURCE: String =
+      "trails/config/analyzer/extract-tool-defs.mjs"
+
+    /** Per-process memo of the extracted bundled-shim dir. The bundle is fixed for a given
+     *  CLI build, so the ~7 MB resource is read + validated at most once per JVM (a CLI
+     *  upgrade is a new process, which re-validates). `@Volatile` + idempotent extraction
+     *  make a benign double-extract under a thread race harmless. */
+    @Volatile
+    private var bundledAnalyzerSdkDirMemo: File? = null
+
+    /**
+     * Final fallback for [resolveSdkDir]: extract the framework-bundled, self-contained
+     * analyzer shim from the JAR to the per-user cache dir and return it. The bundle inlines
+     * all of its npm deps, so the extracted shim runs under `bun` with no `node_modules` —
+     * which is what lets an installed CLI (no SDK source tree) analyze typed tools out of the
+     * box. Memoized per process.
+     *
+     * Returns null when the JAR doesn't carry the bundle (dev build), so callers degrade to
+     * the "analyzer unavailable" message rather than crashing.
+     */
+    internal fun resolveBundledAnalyzerSdkDir(): File? {
+      bundledAnalyzerSdkDirMemo?.let { return it }
+      val dir = extractBundledAnalyzerShim(
+        File(System.getProperty("user.home") ?: ".", ".trailblaze/analyzer"),
+      )
+      if (dir != null) bundledAnalyzerSdkDirMemo = dir
+      return dir
+    }
+
+    /**
+     * Extract the bundled shim resource to [cacheRoot] and return the dir, or null. Best-effort:
+     * a missing resource (dev build), an *empty* resource (a stripped/corrupt build — guarded so
+     * we don't leave a zero-byte shim that the marker would make [analyzerToolingAvailable]
+     * accept), or any I/O error all yield null + a diagnostic, never a thrown exception — the
+     * caller then degrades to "analyzer unavailable". Split out (no memo) so it's unit-testable
+     * with an explicit dir.
+     */
+    internal fun extractBundledAnalyzerShim(cacheRoot: File): File? = try {
+      val bytes = ScriptedToolDefinitionAnalyzer::class.java.classLoader
+        ?.getResourceAsStream(BUNDLED_ANALYZER_SHIM_RESOURCE)
+        ?.use { it.readBytes() }
+      when {
+        bytes == null -> null
+        bytes.isEmpty() -> {
+          Console.info(
+            "[ScriptedToolDefinitionAnalyzer] bundled analyzer shim resource is empty — " +
+              "skipping (typed-tool analysis unavailable from the bundled shim).",
+          )
+          null
+        }
+        else -> extractBundledShim(bytes, cacheRoot).also {
+          Console.info("[ScriptedToolDefinitionAnalyzer] using JAR-bundled analyzer shim at $it")
+        }
+      }
+    } catch (e: Exception) {
+      Console.info(
+        "[ScriptedToolDefinitionAnalyzer] failed to extract bundled analyzer shim " +
+          "(${e.message ?: e.javaClass.simpleName}) — typed-tool analysis unavailable.",
+      )
+      null
+    }
+
+    /**
+     * Write [shimBytes] to `<cacheRoot>/tools/extract-tool-defs.mjs` (the layout
+     * [resolveExtractorShim] expects) and return [cacheRoot]. Skip-write-if-content-matches
+     * keeps the cached shim's mtime stable across runs of the same framework build. Split
+     * out so it's unit-testable without a JAR on the classpath.
+     */
+    internal fun extractBundledShim(shimBytes: ByteArray, cacheRoot: File): File {
+      val shimFile = File(cacheRoot, "tools/extract-tool-defs.mjs")
+      val stale = !shimFile.isFile ||
+        shimFile.length() != shimBytes.size.toLong() ||
+        !shimFile.readBytes().contentEquals(shimBytes)
+      if (stale) {
+        shimFile.parentFile.mkdirs()
+        shimFile.writeBytes(shimBytes)
+      }
+      // Marker so [analyzerToolingAvailable] recognizes this dir as the self-contained
+      // bundle — it has no `node_modules/` (the deps are inlined into the shim), which the
+      // source-tree preflight would otherwise reject.
+      val marker = File(cacheRoot, BUNDLED_ANALYZER_MARKER_FILENAME)
+      if (!marker.isFile) {
+        marker.parentFile.mkdirs()
+        marker.writeText("Trailblaze self-contained scripted-tool analyzer shim bundle.\n")
+      }
+      return cacheRoot
+    }
+
+    /** Marker file written into the bundled-shim cache dir by [extractBundledShim]; its
+     *  presence means the shim is self-contained (deps inlined), so no `node_modules/`
+     *  tree is required to run it. */
+    internal const val BUNDLED_ANALYZER_MARKER_FILENAME: String = ".trailblaze-bundled-analyzer"
+
+    /**
+     * True when [sdkDir] can actually drive the extractor shim: either it's a real SDK
+     * source tree with `node_modules/ts-json-schema-generator` installed, OR it's the
+     * framework-bundled self-contained shim dir (deps inlined — see [extractBundledShim]).
+     * Callsites gate on this before constructing an analyzer so a shim with no resolvable
+     * deps isn't invoked and then fail per-trailmap with `ERR_MODULE_NOT_FOUND`.
+     */
+    fun analyzerToolingAvailable(sdkDir: File): Boolean =
+      File(sdkDir, "node_modules/ts-json-schema-generator").isDirectory ||
+        File(sdkDir, BUNDLED_ANALYZER_MARKER_FILENAME).isFile
 
     /**
      * Convenience: resolve the shim file under the SDK tree (or under

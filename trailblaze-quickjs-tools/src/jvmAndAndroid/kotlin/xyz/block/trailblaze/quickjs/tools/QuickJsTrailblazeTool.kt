@@ -9,6 +9,7 @@ import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
@@ -47,12 +48,29 @@ class QuickJsTrailblazeTool(
    * finally-clear is a harmless no-op after the inner finally already cleared it.
    */
   internal val binding: SessionScopedHostBinding? = null,
+  /**
+   * 1:1 with the scripted tool's declared `isRecordable`. `false` surfaces a per-instance
+   * [toolMetadata] override so the recording gate
+   * ([getIsRecordableFromAnnotation][xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation],
+   * which consults `toolMetadata?.isRecordable` first) keeps the invocation out of the replayable
+   * `.trail.yaml`. Carried on the tool itself — NOT a wrapper — so the decoded instance stays a
+   * [QuickJsTrailblazeTool]: `SessionScopedHostBinding`'s same-host re-entry guard keys off that
+   * exact type, and a wrapper would let a same-bundle compose bypass the guard and deadlock the
+   * host's non-reentrant `evalMutex`. Default `true`.
+   */
+  internal val isRecordable: Boolean = true,
 ) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
 
   constructor(host: QuickJsToolHost, advertisedName: ToolName, args: JsonObject) :
     this(host, advertisedName, args, null)
 
   override val advertisedToolName: String get() = advertisedName.toolName
+
+  // `null` when recordable (default) preserves the prior behavior — the recording gate falls
+  // through to the (absent) class annotation's `true` default. Only a `false` config surfaces an
+  // override that flips the recorded bit.
+  override val toolMetadata: TrailblazeToolMetadata?
+    get() = if (isRecordable) null else TrailblazeToolMetadata(isRecordable = false)
 
   // Surface the LLM-supplied args as `rawToolArguments` so `toLogPayload()` writes them
   // into the `TrailblazeToolLog.raw` field verbatim — otherwise this class-backed (but

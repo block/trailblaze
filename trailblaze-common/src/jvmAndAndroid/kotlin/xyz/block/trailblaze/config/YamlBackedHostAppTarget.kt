@@ -61,13 +61,22 @@ class YamlBackedHostAppTarget(
   // --- Custom tools per driver type ---
 
   /**
-   * Per-driver classification of resolved tool names into class-backed vs YAML-defined buckets.
-   * Used for both `tools:` (inclusion) and `excluded_tools:` (exclusion) — both sides need the
-   * same split so callers can route each kind through its own API.
+   * Per-driver classification of resolved tool names into class-backed, YAML-defined, and
+   * scripted (`.ts` / `.js`) buckets. Used for both `tools:` (inclusion) and `excluded_tools:`
+   * (exclusion) — both sides need the same split so callers can route each kind through its own
+   * API.
+   *
+   * [scriptedNames] is populated on both sides: each classifies a `platforms.<p>.tools:` /
+   * `excluded_tools:` entry that resolves to a scripted tool into this bucket (via
+   * `toolNameResolver.resolveScriptedNameOrNull`), plus a toolset's `resolvedScriptedToolNames`
+   * on the inclusion path. Inclusion-side scripted tools *also* arrive through `target.tools:`
+   * (`getInlineScriptTools()`), which `getAgentToolboxForDriver` unions in separately rather than
+   * via this map. It defaults empty so either side can omit it when there are no scripted entries.
    */
   private data class ResolvedToolsByDriver(
     val classes: Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>>,
     val yamlNames: Map<TrailblazeDriverType, Set<ToolName>>,
+    val scriptedNames: Map<TrailblazeDriverType, Set<ToolName>> = emptyMap(),
   )
 
   /**
@@ -77,11 +86,12 @@ class YamlBackedHostAppTarget(
   private val resolvedCustomToolsByDriver: ResolvedToolsByDriver by lazy {
     val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
     val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
+    val scriptedNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
     config.platforms?.forEach { (platformKey, platformConfig) ->
       val driverTypes = platformConfig.resolveDriverTypes(platformKey)
 
-      // Resolve toolsets — both backings flow through.
+      // Resolve toolsets — all three backings flow through.
       platformConfig.toolSets?.forEach { toolSetId ->
         val toolSet = availableToolSets[toolSetId]
         if (toolSet == null) {
@@ -92,22 +102,30 @@ class YamlBackedHostAppTarget(
           if (!toolSet.isCompatibleWith(dt)) continue
           classes.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedToolClasses)
           yamlNames.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedYamlToolNames)
+          scriptedNames.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedScriptedToolNames)
         }
       }
 
       // Resolve individual tools — look up by bare name; route to the right bucket.
-      // `resolveYamlNameOrNull` returns a typed `ToolName?`, so classification hands back
-      // the already-wrapped value and we avoid a re-wrap here (Decision 038's
-      // wrap-at-the-boundary pattern).
+      // `resolveYamlNameOrNull` / `resolveScriptedNameOrNull` return a typed `ToolName?`, so
+      // classification hands back the already-wrapped value and we avoid a re-wrap here
+      // (Decision 038's wrap-at-the-boundary pattern). Before the scripted branch, a scripted
+      // (`.ts` / `.js`) tool name listed in `tools:` (e.g. `openUrl`) resolved to neither a class
+      // nor a YAML name and hit the `else` below — silently dropped as "unknown tool" — the
+      // inclusion-side parallel of the exclusion bug fixed in `resolvedExcludedToolsByDriver`.
       platformConfig.tools?.forEach { toolName ->
         val toolClass = toolNameResolver.resolveOrNull(toolName)
         val yamlName = toolNameResolver.resolveYamlNameOrNull(toolName)
+        val scriptedName = toolNameResolver.resolveScriptedNameOrNull(toolName)
         when {
           toolClass != null -> for (dt in driverTypes) {
             classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
           }
           yamlName != null -> for (dt in driverTypes) {
             yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
+          }
+          scriptedName != null -> for (dt in driverTypes) {
+            scriptedNames.getOrPut(dt) { mutableSetOf() }.add(scriptedName)
           }
           else -> Console.log(
             "Warning: App target '$id' platform '$platformKey' references unknown tool '$toolName'",
@@ -116,7 +134,7 @@ class YamlBackedHostAppTarget(
       }
     }
 
-    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames)
+    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames, scriptedNames = scriptedNames)
   }
 
   override fun internalGetCustomToolsForDriver(
@@ -131,17 +149,27 @@ class YamlBackedHostAppTarget(
     return resolvedCustomToolsByDriver.yamlNames[driverType] ?: emptySet()
   }
 
+  override fun getCustomScriptedToolNamesForDriver(
+    driverType: TrailblazeDriverType,
+  ): Set<ToolName> {
+    return resolvedCustomToolsByDriver.scriptedNames[driverType] ?: emptySet()
+  }
+
   // --- Excluded tools ---
 
   /**
-   * For each driver type, the resolved set of *excluded* tools — split into class-backed and
-   * YAML-defined entries. Mirrors [resolvedCustomToolsByDriver]'s classification so a target's
-   * `excluded_tools: [pressBack]` flows through the exclusion API instead of being swallowed
-   * by the resolver as an unknown class.
+   * For each driver type, the resolved set of *excluded* tools — split into class-backed,
+   * YAML-defined, and scripted (`.ts` / `.js`) entries. Mirrors [resolvedCustomToolsByDriver]'s
+   * classification so a target's `excluded_tools: [pressBack]` (YAML) or `excluded_tools: [openUrl]`
+   * (scripted, toolset-delivered) flows through the right exclusion API instead of being swallowed
+   * by the resolver as an unknown tool. Before scripted was a recognized bucket here, an
+   * `excluded_tools: [openUrl]` entry hit the `else` branch below and was logged as "unknown tool"
+   * then dropped, so the exclusion never reached the LLM-surface compositors.
    */
   private val resolvedExcludedToolsByDriver: ResolvedToolsByDriver by lazy {
     val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
     val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
+    val scriptedNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
     config.platforms?.forEach { (platformKey, platformConfig) ->
       val excludedNames = platformConfig.excludedTools ?: return@forEach
@@ -149,12 +177,16 @@ class YamlBackedHostAppTarget(
       excludedNames.forEach { name ->
         val toolClass = toolNameResolver.resolveOrNull(name)
         val yamlName = toolNameResolver.resolveYamlNameOrNull(name)
+        val scriptedName = toolNameResolver.resolveScriptedNameOrNull(name)
         when {
           toolClass != null -> for (dt in driverTypes) {
             classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
           }
           yamlName != null -> for (dt in driverTypes) {
             yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
+          }
+          scriptedName != null -> for (dt in driverTypes) {
+            scriptedNames.getOrPut(dt) { mutableSetOf() }.add(scriptedName)
           }
           else -> Console.log(
             "Warning: App target '$id' platform '$platformKey' excluded_tools references unknown tool '$name'",
@@ -163,7 +195,7 @@ class YamlBackedHostAppTarget(
       }
     }
 
-    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames)
+    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames, scriptedNames = scriptedNames)
   }
 
   override fun getExcludedToolsForDriver(
@@ -175,6 +207,11 @@ class YamlBackedHostAppTarget(
     driverType: TrailblazeDriverType,
   ): Set<ToolName> =
     resolvedExcludedToolsByDriver.yamlNames[driverType] ?: emptySet()
+
+  override fun getExcludedScriptedToolNamesForDriver(
+    driverType: TrailblazeDriverType,
+  ): Set<ToolName> =
+    resolvedExcludedToolsByDriver.scriptedNames[driverType] ?: emptySet()
 
   override fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> {
     val ids = mutableListOf<String>()

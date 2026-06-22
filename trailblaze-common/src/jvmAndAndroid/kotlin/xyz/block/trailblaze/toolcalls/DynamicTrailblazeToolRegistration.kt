@@ -23,6 +23,15 @@ interface DynamicTrailblazeToolRegistration {
   val trailblazeDescriptor: TrailblazeToolDescriptor
 
   /**
+   * Whether this tool is advertised to the LLM. `false` keeps it dispatchable by name and
+   * resolvable for recorded replays, but drops it from the LLM's tool menu —
+   * [TrailblazeToolRepo.advertisedDynamic] filters `false` registrations out. Defaults to `true`,
+   * so registrations that don't model LLM-visibility (subprocess MCP, etc.) stay advertised as
+   * before.
+   */
+  val surfaceToLlm: Boolean get() = true
+
+  /**
    * Build the Koog-level [TrailblazeKoogTool] for this tool. Called each time the repo
    * produces a [ai.koog.agents.core.tools.ToolRegistry] via
    * [TrailblazeToolRepo.asToolRegistry].

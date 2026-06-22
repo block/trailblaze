@@ -13,7 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
 /**
- * Evaluates a `@trailblaze/tools` JS bundle in a QuickJS engine and exposes the registered
+ * Evaluates a `@trailblaze/scripting` JS bundle in a QuickJS engine and exposes the registered
  * tools through [listTools] / [callTool]. No MCP, no transport — direct same-process dispatch.
  * One host = one engine = one bundle; [shutdown] tears it down.
  *
@@ -279,7 +279,7 @@ class QuickJsToolHost internal constructor(
      * during evaluation; once this returns, the host is ready for [listTools] / [callTool].
      *
      * @param bundleJs the bundled JS source. Must be a single self-contained string —
-     *   typically the output of esbuild against an author's `tools.ts` with `@trailblaze/tools`
+     *   typically the output of esbuild against an author's `tools.ts` with `@trailblaze/scripting`
      *   aliased to the SDK shim. `import` / `export` survive only if the caller passes
      *   `asModule = true`; today this evaluates as a script, which works because the shim
      *   uses globals rather than ESM modules.

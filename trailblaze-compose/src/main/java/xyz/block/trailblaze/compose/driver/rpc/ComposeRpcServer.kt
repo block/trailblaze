@@ -20,6 +20,8 @@ import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.rpc.registerRpcHandler
+import xyz.block.trailblaze.rpc.respondRpcError
 
 /**
  * Embedded HTTP server that exposes Compose test operations over RPC.

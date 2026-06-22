@@ -1,12 +1,13 @@
 // AUTO-GENERATED — do not edit by hand.
 //
 // TypeScript bindings for the Trail Runner web UI, derived from the Kotlin @Serializable
-// DTOs the daemon's HTTP API exchanges as JSON. Kotlin is canonical; this is the derived
-// artifact.
+// DTOs the daemon's HTTP API exchanges as JSON, plus a typed client for the Trail Runner
+// /rpc/<Name> endpoints. Kotlin is canonical; this is the derived artifact.
 //
 // Regenerate with the `generateDtoTs` Gradle task; CI's `verifyDtoTs` byte-diffs this file
 // against a fresh generation and fails the build on drift, so hand edits are reverted on
 // the next CI run.
+import { rpcCall, type RpcResult, type RpcCallOptions } from "../rpc/client.js";
 
 export interface AddTrailRootRequest {
   path: string;
@@ -25,6 +26,14 @@ export interface AnalyticsResponse {
   events: AnalyticsEventDto[];
 }
 
+export interface CancelSessionRequest {
+  id: string;
+}
+
+export interface CancelSessionResponse {
+  ok: boolean;
+}
+
 export interface CreateTrailDirRequest {
   path: string;
 }
@@ -32,6 +41,10 @@ export interface CreateTrailDirRequest {
 export interface CreateTrailRequest {
   path: string;
   yaml: string;
+}
+
+export interface DeleteSessionRequest {
+  id: string;
 }
 
 export interface DeleteSessionResponse {
@@ -63,6 +76,68 @@ export interface FavoriteRequest {
 
 export interface FavoritesResponse {
   ids: string[];
+}
+
+export interface GetDeviceAppsRequest {
+  platform: string;
+  id: string;
+}
+
+export interface GetEditedTrailsRequest {
+}
+
+export interface GetFavoritesRequest {
+}
+
+export interface GetIntegrationsRequest {
+}
+
+export interface GetRunToolsRequest {
+  target: string;
+  driver?: string | null;
+  platform?: string | null;
+}
+
+export interface GetSessionAnalyticsRequest {
+  sessionId: string;
+}
+
+export interface GetSessionFilesRequest {
+  sessionId: string;
+}
+
+export interface GetSessionsRequest {
+}
+
+export interface GetSettingsRequest {
+}
+
+export interface GetToolSourceRequest {
+  className?: string | null;
+  path?: string | null;
+}
+
+export interface GetToolUsageCountsRequest {
+}
+
+export interface GetToolUsagesRequest {
+  toolId: string;
+}
+
+export interface GetToolsRequest {
+}
+
+export interface GetTrailDetailRequest {
+  id: string;
+}
+
+export interface GetTrailRootsRequest {
+}
+
+export interface GetTrailmapsRequest {
+}
+
+export interface GetTrailsRequest {
 }
 
 export interface IntegrationActionDto {
@@ -117,13 +192,35 @@ export interface OkResponse {
   error?: string | null;
 }
 
+export interface OpenGooseRequest {
+}
+
 export interface OpenSessionFileRequest {
+  id: string;
   name: string;
+}
+
+export interface RebuildDaemonRequest {
 }
 
 export interface RebuildDaemonResponse {
   ok: boolean;
   error?: string | null;
+}
+
+export interface RemoveTrailRootRequest {
+  path: string;
+}
+
+export interface RevealSessionRequest {
+  id: string;
+}
+
+export interface RevealTrailRequest {
+  id: string;
+}
+
+export interface RevealTrailsRootRequest {
 }
 
 export interface RunRequest {
@@ -140,13 +237,30 @@ export interface RunRequest {
   captureNetworkTraffic?: boolean | null;
   captureIosLogs?: boolean | null;
   captureAnalytics?: boolean | null;
+  captureEchoPluginData?: boolean | null;
   trailId?: string | null;
+  draftId?: string | null;
+  variant?: string | null;
 }
 
 export interface RunResponse {
   success: boolean;
   sessionId?: string | null;
   error?: string | null;
+}
+
+export interface RunToolSetDto {
+  id: string;
+  description: string;
+  alwaysEnabled: boolean;
+  tools: string[];
+}
+
+export interface RunToolsResponse {
+  target: string;
+  driver: string;
+  resolved: boolean;
+  toolsets: RunToolSetDto[];
 }
 
 export interface SaveTrailRequest {
@@ -158,6 +272,15 @@ export interface SaveTrailResponse {
   success: boolean;
   savedPath?: string | null;
   error?: string | null;
+}
+
+export interface SessionFileDto {
+  name: string;
+  size: number;
+}
+
+export interface SessionFilesResponse {
+  files: SessionFileDto[];
 }
 
 export interface SessionSummary {
@@ -176,6 +299,11 @@ export interface SessionSummary {
 
 export interface SessionsResponse {
   sessions: SessionSummary[];
+}
+
+export interface SetFavoriteRequest {
+  id: string;
+  favorite: boolean;
 }
 
 export interface SettingsDto {
@@ -202,9 +330,33 @@ export interface SettingsDto {
   screenshotCompressionQuality?: number | null;
 }
 
+export interface SettingsPatchRequest {
+  themeMode?: string | null;
+  alwaysOnTop?: boolean | null;
+  captureLogcat?: boolean | null;
+  captureIosLogs?: boolean | null;
+  captureNetworkTraffic?: boolean | null;
+  captureAnalytics?: boolean | null;
+  showWebBrowser?: boolean | null;
+  showTrailsTab?: boolean | null;
+  showDevicesTab?: boolean | null;
+  showWaypointsTab?: boolean | null;
+  trailsDirectory?: string | null;
+  logsDirectory?: string | null;
+  selfHealEnabled?: boolean | null;
+  requireSteps?: boolean | null;
+  saveAnnotatedScreenshots?: boolean | null;
+  maxLlmCalls?: number | null;
+  llmProvider?: string | null;
+  llmModel?: string | null;
+  screenshotMaxLongerSide?: number | null;
+  screenshotMaxShorterSide?: number | null;
+  screenshotCompressionQuality?: number | null;
+}
+
 export interface ToolCatalogEntry {
   id: string;
-  flavor: string;
+  flavor: ToolFlavor;
   trailmap: string;
   sourcePath: string;
   description?: string | null;
@@ -217,6 +369,8 @@ export interface ToolCatalogEntry {
 export interface ToolCatalogResponse {
   tools: ToolCatalogEntry[];
 }
+
+export type ToolFlavor = "kotlin" | "yaml" | "scripted";
 
 export interface ToolParamDto {
   name: string;
@@ -240,6 +394,10 @@ export interface ToolRunResponse {
   result?: string | null;
   error?: string | null;
   durationMs?: number;
+}
+
+export interface ToolSourceResponse {
+  source?: string | null;
 }
 
 export interface ToolSourceSaveRequest {
@@ -304,7 +462,7 @@ export type TrailblazeDevicePlatform = "ANDROID" | "IOS" | "WEB" | "DESKTOP";
 export interface TrailmapComponent {
   name: string;
   relPath: string;
-  flavor?: string | null;
+  flavor?: ToolFlavor | null;
 }
 
 export interface TrailmapEntry {
@@ -323,6 +481,15 @@ export interface TrailmapsResponse {
   trailmaps: TrailmapEntry[];
 }
 
+export interface UpdateTrailRequest {
+  id: string;
+  yaml: string;
+}
+
+export interface ValidateTrailRequest {
+  yaml: string;
+}
+
 export interface ValidateTrailResponse {
   valid: boolean;
   errors?: ValidationErrorDto[];
@@ -331,4 +498,93 @@ export interface ValidateTrailResponse {
 export interface ValidationErrorDto {
   message: string;
   line?: number | null;
+}
+
+/**
+ * Typed client for the Trail Runner /rpc/<Name> endpoints — one method per RpcRequest<T>.
+ *
+ *   const rpc = createTrailRunnerRpcClient({ baseUrl });
+ *   const r = await rpc.getEditedTrails();   // RpcResult<EditedTrailsResponse>
+ */
+export function createTrailRunnerRpcClient(options: RpcCallOptions = {}) {
+  return {
+    addTrailRoot: (request: AddTrailRootRequest): Promise<RpcResult<TrailRootsResponse>> =>
+      rpcCall<AddTrailRootRequest, TrailRootsResponse>("AddTrailRootRequest", request, options),
+    cancelSession: (request: CancelSessionRequest): Promise<RpcResult<CancelSessionResponse>> =>
+      rpcCall<CancelSessionRequest, CancelSessionResponse>("CancelSessionRequest", request, options),
+    createTrail: (request: CreateTrailRequest): Promise<RpcResult<SaveTrailResponse>> =>
+      rpcCall<CreateTrailRequest, SaveTrailResponse>("CreateTrailRequest", request, options),
+    createTrailDir: (request: CreateTrailDirRequest): Promise<RpcResult<SaveTrailResponse>> =>
+      rpcCall<CreateTrailDirRequest, SaveTrailResponse>("CreateTrailDirRequest", request, options),
+    deleteSession: (request: DeleteSessionRequest): Promise<RpcResult<DeleteSessionResponse>> =>
+      rpcCall<DeleteSessionRequest, DeleteSessionResponse>("DeleteSessionRequest", request, options),
+    getDeviceApps: (request: GetDeviceAppsRequest): Promise<RpcResult<DeviceAppsResponse>> =>
+      rpcCall<GetDeviceAppsRequest, DeviceAppsResponse>("GetDeviceAppsRequest", request, options),
+    getEditedTrails: (request: GetEditedTrailsRequest = {}): Promise<RpcResult<EditedTrailsResponse>> =>
+      rpcCall<GetEditedTrailsRequest, EditedTrailsResponse>("GetEditedTrailsRequest", request, options),
+    getFavorites: (request: GetFavoritesRequest = {}): Promise<RpcResult<FavoritesResponse>> =>
+      rpcCall<GetFavoritesRequest, FavoritesResponse>("GetFavoritesRequest", request, options),
+    getIntegrations: (request: GetIntegrationsRequest = {}): Promise<RpcResult<IntegrationsResponse>> =>
+      rpcCall<GetIntegrationsRequest, IntegrationsResponse>("GetIntegrationsRequest", request, options),
+    getRunTools: (request: GetRunToolsRequest): Promise<RpcResult<RunToolsResponse>> =>
+      rpcCall<GetRunToolsRequest, RunToolsResponse>("GetRunToolsRequest", request, options),
+    getSessionAnalytics: (request: GetSessionAnalyticsRequest): Promise<RpcResult<AnalyticsResponse>> =>
+      rpcCall<GetSessionAnalyticsRequest, AnalyticsResponse>("GetSessionAnalyticsRequest", request, options),
+    getSessionFiles: (request: GetSessionFilesRequest): Promise<RpcResult<SessionFilesResponse>> =>
+      rpcCall<GetSessionFilesRequest, SessionFilesResponse>("GetSessionFilesRequest", request, options),
+    getSessions: (request: GetSessionsRequest = {}): Promise<RpcResult<SessionsResponse>> =>
+      rpcCall<GetSessionsRequest, SessionsResponse>("GetSessionsRequest", request, options),
+    getSettings: (request: GetSettingsRequest = {}): Promise<RpcResult<SettingsDto>> =>
+      rpcCall<GetSettingsRequest, SettingsDto>("GetSettingsRequest", request, options),
+    getToolSource: (request: GetToolSourceRequest): Promise<RpcResult<ToolSourceResponse>> =>
+      rpcCall<GetToolSourceRequest, ToolSourceResponse>("GetToolSourceRequest", request, options),
+    getToolUsageCounts: (request: GetToolUsageCountsRequest = {}): Promise<RpcResult<ToolUsageCountsResponse>> =>
+      rpcCall<GetToolUsageCountsRequest, ToolUsageCountsResponse>("GetToolUsageCountsRequest", request, options),
+    getToolUsages: (request: GetToolUsagesRequest): Promise<RpcResult<TrailIndexResponse>> =>
+      rpcCall<GetToolUsagesRequest, TrailIndexResponse>("GetToolUsagesRequest", request, options),
+    getTools: (request: GetToolsRequest = {}): Promise<RpcResult<ToolCatalogResponse>> =>
+      rpcCall<GetToolsRequest, ToolCatalogResponse>("GetToolsRequest", request, options),
+    getTrailDetail: (request: GetTrailDetailRequest): Promise<RpcResult<TrailDetailResponse>> =>
+      rpcCall<GetTrailDetailRequest, TrailDetailResponse>("GetTrailDetailRequest", request, options),
+    getTrailRoots: (request: GetTrailRootsRequest = {}): Promise<RpcResult<TrailRootsResponse>> =>
+      rpcCall<GetTrailRootsRequest, TrailRootsResponse>("GetTrailRootsRequest", request, options),
+    getTrailmaps: (request: GetTrailmapsRequest = {}): Promise<RpcResult<TrailmapsResponse>> =>
+      rpcCall<GetTrailmapsRequest, TrailmapsResponse>("GetTrailmapsRequest", request, options),
+    getTrails: (request: GetTrailsRequest = {}): Promise<RpcResult<TrailIndexResponse>> =>
+      rpcCall<GetTrailsRequest, TrailIndexResponse>("GetTrailsRequest", request, options),
+    newComponent: (request: NewComponentRequest): Promise<RpcResult<NewComponentResponse>> =>
+      rpcCall<NewComponentRequest, NewComponentResponse>("NewComponentRequest", request, options),
+    openGoose: (request: OpenGooseRequest = {}): Promise<RpcResult<OkResponse>> =>
+      rpcCall<OpenGooseRequest, OkResponse>("OpenGooseRequest", request, options),
+    openSessionFile: (request: OpenSessionFileRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<OpenSessionFileRequest, OkResponse>("OpenSessionFileRequest", request, options),
+    rebuildDaemon: (request: RebuildDaemonRequest = {}): Promise<RpcResult<RebuildDaemonResponse>> =>
+      rpcCall<RebuildDaemonRequest, RebuildDaemonResponse>("RebuildDaemonRequest", request, options),
+    removeTrailRoot: (request: RemoveTrailRootRequest): Promise<RpcResult<TrailRootsResponse>> =>
+      rpcCall<RemoveTrailRootRequest, TrailRootsResponse>("RemoveTrailRootRequest", request, options),
+    revealSession: (request: RevealSessionRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<RevealSessionRequest, OkResponse>("RevealSessionRequest", request, options),
+    revealTrail: (request: RevealTrailRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<RevealTrailRequest, OkResponse>("RevealTrailRequest", request, options),
+    revealTrailsRoot: (request: RevealTrailsRootRequest = {}): Promise<RpcResult<OkResponse>> =>
+      rpcCall<RevealTrailsRootRequest, OkResponse>("RevealTrailsRootRequest", request, options),
+    run: (request: RunRequest): Promise<RpcResult<RunResponse>> =>
+      rpcCall<RunRequest, RunResponse>("RunRequest", request, options),
+    setFavorite: (request: SetFavoriteRequest): Promise<RpcResult<FavoritesResponse>> =>
+      rpcCall<SetFavoriteRequest, FavoritesResponse>("SetFavoriteRequest", request, options),
+    settingsPatch: (request: SettingsPatchRequest): Promise<RpcResult<SettingsDto>> =>
+      rpcCall<SettingsPatchRequest, SettingsDto>("SettingsPatchRequest", request, options),
+    toolReveal: (request: ToolRevealRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<ToolRevealRequest, OkResponse>("ToolRevealRequest", request, options),
+    toolRun: (request: ToolRunRequest): Promise<RpcResult<ToolRunResponse>> =>
+      rpcCall<ToolRunRequest, ToolRunResponse>("ToolRunRequest", request, options),
+    toolSourceSave: (request: ToolSourceSaveRequest): Promise<RpcResult<SaveTrailResponse>> =>
+      rpcCall<ToolSourceSaveRequest, SaveTrailResponse>("ToolSourceSaveRequest", request, options),
+    trailOpen: (request: TrailOpenRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<TrailOpenRequest, OkResponse>("TrailOpenRequest", request, options),
+    updateTrail: (request: UpdateTrailRequest): Promise<RpcResult<SaveTrailResponse>> =>
+      rpcCall<UpdateTrailRequest, SaveTrailResponse>("UpdateTrailRequest", request, options),
+    validateTrail: (request: ValidateTrailRequest): Promise<RpcResult<ValidateTrailResponse>> =>
+      rpcCall<ValidateTrailRequest, ValidateTrailResponse>("ValidateTrailRequest", request, options),
+  };
 }

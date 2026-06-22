@@ -1,11 +1,13 @@
 package xyz.block.trailblaze.model
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
@@ -33,6 +35,14 @@ data class CustomTrailblazeTools(
    * Defaults to empty; rules that only reference class-backed tools don't need to set it.
    */
   val registeredAppSpecificYamlToolNames: Set<ToolName> = emptySet(),
+  /**
+   * App Specific scripted (`.ts` / `.js`) tool names given to the LLM by default. Symmetric with
+   * [registeredAppSpecificYamlToolNames] for the scripted case. Use this for tools delivered by a
+   * toolset's `tools:` (e.g. `openUrl` via `core_interaction`) or listed in a target's
+   * `platforms.<p>.tools:` — advertised to the LLM but dispatched through the per-session
+   * scripted-tool runtime. Defaults to empty; rules that reference no scripted tools don't set it.
+   */
+  val registeredAppSpecificScriptedToolNames: Set<ToolName> = emptySet(),
   /** App Specific Tools that can be registered to the LLM, but are not by default */
   val otherAppSpecificLlmTools: Set<KClass<out TrailblazeTool>> = setOf(),
   /** App Specific Tools that cannot be registered to the LLM */
@@ -70,8 +80,36 @@ data class CustomTrailblazeTools(
       driverType?.let { TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(it) }
         ?: emptySet()
       ) + registeredAppSpecificYamlToolNames,
+  /**
+   * Initial set of scripted (`.ts` / `.js`) tool names given to the LLM via a [TrailblazeToolRepo].
+   * Symmetric with [initialToolRepoYamlToolNames] for the scripted-backed case. If [driverType] is
+   * set, the default is the driver-compatible scripted surface from the catalog; otherwise empty.
+   *
+   * Same catalog-scope caveat as [initialToolRepoToolClasses] applies — the default uses the
+   * classpath-discovered catalog. Override explicitly to compose against a custom
+   * [toolSetCatalog].
+   */
+  val initialToolRepoScriptedToolNames: Set<ToolName> =
+    (
+      driverType?.let { TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(it) }
+        ?: emptySet()
+      ) + registeredAppSpecificScriptedToolNames,
   /** Optional custom toolset catalog for dynamic toolset switching. */
   val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
+  /**
+   * The target's `excluded_tools:` opt-outs for [driverType], split by backing
+   * (class / YAML / scripted) as a [TrailblazeToolSurface]. Forwarded by [toTrailblazeToolRepo] to
+   * [TrailblazeToolRepo.withDynamicToolSets] so every partition is subtracted from the repo's
+   * initial surface.
+   *
+   * This is load-bearing for **scripted** exclusions specifically: a scripted tool delivered by an
+   * always-enabled toolset (e.g. `openUrl` via `core_interaction`) is re-added inside
+   * `withDynamicToolSets` from the catalog's `coreTools`, so it can't be pre-subtracted into
+   * [initialToolRepoToolClasses] / [initialToolRepoYamlToolNames] the way the class/YAML opt-outs
+   * are — it has to ride through here to actually drop on the on-device path. Populate from
+   * `target.getExcludedToolSurfaceForDriver(driverType)`. Defaults to no exclusions.
+   */
+  val initialToolRepoExclusions: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
 ) {
   fun allForSerializationTools(): Set<KClass<out TrailblazeTool>> = buildSet {
     addAll(registeredAppSpecificLlmTools)
@@ -94,6 +132,8 @@ data class CustomTrailblazeTools(
  * [TrailblazeToolRepo.withDynamicToolSets]:
  * - [CustomTrailblazeTools.initialToolRepoToolClasses] — class-backed custom tools
  * - [CustomTrailblazeTools.initialToolRepoYamlToolNames] — YAML-defined custom tools
+ * - [CustomTrailblazeTools.initialToolRepoScriptedToolNames] — scripted (`.ts` / `.js`) custom tools
+ * - [CustomTrailblazeTools.initialToolRepoExclusions] — `excluded_tools:` opt-outs (all backings)
  * - [CustomTrailblazeTools.toolSetCatalog] — dynamic-toolset catalog (falls back to classpath)
  * - [CustomTrailblazeTools.driverType] — driver filter for `always_enabled` entries
  *
@@ -106,6 +146,14 @@ fun CustomTrailblazeTools.toTrailblazeToolRepo(): TrailblazeToolRepo =
   TrailblazeToolRepo.withDynamicToolSets(
     customToolClasses = initialToolRepoToolClasses,
     customYamlToolNames = initialToolRepoYamlToolNames,
+    customScriptedToolNames = initialToolRepoScriptedToolNames,
+    // Forward all three exclusion partitions. The class/YAML opt-outs are usually already removed
+    // from initialToolRepo* by the caller, so subtracting them again is idempotent; the scripted
+    // partition is the one that *must* arrive here, since always-enabled scripted tools are
+    // re-added from the catalog inside withDynamicToolSets and can't be pre-subtracted upstream.
+    excludedToolClasses = initialToolRepoExclusions.toolClasses,
+    excludedYamlToolNames = initialToolRepoExclusions.yamlToolNames,
+    excludedScriptedToolNames = initialToolRepoExclusions.scriptedToolNames,
     catalog = toolSetCatalog ?: TrailblazeToolSetCatalog.defaultEntries(),
     driverType = driverType,
   )

@@ -109,6 +109,21 @@ data class TrailmapScriptedToolFile(
    */
   val supportedPlatforms: List<String>? = null,
   /**
+   * Top-level shortcut for `_meta: { trailblaze/surfaceToLlm: false }`. `false` hides this scripted
+   * tool from the LLM's tool menu while keeping it dispatchable by name (composed by a parent tool)
+   * and resolvable for recorded replays — the scripted-tool equivalent of a Kotlin
+   * `@TrailblazeToolClass(surfaceToLlm = false)` internal step. Translated by [toInlineScriptToolConfig]
+   * into `_meta["trailblaze/surfaceToLlm"]` on the runtime [InlineScriptToolConfig]. Default `true`.
+   */
+  val surfaceToLlm: Boolean = true,
+  /**
+   * Top-level shortcut for `_meta: { trailblaze/isRecordable: false }`. `false` keeps this scripted
+   * tool's invocation out of the recorded `.trail.yaml` (mirrors Kotlin
+   * `@TrailblazeToolClass(isRecordable = false)`). Translated by [toInlineScriptToolConfig] into
+   * `_meta["trailblaze/isRecordable"]`. Default `true`.
+   */
+  val isRecordable: Boolean = true,
+  /**
    * Runtime selector (`subprocess` or `inProcess`) — see [ScriptedToolRuntime].
    *
    * `null` (the default) means in-process QuickJS. Set this to `subprocess` only when the
@@ -284,6 +299,10 @@ data class TrailmapScriptedToolEntry(
   val requiresHost: Boolean? = null,
   /** `null` or empty (default) = inherit file-wide [TrailmapScriptedToolFile.supportedPlatforms]. */
   val supportedPlatforms: List<String>? = null,
+  /** `null` (default) = inherit file-wide [TrailmapScriptedToolFile.surfaceToLlm]. */
+  val surfaceToLlm: Boolean? = null,
+  /** `null` (default) = inherit file-wide [TrailmapScriptedToolFile.isRecordable]. */
+  val isRecordable: Boolean? = null,
   /**
    * Per-entry `_meta` keys. Merged with the file-wide [TrailmapScriptedToolFile.meta] — keys
    * present on both win on the entry side.
@@ -376,12 +395,16 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig 
     explicitMeta = meta,
     supportedPlatforms = supportedPlatforms,
     requiresHost = requiresHost,
+    surfaceToLlm = surfaceToLlm,
+    isRecordable = isRecordable,
   )
   return InlineScriptToolConfig(
     script = script,
     name = resolvedName,
     description = description,
     requiresHost = requiresHost,
+    surfaceToLlm = surfaceToLlm,
+    isRecordable = isRecordable,
     runtime = runtime,
     meta = mergedMeta,
     inputSchema = buildInputSchemaObject(inputSchema),
@@ -459,6 +482,8 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
     val effectiveRequiresHost = entry.requiresHost ?: requiresHost
     val effectiveSupportedPlatforms =
       entry.supportedPlatforms?.takeIf { it.isNotEmpty() } ?: supportedPlatforms
+    val effectiveSurfaceToLlm = entry.surfaceToLlm ?: surfaceToLlm
+    val effectiveIsRecordable = entry.isRecordable ?: isRecordable
     // Merge file-wide defaults under per-entry overrides — per-entry keys win.
     val mergedExplicitMeta = when {
       meta == null && entry.meta == null -> null
@@ -473,12 +498,16 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
       explicitMeta = mergedExplicitMeta,
       supportedPlatforms = effectiveSupportedPlatforms,
       requiresHost = effectiveRequiresHost,
+      surfaceToLlm = effectiveSurfaceToLlm,
+      isRecordable = effectiveIsRecordable,
     )
     InlineScriptToolConfig(
       script = script,
       name = entry.name,
       description = entry.description,
       requiresHost = effectiveRequiresHost,
+      surfaceToLlm = effectiveSurfaceToLlm,
+      isRecordable = effectiveIsRecordable,
       runtime = runtime,
       meta = mergedMeta,
       inputSchema = buildInputSchemaObject(entry.inputSchema),
@@ -492,8 +521,8 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
  * misbehave if a string slipped in where a JsonArray is expected, but that error would surface
  * far from the descriptor file. We'd rather throw here with the descriptor name in the message.
  *
- * Only validates keys we know about (`trailblaze/requiresHost`, `trailblaze/supportedPlatforms`);
- * arbitrary author keys flow through unchecked.
+ * Only validates keys we know about (`trailblaze/requiresHost`, `trailblaze/supportedPlatforms`,
+ * `trailblaze/surfaceToLlm`, `trailblaze/isRecordable`); arbitrary author keys flow through unchecked.
  */
 private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
   if (meta == null) return
@@ -501,6 +530,18 @@ private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
     require(v is JsonPrimitive && v.isBooleanLiteral()) {
       "Tool '$toolName' `_meta.trailblaze/requiresHost`: expected a boolean, got ${v::class.simpleName}. " +
         "Prefer the top-level `requiresHost: true|false` shortcut instead of authoring this key directly."
+    }
+  }
+  // surfaceToLlm / isRecordable are read with `booleanOrNull` downstream, so a non-boolean would
+  // silently fall back to the `true` default — a "my opt-out didn't take" footgun. Fail loudly here
+  // (matching the requiresHost branch) so the author sees the type error at descriptor-load time.
+  for (key in listOf("trailblaze/surfaceToLlm", "trailblaze/isRecordable")) {
+    meta[key]?.let { v ->
+      require(v is JsonPrimitive && v.isBooleanLiteral()) {
+        "Tool '$toolName' `_meta.$key`: expected a boolean, got ${v::class.simpleName}. " +
+          "Prefer the top-level `${key.removePrefix("trailblaze/")}: true|false` shortcut instead of " +
+          "authoring this key directly."
+      }
     }
   }
   meta["trailblaze/supportedPlatforms"]?.let { v ->
@@ -526,6 +567,8 @@ private fun mergeMetaShortcuts(
   explicitMeta: JsonObject?,
   supportedPlatforms: List<String>?,
   requiresHost: Boolean,
+  surfaceToLlm: Boolean = true,
+  isRecordable: Boolean = true,
 ): JsonObject? {
   val explicit = explicitMeta ?: JsonObject(emptyMap())
   val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
@@ -536,7 +579,17 @@ private fun mergeMetaShortcuts(
   // from "key explicitly false". Authors that need the explicit-false shape can author it
   // directly in `_meta`.
   val needsRequiresHost = requiresHost
-  if (explicit.isEmpty() && !needsSupportedPlatforms && !needsRequiresHost) {
+  // surfaceToLlm / isRecordable default to `true`; only fold the NON-default (`false`) into _meta
+  // so the common case stays key-absent — mirrors requiresHost, which folds only when `true`.
+  val needsSurfaceToLlm = !surfaceToLlm
+  val needsIsRecordable = !isRecordable
+  if (
+    explicit.isEmpty() &&
+    !needsSupportedPlatforms &&
+    !needsRequiresHost &&
+    !needsSurfaceToLlm &&
+    !needsIsRecordable
+  ) {
     return null
   }
   return buildJsonObject {
@@ -552,6 +605,12 @@ private fun mergeMetaShortcuts(
     }
     if (needsRequiresHost) {
       put("trailblaze/requiresHost", JsonPrimitive(true))
+    }
+    if (needsSurfaceToLlm) {
+      put("trailblaze/surfaceToLlm", JsonPrimitive(false))
+    }
+    if (needsIsRecordable) {
+      put("trailblaze/isRecordable", JsonPrimitive(false))
     }
   }
 }

@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
  * Projects a [RegisteredToolSpec]'s `spec` JSON onto a [TrailblazeToolDescriptor] the
  * registry can surface to the LLM.
  *
- * The `@trailblaze/tools` SDK's `inputSchema` is the flat author-friendly form —
+ * The `@trailblaze/scripting` SDK's `inputSchema` is the flat author-friendly form —
  * `{ paramName: { type, description } }` — not the nested JSON Schema 2020-12 shape the
  * MCP-flavored runtime reads. This parser handles both:
  *
@@ -127,7 +127,7 @@ private fun JsonObject.tryDecodeAsProperty(): JsonSchemaProperty? = try {
   null
 }
 
-// Top-level `spec` keys defined by `@trailblaze/tools`'s `TrailblazeToolSpec` type.
+// Top-level `spec` keys defined by `@trailblaze/scripting`'s `TrailblazeToolSpec` type.
 // Mirroring them as named constants here so a renamed-key drift surfaces as a compile-
 // referenced symbol rather than a silent grep miss.
 private const val SPEC_KEY_DESCRIPTION = "description"

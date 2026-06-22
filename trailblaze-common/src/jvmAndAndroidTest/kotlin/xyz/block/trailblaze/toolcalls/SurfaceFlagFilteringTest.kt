@@ -6,6 +6,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.serialization.Serializable
 import org.junit.Test
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 
 /**
  * Pins the independence of [TrailblazeToolClass.surfaceToLlm] and
@@ -63,6 +64,16 @@ class SurfaceFlagFilteringTest {
   fun `both false - hidden from both LLM toolbox and scripted-tool bindings`() {
     assertNull(NeitherSurfaceTool::class.toKoogToolDescriptor())
     assertNull(NeitherSurfaceTool::class.toScriptedToolDescriptor())
+  }
+
+  @Test
+  fun `tapOnElementBySelector is surfaced to scripted tools but hidden from the LLM`() {
+    // Regression for the real production flip in PR #3853: `tapOnElementBySelector` moved from
+    // surfaceToScriptedTools=false to true so scripted authors can compose the selector-resolved
+    // tap, while staying hidden from the LLM (which uses the friendlier `tap`). A future blanket
+    // re-default that re-conflates the flags must not silently un-surface it.
+    assertNotNull(TapOnByElementSelector::class.toScriptedToolDescriptor())
+    assertNull(TapOnByElementSelector::class.toKoogToolDescriptor())
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

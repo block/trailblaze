@@ -1,78 +1,78 @@
 package xyz.block.trailblaze.codegen
 
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.descriptors.SerialDescriptor
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceRequest
-import xyz.block.trailblaze.host.rpc.ConnectToDeviceResponse
 import xyz.block.trailblaze.host.rpc.DisconnectDeviceRequest
-import xyz.block.trailblaze.host.rpc.DisconnectDeviceResponse
 import xyz.block.trailblaze.host.rpc.GetConnectedDevicesRequest
-import xyz.block.trailblaze.host.rpc.GetConnectedDevicesResponse
 import xyz.block.trailblaze.host.rpc.GetTargetAppsRequest
-import xyz.block.trailblaze.host.rpc.GetTargetAppsResponse
 import xyz.block.trailblaze.host.rpc.NavigateWebUrlRequest
-import xyz.block.trailblaze.host.rpc.NavigateWebUrlResponse
 import xyz.block.trailblaze.host.rpc.SetCurrentTargetAppRequest
-import xyz.block.trailblaze.host.rpc.SetCurrentTargetAppResponse
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import java.io.File
+import kotlin.reflect.KClass
 
 /**
- * Generates the TypeScript bindings for the daemon's `/rpc/<Name>` request/response types, so a
- * TypeScript UI can call the same typed RPC the Kotlin/Wasm UI uses today (via `HostRpcClient`),
- * with Kotlin as the single source of truth.
- *
- * Scope (this slice): the flat, UI-facing device + target-app endpoints. Deliberately excluded for
- * now because they carry on-the-wire **sealed** types the descriptor walker doesn't support yet:
- * `DeviceInteractionRequest` (sealed `DeviceInteraction`) and `GetScreenStateResponse` (sealed
- * node-detail in the view-hierarchy tree). Add them once `SerialDescriptorTsCodegen` grows
- * discriminated-union support.
- *
- * Only the request/response **data** types are generated. The `RpcResult` envelope is NOT a wire
- * type (the server unwraps it to the raw response on 200, or a flat error on non-2xx), so it lives
- * in the hand-written TypeScript client, not here.
+ * Generates the daemon `/rpc/<Name>` TypeScript bindings — request/response **types** AND a typed
+ * **client** — so a TypeScript UI calls `rpc.getConnectedDevices()` with the endpoint name, request
+ * type, response type, and path all derived from Kotlin. The reflection + rendering is shared with
+ * the Trail Runner generator via [RpcClientTsCodegen]; this object only owns the host-rpc endpoint
+ * allowlist + the file header.
  *
  * Run via `./gradlew :trailblaze-models:generateDtoTs`; CI's `verifyDtoTs` byte-diffs the committed
- * output.
+ * `host-rpc.ts`. The transport primitive (`rpcCall` / `RpcResult`) is the small hand-written client
+ * in `sdks/typescript/src/rpc/client.ts`; the generated methods wrap it with the types baked in.
  */
-@OptIn(ExperimentalSerializationApi::class)
 internal object HostRpcDtoTsBindings {
 
-  /** Endpoint request/response roots; nested + referenced types are pulled in transitively. */
-  private val ROOTS: List<SerialDescriptor> = listOf(
-    GetConnectedDevicesRequest.serializer().descriptor,
-    GetConnectedDevicesResponse.serializer().descriptor,
-    ConnectToDeviceRequest.serializer().descriptor,
-    ConnectToDeviceResponse.serializer().descriptor,
-    DisconnectDeviceRequest.serializer().descriptor,
-    DisconnectDeviceResponse.serializer().descriptor,
-    GetTargetAppsRequest.serializer().descriptor,
-    GetTargetAppsResponse.serializer().descriptor,
-    SetCurrentTargetAppRequest.serializer().descriptor,
-    SetCurrentTargetAppResponse.serializer().descriptor,
-    NavigateWebUrlRequest.serializer().descriptor,
-    NavigateWebUrlResponse.serializer().descriptor,
+  /**
+   * The explicit endpoint allowlist: `RpcRequest<TResponse>` implementors. Each one's response type
+   * and `/rpc/<Name>` path are DERIVED (reflection), not hand-paired. Adding an endpoint is a
+   * one-line edit here.
+   *
+   * This list tracks the endpoints the TypeScript UI actually consumes today (device + target-app
+   * flows); it is deliberately not the full registered RPC surface. Other flat `@Serializable`
+   * endpoints (e.g. `GetToolCatalogRequest`, `RunTrailYamlRequest`) are added here when a consumer
+   * needs them — until then callers can still use the untyped `rpcCall`. Separately, endpoints that
+   * carry on-the-wire **sealed** types are blocked on codegen, not scope: `DeviceInteractionRequest`
+   * (sealed `DeviceInteraction`) and `GetScreenStateRequest` (sealed node-detail) — add them once
+   * discriminated-union support lands in the walker.
+   *
+   * Typed as `KClass<out RpcRequest<*>>` so the allowlist is self-validating: a non-`RpcRequest`
+   * entry fails to compile rather than throwing at reflection time.
+   */
+  private val REQUESTS: List<KClass<out RpcRequest<*>>> = listOf(
+    GetConnectedDevicesRequest::class,
+    ConnectToDeviceRequest::class,
+    DisconnectDeviceRequest::class,
+    GetTargetAppsRequest::class,
+    SetCurrentTargetAppRequest::class,
+    NavigateWebUrlRequest::class,
+  )
+
+  fun generate(): String = RpcClientTsCodegen.generate(
+    header = HEADER,
+    extraTypeRoots = emptyList(),
+    requests = REQUESTS,
+    clientFunctionName = "createRpcClient",
+    surfaceLabel = "daemon's",
   )
 
   private const val HEADER: String =
     "// AUTO-GENERATED — do not edit by hand.\n" +
       "//\n" +
-      "// TypeScript bindings for the daemon's /rpc/<Name> request/response types, derived from the\n" +
-      "// Kotlin @Serializable models. Kotlin is canonical; this is the derived artifact. Pair these\n" +
-      "// with the rpcCall() client in ../rpc/client.ts.\n" +
+      "// Daemon /rpc/<Name> TypeScript bindings — request/response types AND a typed client —\n" +
+      "// derived from the Kotlin @Serializable models and their RpcRequest<TResponse> declarations.\n" +
+      "// Kotlin is canonical; this is the derived artifact.\n" +
       "//\n" +
       "// Regenerate with the `generateDtoTs` Gradle task; CI's `verifyDtoTs` byte-diffs this file\n" +
       "// against a fresh generation and fails the build on drift, so hand edits are reverted on\n" +
       "// the next CI run.\n"
-
-  fun generate(): String = SerialDescriptorTsCodegen.generate(ROOTS, HEADER)
 }
 
 /** Entry point for the `generateDtoTs` Gradle task. `args[0]` is the output file path. */
 internal fun main(args: Array<String>) {
-  val outPath = args.firstOrNull()
-    ?: error("usage: HostRpcDtoTsBindingsKt <output-file.ts>")
+  val outPath = args.firstOrNull() ?: error("usage: HostRpcDtoTsBindingsKt <output-file.ts>")
   val outFile = File(outPath)
   outFile.parentFile?.mkdirs()
   outFile.writeText(HostRpcDtoTsBindings.generate(), Charsets.UTF_8)
-  println("Wrote daemon RPC TypeScript bindings to ${outFile.absolutePath}")
+  println("Wrote daemon RPC TypeScript bindings (types + client) to ${outFile.absolutePath}")
 }

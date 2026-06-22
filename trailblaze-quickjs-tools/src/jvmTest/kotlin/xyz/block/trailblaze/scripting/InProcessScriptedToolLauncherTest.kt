@@ -1,14 +1,21 @@
 package xyz.block.trailblaze.scripting
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import java.io.File
 import java.nio.file.Files
 
 /**
@@ -39,6 +46,27 @@ class InProcessScriptedToolLauncherTest {
   @Test
   fun `describe returns nothing for an empty name set`() {
     assertTrue(InProcessScriptedToolLauncher.describe(emptySet()).isEmpty())
+  }
+
+  @Test
+  fun `resolveInProcessScriptedTools resolves a framework tool to its config and bundle path`() {
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl))
+    val one = resolved.firstOrNull { it.name == openUrl }
+    assertNotNull(one, "openUrl should resolve from the catalog as an in-process tool")
+    assertEquals("openUrl", one.config.name)
+    assertTrue(one.bundleResourcePath.isNotBlank(), "resolved tool must carry its bundle resource path")
+  }
+
+  @Test
+  fun `resolveInProcessScriptedTools skips unknown names and honors skipNames`() {
+    assertTrue(
+      InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(ToolName("definitelyNotARealScriptedTool"))).isEmpty(),
+      "unknown names resolve to nothing",
+    )
+    assertTrue(
+      InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl), skipNames = setOf(openUrl)).isEmpty(),
+      "skipNames drops the tool before resolution",
+    )
   }
 
   /**
@@ -78,6 +106,109 @@ class InProcessScriptedToolLauncherTest {
       )
     } finally {
       registrations.forEach { runCatching { it.dispose() } }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * The host in-process recording gate: a registration whose config carries `isRecordable = false`
+   * must produce a decoded tool that reports `getIsRecordableFromAnnotation() == false`, so
+   * `logToolExecution` keeps the invocation out of the replayable `.trail.yaml`. The default
+   * (`isRecordable = true`) must stay recordable — the QuickJS tool has no class annotation, so the
+   * gate falls through to the `true` default. Also pins the `surfaceToLlm` registration override.
+   *
+   * Reuses the framework `openUrl` bundle (ships on the classpath) but rebuilds the config with the
+   * flag flipped, since `openUrl` itself is a normal recordable + LLM-visible tool.
+   */
+  @Test
+  fun `isRecordable=false config threads onto the decoded tool's recordable bit`() = runBlocking {
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl)).single()
+    val bundleJs = assertNotNull(
+      this@InProcessScriptedToolLauncherTest::class.java.classLoader
+        .getResourceAsStream(resolved.bundleResourcePath),
+      "openUrl bundle should be on the test classpath at ${resolved.bundleResourcePath}",
+    ).use { it.readBytes().decodeToString() }
+
+    val sessionDir = Files.createTempDirectory("inproc-recordable-test").toFile()
+    val bundleFile = File(sessionDir, "openUrl.bundle.js").apply { writeText(bundleJs) }
+    val args = """{"url":"https://example.com"}"""
+
+    // Default config: recordable + surfaced (no-regression).
+    val recordableRepo = TrailblazeToolRepo.withDynamicToolSets()
+    val recordableReg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = resolved.config,
+      bundlePath = bundleFile,
+      toolRepo = recordableRepo,
+      sessionId = SessionId.sanitized("inproc-recordable-default"),
+    )
+
+    // Opt-out config: same bundle, flags flipped to false.
+    val hiddenRepo = TrailblazeToolRepo.withDynamicToolSets()
+    val hiddenReg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = resolved.config.copy(surfaceToLlm = false, isRecordable = false),
+      bundlePath = bundleFile,
+      toolRepo = hiddenRepo,
+      sessionId = SessionId.sanitized("inproc-recordable-optout"),
+    )
+
+    try {
+      assertTrue(recordableReg.surfaceToLlm, "default config must keep the registration surfaced")
+      assertTrue(
+        recordableReg.decodeToolCall(args).getIsRecordableFromAnnotation(),
+        "a recordable (default) scripted tool must stay recordable",
+      )
+
+      assertFalse(hiddenReg.surfaceToLlm, "surfaceToLlm=false must drop the registration from advertisement")
+      assertFalse(
+        hiddenReg.decodeToolCall(args).getIsRecordableFromAnnotation(),
+        "isRecordable=false must thread onto the decoded tool so the recording gate skips it",
+      )
+    } finally {
+      runCatching { recordableReg.dispose() }
+      runCatching { hiddenReg.dispose() }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * Host-path `_meta` consistency: a descriptor can opt out via the raw namespaced `_meta` key
+   * (`trailblaze/surfaceToLlm` / `trailblaze/isRecordable`) WITHOUT the typed shortcut field. The
+   * on-device QuickJS launcher reads `_meta`, so the host in-process registration must honor it too
+   * (opt-out AND with the typed field) — otherwise the host would advertise + record a tool the
+   * on-device path hides. Pins that the host path consults `_meta`, not just the typed slot.
+   */
+  @Test
+  fun `host registration honors raw _meta opt-out without the typed shortcut field`() = runBlocking {
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl)).single()
+    val bundleJs = assertNotNull(
+      this@InProcessScriptedToolLauncherTest::class.java.classLoader
+        .getResourceAsStream(resolved.bundleResourcePath),
+    ).use { it.readBytes().decodeToString() }
+    val sessionDir = Files.createTempDirectory("inproc-meta-optout-test").toFile()
+    val bundleFile = File(sessionDir, "openUrl.bundle.js").apply { writeText(bundleJs) }
+
+    // Typed fields left at their defaults (true); opt-out expressed ONLY via the namespaced `_meta`.
+    val metaOnlyOptOut = resolved.config.copy(
+      meta = buildJsonObject {
+        put("trailblaze/surfaceToLlm", JsonPrimitive(false))
+        put("trailblaze/isRecordable", JsonPrimitive(false))
+      },
+    )
+    val repo = TrailblazeToolRepo.withDynamicToolSets()
+    val reg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = metaOnlyOptOut,
+      bundlePath = bundleFile,
+      toolRepo = repo,
+      sessionId = SessionId.sanitized("inproc-meta-optout"),
+    )
+    try {
+      assertFalse(reg.surfaceToLlm, "host registration must honor `_meta.trailblaze/surfaceToLlm: false`")
+      assertFalse(
+        reg.decodeToolCall("""{"url":"https://example.com"}""").getIsRecordableFromAnnotation(),
+        "host registration must honor `_meta.trailblaze/isRecordable: false`",
+      )
+    } finally {
+      runCatching { reg.dispose() }
       sessionDir.deleteRecursively()
     }
   }

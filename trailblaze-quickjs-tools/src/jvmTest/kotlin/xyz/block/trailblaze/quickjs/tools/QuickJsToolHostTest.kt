@@ -23,7 +23,7 @@ import kotlinx.serialization.json.put
 
 /**
  * Round-trip tests for [QuickJsToolHost] using a hand-written JS bundle that simulates what
- * esbuild would emit when bundling an author's `tools.ts` against `@trailblaze/tools`.
+ * esbuild + the synthesized registration wrapper emit for an author's scripted-tool bundle.
  *
  * The bundle here inlines the shim's `globalThis.__trailblazeTools` registry directly — no
  * SDK npm package needed, no MCP. That matches the architecture of the new on-device runtime:
@@ -57,8 +57,8 @@ class QuickJsToolHostTest {
   @Test
   fun `bundle registers a tool and listTools surfaces it with its spec`() = runBlocking {
     val host = connect(
-      // Inlined shim + one tool. Reproduces what esbuild would produce when bundling
-      // `import { trailblaze } from "@trailblaze/tools"; trailblaze.tool(...)`.
+      // Inlined shim + one tool. Reproduces the `globalThis.__trailblazeTools` registry shape a
+      // scripted-tool bundle populates (the SDK-agnostic on-device dispatch contract).
       """
       const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
       const trailblaze = {

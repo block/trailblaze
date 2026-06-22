@@ -101,8 +101,9 @@ class AnalyzerScriptedToolEnrichment(
       val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return null
       val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
-      val tsjsg = File(sdkDir, "node_modules/ts-json-schema-generator")
-      if (!tsjsg.isDirectory) return null
+      // Deps must be resolvable: a real SDK tree with node_modules installed, OR the
+      // framework-bundled self-contained shim (deps inlined). Rejects a shim with neither.
+      if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) return null
       val analyzer = ScriptedToolDefinitionAnalyzer(
         bunBinary = bun,
         extractorShim = shim,
@@ -301,6 +302,8 @@ class AnalyzerScriptedToolEnrichment(
             entryMeta = entry.meta,
             entryRequiresHost = entry.requiresHost,
             entrySupportedPlatforms = entry.supportedPlatforms,
+            entrySurfaceToLlm = entry.surfaceToLlm,
+            entryIsRecordable = entry.isRecordable,
             def = defsByName.getValue(entry.name),
           )
         }
@@ -334,6 +337,8 @@ class AnalyzerScriptedToolEnrichment(
             entryMeta = null,
             entryRequiresHost = null,
             entrySupportedPlatforms = null,
+            entrySurfaceToLlm = null,
+            entryIsRecordable = null,
             def = def,
           ),
         )
@@ -354,11 +359,19 @@ class AnalyzerScriptedToolEnrichment(
           )
         }
         val def = defs.single()
+        val analyzerSurfaceToLlm = (def.spec?.get("surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
+        val analyzerIsRecordable = (def.spec?.get("isRecordable") as? JsonPrimitive)?.booleanOrNull ?: true
+        val effectiveSurfaceToLlm = descriptor.surfaceToLlm && analyzerSurfaceToLlm
+        val effectiveIsRecordable = descriptor.isRecordable && analyzerIsRecordable
+        // Combined (descriptor AND analyzer) value into mergeMeta so the on-device `_meta` matches
+        // the typed slot — see the buildPartialConfig rationale above.
         val merged = mergeMeta(
           descriptorMeta = descriptor.meta,
           requiresHost = descriptor.requiresHost,
           supportedPlatforms = descriptor.supportedPlatforms,
           analyzerSpec = def.spec,
+          surfaceToLlm = effectiveSurfaceToLlm,
+          isRecordable = effectiveIsRecordable,
         )
         listOf(
           InlineScriptToolConfig(
@@ -367,6 +380,8 @@ class AnalyzerScriptedToolEnrichment(
             description = def.description,
             requiresHost = descriptor.requiresHost ||
               (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true,
+            surfaceToLlm = effectiveSurfaceToLlm,
+            isRecordable = effectiveIsRecordable,
             runtime = descriptor.runtime,
             meta = merged,
             inputSchema = def.inputSchemaObject,
@@ -409,6 +424,8 @@ class AnalyzerScriptedToolEnrichment(
     entryMeta: JsonObject?,
     entryRequiresHost: Boolean?,
     entrySupportedPlatforms: List<String>?,
+    entrySurfaceToLlm: Boolean?,
+    entryIsRecordable: Boolean?,
     def: ScriptedToolDefinition,
   ): InlineScriptToolConfig {
     val description = entryDescription ?: def.description
@@ -427,29 +444,74 @@ class AnalyzerScriptedToolEnrichment(
     val effectiveSupportedPlatforms = entrySupportedPlatforms?.takeIf { it.isNotEmpty() }
       ?: fileLevelSupportedPlatforms
     val effectiveRequiresHost = entryRequiresHost ?: descriptor.requiresHost
+    val analyzerRequiresHost = (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true
+    // surfaceToLlm / isRecordable default `true`; `false` is the opt-out. Combine descriptor-side
+    // (per-entry wins over file-wide) with the analyzer-extracted `.ts` spec by AND — a `false`
+    // from either side hides / un-records the tool. Mirrors `requiresHost`'s additive union, just
+    // inverted because these flags default the other way.
+    val descriptorSurfaceToLlm = entrySurfaceToLlm ?: descriptor.surfaceToLlm
+    val descriptorIsRecordable = entryIsRecordable ?: descriptor.isRecordable
+    val analyzerSurfaceToLlm = (def.spec?.get("surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
+    val analyzerIsRecordable = (def.spec?.get("isRecordable") as? JsonPrimitive)?.booleanOrNull ?: true
+    val effectiveSurfaceToLlm = descriptorSurfaceToLlm && analyzerSurfaceToLlm
+    val effectiveIsRecordable = descriptorIsRecordable && analyzerIsRecordable
+    // Pass the FULLY-combined value (descriptor AND analyzer) into mergeMeta, not just the
+    // descriptor-side value: the shortcut fold runs LAST, so feeding it the combined opt-out makes
+    // the on-device `_meta` (read by QuickJsToolMeta) agree with the typed `InlineScriptToolConfig`
+    // slot the host reads — otherwise an explicit descriptor `_meta:{trailblaze/surfaceToLlm:true}`
+    // could win in `_meta` while the typed slot is `false`, diverging the two runtimes.
     val mergedMetaBase = mergeMeta(
       descriptorMeta = descriptor.meta,
       requiresHost = effectiveRequiresHost,
       supportedPlatforms = effectiveSupportedPlatforms,
       analyzerSpec = def.spec,
+      surfaceToLlm = effectiveSurfaceToLlm,
+      isRecordable = effectiveIsRecordable,
     )
-    val merged = if (entryMeta == null || entryMeta.isEmpty()) mergedMetaBase else {
+    val mergedWithEntry = if (entryMeta == null || entryMeta.isEmpty()) mergedMetaBase else {
       // Per-entry `_meta:` keys win over file-wide ones.
       buildJsonObject {
         mergedMetaBase?.forEach { (k, v) -> put(k, v) }
         entryMeta.forEach { (k, v) -> put(k, v) }
       }
     }
-    val analyzerRequiresHost = (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true
+    // The per-entry `_meta` overlay above runs AFTER mergeMeta's shortcut fold, so a per-entry raw
+    // `_meta:{trailblaze/surfaceToLlm:true}` could otherwise re-introduce a `true` that contradicts
+    // the combined-`false` typed slot — exactly the typed-vs-`_meta` divergence this enrichment is
+    // meant to prevent. Re-assert the combined opt-out as the final authority so the on-device
+    // `_meta` (read by QuickJsToolMeta) can never disagree with the host's typed slot.
+    val merged = reassertOptOuts(mergedWithEntry, effectiveSurfaceToLlm, effectiveIsRecordable)
     return InlineScriptToolConfig(
       script = scriptFile.absolutePath,
       name = entryName,
       description = description,
       requiresHost = effectiveRequiresHost || analyzerRequiresHost,
+      surfaceToLlm = effectiveSurfaceToLlm,
+      isRecordable = effectiveIsRecordable,
       runtime = descriptor.runtime,
       meta = merged,
       inputSchema = inputSchema,
     )
+  }
+
+  /**
+   * Forces `_meta.trailblaze/surfaceToLlm` / `…/isRecordable` to `false` whenever the combined
+   * effective value is `false`, so a later `_meta` overlay can't contradict the typed
+   * [InlineScriptToolConfig] slot. A `true` effective value leaves `_meta` untouched (the `true`
+   * default emits no key — re-asserting it would change the wire shape for the common case).
+   * Returns the input unchanged when both flags are `true` and there's nothing to enforce.
+   */
+  private fun reassertOptOuts(
+    meta: JsonObject?,
+    surfaceToLlm: Boolean,
+    isRecordable: Boolean,
+  ): JsonObject? {
+    if (surfaceToLlm && isRecordable) return meta
+    return buildJsonObject {
+      meta?.forEach { (k, v) -> put(k, v) }
+      if (!surfaceToLlm) put("trailblaze/surfaceToLlm", JsonPrimitive(false))
+      if (!isRecordable) put("trailblaze/isRecordable", JsonPrimitive(false))
+    }
   }
 
   /**
@@ -540,16 +602,23 @@ class AnalyzerScriptedToolEnrichment(
     requiresHost: Boolean,
     supportedPlatforms: List<String>?,
     analyzerSpec: JsonObject?,
+    surfaceToLlm: Boolean = true,
+    isRecordable: Boolean = true,
   ): JsonObject? {
     val explicit = descriptorMeta ?: JsonObject(emptyMap())
     val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
     val needsRequiresHost = requiresHost
+    // surfaceToLlm / isRecordable default `true`; only the `false` opt-out folds a key.
+    val needsSurfaceToLlm = !surfaceToLlm
+    val needsIsRecordable = !isRecordable
     val analyzerProjected = projectAnalyzerSpec(analyzerSpec)
     val analyzerHasContent = analyzerProjected.isNotEmpty()
     if (
       explicit.isEmpty() &&
       !needsSupportedPlatforms &&
       !needsRequiresHost &&
+      !needsSurfaceToLlm &&
+      !needsIsRecordable &&
       !analyzerHasContent
     ) {
       return null
@@ -572,6 +641,12 @@ class AnalyzerScriptedToolEnrichment(
       if (needsRequiresHost) {
         put("trailblaze/requiresHost", JsonPrimitive(true))
       }
+      if (needsSurfaceToLlm) {
+        put("trailblaze/surfaceToLlm", JsonPrimitive(false))
+      }
+      if (needsIsRecordable) {
+        put("trailblaze/isRecordable", JsonPrimitive(false))
+      }
     }
   }
 
@@ -591,22 +666,24 @@ class AnalyzerScriptedToolEnrichment(
     if (analyzerSpec == null || analyzerSpec.isEmpty()) return emptyMap()
     val projected = mutableMapOf<String, JsonElement>()
     // SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set
-    // (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`)
-    // is defined in THREE places that must stay in lockstep when a new field is
-    // added to `TrailblazeTypedToolSpec`:
-    //  1. `sdks/typescript/src/tool.ts`               (the SDK's TS surface)
+    // (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`,
+    // `surfaceToLlm`, `isRecordable`) is defined in THREE places that must stay in
+    // lockstep when a new field is added to `TrailblazeTypedToolSpec`:
+    //  1. `sdks/typescript/src/tool-core.ts`             (the SDK's TS surface)
     //  2. `sdks/typescript/tools/extract-tool-defs.mjs`  (`RECOGNIZED_SPEC_FIELDS`)
     //  3. This function (Kotlin projection into namespaced `_meta` keys)
-    // The runtime parser (`TrailblazeToolMeta.fromJsonObject`) reads the
-    // namespaced keys, so adding a field here without updating it there means
-    // the value flows through `_meta` but the runtime ignores it. There is no
-    // compile-time enforcement that the four sites agree — adding a parity
-    // test (or extracting a shared constant in a model module) is tracked as
-    // a follow-up.
+    // The runtime parsers (`TrailblazeToolMeta.fromJsonObject` for MCP/subprocess,
+    // `QuickJsToolMeta.fromSpec` for in-process) read the namespaced keys, so adding
+    // a field here without updating them there means the value flows through `_meta`
+    // but the runtime ignores it. There is no compile-time enforcement that the sites
+    // agree — adding a parity test (or extracting a shared constant in a model module)
+    // is tracked as a follow-up.
     analyzerSpec["supportedPlatforms"]?.let { projected["trailblaze/supportedPlatforms"] = it }
     analyzerSpec["requiresContext"]?.let { projected["trailblaze/requiresContext"] = it }
     analyzerSpec["requiresHost"]?.let { projected["trailblaze/requiresHost"] = it }
     analyzerSpec["supportedDrivers"]?.let { projected["trailblaze/supportedDrivers"] = it }
+    analyzerSpec["surfaceToLlm"]?.let { projected["trailblaze/surfaceToLlm"] = it }
+    analyzerSpec["isRecordable"]?.let { projected["trailblaze/isRecordable"] = it }
     return projected
   }
 

@@ -57,6 +57,11 @@ See [Trailmaps](trailmaps.md) for the trailmap manifest schema, per-file scripte
 workspace-vs-classpath precedence rule. For the binary-friendly config bundle story inside
 `trails/config/`, see [External Config](generated/external-config.md).
 
+If you author scripted tools, the framework also lays down generated files under
+`trails/config/trailmaps/` and `trails/.trailblaze/` (typed bindings, a per-trailmap
+`tsconfig.json`, the vendored SDK bundle). For what each one is and which to commit, see
+[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md).
+
 ## Trail file names
 
 Two filenames are recognized as trails, matched case-sensitively on the exact name:

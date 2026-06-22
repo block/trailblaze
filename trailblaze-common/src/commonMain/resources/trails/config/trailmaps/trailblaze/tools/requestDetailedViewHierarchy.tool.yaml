@@ -1,0 +1,2 @@
+id: requestDetailedViewHierarchy
+class: xyz.block.trailblaze.toolcalls.commands.RequestDetailedViewHierarchyTrailblazeTool

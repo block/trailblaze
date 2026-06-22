@@ -494,24 +494,26 @@ class AndroidCompactElementListTest {
   }
 
   @Test
-  fun `non-important labeled text is filtered by default`() {
-    // A TextView with text but marked as not-important-for-accessibility is normally
-    // filtered from the compact list (isMeaningful requires isImportantForAccessibility
-    // when the node's only signal is a label).
+  fun `non-important labeled leaf is surfaced (Compose mergeDescendants fallback)`() {
+    // Compose's default a11y handling sets isImportantForAccessibility=false on inner
+    // Text leaves because their content is supposed to be readable via the merged parent's
+    // contentDescription. When that merge doesn't fire (or the parent never gets a usable
+    // label) the dropped child carries the only readable text on screen. isMeaningful() now
+    // surfaces label-only nodes regardless of the importance flag — the upstream
+    // TrailblazeNodeMapper.filterImportantForAccessibility() already restricts kept non-
+    // important nodes to LEAVES, so anything reaching this point with a label is a node
+    // the LLM needs to see.
     val text = node(
       detail = DriverNodeDetail.AndroidAccessibility(
         className = "android.widget.TextView",
-        text = "Decorative text",
+        text = "Compose merged-descendant text",
         isImportantForAccessibility = false,
       ),
     )
     val root = node(children = listOf(text))
     val result = AndroidCompactElementList.build(root)
 
-    assertTrue(
-      !result.text.contains("Decorative text"),
-      "Non-important labeled TextView should be filtered out. Actual:\n${result.text}",
-    )
+    assertContains(result.text, "Compose merged-descendant text")
   }
 
   @Test
@@ -883,5 +885,92 @@ class AndroidCompactElementListTest {
 
     assertContains(result.text, "EditText \"Search\"")
     assertTrue(!result.text.contains("Search: Search"), "identical hint/text should dedupe")
+  }
+
+  // -- Compose graphicsLayer inverted bounds (right<left / bottom<top) --
+
+  @Test
+  fun `horizontally-inverted node stays visible and is tagged bounds-transformed`() {
+    // scaleX=-1f flips a visually-centered node to right<left; it must stay in the list (so the
+    // resolver can pick it) with coords flagged unreliable, not be dropped as offscreen.
+    val flipped =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.TextView",
+            text = "Digit1",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 375, top = 300, right = -705, bottom = 450),
+      )
+    val root = node(children = listOf(flipped))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "\"Digit1\"")
+    assertContains(result.text, "(bounds-transformed)")
+  }
+
+  @Test
+  fun `vertically-inverted node with negative bottom is not dropped as offscreen`() {
+    // bottom<top would trip the old `b.bottom <= 0` offscreen check and drop the node; the vertical
+    // axis is unreliable from the transform, so the node must be kept and tagged instead.
+    val flipped =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.TextView",
+            text = "AmountField",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 100, right = 200, bottom = -50),
+      )
+    val root = node(children = listOf(flipped))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertContains(result.text, "\"AmountField\"")
+    assertContains(result.text, "(bounds-transformed)")
+  }
+
+  @Test
+  fun `node genuinely offscreen on a reliable axis is still dropped when only the other axis is inverted`() {
+    // Below the fold (top >= screenHeight) plus a horizontal flip: the vertical axis is reliable and
+    // says offscreen, so it must still drop — an inversion on one axis is not a free pass on the other.
+    val offscreenFlipped =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "BelowAndFlipped",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 200, top = 900, right = -50, bottom = 950),
+      )
+    val root = node(children = listOf(offscreenFlipped))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertTrue(
+      !result.text.contains("BelowAndFlipped"),
+      "A genuinely offscreen node must stay dropped despite a horizontal-bounds inversion",
+    )
+  }
+
+  @Test
+  fun `normal below-fold node is still dropped`() {
+    // Regression guard for the offscreen / scroll-to-reveal path: a valid-bounds node below the fold
+    // must still be classified offscreen and dropped.
+    val below =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "BelowFold",
+            isClickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(left = 0, top = 900, right = 200, bottom = 950),
+      )
+    val root = node(children = listOf(below))
+    val result = AndroidCompactElementList.build(root, screenHeight = 800)
+
+    assertTrue(!result.text.contains("\"BelowFold\""), "Normal below-fold node must stay offscreen-dropped")
   }
 }

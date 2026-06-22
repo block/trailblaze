@@ -27,6 +27,7 @@ import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.scripting.mcp.shouldRegisterForPlatform
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
@@ -715,13 +716,21 @@ class ToolDiscoveryToolSet(
     if (driverType == null || target == null) return systemExclusions
 
     val targetExclusions = try {
-      val classExclusions = target.getExcludedToolsForDriver(driverType)
+      // One read of the target's `excluded_tools:` surface across all three backings — the same
+      // central accessor the resolver / runtime / on-device paths use. This keeps discovery's
+      // hidden set in lockstep with what the agent actually sees: a target's
+      // `excluded_tools: [pressBack]` (YAML) or `[openUrl]` (scripted) is hidden here exactly as
+      // it's dropped from the LLM surface.
+      val excluded = target.getExcludedToolSurfaceForDriver(driverType)
+      // Class exclusions resolve to their advertised descriptor name (the @TrailblazeToolClass
+      // name); YAML + scripted exclusions are already names.
+      val classExclusions = excluded.toolClasses
         .mapNotNull { it.toTrailblazeToolDescriptorWithSource()?.name }
-      // YAML-defined exclusions ride alongside class-backed ones so a target's
-      // `excluded_tools: [pressBack]` is respected by the discovery layer.
-      val yamlExclusions = target.getExcludedYamlToolNamesForDriver(driverType)
-        .map { it.toolName }
-      (classExclusions + yamlExclusions).toSet()
+      (
+        classExclusions +
+          excluded.yamlToolNames.map { it.toolName } +
+          excluded.scriptedToolNames.map { it.toolName }
+        ).toSet()
     } catch (e: Exception) {
       // Don't fail discovery if a target's exclusion lookup throws — just degrade to "no
       // target-side exclusions" and surface the failure so it isn't silent during debugging.

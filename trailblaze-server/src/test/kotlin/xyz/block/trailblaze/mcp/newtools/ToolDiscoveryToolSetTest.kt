@@ -255,6 +255,51 @@ class ToolDiscoveryToolSetTest {
     assertContains(otherNames, "secondapp")
   }
 
+  @Test
+  fun `INDEX mode hides a scripted tool the target excludes via excluded_tools`() = runTest {
+    // Discovery must honor scripted `excluded_tools:` the same way the LLM surface does. openUrl is
+    // a scripted (.ts) tool delivered by core_interaction/navigation; a target that opts out of it
+    // must not see it advertised by `toolbox`. Exercises the scripted partition of
+    // getExcludedToolSurfaceForDriver routed through getExcludedToolNames.
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+
+    fun toolNamesInPlatformToolsets(resultJson: String): Set<String> =
+      json.parseToJsonElement(resultJson).jsonObject["platformToolsets"]!!.jsonArray
+        .flatMap { it.jsonObject["tools"]?.jsonArray.orEmpty() }
+        .map { it.jsonPrimitive.content }
+        .toSet()
+
+    // Baseline: a target with no exclusions surfaces openUrl, so the negative assertion isn't vacuous.
+    val baseline = createToolSet(currentTarget = testTarget, currentDriverType = android)
+    assertContains(toolNamesInPlatformToolsets(baseline.toolbox()), "openUrl")
+
+    // A target that excludes openUrl (scripted) must not see it advertised in discovery output.
+    val excludingTarget = object : TrailblazeHostAppTarget(
+      id = "excludesopenurl",
+      displayName = "Excludes openUrl",
+    ) {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.excludes.app") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getExcludedScriptedToolNamesForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<ToolName> = setOf(ToolName("openUrl"))
+    }
+    val toolSet = createToolSet(
+      allTargets = setOf(excludingTarget),
+      currentTarget = excludingTarget,
+      currentDriverType = android,
+    )
+    assertFalse(
+      "openUrl" in toolNamesInPlatformToolsets(toolSet.toolbox()),
+      "openUrl was excluded via excluded_tools — discovery must hide it from platformToolsets",
+    )
+  }
+
   // -- 3. Index mode -- detail=true -------------------------------------------
 
   @Scenario(

@@ -33,7 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
  * Loads two bundles staged into the test APK assets:
  * 1. `config/trailmaps/sampleapp/tools/quickjs-tools/pure.js` — the pure-JS sample, copied via
  *    `stageTrailAssets`.
- * 2. `fixtures/quickjs/typed.bundle.js` — the typed `@trailblaze/tools` bundle produced by
+ * 2. `fixtures/quickjs/typed.bundle.js` — the typed `@trailblaze/scripting` bundle produced by
  *    `:trailblaze-quickjs-tools:bundleSampleAppTypedAuthorTool` and staged via
  *    `stageQuickjsBundles`.
  *
@@ -89,8 +89,8 @@ class QuickJsToolBundleOnDeviceTest {
   }
 
   /**
-   * The typed `@trailblaze/tools` bundle path — proves the esbuild output evaluates cleanly under
-   * Android-side QuickJS, not just the JVM target.
+   * The typed `@trailblaze/scripting` bundle path — proves the esbuild output evaluates cleanly
+   * under Android-side QuickJS, not just the JVM target.
    */
   @Test
   fun typedAuthorBundleLoadsAndDispatchesOnDevice() = runBlocking {

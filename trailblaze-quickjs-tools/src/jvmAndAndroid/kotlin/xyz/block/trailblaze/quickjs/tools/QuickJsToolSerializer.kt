@@ -27,6 +27,13 @@ class QuickJsToolSerializer(
   private val advertisedName: ToolName,
   private val host: QuickJsToolHost,
   private val binding: SessionScopedHostBinding? = null,
+  /**
+   * Forwarded onto the decoded [QuickJsTrailblazeTool] so a `isRecordable = false` scripted tool
+   * surfaces the per-instance metadata override that keeps it out of the recording. Defaults
+   * `true`; threading it here (rather than wrapping the decoded tool) keeps the instance a
+   * [QuickJsTrailblazeTool] for `SessionScopedHostBinding`'s same-host re-entry guard.
+   */
+  private val isRecordable: Boolean = true,
 ) : KSerializer<QuickJsTrailblazeTool> {
 
   constructor(advertisedName: ToolName, host: QuickJsToolHost) : this(advertisedName, host, null)
@@ -39,7 +46,13 @@ class QuickJsToolSerializer(
       ?: error("QuickJsToolSerializer requires JSON decoding (got ${decoder::class.simpleName}).")
     val argsElement = jsonDecoder.decodeJsonElement()
     val args = argsElement as? JsonObject ?: JsonObject(emptyMap())
-    return QuickJsTrailblazeTool(host = host, advertisedName = advertisedName, args = args, binding = binding)
+    return QuickJsTrailblazeTool(
+      host = host,
+      advertisedName = advertisedName,
+      args = args,
+      binding = binding,
+      isRecordable = isRecordable,
+    )
   }
 
   override fun serialize(encoder: Encoder, value: QuickJsTrailblazeTool) {

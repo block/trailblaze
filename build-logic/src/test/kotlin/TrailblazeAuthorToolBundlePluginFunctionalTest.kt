@@ -91,7 +91,7 @@ class TrailblazeAuthorToolBundlePluginFunctionalTest {
   fun `bundle task fails with directed error when entry file is missing`() {
     // Pins the kdoc claim that the bundle task surfaces a "entry not found" error pointing
     // at the offending path. Doesn't need a real esbuild — the entry-file check fires before
-    // ProcessBuilder runs, so we can omit `esbuildBinary` / `toolsSdkSrc` (the @InputFile
+    // ProcessBuilder runs, so we can omit `esbuildBinary` / `scriptingSdkSrc` (the @InputFile
     // validation will catch *those* gaps if we tried to run; we point them at the source dir
     // so Gradle's input-snapshot pass succeeds and the task action runs).
     val projectDir = newFixtureProject(
@@ -108,7 +108,8 @@ class TrailblazeAuthorToolBundlePluginFunctionalTest {
             sourceDir.set(layout.projectDirectory.dir("foo-src"))
             entryPoint.set("does-not-exist.ts")
             esbuildBinary.set(stubInput)
-            toolsSdkSrc.set(stubInput)
+            scriptingSdkSrc.set(stubInput)
+            scriptingWrapperTemplate.set(stubInput)
             autoInstall.set(false)
           }
         }

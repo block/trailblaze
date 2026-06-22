@@ -1,13 +1,5 @@
 package xyz.block.trailblaze.host
 
-import ai.koog.prompt.Prompt
-import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.AttachmentSource
-import ai.koog.prompt.message.Message
-import ai.koog.prompt.message.MessagePart
-import ai.koog.prompt.message.RequestMetaInfo
-import ai.koog.utils.time.KoogClock
-import ai.koog.prompt.params.LLMParams
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -15,10 +7,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.agent.BlazeConfig
 import xyz.block.trailblaze.agent.DefaultProgressReporter
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
 import xyz.block.trailblaze.agent.MultiAgentV3Runner
@@ -29,9 +18,6 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
-import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
-import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
-import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
@@ -92,11 +78,13 @@ import xyz.block.trailblaze.scripting.partitionByImportClosure
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -1648,9 +1636,11 @@ object TrailblazeHostYamlRunner {
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
-    val excludedToolClasses = targetTestApp
-      ?.getExcludedToolsForDriver(driverType)
-      ?: emptySet()
+    // Full `excluded_tools:` surface (class / YAML / scripted) via the central accessor, so this
+    // host-runner path drops scripted opt-outs (e.g. `openUrl`) too — not just class-backed ones.
+    val excludedSurface = targetTestApp
+      ?.getExcludedToolSurfaceForDriver(driverType)
+      ?: EmptyTrailblazeToolSurface
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -1720,7 +1710,9 @@ object TrailblazeHostYamlRunner {
 
     val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
       customToolClasses = customToolClasses,
-      excludedToolClasses = excludedToolClasses,
+      excludedToolClasses = excludedSurface.toolClasses,
+      excludedYamlToolNames = excludedSurface.yamlToolNames,
+      excludedScriptedToolNames = excludedSurface.scriptedToolNames,
       driverType = driverType,
     )
 
@@ -1845,45 +1837,6 @@ object TrailblazeHostYamlRunner {
         )
       }
 
-      val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
-        val metaInfo = RequestMetaInfo.create(KoogClock.System)
-        val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
-          Message.User(
-            parts = buildList<MessagePart.RequestPart> {
-              add(MessagePart.Text(userMessage))
-              add(
-                MessagePart.Attachment(
-                  source = AttachmentSource.Image(
-                    content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                    format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
-                  ),
-                ),
-              )
-            },
-            metaInfo = metaInfo,
-          )
-        } else {
-          Message.User(content = userMessage, metaInfo = metaInfo)
-        }
-        val koogPrompt = Prompt(
-          messages = listOf(
-            Message.System(content = systemPrompt, metaInfo = metaInfo),
-            userMsg,
-          ),
-          id = "host_accessibility_v3_planner",
-          params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
-        )
-        val response = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-        val toolCall = response.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
-        val toolArgsJson = toolCall?.args ?: "{}"
-        val toolArgs = try {
-          Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
-        } catch (_: Exception) {
-          JsonObject(emptyMap())
-        }
-        PlannerToolCallResult.fromRaw(toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown", toolArgs)
-      }
-
       val progressListener = loggingRule.logger.createProgressListener(session)
       val progressReporter = DefaultProgressReporter(progressListener)
       val availableToolsProvider = {
@@ -1893,8 +1846,6 @@ object TrailblazeHostYamlRunner {
       val v3Runner = MultiAgentV3Runner.create(
         screenAnalyzer = screenAnalyzer,
         executor = executor,
-        plannerLlmCall = plannerLlmCall,
-        config = BlazeConfig.DEFAULT,
         progressReporter = progressReporter,
         deviceId = trailblazeDeviceId,
         availableToolsProvider = availableToolsProvider,
@@ -2023,7 +1974,7 @@ object TrailblazeHostYamlRunner {
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
-    val excludedToolClasses = targetTestApp?.getExcludedToolsForDriver(driverType) ?: emptySet()
+    val excludedSurface = targetTestApp?.getExcludedToolSurfaceForDriver(driverType) ?: EmptyTrailblazeToolSurface
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -2076,7 +2027,9 @@ object TrailblazeHostYamlRunner {
 
     val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
       customToolClasses = customToolClasses,
-      excludedToolClasses = excludedToolClasses,
+      excludedToolClasses = excludedSurface.toolClasses,
+      excludedYamlToolNames = excludedSurface.yamlToolNames,
+      excludedScriptedToolNames = excludedSurface.scriptedToolNames,
       driverType = driverType,
     )
 

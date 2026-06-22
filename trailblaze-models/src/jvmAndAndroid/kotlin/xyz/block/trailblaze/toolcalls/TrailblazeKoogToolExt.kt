@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
@@ -82,15 +83,24 @@ fun KType.asToolType(): ToolParameterType {
 }
 
 /**
- * Parameters whose types should be excluded from Koog tool descriptor generation.
- * These are internal fields used for recording/playback, not for LLM selection.
+ * Parameters whose types should be excluded from Koog tool descriptor generation (BOTH the LLM
+ * surface via [toKoogToolDescriptor] and the scripted-tool surface via [toScriptedToolDescriptor]).
+ * These are internal fields used for recording/playback, not for LLM/scripted selection.
  *
- * [TrailblazeNodeSelector] is excluded because it contains self-referencing fields
- * (childOf, below, above, etc.) that cause [StackOverflowError] in Koog's
- * reflection, and because it is not a parameter the LLM should set.
+ * Both [TrailblazeNodeSelector] and its legacy Maestro-shaped sibling [TrailblazeElementSelector]
+ * are excluded because each contains self-referencing fields (childOf, below, above, containsChild,
+ * containsDescendants, …) that recurse without bound in Koog's reflection-based [asToolType]
+ * lowering and blow the stack with a [StackOverflowError]. That error is NOT an [Exception], so
+ * [toScriptedToolDescriptor]'s catch can't absorb it — an un-excluded recursive selector param on a
+ * surfaced tool crashes per-trailmap codegen / daemon startup outright (regression first seen when
+ * `tapOnElementBySelector`, which carries a legacy `selector: TrailblazeElementSelector?`, was
+ * surfaced to scripted tools). Neither selector is a parameter the LLM/scripted author sets via the
+ * descriptor anyway — scripted authors get the rich selector typing from the hand-curated
+ * `built-in-tools.ts`, and the legacy `selector` field is itself deprecated.
  */
 private val excludedParameterTypes = setOf(
   TrailblazeNodeSelector::class.qualifiedName,
+  TrailblazeElementSelector::class.qualifiedName,
 )
 
 /**

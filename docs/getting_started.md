@@ -63,10 +63,18 @@ cd trailblaze
 ./trailblaze app        # Start the daemon (also opens the desktop app on macOS)
 ```
 
-**Optional, via Homebrew (`brew install bun esbuild ffmpeg`):**
+**Bundled with the Homebrew install:**
 
-- `bun` + `esbuild` — needed only when authoring or running trailmap-defined scripted
-  tools written in TypeScript.
+- `bun` — the JavaScript runtime Trailblaze uses to type-check and analyze your TypeScript
+  scripted tools. `brew install block/tap/trailblaze` pulls it in as a dependency, so
+  **authoring typed scripted tools works out of the box** — no `bun install`, no
+  `node_modules` (the SDK and analyzer ship inside the CLI). Installing from source or
+  `install.sh` instead? Just put `bun` on your `PATH` ([bun.sh](https://bun.sh)).
+
+**Optional, via Homebrew (`brew install esbuild ffmpeg`):**
+
+- `esbuild` — needed only when *running* trailmap-defined scripted tools written in
+  TypeScript.
 - `ffmpeg` — needed only for trail video capture and sprite extraction. Trails still run
   without it; only the rendered video and sprite-strip outputs are missing.
 

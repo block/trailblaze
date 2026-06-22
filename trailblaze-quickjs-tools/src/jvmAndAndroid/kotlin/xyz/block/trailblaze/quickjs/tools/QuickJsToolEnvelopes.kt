@@ -53,7 +53,7 @@ internal data class QuickJsContentPart(
 
 /**
  * Per-invocation context handed to a bundled handler as its `ctx` parameter. Authors
- * receive this as `(args, ctx) => ...` in TS — see `@trailblaze/tools`'s
+ * receive this as `(args, ctx) => ...` in TS — see `@trailblaze/scripting`'s
  * `TrailblazeContext` type. The runtime stamps these fields at every dispatch.
  */
 @Serializable

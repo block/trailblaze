@@ -9,12 +9,11 @@
 //
 //   await trailblaze.run();
 
-import { run, type RunOptions } from "./run.js";
-import {
-  tool,
-  type TrailblazeToolHandler,
-  type TrailblazeToolSpec,
-  type TrailblazeTypedToolSpec,
+import type { RunOptions } from "./run.js";
+import type {
+  TrailblazeToolHandler,
+  TrailblazeToolSpec,
+  TrailblazeTypedToolSpec,
 } from "./tool.js";
 export { z } from "zod";
 
@@ -69,16 +68,14 @@ import "./built-in-tools.js";
 export type { RunOptions, TrailblazeToolHandler, TrailblazeToolSpec, TrailblazeTypedToolSpec };
 
 /**
- * Namespace bundle authors import as `trailblaze`. Flat entry points (`tool`, `run`) also
- * export individually for anyone who prefers named imports over the namespace.
+ * Namespace bundle authors import as `trailblaze`, plus the flat `tool` / `run` entry points.
+ * Sourced from the FULL profile (`./sub-process.js`) so IDE/typecheck consumers of
+ * `@trailblaze/scripting` get the complete authoring surface (typed + imperative `tool`, real
+ * `run`). The slim in-process profile (`./in-process.js`) is a separate subpath the bundler
+ * aliases to for default-runtime tools — it is not the package main.
  *
  * Test-only helpers (e.g., `_clearPendingTools` in `./tool.js`) are deliberately NOT
  * re-exported here. The SDK's public surface is `tool`, `run`, `fromMeta`, and the type
  * exports above; tests that need internals import from the module's relative path directly.
  */
-export const trailblaze = {
-  tool,
-  run,
-};
-
-export { run, tool };
+export { trailblaze, run, tool } from "./sub-process.js";

@@ -11,6 +11,7 @@ import ai.koog.agents.core.dsl.extension.nodeLLMCompressHistory
 import ai.koog.agents.core.dsl.extension.nodeLLMRequestOnlyCallingTools
 import ai.koog.agents.core.dsl.extension.nodeLLMSendToolResultsOnlyCallingTools
 import ai.koog.agents.core.dsl.extension.onToolCalls
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
@@ -105,6 +106,25 @@ import kotlin.reflect.full.findAnnotation
  * design; cross-block continuity would use Koog's persistency/snapshot feature and is intentionally
  * out of scope here. Compression can be disabled (pass a null strategy to [buildStrategy], or set
  * `TRAILBLAZE_KOOG_DISABLE_HISTORY_COMPRESSION=1`), which restores the prune-only v1 loop.
+ *
+ * ## Runtime toolset switching (progressive disclosure)
+ *
+ * The LLM starts with a minimal tool surface (the `always_enabled` toolsets) and can widen it
+ * mid-run by calling `setActiveToolSets` — a [xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool]
+ * that mutates the session's [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo] rather than driving
+ * the device. Koog poses two obstacles to this that the legacy MCP path doesn't have, both handled
+ * by the host runner ([runPromptsWithKoogStrategyGraph]):
+ *
+ *  1. **Config tools aren't device tools.** `setActiveToolSets` isn't an `ExecutableTrailblazeTool`,
+ *     so routing it through the driver agent throws "Unhandled Trailblaze tool". The host's tool
+ *     dispatcher intercepts `ConfigTrailblazeTool` and executes it against the repo instead (mirroring
+ *     the legacy `DirectMcpAgent`).
+ *  2. **Koog's tool surface is fixed at run start.** The [ToolRegistry] (execution) and the agent's
+ *     advertised `tools` descriptors (what the LLM sees) are both snapshotted when the [AIAgent] is
+ *     built, so mutating the repo alone changes nothing live. The [onToolSurfaceRefresh] hook closes
+ *     this: after a config tool runs, the prune-pre-send node calls it to top up the live registry
+ *     (so newly-active tools dispatch) and re-advertise the new descriptor set (so the LLM sees them)
+ *     before the next request. When the hook is `null` (any non-host caller) the surface stays fixed.
  *
  * ## Koog 1.0.0 API symbols used
  *
@@ -252,6 +272,16 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
       isHistoryTooBig: (Prompt) -> Boolean = { it.messages.size > HISTORY_COMPRESSION_MESSAGE_THRESHOLD },
       /** Name of the completion tool that terminates the loop (derived from its annotation). */
       objectiveStatusToolName: String = OBJECTIVE_STATUS_TOOL_NAME,
+      /**
+       * Hook invoked before each follow-up LLM request (in the prune-pre-send node). Returns the
+       * new advertised [ToolDescriptor] list when a `setActiveToolSets`-style [ConfigTrailblazeTool]
+       * [xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool] has changed the active toolsets since
+       * the last request, or `null` when the surface is unchanged (the common case — the advertised
+       * tools are then left as-is). The host implementation also tops up the live tool registry as a
+       * side effect so the newly-active tools dispatch. `null` (the default) disables runtime toolset
+       * switching entirely, preserving the original fixed-surface behavior for any non-host caller.
+       */
+      onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
     ): AIAgentGraphStrategy<String, String> =
       strategy(name) {
         // Forced tool-calling on every turn (ToolChoice.Required) — the LLM can't return free text.
@@ -279,7 +309,18 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
         val prunePreSendResults by node<ReceivedToolResults, ReceivedToolResults>(
           "prunePreSendResults",
         ) { input ->
-          llm.writeSession { prompt = pruneScreenStateHistory(prompt) }
+          // A ConfigTrailblazeTool (e.g. setActiveToolSets) may have just changed the active
+          // toolsets in the executeTools node we came from. Ask the host to rebuild the surface:
+          // a non-null result is the new advertised tool list (the host also tops up the live tool
+          // registry so newly-active tools can dispatch), null means nothing changed. Computed
+          // outside the write session since it only touches the repo/registry, not LLM state.
+          val refreshedTools = onToolSurfaceRefresh?.invoke()
+          llm.writeSession {
+            prompt = pruneScreenStateHistory(prompt)
+            if (refreshedTools != null) {
+              tools = refreshedTools
+            }
+          }
           input
         }
         // Terminal transform: executeObjectiveStatus produces ReceivedToolResults; the graph's
@@ -465,6 +506,10 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
      *   against a per-call execution context (built via `TrailblazeToolRepo.asToolRegistry`).
      * @param systemPrompt Custom system prompt (optional).
      * @param maxAgentIterations Maximum graph iterations before giving up.
+     * @param onToolSurfaceRefresh Hook for runtime toolset switching — see [buildStrategy]. When a
+     *   `setActiveToolSets`-style [xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool] changes the
+     *   active toolsets mid-run, this lets the host re-advertise the new tool surface (and top up
+     *   the live [toolRegistry] so the new tools dispatch). `null` keeps the fixed-surface behavior.
      * @return A ready-to-use agent.
      */
     fun createInProcess(
@@ -473,6 +518,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
       toolRegistry: ToolRegistry,
       systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
       maxAgentIterations: Int = DEFAULT_MAX_ITERATIONS,
+      onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
     ): KoogStrategyGraphAgent {
       val agent = buildAgent(
         llmClient = llmClient,
@@ -480,6 +526,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
         toolRegistry = toolRegistry,
         systemPrompt = systemPrompt,
         maxAgentIterations = maxAgentIterations,
+        onToolSurfaceRefresh = onToolSurfaceRefresh,
       )
       return KoogStrategyGraphAgent(agent, toolRegistry)
     }
@@ -495,6 +542,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
       toolRegistry: ToolRegistry,
       systemPrompt: String,
       maxAgentIterations: Int,
+      onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
     ): AIAgent<String, String> {
       // Koog 1.0.0 removed SingleLLMPromptExecutor — use MultiLLMPromptExecutor with one
       // (provider, client) entry instead (functionally equivalent for the single-client case).
@@ -530,6 +578,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
             HistoryCompressionStrategy.FromLastNMessages(HISTORY_COMPRESSION_KEEP_RECENT_MESSAGES)
           },
           isHistoryTooBig = { it.messages.size > threshold },
+          onToolSurfaceRefresh = onToolSurfaceRefresh,
         ),
         toolRegistry = toolRegistry,
         systemPrompt = systemPrompt,

@@ -1,11 +1,53 @@
 package xyz.block.trailblaze.quickjs.tools
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
+
+/**
+ * YAML-descriptor-derived advertisement metadata for a scripted tool, supplied to
+ * [QuickJsToolBundleLauncher.launchAll] via `advertisementOverrides`.
+ *
+ * Typed scripted tools bundle through a synthesized wrapper that registers a handler-only entry on
+ * `globalThis.__trailblazeTools` (no `spec`) — the bundle is the lean dispatch surface; the tool's
+ * description / inputSchema / `_meta` live in its YAML descriptor. Without an override the launcher
+ * would advertise such a tool to the LLM with an empty descriptor and skip `_meta` gating. The
+ * on-device caller ([xyz.block.trailblaze.android.AndroidTrailblazeRule]) builds one of these from
+ * the discovered YAML descriptor so advertisement + gating match the daemon/host path (which
+ * already sources both from YAML via `InProcessScriptedToolLauncher`).
+ *
+ * @param descriptor the LLM-facing descriptor (`buildScriptedToolDescriptor(config)`).
+ * @param meta the `_meta` registration gate (`QuickJsToolMeta` from the descriptor's `_meta`).
+ */
+data class QuickJsToolAdvertisement(
+  val descriptor: TrailblazeToolDescriptor,
+  val meta: QuickJsToolMeta,
+) {
+  companion object {
+    /**
+     * Build the advertisement (LLM-facing descriptor + on-device `_meta` registration gate) for a
+     * catalog scripted tool's [config]. The ONE place a YAML scripted-tool config becomes "what the
+     * LLM sees + how it's gated on-device", so the on-device launch path
+     * (`AndroidTrailblazeRule.launchToolsetScriptedToolBundles`) can't drift from the descriptor the
+     * host path derives via the same `buildScriptedToolDescriptor`. `config.meta` already carries the
+     * folded top-level `supportedPlatforms` / `requiresHost` shortcuts as `trailblaze/`-prefixed keys,
+     * which is exactly what [QuickJsToolMeta.fromSpec] reads.
+     */
+    fun fromInlineScriptToolConfig(config: InlineScriptToolConfig): QuickJsToolAdvertisement =
+      QuickJsToolAdvertisement(
+        descriptor = LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config),
+        meta = QuickJsToolMeta.fromSpec(buildJsonObject { config.meta?.let { put("_meta", it) } }),
+      )
+  }
+}
 
 /**
  * The handle [QuickJsToolBundleLauncher.launchAll] returns. Holds the live tool hosts +
@@ -116,6 +158,14 @@ object QuickJsToolBundleLauncher {
     toolRepo: TrailblazeToolRepo,
     preferHostAgent: Boolean = false,
     bundleSourceResolver: (McpServerConfig) -> BundleSource = ::defaultBundleSourceResolver,
+    /**
+     * Per-tool advertisement overrides keyed by tool name. When a bundle registers a tool whose
+     * name is present here, the override's descriptor + `_meta` gate are used instead of the
+     * bundle's own (handler-only typed-tool wrappers carry no `spec`, so without this the LLM
+     * would see an empty descriptor and `_meta` filters wouldn't run). Empty (the default)
+     * preserves the bundle-sourced behavior for callers whose bundles populate their own `spec`.
+     */
+    advertisementOverrides: Map<ToolName, QuickJsToolAdvertisement> = emptyMap(),
   ): LaunchedQuickJsToolRuntime {
     val bundleable = bundles.filter { it.isBundleable }
     if (bundleable.isEmpty()) {
@@ -172,7 +222,12 @@ object QuickJsToolBundleLauncher {
 
         val registered = host.listTools()
         for (spec in registered) {
-          val meta = QuickJsToolMeta.fromSpec(spec.spec)
+          // Prefer the YAML-descriptor-derived advertisement (description / inputSchema / _meta)
+          // when supplied — a handler-only typed-tool wrapper carries no `spec`, so the bundle's
+          // own descriptor + meta would be empty. Falls back to the bundle's `spec` for tools with
+          // no override (e.g. a hand-written `pure.js` that populates `spec`).
+          val override = advertisementOverrides[ToolName(spec.name)]
+          val meta = override?.meta ?: QuickJsToolMeta.fromSpec(spec.spec)
           if (!meta.shouldRegister(driver = deviceInfo.trailblazeDriverType, preferHostAgent = preferHostAgent)) {
             // requiresHost / driver / platform mismatch — drop at registration so the LLM
             // never sees a tool it can't actually run in this session. The legacy
@@ -186,6 +241,9 @@ object QuickJsToolBundleLauncher {
             host = host,
             spec = spec,
             binding = binding,
+            descriptorOverride = override?.descriptor,
+            surfaceToLlm = meta.surfaceToLlm,
+            isRecordable = meta.isRecordable,
           )
         }
       }

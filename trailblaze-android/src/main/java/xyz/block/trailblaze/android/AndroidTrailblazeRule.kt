@@ -1,20 +1,10 @@
 package xyz.block.trailblaze.android
 
-import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.AttachmentSource
-import ai.koog.prompt.message.MessagePart
-import ai.koog.utils.time.KoogClock
-import ai.koog.prompt.message.Message
-import ai.koog.prompt.message.RequestMetaInfo
-import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import maestro.orchestra.Command
 import org.junit.runner.Description
 import xyz.block.trailblaze.AdbCommandUtil
@@ -29,17 +19,13 @@ import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
-import xyz.block.trailblaze.agent.BlazeConfig
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
 import xyz.block.trailblaze.agent.MultiAgentV3Runner
 import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
-import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
-import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.android.agent.KoogLlmSamplingSource
-import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
@@ -49,7 +35,6 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.config.McpServerConfig
-import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -69,7 +54,9 @@ import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.quickjs.tools.AndroidAssetBundleSource
 import xyz.block.trailblaze.quickjs.tools.BundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
+import xyz.block.trailblaze.quickjs.tools.QuickJsToolAdvertisement
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
+import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -133,19 +120,7 @@ open class AndroidTrailblazeRule(
   agentOverride: MaestroTrailblazeAgent? = null,
   screenStateProviderOverride: (() -> ScreenState)? = null,
   /**
-   * Blaze configuration for V3 exploration mode.
-   *
-   * Defaults to [BlazeConfig.DEFAULT] — balanced settings for most exploration scenarios.
-   * Only used when [AgentImplementation.MULTI_AGENT_V3] is active (via instrumentation arg
-   * `-e trailblaze.agent MULTI_AGENT_V3`). The legacy [TrailblazeRunner] path ignores this
-   * parameter entirely.
-   *
-   * Override with a custom [BlazeConfig] if you need to tune iteration counts, reflection
-   * intervals, or subtask limits based on empirical OOM data from Device Farm runs.
-   */
-  private val blazeConfig: BlazeConfig = BlazeConfig.DEFAULT,
-  /**
-   * QuickJS tool bundle declarations for tools authored against `@trailblaze/tools` and
+   * QuickJS tool bundle declarations for tools authored against `@trailblaze/scripting` and
    * compiled to a JS bundle. Each entry should have `script:` set to a relative path that
    * resolves to a `.js` asset shipped in the APK — the launcher reads each via
    * [quickjsBundleSourceResolver] and registers advertised tools into the session's tool
@@ -182,8 +157,8 @@ open class AndroidTrailblazeRule(
    * the CLI's `--max-llm-calls` flag and threaded through
    * [xyz.block.trailblaze.llm.RunYamlRequest.maxLlmCalls] into this rule's constructor.
    * Null = use the runner's built-in default. Ignored when
-   * [AgentImplementation.MULTI_AGENT_V3] is selected (the V3 path tunes iterations via
-   * [BlazeConfig] instead, and the CLI rejects the combination at parse time).
+   * [AgentImplementation.MULTI_AGENT_V3] is selected (the CLI rejects the combination at
+   * parse time).
    */
   private val maxLlmCalls: Int? = null,
   /**
@@ -505,47 +480,9 @@ open class AndroidTrailblazeRule(
       toolRepo = trailblazeToolRepo,
       elementComparator = elementComparator,
     )
-    val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
-      val metaInfo = RequestMetaInfo.create(KoogClock.System)
-      val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
-        Message.User(
-          parts = buildList<MessagePart.RequestPart> {
-            add(MessagePart.Text(userMessage))
-            add(
-              MessagePart.Attachment(
-                source = AttachmentSource.Image(
-                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
-                ),
-              )
-            )
-          },
-          metaInfo = metaInfo,
-        )
-      } else {
-        Message.User(content = userMessage, metaInfo = metaInfo)
-      }
-      val koogPrompt = Prompt(
-        messages = listOf(Message.System(content = systemPrompt, metaInfo = metaInfo), userMsg),
-        id = "android_test_planner",
-        params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
-      )
-      val response = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-      val toolCall = response.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
-      val toolName = toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown"
-      val toolArgsJson = toolCall?.args ?: "{}"
-      val toolArgs = try {
-        Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
-      } catch (_: Exception) {
-        JsonObject(emptyMap())
-      }
-      PlannerToolCallResult.fromRaw(toolName, toolArgs)
-    }
     val v3Runner = MultiAgentV3Runner.create(
       screenAnalyzer = screenAnalyzer,
       executor = executor,
-      plannerLlmCall = plannerLlmCall,
-      config = blazeConfig,
       deviceId = trailblazeDeviceId,
       availableToolsProvider = { trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() } },
     )
@@ -716,6 +653,10 @@ open class AndroidTrailblazeRule(
       val sessionId = (trailblazeLoggingRule.session
         ?: error("Session not available for QuickJS bundle launch")).sessionId
       if (quickjsToolBundles.isNotEmpty()) {
+        // No `advertisementOverrides` here on purpose: these are caller-supplied target-declared
+        // bundles (no YAML descriptor to source from at this site), so each advertises from its
+        // own bundle `spec`. The toolset-delivered path below builds overrides from YAML because
+        // its typed-tool wrappers are handler-only (no `spec`). See [launchToolsetScriptedToolBundles].
         launchedQuickjsRuntime = QuickJsToolBundleLauncher.launchAll(
           bundles = quickjsToolBundles,
           deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
@@ -775,44 +716,34 @@ open class AndroidTrailblazeRule(
     toolRepo: TrailblazeToolRepo,
     sessionId: xyz.block.trailblaze.logs.model.SessionId,
   ): LaunchedQuickJsToolRuntime? {
-    // Drop any name already registered as a dynamic tool earlier this session (e.g. via
-    // `quickjsToolBundles` / target.tools:). Re-registering a name hard-fails in
-    // `addDynamicTools` (collision guard), and it would invert the host-side precedence where
-    // target-declared tools win over toolset-delivered ones.
     // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
     // initially-active toolsets' — so a toolset enabled later via `setActiveToolSets` is already
     // dispatchable on-device (advertisement stays gated to the active set in TrailblazeToolRepo).
-    val alreadyRegistered = toolRepo.getRegisteredDynamicTools().keys
-    val toolsetNames = toolRepo.allCatalogScriptedToolNames - alreadyRegistered
-    if (toolsetNames.isEmpty()) return null
-
-    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
-    val bundleConfigs = mutableListOf<McpServerConfig>()
-
-    for (name in toolsetNames) {
-      val discovered = descriptorsByName[name]
-      if (discovered == null) {
-        // Mirror the host-side breadcrumb: without it the tool appears enabled at higher
-        // layers but no bundle launches, so it silently never dispatches on-device.
-        Console.log(
-          "[toolset-scripted] no descriptor found on-device for scripted tool " +
-            "'${name.toolName}' named by an active toolset — skipping its bundle. Confirm the " +
-            "tool's descriptor YAML + .bundle.js ship in the on-device assets.",
-        )
-        continue
-      }
-      // Shared with the host path so the descriptor->bundle naming rule can't drift.
-      bundleConfigs += McpServerConfig(script = ScriptedToolNameDiscoverer.bundleResourcePath(discovered))
-    }
-
-    if (bundleConfigs.isEmpty()) return null
+    // `skipNames` drops names already registered (e.g. via `quickjsToolBundles` / target.tools:):
+    // re-registering hard-fails the `addDynamicTools` collision guard, and it would invert the
+    // host-side precedence where target-declared tools win over toolset-delivered ones.
+    //
+    // Resolve + filter through the SAME `InProcessScriptedToolLauncher` the host/daemon path uses,
+    // so on-device and host agree on which catalog tools run in-process and where their bundles
+    // live — no second copy of that logic to drift. A typed tool's bundle is handler-only (no
+    // `spec`), so the LLM-facing descriptor + `_meta` gate come from the YAML descriptor via the
+    // shared `QuickJsToolAdvertisement.fromInlineScriptToolConfig`, matching the host path's source.
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(
+      toolNames = toolRepo.allCatalogScriptedToolNames,
+      skipNames = toolRepo.getRegisteredDynamicTools().keys,
+      logPrefix = "[toolset-scripted]",
+    )
+    if (resolved.isEmpty()) return null
 
     return QuickJsToolBundleLauncher.launchAll(
-      bundles = bundleConfigs,
+      bundles = resolved.map { McpServerConfig(script = it.bundleResourcePath) },
       deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
       sessionId = sessionId,
       toolRepo = toolRepo,
       bundleSourceResolver = { entry -> AndroidAssetBundleSource(assetPath = entry.script!!) },
+      advertisementOverrides = resolved.associate {
+        it.name to QuickJsToolAdvertisement.fromInlineScriptToolConfig(it.config)
+      },
     )
   }
 

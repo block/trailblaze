@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
 import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogToolsWithExecutor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.RequestDetailedViewHierarchyTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -169,10 +170,18 @@ class TrailblazeToolRepo(
      * bundle loads (so recorded replays + active calls work via [toolCallToTrailblazeTool]), but
      * only ADVERTISED when its toolset is active — that's the toolset gating. Non-scripted dynamic
      * tools (subprocess MCP, target-declared scripted tools) are always advertised.
+     *
+     * A registration that declares `surfaceToLlm = false` (e.g. a scripted internal step composed
+     * by a parent tool) is dropped regardless of toolset activity — it stays dispatchable by name
+     * and resolvable for recorded replays, but never enters the LLM's tool menu. Defaults to `true`,
+     * so registrations that don't model LLM-visibility (subprocess MCP, etc.) are unaffected.
      */
     fun advertisedDynamic(): List<DynamicTrailblazeToolRegistration> =
       dynamic.entries
-        .filter { (name, _) -> name !in allCatalogScriptedToolNames || name in activeScriptedToolNames }
+        .filter { (name, reg) ->
+          reg.surfaceToLlm &&
+            (name !in allCatalogScriptedToolNames || name in activeScriptedToolNames)
+        }
         .map { it.value }
   }
 
@@ -191,7 +200,7 @@ class TrailblazeToolRepo(
     // can be resolved, even when dynamic toolsets limit registeredTrailblazeToolClasses.
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
-      tools((snapshot.toolClasses + verifyTools).toKoogTools(trailblazeToolContextProvider))
+      tools((snapshot.toolClasses + verifyTools + koogInspectionTools).toKoogTools(trailblazeToolContextProvider))
       if (snapshot.yamlToolNames.isNotEmpty()) {
         tools(KoogToolExt.buildKoogToolsForYamlDefined(snapshot.yamlToolNames, trailblazeToolContextProvider))
       }
@@ -225,12 +234,18 @@ class TrailblazeToolRepo(
   ): ToolRegistry {
     val snapshot = snapshotRegisteredTools()
     return ToolRegistry {
-      tools((snapshot.toolClasses + verifyTools).toKoogToolsWithExecutor(toolDispatcher))
+      tools((snapshot.toolClasses + verifyTools + koogInspectionTools).toKoogToolsWithExecutor(toolDispatcher))
       if (snapshot.yamlToolNames.isNotEmpty()) {
         tools(KoogToolExt.buildKoogToolsForYamlDefinedWithExecutor(snapshot.yamlToolNames, toolDispatcher))
       }
-      if (snapshot.dynamic.isNotEmpty()) {
-        tools(snapshot.dynamic.values.map { it.buildKoogTool(trailblazeToolContextProvider) })
+      // Same advertisement gate as the context-provider overload above: filter through
+      // `advertisedDynamic()` so a scripted internal step declaring `surfaceToLlm = false` (and a
+      // scripted tool whose toolset isn't active) stays out of the LLM's menu on the
+      // KOOG_STRATEGY_GRAPH (in-process) path too. It remains dispatchable by name via
+      // `toolCallToTrailblazeTool` — this only governs what's advertised.
+      val advertisedDynamic = snapshot.advertisedDynamic()
+      if (advertisedDynamic.isNotEmpty()) {
+        tools(advertisedDynamic.map { it.buildKoogTool(trailblazeToolContextProvider) })
       }
     }
   }
@@ -319,6 +334,12 @@ class TrailblazeToolRepo(
    * registered once at session start (via [addDynamicTools]) and stay available regardless
    * of which catalog toolsets the LLM enables. The reported tool count + acknowledgement
    * string include them so the LLM's view of "tools available" matches reality.
+   *
+   * **A target's `excluded_tools:` opt-outs are NOT re-applied here.** Exclusions
+   * ([withDynamicToolSets]' `excluded*` params) are subtracted from the INITIAL surface only;
+   * re-enabling a toolset via this method re-resolves it from the catalog without the exclusion.
+   * If a target must never surface a tool, exclude it AND don't author a toolset switch that
+   * re-enables it. See [withDynamicToolSets].
    */
   fun setActiveToolSets(toolSetIds: List<String>): String {
     val catalog = toolSetCatalog
@@ -644,6 +665,18 @@ class TrailblazeToolRepo(
 
   companion object {
     /**
+     * Drivers that get the [koogInspectionTools] surface (the `requestDetailedViewHierarchy` tool).
+     * Same set as the `observation` toolset's `drivers:` — host (iOS) + on-device (Android) — which
+     * expose a screen-inspection hierarchy and whose agents run a generic ExecutableTrailblazeTool.
+     * Notably excludes Revyl (its agent can't execute this generic tool and it has its own capture).
+     */
+    private val KOOG_INSPECTION_DRIVERS: Set<TrailblazeDriverType> = setOf(
+      TrailblazeDriverType.IOS_HOST,
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    )
+
+    /**
      * Creates a [TrailblazeToolRepo] with dynamic toolset support.
      *
      * Starts with only core tools (the catalog's `always_enabled` entries) plus any
@@ -660,12 +693,23 @@ class TrailblazeToolRepo(
      * backing [KClass]) to the initial surface — symmetric with [customToolClasses] for
      * class-backed tools. Callers that only reference class-backed tools can leave it at
      * the default empty set.
+     *
+     * [excludedToolClasses] / [excludedYamlToolNames] / [excludedScriptedToolNames] are the
+     * target's `excluded_tools:` opt-outs, one set per backing — each subtracted from the matching
+     * initial surface so an excluded tool (e.g. the scripted `openUrl`) isn't served to the LLM.
+     * Callers should populate all three from `getExcludedToolSurfaceForDriver` rather than wiring
+     * them individually, so a backing can't be excluded here but forgotten elsewhere. This applies
+     * to the INITIAL surface only — a later `setActiveToolSets` that re-enables the delivering
+     * toolset re-resolves from the catalog without the exclusion (a pre-existing limitation shared
+     * by all three partitions).
      */
     fun withDynamicToolSets(
       customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
       customYamlToolNames: Set<ToolName> = emptySet(),
       customScriptedToolNames: Set<ToolName> = emptySet(),
       excludedToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+      excludedYamlToolNames: Set<ToolName> = emptySet(),
+      excludedScriptedToolNames: Set<ToolName> = emptySet(),
       catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
       driverType: TrailblazeDriverType? = null,
     ): TrailblazeToolRepo {
@@ -678,8 +722,8 @@ class TrailblazeToolRepo(
         trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "Core Tool Set",
           toolClasses = coreTools.toolClasses + customToolClasses - excludedToolClasses,
-          yamlToolNames = coreTools.yamlToolNames + customYamlToolNames,
-          scriptedToolNames = coreTools.scriptedToolNames + customScriptedToolNames,
+          yamlToolNames = coreTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
+          scriptedToolNames = coreTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
         ),
         toolSetCatalog = catalog,
         driverType = driverType,
@@ -700,6 +744,28 @@ class TrailblazeToolRepo(
     TrailblazeToolSetCatalog.entryToolClasses("verification", catalog) +
       ObjectiveStatusTrailblazeTool::class
   }
+
+  // On-demand "full screen" inspection for the in-process Koog agent loops (the
+  // [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] path). The screen view the
+  // agent sees after each action is the compact, interactable-only element list; this tool lets it
+  // request the full ref-annotated list (all visible elements) when it needs more — non-interactable
+  // labels for context, or an element the compact filter omitted. Added only to the two
+  // `asToolRegistry` overloads (the Koog registries), so the legacy runner's tool surface is
+  // unchanged. Read-only, so it never appears in recordings.
+  //
+  // Scoped to the same drivers as the `observation` toolset: host (iOS) and on-device (Android),
+  // which expose a screen-inspection hierarchy AND whose agents execute a generic
+  // ExecutableTrailblazeTool via runTrailblazeTools. Revyl is deliberately excluded — its agent
+  // only runs RevylExecutableTool/objectiveStatus and has its own screen capture, so advertising
+  // this tool there would let the model call something that can never return a hierarchy. Other
+  // drivers (web, Compose, iOS AXe) aren't validated for it, so they're left out too. A null
+  // driver (test fixtures) keeps it for convenience.
+  private val koogInspectionTools: Set<KClass<out TrailblazeTool>> =
+    if (driverType == null || driverType in KOOG_INSPECTION_DRIVERS) {
+      setOf(RequestDetailedViewHierarchyTrailblazeTool::class)
+    } else {
+      emptySet()
+    }
 
   // This function returns different tool descriptors based on the type of prompt step passed in.
   // The DirectionStep returns all registered trailblaze tool classes, while the VerificationStep

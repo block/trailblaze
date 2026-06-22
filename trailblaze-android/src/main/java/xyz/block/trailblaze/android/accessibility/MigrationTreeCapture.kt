@@ -35,7 +35,9 @@ object MigrationTreeCapture {
       return null
     }
     return try {
-      val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo()
+      // awaitStable=false: must be the SAME frame as the primary (UiAutomator) capture for the
+      // migration hit-test to align — a settle wait could desync the two reads (see class kdoc).
+      val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo(awaitStable = false)
       val rawTree = rootNodeInfo?.toAccessibilityNode()?.toTrailblazeNode()
       // Filter to important-for-accessibility — same default as
       // AccessibilityServiceScreenState. The migration hit-test runs against this tree, and

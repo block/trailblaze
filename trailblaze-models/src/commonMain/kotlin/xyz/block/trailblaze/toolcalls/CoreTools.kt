@@ -193,8 +193,8 @@ object CoreTools {
   //
   // Different tool sets may use different names for the same action.
   // For example, "type" (AndroidWorld) and "inputText" (Trailblaze) both
-  // represent text input. These helpers let shared code (e.g., BlazeGoalPlanner)
-  // classify tool actions without depending on specific tool set modules.
+  // represent text input. These helpers let shared code classify tool actions
+  // without depending on specific tool set modules.
 
   /** Well-known tool names that represent text input actions. */
   private val TEXT_INPUT_NAMES = setOf(

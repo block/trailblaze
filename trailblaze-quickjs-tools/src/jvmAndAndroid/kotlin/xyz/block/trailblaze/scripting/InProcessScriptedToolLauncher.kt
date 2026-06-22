@@ -32,8 +32,84 @@ import java.io.File
  *
  * Rolls back every registration made in this call if any single one throws, so a partial failure
  * never leaves half-registered tools in the session repo.
+ *
+ * The catalog discover → resolve-config → in-process-filter step is factored into
+ * [resolveInProcessScriptedTools] so the host launch path, the host [describe] advertise path, and
+ * the **on-device** launch path (`AndroidTrailblazeRule.launchToolsetScriptedToolBundles`) all
+ * resolve catalog scripted tools the same way. Keeping that one resolver is the guard against the
+ * host and device paths drifting — which is exactly the bug class #3845 fixed (the on-device path
+ * had its own copy of "YAML descriptor → what the LLM sees" and dropped the descriptor).
  */
 object InProcessScriptedToolLauncher {
+
+  /**
+   * A catalog scripted tool resolved for the in-process runtime: its [config] (carrying the
+   * description / inputSchema / `_meta`), and the classpath/asset [bundleResourcePath] of its
+   * pre-compiled `.bundle.js`. Emitted by [resolveInProcessScriptedTools].
+   */
+  data class ResolvedInProcessScriptedTool(
+    val name: ToolName,
+    val config: InlineScriptToolConfig,
+    val bundleResourcePath: String,
+  )
+
+  /**
+   * Discover + resolve + in-process-filter [toolNames] against the catalog YAML descriptors. The
+   * single source of truth for "which catalog scripted tools run in-process and where their bundle
+   * lives" — shared by [launch], [describe], and the on-device launcher so they can't drift.
+   *
+   * Skips (with a logged breadcrumb) any name that: has no discovered descriptor, has no matching
+   * tool config in that descriptor, or opts into a non-[ScriptedToolRuntime.IN_PROCESS] runtime
+   * (those dispatch through the subprocess path, never in-process). [skipNames] are dropped up
+   * front — e.g. names already registered as target-declared tools, which win on collision.
+   *
+   * Connects no QuickJS engine; pure resolution over the on-disk/classpath descriptors.
+   */
+  fun resolveInProcessScriptedTools(
+    toolNames: Set<ToolName>,
+    skipNames: Set<ToolName> = emptySet(),
+    logPrefix: String = "[InProcessScriptedToolLauncher]",
+  ): List<ResolvedInProcessScriptedTool> {
+    val newNames = toolNames - skipNames
+    if (newNames.isEmpty()) return emptyList()
+    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    return newNames.mapNotNull { name ->
+      val discovered = descriptorsByName[name]
+      if (discovered == null) {
+        Console.log(
+          "$logPrefix Scripted tool '${name.toolName}' has no matching descriptor — skipping. " +
+            "Ensure a descriptor YAML with an explicit `name: ${name.toolName}` exists under a " +
+            "trailmap's `tools/` directory; on-device, also confirm that descriptor (and its " +
+            "`.bundle.js`) is packaged into the runtime's resources/assets.",
+        )
+        return@mapNotNull null
+      }
+      val config = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { ToolName(it.name) == name }
+      if (config == null) {
+        Console.log(
+          "$logPrefix descriptor for '${name.toolName}' produced no matching tool config — skipping.",
+        )
+        return@mapNotNull null
+      }
+      // Subprocess-opted tools never run through the embedded QuickJS engine; only in-process
+      // tools (the default, #3819) do. They dispatch via the host bun subprocess where one is
+      // available — which means they're simply not dispatchable in an on-device session.
+      if (ScriptedToolRuntime.resolve(config.runtime) != ScriptedToolRuntime.IN_PROCESS) {
+        Console.log(
+          "$logPrefix Scripted tool '${name.toolName}' declares runtime '${config.runtime}' " +
+            "(not in-process) — skipping in-process resolution. It runs only on the host bun " +
+            "subprocess path, so it is not available in an on-device session.",
+        )
+        return@mapNotNull null
+      }
+      // Shared with the on-device path so the descriptor -> bundle naming rule can't drift.
+      ResolvedInProcessScriptedTool(
+        name = name,
+        config = config,
+        bundleResourcePath = ScriptedToolNameDiscoverer.bundleResourcePath(discovered),
+      )
+    }
+  }
 
   /**
    * @param toolNames catalog scripted tool names to launch in-process.
@@ -50,47 +126,20 @@ object InProcessScriptedToolLauncher {
     classLoader: ClassLoader? = InProcessScriptedToolLauncher::class.java.classLoader,
     logPrefix: String = "[InProcessScriptedToolLauncher]",
   ): List<LazyYamlScriptedToolRegistration> {
-    val newNames = toolNames - skipNames
-    if (newNames.isEmpty()) return emptyList()
+    val resolved = resolveInProcessScriptedTools(toolNames, skipNames, logPrefix)
+    if (resolved.isEmpty()) return emptyList()
 
-    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
     val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
 
     try {
-      for (name in newNames) {
-        val discovered = descriptorsByName[name]
-        if (discovered == null) {
-          Console.log(
-            "$logPrefix Scripted tool '${name.toolName}' has no matching descriptor — skipping. " +
-              "Ensure a descriptor YAML with an explicit `name: ${name.toolName}` exists under a " +
-              "trailmap's `tools/` directory.",
-          )
-          continue
-        }
-
-        val toolConfig: InlineScriptToolConfig =
-          discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { ToolName(it.name) == name }
-            ?: continue
-
-        // Subprocess-opted tools stay on the subprocess path; only in-process tools (the default,
-        // #3819) launch through the embedded QuickJS engine here.
-        if (ScriptedToolRuntime.resolve(toolConfig.runtime) != ScriptedToolRuntime.IN_PROCESS) {
-          Console.log(
-            "$logPrefix Scripted tool '${name.toolName}' opts into ${toolConfig.runtime} runtime " +
-              "— skipping in-process launch (handled by the subprocess path).",
-          )
-          continue
-        }
-
-        // Shared with the on-device path so the descriptor -> bundle naming rule can't drift.
-        val bundleResourcePath = ScriptedToolNameDiscoverer.bundleResourcePath(discovered)
-        val bundleJs = classLoader?.getResourceAsStream(bundleResourcePath)
+      for (tool in resolved) {
+        val bundleJs = classLoader?.getResourceAsStream(tool.bundleResourcePath)
           ?.bufferedReader()
           ?.use { it.readText() }
         if (bundleJs == null) {
           Console.log(
-            "$logPrefix Scripted tool '${name.toolName}': pre-compiled bundle not found on " +
-              "classpath at '$bundleResourcePath' — skipping. Run " +
+            "$logPrefix Scripted tool '${tool.name.toolName}': pre-compiled bundle not found on " +
+              "classpath at '${tool.bundleResourcePath}' — skipping. Run " +
               "`./gradlew :trailblaze-common:bundleFrameworkScriptedTools` to regenerate.",
           )
           continue
@@ -98,11 +147,11 @@ object InProcessScriptedToolLauncher {
 
         val bundleDir = File(sessionDir, "in-process-scripted-tools")
         bundleDir.mkdirs()
-        val bundleFile = File(bundleDir, "${name.toolName}.bundle.js")
+        val bundleFile = File(bundleDir, "${tool.name.toolName}.bundle.js")
         bundleFile.writeText(bundleJs)
 
         accumulated += LazyYamlScriptedToolRegistration.create(
-          toolConfig = toolConfig,
+          toolConfig = tool.config,
           bundlePath = bundleFile,
           toolRepo = toolRepo,
           sessionId = sessionId,
@@ -137,18 +186,8 @@ object InProcessScriptedToolLauncher {
    * that have no descriptor and tools that opt into [ScriptedToolRuntime.SUBPROCESS] — those can't
    * dispatch through the in-process path so they must not be advertised on it.
    */
-  fun describe(toolNames: Set<ToolName>): List<TrailblazeToolDescriptor> {
-    if (toolNames.isEmpty()) return emptyList()
-    val descriptorsByName = ScriptedToolNameDiscoverer.discoverDescriptorsByName()
-    return toolNames.mapNotNull { name ->
-      val discovered = descriptorsByName[name] ?: return@mapNotNull null
-      val config: InlineScriptToolConfig =
-        discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { ToolName(it.name) == name }
-          ?: return@mapNotNull null
-      if (ScriptedToolRuntime.resolve(config.runtime) != ScriptedToolRuntime.IN_PROCESS) {
-        return@mapNotNull null
-      }
-      LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(config)
+  fun describe(toolNames: Set<ToolName>): List<TrailblazeToolDescriptor> =
+    resolveInProcessScriptedTools(toolNames).map {
+      LazyYamlScriptedToolRegistration.buildScriptedToolDescriptor(it.config)
     }
-  }
 }

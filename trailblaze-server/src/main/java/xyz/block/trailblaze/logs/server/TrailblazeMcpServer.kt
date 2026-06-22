@@ -110,10 +110,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
@@ -551,11 +553,18 @@ class TrailblazeMcpServer(
       // in `AppTargetDiscoveryTest`.
       val declaredToolSetIds = target.getDeclaredToolSetIdsForDriver(driverType)
       val resolvedFromTrailmap = TrailblazeToolSetCatalog.resolveForDriver(driverType, declaredToolSetIds)
+      // One read of the target's `excluded_tools:` surface (class / YAML / scripted), forwarded by
+      // partition below. Routing through this single accessor — instead of calling the three
+      // per-backing getters here — is what keeps a target's `excluded_tools: [openUrl]` (a scripted
+      // tool) honored here in lockstep with the resolver, report, discovery, and on-device paths.
+      val excluded = target.getExcludedToolSurfaceForDriver(driverType)
       val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
         customToolClasses = collectCustomToolClasses(driverType),
         customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames,
         customScriptedToolNames = resolvedFromTrailmap.scriptedToolNames,
-        excludedToolClasses = target.getExcludedToolsForDriver(driverType),
+        excludedToolClasses = excluded.toolClasses,
+        excludedYamlToolNames = excluded.yamlToolNames,
+        excludedScriptedToolNames = excluded.scriptedToolNames,
         catalog = TrailblazeToolSetCatalog.defaultEntries(),
         driverType = driverType,
       )
@@ -2003,9 +2012,16 @@ class TrailblazeMcpServer(
           val customToolClasses = if (driverType != null && activeTarget != null) {
             activeTarget.getCustomToolsForDriver(driverType)
           } else emptySet()
-          val excludedToolClasses = if (driverType != null && activeTarget != null) {
-            activeTarget.getExcludedToolsForDriver(driverType)
-          } else emptySet()
+          // The target's `excluded_tools:` surface (class / YAML / scripted), read once and shared
+          // by the class- and YAML-descriptor passes below via the same central accessor every
+          // other compositor uses. This path advertises only class + YAML descriptors (scripted
+          // tools reach the LLM through the dynamic-tool runtime, gated separately), so the
+          // scripted partition is unused here — but reading the whole surface keeps this site from
+          // drifting if scripted advertising is ever added.
+          val excludedSurface = if (driverType != null && activeTarget != null) {
+            activeTarget.getExcludedToolSurfaceForDriver(driverType)
+          } else EmptyTrailblazeToolSurface
+          val excludedToolClasses = excludedSurface.toolClasses
           // Custom tools first so the LLM sees app-specific tools (e.g., sign-in)
           // before generic alternatives (e.g., launchApp), improving selection.
           val classDescriptors = (customToolClasses + builtInToolClasses - excludedToolClasses)
@@ -2019,9 +2035,7 @@ class TrailblazeMcpServer(
             val customYamlNames = if (driverType != null && activeTarget != null) {
               activeTarget.getCustomYamlToolNamesForDriver(driverType)
             } else emptySet()
-            val excludedYamlNames = if (driverType != null && activeTarget != null) {
-              activeTarget.getExcludedYamlToolNamesForDriver(driverType)
-            } else emptySet()
+            val excludedYamlNames = excludedSurface.yamlToolNames
             val builtInYamlNames = resolvedFromTrailmap?.yamlToolNames ?: emptySet()
             KoogToolExt.buildTrailblazeDescriptorsForYamlDefined(
               (customYamlNames + builtInYamlNames - excludedYamlNames).toSet(),

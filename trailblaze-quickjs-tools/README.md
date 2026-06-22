@@ -1,21 +1,22 @@
 # trailblaze-quickjs-tools
 
-Evaluates `@trailblaze/tools`-authored JS bundles in QuickJS and registers the
+Evaluates `@trailblaze/scripting`-authored JS bundles in QuickJS and registers the
 advertised tools into Trailblaze's `TrailblazeToolRepo`. No MCP framing — the
 runtime reads `globalThis.__trailblazeTools` directly and dispatches via
 `QuickJsToolHost.callTool(name, args, ctx)`.
 
-This is the MCP-free QuickJS runtime, and the runtime `AndroidTrailblazeRule`
-launches on-device today.
+This is the MCP-free QuickJS runtime that `AndroidTrailblazeRule` launches on-device today.
 
-> **Direction reversed (2026-06-17).** An earlier version of this note called
-> `@trailblaze/scripting` the "legacy" MCP-shaped path slated for retirement. That is no longer
-> the plan. Per the "Consolidate scripted-tool surfaces" decision (`docs/devlog/`), the single
-> surviving author surface is `@trailblaze/scripting`; the `@trailblaze/tools` SDK is the one slated
-> for removal, once its MCP-free in-process composition (the `__trailblazeCallback` binding) is
-> folded into that surface. This module's QuickJS engine wrapper (`QuickJsToolHost`) is expected to
-> be **reused** to back the single in-process runtime — the code below largely survives even though
-> the separate SDK does not.
+> **Single author surface (2026-06).** Trailblaze has one scripted-tool authoring SDK,
+> `@trailblaze/scripting`, with two bundle *profiles* selected per tool by its `runtime:`:
+> the SLIM **in-process** profile (`sdks/typescript/src/in-process.ts` — typed-only, no MCP,
+> no ajv, no zod) that this runtime evaluates, and the FULL **subprocess** profile (the MCP
+> server) for `runtime: subprocess` tools. The retired `@trailblaze/tools` package — a separate
+> MCP-free SDK that pre-dated the slim profile — has been deleted; its job (KB-scale in-process
+> bundles) is now done by aliasing `@trailblaze/scripting` to the slim entry. The bundlers
+> synthesize a small registration wrapper that populates `globalThis.__trailblazeTools` from each
+> file's typed-tool exports (typed declarations don't self-register). `QuickJsToolHost` is the
+> engine wrapper that backs this in-process runtime.
 
 ## Reading order
 
@@ -32,7 +33,7 @@ A new contributor onboarding to this module should read in this order:
    takes. `HostLocalExecutableTrailblazeTool`, so the agent dispatches it
    directly via `execute(context)` without driver-specific routing.
 4. **`QuickJsToolEnvelopes.kt`** — typed `@Serializable` data classes for the
-   SDK's `TrailblazeToolResult` shape and the per-invocation `ctx`.
+   scripted-tool `TrailblazeToolResult` shape and the per-invocation `ctx`.
 5. **`BundleSource.kt`** + **`AndroidAssetBundleSource.kt`** (androidMain) —
    load-from-where abstraction. File, inline string, or APK asset.
 
@@ -51,7 +52,8 @@ LLM picks a tool from the repo
 
 - No MCP `tools/list` / `tools/call` — the runtime reads
   `globalThis.__trailblazeTools` directly.
-- One SDK (`@trailblaze/tools`) instead of `@trailblaze/scripting`.
+- Bundles are built against the SLIM in-process `@trailblaze/scripting` profile
+  (no MCP server, no ajv, no zod) rather than the full subprocess profile.
 - The `HostBinding` interface is `(name, argsJson) → resultJson` — no MCP
   envelope, no protocol framing.
 
@@ -61,8 +63,9 @@ Three flavors live under `examples/android-sample-app/trails/config/`:
 
 - **`quickjs-tools/pure.js`** — pure JS, no SDK, no build step. Populates
   `globalThis.__trailblazeTools` directly.
-- **`quickjs-tools/typed.ts`** — TS authored against `@trailblaze/tools`,
+- **`quickjs-tools/typed.ts`** — TS authored against `@trailblaze/scripting`,
   bundled by the `trailblaze.author-tool-bundle` plugin into a single
   self-contained `.bundle.js`.
-- **`host-tools/tools.ts`** — uses `node:*` modules. Host-only; cannot run in
-  QuickJS, integrates via the subprocess path in `:trailblaze-scripting-subprocess`.
+- **`host-tools/tools.ts`** — uses `node:*` modules. Host-only (`runtime: subprocess`);
+  cannot run in QuickJS, integrates via the subprocess path in
+  `:trailblaze-scripting-subprocess`.

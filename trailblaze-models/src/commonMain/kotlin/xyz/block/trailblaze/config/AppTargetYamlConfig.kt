@@ -136,6 +136,21 @@ data class InlineScriptToolConfig(
    */
   val requiresHost: Boolean = false,
   /**
+   * 1:1 with `@TrailblazeToolClass.surfaceToLlm`. `false` hides this scripted tool from the LLM's
+   * tool menu while keeping it dispatchable by name (composed by a parent tool) and resolvable for
+   * recorded replays — the scripted-tool equivalent of an internal Kotlin step. Honored by
+   * [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo.advertisedDynamic], which drops
+   * `surfaceToLlm = false` dynamic registrations from the advertised set. Default `true`.
+   */
+  val surfaceToLlm: Boolean = true,
+  /**
+   * 1:1 with `@TrailblazeToolClass.isRecordable`. `false` keeps this scripted tool's invocation out
+   * of the recorded `.trail.yaml`. The runtime threads it onto the decoded tool's
+   * [xyz.block.trailblaze.toolcalls.TrailblazeTool.toolMetadata] so `getIsRecordableFromAnnotation()`
+   * returns false at logging time. Use for internal steps a parent tool composes. Default `true`.
+   */
+  val isRecordable: Boolean = true,
+  /**
    * Runtime selector (`subprocess` / `inProcess`). `null` (the default) means in-process
    * QuickJS; set `subprocess` only when the tool's own code needs Node APIs. The file
    * extension is not a runtime hint — `.js` / `.mjs` / `.cjs` is not auto-routed to a subprocess.

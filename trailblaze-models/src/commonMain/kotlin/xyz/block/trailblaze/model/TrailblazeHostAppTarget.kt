@@ -58,6 +58,23 @@ abstract class TrailblazeHostAppTarget(
   open fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
 
   /**
+   * Scripted (`.ts` / `.js`) tool names this target exposes for the given driver.
+   *
+   * Mirrors [getCustomYamlToolNamesForDriver] (inclusion) and [getExcludedScriptedToolNamesForDriver]
+   * (exclusion) for tools delivered by a toolset's `tools:` (e.g. `openUrl` via `core_interaction`)
+   * or listed directly in a target's `platforms.<p>.tools:`. These are advertised to the LLM like
+   * any other tool but dispatched through the per-session scripted-tool runtime. Without this, a
+   * scripted name in `platforms.<p>.tools:` resolves to neither a class nor a YAML name and is
+   * silently dropped (logged as an unknown tool) — the scripted-partition parallel of the bug fixed
+   * for class-backed tools ([getCustomToolsForDriver]) and YAML tools
+   * ([getCustomYamlToolNamesForDriver]).
+   *
+   * Default empty; YAML-backed targets populate it from their toolsets and per-platform `tools:`
+   * lists.
+   */
+  open fun getCustomScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
+
+  /**
    * A named group of tools for discovery output. Allows targets to organize their
    * custom tools into logical groups (e.g., "onboarding", "checkout", "settings").
    *
@@ -111,6 +128,20 @@ abstract class TrailblazeHostAppTarget(
    * Default empty; YAML-backed targets populate from their per-platform `excluded_tools` lists.
    */
   open fun getExcludedYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
+
+  /**
+   * Scripted (`.ts` / `.js`) tool names this target wants to exclude for the given driver.
+   *
+   * Mirrors [getExcludedYamlToolNamesForDriver] for tools delivered by a toolset's `tools:`
+   * (e.g. `openUrl` via `core_interaction`) or the target's own `target.tools:` — tools advertised
+   * to the LLM but dispatched through the per-session scripted-tool runtime. Without this, a target
+   * YAML's `excluded_tools: [openUrl]` resolves to neither a class nor a YAML name and is silently
+   * dropped (logged as an unknown tool) — the scripted-partition parallel of the bug fixed for
+   * class-backed tools ([getExcludedToolsForDriver]) and YAML tools ([getExcludedYamlToolNamesForDriver]).
+   *
+   * Default empty; YAML-backed targets populate from their per-platform `excluded_tools` lists.
+   */
+  open fun getExcludedScriptedToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
 
   /**
    * Toolset ids the target *declares* for the given driver — the positive list of toolset

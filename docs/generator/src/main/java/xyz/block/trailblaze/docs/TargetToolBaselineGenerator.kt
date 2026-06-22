@@ -24,7 +24,9 @@ import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.Header
 import xyz.block.trailblaze.toolcalls.ResolvedTargetToolDetailRenderer.ToolDetail
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.allToolNameStrings
 import xyz.block.trailblaze.toolcalls.allToolNames
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.toolName
 import java.io.File
 
@@ -177,11 +179,12 @@ class TargetToolBaselineGenerator(
 
     if (allDrivers.isEmpty()) return@buildString
 
-    // Build per-driver excluded sets
+    // Build per-driver excluded sets. Route through the central `getExcludedToolSurfaceForDriver`
+    // accessor so the baseline matrix honors ALL three exclusion backings (class / YAML / scripted)
+    // — reading only `getExcludedToolsForDriver` here would miss an `excluded_tools: [openUrl]`
+    // (scripted) or `[pressBack]` (YAML) and render an excluded tool as available.
     val excluded = allDrivers.associateWith { driverType ->
-      target.getExcludedToolsForDriver(driverType)
-        .map { it.toolName().toolName }
-        .toSet()
+      target.getExcludedToolSurfaceForDriver(driverType).allToolNameStrings
     }
 
     // Build: which drivers each toolset applies to (from platform section scope)

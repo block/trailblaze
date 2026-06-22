@@ -6,10 +6,12 @@ import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.DriverTypeKey
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
+import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.ResolvedTargetIdempotentWrite
@@ -87,6 +89,16 @@ object ResolvedTargetReportEmitter {
       )
     }.getOrNull().orEmpty().mapKeys { it.key.toolName }
     val yamlToolConfigsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+    // Scripted-tool descriptor index (`trails/config/trailmaps/**/tools/*.yaml` → descriptor),
+    // used to resolve toolset-delivered scripted names (e.g. `openUrl` via `navigation`) to their
+    // `InlineScriptToolConfig` for sidecars. Discovered AT MOST once per `emit(...)` — the recursive
+    // resource scan + YAML decode is expensive, so a `by lazy` shares it across every target rather
+    // than re-scanning per target (a workspace with many `navigation`-using targets paid that scan
+    // once per target before). Stays lazy so workspaces with zero toolset-delivered scripted tools
+    // never trigger the scan at all (mirrors the per-target `any { it !in byName }` guard).
+    val scriptedDescriptorsByName: Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor> by lazy {
+      runCatching { ScriptedToolNameDiscoverer.discoverDescriptorsByName() }.getOrNull().orEmpty()
+    }
     val written = mutableListOf<File>()
     val keepNames = mutableSetOf<String>()
     val keepIds = mutableSetOf<String>()
@@ -106,6 +118,7 @@ object ResolvedTargetReportEmitter {
         trailmapsById = trailmapsById,
         catalog = catalog,
         yamlToolConfigsByName = yamlToolConfigsByName,
+        scriptedDescriptorsByName = { scriptedDescriptorsByName },
       )
       val runtimeRegistry = runtimeRegistryWithProvenance(trailmap.manifest.id, trailmapsById)
       val resolutionTrace = traceContributions(trailmap, trailmapsById)
@@ -394,8 +407,12 @@ object ResolvedTargetReportEmitter {
         }
       }.toSet()
       val totalAgentTools = netAgentToolNames.size
-      val totalExcluded = agentToolbox.perPlatform.values.flatMap { it.exclusions }.toSet().size
-      val totalScripted = agentToolbox.scriptedTools.size
+      val allExclusions = agentToolbox.perPlatform.values.flatMap { it.exclusions }.toSet()
+      val totalExcluded = allExclusions.size
+      // Net out scripted tools the target excluded via `excluded_tools:` so this count matches the
+      // "### Scripted tools" section above (which now drops them) — an excluded scripted tool is
+      // counted under `totalExcluded`, not as part of the advertised scripted surface.
+      val totalScripted = agentToolbox.scriptedTools.count { it.tool.name !in allExclusions }
       appendLine("- ${runtimeToolNames.size} tool(s) in runtime registry across ${runtimeRegistry.size} platform(s)")
       appendLine("- $totalAgentTools class-backed/YAML tool(s) in agent toolbox (after `tools:` additions + `excluded_tools:` removals)")
       appendLine("- $totalExcluded tool(s) excluded by `excluded_tools:`")
@@ -499,11 +516,20 @@ object ResolvedTargetReportEmitter {
 
       appendLine("### Scripted tools (trailmap-local + transitive exports)")
       appendLine()
-      if (agentToolbox.scriptedTools.isEmpty()) {
+      // Drop scripted tools the target excluded via `excluded_tools:` so this section stays
+      // aligned with the resolver (`getAgentToolboxForDriver` subtracts the same names) and the
+      // `AgentToolboxPrimitivesMatchTest` drift guard. Exclusions are tracked per platform as raw
+      // names; the scripted section is rendered once (driver-agnostic), so subtract the union
+      // across platforms — for single-platform targets (the common case + every drift-guard
+      // fixture) that's exactly the per-driver exclusion. The names still render below under
+      // "Excluded by `excluded_tools:`" and as ❌ in the availability matrix.
+      val excludedScriptedNames = agentToolbox.perPlatform.values.flatMap { it.exclusions }.toSet()
+      val visibleScriptedTools = agentToolbox.scriptedTools.filter { it.tool.name !in excludedScriptedNames }
+      if (visibleScriptedTools.isEmpty()) {
         appendLine("_(no scripted tools)_")
         appendLine()
       } else {
-        agentToolbox.scriptedTools.sortedBy { it.tool.name }.forEach { entry ->
+        visibleScriptedTools.sortedBy { it.tool.name }.forEach { entry ->
           val origin = if (entry.originTrailmapId == entry.consumerTrailmapId) {
             "from this trailmap"
           } else {
@@ -632,6 +658,16 @@ object ResolvedTargetReportEmitter {
       }
     }
 
+    // Toolset-delivered scripted tools (e.g. `openUrl` via the `navigation` toolset) are scoped
+    // per (platform, driver) below — unlike target-root scripted tools they only resolve under the
+    // cells whose toolset actually contributed them. Index them by name so the per-cell loop can
+    // attach the `script:<file>` label + respect `supportedPlatforms` (automated review on PR
+    // #3832 flagged that a target-wide union showed `openUrl` ✅ under driver columns whose toolset
+    // never delivered it).
+    val toolsetScriptedByName = agentToolbox.scriptedTools
+      .filter { it.deliveredByToolset }
+      .associateBy { it.tool.name }
+
     // Class-backed / YAML-only / additions per (platform, driver). Apply exclusions
     // upfront so they only count as ❌ when the tool would otherwise have been included
     // (mirrors `YamlBackedHostAppTarget.getExcludedToolsForDriver` semantics).
@@ -641,31 +677,52 @@ object ResolvedTargetReportEmitter {
         val classBacked = driver.classBacked
         val yamlOnly = driver.yamlOnly
         val additions = platformBox.additions
-        val included = (classBacked + yamlOnly + additions) - platformBox.exclusions
-        val excluded = platformBox.exclusions intersect (classBacked + yamlOnly + additions)
+        // Toolset-delivered scripted names this driver resolved, further narrowed by each tool's
+        // `supportedPlatforms` meta (a tool whose toolset is compatible with the driver but that
+        // declares `supportedPlatforms: [android]` still won't surface under a web cell).
+        val driverScripted = driver.toolsetScripted.filter { name ->
+          val scripted = toolsetScriptedByName[name] ?: return@filter true
+          cell in scriptedToolApplicableColumns(scripted.tool, driverColumns)
+        }.toSet()
+        val candidates = classBacked + yamlOnly + additions + driverScripted
+        val included = candidates - platformBox.exclusions
+        val excluded = platformBox.exclusions intersect candidates
         for (toolName in included) {
           val entry = entries.getOrPut(toolName) { Entry() }
           entry.included += cell
           attributeToolsetsFor(toolName, platform, driver, entry)
+          toolsetScriptedByName[toolName]?.let { entry.toolSets += "script:${File(it.tool.script).name}" }
         }
         for (toolName in excluded) {
           val entry = entries.getOrPut(toolName) { Entry() }
           entry.excluded += cell
           attributeToolsetsFor(toolName, platform, driver, entry)
+          toolsetScriptedByName[toolName]?.let { entry.toolSets += "script:${File(it.tool.script).name}" }
         }
       }
     }
 
-    // Trailmap-authored scripted tools (`target.tools:` and exported deps). Driver scope is
-    // narrowed by the `_meta["trailblaze/supportedPlatforms"]` field when present —
-    // mirrors `TargetToolBaselineGenerator.driversForScriptedTool`. Without this filter
-    // a scripted tool declared with `supportedPlatforms: [android]` would wrongly show ✅
-    // under web drivers (caught by Copilot review on PR #3326).
+    // Target-root scripted tools (`target.tools:` and exported deps) — driver-agnostic, so they
+    // apply to every driver column, narrowed only by the `_meta["trailblaze/supportedPlatforms"]`
+    // field when present (mirrors `TargetToolBaselineGenerator.driversForScriptedTool`; without
+    // this filter a `supportedPlatforms: [android]` tool would wrongly show ✅ under web drivers —
+    // caught by Copilot review on PR #3326). Toolset-delivered scripted tools are excluded here
+    // (handled per-cell above) so they aren't re-marked ✅ across columns their toolset never
+    // surfaced.
     for (scripted in agentToolbox.scriptedTools) {
+      if (scripted.deliveredByToolset) continue
       val entry = entries.getOrPut(scripted.tool.name) { Entry() }
       val scriptFile = File(scripted.tool.script).name
       entry.toolSets += "script:$scriptFile"
-      scriptedToolApplicableColumns(scripted.tool, driverColumns).forEach { entry.included += it }
+      // A target-root scripted tool the target also lists in `excluded_tools:` is opted out: mark
+      // it ❌ on the columns where its platform excludes it (mirrors the toolset-delivered branch
+      // above, which routes scripted names through `candidates - exclusions`). Without this the
+      // matrix would show ✅ for a tool the resolver + scripted section already dropped.
+      scriptedToolApplicableColumns(scripted.tool, driverColumns).forEach { col ->
+        val excludedOnThisPlatform =
+          agentToolbox.perPlatform[col.first]?.exclusions?.contains(scripted.tool.name) == true
+        if (excludedOnThisPlatform) entry.excluded += col else entry.included += col
+      }
     }
 
     if (entries.isEmpty()) {
@@ -778,12 +835,29 @@ object ResolvedTargetReportEmitter {
     val driverYamlKey: String,
     val classBacked: Set<String>,
     val yamlOnly: Set<String>,
+    /**
+     * Scripted (`.ts` / `.js`) tool names this driver's *toolsets* delivered (e.g. `openUrl`
+     * via the `navigation` toolset). Scoped per (platform, driver) because `resolveForDriver`
+     * already filtered out toolsets incompatible with this driver — so a tool only lands here
+     * for the cells where its toolset actually resolved. The availability matrix uses this to
+     * avoid marking a toolset-delivered scripted tool ✅ under a driver column whose toolset
+     * never surfaced it (vs target-root scripted tools, which apply to every driver column).
+     */
+    val toolsetScripted: Set<String>,
   )
 
   private data class ScriptedToolEntry(
     val tool: InlineScriptToolConfig,
     val originTrailmapId: String,
     val consumerTrailmapId: String,
+    /**
+     * `true` when this scripted tool reached the toolbox via a toolset's `tools:` (bare name
+     * through `resolveForDriver`), `false` when it was authored at target-root scope
+     * (`target.tools:` or a trailmap `exports:`). The matrix scopes toolset-delivered entries
+     * to the [DriverToolbox.toolsetScripted] cells that actually contributed them; target-root
+     * entries stay driver-agnostic (✅ on every column, narrowed only by `supportedPlatforms`).
+     */
+    val deliveredByToolset: Boolean,
   )
 
   private fun computeAgentToolbox(
@@ -792,8 +866,14 @@ object ResolvedTargetReportEmitter {
     trailmapsById: Map<String, ResolvedTrailmap>,
     catalog: List<ToolSetCatalogEntry>,
     yamlToolConfigsByName: Map<ToolName, ToolYamlConfig>,
+    scriptedDescriptorsByName: () -> Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor>,
   ): AgentToolbox {
     val perPlatform = mutableMapOf<String, PlatformToolbox>()
+    // Toolset-delivered scripted tool names (e.g. `openUrl` via the `navigation` toolset), unioned
+    // across every platform/driver the target resolves. Collected here so the scripted-sidecar pass
+    // can render them: they're advertised by bare name THROUGH a toolset, so they never appear in
+    // any target's `tools:` list that [collectScriptedTools] otherwise reads.
+    val toolsetScriptedNames = linkedSetOf<String>()
     target.platforms.orEmpty().forEach { (platformKey, platformConfig) ->
       val additions = platformConfig.tools.orEmpty().toSet()
       val exclusions = platformConfig.excludedTools.orEmpty().toSet()
@@ -827,10 +907,13 @@ object ResolvedTargetReportEmitter {
           }
           .map { it.toolName }
           .toSet()
+        val driverToolsetScripted = resolved.scriptedToolNames.map { it.toolName }.toSet()
+        toolsetScriptedNames += driverToolsetScripted
         DriverToolbox(
           driverYamlKey = driverType.yamlKey,
           classBacked = classBacked,
           yamlOnly = yamlOnly,
+          toolsetScripted = driverToolsetScripted,
         )
       }
       perPlatform[platformKey] = PlatformToolbox(
@@ -839,7 +922,12 @@ object ResolvedTargetReportEmitter {
         exclusions = exclusions,
       )
     }
-    val scriptedTools = collectScriptedTools(ownTrailmap, trailmapsById)
+    val scriptedTools = collectScriptedTools(
+      ownTrailmap = ownTrailmap,
+      trailmapsById = trailmapsById,
+      toolsetScriptedToolNames = toolsetScriptedNames,
+      scriptedDescriptorsByName = scriptedDescriptorsByName,
+    )
     return AgentToolbox(perPlatform = perPlatform, scriptedTools = scriptedTools)
   }
 
@@ -879,6 +967,8 @@ object ResolvedTargetReportEmitter {
   private fun collectScriptedTools(
     ownTrailmap: ResolvedTrailmap,
     trailmapsById: Map<String, ResolvedTrailmap>,
+    toolsetScriptedToolNames: Set<String> = emptySet(),
+    scriptedDescriptorsByName: () -> Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor> = { emptyMap() },
   ): List<ScriptedToolEntry> {
     val byName = linkedMapOf<String, ScriptedToolEntry>()
     ownTrailmap.target?.tools.orEmpty().forEach { tool ->
@@ -888,6 +978,8 @@ object ResolvedTargetReportEmitter {
           tool = tool,
           originTrailmapId = ownTrailmap.manifest.id,
           consumerTrailmapId = ownTrailmap.manifest.id,
+          // Authored at target-root scope — driver-agnostic in the matrix.
+          deliveredByToolset = false,
         ),
       )
     }
@@ -908,10 +1000,40 @@ object ResolvedTargetReportEmitter {
             tool = tool,
             originTrailmapId = dep.manifest.id,
             consumerTrailmapId = ownTrailmap.manifest.id,
+            // Inherited via a dep's `exports:` — still target-root scope, driver-agnostic.
+            deliveredByToolset = false,
           )
         }
       }
       dep.manifest.dependencies.forEach { frontier.add(it) }
+    }
+    // Toolset-delivered scripted tools: listed by bare name in a toolset's `tools:`, so they have
+    // no [InlineScriptToolConfig] in any target's `tools:` (the two passes above). Resolve each
+    // remaining name to its descriptor the same way the catalog + host bundler do, so it earns a
+    // `ToolDetail.Scripted` sidecar instead of rendering as a plain, un-clickable matrix cell.
+    // `target.tools`-declared and exported entries already in [byName] win (they carry the
+    // consumer's own config), so only names not yet seen are resolved here. The descriptor index
+    // is supplied lazily by the caller — discovered once per `emit(...)` and shared across every
+    // target rather than re-scanned per target — and is only realized when a target actually has
+    // an un-seen toolset-delivered scripted name (the `any { it !in byName }` guard).
+    if (toolsetScriptedToolNames.any { it !in byName }) {
+      val discovered = scriptedDescriptorsByName()
+      toolsetScriptedToolNames.forEach { name ->
+        if (byName.containsKey(name)) return@forEach
+        val descriptor = discovered[ToolName(name)] ?: return@forEach
+        val config = descriptor.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name }
+          ?: return@forEach
+        // relPath is `<trailmap-id>/tools/...`; its first segment is the origin trailmap. The
+        // scripted-sidecar pass derives `originTrailmapDir` from this id via [trailmapsById].
+        byName[name] = ScriptedToolEntry(
+          tool = config,
+          originTrailmapId = descriptor.relPath.substringBefore('/'),
+          consumerTrailmapId = ownTrailmap.manifest.id,
+          // Delivered through a toolset — matrix scopes this to the (platform, driver) cells
+          // whose resolved toolset contributed it, not every column.
+          deliveredByToolset = true,
+        )
+      }
     }
     return byName.values.toList()
   }

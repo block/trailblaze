@@ -27,7 +27,13 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass(
   name = "tapOnElementBySelector",
   surfaceToLlm = false,
-  surfaceToScriptedTools = false,
+  // Available to scripted tools: this is the selector-resolved tap (ACTION_CLICK-vs-gesture
+  // routing + animation settle) that scripted authors compose for "tap the element matching this
+  // selector". It stays hidden from the LLM (which uses the friendlier `tap` /
+  // `tapOnElementWithText`) — those two audiences are orthogonal. The earlier blanket `false` was
+  // a mechanical carry-over from the single-flag `isForLlm` split (#3272), not a scripted-specific
+  // decision; surfacing it matches this tool's stated "delegated to, not LLM-registered" role.
+  surfaceToScriptedTools = true,
 )
 @LLMDescription("Taps on an element by its selector.")
 /**

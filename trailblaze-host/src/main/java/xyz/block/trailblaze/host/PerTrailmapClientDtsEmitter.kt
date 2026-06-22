@@ -151,11 +151,11 @@ object PerTrailmapClientDtsEmitter {
     val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return null
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
-    // Preflight: `ts-json-schema-generator` must be installed under the SDK. Same check as
-    // `CheckCommand.emitScriptedToolDefinitionsDebug` — a fresh checkout that hasn't run
-    // `bun install` would otherwise have the shim invoke bun with no resolvable deps.
-    val tsjsg = File(sdkDir, "node_modules/ts-json-schema-generator")
-    if (!tsjsg.isDirectory) return null
+    // Preflight: the shim's deps must be resolvable — either a real SDK tree with
+    // `ts-json-schema-generator` under `node_modules/`, OR the framework-bundled
+    // self-contained shim (deps inlined). Same gate as
+    // `AnalyzerScriptedToolEnrichment.resolveFromEnvironment`.
+    if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) return null
     return ScriptedToolDefinitionAnalyzer(
       bunBinary = bun,
       extractorShim = shim,

@@ -20,7 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 class QuickJsToolRegistration(
   /**
    * The host this tool lives in. The registration holds the host reference rather than
-   * looking it up at execute time so the `@trailblaze/tools` SDK's "register on bundle
+   * looking it up at execute time so the `@trailblaze/scripting` SDK's "register on bundle
    * evaluation, dispatch by name" contract can be implemented as a direct call.
    */
   internal val host: QuickJsToolHost,
@@ -34,11 +34,39 @@ class QuickJsToolRegistration(
    * paths that don't support cross-tool composition.
    */
   internal val binding: SessionScopedHostBinding? = null,
+  /**
+   * Advertise-time descriptor to expose to the LLM instead of one derived from [spec].
+   *
+   * Typed scripted tools (`export const x = trailblaze.tool<I>(...)`) bundle through a
+   * synthesized wrapper that registers a handler-only entry on `globalThis.__trailblazeTools`
+   * (no `spec`), because the bundle is the lean dispatch surface — the description / inputSchema /
+   * `_meta` live in the tool's YAML descriptor, which the daemon/host path already reads. The
+   * on-device launcher supplies that YAML-derived descriptor here so the LLM sees the real
+   * description + parameters rather than the empty descriptor [spec] would yield. Null on paths
+   * that legitimately advertise from the bundle's own `spec` (e.g. a hand-written `pure.js`
+   * fixture that populates `spec`).
+   */
+  internal val descriptorOverride: TrailblazeToolDescriptor? = null,
+  /**
+   * 1:1 with the scripted tool's declared `surfaceToLlm`. When `false`,
+   * [TrailblazeToolRepo.advertisedDynamic] drops this registration from the LLM's tool menu while
+   * keeping it dispatchable by name and resolvable for recorded replays. Sourced from the tool's
+   * `_meta` ([QuickJsToolMeta.surfaceToLlm]) by [QuickJsToolBundleLauncher]. Default `true`.
+   */
+  override val surfaceToLlm: Boolean = true,
+  /**
+   * 1:1 with the scripted tool's declared `isRecordable`. When `false`, [decodeToolCall] threads it
+   * onto the decoded tool's `toolMetadata` so the recording gate keeps the invocation out of the
+   * `.trail.yaml`. Sourced from the tool's `_meta` ([QuickJsToolMeta.isRecordable]) by
+   * [QuickJsToolBundleLauncher]. Default `true`.
+   */
+  internal val isRecordable: Boolean = true,
 ) : DynamicTrailblazeToolRegistration {
 
   override val name: ToolName = ToolName(spec.name)
 
-  override val trailblazeDescriptor: TrailblazeToolDescriptor = spec.toTrailblazeToolDescriptor()
+  override val trailblazeDescriptor: TrailblazeToolDescriptor =
+    descriptorOverride ?: spec.toTrailblazeToolDescriptor()
 
   override fun buildKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
@@ -47,7 +75,7 @@ class QuickJsToolRegistration(
     // doesn't model today (`array`, `object`, etc.) — those fall back to String rather than
     // crashing session startup. Same posture the legacy MCP-bundle registration takes.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = QuickJsToolSerializer(name, host, binding)
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -60,7 +88,13 @@ class QuickJsToolRegistration(
   }
 
   override fun decodeToolCall(argumentsJson: String): TrailblazeTool {
-    val serializer = QuickJsToolSerializer(name, host, binding)
+    // `isRecordable` is threaded onto the decoded QuickJsTrailblazeTool itself (via the serializer)
+    // rather than wrapping it: the decoded instance must STAY a QuickJsTrailblazeTool so
+    // SessionScopedHostBinding's same-host re-entry guard (`resolved is QuickJsTrailblazeTool`)
+    // still fires — a wrapper would let a non-recordable same-bundle compose bypass the guard and
+    // deadlock the host's non-reentrant evalMutex. The tool's `toolMetadata` carries the opt-out so
+    // the recording gate (`getIsRecordableFromAnnotation`) skips it.
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable)
     return Json.decodeFromString(serializer, argumentsJson)
   }
 }

@@ -42,14 +42,47 @@ internal fun TrailblazeNode.filterImportantForAccessibility(): TrailblazeNode {
       // every node beneath the outer WebView survives untouched.
       if (child.isWebView()) return@flatMap listOf(child)
       val processedChild = child.copy(children = processChildren(child.children))
-      val isImportant = when (val detail = child.driverDetail) {
-        is DriverNodeDetail.AndroidAccessibility -> detail.isImportantForAccessibility
+      val keep = when (val detail = child.driverDetail) {
+        is DriverNodeDetail.AndroidAccessibility ->
+          detail.isImportantForAccessibility ||
+            (processedChild.children.isEmpty() && detail.hasReadableLabel())
         else -> true
       }
-      if (isImportant) listOf(processedChild) else processedChild.children
+      if (keep) listOf(processedChild) else processedChild.children
     }
   return copy(children = processChildren(children))
 }
+
+/**
+ * Compose-aware fallback for [filterImportantForAccessibility].
+ *
+ * Jetpack Compose's default a11y handling sets `importantForAccessibility=false` on inner
+ * Text/Icon leaves because their content is supposed to be readable via the merged parent's
+ * `contentDescription`. When that merge doesn't fire (or the parent never synthesizes a
+ * usable label), the dropped child carries the only readable text on screen, and the runtime
+ * LLM gets a refless container it can't select. Keeping any node that carries its own
+ * readable label — text or contentDescription — regardless of the importance flag, gives
+ * Compose-rendered screens a usable simplified view without resorting to `--all`.
+ *
+ * **Intentionally narrow.** "Readable label" is the only signal we add — interactive flags
+ * like `isClickable` / `isEditable` / `isFocusable` are deliberately NOT included here. The
+ * `TrailblazeNodeMapperTest` "drops non-important editable or clickable nodes" test pins the
+ * historical reason: every background view that happens to be clickable (overlay scrims,
+ * ripple-providing rows, dismiss layers, etc.) would re-enter the default snapshot and
+ * balloon the tree the LLM has to read. Without a label, the LLM cannot address the node
+ * anyway, so keeping it adds noise without selectability. Pre-Compose `View` hierarchies are
+ * unaffected: decorative wrappers (`LinearLayout`, `FrameLayout`, etc.) have no text or
+ * contentDescription, so they still drop as before.
+ *
+ * **Leaves only.** The fallback is gated on `processedChild.children.isEmpty()` — i.e. the
+ * node has no surviving children after recursive filtering. Non-important *wrappers* that
+ * happen to carry a label but contain children (their own or promoted ones) are still
+ * dropped, so `containsChild` selectors that rely on non-important intermediates being
+ * removed + their children promoted up keep working. The
+ * `AccessibilityDeviceManagerTreeFilterTest` `containsChild ...` test pins that invariant.
+ */
+private fun DriverNodeDetail.AndroidAccessibility.hasReadableLabel(): Boolean =
+  !text.isNullOrBlank() || !contentDescription.isNullOrBlank()
 
 /**
  * Exact runtime class name for Android's WebView. The match in [isWebView] is intentionally

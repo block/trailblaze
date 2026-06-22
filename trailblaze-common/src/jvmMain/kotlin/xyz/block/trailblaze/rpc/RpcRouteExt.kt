@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.compose.driver.rpc
+package xyz.block.trailblaze.rpc
 
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -8,16 +8,22 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.mcp.RpcHandler
 
 /**
- * Mirrors [xyz.block.trailblaze.mcp.models.RpcErrorResponse] from the on-device RPC module.
+ * Canonical host-side helpers for registering a daemon `/rpc/<Name>` endpoint from a typed
+ * `RpcRequest<TResponse>` + an [RpcHandler]. Lives in `:trailblaze-common` (jvmMain) so every
+ * JVM/host module that runs the daemon's embedded Ktor server can share one implementation — the
+ * host device API (`DeviceApiEndpoint`), the Compose driver server, and the Trail Runner endpoint.
+ * Scoped to `jvmMain` (not `commonMain`) so the on-device Android build does not inherit ktor-server.
  *
- * Duplicated here because `trailblaze-compose` does not depend on `trailblaze-android-ondevice-mcp`.
- * If the error response schema is ever moved to `trailblaze-models`, this can be replaced.
+ * The wire contract matches the generated TypeScript `rpcCall` client (`sdks/typescript/src/rpc`):
+ * a 2xx carries the raw `TResponse`, a non-2xx carries a flat [RpcErrorResponse]. The on-device RPC
+ * module (`trailblaze-android-ondevice-mcp`) keeps its own variant; the existing `:trailblaze-compose`
+ * copy is now redundant and should be repointed here in a follow-up.
  */
 @Serializable
 data class RpcErrorResponse(
@@ -47,7 +53,7 @@ suspend inline fun ApplicationCall.respondRpcException(e: Exception) {
     status = HttpStatusCode.InternalServerError,
     message =
       RpcErrorResponse(
-        errorType = "UNKNOWN_ERROR",
+        errorType = RpcResult.ErrorType.UNKNOWN_ERROR.name,
         message = "Failed to process RPC request",
         details = e.message,
       ),

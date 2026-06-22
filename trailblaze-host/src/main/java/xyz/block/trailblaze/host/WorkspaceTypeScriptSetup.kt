@@ -50,6 +50,10 @@ object WorkspaceTypeScriptSetup {
   fun setUp(workspaceRoot: Path): SetupResult {
     val sdkDir = extractSdk(workspaceRoot)
     pruneStaleWorkspaceTsconfigBase(workspaceRoot)
+    // First-run-only, best-effort: hide the artifacts `check` generates from `git status`
+    // via the repo's local `.git/info/exclude`, so a developer never has to ask which
+    // generated files to commit. No-op when already seeded or outside a git repo.
+    GitInfoExcludeSeeder.seedOnce(workspaceRoot)
     val sdkDtsBundle = sdkDir.resolve(SDK_DTS_BUNDLE_RELATIVE_PATH).toAbsolutePath()
     return SetupResult(sdkDir = sdkDir, sdkDtsBundle = sdkDtsBundle)
   }

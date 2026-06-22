@@ -25,7 +25,10 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 
 /**
@@ -98,6 +101,74 @@ class QuickJsToolBundleLauncherTest {
     launchedRuntime = runtime
     val registered = toolRepo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet()
     assertEquals(setOf("alpha", "beta"), registered)
+  }
+
+  @Test
+  fun `advertisementOverrides supply the descriptor for a handler-only bundle entry`() = runBlocking {
+    // Typed scripted tools bundle to a handler-only `globalThis.__trailblazeTools` entry (no
+    // `spec`). The launcher must advertise the YAML-derived descriptor passed via
+    // advertisementOverrides instead of the empty descriptor the bundle's missing spec yields —
+    // otherwise the LLM sees an undocumented, no-argument tool (the Codex/Copilot P2 on #3845).
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["openThing"] = {
+        handler: async (args) => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+    """.trimIndent()
+    val overrideDescriptor = TrailblazeToolDescriptor(
+      name = "openThing",
+      description = "Opens the thing at the given url.",
+      requiredParameters = listOf(
+        TrailblazeToolParameterDescriptor(name = "url", type = "string", description = "The URL."),
+      ),
+    )
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      advertisementOverrides = mapOf(
+        ToolName("openThing") to QuickJsToolAdvertisement(
+          descriptor = overrideDescriptor,
+          meta = QuickJsToolMeta(),
+        ),
+      ),
+    )
+    launchedRuntime = runtime
+    val registration = toolRepo.getRegisteredDynamicTools()
+      .entries.first { it.key.toolName == "openThing" }.value
+    assertEquals("Opens the thing at the given url.", registration.trailblazeDescriptor.description)
+    assertEquals(
+      listOf("url"),
+      registration.trailblazeDescriptor.requiredParameters.map { it.name },
+    )
+  }
+
+  @Test
+  fun `advertisementOverrides meta gates registration off the session platform`() = runBlocking {
+    // The override's `_meta` gate must drop a handler-only tool whose supportedPlatforms exclude
+    // the session platform (device here is ANDROID). Without the override the empty bundle spec
+    // would register it everywhere — the second half of the #3845 advertisement regression.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["iosOnly"] = { handler: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+    """.trimIndent()
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      advertisementOverrides = mapOf(
+        ToolName("iosOnly") to QuickJsToolAdvertisement(
+          descriptor = TrailblazeToolDescriptor(name = "iosOnly", description = "iOS only"),
+          meta = QuickJsToolMeta(supportedPlatforms = listOf("IOS")),
+        ),
+      ),
+    )
+    launchedRuntime = runtime
+    assertTrue(toolRepo.getRegisteredDynamicTools().keys.none { it.toolName == "iosOnly" })
   }
 
   @Test

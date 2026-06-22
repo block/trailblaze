@@ -259,6 +259,92 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
   }
 
+  @Test fun `withDynamicToolSets subtracts excluded YAML and scripted names from the always-enabled surface`() {
+    // The on-device / host-runner exclusion fix relies on excludedYamlToolNames /
+    // excludedScriptedToolNames being subtracted from the ALWAYS-ENABLED catalog surface — not just
+    // from caller-supplied custom sets. That's exactly where a tool like `openUrl` is re-added, so
+    // pre-subtracting it upstream isn't enough; the param must reach the initial composition. Pin
+    // both partitions here against an always-enabled fixture toolset.
+    val yamlName = ToolName("always_yaml")
+    val scriptedName = ToolName("always_scripted")
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "always_on",
+        description = "always-enabled fixture",
+        toolClasses = emptySet(),
+        yamlToolNames = setOf(yamlName),
+        scriptedToolNames = setOf(scriptedName),
+        alwaysEnabled = true,
+      ),
+    )
+
+    // Baseline: both surface from the always-enabled toolset, so the exclusion assertions below
+    // aren't vacuous.
+    val baseline = TrailblazeToolRepo.withDynamicToolSets(catalog = catalog)
+    assertThat(baseline.getRegisteredYamlToolNames()).contains(yamlName)
+    assertThat(baseline.getRegisteredScriptedToolNames()).contains(scriptedName)
+
+    // Excluded: each partition is subtracted from the initial surface.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = catalog,
+      excludedYamlToolNames = setOf(yamlName),
+      excludedScriptedToolNames = setOf(scriptedName),
+    )
+    assertThat(repo.getRegisteredYamlToolNames()).doesNotContain(yamlName)
+    assertThat(repo.getRegisteredScriptedToolNames()).doesNotContain(scriptedName)
+  }
+
+  @Test fun `a surfaceToLlm = false dynamic registration is dispatchable but never advertised`() {
+    // The scripted-tool internal-step gate: a registration declaring `surfaceToLlm = false`
+    // (e.g. a launch-step composed by a parent tool) stays registered + dispatchable by name +
+    // resolvable for recorded replays, but `advertisedDynamic` drops it from the LLM menu —
+    // independent of toolset activity (it isn't a catalog scripted name here).
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = TrailblazeToolSetCatalog.defaultEntries(),
+    )
+    repo.addDynamicTools(listOf(stubRegistration("internal_step", surfaceToLlm = false)))
+
+    // Registered + dispatchable, but hidden from the advertised descriptor set.
+    assertThat(repo.getRegisteredDynamicTools().keys).contains(ToolName("internal_step"))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain("internal_step")
+    assertThat(repo.toolCallToTrailblazeTool("internal_step", "{}"))
+      .isInstanceOf(StubDynamicTool::class)
+
+    // A sibling surfaceToLlm = true registration IS advertised — proving the gate is per-tool.
+    repo.addDynamicTools(listOf(stubRegistration("visible_tool")))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("visible_tool")
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain("internal_step")
+  }
+
+  @Test fun `the executor-backed tool registry also excludes surfaceToLlm = false dynamic tools`() {
+    // Regression: the executor overload (the KOOG_STRATEGY_GRAPH in-process path) previously
+    // registered `snapshot.dynamic.values` directly, so a `surfaceToLlm = false` scripted internal
+    // step leaked into the LLM's menu there even though the other overload's gate hid it. It now
+    // routes through `advertisedDynamic()` too.
+    //
+    // The stub's `buildKoogTool` throws; `advertisedDynamic()` is empty for a `surfaceToLlm = false`
+    // registration, so the executor registry builds WITHOUT calling it. Before the fix, the
+    // `snapshot.dynamic.values` path would have called `buildKoogTool` and thrown — so a clean build
+    // here that omits the tool's name proves it was filtered before koog-tool construction.
+    val repo = TrailblazeToolRepo(
+      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "has-tap",
+        toolClasses = setOf(TapTrailblazeTool::class),
+      ),
+    )
+    repo.addDynamicTools(listOf(stubRegistration("internal_step", surfaceToLlm = false)))
+
+    val registry = repo.asToolRegistry(
+      toolDispatcher = { "" },
+      // Only invoked for advertised dynamic tools — none here, so it must never fire.
+      trailblazeToolContextProvider = { error("context provider must not be needed — no advertised dynamic tools") },
+    )
+    val names = registry.tools.map { it.descriptor.name }
+    assertThat(names).doesNotContain("internal_step")
+    // The class-backed tool is still present — the registry built fine, it just dropped the hidden one.
+    assertThat(names).contains(TapTrailblazeTool::class.toolName().toolName)
+  }
+
   // --- helpers ---
 
   @Serializable
@@ -277,11 +363,13 @@ class TrailblazeToolRepoDynamicTest {
   private fun stubRegistration(
     toolName: String,
     source: TrailblazeToolSourceDescriptor? = null,
+    surfaceToLlm: Boolean = true,
   ): DynamicTrailblazeToolRegistration =
     object : DynamicTrailblazeToolRegistration {
       override val name: ToolName = ToolName(toolName)
       override val trailblazeDescriptor: TrailblazeToolDescriptor =
         TrailblazeToolDescriptor(name = toolName, source = source)
+      override val surfaceToLlm: Boolean = surfaceToLlm
 
       override fun buildKoogTool(
         trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,

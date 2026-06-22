@@ -109,6 +109,10 @@ kotlin {
         // live under src/jvmMain, so on-device Android consumers do not need (and must not
         // pay for) this dep.
         implementation(libs.dadb)
+        // ktor-server (JVM only): RpcRouteExt's `registerRpcHandler` is a Ktor server route
+        // extension shared by the host-side modules that run the daemon's embedded server. Scoped
+        // to jvmMain so the on-device Android build does not inherit a server framework.
+        implementation(libs.ktor.server.core)
       }
     }
 
@@ -166,16 +170,26 @@ dependencyGuard {
 }
 
 // --- Framework scripted-tool QuickJS bundles ---
-// Pre-compiles every @trailblaze/tools-based `.ts` tool in the framework `trailblaze` trailmap into
-// a self-contained `.bundle.js` that QuickJsToolHost evaluates directly (host daemon + on-device).
-// The committed `.bundle.js` is what the toolset-delivery path loads from the classpath / APK
-// assets — see TrailblazeHostYamlRunner.registerToolsetScriptedToolBundles and
+// Pre-compiles every @trailblaze/scripting-based `.ts` tool in the framework `trailblaze` trailmap
+// into a self-contained `.bundle.js` that QuickJsToolHost evaluates directly (host daemon +
+// on-device). The committed `.bundle.js` is what the toolset-delivery path loads from the
+// classpath / APK assets — see TrailblazeHostYamlRunner.registerToolsetScriptedToolBundles and
 // AndroidTrailblazeRule.launchToolsetScriptedToolBundles. Generalized over the directory so new
 // framework scripted tools are picked up without editing this build script.
+//
+// This is an IN-PROCESS bundler: it aliases `@trailblaze/scripting` to the SLIM in-process SDK
+// profile (`sdks/typescript/src/in-process.ts` — no MCP, no ajv, no zod) so each per-tool bundle
+// stays KB-scale, and synthesizes a registration wrapper (typed-tool exports don't self-register).
+//
+// The wrapper JS is no longer hand-built here: it renders from the ONE committed template,
+// `sdks/typescript/tools/in-process-wrapper-template.mjs`, read off disk via `frameworkRoot`. The
+// build-time `BundleAuthorToolsTask` (build-logic) reads the same file; the daemon-time
+// `DaemonScriptedToolBundler` (:trailblaze-host) reads it from the classpath. That single template
+// retired the old three-way SISTER-IMPL-TAG duplication — there's nothing left to keep in lockstep.
 val frameworkToolsDir =
   file("src/commonMain/resources/trails/config/trailmaps/trailblaze/tools")
 val frameworkRoot: File? = run {
-  val marker = "sdks/typescript-tools/package.json"
+  val marker = "sdks/typescript/package.json"
   var dir: File? = rootProject.projectDir
   while (dir != null) {
     if (File(dir, marker).isFile) return@run dir
@@ -187,56 +201,131 @@ val frameworkRoot: File? = run {
   null
 }
 val esbuildBinary = frameworkRoot?.let { File(it, "sdks/typescript/node_modules/.bin/esbuild") }
-val toolsSdkSrc = frameworkRoot?.let { File(it, "sdks/typescript-tools/src/index.ts") }
+val scriptingSdkSrc = frameworkRoot?.let { File(it, "sdks/typescript/src/in-process.ts") }
+val scriptingWrapperTemplate =
+  frameworkRoot?.let { File(it, "sdks/typescript/tools/in-process-wrapper-template.mjs") }
 
 fun frameworkScriptedToolSources(): List<File> =
   frameworkToolsDir.listFiles()
     ?.filter {
       it.isFile && it.name.endsWith(".ts") &&
-        !it.name.endsWith(".d.ts") && !it.name.endsWith(".test.ts")
+        !it.name.endsWith(".d.ts") && !it.name.endsWith(".test.ts") &&
+        // Skip a synthesized registration wrapper left behind by a crashed bundle run — it's a
+        // build artifact, never a tool source (normal runs delete it in `finally`).
+        !it.name.startsWith(".trailblaze-wrapper-")
     }
     ?.sortedBy { it.name }
     ?: emptyList()
+
+// Renders the in-process registration wrapper for a typed scripted-tool source file
+// (`export const <toolName> = trailblaze.tool<I>(...)`) from the ONE committed template,
+// `sdks/typescript/tools/in-process-wrapper-template.mjs`. Typed-tool exports do NOT self-register,
+// so the wrapper imports the file as a namespace, enumerates its function-valued exports, and
+// registers each on `globalThis.__trailblazeTools[<exportName>]`. The output is byte-for-byte what
+// the build-logic `BundleAuthorToolsTask` and the daemon-time `DaemonScriptedToolBundler` produce
+// for the same source — they all render the same template.
+//
+// Token substitution is duplicated here (a few `.replace` calls) only because this build script
+// can't import the build-logic plugin's renderer; the load-bearing JS lives in the template file,
+// not in this build script.
+fun synthesizeInProcessScriptedToolWrapper(userScriptFileName: String): String {
+  val templateFile = requireNotNull(scriptingWrapperTemplate) {
+    "Scripted-tool wrapper template not found — expected sdks/typescript/tools/in-process-wrapper-template.mjs."
+  }
+  require(templateFile.isFile) { "Wrapper template not found at ${templateFile.absolutePath}" }
+  val header = buildString {
+    appendLine("// Synthetic entry generated by :trailblaze-common's framework scripted-tool bundler.")
+    appendLine("// Imports every typed-tool export from `$userScriptFileName`, builds a `client` shim")
+    appendLine("// over the host's `__trailblazeCall` binding, and registers each export on")
+    appendLine("// `globalThis.__trailblazeTools[<exportName>]` so QuickJsToolHost.callTool can dispatch it.")
+  }
+  val registration = buildString {
+    appendLine("for (const __exportName of Object.keys(__userModule)) {")
+    appendLine("  const __def = __userModule[__exportName];")
+    appendLine("  if (typeof __def !== 'function') continue;")
+    appendLine("  globalThis.__trailblazeTools[__exportName] = {")
+    appendLine("    handler: async (args, ctx) => {")
+    appendLine("      const result = await __def(args, ctx, __client);")
+    appendLine("      return __normalizeResult(result);")
+    appendLine("    },")
+    appendLine("  };")
+    appendLine("}")
+  }
+  return templateFile.readText()
+    .replace("// __TRAILBLAZE_HEADER__\n", header)
+    .replace("__TRAILBLAZE_IMPORT_SOURCE__", "./$userScriptFileName")
+    // Multi-export: no single-export prelude — the empty replacement removes the token line.
+    .replace("// __TRAILBLAZE_PRELUDE__\n", "")
+    .replace("// __TRAILBLAZE_REGISTRATION__\n", registration)
+}
 
 fun esbuildScriptedTool(source: File, outFile: File) {
   requireNotNull(esbuildBinary) {
     "esbuild not found — run `bun install` in sdks/typescript/."
   }
-  requireNotNull(toolsSdkSrc) {
-    "@trailblaze/tools SDK source not found at sdks/typescript-tools/src/index.ts."
+  requireNotNull(scriptingSdkSrc) {
+    "@trailblaze/scripting slim SDK entry not found at sdks/typescript/src/in-process.ts."
   }
   require(esbuildBinary.isFile) { "esbuild not found at ${esbuildBinary.absolutePath}" }
-  require(toolsSdkSrc.isFile) { "SDK source not found at ${toolsSdkSrc.absolutePath}" }
+  require(scriptingSdkSrc.isFile) { "SDK source not found at ${scriptingSdkSrc.absolutePath}" }
   val logFile =
     layout.buildDirectory.file("tmp/bundle-${source.nameWithoutExtension}.log").get().asFile
   logFile.parentFile.mkdirs()
+  // Synthesize a registration wrapper co-located with the source so esbuild resolves the relative
+  // `./<source>` import; bundle the wrapper, not the raw source (typed-tool exports don't
+  // self-register). Throw-only stdio stub mirrors the daemon-time bundler (defensive — the slim
+  // SDK never imports MCP). Both temp files are cleaned up in `finally`.
+  //
+  // The wrapper filename must be DETERMINISTIC (not `createTempFile`): esbuild emits the entry
+  // filename as a `// <name>` module comment in the output, and this `.bundle.js` is committed +
+  // byte-diffed by `verifyFrameworkScriptedToolsBundle`. A random suffix would make the committed
+  // artifact non-reproducible and fail the verify on every run. One source bundles at a time
+  // (sequential `forEach`), so a per-source name can't collide.
+  val wrapperFile = File(frameworkToolsDir, ".trailblaze-wrapper-${source.nameWithoutExtension}.ts")
+  wrapperFile.writeText(synthesizeInProcessScriptedToolWrapper(source.name))
+  val stdioStubFile =
+    layout.buildDirectory.file("tmp/_ondevice-stdio-stub.ts").get().asFile.apply {
+      parentFile.mkdirs()
+      writeText(
+        "/* GENERATED by :trailblaze-common bundler — esbuild --alias target for the " +
+          "on-device QuickJS path. */\n" +
+          "export class StdioServerTransport { " +
+          "constructor() { throw new Error(\"StdioServerTransport unavailable on-device\"); } }\n",
+      )
+    }
   val argv = listOf(
     esbuildBinary.absolutePath,
-    source.absolutePath,
+    wrapperFile.absolutePath,
     "--bundle",
     "--platform=neutral",
     "--format=iife",
     "--target=es2020",
     "--main-fields=module,main",
-    "--alias:@trailblaze/tools=${toolsSdkSrc.absolutePath}",
     "--external:node:process",
+    "--alias:@trailblaze/scripting=${scriptingSdkSrc.absolutePath}",
+    "--alias:@modelcontextprotocol/sdk/server/stdio.js=${stdioStubFile.absolutePath}",
     "--outfile=${outFile.absolutePath}",
   )
-  val proc = ProcessBuilder(argv)
-    .directory(frameworkToolsDir)
-    .redirectErrorStream(true)
-    // Overwrite (not append) so the log reflects only the latest esbuild run for this tool.
-    // Appending across Gradle runs grows the file unbounded and mixes stale output into triage.
-    .redirectOutput(ProcessBuilder.Redirect.to(logFile))
-    .start()
-  if (!proc.waitFor(2, TimeUnit.MINUTES)) {
-    proc.destroyForcibly()
-    throw GradleException("esbuild timed out for ${source.name}. See ${logFile.absolutePath}.")
-  }
-  if (proc.exitValue() != 0) {
-    throw GradleException(
-      "esbuild failed for ${source.name} (exit ${proc.exitValue()}). See ${logFile.absolutePath}.",
-    )
+  try {
+    val proc = ProcessBuilder(argv)
+      .directory(frameworkToolsDir)
+      .redirectErrorStream(true)
+      // Overwrite (not append) so the log reflects only the latest esbuild run for this tool.
+      // Appending across Gradle runs grows the file unbounded and mixes stale output into triage.
+      .redirectOutput(ProcessBuilder.Redirect.to(logFile))
+      .start()
+    if (!proc.waitFor(2, TimeUnit.MINUTES)) {
+      proc.destroyForcibly()
+      throw GradleException("esbuild timed out for ${source.name}. See ${logFile.absolutePath}.")
+    }
+    if (proc.exitValue() != 0) {
+      throw GradleException(
+        "esbuild failed for ${source.name} (exit ${proc.exitValue()}). See ${logFile.absolutePath}.",
+      )
+    }
+  } finally {
+    wrapperFile.delete()
+    stdioStubFile.delete()
   }
 }
 

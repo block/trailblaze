@@ -19,8 +19,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.compose.driver.rpc.RpcWsHandlerRegistry
 import xyz.block.trailblaze.compose.driver.rpc.WsSessionContext
-import xyz.block.trailblaze.compose.driver.rpc.registerRpcHandler
 import xyz.block.trailblaze.compose.driver.rpc.registerRpcWebSocket
+import xyz.block.trailblaze.rpc.registerRpcHandler
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceRequest
 import xyz.block.trailblaze.host.rpc.ConnectToDeviceResponse
 import xyz.block.trailblaze.host.rpc.DeviceInteractionRequest

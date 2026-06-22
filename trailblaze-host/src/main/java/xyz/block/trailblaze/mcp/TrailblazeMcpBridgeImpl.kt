@@ -82,6 +82,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -565,10 +566,28 @@ class TrailblazeMcpBridgeImpl(
     /**
      * How long to wait for the on-device agent to start during device connect.
      * Longer than HOST mode because it may need to install APK, start instrumentation,
-     * enable accessibility service, and verify the RPC server. If the agent still isn't
-     * ready, the driver status provider reports progress.
+     * enable accessibility service, and verify the RPC server — including one clean-restart
+     * retry when the first readiness probe finds a zombie server on a slow API 36 cold start.
+     * Kept below CliMcpClient.DEFAULT_REQUEST_TIMEOUT_MS (180s): this await blocks inside the
+     * MCP request, so it must leave headroom for the round-trip or the CLI times out first. If
+     * the agent still isn't ready when this elapses, the background setup keeps going and the
+     * driver status provider reports progress.
+     *
+     * Budget math (worst case, zombie path): connect (~5s reuse) + INITIAL_READINESS_PROBE_MS +
+     * force-restart connect (~25s) + RESTART_READINESS_PROBE_MS = ~130s, comfortably under both
+     * this latch and the 180s MCP request timeout.
      */
-    private const val ON_DEVICE_AGENT_TIMEOUT_SECONDS = 30L
+    private const val ON_DEVICE_AGENT_TIMEOUT_SECONDS = 150L
+
+    /**
+     * First readiness-probe budget. A healthy clean start serves in ~26s (APK install + launch),
+     * so this is sized to confirm health fast and detect a zombie server quickly — short enough
+     * that a full force-restart + re-probe still fits under the 180s MCP request timeout.
+     */
+    private const val INITIAL_READINESS_PROBE_MS = 40_000L
+
+    /** Readiness-probe budget after a force-restart; a clean relaunch serves in well under this. */
+    private const val RESTART_READINESS_PROBE_MS = 60_000L
 
     /**
      * How long getDirectScreenStateProvider() waits for an in-progress driver creation
@@ -745,44 +764,58 @@ class TrailblazeMcpBridgeImpl(
 
         Console.log("[MCP Bridge] Starting on-device agent for $key (driver=${driverType?.name})")
 
-        // Install APK and start instrumentation (reuses existing agent if already running)
-        // Pass LLM tokens so the on-device runner can create LLM clients (e.g., OAuth token).
-        runBlocking {
-          HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
-            deviceId = trailblazeDeviceId,
-            trailblazeOnDeviceInstrumentationTarget = target,
-            additionalInstrumentationArgs = trailblazeDeviceManager.onDeviceInstrumentationArgsProvider(),
-          )
-        }
-
-        // Enable the service in ADB settings, then block on-device until it's connected.
-        // The on-device check uses the reliable in-process TrailblazeAccessibilityService
-        // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
-        if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-          AccessibilityServiceSetupUtils.enableAccessibilityService(
-            deviceId = trailblazeDeviceId,
-            hostPackage = target.testAppId,
-            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
-          )
-        }
-
-        // Wait until the device can actually serve a GetScreenState call — the one readiness
-        // check that guarantees everything downstream (HTTP server, accessibility service binding,
-        // window population) is in place.
-        runBlocking {
-          val rpcClient = OnDeviceRpcClient(
-            trailblazeDeviceId = trailblazeDeviceId,
-            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
-          )
-          try {
-            rpcClient.waitForReady(
-              requireAndroidAccessibilityService =
-                driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        // Connect + enable a11y. An IOException here is infra (ADB/install/instrumentation) that a
+        // restart would just repeat — let it propagate to the outer catch instead of retrying.
+        fun doConnectAndEnable(forceRestart: Boolean) {
+          runBlocking {
+            HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
+              sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+              deviceId = trailblazeDeviceId,
+              trailblazeOnDeviceInstrumentationTarget = target,
+              additionalInstrumentationArgs = trailblazeDeviceManager.onDeviceInstrumentationArgsProvider(),
+              forceRestart = forceRestart,
             )
-          } finally {
-            rpcClient.close()
           }
+          if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+            AccessibilityServiceSetupUtils.enableAccessibilityService(
+              deviceId = trailblazeDeviceId,
+              hostPackage = target.testAppId,
+              sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+            )
+          }
+        }
+
+        // Block until the device actually serves GetScreenState (proves the RPC listener is bound,
+        // not merely that a PID exists).
+        fun awaitReady(timeoutMs: Long) {
+          runBlocking {
+            val rpcClient = OnDeviceRpcClient(
+              trailblazeDeviceId = trailblazeDeviceId,
+              sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+            )
+            try {
+              rpcClient.waitForReady(
+                timeoutMs = timeoutMs,
+                requireAndroidAccessibilityService =
+                  driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+              )
+            } finally {
+              rpcClient.close()
+            }
+          }
+        }
+
+        doConnectAndEnable(forceRestart = false)
+        try {
+          // Fail-fast first probe: a healthy clean start serves in ~26s (install + launch), so 40s
+          // detects a zombie quickly and leaves room for the full restart+reprobe under the MCP timeout.
+          awaitReady(timeoutMs = INITIAL_READINESS_PROBE_MS)
+        } catch (probeFailed: IOException) {
+          // Process is alive (pidof) so connect reused it, but the RPC server is stuck/dead —
+          // force-stop + reinstall + relaunch is the only thing that recovers a zombie. Retry once.
+          Console.log("[MCP Bridge] On-device readiness probe failed for $key (${probeFailed.message}); force-restarting once")
+          doConnectAndEnable(forceRestart = true)
+          awaitReady(timeoutMs = RESTART_READINESS_PROBE_MS)
         }
 
         onDeviceAgentReady.add(key)

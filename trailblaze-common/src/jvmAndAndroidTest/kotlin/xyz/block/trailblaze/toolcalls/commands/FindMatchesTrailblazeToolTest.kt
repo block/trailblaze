@@ -30,6 +30,7 @@ import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -38,9 +39,17 @@ import kotlin.test.assertTrue
 
 class FindMatchesTrailblazeToolTest {
 
+  @BeforeTest
+  fun shrinkPollInterval() {
+    // Keep the polling tests off real wall-clock sleeps — the production 300ms interval would add
+    // ~hundreds of ms per poll. The wait-budget (timeoutMs) is still honored via the real clock.
+    FindMatchesTrailblazeTool.pollIntervalMs = 1L
+  }
+
   @AfterTest
   fun cleanup() {
     repeat(SnapshotCache.frameDepth()) { SnapshotCache.popFrame() }
+    FindMatchesTrailblazeTool.pollIntervalMs = FindMatchesTrailblazeTool.DEFAULT_POLL_INTERVAL_MS
   }
 
   // -- Fixtures --
@@ -344,6 +353,160 @@ class FindMatchesTrailblazeToolTest {
     val selectorArg = obj["args"]?.jsonObject?.get("selector")?.jsonPrimitive?.content
     assertNotNull(selectorArg, "trace event should carry the rendered selector description in args")
     assertTrue(selectorArg.contains("Submit"), "selector arg should include the textRegex; got: $selectorArg")
+  }
+
+  // -- timeoutMs polling (wait-until-visible) --
+
+  /**
+   * Context whose `screenStateProvider` returns a FRESH state each call, wrapping whatever
+   * [treeProvider] yields that call — lets a poll test model a screen that changes between
+   * captures. The `screenState` field is a throwaway; the polling path reads only the provider.
+   */
+  private fun pollingCtx(treeProvider: () -> TrailblazeNode?): TrailblazeToolExecutionContext =
+    TrailblazeToolExecutionContext(
+      screenState = FakeScreenState(androidNode(nodeId = 99)),
+      traceId = null,
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = "test",
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+        ),
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        widthPixels = 1080,
+        heightPixels = 1920,
+      ),
+      sessionProvider = TrailblazeSessionProvider {
+        TrailblazeSession(sessionId = SessionId("test"), startTime = Clock.System.now())
+      },
+      screenStateProvider = { FakeScreenState(treeProvider()) },
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      memory = AgentMemory(),
+    )
+
+  @Test
+  fun `timeoutMs polls the live hierarchy until the selector appears, then returns the match`() = runBlocking {
+    val withSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Submit")))
+    val withoutSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Loading")))
+    val captureCount = intArrayOf(0)
+    // First capture has no "Submit" (still loading); subsequent captures do — models a screen
+    // that renders the target after the call begins.
+    val context = pollingCtx { if (captureCount[0]++ == 0) withoutSubmit else withSubmit }
+
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 5_000).execute(context)
+
+    val matches = decodeMatches(result)
+    assertEquals(1, matches.size, "should return the match once it appears")
+    assertTrue(captureCount[0] >= 2, "should have re-captured while waiting; captured ${captureCount[0]}x")
+  }
+
+  @Test
+  fun `timeoutMs returns empty success (not an error) when the selector never appears`() = runBlocking {
+    // A real tree is present (resolution IS possible), the selector just never matches.
+    val withoutSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Loading")))
+    val context = pollingCtx { withoutSubmit }
+
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 60).execute(context)
+
+    // "Absent after the timeout" is a normal empty result for the caller's `length === 0` gate —
+    // NOT a verification failure. This is the whole point of the probe vs a throwing assert.
+    assertIs<TrailblazeToolResult.Success>(result)
+    assertEquals(emptyList(), decodeMatches(result))
+  }
+
+  @Test
+  fun `timeoutMs tolerates a transient null tree then returns the match once it resolves`() = runBlocking {
+    // Pins the kdoc contract: a tree that is null on SOME polls but present on others (mid-
+    // transition) is just "no match yet", NOT the persistent NoTreeEverSeen driver-mismatch. The
+    // provider yields null first (capture mid-transition), then a tree with no match, then the
+    // matching tree — the match must still be returned (Success), never the missing-tree error.
+    val withSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Submit")))
+    val withoutSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Loading")))
+    val sequence: List<TrailblazeNode?> = listOf(null, withoutSubmit, withSubmit)
+    val captureCount = intArrayOf(0)
+    val context = pollingCtx {
+      val i = captureCount[0]++
+      sequence.getOrElse(i) { withSubmit }
+    }
+
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 5_000).execute(context)
+
+    val matches = decodeMatches(result)
+    assertEquals(1, matches.size, "transient null trees must not abort the poll; the match should still be found")
+    assertTrue(captureCount[0] >= 3, "should have polled past the null + no-match captures; captured ${captureCount[0]}x")
+  }
+
+  @Test
+  fun `timeoutMs returns the missing-tree error when the driver never produces a node tree`() = runBlocking {
+    // A driver whose ScreenState never yields a trailblazeNodeTree (e.g. Maestro-only) can't
+    // resolve a node selector at all. The polling path must surface the SAME error the
+    // point-in-time path returns — not a misleading empty success that sends a scripted caller
+    // down its "absent element" branch.
+    val context = pollingCtx { null }
+
+    val result = FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 60).execute(context)
+
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertTrue(
+      error.errorMessage.contains("does not produce a TrailblazeNode tree"),
+      "expected the missing-tree error, got: ${error.errorMessage}",
+    )
+  }
+
+  @Test
+  fun `timeoutMs polling emits exactly one trace span for the whole poll, not one per capture`() = runBlocking {
+    // Regression guard for the per-poll span flood: the polling path must wrap the ENTIRE wait in a
+    // single TrailblazeTracer span (emitted once by execute), NOT re-enter a traced resolve on every
+    // re-capture. The selector never matches, so the poll re-captures many times within the budget —
+    // yet only one `findMatches` span may be recorded.
+    val withoutSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Loading")))
+    val captureCount = intArrayOf(0)
+    val context = pollingCtx {
+      captureCount[0]++
+      withoutSubmit
+    }
+
+    TrailblazeTracer.clear()
+    FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 40).execute(context)
+
+    assertTrue(captureCount[0] >= 2, "test must exercise multiple polls; captured ${captureCount[0]}x")
+    val findMatchesEvents =
+      Json.parseToJsonElement(TrailblazeTracer.exportJson()).jsonArray.filter {
+        it.jsonObject["name"]?.jsonPrimitive?.content == "findMatches"
+      }
+    assertEquals(
+      1,
+      findMatchesEvents.size,
+      "polling path must emit exactly one findMatches span across ${captureCount[0]} captures",
+    )
+  }
+
+  @Test
+  fun `non-positive timeoutMs performs a single immediate capture without polling`() = runBlocking {
+    // kdoc contract for timeoutMs <= 0: one immediate live capture, no wait — the point-in-time
+    // result routed through the polling path rather than an error.
+    val withSubmit = androidNode(nodeId = 1, children = listOf(androidNode(nodeId = 2, text = "Submit")))
+
+    val zeroCaptures = intArrayOf(0)
+    val zeroResult =
+      FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = 0).execute(
+        pollingCtx {
+          zeroCaptures[0]++
+          withSubmit
+        },
+      )
+    assertEquals(1, decodeMatches(zeroResult).size, "timeoutMs=0 should still return the current match")
+    assertEquals(1, zeroCaptures[0], "timeoutMs=0 must capture exactly once (no polling)")
+
+    val negCaptures = intArrayOf(0)
+    val negResult =
+      FindMatchesTrailblazeTool(selector = submitSelector(), timeoutMs = -5).execute(
+        pollingCtx {
+          negCaptures[0]++
+          withSubmit
+        },
+      )
+    assertEquals(1, decodeMatches(negResult).size, "negative timeoutMs should still return the current match")
+    assertEquals(1, negCaptures[0], "negative timeoutMs must capture exactly once (no polling)")
   }
 
   @Test

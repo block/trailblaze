@@ -134,6 +134,17 @@ object IosCompactElementList {
         if (label != null && shortClass.isNotEmpty()) "$shortClass \"$label\""
         else if (label != null) "\"$label\""
         else if (shortClass.isNotEmpty()) shortClass
+        // Label-less AND class-less, but it carries an identifier (most often an
+        // accessibilityIdentifier → resourceId): a SwiftUI TextField with no placeholder is the
+        // canonical case — Maestro gives it only a resourceId, no text/hintText/className. Emit a
+        // generic "element" descriptor so the `[id=…]` annotation below identifies it. GATED
+        // EXPLICITLY on `includeAllElements` — NOT left to the branch's `includeAllElements ||
+        // isMeaningful` guard: a clickable/checked/focused id-only node IS "meaningful", so without
+        // this gate it would leak into the lean default compact view and break the byte-identical
+        // default invariant. Restricting to ALL_ELEMENTS keeps the default view untouched — these
+        // surface only via `requestDetailedViewHierarchy`, where the ref makes them tappable.
+        // Mirrors the IosAxe path's `hasIdentifiableProperties` gate.
+        else if (includeAllElements && detail.hasIdentifiableProperties) "element"
         else {
           for (child in node.children) {
             buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
@@ -245,6 +256,15 @@ object IosCompactElementList {
     val label = detail.text ?: detail.accessibilityText
     // Chevron disclosure indicators — decorative
     if (label == "chevron") return true
+
+    // App-defined inputs/controls carry an accessibility identifier (resourceId) or a
+    // placeholder (hintText); real system chrome (scroll indicators, status-bar glyphs,
+    // battery badges) never does. Never treat such a node as system UI — otherwise an empty,
+    // wide text field (e.g. a ~370x34 SwiftUI TextField with no value yet) trips the
+    // aspect-ratio "horizontal scrollbar" heuristic below (ratio > 10) and vanishes from the
+    // element list, leaving the agent unable to see — or tap by ref — a field that is plainly
+    // on screen.
+    if (!detail.resourceId.isNullOrBlank() || !detail.hintText.isNullOrBlank()) return false
 
     val bounds = node.bounds ?: return false
     // Zero-size structural containers — not system UI, just wrappers

@@ -186,7 +186,7 @@ class ScriptedToolHostOnlyPartitionerTest {
       val explicit = File(path)
       if (explicit.isFile) return explicit
     }
-    val marker = "sdks/typescript-tools/package.json"
+    val marker = "sdks/typescript/package.json"
     val esbuildRel = "sdks/typescript/node_modules/.bin/esbuild"
     var current: File? = File(System.getProperty("user.dir"))
     while (current != null) {

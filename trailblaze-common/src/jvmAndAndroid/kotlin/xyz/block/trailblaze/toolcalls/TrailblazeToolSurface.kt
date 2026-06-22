@@ -42,3 +42,13 @@ val TrailblazeToolSurface.allToolNames: Set<ToolName>
 /** [allToolNames] as raw strings, for the string-keyed consumers (acceptance gates, doc rows). */
 val TrailblazeToolSurface.allToolNameStrings: Set<String>
   get() = allToolNames.mapTo(mutableSetOf()) { it.toolName }
+
+/**
+ * A [TrailblazeToolSurface] with no tools of any backing. The neutral element for surface-typed
+ * fields — e.g. the default `excluded_tools:` surface a target carries when it opts nothing out.
+ */
+object EmptyTrailblazeToolSurface : TrailblazeToolSurface {
+  override val toolClasses: Set<KClass<out TrailblazeTool>> = emptySet()
+  override val yamlToolNames: Set<ToolName> = emptySet()
+  override val scriptedToolNames: Set<ToolName> = emptySet()
+}

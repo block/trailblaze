@@ -24,6 +24,11 @@ rules, this page links out to [Trailmaps](trailmaps.md).
 
 - The **`trailblaze` CLI** on your `PATH`. If you don't have it, follow
   [Getting Started](getting_started.md) first.
+- **`bun`** on your `PATH`. Trailblaze runs bun to read the types out of your `.ts` tools
+  and generate the IDE bindings, so `trailblaze check` needs it. If you installed
+  `trailblaze` via Homebrew you already have it — bun is pulled in as a dependency;
+  otherwise install it from [bun.sh](https://bun.sh). You do **not** run `bun install` or
+  keep a `node_modules/`: the SDK and the analyzer both ship inside the CLI.
 - A device or browser the CLI can drive — an Android emulator, an iOS simulator, or a
   local browser via the Playwright driver. The CLI's `trailblaze device list` confirms
   what's reachable.
@@ -150,6 +155,12 @@ The export name (`myapp_login`) is the load-bearing identifier — the manifest'
 See [Scripted Tools (TypeScript) — The shape](scripted-tools-typed-authoring.md#the-shape)
 for the full reference.
 
+> **Editor showing red squiggles on the `@trailblaze/scripting` import and `ctx.tools.*`?
+> Expected — for now.** The types are *generated*, not shipped in your source tree, so a
+> brand-new file has nothing to resolve against yet. Step 4 fixes it: one `trailblaze check`
+> writes the bindings and the squiggles become full autocomplete. (After that first run the
+> daemon keeps them current as you edit.)
+
 ## Step 4 — Materialize the workspace SDK
 
 ```bash
@@ -166,8 +177,15 @@ This single command:
    `.gitignore` for derived files).
 
 After this, your IDE has full typing on `ctx.tools.<name>(args)` and on any
-`@trailblaze/scripting` imports. The daemon re-runs the pipeline automatically on every
-aware command; the output is idempotent.
+`@trailblaze/scripting` imports. You don't have to run it by hand every time: the daemon
+re-runs the pipeline automatically on every aware command, and the workspace `package.json`
+that `check` drops on first run re-runs it on `bun install` — so a teammate who clones the
+repo gets the same typings with a plain install. The output is idempotent.
+
+Of the files this drops, you commit just one — the per-trailmap `.gitignore` (and the
+first-run `package.json`); the rest is regenerated and auto-ignored. See
+[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md) for
+the full breakdown.
 
 ## Step 5 — See the tool in the agent's toolbox
 

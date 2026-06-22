@@ -86,6 +86,79 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `bundleOne aliases trailblaze scripting to the slim in-process entry (no MCP SDK)`() = runBlocking {
+    // Pins the slim-profile alias: a tool importing the real `@trailblaze/scripting` SDK must
+    // esbuild against `sdks/typescript/src/in-process.ts` (typed-only — no MCP server, no eager
+    // ajv), NOT the full SDK from node_modules. Before the alias, an in-process tool importing
+    // `@trailblaze/scripting` inlined the entire ~1.2 MB `@modelcontextprotocol/sdk` + ajv into its
+    // per-tool bundle even though the in-process path never starts the MCP server.
+    assumeEsbuildPresent()
+    val src = File(tempFolder.newFolder("scriptingImport"), "slimTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |export const slimTool = trailblaze.tool(async (input) => String(input.text).toUpperCase());
+        |""".trimMargin(),
+      )
+    }
+    val out = bundler.bundleOne(src, toolName = "slimTool")
+    val bundleSource = out.readText()
+    // The slim entry took effect — the MCP SDK is absent from the bundle.
+    assertFalse(
+      bundleSource.contains("@modelcontextprotocol"),
+      "expected the slim in-process alias to keep @modelcontextprotocol/sdk OUT of the bundle " +
+        "(got a ${out.length()}-byte bundle)",
+    )
+    // ...and the tool still self-registers on the globalThis registry QuickJsToolHost reads,
+    // via the synthesized wrapper (which is what makes the typed export dispatchable on-device).
+    assertTrue(
+      bundleSource.contains("__trailblazeTools") && bundleSource.contains("slimTool"),
+      "expected the bundle to register slimTool on globalThis.__trailblazeTools",
+    )
+    // Slim, not the >1 MB full-SDK bundle. Generous ceiling so the assertion tracks "no MCP/ajv
+    // inlined", not an exact byte count.
+    assertTrue(
+      out.length() < 200_000L,
+      "expected a slim KB-scale bundle; got ${out.length()} bytes — the @trailblaze/scripting " +
+        "alias to in-process.ts may not have taken effect",
+    )
+  }
+
+  @Test
+  fun `slim in-process entry re-exports the full lightweight surface (selectors, conditionals, zod)`() = runBlocking {
+    // Regression for the Codex P1 on #3838: the slim `in-process.ts` entry must be a drop-in for
+    // `@trailblaze/scripting`, not expose only `trailblaze`/`tool`/`run`. A default-runtime tool that
+    // imports `selectors`, `captureViewHierarchy`, or `z` from `@trailblaze/scripting` must still
+    // resolve when esbuild aliases the package to `in-process.ts` — and must NOT drag in the MCP SDK.
+    assumeEsbuildPresent()
+    val src = File(tempFolder.newFolder("broadSurface"), "broadTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze, selectors, z, captureViewHierarchy } from "@trailblaze/scripting";
+        |const _schema = z.object({ text: z.string() });
+        |export const broadTool = trailblaze.tool(async (input) => {
+        |  const _sel = selectors.androidAccessibility({ textRegex: "ok" });
+        |  void _sel; void _schema; void captureViewHierarchy;
+        |  return String(input.text).toUpperCase();
+        |});
+        |""".trimMargin(),
+      )
+    }
+    // Before the fix this throws "Could not resolve" for selectors/z/captureViewHierarchy; after the
+    // slim entry re-exports the lightweight surface, it bundles cleanly.
+    val out = bundler.bundleOne(src, toolName = "broadTool")
+    val bundleSource = out.readText()
+    assertFalse(
+      bundleSource.contains("@modelcontextprotocol"),
+      "broad-surface slim bundle must still exclude the MCP SDK (got ${out.length()} bytes)",
+    )
+    assertTrue(
+      bundleSource.contains("broadTool") && bundleSource.contains("__trailblazeTools"),
+      "expected broadTool registered on globalThis.__trailblazeTools",
+    )
+  }
+
+  @Test
   fun `bundleOne hits cache on second call with unchanged source`() = runBlocking {
     assumeEsbuildPresent()
     val src = writeTinyTs("cache-me.ts")
@@ -758,7 +831,7 @@ class DaemonScriptedToolBundlerTest {
    * 1. `TRAILBLAZE_TEST_ESBUILD_BINARY` env var (absolute path) — escape hatch for
    *    contributors who already have esbuild installed somewhere outside the repo.
    * 2. Walks parents from the JVM CWD looking for the framework root marker
-   *    (`sdks/typescript-tools/package.json`), then returns
+   *    (`sdks/typescript/package.json`), then returns
    *    `<root>/sdks/typescript/node_modules/.bin/esbuild` if it exists. Mirrors
    *    `defaultEsbuildBinary()` in the build-logic plugin.
    *
@@ -770,7 +843,7 @@ class DaemonScriptedToolBundlerTest {
       val explicit = File(path)
       if (explicit.isFile) return explicit
     }
-    val marker = "sdks/typescript-tools/package.json"
+    val marker = "sdks/typescript/package.json"
     val esbuildRel = "sdks/typescript/node_modules/.bin/esbuild"
     var current: File? = File(System.getProperty("user.dir"))
     while (current != null) {

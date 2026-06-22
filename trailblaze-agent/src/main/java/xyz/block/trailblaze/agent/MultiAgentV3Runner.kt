@@ -3,10 +3,6 @@ package xyz.block.trailblaze.agent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.agent.blaze.BlazeGoalPlanner
-import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
-import xyz.block.trailblaze.agent.blaze.createFullFeaturedBlazeGoalPlanner
-import xyz.block.trailblaze.agent.blaze.initialBlazeState
 import xyz.block.trailblaze.agent.trail.DeterministicTrailExecutor
 import xyz.block.trailblaze.agent.trail.DefaultConditionChecker
 import xyz.block.trailblaze.logs.client.LogEmitter
@@ -25,53 +21,25 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
-import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.util.Console
 
 /**
- * Multi-Agent V3 Runner - Orchestrates all Mobile-Agent-v3 inspired features.
+ * Executes a trail file step by step, preferring recordings (zero LLM cost) and falling
+ * back to AI analysis when needed — the "blaze once, trail forever" replay path.
  *
- * This runner integrates all 6 phases of the Mobile-Agent-v3 implementation:
+ * Provides three entry points:
  *
- * - **Phase 1**: Exception Handling & Recovery (popups, ads, errors)
- * - **Phase 2**: Reflection & Self-Correction (loop detection, backtracking)
- * - **Phase 3**: Task Decomposition (breaking objectives into subtasks)
- * - **Phase 4**: Cross-App Memory (facts, screenshots, clipboard)
- * - **Phase 5**: Trail Recording Enhancement (pre/post conditions, validation)
- * - **Phase 6**: MCP Progress Reporting (real-time events, execution status)
+ * - [trail] — run a list of steps in order (deterministic recordings or self-heal modes)
+ * - [trailWithRecordings] — same, with per-step [EnhancedRecording] pre/post-condition
+ *   validation and recovery strategies
+ * - [validateTrail] — replay recordings purely to check which steps still pass
  *
- * ## Blaze Mode (Exploratory)
+ * All major execution events are surfaced to MCP clients via the optional [ProgressReporter].
  *
- * The runner executes in blaze mode, discovering actions dynamically to achieve
- * an objective. It records actions for future trail generation ("blaze once, trail forever").
- *
- * ## Example Usage
- *
- * ```kotlin
- * val runner = MultiAgentV3Runner.create(
- *   screenAnalyzer = myScreenAnalyzer,
- *   executor = myUiExecutor,
- *   llmCall = { prompt -> myLlm.complete(prompt) },
- * )
- *
- * val result = runner.blaze(
- *   objective = "Order a large pepperoni pizza from Domino's",
- *   config = BlazeConfig.DEFAULT,
- * )
- *
- * if (result.success) {
- *   Console.log("Objective achieved in ${result.actionCount} actions")
- *   // Generate trail file from recorded actions
- *   val trail = result.recordedActions
- * }
- * ```
- *
- * @see BlazeGoalPlanner for blaze execution
- * @see BlazeConfig for configuration options
+ * @see TrailConfig for execution-mode / fallback configuration
  */
 class MultiAgentV3Runner private constructor(
-  private val blazePlanner: BlazeGoalPlanner,
   private val screenAnalyzer: ScreenAnalyzer?,
   private val executor: UiActionExecutor?,
   private val progressReporter: ProgressReporter?,
@@ -84,85 +52,6 @@ class MultiAgentV3Runner private constructor(
   // silently skipped — existing trails behave identically.
   private val waypointResolver: ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? = null,
 ) {
-
-  /**
-   * Executes a blaze exploration toward an objective.
-   *
-   * Blaze mode discovers actions dynamically by analyzing screens and
-   * executing actions. All Phase 1-6 features are active:
-   *
-   * - Exception handling for popups, ads, errors
-   * - Reflection for self-correction
-   * - Task decomposition for complex objectives
-   * - Cross-app memory for multi-app workflows
-   * - Progress reporting for MCP clients
-   *
-   * @param objective The goal to achieve
-   * @param config Configuration for exploration (uses planner's config if not specified)
-   * @param sessionId Session ID for progress reporting
-   * @return Blaze result with recorded actions
-   */
-  suspend fun blaze(
-    objective: String,
-    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("step"),
-  ): BlazeResult {
-    val startTime = System.currentTimeMillis()
-
-    // Report execution started
-    progressReporter?.onExecutionStarted(
-      sessionId = sessionId,
-      objective = objective,
-      hasTaskPlan = true, // Task decomposition is enabled by default
-      deviceId = deviceId,
-    )
-
-    val initialState = initialBlazeState(objective).copy(targetDeviceId = deviceId)
-
-    return try {
-      val finalState = blazePlanner.execute(initialState)
-
-      val result = BlazeResult(
-        success = finalState.achieved,
-        state = finalState,
-        durationMs = System.currentTimeMillis() - startTime,
-        recordedActions = finalState.actionHistory,
-        errorMessage = finalState.stuckReason,
-        targetDeviceId = deviceId,
-      )
-
-      // Report execution completed
-      progressReporter?.onExecutionCompleted(
-        sessionId = sessionId,
-        success = result.success,
-        totalDurationMs = result.durationMs,
-        totalActions = result.actionCount,
-        errorMessage = result.errorMessage,
-        deviceId = deviceId,
-      )
-
-      result
-    } catch (e: Exception) {
-      if (e is CancellationException) throw e
-      val result = BlazeResult(
-        success = false,
-        state = initialState.copy(stuck = true, stuckReason = e.message),
-        durationMs = System.currentTimeMillis() - startTime,
-        errorMessage = e.message,
-        targetDeviceId = deviceId,
-      )
-
-      progressReporter?.onExecutionCompleted(
-        sessionId = sessionId,
-        success = false,
-        totalDurationMs = result.durationMs,
-        totalActions = 0,
-        errorMessage = e.message,
-        deviceId = deviceId,
-      )
-
-      result
-    }
-  }
 
   /**
    * Executes a trail file step by step with enhanced recording support.
@@ -787,12 +676,10 @@ class MultiAgentV3Runner private constructor(
 
   companion object {
     /**
-     * Creates a MultiAgentV3Runner with all features enabled.
+     * Creates a MultiAgentV3Runner for trail execution.
      *
-     * @param screenAnalyzer Screen analyzer for blaze mode
+     * @param screenAnalyzer Screen analyzer for the AI-fallback trail modes
      * @param executor UI action executor
-     * @param plannerLlmCall Tool-calling LLM function for planning (task decomposition/replanning)
-     * @param config Blaze configuration (optional)
      * @param progressReporter Progress reporter for MCP clients (optional)
      * @param deviceId Device ID for parallel execution tracking (optional)
      * @param recordingValidator Recording validator for EnhancedRecording support (optional)
@@ -801,8 +688,6 @@ class MultiAgentV3Runner private constructor(
     fun create(
       screenAnalyzer: ScreenAnalyzer,
       executor: UiActionExecutor,
-      plannerLlmCall: PlannerLlmCall,
-      config: BlazeConfig = BlazeConfig.DEFAULT,
       progressReporter: ProgressReporter? = null,
       deviceId: TrailblazeDeviceId? = null,
       recordingValidator: RecordingValidator? = null,
@@ -810,18 +695,7 @@ class MultiAgentV3Runner private constructor(
       logEmitter: LogEmitter? = null,
       waypointResolver: ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? = null,
     ): MultiAgentV3Runner {
-      // Create the full-featured blaze planner with all Phase 1-6 capabilities
-      val blazePlanner = createFullFeaturedBlazeGoalPlanner(
-        config = config,
-        screenAnalyzer = screenAnalyzer,
-        executor = executor,
-        plannerLlmCall = plannerLlmCall,
-        ocrExtractor = null, // Can be added later
-        availableToolsProvider = availableToolsProvider,
-      )
-
       return MultiAgentV3Runner(
-        blazePlanner = blazePlanner,
         screenAnalyzer = screenAnalyzer,
         executor = executor,
         progressReporter = progressReporter,
@@ -832,40 +706,6 @@ class MultiAgentV3Runner private constructor(
         waypointResolver = waypointResolver,
       )
     }
-
-    /**
-     * Creates a MultiAgentV3Runner with a custom BlazeGoalPlanner.
-     *
-     * Use this when you need custom configuration of the planner.
-     *
-     * @param blazePlanner Pre-configured blaze planner
-     * @param screenAnalyzer Screen analyzer for trail mode execution (optional)
-     * @param executor UI action executor for trail mode execution (optional)
-     * @param progressReporter Progress reporter for MCP clients (optional)
-     * @param deviceId Device ID for parallel execution tracking (optional)
-     * @param recordingValidator Recording validator for EnhancedRecording support (optional)
-     * @param logEmitter Optional log emitter for objective lifecycle events during deterministic execution
-     * @return Configured MultiAgentV3Runner
-     */
-    fun createWithPlanner(
-      blazePlanner: BlazeGoalPlanner,
-      screenAnalyzer: ScreenAnalyzer? = null,
-      executor: UiActionExecutor? = null,
-      progressReporter: ProgressReporter? = null,
-      deviceId: TrailblazeDeviceId? = null,
-      recordingValidator: RecordingValidator? = null,
-      availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
-      logEmitter: LogEmitter? = null,
-    ): MultiAgentV3Runner = MultiAgentV3Runner(
-      blazePlanner = blazePlanner,
-      screenAnalyzer = screenAnalyzer,
-      executor = executor,
-      progressReporter = progressReporter,
-      deviceId = deviceId,
-      recordingValidator = recordingValidator,
-      availableToolsProvider = availableToolsProvider,
-      logEmitter = logEmitter,
-    )
   }
 }
 
@@ -1107,38 +947,6 @@ class DefaultProgressReporter(
         key = key,
         valuePreview = valuePreview,
       )
-    )
-  }
-}
-
-/**
- * Converts blaze exploration results into a trail-compatible format.
- *
- * This extension enables the "blaze once, trail forever" philosophy by
- * converting successful blaze exploration sequences into reusable trail steps.
- * The resulting steps can be serialized to .trail.yaml files for deterministic
- * replay.
- *
- * ## Example Usage
- *
- * ```kotlin
- * val blazeResult = runner.blaze("Order a large pepperoni pizza from Domino's")
- * if (blazeResult.success) {
- *   val trailSteps = blazeResult.toTrailSteps()
- *   // Save trailSteps to .trail.yaml file
- * }
- * ```
- *
- * @return List of PromptStep objects that can be executed as a trail
- */
-fun BlazeResult.toTrailSteps(): List<PromptStep> {
-  // Group recorded actions into logical steps based on task boundaries
-  // For now, create one step per recorded action as a simple conversion
-  return recordedActions.map { action ->
-    DirectionStep(
-      step = action.reasoning,
-      recordable = true,
-      recording = null, // Recording would need to be attached separately
     )
   }
 }

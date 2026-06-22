@@ -511,36 +511,23 @@ primitives. Set the path on `target.system_prompt_file:` in `trailmap.yaml` — 
 ## IDE typings — `trailblaze check`
 
 Trailblaze emits per-trailmap typings so `ctx.tools.<name>(args)` autocompletes in your
-editor with no hand-authored config. Run once after cloning (or after a `trailmap.yaml`
-edit):
+editor with no hand-authored config — no `bun install`, no `node_modules`. After cloning
+(or after editing a `trailmap.yaml`), run:
 
 ```bash
 trailblaze check
 ```
 
-That command:
+It vendors the SDK, emits each trailmap's `tools/trailblaze-client.d.ts` (exhaustive types
+for every tool that trailmap can dispatch) and a framework-managed `tools/tsconfig.json`,
+then type-checks your `tools/*.ts`. Hover any `ctx.tools.<name>` call afterward and the IDE
+shows the typed signature and TSDoc; a wrong name or arg shape is a `tsc` error.
 
-1. Resolves the trailmap graph and emits per-target rolled-up YAML at
-   `trails/config/dist/targets/<id>.yaml`.
-2. Vendors the workspace SDK at `<workspace>/.trailblaze/sdk/dist/index.d.ts` — a single
-   rolled-up `.d.ts` that `tsc` resolves through the per-trailmap tsconfig.
-3. Emits per-trailmap typed bindings at `<trailmap>/tools/trailblaze-client.d.ts` —
-   exhaustive types for every tool the runtime knows about (framework primitives,
-   trailmap-local scripted tools, transitively-inherited dependencies' `exports:`).
-4. Writes framework-managed `<trailmap>/tools/tsconfig.json` + `<trailmap>/.gitignore` so
-   the editor picks up the typings with no manual setup.
-
-After this, hover any `ctx.tools.<name>` call in `tools/*.ts` — the IDE shows the typed
-signature and the original TSDoc. Mistype a name or pass the wrong arg shape and `tsc`
-flags it at compile time.
-
-The daemon also fires this pipeline on every aware command (`trailblaze step` / `ask` /
-`verify` / `trail` / `session` / `app start`) — on a fresh clone it primes everything
-automatically; on subsequent runs a content hash makes it a sub-millisecond no-op.
-
-**No `bun install` required.** The SDK is delivered as a single rolled-up `.d.ts`
-resolved through path mapping, not through `node_modules`. Per-trailmap `package.json`
-files are no longer needed for type-checking — the entire scaffolding is framework-managed.
+You usually don't even run it by hand: the daemon fires the same codegen on every
+device-aware command, and the committed workspace `package.json` re-runs it on
+`npm install` / `bun install`. **For the workspace layout (what you write vs. what's
+generated), what each generated file is for, and which ones to commit, see
+[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md).**
 
 ## Testing your tool
 
@@ -669,7 +656,7 @@ If you don't recognize yourself in those three cases, you don't need a YAML — 
 | `esbuild failed (exit 1) bundling scripted-tool source /path/to/foo.ts` | Syntax error or unresolved import in your `.ts`. The full esbuild stderr follows in the same message. |
 | `Trailmap '<id>': target.tools: listed '<path>.tool.yaml', but .tool.yaml files are pure-YAML composed tools that auto-discover...` | You put a pure-YAML tool path under `target.tools:`. That list is for scripted tools only. Drop the entry; the YAML tool auto-discovers. See [Trailmaps → Tool flavors](trailmaps.md#tool-flavors-which-kind-do-i-write). |
 | `Scripted tool 'X' must export a function with that exact name. Found: undefined.` | The export name doesn't match what `target.tools:` is asking for. Either rename the export or update the manifest entry. |
-| `client.tools.<X>` is a `tsc` error in the IDE | The per-trailmap `trailblaze-client.d.ts` is stale or missing. Run `trailblaze check` — the codegen rewrites bindings against the current registry. |
+| `ctx.tools.<X>` is a `tsc` error in the IDE | The per-trailmap `trailblaze-client.d.ts` is stale or missing. Run `trailblaze check` — the codegen rewrites bindings against the current registry. |
 
 ## Where to go next
 
@@ -677,6 +664,9 @@ If you don't recognize yourself in those three cases, you don't need a YAML — 
   empty directory to running tool.
 - **[Trailmaps](trailmaps.md)** — manifest schema, dependencies + defaults, tool
   flavors, discovery + precedence.
+- **[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md)** —
+  workspace layout (source vs. generated), what each generated file is for, what to commit,
+  and the fresh-clone bootstrap.
 - **[`examples/ios-contacts/README`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/README.md)**
   / **[`examples/wikipedia/README`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/README.md)**
   — the worked references this page draws from, with their own quick-starts and CI

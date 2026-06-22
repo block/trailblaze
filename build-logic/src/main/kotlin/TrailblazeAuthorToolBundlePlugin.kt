@@ -45,9 +45,14 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
           project.layout.projectDirectory.file(defaultEsbuild.absolutePath),
         )
       }
-      project.defaultToolsSdkSrc()?.let { defaultSdk ->
-        spec.toolsSdkSrc.convention(
+      project.defaultScriptingSdkSrc()?.let { defaultSdk ->
+        spec.scriptingSdkSrc.convention(
           project.layout.projectDirectory.file(defaultSdk.absolutePath),
+        )
+      }
+      project.defaultScriptingWrapperTemplate()?.let { defaultTemplate ->
+        spec.scriptingWrapperTemplate.convention(
+          project.layout.projectDirectory.file(defaultTemplate.absolutePath),
         )
       }
       spec.outputFile.convention(
@@ -67,7 +72,8 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
         task.entryPoint.set(spec.entryPoint)
         task.outputFile.set(spec.outputFile)
         task.esbuildBinary.set(spec.esbuildBinary)
-        task.toolsSdkSrc.set(spec.toolsSdkSrc)
+        task.scriptingSdkSrc.set(spec.scriptingSdkSrc)
+        task.scriptingWrapperTemplate.set(spec.scriptingWrapperTemplate)
         // Snapshot only the author-managed files for up-to-date checks. Excludes the volatile
         // `node_modules/` populated by the install task (huge, would slow snapshotting and
         // produce spurious cache misses on every install) AND the install sentinel (an

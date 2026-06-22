@@ -11,7 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  * Trailblaze-specific metadata read off a registered tool's `spec._meta` object. Lean
  * subset of the legacy `TrailblazeToolMeta` (in `:trailblaze-scripting-mcp-common`) that
  * keeps this module free of the MCP-SDK dependency. Reads the same `trailblaze/`-prefixed
- * keys the legacy reader does so a tool authored against `@trailblaze/tools` filters
+ * keys the legacy reader does so a tool authored against `@trailblaze/scripting` filters
  * identically whether it loads through this runtime or the MCP-shaped one.
  *
  * Missing keys take all-permissive defaults — a bundle with no `_meta` filtering still
@@ -26,6 +26,20 @@ data class QuickJsToolMeta(
    * Values are normalized to uppercase at parse time so authors can write either casing.
    */
   val supportedPlatforms: List<String> = emptyList(),
+  /**
+   * Whether to advertise this tool to the LLM. Unlike [requiresHost] / [supportedDrivers] /
+   * [supportedPlatforms], this is NOT a [shouldRegister] gate — a `surfaceToLlm = false` tool
+   * still registers for by-name dispatch (so a parent tool can compose it and recorded replays
+   * resolve it); it's only dropped from the advertised set. Default `true`.
+   */
+  val surfaceToLlm: Boolean = true,
+  /**
+   * Whether this tool's invocation is written to the recorded `.trail.yaml`. Like [surfaceToLlm]
+   * this is not a [shouldRegister] gate — the tool still registers and runs; the runtime threads
+   * this onto the decoded tool's `toolMetadata` so the recording gate honors the opt-out. Default
+   * `true`.
+   */
+  val isRecordable: Boolean = true,
 ) {
 
   /**
@@ -52,6 +66,8 @@ data class QuickJsToolMeta(
     private const val KEY_REQUIRES_HOST = "${PREFIX}requiresHost"
     private const val KEY_SUPPORTED_DRIVERS = "${PREFIX}supportedDrivers"
     private const val KEY_SUPPORTED_PLATFORMS = "${PREFIX}supportedPlatforms"
+    private const val KEY_SURFACE_TO_LLM = "${PREFIX}surfaceToLlm"
+    private const val KEY_IS_RECORDABLE = "${PREFIX}isRecordable"
 
     /**
      * Reads a registered tool's `spec` object — looking inside `spec._meta` for the
@@ -65,6 +81,8 @@ data class QuickJsToolMeta(
         requiresHost = (meta[KEY_REQUIRES_HOST] as? JsonPrimitive)?.booleanOrNull ?: false,
         supportedDrivers = meta.readStringList(KEY_SUPPORTED_DRIVERS),
         supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
+        surfaceToLlm = (meta[KEY_SURFACE_TO_LLM] as? JsonPrimitive)?.booleanOrNull ?: true,
+        isRecordable = (meta[KEY_IS_RECORDABLE] as? JsonPrimitive)?.booleanOrNull ?: true,
       )
     }
 

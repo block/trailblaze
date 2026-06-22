@@ -7,6 +7,9 @@ import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.allToolNames
+import xyz.block.trailblaze.toolcalls.getAgentToolboxForDriver
+import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import kotlin.test.assertEquals
@@ -150,6 +153,138 @@ class YamlBackedHostAppTargetTest {
       "YAML-defined pressBack should land in the YAML exclusion bucket. Got: ${target.getExcludedYamlToolNamesForDriver(androidDriver)}",
     )
     assertTrue(target.getExcludedYamlToolNamesForDriver(TrailblazeDriverType.IOS_HOST).isEmpty())
+  }
+
+  @Test
+  fun `excluded scripted tools route to the scripted exclusion bucket`() {
+    // The scripted-partition parallel of the class / YAML exclusion tests above: a target YAML can
+    // list a toolset-delivered scripted (`.ts`) tool name (e.g. `openUrl`, delivered by
+    // `core_interaction`) under `excluded_tools`, and the resolver classifies it into the scripted
+    // exclusion bucket instead of dropping it as "unknown tool". Before this, such an entry hit the
+    // `else` branch in `resolvedExcludedToolsByDriver` and was silently lost, so the exclusion never
+    // reached the LLM-surface compositors and `openUrl` stayed advertised.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        android:
+          excluded_tools: [openUrl]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+
+    val androidDriver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    assertTrue(
+      target.getExcludedScriptedToolNamesForDriver(androidDriver).any { it.toolName == "openUrl" },
+      "Scripted openUrl should land in the scripted exclusion bucket. " +
+        "Got: ${target.getExcludedScriptedToolNamesForDriver(androidDriver)}",
+    )
+    // It must NOT leak into the class-backed or YAML-defined exclusion buckets.
+    assertTrue(target.getExcludedToolsForDriver(androidDriver).isEmpty())
+    assertTrue(target.getExcludedYamlToolNamesForDriver(androidDriver).isEmpty())
+    // Scoped per platform like the other exclusion kinds (declared only under `android`).
+    assertTrue(target.getExcludedScriptedToolNamesForDriver(TrailblazeDriverType.IOS_HOST).isEmpty())
+  }
+
+  @Test
+  fun `getExcludedToolSurfaceForDriver unions class, YAML, and scripted exclusions`() {
+    // The central exclusion entry point — the exclusion-side mirror of
+    // TrailblazeToolSurface.allToolNames. A target that opts out of one tool of each backing should
+    // see each land in the right partition of the returned surface, with allToolNames unioning them.
+    // Every compositor (resolver, daemon, discovery, on-device) reads THIS one accessor, so this
+    // partitioning is the single contract they all depend on — pinning it here guards against a
+    // future backing being added to one partition but dropped from the union.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        android:
+          excluded_tools: [tap, eraseText, openUrl]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val surface = target.getExcludedToolSurfaceForDriver(android)
+
+    // tap is class-backed, eraseText is YAML-defined, openUrl is scripted — each in its own bucket.
+    assertTrue(TapTrailblazeTool::class in surface.toolClasses, "tap -> class bucket")
+    assertTrue(surface.yamlToolNames.any { it.toolName == "eraseText" }, "eraseText -> YAML bucket")
+    assertTrue(surface.scriptedToolNames.any { it.toolName == "openUrl" }, "openUrl -> scripted bucket")
+    // allToolNames is the union across all three partitions.
+    val allNames = surface.allToolNames.map { it.toolName }.toSet()
+    assertTrue(
+      setOf("tap", "eraseText", "openUrl").all { it in allNames },
+      "allToolNames must union every backing. Got: $allNames",
+    )
+  }
+
+  @Test
+  fun `scripted tools listed in platforms tools route to the scripted inclusion bucket`() {
+    // The inclusion-side mirror of `excluded scripted tools route to the scripted exclusion bucket`
+    // above. A target YAML can list a toolset-delivered scripted (`.ts`) tool name (e.g. `openUrl`,
+    // delivered by `core_interaction`) directly under `platforms.<p>.tools:`, and the resolver
+    // classifies it into the scripted INCLUSION bucket instead of dropping it as "unknown tool".
+    // Before this, such an entry hit the `else` branch in `resolvedCustomToolsByDriver` and was
+    // silently lost, so the scripted tool never surfaced to the LLM — the inclusion-side parallel
+    // of the exclusion bug closed in #3862.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        android:
+          tools: [openUrl]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+
+    val androidDriver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    assertTrue(
+      target.getCustomScriptedToolNamesForDriver(androidDriver).any { it.toolName == "openUrl" },
+      "Scripted openUrl should land in the scripted inclusion bucket. " +
+        "Got: ${target.getCustomScriptedToolNamesForDriver(androidDriver)}",
+    )
+    // It must NOT leak into the class-backed or YAML-defined inclusion buckets.
+    assertTrue(target.getCustomToolsForDriver(androidDriver).isEmpty())
+    assertTrue(target.getCustomYamlToolNamesForDriver(androidDriver).isEmpty())
+    // Scoped per platform like the other inclusion kinds (declared only under `android`).
+    assertTrue(target.getCustomScriptedToolNamesForDriver(TrailblazeDriverType.IOS_HOST).isEmpty())
+  }
+
+  @Test
+  fun `getAgentToolboxForDriver surfaces a custom scripted tool listed in platforms tools`() {
+    // The point of the whole effort: a scripted tool listed in `platforms.<p>.tools:` must reach
+    // the LLM-visible surface via `getAgentToolboxForDriver`, exactly like a class-backed or
+    // YAML-defined custom tool. Use playwright-native, where `openUrl`'s toolsets (`core_interaction`
+    // / `navigation`) are mobile-only and deliver nothing — so `openUrl` appears in the toolbox ONLY
+    // because the custom scripted inclusion bucket is unioned in. That pins the scripted partition
+    // of the union the same way the existing parity tests pin the class / YAML partitions; without
+    // the union (the inclusion-side mirror of #3862) this assertion fails.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        web:
+          drivers: [playwright-native]
+          tools: [openUrl]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val web = TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    assertTrue(
+      target.getCustomScriptedToolNamesForDriver(web).any { it.toolName == "openUrl" },
+      "custom scripted bucket should contain openUrl on playwright-native. " +
+        "Got: ${target.getCustomScriptedToolNamesForDriver(web)}",
+    )
+    val toolbox = target.getAgentToolboxForDriver(driverType = web)
+    assertTrue(
+      toolbox.scriptedToolNames.any { it.toolName == "openUrl" },
+      "getAgentToolboxForDriver must union the custom scripted inclusion bucket. " +
+        "scriptedToolNames=${toolbox.scriptedToolNames}",
+    )
   }
 
   @Test

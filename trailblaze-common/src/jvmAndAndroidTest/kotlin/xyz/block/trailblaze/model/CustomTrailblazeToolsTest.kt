@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -156,6 +157,42 @@ class CustomTrailblazeToolsTest {
     assertTrue(
       "eraseText" in descriptorNames,
       "Custom YAML tool name must reach the tool descriptor registry",
+    )
+  }
+
+  @Test
+  fun `toTrailblazeToolRepo forwards scripted exclusions so an excluded scripted tool is not advertised`() {
+    // The on-device gap this closes: openUrl is a scripted tool delivered by the always-enabled
+    // core_interaction toolset, so withDynamicToolSets re-adds it from the catalog even when a
+    // caller pre-subtracts the class/YAML opt-outs. Only forwarding the SCRIPTED exclusion partition
+    // through toTrailblazeToolRepo actually drops it on this path. The baseline (no exclusions) must
+    // advertise openUrl, otherwise the exclusion assertion would be vacuous.
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val baseline = CustomTrailblazeTools(
+      registeredAppSpecificLlmTools = emptySet(),
+      config = TrailblazeConfig.DEFAULT,
+      driverType = android,
+    ).toTrailblazeToolRepo()
+    assertTrue(
+      baseline.getRegisteredScriptedToolNames().any { it.toolName == "openUrl" },
+      "baseline must advertise scripted openUrl, else the exclusion assertion is vacuous. " +
+        "Got: ${baseline.getRegisteredScriptedToolNames()}",
+    )
+
+    val withExclusion = CustomTrailblazeTools(
+      registeredAppSpecificLlmTools = emptySet(),
+      config = TrailblazeConfig.DEFAULT,
+      driverType = android,
+      initialToolRepoExclusions = ResolvedToolExclusions(
+        toolClasses = emptySet(),
+        yamlToolNames = emptySet(),
+        scriptedToolNames = setOf(ToolName("openUrl")),
+      ),
+    ).toTrailblazeToolRepo()
+    assertFalse(
+      withExclusion.getRegisteredScriptedToolNames().any { it.toolName == "openUrl" },
+      "openUrl was excluded via initialToolRepoExclusions — toTrailblazeToolRepo must forward the " +
+        "scripted partition to withDynamicToolSets. Got: ${withExclusion.getRegisteredScriptedToolNames()}",
     )
   }
 

@@ -958,4 +958,125 @@ class TrailmapScriptedToolFileTest {
       "case-insensitive `.TS` script must still route through enrichment",
     )
   }
+
+  @Test
+  fun `surfaceToLlm and isRecordable default to true and emit no _meta keys`() {
+    // The common case: a normal scripted tool is LLM-visible + recordable. Folding the `true`
+    // defaults into `_meta` would change the wire shape for nearly every tool, so they must NOT
+    // appear when omitted — exactly the inverse of requiresHost (which only folds its `true`).
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+    """.trimIndent()
+
+    val parsed = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    assertTrue(parsed.surfaceToLlm)
+    assertTrue(parsed.isRecordable)
+    val inline = parsed.toInlineScriptToolConfig()
+    assertTrue(inline.surfaceToLlm, "typed surfaceToLlm field must default true")
+    assertTrue(inline.isRecordable, "typed isRecordable field must default true")
+    assertEquals(null, inline.meta, "true defaults must not fold any _meta key")
+  }
+
+  @Test
+  fun `surfaceToLlm false folds into the _meta namespaced key and the typed field`() {
+    // The internal-step opt-out: the host advertise filter reads the typed field; the on-device
+    // QuickJS launcher reads `_meta["trailblaze/surfaceToLlm"]`. Both must reflect the opt-out.
+    val source = """
+      script: ./tools/internal_step.ts
+      name: internal_step
+      surfaceToLlm: false
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    assertEquals(false, inline.surfaceToLlm, "typed surfaceToLlm field must propagate the opt-out")
+    val meta = assertNotNull(inline.meta, "surfaceToLlm: false must produce a non-null _meta")
+    assertEquals(
+      JsonPrimitive(false),
+      meta["trailblaze/surfaceToLlm"],
+      "Top-level `surfaceToLlm: false` must fold into `_meta.trailblaze/surfaceToLlm`",
+    )
+  }
+
+  @Test
+  fun `isRecordable false folds into the _meta namespaced key and the typed field`() {
+    val source = """
+      script: ./tools/internal_step.ts
+      name: internal_step
+      isRecordable: false
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    assertEquals(false, inline.isRecordable, "typed isRecordable field must propagate the opt-out")
+    val meta = assertNotNull(inline.meta, "isRecordable: false must produce a non-null _meta")
+    assertEquals(
+      JsonPrimitive(false),
+      meta["trailblaze/isRecordable"],
+      "Top-level `isRecordable: false` must fold into `_meta.trailblaze/isRecordable`",
+    )
+  }
+
+  @Test
+  fun `multi-tool entry inherits file-wide surfaceToLlm and isRecordable unless overridden`() {
+    // Per-entry `null` (default) inherits the file-wide opt-out; an explicit per-entry value wins.
+    val source = """
+      script: ./tools/steps.ts
+      surfaceToLlm: false
+      isRecordable: false
+      tools:
+        - name: inherits_both
+        - name: overrides_visible
+          surfaceToLlm: true
+    """.trimIndent()
+
+    val configs = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfigs()
+      .associateBy { it.name }
+
+    val inherits = assertNotNull(configs["inherits_both"])
+    assertEquals(false, inherits.surfaceToLlm)
+    assertEquals(false, inherits.isRecordable)
+
+    val overrides = assertNotNull(configs["overrides_visible"])
+    assertEquals(true, overrides.surfaceToLlm, "per-entry surfaceToLlm: true must override file-wide false")
+    assertEquals(false, overrides.isRecordable, "isRecordable still inherits the file-wide false")
+  }
+
+  @Test
+  fun `_meta with non-boolean trailblaze surfaceToLlm is rejected with descriptor-aware error`() {
+    // Mirrors the requiresHost wrong-type validation: a non-boolean `_meta.trailblaze/surfaceToLlm`
+    // is read with `booleanOrNull` downstream and would silently default to `true` (a "my opt-out
+    // didn't take" footgun). Fail loudly at descriptor-load time instead, naming the tool + key.
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      _meta:
+        trailblaze/surfaceToLlm: 1
+    """.trimIndent()
+
+    val descriptor = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    val ex = assertFailsWith<IllegalArgumentException> { descriptor.toInlineScriptToolConfig() }
+    val msg = assertNotNull(ex.message)
+    assertTrue(msg.contains("foo_tool"), "expected tool name in: $msg")
+    assertTrue(msg.contains("trailblaze/surfaceToLlm"), "expected key name in: $msg")
+    assertTrue(msg.contains("boolean"), "expected expected-type guidance in: $msg")
+  }
+
+  @Test
+  fun `_meta with non-boolean trailblaze isRecordable is rejected with descriptor-aware error`() {
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      _meta:
+        trailblaze/isRecordable: "yes"
+    """.trimIndent()
+
+    val descriptor = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    val ex = assertFailsWith<IllegalArgumentException> { descriptor.toInlineScriptToolConfig() }
+    val msg = assertNotNull(ex.message)
+    assertTrue(msg.contains("trailblaze/isRecordable"), "expected key name in: $msg")
+    assertTrue(msg.contains("boolean"), "expected expected-type guidance in: $msg")
+  }
 }

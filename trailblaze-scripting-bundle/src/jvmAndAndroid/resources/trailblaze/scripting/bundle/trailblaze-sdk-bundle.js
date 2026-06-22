@@ -149,11 +149,11 @@ var trailblazeSdk = (() => {
     escapeRegex: () => escapeRegex,
     extend: () => extend,
     finalizeIssue: () => finalizeIssue,
-    floatSafeRemainder: () => floatSafeRemainder2,
+    floatSafeRemainder: () => floatSafeRemainder,
     getElementAtPath: () => getElementAtPath,
     getEnumValues: () => getEnumValues,
     getLengthableOrigin: () => getLengthableOrigin,
-    getParsedType: () => getParsedType2,
+    getParsedType: () => getParsedType,
     getSizableOrigin: () => getSizableOrigin,
     hexToUint8Array: () => hexToUint8Array,
     isObject: () => isObject,
@@ -234,7 +234,7 @@ var trailblazeSdk = (() => {
     const end = source.endsWith("$") ? source.length - 1 : source.length;
     return source.slice(start, end);
   }
-  function floatSafeRemainder2(val, step) {
+  function floatSafeRemainder(val, step) {
     const valDecCount = (val.toString().split(".")[1] || "").length;
     const stepString = step.toString();
     let stepDecCount = (stepString.split(".")[1] || "").length;
@@ -723,7 +723,7 @@ var trailblazeSdk = (() => {
   function uint8ArrayToHex(bytes) {
     return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
-  var EVALUATING, captureStackTrace, allowsEval, getParsedType2, propertyKeyTypes, primitiveTypes, NUMBER_FORMAT_RANGES, BIGINT_FORMAT_RANGES, Class;
+  var EVALUATING, captureStackTrace, allowsEval, getParsedType, propertyKeyTypes, primitiveTypes, NUMBER_FORMAT_RANGES, BIGINT_FORMAT_RANGES, Class;
   var init_util = __esm({
     "node_modules/zod/v4/core/util.js"() {
       EVALUATING = /* @__PURE__ */ Symbol("evaluating");
@@ -741,7 +741,7 @@ var trailblazeSdk = (() => {
           return false;
         }
       });
-      getParsedType2 = (data) => {
+      getParsedType = (data) => {
         const t = typeof data;
         switch (t) {
           case "undefined":
@@ -1295,7 +1295,7 @@ var trailblazeSdk = (() => {
         inst._zod.check = (payload) => {
           if (typeof payload.value !== typeof def.value)
             throw new Error("Cannot mix number and bigint in multiple_of check.");
-          const isMultiple = typeof payload.value === "bigint" ? payload.value % def.value === BigInt(0) : floatSafeRemainder2(payload.value, def.value) === 0;
+          const isMultiple = typeof payload.value === "bigint" ? payload.value % def.value === BigInt(0) : floatSafeRemainder(payload.value, def.value) === 0;
           if (isMultiple)
             return;
           payload.issues.push({
@@ -1836,7 +1836,7 @@ var trailblazeSdk = (() => {
     const padded = base643.padEnd(Math.ceil(base643.length / 4) * 4, "=");
     return isValidBase64(padded);
   }
-  function isValidJWT2(token, algorithm = null) {
+  function isValidJWT(token, algorithm = null) {
     try {
       const tokensParts = token.split(".");
       if (tokensParts.length !== 3)
@@ -1971,7 +1971,7 @@ var trailblazeSdk = (() => {
     }
     return final;
   }
-  function mergeValues2(a, b) {
+  function mergeValues(a, b) {
     if (a === b) {
       return { valid: true, data: a };
     }
@@ -1983,7 +1983,7 @@ var trailblazeSdk = (() => {
       const sharedKeys = Object.keys(a).filter((key) => bKeys.indexOf(key) !== -1);
       const newObj = { ...a, ...b };
       for (const key of sharedKeys) {
-        const sharedValue = mergeValues2(a[key], b[key]);
+        const sharedValue = mergeValues(a[key], b[key]);
         if (!sharedValue.valid) {
           return {
             valid: false,
@@ -2002,7 +2002,7 @@ var trailblazeSdk = (() => {
       for (let index = 0; index < a.length; index++) {
         const itemA = a[index];
         const itemB = b[index];
-        const sharedValue = mergeValues2(itemA, itemB);
+        const sharedValue = mergeValues(itemA, itemB);
         if (!sharedValue.valid) {
           return {
             valid: false,
@@ -2047,7 +2047,7 @@ var trailblazeSdk = (() => {
     }
     if (aborted(result))
       return result;
-    const merged = mergeValues2(left.value, right.value);
+    const merged = mergeValues(left.value, right.value);
     if (!merged.valid) {
       throw new Error(`Unmergable intersection. Error path: ${JSON.stringify(merged.mergeErrorPath)}`);
     }
@@ -2540,7 +2540,7 @@ var trailblazeSdk = (() => {
       $ZodJWT = /* @__PURE__ */ $constructor("$ZodJWT", (inst, def) => {
         $ZodStringFormat.init(inst, def);
         inst._zod.check = (payload) => {
-          if (isValidJWT2(payload.value, def.alg))
+          if (isValidJWT(payload.value, def.alg))
             return;
           payload.issues.push({
             code: "invalid_format",
@@ -4786,7 +4786,7 @@ var trailblazeSdk = (() => {
   });
 
   // node_modules/zod/v4/locales/en.js
-  function en_default2() {
+  function en_default() {
     return {
       localeError: error9()
     };
@@ -9626,7 +9626,7 @@ var trailblazeSdk = (() => {
     cs: () => cs_default,
     da: () => da_default,
     de: () => de_default,
-    en: () => en_default2,
+    en: () => en_default,
     eo: () => eo_default,
     es: () => es_default,
     fa: () => fa_default,
@@ -12085,7 +12085,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     initializeContext: () => initializeContext,
     isValidBase64: () => isValidBase64,
     isValidBase64URL: () => isValidBase64URL,
-    isValidJWT: () => isValidJWT2,
+    isValidJWT: () => isValidJWT,
     locales: () => locales_exports,
     meta: () => meta,
     parse: () => parse,
@@ -12167,8 +12167,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/iso.js
-  var iso_exports2 = {};
-  __export(iso_exports2, {
+  var iso_exports = {};
+  __export(iso_exports, {
     ZodISODate: () => ZodISODate,
     ZodISODateTime: () => ZodISODateTime,
     ZodISODuration: () => ZodISODuration,
@@ -12215,7 +12215,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/errors.js
-  var initializer2, ZodError2, ZodRealError;
+  var initializer2, ZodError, ZodRealError;
   var init_errors2 = __esm({
     "node_modules/zod/v4/classic/errors.js"() {
       init_core2();
@@ -12255,7 +12255,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           }
         });
       };
-      ZodError2 = $constructor("ZodError", initializer2);
+      ZodError = $constructor("ZodError", initializer2);
       ZodRealError = $constructor("ZodError", initializer2, {
         Parent: Error
       });
@@ -12263,15 +12263,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/parse.js
-  var parse2, parseAsync2, safeParse3, safeParseAsync3, encode2, decode2, encodeAsync2, decodeAsync2, safeEncode2, safeDecode2, safeEncodeAsync2, safeDecodeAsync2;
+  var parse2, parseAsync2, safeParse2, safeParseAsync2, encode2, decode2, encodeAsync2, decodeAsync2, safeEncode2, safeDecode2, safeEncodeAsync2, safeDecodeAsync2;
   var init_parse2 = __esm({
     "node_modules/zod/v4/classic/parse.js"() {
       init_core2();
       init_errors2();
       parse2 = /* @__PURE__ */ _parse(ZodRealError);
       parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
-      safeParse3 = /* @__PURE__ */ _safeParse(ZodRealError);
-      safeParseAsync3 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
+      safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
+      safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
       encode2 = /* @__PURE__ */ _encode(ZodRealError);
       decode2 = /* @__PURE__ */ _decode(ZodRealError);
       encodeAsync2 = /* @__PURE__ */ _encodeAsync(ZodRealError);
@@ -12284,74 +12284,74 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/schemas.js
-  var schemas_exports3 = {};
-  __export(schemas_exports3, {
-    ZodAny: () => ZodAny2,
-    ZodArray: () => ZodArray2,
+  var schemas_exports2 = {};
+  __export(schemas_exports2, {
+    ZodAny: () => ZodAny,
+    ZodArray: () => ZodArray,
     ZodBase64: () => ZodBase64,
     ZodBase64URL: () => ZodBase64URL,
-    ZodBigInt: () => ZodBigInt2,
+    ZodBigInt: () => ZodBigInt,
     ZodBigIntFormat: () => ZodBigIntFormat,
-    ZodBoolean: () => ZodBoolean2,
+    ZodBoolean: () => ZodBoolean,
     ZodCIDRv4: () => ZodCIDRv4,
     ZodCIDRv6: () => ZodCIDRv6,
     ZodCUID: () => ZodCUID,
     ZodCUID2: () => ZodCUID2,
-    ZodCatch: () => ZodCatch2,
+    ZodCatch: () => ZodCatch,
     ZodCodec: () => ZodCodec,
     ZodCustom: () => ZodCustom,
     ZodCustomStringFormat: () => ZodCustomStringFormat,
-    ZodDate: () => ZodDate2,
-    ZodDefault: () => ZodDefault2,
-    ZodDiscriminatedUnion: () => ZodDiscriminatedUnion2,
+    ZodDate: () => ZodDate,
+    ZodDefault: () => ZodDefault,
+    ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
     ZodE164: () => ZodE164,
     ZodEmail: () => ZodEmail,
     ZodEmoji: () => ZodEmoji,
-    ZodEnum: () => ZodEnum2,
+    ZodEnum: () => ZodEnum,
     ZodExactOptional: () => ZodExactOptional,
     ZodFile: () => ZodFile,
-    ZodFunction: () => ZodFunction2,
+    ZodFunction: () => ZodFunction,
     ZodGUID: () => ZodGUID,
     ZodIPv4: () => ZodIPv4,
     ZodIPv6: () => ZodIPv6,
-    ZodIntersection: () => ZodIntersection2,
+    ZodIntersection: () => ZodIntersection,
     ZodJWT: () => ZodJWT,
     ZodKSUID: () => ZodKSUID,
-    ZodLazy: () => ZodLazy2,
-    ZodLiteral: () => ZodLiteral2,
+    ZodLazy: () => ZodLazy,
+    ZodLiteral: () => ZodLiteral,
     ZodMAC: () => ZodMAC,
-    ZodMap: () => ZodMap2,
-    ZodNaN: () => ZodNaN2,
+    ZodMap: () => ZodMap,
+    ZodNaN: () => ZodNaN,
     ZodNanoID: () => ZodNanoID,
-    ZodNever: () => ZodNever2,
+    ZodNever: () => ZodNever,
     ZodNonOptional: () => ZodNonOptional,
-    ZodNull: () => ZodNull2,
-    ZodNullable: () => ZodNullable2,
-    ZodNumber: () => ZodNumber2,
+    ZodNull: () => ZodNull,
+    ZodNullable: () => ZodNullable,
+    ZodNumber: () => ZodNumber,
     ZodNumberFormat: () => ZodNumberFormat,
-    ZodObject: () => ZodObject2,
-    ZodOptional: () => ZodOptional2,
+    ZodObject: () => ZodObject,
+    ZodOptional: () => ZodOptional,
     ZodPipe: () => ZodPipe,
     ZodPrefault: () => ZodPrefault,
-    ZodPromise: () => ZodPromise2,
-    ZodReadonly: () => ZodReadonly2,
-    ZodRecord: () => ZodRecord2,
-    ZodSet: () => ZodSet2,
-    ZodString: () => ZodString2,
+    ZodPromise: () => ZodPromise,
+    ZodReadonly: () => ZodReadonly,
+    ZodRecord: () => ZodRecord,
+    ZodSet: () => ZodSet,
+    ZodString: () => ZodString,
     ZodStringFormat: () => ZodStringFormat,
     ZodSuccess: () => ZodSuccess,
-    ZodSymbol: () => ZodSymbol2,
+    ZodSymbol: () => ZodSymbol,
     ZodTemplateLiteral: () => ZodTemplateLiteral,
     ZodTransform: () => ZodTransform,
-    ZodTuple: () => ZodTuple2,
-    ZodType: () => ZodType2,
+    ZodTuple: () => ZodTuple,
+    ZodType: () => ZodType,
     ZodULID: () => ZodULID,
     ZodURL: () => ZodURL,
     ZodUUID: () => ZodUUID,
-    ZodUndefined: () => ZodUndefined2,
-    ZodUnion: () => ZodUnion2,
-    ZodUnknown: () => ZodUnknown2,
-    ZodVoid: () => ZodVoid2,
+    ZodUndefined: () => ZodUndefined,
+    ZodUnion: () => ZodUnion,
+    ZodUnknown: () => ZodUnknown,
+    ZodVoid: () => ZodVoid,
     ZodXID: () => ZodXID,
     ZodXor: () => ZodXor,
     _ZodString: () => _ZodString,
@@ -12415,7 +12415,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     nullable: () => nullable,
     nullish: () => nullish2,
     number: () => number2,
-    object: () => object2,
+    object: () => object,
     optional: () => optional,
     partialRecord: () => partialRecord,
     pipe: () => pipe,
@@ -12452,7 +12452,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     xor: () => xor
   });
   function string2(params) {
-    return _string(ZodString2, params);
+    return _string(ZodString, params);
   }
   function email2(params) {
     return _email(ZodEmail, params);
@@ -12548,7 +12548,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return _stringFormat(ZodCustomStringFormat, format, regex, params);
   }
   function number2(params) {
-    return _number(ZodNumber2, params);
+    return _number(ZodNumber, params);
   }
   function int(params) {
     return _int(ZodNumberFormat, params);
@@ -12566,10 +12566,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return _uint32(ZodNumberFormat, params);
   }
   function boolean2(params) {
-    return _boolean(ZodBoolean2, params);
+    return _boolean(ZodBoolean, params);
   }
   function bigint2(params) {
-    return _bigint(ZodBigInt2, params);
+    return _bigint(ZodBigInt, params);
   }
   function int64(params) {
     return _int64(ZodBigIntFormat, params);
@@ -12578,46 +12578,46 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return _uint64(ZodBigIntFormat, params);
   }
   function symbol(params) {
-    return _symbol(ZodSymbol2, params);
+    return _symbol(ZodSymbol, params);
   }
   function _undefined3(params) {
-    return _undefined2(ZodUndefined2, params);
+    return _undefined2(ZodUndefined, params);
   }
   function _null3(params) {
-    return _null2(ZodNull2, params);
+    return _null2(ZodNull, params);
   }
   function any() {
-    return _any(ZodAny2);
+    return _any(ZodAny);
   }
   function unknown() {
-    return _unknown(ZodUnknown2);
+    return _unknown(ZodUnknown);
   }
   function never(params) {
-    return _never(ZodNever2, params);
+    return _never(ZodNever, params);
   }
   function _void2(params) {
-    return _void(ZodVoid2, params);
+    return _void(ZodVoid, params);
   }
   function date3(params) {
-    return _date(ZodDate2, params);
+    return _date(ZodDate, params);
   }
   function array(element, params) {
-    return _array(ZodArray2, element, params);
+    return _array(ZodArray, element, params);
   }
   function keyof(schema) {
     const shape = schema._zod.def.shape;
     return _enum2(Object.keys(shape));
   }
-  function object2(shape, params) {
+  function object(shape, params) {
     const def = {
       type: "object",
       shape: shape ?? {},
       ...util_exports.normalizeParams(params)
     };
-    return new ZodObject2(def);
+    return new ZodObject(def);
   }
   function strictObject(shape, params) {
-    return new ZodObject2({
+    return new ZodObject({
       type: "object",
       shape,
       catchall: never(),
@@ -12625,7 +12625,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function looseObject(shape, params) {
-    return new ZodObject2({
+    return new ZodObject({
       type: "object",
       shape,
       catchall: unknown(),
@@ -12633,7 +12633,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function union(options, params) {
-    return new ZodUnion2({
+    return new ZodUnion({
       type: "union",
       options,
       ...util_exports.normalizeParams(params)
@@ -12648,7 +12648,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function discriminatedUnion(discriminator, options, params) {
-    return new ZodDiscriminatedUnion2({
+    return new ZodDiscriminatedUnion({
       type: "union",
       options,
       discriminator,
@@ -12656,7 +12656,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function intersection(left, right) {
-    return new ZodIntersection2({
+    return new ZodIntersection({
       type: "intersection",
       left,
       right
@@ -12666,7 +12666,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const hasRest = _paramsOrRest instanceof $ZodType;
     const params = hasRest ? _params : _paramsOrRest;
     const rest = hasRest ? _paramsOrRest : null;
-    return new ZodTuple2({
+    return new ZodTuple({
       type: "tuple",
       items,
       rest,
@@ -12674,7 +12674,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function record(keyType, valueType, params) {
-    return new ZodRecord2({
+    return new ZodRecord({
       type: "record",
       keyType,
       valueType,
@@ -12684,7 +12684,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   function partialRecord(keyType, valueType, params) {
     const k = clone(keyType);
     k._zod.values = void 0;
-    return new ZodRecord2({
+    return new ZodRecord({
       type: "record",
       keyType: k,
       valueType,
@@ -12692,7 +12692,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function looseRecord(keyType, valueType, params) {
-    return new ZodRecord2({
+    return new ZodRecord({
       type: "record",
       keyType,
       valueType,
@@ -12701,7 +12701,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function map(keyType, valueType, params) {
-    return new ZodMap2({
+    return new ZodMap({
       type: "map",
       keyType,
       valueType,
@@ -12709,7 +12709,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function set(valueType, params) {
-    return new ZodSet2({
+    return new ZodSet({
       type: "set",
       valueType,
       ...util_exports.normalizeParams(params)
@@ -12717,21 +12717,21 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   }
   function _enum2(values, params) {
     const entries = Array.isArray(values) ? Object.fromEntries(values.map((v) => [v, v])) : values;
-    return new ZodEnum2({
+    return new ZodEnum({
       type: "enum",
       entries,
       ...util_exports.normalizeParams(params)
     });
   }
   function nativeEnum(entries, params) {
-    return new ZodEnum2({
+    return new ZodEnum({
       type: "enum",
       entries,
       ...util_exports.normalizeParams(params)
     });
   }
   function literal(value, params) {
-    return new ZodLiteral2({
+    return new ZodLiteral({
       type: "literal",
       values: Array.isArray(value) ? value : [value],
       ...util_exports.normalizeParams(params)
@@ -12747,7 +12747,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function optional(innerType) {
-    return new ZodOptional2({
+    return new ZodOptional({
       type: "optional",
       innerType
     });
@@ -12759,7 +12759,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function nullable(innerType) {
-    return new ZodNullable2({
+    return new ZodNullable({
       type: "nullable",
       innerType
     });
@@ -12768,7 +12768,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return optional(nullable(innerType));
   }
   function _default2(innerType, defaultValue) {
-    return new ZodDefault2({
+    return new ZodDefault({
       type: "default",
       innerType,
       get defaultValue() {
@@ -12799,14 +12799,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function _catch2(innerType, catchValue) {
-    return new ZodCatch2({
+    return new ZodCatch({
       type: "catch",
       innerType,
       catchValue: typeof catchValue === "function" ? catchValue : () => catchValue
     });
   }
   function nan(params) {
-    return _nan(ZodNaN2, params);
+    return _nan(ZodNaN, params);
   }
   function pipe(in_, out) {
     return new ZodPipe({
@@ -12826,7 +12826,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function readonly(innerType) {
-    return new ZodReadonly2({
+    return new ZodReadonly({
       type: "readonly",
       innerType
     });
@@ -12839,19 +12839,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
   function lazy(getter) {
-    return new ZodLazy2({
+    return new ZodLazy({
       type: "lazy",
       getter
     });
   }
   function promise(innerType) {
-    return new ZodPromise2({
+    return new ZodPromise({
       type: "promise",
       innerType
     });
   }
   function _function(params) {
-    return new ZodFunction2({
+    return new ZodFunction({
       type: "function",
       input: Array.isArray(params?.input) ? tuple(params?.input) : params?.input ?? array(unknown()),
       output: params?.output ?? unknown()
@@ -12905,7 +12905,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   function preprocess(fn, schema) {
     return pipe(transform(fn), schema);
   }
-  var ZodType2, _ZodString, ZodString2, ZodStringFormat, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodMAC, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodCustomStringFormat, ZodNumber2, ZodNumberFormat, ZodBoolean2, ZodBigInt2, ZodBigIntFormat, ZodSymbol2, ZodUndefined2, ZodNull2, ZodAny2, ZodUnknown2, ZodNever2, ZodVoid2, ZodDate2, ZodArray2, ZodObject2, ZodUnion2, ZodXor, ZodDiscriminatedUnion2, ZodIntersection2, ZodTuple2, ZodRecord2, ZodMap2, ZodSet2, ZodEnum2, ZodLiteral2, ZodFile, ZodTransform, ZodOptional2, ZodExactOptional, ZodNullable2, ZodDefault2, ZodPrefault, ZodNonOptional, ZodSuccess, ZodCatch2, ZodNaN2, ZodPipe, ZodCodec, ZodReadonly2, ZodTemplateLiteral, ZodLazy2, ZodPromise2, ZodFunction2, ZodCustom, describe2, meta2, stringbool;
+  var ZodType, _ZodString, ZodString, ZodStringFormat, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodMAC, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodCustomStringFormat, ZodNumber, ZodNumberFormat, ZodBoolean, ZodBigInt, ZodBigIntFormat, ZodSymbol, ZodUndefined, ZodNull, ZodAny, ZodUnknown, ZodNever, ZodVoid, ZodDate, ZodArray, ZodObject, ZodUnion, ZodXor, ZodDiscriminatedUnion, ZodIntersection, ZodTuple, ZodRecord, ZodMap, ZodSet, ZodEnum, ZodLiteral, ZodFile, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodSuccess, ZodCatch, ZodNaN, ZodPipe, ZodCodec, ZodReadonly, ZodTemplateLiteral, ZodLazy, ZodPromise, ZodFunction, ZodCustom, describe2, meta2, stringbool;
   var init_schemas2 = __esm({
     "node_modules/zod/v4/classic/schemas.js"() {
       init_core2();
@@ -12915,7 +12915,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       init_checks2();
       init_iso();
       init_parse2();
-      ZodType2 = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
+      ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
         $ZodType.init(inst, def);
         Object.assign(inst["~standard"], {
           jsonSchema: {
@@ -12945,9 +12945,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           return inst;
         });
         inst.parse = (data, params) => parse2(inst, data, params, { callee: inst.parse });
-        inst.safeParse = (data, params) => safeParse3(inst, data, params);
+        inst.safeParse = (data, params) => safeParse2(inst, data, params);
         inst.parseAsync = async (data, params) => parseAsync2(inst, data, params, { callee: inst.parseAsync });
-        inst.safeParseAsync = async (data, params) => safeParseAsync3(inst, data, params);
+        inst.safeParseAsync = async (data, params) => safeParseAsync2(inst, data, params);
         inst.spa = inst.safeParseAsync;
         inst.encode = (data, params) => encode2(inst, data, params);
         inst.decode = (data, params) => decode2(inst, data, params);
@@ -13000,7 +13000,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       _ZodString = /* @__PURE__ */ $constructor("_ZodString", (inst, def) => {
         $ZodString.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => stringProcessor(inst, ctx, json2, params);
         const bag = inst._zod.bag;
         inst.format = bag.format ?? null;
@@ -13022,7 +13022,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         inst.toUpperCase = () => inst.check(_toUpperCase());
         inst.slugify = () => inst.check(_slugify());
       });
-      ZodString2 = /* @__PURE__ */ $constructor("ZodString", (inst, def) => {
+      ZodString = /* @__PURE__ */ $constructor("ZodString", (inst, def) => {
         $ZodString.init(inst, def);
         _ZodString.init(inst, def);
         inst.email = (params) => inst.check(_email(ZodEmail, params));
@@ -13141,9 +13141,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         $ZodCustomStringFormat.init(inst, def);
         ZodStringFormat.init(inst, def);
       });
-      ZodNumber2 = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
+      ZodNumber = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
         $ZodNumber.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => numberProcessor(inst, ctx, json2, params);
         inst.gt = (value, params) => inst.check(_gt(value, params));
         inst.gte = (value, params) => inst.check(_gte(value, params));
@@ -13169,16 +13169,16 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       ZodNumberFormat = /* @__PURE__ */ $constructor("ZodNumberFormat", (inst, def) => {
         $ZodNumberFormat.init(inst, def);
-        ZodNumber2.init(inst, def);
+        ZodNumber.init(inst, def);
       });
-      ZodBoolean2 = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
+      ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
         $ZodBoolean.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => booleanProcessor(inst, ctx, json2, params);
       });
-      ZodBigInt2 = /* @__PURE__ */ $constructor("ZodBigInt", (inst, def) => {
+      ZodBigInt = /* @__PURE__ */ $constructor("ZodBigInt", (inst, def) => {
         $ZodBigInt.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => bigintProcessor(inst, ctx, json2, params);
         inst.gte = (value, params) => inst.check(_gte(value, params));
         inst.min = (value, params) => inst.check(_gte(value, params));
@@ -13200,46 +13200,46 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       ZodBigIntFormat = /* @__PURE__ */ $constructor("ZodBigIntFormat", (inst, def) => {
         $ZodBigIntFormat.init(inst, def);
-        ZodBigInt2.init(inst, def);
+        ZodBigInt.init(inst, def);
       });
-      ZodSymbol2 = /* @__PURE__ */ $constructor("ZodSymbol", (inst, def) => {
+      ZodSymbol = /* @__PURE__ */ $constructor("ZodSymbol", (inst, def) => {
         $ZodSymbol.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => symbolProcessor(inst, ctx, json2, params);
       });
-      ZodUndefined2 = /* @__PURE__ */ $constructor("ZodUndefined", (inst, def) => {
+      ZodUndefined = /* @__PURE__ */ $constructor("ZodUndefined", (inst, def) => {
         $ZodUndefined.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => undefinedProcessor(inst, ctx, json2, params);
       });
-      ZodNull2 = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
+      ZodNull = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
         $ZodNull.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => nullProcessor(inst, ctx, json2, params);
       });
-      ZodAny2 = /* @__PURE__ */ $constructor("ZodAny", (inst, def) => {
+      ZodAny = /* @__PURE__ */ $constructor("ZodAny", (inst, def) => {
         $ZodAny.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => anyProcessor(inst, ctx, json2, params);
       });
-      ZodUnknown2 = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
+      ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
         $ZodUnknown.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => unknownProcessor(inst, ctx, json2, params);
       });
-      ZodNever2 = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
+      ZodNever = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
         $ZodNever.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => neverProcessor(inst, ctx, json2, params);
       });
-      ZodVoid2 = /* @__PURE__ */ $constructor("ZodVoid", (inst, def) => {
+      ZodVoid = /* @__PURE__ */ $constructor("ZodVoid", (inst, def) => {
         $ZodVoid.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => voidProcessor(inst, ctx, json2, params);
       });
-      ZodDate2 = /* @__PURE__ */ $constructor("ZodDate", (inst, def) => {
+      ZodDate = /* @__PURE__ */ $constructor("ZodDate", (inst, def) => {
         $ZodDate.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => dateProcessor(inst, ctx, json2, params);
         inst.min = (value, params) => inst.check(_gte(value, params));
         inst.max = (value, params) => inst.check(_lte(value, params));
@@ -13247,9 +13247,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         inst.minDate = c.minimum ? new Date(c.minimum) : null;
         inst.maxDate = c.maximum ? new Date(c.maximum) : null;
       });
-      ZodArray2 = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
+      ZodArray = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
         $ZodArray.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => arrayProcessor(inst, ctx, json2, params);
         inst.element = def.element;
         inst.min = (minLength, params) => inst.check(_minLength(minLength, params));
@@ -13258,9 +13258,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         inst.length = (len, params) => inst.check(_length(len, params));
         inst.unwrap = () => inst.element;
       });
-      ZodObject2 = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
+      ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
         $ZodObjectJIT.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => objectProcessor(inst, ctx, json2, params);
         util_exports.defineLazy(inst, "shape", () => {
           return def.shape;
@@ -13280,49 +13280,49 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         inst.merge = (other) => util_exports.merge(inst, other);
         inst.pick = (mask) => util_exports.pick(inst, mask);
         inst.omit = (mask) => util_exports.omit(inst, mask);
-        inst.partial = (...args) => util_exports.partial(ZodOptional2, inst, args[0]);
+        inst.partial = (...args) => util_exports.partial(ZodOptional, inst, args[0]);
         inst.required = (...args) => util_exports.required(ZodNonOptional, inst, args[0]);
       });
-      ZodUnion2 = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
+      ZodUnion = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
         $ZodUnion.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
         inst.options = def.options;
       });
       ZodXor = /* @__PURE__ */ $constructor("ZodXor", (inst, def) => {
-        ZodUnion2.init(inst, def);
+        ZodUnion.init(inst, def);
         $ZodXor.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
         inst.options = def.options;
       });
-      ZodDiscriminatedUnion2 = /* @__PURE__ */ $constructor("ZodDiscriminatedUnion", (inst, def) => {
-        ZodUnion2.init(inst, def);
+      ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("ZodDiscriminatedUnion", (inst, def) => {
+        ZodUnion.init(inst, def);
         $ZodDiscriminatedUnion.init(inst, def);
       });
-      ZodIntersection2 = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
+      ZodIntersection = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
         $ZodIntersection.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => intersectionProcessor(inst, ctx, json2, params);
       });
-      ZodTuple2 = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
+      ZodTuple = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
         $ZodTuple.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => tupleProcessor(inst, ctx, json2, params);
         inst.rest = (rest) => inst.clone({
           ...inst._zod.def,
           rest
         });
       });
-      ZodRecord2 = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
+      ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
         $ZodRecord.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => recordProcessor(inst, ctx, json2, params);
         inst.keyType = def.keyType;
         inst.valueType = def.valueType;
       });
-      ZodMap2 = /* @__PURE__ */ $constructor("ZodMap", (inst, def) => {
+      ZodMap = /* @__PURE__ */ $constructor("ZodMap", (inst, def) => {
         $ZodMap.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => mapProcessor(inst, ctx, json2, params);
         inst.keyType = def.keyType;
         inst.valueType = def.valueType;
@@ -13331,18 +13331,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         inst.max = (...args) => inst.check(_maxSize(...args));
         inst.size = (...args) => inst.check(_size(...args));
       });
-      ZodSet2 = /* @__PURE__ */ $constructor("ZodSet", (inst, def) => {
+      ZodSet = /* @__PURE__ */ $constructor("ZodSet", (inst, def) => {
         $ZodSet.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => setProcessor(inst, ctx, json2, params);
         inst.min = (...args) => inst.check(_minSize(...args));
         inst.nonempty = (params) => inst.check(_minSize(1, params));
         inst.max = (...args) => inst.check(_maxSize(...args));
         inst.size = (...args) => inst.check(_size(...args));
       });
-      ZodEnum2 = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
+      ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
         $ZodEnum.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
         inst.enum = def.entries;
         inst.options = Object.values(def.entries);
@@ -13355,7 +13355,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             } else
               throw new Error(`Key ${value} not found in enum`);
           }
-          return new ZodEnum2({
+          return new ZodEnum({
             ...def,
             checks: [],
             ...util_exports.normalizeParams(params),
@@ -13370,7 +13370,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             } else
               throw new Error(`Key ${value} not found in enum`);
           }
-          return new ZodEnum2({
+          return new ZodEnum({
             ...def,
             checks: [],
             ...util_exports.normalizeParams(params),
@@ -13378,9 +13378,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           });
         };
       });
-      ZodLiteral2 = /* @__PURE__ */ $constructor("ZodLiteral", (inst, def) => {
+      ZodLiteral = /* @__PURE__ */ $constructor("ZodLiteral", (inst, def) => {
         $ZodLiteral.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => literalProcessor(inst, ctx, json2, params);
         inst.values = new Set(def.values);
         Object.defineProperty(inst, "value", {
@@ -13394,7 +13394,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       ZodFile = /* @__PURE__ */ $constructor("ZodFile", (inst, def) => {
         $ZodFile.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => fileProcessor(inst, ctx, json2, params);
         inst.min = (size, params) => inst.check(_minSize(size, params));
         inst.max = (size, params) => inst.check(_maxSize(size, params));
@@ -13402,7 +13402,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
         $ZodTransform.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => transformProcessor(inst, ctx, json2, params);
         inst._zod.parse = (payload, _ctx) => {
           if (_ctx.direction === "backward") {
@@ -13432,64 +13432,64 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           return payload;
         };
       });
-      ZodOptional2 = /* @__PURE__ */ $constructor("ZodOptional", (inst, def) => {
+      ZodOptional = /* @__PURE__ */ $constructor("ZodOptional", (inst, def) => {
         $ZodOptional.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
       ZodExactOptional = /* @__PURE__ */ $constructor("ZodExactOptional", (inst, def) => {
         $ZodExactOptional.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
-      ZodNullable2 = /* @__PURE__ */ $constructor("ZodNullable", (inst, def) => {
+      ZodNullable = /* @__PURE__ */ $constructor("ZodNullable", (inst, def) => {
         $ZodNullable.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => nullableProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
-      ZodDefault2 = /* @__PURE__ */ $constructor("ZodDefault", (inst, def) => {
+      ZodDefault = /* @__PURE__ */ $constructor("ZodDefault", (inst, def) => {
         $ZodDefault.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => defaultProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
         inst.removeDefault = inst.unwrap;
       });
       ZodPrefault = /* @__PURE__ */ $constructor("ZodPrefault", (inst, def) => {
         $ZodPrefault.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => prefaultProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
       ZodNonOptional = /* @__PURE__ */ $constructor("ZodNonOptional", (inst, def) => {
         $ZodNonOptional.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => nonoptionalProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
       ZodSuccess = /* @__PURE__ */ $constructor("ZodSuccess", (inst, def) => {
         $ZodSuccess.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => successProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
-      ZodCatch2 = /* @__PURE__ */ $constructor("ZodCatch", (inst, def) => {
+      ZodCatch = /* @__PURE__ */ $constructor("ZodCatch", (inst, def) => {
         $ZodCatch.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => catchProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
         inst.removeCatch = inst.unwrap;
       });
-      ZodNaN2 = /* @__PURE__ */ $constructor("ZodNaN", (inst, def) => {
+      ZodNaN = /* @__PURE__ */ $constructor("ZodNaN", (inst, def) => {
         $ZodNaN.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => nanProcessor(inst, ctx, json2, params);
       });
       ZodPipe = /* @__PURE__ */ $constructor("ZodPipe", (inst, def) => {
         $ZodPipe.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => pipeProcessor(inst, ctx, json2, params);
         inst.in = def.in;
         inst.out = def.out;
@@ -13498,45 +13498,45 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         ZodPipe.init(inst, def);
         $ZodCodec.init(inst, def);
       });
-      ZodReadonly2 = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
+      ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
         $ZodReadonly.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => readonlyProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
       ZodTemplateLiteral = /* @__PURE__ */ $constructor("ZodTemplateLiteral", (inst, def) => {
         $ZodTemplateLiteral.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => templateLiteralProcessor(inst, ctx, json2, params);
       });
-      ZodLazy2 = /* @__PURE__ */ $constructor("ZodLazy", (inst, def) => {
+      ZodLazy = /* @__PURE__ */ $constructor("ZodLazy", (inst, def) => {
         $ZodLazy.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => lazyProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.getter();
       });
-      ZodPromise2 = /* @__PURE__ */ $constructor("ZodPromise", (inst, def) => {
+      ZodPromise = /* @__PURE__ */ $constructor("ZodPromise", (inst, def) => {
         $ZodPromise.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => promiseProcessor(inst, ctx, json2, params);
         inst.unwrap = () => inst._zod.def.innerType;
       });
-      ZodFunction2 = /* @__PURE__ */ $constructor("ZodFunction", (inst, def) => {
+      ZodFunction = /* @__PURE__ */ $constructor("ZodFunction", (inst, def) => {
         $ZodFunction.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => functionProcessor(inst, ctx, json2, params);
       });
       ZodCustom = /* @__PURE__ */ $constructor("ZodCustom", (inst, def) => {
         $ZodCustom.init(inst, def);
-        ZodType2.init(inst, def);
+        ZodType.init(inst, def);
         inst._zod.processJSONSchema = (ctx, json2, params) => customProcessor(inst, ctx, json2, params);
       });
       describe2 = describe;
       meta2 = meta;
       stringbool = (...args) => _stringbool({
         Codec: ZodCodec,
-        Boolean: ZodBoolean2,
-        String: ZodString2
+        Boolean: ZodBoolean,
+        String: ZodString
       }, ...args);
     }
   });
@@ -13547,15 +13547,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       customError: map2
     });
   }
-  function getErrorMap2() {
+  function getErrorMap() {
     return config().customError;
   }
-  var ZodIssueCode2, ZodFirstPartyTypeKind2;
+  var ZodIssueCode, ZodFirstPartyTypeKind;
   var init_compat = __esm({
     "node_modules/zod/v4/classic/compat.js"() {
       init_core2();
       init_core2();
-      ZodIssueCode2 = {
+      ZodIssueCode = {
         invalid_type: "invalid_type",
         too_big: "too_big",
         too_small: "too_small",
@@ -13569,7 +13569,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         custom: "custom"
       };
       /* @__PURE__ */ (function(ZodFirstPartyTypeKind3) {
-      })(ZodFirstPartyTypeKind2 || (ZodFirstPartyTypeKind2 = {}));
+      })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
     }
   });
 
@@ -13978,9 +13978,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       init_iso();
       init_schemas2();
       z = {
-        ...schemas_exports3,
+        ...schemas_exports2,
         ...checks_exports2,
-        iso: iso_exports2
+        iso: iso_exports
       };
       RECOGNIZED_KEYS = /* @__PURE__ */ new Set([
         // Schema identification
@@ -14057,8 +14057,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/coerce.js
-  var coerce_exports2 = {};
-  __export(coerce_exports2, {
+  var coerce_exports = {};
+  __export(coerce_exports, {
     bigint: () => bigint3,
     boolean: () => boolean3,
     date: () => date4,
@@ -14066,19 +14066,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     string: () => string3
   });
   function string3(params) {
-    return _coercedString(ZodString2, params);
+    return _coercedString(ZodString, params);
   }
   function number3(params) {
-    return _coercedNumber(ZodNumber2, params);
+    return _coercedNumber(ZodNumber, params);
   }
   function boolean3(params) {
-    return _coercedBoolean(ZodBoolean2, params);
+    return _coercedBoolean(ZodBoolean, params);
   }
   function bigint3(params) {
-    return _coercedBigint(ZodBigInt2, params);
+    return _coercedBigint(ZodBigInt, params);
   }
   function date4(params) {
-    return _coercedDate(ZodDate2, params);
+    return _coercedDate(ZodDate, params);
   }
   var init_coerce = __esm({
     "node_modules/zod/v4/classic/coerce.js"() {
@@ -14088,40 +14088,40 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   });
 
   // node_modules/zod/v4/classic/external.js
-  var external_exports3 = {};
-  __export(external_exports3, {
+  var external_exports = {};
+  __export(external_exports, {
     $brand: () => $brand,
     $input: () => $input,
     $output: () => $output,
     NEVER: () => NEVER,
     TimePrecision: () => TimePrecision,
-    ZodAny: () => ZodAny2,
-    ZodArray: () => ZodArray2,
+    ZodAny: () => ZodAny,
+    ZodArray: () => ZodArray,
     ZodBase64: () => ZodBase64,
     ZodBase64URL: () => ZodBase64URL,
-    ZodBigInt: () => ZodBigInt2,
+    ZodBigInt: () => ZodBigInt,
     ZodBigIntFormat: () => ZodBigIntFormat,
-    ZodBoolean: () => ZodBoolean2,
+    ZodBoolean: () => ZodBoolean,
     ZodCIDRv4: () => ZodCIDRv4,
     ZodCIDRv6: () => ZodCIDRv6,
     ZodCUID: () => ZodCUID,
     ZodCUID2: () => ZodCUID2,
-    ZodCatch: () => ZodCatch2,
+    ZodCatch: () => ZodCatch,
     ZodCodec: () => ZodCodec,
     ZodCustom: () => ZodCustom,
     ZodCustomStringFormat: () => ZodCustomStringFormat,
-    ZodDate: () => ZodDate2,
-    ZodDefault: () => ZodDefault2,
-    ZodDiscriminatedUnion: () => ZodDiscriminatedUnion2,
+    ZodDate: () => ZodDate,
+    ZodDefault: () => ZodDefault,
+    ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
     ZodE164: () => ZodE164,
     ZodEmail: () => ZodEmail,
     ZodEmoji: () => ZodEmoji,
-    ZodEnum: () => ZodEnum2,
-    ZodError: () => ZodError2,
+    ZodEnum: () => ZodEnum,
+    ZodError: () => ZodError,
     ZodExactOptional: () => ZodExactOptional,
     ZodFile: () => ZodFile,
-    ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind2,
-    ZodFunction: () => ZodFunction2,
+    ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind,
+    ZodFunction: () => ZodFunction,
     ZodGUID: () => ZodGUID,
     ZodIPv4: () => ZodIPv4,
     ZodIPv6: () => ZodIPv6,
@@ -14129,46 +14129,46 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     ZodISODateTime: () => ZodISODateTime,
     ZodISODuration: () => ZodISODuration,
     ZodISOTime: () => ZodISOTime,
-    ZodIntersection: () => ZodIntersection2,
-    ZodIssueCode: () => ZodIssueCode2,
+    ZodIntersection: () => ZodIntersection,
+    ZodIssueCode: () => ZodIssueCode,
     ZodJWT: () => ZodJWT,
     ZodKSUID: () => ZodKSUID,
-    ZodLazy: () => ZodLazy2,
-    ZodLiteral: () => ZodLiteral2,
+    ZodLazy: () => ZodLazy,
+    ZodLiteral: () => ZodLiteral,
     ZodMAC: () => ZodMAC,
-    ZodMap: () => ZodMap2,
-    ZodNaN: () => ZodNaN2,
+    ZodMap: () => ZodMap,
+    ZodNaN: () => ZodNaN,
     ZodNanoID: () => ZodNanoID,
-    ZodNever: () => ZodNever2,
+    ZodNever: () => ZodNever,
     ZodNonOptional: () => ZodNonOptional,
-    ZodNull: () => ZodNull2,
-    ZodNullable: () => ZodNullable2,
-    ZodNumber: () => ZodNumber2,
+    ZodNull: () => ZodNull,
+    ZodNullable: () => ZodNullable,
+    ZodNumber: () => ZodNumber,
     ZodNumberFormat: () => ZodNumberFormat,
-    ZodObject: () => ZodObject2,
-    ZodOptional: () => ZodOptional2,
+    ZodObject: () => ZodObject,
+    ZodOptional: () => ZodOptional,
     ZodPipe: () => ZodPipe,
     ZodPrefault: () => ZodPrefault,
-    ZodPromise: () => ZodPromise2,
-    ZodReadonly: () => ZodReadonly2,
+    ZodPromise: () => ZodPromise,
+    ZodReadonly: () => ZodReadonly,
     ZodRealError: () => ZodRealError,
-    ZodRecord: () => ZodRecord2,
-    ZodSet: () => ZodSet2,
-    ZodString: () => ZodString2,
+    ZodRecord: () => ZodRecord,
+    ZodSet: () => ZodSet,
+    ZodString: () => ZodString,
     ZodStringFormat: () => ZodStringFormat,
     ZodSuccess: () => ZodSuccess,
-    ZodSymbol: () => ZodSymbol2,
+    ZodSymbol: () => ZodSymbol,
     ZodTemplateLiteral: () => ZodTemplateLiteral,
     ZodTransform: () => ZodTransform,
-    ZodTuple: () => ZodTuple2,
-    ZodType: () => ZodType2,
+    ZodTuple: () => ZodTuple,
+    ZodType: () => ZodType,
     ZodULID: () => ZodULID,
     ZodURL: () => ZodURL,
     ZodUUID: () => ZodUUID,
-    ZodUndefined: () => ZodUndefined2,
-    ZodUnion: () => ZodUnion2,
-    ZodUnknown: () => ZodUnknown2,
-    ZodVoid: () => ZodVoid2,
+    ZodUndefined: () => ZodUndefined,
+    ZodUnion: () => ZodUnion,
+    ZodUnknown: () => ZodUnknown,
+    ZodVoid: () => ZodVoid,
     ZodXID: () => ZodXID,
     ZodXor: () => ZodXor,
     _ZodString: () => _ZodString,
@@ -14186,7 +14186,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     cidrv6: () => cidrv62,
     clone: () => clone,
     codec: () => codec,
-    coerce: () => coerce_exports2,
+    coerce: () => coerce_exports,
     config: () => config,
     core: () => core_exports2,
     cuid: () => cuid3,
@@ -14212,7 +14212,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     formatError: () => formatError,
     fromJSONSchema: () => fromJSONSchema,
     function: () => _function,
-    getErrorMap: () => getErrorMap2,
+    getErrorMap: () => getErrorMap,
     globalRegistry: () => globalRegistry,
     gt: () => _gt,
     gte: () => _gte,
@@ -14229,7 +14229,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     intersection: () => intersection,
     ipv4: () => ipv42,
     ipv6: () => ipv62,
-    iso: () => iso_exports2,
+    iso: () => iso_exports,
     json: () => json,
     jwt: () => jwt,
     keyof: () => keyof,
@@ -14265,7 +14265,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     nullable: () => nullable,
     nullish: () => nullish2,
     number: () => number2,
-    object: () => object2,
+    object: () => object,
     optional: () => optional,
     overwrite: () => _overwrite,
     parse: () => parse2,
@@ -14288,8 +14288,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     safeDecodeAsync: () => safeDecodeAsync2,
     safeEncode: () => safeEncode2,
     safeEncodeAsync: () => safeEncodeAsync2,
-    safeParse: () => safeParse3,
-    safeParseAsync: () => safeParseAsync3,
+    safeParse: () => safeParse2,
+    safeParseAsync: () => safeParseAsync2,
     set: () => set,
     setErrorMap: () => setErrorMap,
     size: () => _size,
@@ -14344,7 +14344,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       init_iso();
       init_iso();
       init_coerce();
-      config(en_default2());
+      config(en_default());
     }
   });
 
@@ -14398,10 +14398,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         pollInterval: number2().optional()
       });
-      TaskMetadataSchema = object2({
+      TaskMetadataSchema = object({
         ttl: number2().optional()
       });
-      RelatedTaskMetadataSchema = object2({
+      RelatedTaskMetadataSchema = object({
         taskId: string2()
       });
       RequestMetaSchema = looseObject({
@@ -14414,7 +14414,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         [RELATED_TASK_META_KEY]: RelatedTaskMetadataSchema.optional()
       });
-      BaseRequestParamsSchema = object2({
+      BaseRequestParamsSchema = object({
         /**
          * See [General fields: `_meta`](/specification/draft/basic/index#meta) for notes on `_meta` usage.
          */
@@ -14432,18 +14432,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         task: TaskMetadataSchema.optional()
       });
       isTaskAugmentedRequestParams = (value) => TaskAugmentedRequestParamsSchema.safeParse(value).success;
-      RequestSchema = object2({
+      RequestSchema = object({
         method: string2(),
         params: BaseRequestParamsSchema.loose().optional()
       });
-      NotificationsParamsSchema = object2({
+      NotificationsParamsSchema = object({
         /**
          * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
          * for notes on _meta usage.
          */
         _meta: RequestMetaSchema.optional()
       });
-      NotificationSchema = object2({
+      NotificationSchema = object({
         method: string2(),
         params: NotificationsParamsSchema.loose().optional()
       });
@@ -14455,18 +14455,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         _meta: RequestMetaSchema.optional()
       });
       RequestIdSchema = union([string2(), number2().int()]);
-      JSONRPCRequestSchema = object2({
+      JSONRPCRequestSchema = object({
         jsonrpc: literal(JSONRPC_VERSION),
         id: RequestIdSchema,
         ...RequestSchema.shape
       }).strict();
       isJSONRPCRequest = (value) => JSONRPCRequestSchema.safeParse(value).success;
-      JSONRPCNotificationSchema = object2({
+      JSONRPCNotificationSchema = object({
         jsonrpc: literal(JSONRPC_VERSION),
         ...NotificationSchema.shape
       }).strict();
       isJSONRPCNotification = (value) => JSONRPCNotificationSchema.safeParse(value).success;
-      JSONRPCResultResponseSchema = object2({
+      JSONRPCResultResponseSchema = object({
         jsonrpc: literal(JSONRPC_VERSION),
         id: RequestIdSchema,
         result: ResultSchema
@@ -14482,10 +14482,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         ErrorCode2[ErrorCode2["InternalError"] = -32603] = "InternalError";
         ErrorCode2[ErrorCode2["UrlElicitationRequired"] = -32042] = "UrlElicitationRequired";
       })(ErrorCode || (ErrorCode = {}));
-      JSONRPCErrorResponseSchema = object2({
+      JSONRPCErrorResponseSchema = object({
         jsonrpc: literal(JSONRPC_VERSION),
         id: RequestIdSchema.optional(),
-        error: object2({
+        error: object({
           /**
            * The error type that occurred.
            */
@@ -14525,7 +14525,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("notifications/cancelled"),
         params: CancelledNotificationParamsSchema
       });
-      IconSchema = object2({
+      IconSchema = object({
         /**
          * URL or data URI for the icon.
          */
@@ -14550,7 +14550,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         theme: _enum2(["light", "dark"]).optional()
       });
-      IconsSchema = object2({
+      IconsSchema = object({
         /**
          * Optional set of sized icons that the client can display in a user interface.
          *
@@ -14564,7 +14564,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         icons: array(IconSchema).optional()
       });
-      BaseMetadataSchema = object2({
+      BaseMetadataSchema = object({
         /** Intended for programmatic or logical use, but used as a display name in past specs or fallback */
         name: string2(),
         /**
@@ -14594,7 +14594,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         description: string2().optional()
       });
-      FormElicitationCapabilitySchema = intersection(object2({
+      FormElicitationCapabilitySchema = intersection(object({
         applyDefaults: boolean2().optional()
       }), record(string2(), unknown()));
       ElicitationCapabilitySchema = preprocess((value) => {
@@ -14604,7 +14604,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           }
         }
         return value;
-      }, intersection(object2({
+      }, intersection(object({
         form: FormElicitationCapabilitySchema.optional(),
         url: AssertObjectSchema.optional()
       }), record(string2(), unknown()).optional()));
@@ -14656,7 +14656,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           }).optional()
         }).optional()
       });
-      ClientCapabilitiesSchema = object2({
+      ClientCapabilitiesSchema = object({
         /**
          * Experimental, non-standard capabilities that the client supports.
          */
@@ -14664,7 +14664,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * Present if the client supports sampling from an LLM.
          */
-        sampling: object2({
+        sampling: object({
           /**
            * Present if the client supports context inclusion via includeContext parameter.
            * If not declared, servers SHOULD only use `includeContext: "none"` (or omit it).
@@ -14682,7 +14682,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * Present if the client supports listing roots.
          */
-        roots: object2({
+        roots: object({
           /**
            * Whether the client supports issuing notifications for changes to the roots list.
            */
@@ -14709,7 +14709,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("initialize"),
         params: InitializeRequestParamsSchema
       });
-      ServerCapabilitiesSchema = object2({
+      ServerCapabilitiesSchema = object({
         /**
          * Experimental, non-standard capabilities that the server supports.
          */
@@ -14725,7 +14725,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * Present if the server offers any prompt templates.
          */
-        prompts: object2({
+        prompts: object({
           /**
            * Whether this server supports issuing notifications for changes to the prompt list.
            */
@@ -14734,7 +14734,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * Present if the server offers any resources to read.
          */
-        resources: object2({
+        resources: object({
           /**
            * Whether this server supports clients subscribing to resource updates.
            */
@@ -14747,7 +14747,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * Present if the server offers any tools to call.
          */
-        tools: object2({
+        tools: object({
           /**
            * Whether this server supports issuing notifications for changes to the tool list.
            */
@@ -14784,7 +14784,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("ping"),
         params: BaseRequestParamsSchema.optional()
       });
-      ProgressSchema = object2({
+      ProgressSchema = object({
         /**
          * The progress thus far. This should increase every time progress is made, even if the total is unknown.
          */
@@ -14798,7 +14798,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         message: optional(string2())
       });
-      ProgressNotificationParamsSchema = object2({
+      ProgressNotificationParamsSchema = object({
         ...NotificationsParamsSchema.shape,
         ...ProgressSchema.shape,
         /**
@@ -14828,7 +14828,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         nextCursor: CursorSchema.optional()
       });
       TaskStatusSchema = _enum2(["working", "input_required", "completed", "failed", "cancelled"]);
-      TaskSchema = object2({
+      TaskSchema = object({
         taskId: string2(),
         status: TaskStatusSchema,
         /**
@@ -14885,7 +14885,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         })
       });
       CancelTaskResultSchema = ResultSchema.merge(TaskSchema);
-      ResourceContentsSchema = object2({
+      ResourceContentsSchema = object({
         /**
          * The URI of this resource.
          */
@@ -14921,7 +14921,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         blob: Base64Schema
       });
       RoleSchema = _enum2(["user", "assistant"]);
-      AnnotationsSchema = object2({
+      AnnotationsSchema = object({
         /**
          * Intended audience(s) for the resource.
          */
@@ -14933,9 +14933,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * ISO 8601 timestamp for the most recent modification.
          */
-        lastModified: iso_exports2.datetime({ offset: true }).optional()
+        lastModified: iso_exports.datetime({ offset: true }).optional()
       });
-      ResourceSchema = object2({
+      ResourceSchema = object({
         ...BaseMetadataSchema.shape,
         ...IconsSchema.shape,
         /**
@@ -14968,7 +14968,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         _meta: optional(looseObject({}))
       });
-      ResourceTemplateSchema = object2({
+      ResourceTemplateSchema = object({
         ...BaseMetadataSchema.shape,
         ...IconsSchema.shape,
         /**
@@ -15047,7 +15047,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("notifications/resources/updated"),
         params: ResourceUpdatedNotificationParamsSchema
       });
-      PromptArgumentSchema = object2({
+      PromptArgumentSchema = object({
         /**
          * The name of the argument.
          */
@@ -15061,7 +15061,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         required: optional(boolean2())
       });
-      PromptSchema = object2({
+      PromptSchema = object({
         ...BaseMetadataSchema.shape,
         ...IconsSchema.shape,
         /**
@@ -15098,7 +15098,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("prompts/get"),
         params: GetPromptRequestParamsSchema
       });
-      TextContentSchema = object2({
+      TextContentSchema = object({
         type: literal("text"),
         /**
          * The text content of the message.
@@ -15114,7 +15114,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         _meta: record(string2(), unknown()).optional()
       });
-      ImageContentSchema = object2({
+      ImageContentSchema = object({
         type: literal("image"),
         /**
          * The base64-encoded image data.
@@ -15134,7 +15134,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         _meta: record(string2(), unknown()).optional()
       });
-      AudioContentSchema = object2({
+      AudioContentSchema = object({
         type: literal("audio"),
         /**
          * The base64-encoded audio data.
@@ -15154,7 +15154,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         _meta: record(string2(), unknown()).optional()
       });
-      ToolUseContentSchema = object2({
+      ToolUseContentSchema = object({
         type: literal("tool_use"),
         /**
          * The name of the tool to invoke.
@@ -15177,7 +15177,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         _meta: record(string2(), unknown()).optional()
       });
-      EmbeddedResourceSchema = object2({
+      EmbeddedResourceSchema = object({
         type: literal("resource"),
         resource: union([TextResourceContentsSchema, BlobResourceContentsSchema]),
         /**
@@ -15200,7 +15200,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         ResourceLinkSchema,
         EmbeddedResourceSchema
       ]);
-      PromptMessageSchema = object2({
+      PromptMessageSchema = object({
         role: RoleSchema,
         content: ContentBlockSchema
       });
@@ -15215,7 +15215,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("notifications/prompts/list_changed"),
         params: NotificationsParamsSchema.optional()
       });
-      ToolAnnotationsSchema = object2({
+      ToolAnnotationsSchema = object({
         /**
          * A human-readable title for the tool.
          */
@@ -15254,7 +15254,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         openWorldHint: boolean2().optional()
       });
-      ToolExecutionSchema = object2({
+      ToolExecutionSchema = object({
         /**
          * Indicates the tool's preference for task-augmented execution.
          * - "required": Clients MUST invoke the tool as a task
@@ -15265,7 +15265,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         taskSupport: _enum2(["required", "optional", "forbidden"]).optional()
       });
-      ToolSchema = object2({
+      ToolSchema = object({
         ...BaseMetadataSchema.shape,
         ...IconsSchema.shape,
         /**
@@ -15276,7 +15276,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          * A JSON Schema 2020-12 object defining the expected parameters for the tool.
          * Must have type: 'object' at the root level per MCP spec.
          */
-        inputSchema: object2({
+        inputSchema: object({
           type: literal("object"),
           properties: record(string2(), AssertObjectSchema).optional(),
           required: array(string2()).optional()
@@ -15286,7 +15286,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          * returned in the structuredContent field of a CallToolResult.
          * Must have type: 'object' at the root level per MCP spec.
          */
-        outputSchema: object2({
+        outputSchema: object({
           type: literal("object"),
           properties: record(string2(), AssertObjectSchema).optional(),
           required: array(string2()).optional()
@@ -15362,7 +15362,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("notifications/tools/list_changed"),
         params: NotificationsParamsSchema.optional()
       });
-      ListChangedOptionsBaseSchema = object2({
+      ListChangedOptionsBaseSchema = object({
         /**
          * If true, the list will be refreshed automatically when a list changed notification is received.
          * The callback will be called with the updated list.
@@ -15411,13 +15411,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         method: literal("notifications/message"),
         params: LoggingMessageNotificationParamsSchema
       });
-      ModelHintSchema = object2({
+      ModelHintSchema = object({
         /**
          * A hint for a model name.
          */
         name: string2().optional()
       });
-      ModelPreferencesSchema = object2({
+      ModelPreferencesSchema = object({
         /**
          * Optional hints to use for model selection.
          */
@@ -15435,7 +15435,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         intelligencePriority: number2().min(0).max(1).optional()
       });
-      ToolChoiceSchema = object2({
+      ToolChoiceSchema = object({
         /**
          * Controls when tools are used:
          * - "auto": Model decides whether to use tools (default)
@@ -15444,11 +15444,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         mode: _enum2(["auto", "required", "none"]).optional()
       });
-      ToolResultContentSchema = object2({
+      ToolResultContentSchema = object({
         type: literal("tool_result"),
         toolUseId: string2().describe("The unique identifier for the corresponding tool call."),
         content: array(ContentBlockSchema).default([]),
-        structuredContent: object2({}).loose().optional(),
+        structuredContent: object({}).loose().optional(),
         isError: boolean2().optional(),
         /**
          * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
@@ -15464,7 +15464,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         ToolUseContentSchema,
         ToolResultContentSchema
       ]);
-      SamplingMessageSchema = object2({
+      SamplingMessageSchema = object({
         role: RoleSchema,
         content: union([SamplingMessageContentBlockSchema, array(SamplingMessageContentBlockSchema)]),
         /**
@@ -15564,13 +15564,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         content: union([SamplingMessageContentBlockSchema, array(SamplingMessageContentBlockSchema)])
       });
-      BooleanSchemaSchema = object2({
+      BooleanSchemaSchema = object({
         type: literal("boolean"),
         title: string2().optional(),
         description: string2().optional(),
         default: boolean2().optional()
       });
-      StringSchemaSchema = object2({
+      StringSchemaSchema = object({
         type: literal("string"),
         title: string2().optional(),
         description: string2().optional(),
@@ -15579,7 +15579,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         format: _enum2(["email", "uri", "date", "date-time"]).optional(),
         default: string2().optional()
       });
-      NumberSchemaSchema = object2({
+      NumberSchemaSchema = object({
         type: _enum2(["number", "integer"]),
         title: string2().optional(),
         description: string2().optional(),
@@ -15587,24 +15587,24 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         maximum: number2().optional(),
         default: number2().optional()
       });
-      UntitledSingleSelectEnumSchemaSchema = object2({
+      UntitledSingleSelectEnumSchemaSchema = object({
         type: literal("string"),
         title: string2().optional(),
         description: string2().optional(),
         enum: array(string2()),
         default: string2().optional()
       });
-      TitledSingleSelectEnumSchemaSchema = object2({
+      TitledSingleSelectEnumSchemaSchema = object({
         type: literal("string"),
         title: string2().optional(),
         description: string2().optional(),
-        oneOf: array(object2({
+        oneOf: array(object({
           const: string2(),
           title: string2()
         })),
         default: string2().optional()
       });
-      LegacyTitledEnumSchemaSchema = object2({
+      LegacyTitledEnumSchemaSchema = object({
         type: literal("string"),
         title: string2().optional(),
         description: string2().optional(),
@@ -15613,26 +15613,26 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         default: string2().optional()
       });
       SingleSelectEnumSchemaSchema = union([UntitledSingleSelectEnumSchemaSchema, TitledSingleSelectEnumSchemaSchema]);
-      UntitledMultiSelectEnumSchemaSchema = object2({
+      UntitledMultiSelectEnumSchemaSchema = object({
         type: literal("array"),
         title: string2().optional(),
         description: string2().optional(),
         minItems: number2().optional(),
         maxItems: number2().optional(),
-        items: object2({
+        items: object({
           type: literal("string"),
           enum: array(string2())
         }),
         default: array(string2()).optional()
       });
-      TitledMultiSelectEnumSchemaSchema = object2({
+      TitledMultiSelectEnumSchemaSchema = object({
         type: literal("array"),
         title: string2().optional(),
         description: string2().optional(),
         minItems: number2().optional(),
         maxItems: number2().optional(),
-        items: object2({
-          anyOf: array(object2({
+        items: object({
+          anyOf: array(object({
             const: string2(),
             title: string2()
           }))
@@ -15657,7 +15657,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          * A restricted subset of JSON Schema.
          * Only top-level properties are allowed, without nesting.
          */
-        requestedSchema: object2({
+        requestedSchema: object({
           type: literal("object"),
           properties: record(string2(), PrimitiveSchemaDefinitionSchema),
           required: array(string2()).optional()
@@ -15713,14 +15713,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
          */
         content: preprocess((val) => val === null ? void 0 : val, record(string2(), union([string2(), number2(), boolean2(), array(string2())])).optional())
       });
-      ResourceTemplateReferenceSchema = object2({
+      ResourceTemplateReferenceSchema = object({
         type: literal("ref/resource"),
         /**
          * The URI or URI template of the resource.
          */
         uri: string2()
       });
-      PromptReferenceSchema = object2({
+      PromptReferenceSchema = object({
         type: literal("ref/prompt"),
         /**
          * The name of the prompt or prompt template
@@ -15732,7 +15732,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         /**
          * The argument's information
          */
-        argument: object2({
+        argument: object({
           /**
            * The name of the argument
            */
@@ -15742,7 +15742,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
            */
           value: string2()
         }),
-        context: object2({
+        context: object({
           /**
            * Previously-resolved variables in a URI template or prompt.
            */
@@ -15769,7 +15769,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           hasMore: optional(boolean2())
         })
       });
-      RootSchema = object2({
+      RootSchema = object({
         /**
          * The URI identifying the root. This *must* start with file:// for now.
          */
@@ -23697,8 +23697,404 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     selectors: () => selectors,
     tool: () => tool,
     trailblaze: () => trailblaze,
-    z: () => external_exports3
+    z: () => external_exports
   });
+
+  // node_modules/zod/index.js
+  init_external();
+  init_external();
+
+  // src/logger.ts
+  function createLogger(server, toolName) {
+    const emit = (level, message, fields) => {
+      const mcpLevel = level === "warn" ? "warning" : level;
+      const data = fields ? { message, fields } : message;
+      void server.sendLoggingMessage({ level: mcpLevel, data, logger: toolName }).catch(() => {
+      });
+      const prefix = `[${toolName}] [${level}] ${message}`;
+      const suffix = fields ? " " + safeStringify(fields) : "";
+      console.error(prefix + suffix);
+    };
+    return {
+      debug: (message, fields) => emit("debug", message, fields),
+      info: (message, fields) => emit("info", message, fields),
+      warn: (message, fields) => emit("warn", message, fields),
+      error: (message, fields) => emit("error", message, fields)
+    };
+  }
+  var noopLogger = {
+    debug: () => {
+    },
+    info: () => {
+    },
+    warn: () => {
+    },
+    error: () => {
+    }
+  };
+  function safeStringify(value) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  // src/memory.ts
+  var DRAIN_DELTA = /* @__PURE__ */ Symbol.for("trailblaze.memory.drainDelta");
+  var META_KEY_TRAILBLAZE = "trailblaze";
+  var META_KEY_MEMORY = "memory";
+  var META_KEY_MEMORY_DELTA = "memoryDelta";
+  var META_KEY_MEMORY_DELETIONS = "memoryDeletions";
+  var INTERPOLATE_PATTERNS = [
+    /\$\{([^}]+)\}/g,
+    /\{\{([^}]+)\}\}/g
+  ];
+  function createMemory(snapshot) {
+    const frozenSnapshot = new Map(
+      snapshot ? Object.entries(snapshot).filter(
+        // Defensive — the snapshot is supposed to be `Record<string, string>` from the
+        // Kotlin side, but `fromMeta` receives raw JSON. Skip non-string values rather
+        // than coercing so a producer-side bug surfaces as a missing key instead of a
+        // silently corrupted value.
+        ([, v]) => typeof v === "string"
+      ) : []
+    );
+    const DELETED = /* @__PURE__ */ Symbol("deleted");
+    const buffer = /* @__PURE__ */ new Map();
+    const get = (key) => {
+      if (buffer.has(key)) {
+        const v = buffer.get(key);
+        return v === DELETED ? void 0 : v;
+      }
+      return frozenSnapshot.get(key);
+    };
+    const has = (key) => {
+      if (buffer.has(key)) return buffer.get(key) !== DELETED;
+      return frozenSnapshot.has(key);
+    };
+    const set2 = (key, value) => {
+      buffer.set(key, value);
+    };
+    const del = (key) => {
+      buffer.set(key, DELETED);
+    };
+    const keys = () => {
+      const visible = new Set(frozenSnapshot.keys());
+      buffer.forEach((v, k) => {
+        if (v === DELETED) visible.delete(k);
+        else visible.add(k);
+      });
+      return [...visible];
+    };
+    const interpolate = (template) => {
+      let result = template;
+      for (const pattern of INTERPOLATE_PATTERNS) {
+        const re = new RegExp(pattern.source, "g");
+        result = result.replace(re, (_match, name) => get(name) ?? "");
+      }
+      return result;
+    };
+    const setJson = (key, value) => {
+      const serialized = JSON.stringify(value);
+      if (serialized === void 0) {
+        del(key);
+        return;
+      }
+      set2(key, serialized);
+    };
+    const getJson = (key) => {
+      const raw = get(key);
+      if (raw === void 0) return void 0;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return void 0;
+      }
+    };
+    const drainDelta = () => {
+      const sets = /* @__PURE__ */ Object.create(null);
+      const deletions = [];
+      buffer.forEach((v, k) => {
+        if (v === DELETED) {
+          if (frozenSnapshot.has(k)) deletions.push(k);
+        } else if (frozenSnapshot.get(k) !== v) {
+          sets[k] = v;
+        }
+      });
+      return { sets, deletions };
+    };
+    const toJSON = () => {
+      const out = {};
+      frozenSnapshot.forEach((v, k) => {
+        out[k] = v;
+      });
+      buffer.forEach((v, k) => {
+        if (v === DELETED) delete out[k];
+        else out[k] = v;
+      });
+      return out;
+    };
+    const memory = {
+      get,
+      set: set2,
+      has,
+      keys,
+      delete: del,
+      interpolate,
+      setJson,
+      getJson,
+      [DRAIN_DELTA]: drainDelta,
+      toJSON
+    };
+    return memory;
+  }
+
+  // src/context.ts
+  var VALID_PLATFORMS = /* @__PURE__ */ new Set(["ios", "android", "web"]);
+  function fromMeta(meta3, logger) {
+    if (typeof meta3 !== "object" || meta3 === null) return void 0;
+    const bag = meta3;
+    const envelope = bag[META_KEY_TRAILBLAZE];
+    if (typeof envelope !== "object" || envelope === null) return void 0;
+    const tb = envelope;
+    const sessionId = tb["sessionId"];
+    const invocationId = tb["invocationId"];
+    if (typeof sessionId !== "string" || typeof invocationId !== "string") return void 0;
+    const baseUrl = typeof tb["baseUrl"] === "string" ? tb["baseUrl"] : void 0;
+    const runtimeRaw = tb["runtime"];
+    const runtime = runtimeRaw === "ondevice" ? "ondevice" : void 0;
+    const deviceBag = tb["device"];
+    if (typeof deviceBag !== "object" || deviceBag === null) return void 0;
+    const deviceRecord = deviceBag;
+    const platformRaw = deviceRecord["platform"];
+    if (typeof platformRaw !== "string" || !VALID_PLATFORMS.has(platformRaw)) {
+      return void 0;
+    }
+    const widthPixels = deviceRecord["widthPixels"];
+    const heightPixels = deviceRecord["heightPixels"];
+    const driverType = deviceRecord["driverType"];
+    if (typeof widthPixels !== "number" || typeof heightPixels !== "number" || typeof driverType !== "string") {
+      return void 0;
+    }
+    const memoryBag = tb[META_KEY_MEMORY];
+    const memorySnapshot = typeof memoryBag === "object" && memoryBag !== null ? memoryBag : void 0;
+    const memory = createMemory(memorySnapshot);
+    const target = parseTarget(tb["target"]);
+    return {
+      baseUrl,
+      runtime,
+      sessionId,
+      invocationId,
+      device: {
+        platform: platformRaw,
+        widthPixels,
+        heightPixels,
+        driverType
+      },
+      target,
+      memory,
+      logger: logger ?? noopLogger
+    };
+  }
+  function parseTarget(raw) {
+    if (typeof raw !== "object" || raw === null) return void 0;
+    const bag = raw;
+    const id = bag["id"];
+    const appIdsRaw = bag["appIds"];
+    if (typeof id !== "string" || !Array.isArray(appIdsRaw)) return void 0;
+    if (!appIdsRaw.every((entry) => typeof entry === "string")) return void 0;
+    const appIds = appIdsRaw;
+    const displayName = typeof bag["displayName"] === "string" ? bag["displayName"] : void 0;
+    const appId = typeof bag["appId"] === "string" ? bag["appId"] : void 0;
+    const resolvedBaseUrl = typeof bag["resolvedBaseUrl"] === "string" ? bag["resolvedBaseUrl"] : void 0;
+    const baseUrlsRaw = bag["baseUrls"];
+    const baseUrls = Array.isArray(baseUrlsRaw) && baseUrlsRaw.every((entry) => typeof entry === "string") ? baseUrlsRaw : void 0;
+    const resolveAppId = (options) => {
+      const fromTarget = appId || appIds[0];
+      if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
+      const fallback = options?.defaultAppId?.trim();
+      return fallback && fallback.length > 0 ? fallback : void 0;
+    };
+    const resolveBaseUrl = (options) => {
+      const fromTarget = resolvedBaseUrl || baseUrls && baseUrls[0];
+      if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
+      const fallback = options?.defaultBaseUrl?.trim();
+      return fallback && fallback.length > 0 ? fallback : void 0;
+    };
+    const target = {
+      id,
+      displayName,
+      appIds,
+      appId,
+      baseUrls,
+      resolvedBaseUrl,
+      resolveAppId,
+      resolveBaseUrl
+    };
+    return target;
+  }
+
+  // src/view-hierarchy.ts
+  var SELECTOR_REGISTRY = /* @__PURE__ */ Symbol("trailblaze.viewHierarchy.selectorRegistry");
+  async function captureViewHierarchy(client, selectors2) {
+    const ownedSelectors = selectors2.slice();
+    const resolved = await resolveSelectors(client, ownedSelectors);
+    return buildSnapshot(resolved, ownedSelectors);
+  }
+  async function reCaptureViewHierarchy(client, base) {
+    const tagged = base;
+    const selectors2 = tagged[SELECTOR_REGISTRY];
+    if (!selectors2) {
+      throw new Error(
+        "reCaptureViewHierarchy: cannot refresh this snapshot \u2014 it wasn't built via captureViewHierarchy(). The refresh path is only used by callers that need a verify snapshot AFTER a state-mutating action (e.g. runConditionalActions's postcondition check). Either build the snapshot via captureViewHierarchy(client, [...selectors]) so the framework can refresh it, or skip postcondition-style verification."
+      );
+    }
+    return captureViewHierarchy(client, selectors2);
+  }
+  async function resolveSelectors(client, selectors2) {
+    const entries = await Promise.all(
+      selectors2.map(async (selector) => {
+        const key = selectorKey(selector);
+        const matches = await client.tools.findMatches({ selector });
+        return [key, matches];
+      })
+    );
+    const map2 = /* @__PURE__ */ new Map();
+    for (const [key, matches] of entries) {
+      map2.set(key, matches);
+    }
+    return map2;
+  }
+  function buildSnapshot(resolved, selectors2) {
+    const matchesFor = (selector) => {
+      const key = selectorKey(selector);
+      const matches = resolved.get(key);
+      if (matches === void 0) {
+        throw new Error(
+          `ViewHierarchy: selector ${JSON.stringify(selector)} was not pre-resolved. Add it to the selectors list passed to captureViewHierarchy(client, [...]).`
+        );
+      }
+      return matches;
+    };
+    const snap = {
+      visible(selector) {
+        return matchesFor(selector).length > 0;
+      },
+      find(selector) {
+        const matches = matchesFor(selector);
+        return matches.length > 0 ? matches[0] : null;
+      },
+      findAll(selector) {
+        return matchesFor(selector).slice();
+      },
+      [SELECTOR_REGISTRY]: selectors2
+    };
+    return snap;
+  }
+  function selectorKey(selector) {
+    return JSON.stringify(selector);
+  }
+
+  // src/conditional-action.ts
+  var ConditionalActionFailedError = class _ConditionalActionFailedError extends Error {
+    constructor(conditionalActionId, message, cause = null) {
+      super(message);
+      this.name = "ConditionalActionFailedError";
+      this.conditionalActionId = conditionalActionId;
+      this.cause = cause;
+      if (typeof Error.captureStackTrace === "function") {
+        Error.captureStackTrace(this, _ConditionalActionFailedError);
+      }
+    }
+  };
+  async function runConditionalActions(client, conditionalActions, presnapshot) {
+    if (conditionalActions.length === 0) {
+      return { handled: [] };
+    }
+    const snap = presnapshot ?? throwNoSnapshot();
+    const applicable = conditionalActions.filter(
+      (c) => !evalPostcondition(c, snap) && evalCondition(c, snap)
+    );
+    if (applicable.length === 0) {
+      return { handled: [] };
+    }
+    const handled = [];
+    for (const c of applicable) {
+      await runAction(c);
+      if (c.postcondition) {
+        const verifySnap = await reCaptureViewHierarchy(client, snap);
+        if (!evalPostcondition(c, verifySnap)) {
+          throw new ConditionalActionFailedError(
+            c.id,
+            `postcondition not satisfied after action for ${describe3(c)}`
+          );
+        }
+      }
+      handled.push(c.id);
+    }
+    return { handled };
+  }
+  function describe3(c) {
+    if (c.description && c.description.length > 0) {
+      return `conditional "${c.id}" (${c.description})`;
+    }
+    return `conditional "${c.id}"`;
+  }
+  function evalCondition(c, snap) {
+    try {
+      return Boolean(c.condition(snap));
+    } catch (e) {
+      throw new ConditionalActionFailedError(
+        c.id,
+        `condition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  function evalPostcondition(c, snap) {
+    if (!c.postcondition) return false;
+    try {
+      return Boolean(c.postcondition(snap));
+    } catch (e) {
+      throw new ConditionalActionFailedError(
+        c.id,
+        `postcondition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  async function runAction(c) {
+    try {
+      await c.action();
+    } catch (e) {
+      if (e instanceof ConditionalActionFailedError) throw e;
+      throw new ConditionalActionFailedError(
+        c.id,
+        `action threw for ${describe3(c)}: ${formatError2(e)}`,
+        e
+      );
+    }
+  }
+  function formatError2(e) {
+    if (e instanceof Error) return e.message;
+    return String(e);
+  }
+  function throwNoSnapshot() {
+    throw new Error(
+      "runConditionalActions: presnapshot is required in Phase 2. Build one via `await captureViewHierarchy(client, [...selectors])` and pass it in, where the selectors are the ones your condition / postcondition predicates probe. See the `wikipedia_conditional_action_demo` example tool in the wikipedia trailmap for an end-to-end usage. The auto-acquire fallback lands when the host-side full-tree snapshot tool ships."
+    );
+  }
+
+  // src/generated/selectors.ts
+  var selectors = {
+    androidAccessibility: (args) => ({ androidAccessibility: args }),
+    androidMaestro: (args) => ({ androidMaestro: args }),
+    web: (args) => ({ web: args }),
+    compose: (args) => ({ compose: args }),
+    iosMaestro: (args) => ({ iosMaestro: args }),
+    iosAxe: (args) => ({ iosAxe: args })
+  };
 
   // node_modules/zod/v3/helpers/util.js
   var util;
@@ -23792,7 +24188,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     "map",
     "set"
   ]);
-  var getParsedType = (data) => {
+  var getParsedType2 = (data) => {
     const t = typeof data;
     switch (t) {
       case "undefined":
@@ -23835,7 +24231,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   };
 
   // node_modules/zod/v3/ZodError.js
-  var ZodIssueCode = util.arrayToEnum([
+  var ZodIssueCode2 = util.arrayToEnum([
     "invalid_type",
     "invalid_literal",
     "custom",
@@ -23853,7 +24249,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     "not_multiple_of",
     "not_finite"
   ]);
-  var ZodError = class _ZodError extends Error {
+  var ZodError2 = class _ZodError extends Error {
     get errors() {
       return this.issues;
     }
@@ -23943,8 +24339,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this.flatten();
     }
   };
-  ZodError.create = (issues) => {
-    const error48 = new ZodError(issues);
+  ZodError2.create = (issues) => {
+    const error48 = new ZodError2(issues);
     return error48;
   };
 
@@ -23952,38 +24348,38 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   var errorMap = (issue2, _ctx) => {
     let message;
     switch (issue2.code) {
-      case ZodIssueCode.invalid_type:
+      case ZodIssueCode2.invalid_type:
         if (issue2.received === ZodParsedType.undefined) {
           message = "Required";
         } else {
           message = `Expected ${issue2.expected}, received ${issue2.received}`;
         }
         break;
-      case ZodIssueCode.invalid_literal:
+      case ZodIssueCode2.invalid_literal:
         message = `Invalid literal value, expected ${JSON.stringify(issue2.expected, util.jsonStringifyReplacer)}`;
         break;
-      case ZodIssueCode.unrecognized_keys:
+      case ZodIssueCode2.unrecognized_keys:
         message = `Unrecognized key(s) in object: ${util.joinValues(issue2.keys, ", ")}`;
         break;
-      case ZodIssueCode.invalid_union:
+      case ZodIssueCode2.invalid_union:
         message = `Invalid input`;
         break;
-      case ZodIssueCode.invalid_union_discriminator:
+      case ZodIssueCode2.invalid_union_discriminator:
         message = `Invalid discriminator value. Expected ${util.joinValues(issue2.options)}`;
         break;
-      case ZodIssueCode.invalid_enum_value:
+      case ZodIssueCode2.invalid_enum_value:
         message = `Invalid enum value. Expected ${util.joinValues(issue2.options)}, received '${issue2.received}'`;
         break;
-      case ZodIssueCode.invalid_arguments:
+      case ZodIssueCode2.invalid_arguments:
         message = `Invalid function arguments`;
         break;
-      case ZodIssueCode.invalid_return_type:
+      case ZodIssueCode2.invalid_return_type:
         message = `Invalid function return type`;
         break;
-      case ZodIssueCode.invalid_date:
+      case ZodIssueCode2.invalid_date:
         message = `Invalid date`;
         break;
-      case ZodIssueCode.invalid_string:
+      case ZodIssueCode2.invalid_string:
         if (typeof issue2.validation === "object") {
           if ("includes" in issue2.validation) {
             message = `Invalid input: must include "${issue2.validation.includes}"`;
@@ -24003,7 +24399,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           message = "Invalid";
         }
         break;
-      case ZodIssueCode.too_small:
+      case ZodIssueCode2.too_small:
         if (issue2.type === "array")
           message = `Array must contain ${issue2.exact ? "exactly" : issue2.inclusive ? `at least` : `more than`} ${issue2.minimum} element(s)`;
         else if (issue2.type === "string")
@@ -24017,7 +24413,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         else
           message = "Invalid input";
         break;
-      case ZodIssueCode.too_big:
+      case ZodIssueCode2.too_big:
         if (issue2.type === "array")
           message = `Array must contain ${issue2.exact ? `exactly` : issue2.inclusive ? `at most` : `less than`} ${issue2.maximum} element(s)`;
         else if (issue2.type === "string")
@@ -24031,16 +24427,16 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         else
           message = "Invalid input";
         break;
-      case ZodIssueCode.custom:
+      case ZodIssueCode2.custom:
         message = `Invalid input`;
         break;
-      case ZodIssueCode.invalid_intersection_types:
+      case ZodIssueCode2.invalid_intersection_types:
         message = `Intersection results could not be merged`;
         break;
-      case ZodIssueCode.not_multiple_of:
+      case ZodIssueCode2.not_multiple_of:
         message = `Number must be a multiple of ${issue2.multipleOf}`;
         break;
-      case ZodIssueCode.not_finite:
+      case ZodIssueCode2.not_finite:
         message = "Number must be finite";
         break;
       default:
@@ -24049,11 +24445,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
     return { message };
   };
-  var en_default = errorMap;
+  var en_default2 = errorMap;
 
   // node_modules/zod/v3/errors.js
-  var overrideErrorMap = en_default;
-  function getErrorMap() {
+  var overrideErrorMap = en_default2;
+  function getErrorMap2() {
     return overrideErrorMap;
   }
 
@@ -24084,7 +24480,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   };
   function addIssueToContext(ctx, issueData) {
-    const overrideMap = getErrorMap();
+    const overrideMap = getErrorMap2();
     const issue2 = makeIssue({
       issueData,
       data: ctx.data,
@@ -24096,7 +24492,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         // then schema-bound map if available
         overrideMap,
         // then global override map
-        overrideMap === en_default ? void 0 : en_default
+        overrideMap === en_default2 ? void 0 : en_default2
         // then global default map
       ].filter((x) => !!x)
     });
@@ -24205,7 +24601,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         get error() {
           if (this._error)
             return this._error;
-          const error48 = new ZodError(ctx.common.issues);
+          const error48 = new ZodError2(ctx.common.issues);
           this._error = error48;
           return this._error;
         }
@@ -24235,18 +24631,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
     return { errorMap: customMap, description };
   }
-  var ZodType = class {
+  var ZodType2 = class {
     get description() {
       return this._def.description;
     }
     _getType(input) {
-      return getParsedType(input.data);
+      return getParsedType2(input.data);
     }
     _getOrReturnCtx(input, ctx) {
       return ctx || {
         common: input.parent.common,
         data: input.data,
-        parsedType: getParsedType(input.data),
+        parsedType: getParsedType2(input.data),
         schemaErrorMap: this._def.errorMap,
         path: input.path,
         parent: input.parent
@@ -24258,7 +24654,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         ctx: {
           common: input.parent.common,
           data: input.data,
-          parsedType: getParsedType(input.data),
+          parsedType: getParsedType2(input.data),
           schemaErrorMap: this._def.errorMap,
           path: input.path,
           parent: input.parent
@@ -24293,7 +24689,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         schemaErrorMap: this._def.errorMap,
         parent: null,
         data,
-        parsedType: getParsedType(data)
+        parsedType: getParsedType2(data)
       };
       const result = this._parseSync({ data, path: ctx.path, parent: ctx });
       return handleResult(ctx, result);
@@ -24308,7 +24704,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         schemaErrorMap: this._def.errorMap,
         parent: null,
         data,
-        parsedType: getParsedType(data)
+        parsedType: getParsedType2(data)
       };
       if (!this["~standard"].async) {
         try {
@@ -24351,7 +24747,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         schemaErrorMap: this._def.errorMap,
         parent: null,
         data,
-        parsedType: getParsedType(data)
+        parsedType: getParsedType2(data)
       };
       const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
       const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
@@ -24370,7 +24766,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._refinement((val, ctx) => {
         const result = check2(val);
         const setError = () => ctx.addIssue({
-          code: ZodIssueCode.custom,
+          code: ZodIssueCode2.custom,
           ...getIssueProperties(val)
         });
         if (typeof Promise !== "undefined" && result instanceof Promise) {
@@ -24404,7 +24800,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     _refinement(refinement) {
       return new ZodEffects({
         schema: this,
-        typeName: ZodFirstPartyTypeKind.ZodEffects,
+        typeName: ZodFirstPartyTypeKind2.ZodEffects,
         effect: { type: "refinement", refinement }
       });
     }
@@ -24445,57 +24841,57 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       };
     }
     optional() {
-      return ZodOptional.create(this, this._def);
+      return ZodOptional2.create(this, this._def);
     }
     nullable() {
-      return ZodNullable.create(this, this._def);
+      return ZodNullable2.create(this, this._def);
     }
     nullish() {
       return this.nullable().optional();
     }
     array() {
-      return ZodArray.create(this);
+      return ZodArray2.create(this);
     }
     promise() {
-      return ZodPromise.create(this, this._def);
+      return ZodPromise2.create(this, this._def);
     }
     or(option) {
-      return ZodUnion.create([this, option], this._def);
+      return ZodUnion2.create([this, option], this._def);
     }
     and(incoming) {
-      return ZodIntersection.create(this, incoming, this._def);
+      return ZodIntersection2.create(this, incoming, this._def);
     }
     transform(transform2) {
       return new ZodEffects({
         ...processCreateParams(this._def),
         schema: this,
-        typeName: ZodFirstPartyTypeKind.ZodEffects,
+        typeName: ZodFirstPartyTypeKind2.ZodEffects,
         effect: { type: "transform", transform: transform2 }
       });
     }
     default(def) {
       const defaultValueFunc = typeof def === "function" ? def : () => def;
-      return new ZodDefault({
+      return new ZodDefault2({
         ...processCreateParams(this._def),
         innerType: this,
         defaultValue: defaultValueFunc,
-        typeName: ZodFirstPartyTypeKind.ZodDefault
+        typeName: ZodFirstPartyTypeKind2.ZodDefault
       });
     }
     brand() {
       return new ZodBranded({
-        typeName: ZodFirstPartyTypeKind.ZodBranded,
+        typeName: ZodFirstPartyTypeKind2.ZodBranded,
         type: this,
         ...processCreateParams(this._def)
       });
     }
     catch(def) {
       const catchValueFunc = typeof def === "function" ? def : () => def;
-      return new ZodCatch({
+      return new ZodCatch2({
         ...processCreateParams(this._def),
         innerType: this,
         catchValue: catchValueFunc,
-        typeName: ZodFirstPartyTypeKind.ZodCatch
+        typeName: ZodFirstPartyTypeKind2.ZodCatch
       });
     }
     describe(description) {
@@ -24509,7 +24905,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return ZodPipeline.create(this, target);
     }
     readonly() {
-      return ZodReadonly.create(this);
+      return ZodReadonly2.create(this);
     }
     isOptional() {
       return this.safeParse(void 0).success;
@@ -24567,7 +24963,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
     return false;
   }
-  function isValidJWT(jwt2, alg) {
+  function isValidJWT2(jwt2, alg) {
     if (!jwtRegex.test(jwt2))
       return false;
     try {
@@ -24598,7 +24994,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
     return false;
   }
-  var ZodString = class _ZodString2 extends ZodType {
+  var ZodString2 = class _ZodString2 extends ZodType2 {
     _parse(input) {
       if (this._def.coerce) {
         input.data = String(input.data);
@@ -24607,7 +25003,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (parsedType2 !== ZodParsedType.string) {
         const ctx2 = this._getOrReturnCtx(input);
         addIssueToContext(ctx2, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.string,
           received: ctx2.parsedType
         });
@@ -24620,7 +25016,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (input.data.length < check2.value) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_small,
+              code: ZodIssueCode2.too_small,
               minimum: check2.value,
               type: "string",
               inclusive: true,
@@ -24633,7 +25029,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (input.data.length > check2.value) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_big,
+              code: ZodIssueCode2.too_big,
               maximum: check2.value,
               type: "string",
               inclusive: true,
@@ -24649,7 +25045,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             if (tooBig) {
               addIssueToContext(ctx, {
-                code: ZodIssueCode.too_big,
+                code: ZodIssueCode2.too_big,
                 maximum: check2.value,
                 type: "string",
                 inclusive: true,
@@ -24658,7 +25054,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
               });
             } else if (tooSmall) {
               addIssueToContext(ctx, {
-                code: ZodIssueCode.too_small,
+                code: ZodIssueCode2.too_small,
                 minimum: check2.value,
                 type: "string",
                 inclusive: true,
@@ -24673,7 +25069,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "email",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24686,7 +25082,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "emoji",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24696,7 +25092,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "uuid",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24706,7 +25102,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "nanoid",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24716,7 +25112,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "cuid",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24726,7 +25122,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "cuid2",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24736,7 +25132,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "ulid",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24748,7 +25144,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "url",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24760,7 +25156,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "regex",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24771,7 +25167,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!input.data.includes(check2.value, check2.position)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: { includes: check2.value, position: check2.position },
               message: check2.message
             });
@@ -24785,7 +25181,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!input.data.startsWith(check2.value)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: { startsWith: check2.value },
               message: check2.message
             });
@@ -24795,7 +25191,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!input.data.endsWith(check2.value)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: { endsWith: check2.value },
               message: check2.message
             });
@@ -24806,7 +25202,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!regex.test(input.data)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: "datetime",
               message: check2.message
             });
@@ -24817,7 +25213,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!regex.test(input.data)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: "date",
               message: check2.message
             });
@@ -24828,7 +25224,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!regex.test(input.data)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               validation: "time",
               message: check2.message
             });
@@ -24839,7 +25235,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "duration",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24849,17 +25245,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "ip",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
           }
         } else if (check2.kind === "jwt") {
-          if (!isValidJWT(input.data, check2.alg)) {
+          if (!isValidJWT2(input.data, check2.alg)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "jwt",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24869,7 +25265,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "cidr",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24879,7 +25275,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "base64",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24889,7 +25285,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
               validation: "base64url",
-              code: ZodIssueCode.invalid_string,
+              code: ZodIssueCode2.invalid_string,
               message: check2.message
             });
             status.dirty();
@@ -24903,7 +25299,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     _regex(regex, validation, message) {
       return this.refinement((data) => regex.test(data), {
         validation,
-        code: ZodIssueCode.invalid_string,
+        code: ZodIssueCode2.invalid_string,
         ...errorUtil.errToObj(message)
       });
     }
@@ -25136,15 +25532,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return max;
     }
   };
-  ZodString.create = (params) => {
-    return new ZodString({
+  ZodString2.create = (params) => {
+    return new ZodString2({
       checks: [],
-      typeName: ZodFirstPartyTypeKind.ZodString,
+      typeName: ZodFirstPartyTypeKind2.ZodString,
       coerce: params?.coerce ?? false,
       ...processCreateParams(params)
     });
   };
-  function floatSafeRemainder(val, step) {
+  function floatSafeRemainder2(val, step) {
     const valDecCount = (val.toString().split(".")[1] || "").length;
     const stepDecCount = (step.toString().split(".")[1] || "").length;
     const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
@@ -25152,7 +25548,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
     return valInt % stepInt / 10 ** decCount;
   }
-  var ZodNumber = class _ZodNumber extends ZodType {
+  var ZodNumber2 = class _ZodNumber extends ZodType2 {
     constructor() {
       super(...arguments);
       this.min = this.gte;
@@ -25167,7 +25563,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (parsedType2 !== ZodParsedType.number) {
         const ctx2 = this._getOrReturnCtx(input);
         addIssueToContext(ctx2, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.number,
           received: ctx2.parsedType
         });
@@ -25180,7 +25576,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!util.isInteger(input.data)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.invalid_type,
+              code: ZodIssueCode2.invalid_type,
               expected: "integer",
               received: "float",
               message: check2.message
@@ -25192,7 +25588,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (tooSmall) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_small,
+              code: ZodIssueCode2.too_small,
               minimum: check2.value,
               type: "number",
               inclusive: check2.inclusive,
@@ -25206,7 +25602,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (tooBig) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_big,
+              code: ZodIssueCode2.too_big,
               maximum: check2.value,
               type: "number",
               inclusive: check2.inclusive,
@@ -25216,10 +25612,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             status.dirty();
           }
         } else if (check2.kind === "multipleOf") {
-          if (floatSafeRemainder(input.data, check2.value) !== 0) {
+          if (floatSafeRemainder2(input.data, check2.value) !== 0) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.not_multiple_of,
+              code: ZodIssueCode2.not_multiple_of,
               multipleOf: check2.value,
               message: check2.message
             });
@@ -25229,7 +25625,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!Number.isFinite(input.data)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.not_finite,
+              code: ZodIssueCode2.not_finite,
               message: check2.message
             });
             status.dirty();
@@ -25376,15 +25772,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return Number.isFinite(min) && Number.isFinite(max);
     }
   };
-  ZodNumber.create = (params) => {
-    return new ZodNumber({
+  ZodNumber2.create = (params) => {
+    return new ZodNumber2({
       checks: [],
-      typeName: ZodFirstPartyTypeKind.ZodNumber,
+      typeName: ZodFirstPartyTypeKind2.ZodNumber,
       coerce: params?.coerce || false,
       ...processCreateParams(params)
     });
   };
-  var ZodBigInt = class _ZodBigInt extends ZodType {
+  var ZodBigInt2 = class _ZodBigInt extends ZodType2 {
     constructor() {
       super(...arguments);
       this.min = this.gte;
@@ -25410,7 +25806,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (tooSmall) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_small,
+              code: ZodIssueCode2.too_small,
               type: "bigint",
               minimum: check2.value,
               inclusive: check2.inclusive,
@@ -25423,7 +25819,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (tooBig) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_big,
+              code: ZodIssueCode2.too_big,
               type: "bigint",
               maximum: check2.value,
               inclusive: check2.inclusive,
@@ -25435,7 +25831,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (input.data % check2.value !== BigInt(0)) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.not_multiple_of,
+              code: ZodIssueCode2.not_multiple_of,
               multipleOf: check2.value,
               message: check2.message
             });
@@ -25450,7 +25846,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     _getInvalidInput(input) {
       const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
+        code: ZodIssueCode2.invalid_type,
         expected: ZodParsedType.bigint,
         received: ctx.parsedType
       });
@@ -25548,15 +25944,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return max;
     }
   };
-  ZodBigInt.create = (params) => {
-    return new ZodBigInt({
+  ZodBigInt2.create = (params) => {
+    return new ZodBigInt2({
       checks: [],
-      typeName: ZodFirstPartyTypeKind.ZodBigInt,
+      typeName: ZodFirstPartyTypeKind2.ZodBigInt,
       coerce: params?.coerce ?? false,
       ...processCreateParams(params)
     });
   };
-  var ZodBoolean = class extends ZodType {
+  var ZodBoolean2 = class extends ZodType2 {
     _parse(input) {
       if (this._def.coerce) {
         input.data = Boolean(input.data);
@@ -25565,7 +25961,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (parsedType2 !== ZodParsedType.boolean) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.boolean,
           received: ctx.parsedType
         });
@@ -25574,14 +25970,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodBoolean.create = (params) => {
-    return new ZodBoolean({
-      typeName: ZodFirstPartyTypeKind.ZodBoolean,
+  ZodBoolean2.create = (params) => {
+    return new ZodBoolean2({
+      typeName: ZodFirstPartyTypeKind2.ZodBoolean,
       coerce: params?.coerce || false,
       ...processCreateParams(params)
     });
   };
-  var ZodDate = class _ZodDate extends ZodType {
+  var ZodDate2 = class _ZodDate extends ZodType2 {
     _parse(input) {
       if (this._def.coerce) {
         input.data = new Date(input.data);
@@ -25590,7 +25986,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (parsedType2 !== ZodParsedType.date) {
         const ctx2 = this._getOrReturnCtx(input);
         addIssueToContext(ctx2, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.date,
           received: ctx2.parsedType
         });
@@ -25599,7 +25995,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (Number.isNaN(input.data.getTime())) {
         const ctx2 = this._getOrReturnCtx(input);
         addIssueToContext(ctx2, {
-          code: ZodIssueCode.invalid_date
+          code: ZodIssueCode2.invalid_date
         });
         return INVALID;
       }
@@ -25610,7 +26006,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (input.data.getTime() < check2.value) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_small,
+              code: ZodIssueCode2.too_small,
               message: check2.message,
               inclusive: true,
               exact: false,
@@ -25623,7 +26019,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (input.data.getTime() > check2.value) {
             ctx = this._getOrReturnCtx(input, ctx);
             addIssueToContext(ctx, {
-              code: ZodIssueCode.too_big,
+              code: ZodIssueCode2.too_big,
               message: check2.message,
               inclusive: true,
               exact: false,
@@ -25682,21 +26078,21 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return max != null ? new Date(max) : null;
     }
   };
-  ZodDate.create = (params) => {
-    return new ZodDate({
+  ZodDate2.create = (params) => {
+    return new ZodDate2({
       checks: [],
       coerce: params?.coerce || false,
-      typeName: ZodFirstPartyTypeKind.ZodDate,
+      typeName: ZodFirstPartyTypeKind2.ZodDate,
       ...processCreateParams(params)
     });
   };
-  var ZodSymbol = class extends ZodType {
+  var ZodSymbol2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 !== ZodParsedType.symbol) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.symbol,
           received: ctx.parsedType
         });
@@ -25705,19 +26101,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodSymbol.create = (params) => {
-    return new ZodSymbol({
-      typeName: ZodFirstPartyTypeKind.ZodSymbol,
+  ZodSymbol2.create = (params) => {
+    return new ZodSymbol2({
+      typeName: ZodFirstPartyTypeKind2.ZodSymbol,
       ...processCreateParams(params)
     });
   };
-  var ZodUndefined = class extends ZodType {
+  var ZodUndefined2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 !== ZodParsedType.undefined) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.undefined,
           received: ctx.parsedType
         });
@@ -25726,19 +26122,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodUndefined.create = (params) => {
-    return new ZodUndefined({
-      typeName: ZodFirstPartyTypeKind.ZodUndefined,
+  ZodUndefined2.create = (params) => {
+    return new ZodUndefined2({
+      typeName: ZodFirstPartyTypeKind2.ZodUndefined,
       ...processCreateParams(params)
     });
   };
-  var ZodNull = class extends ZodType {
+  var ZodNull2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 !== ZodParsedType.null) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.null,
           received: ctx.parsedType
         });
@@ -25747,13 +26143,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodNull.create = (params) => {
-    return new ZodNull({
-      typeName: ZodFirstPartyTypeKind.ZodNull,
+  ZodNull2.create = (params) => {
+    return new ZodNull2({
+      typeName: ZodFirstPartyTypeKind2.ZodNull,
       ...processCreateParams(params)
     });
   };
-  var ZodAny = class extends ZodType {
+  var ZodAny2 = class extends ZodType2 {
     constructor() {
       super(...arguments);
       this._any = true;
@@ -25762,13 +26158,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodAny.create = (params) => {
-    return new ZodAny({
-      typeName: ZodFirstPartyTypeKind.ZodAny,
+  ZodAny2.create = (params) => {
+    return new ZodAny2({
+      typeName: ZodFirstPartyTypeKind2.ZodAny,
       ...processCreateParams(params)
     });
   };
-  var ZodUnknown = class extends ZodType {
+  var ZodUnknown2 = class extends ZodType2 {
     constructor() {
       super(...arguments);
       this._unknown = true;
@@ -25777,36 +26173,36 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodUnknown.create = (params) => {
-    return new ZodUnknown({
-      typeName: ZodFirstPartyTypeKind.ZodUnknown,
+  ZodUnknown2.create = (params) => {
+    return new ZodUnknown2({
+      typeName: ZodFirstPartyTypeKind2.ZodUnknown,
       ...processCreateParams(params)
     });
   };
-  var ZodNever = class extends ZodType {
+  var ZodNever2 = class extends ZodType2 {
     _parse(input) {
       const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
-        code: ZodIssueCode.invalid_type,
+        code: ZodIssueCode2.invalid_type,
         expected: ZodParsedType.never,
         received: ctx.parsedType
       });
       return INVALID;
     }
   };
-  ZodNever.create = (params) => {
-    return new ZodNever({
-      typeName: ZodFirstPartyTypeKind.ZodNever,
+  ZodNever2.create = (params) => {
+    return new ZodNever2({
+      typeName: ZodFirstPartyTypeKind2.ZodNever,
       ...processCreateParams(params)
     });
   };
-  var ZodVoid = class extends ZodType {
+  var ZodVoid2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 !== ZodParsedType.undefined) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.void,
           received: ctx.parsedType
         });
@@ -25815,19 +26211,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return OK(input.data);
     }
   };
-  ZodVoid.create = (params) => {
-    return new ZodVoid({
-      typeName: ZodFirstPartyTypeKind.ZodVoid,
+  ZodVoid2.create = (params) => {
+    return new ZodVoid2({
+      typeName: ZodFirstPartyTypeKind2.ZodVoid,
       ...processCreateParams(params)
     });
   };
-  var ZodArray = class _ZodArray extends ZodType {
+  var ZodArray2 = class _ZodArray extends ZodType2 {
     _parse(input) {
       const { ctx, status } = this._processInputParams(input);
       const def = this._def;
       if (ctx.parsedType !== ZodParsedType.array) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.array,
           received: ctx.parsedType
         });
@@ -25838,7 +26234,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         const tooSmall = ctx.data.length < def.exactLength.value;
         if (tooBig || tooSmall) {
           addIssueToContext(ctx, {
-            code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
+            code: tooBig ? ZodIssueCode2.too_big : ZodIssueCode2.too_small,
             minimum: tooSmall ? def.exactLength.value : void 0,
             maximum: tooBig ? def.exactLength.value : void 0,
             type: "array",
@@ -25852,7 +26248,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (def.minLength !== null) {
         if (ctx.data.length < def.minLength.value) {
           addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
+            code: ZodIssueCode2.too_small,
             minimum: def.minLength.value,
             type: "array",
             inclusive: true,
@@ -25865,7 +26261,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (def.maxLength !== null) {
         if (ctx.data.length > def.maxLength.value) {
           addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
+            code: ZodIssueCode2.too_big,
             maximum: def.maxLength.value,
             type: "array",
             inclusive: true,
@@ -25912,43 +26308,43 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this.min(1, message);
     }
   };
-  ZodArray.create = (schema, params) => {
-    return new ZodArray({
+  ZodArray2.create = (schema, params) => {
+    return new ZodArray2({
       type: schema,
       minLength: null,
       maxLength: null,
       exactLength: null,
-      typeName: ZodFirstPartyTypeKind.ZodArray,
+      typeName: ZodFirstPartyTypeKind2.ZodArray,
       ...processCreateParams(params)
     });
   };
   function deepPartialify(schema) {
-    if (schema instanceof ZodObject) {
+    if (schema instanceof ZodObject2) {
       const newShape = {};
       for (const key in schema.shape) {
         const fieldSchema = schema.shape[key];
-        newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
+        newShape[key] = ZodOptional2.create(deepPartialify(fieldSchema));
       }
-      return new ZodObject({
+      return new ZodObject2({
         ...schema._def,
         shape: () => newShape
       });
-    } else if (schema instanceof ZodArray) {
-      return new ZodArray({
+    } else if (schema instanceof ZodArray2) {
+      return new ZodArray2({
         ...schema._def,
         type: deepPartialify(schema.element)
       });
-    } else if (schema instanceof ZodOptional) {
-      return ZodOptional.create(deepPartialify(schema.unwrap()));
-    } else if (schema instanceof ZodNullable) {
-      return ZodNullable.create(deepPartialify(schema.unwrap()));
-    } else if (schema instanceof ZodTuple) {
-      return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
+    } else if (schema instanceof ZodOptional2) {
+      return ZodOptional2.create(deepPartialify(schema.unwrap()));
+    } else if (schema instanceof ZodNullable2) {
+      return ZodNullable2.create(deepPartialify(schema.unwrap()));
+    } else if (schema instanceof ZodTuple2) {
+      return ZodTuple2.create(schema.items.map((item) => deepPartialify(item)));
     } else {
       return schema;
     }
   }
-  var ZodObject = class _ZodObject extends ZodType {
+  var ZodObject2 = class _ZodObject extends ZodType2 {
     constructor() {
       super(...arguments);
       this._cached = null;
@@ -25968,7 +26364,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (parsedType2 !== ZodParsedType.object) {
         const ctx2 = this._getOrReturnCtx(input);
         addIssueToContext(ctx2, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.object,
           received: ctx2.parsedType
         });
@@ -25977,7 +26373,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const { status, ctx } = this._processInputParams(input);
       const { shape, keys: shapeKeys } = this._getCached();
       const extraKeys = [];
-      if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
+      if (!(this._def.catchall instanceof ZodNever2 && this._def.unknownKeys === "strip")) {
         for (const key in ctx.data) {
           if (!shapeKeys.includes(key)) {
             extraKeys.push(key);
@@ -25994,7 +26390,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           alwaysSet: key in ctx.data
         });
       }
-      if (this._def.catchall instanceof ZodNever) {
+      if (this._def.catchall instanceof ZodNever2) {
         const unknownKeys = this._def.unknownKeys;
         if (unknownKeys === "passthrough") {
           for (const key of extraKeys) {
@@ -26006,7 +26402,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         } else if (unknownKeys === "strict") {
           if (extraKeys.length > 0) {
             addIssueToContext(ctx, {
-              code: ZodIssueCode.unrecognized_keys,
+              code: ZodIssueCode2.unrecognized_keys,
               keys: extraKeys
             });
             status.dirty();
@@ -26122,7 +26518,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           ...this._def.shape(),
           ...merging._def.shape()
         }),
-        typeName: ZodFirstPartyTypeKind.ZodObject
+        typeName: ZodFirstPartyTypeKind2.ZodObject
       });
       return merged;
     }
@@ -26244,7 +26640,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         } else {
           const fieldSchema = this.shape[key];
           let newField = fieldSchema;
-          while (newField instanceof ZodOptional) {
+          while (newField instanceof ZodOptional2) {
             newField = newField._def.innerType;
           }
           newShape[key] = newField;
@@ -26259,34 +26655,34 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return createZodEnum(util.objectKeys(this.shape));
     }
   };
-  ZodObject.create = (shape, params) => {
-    return new ZodObject({
+  ZodObject2.create = (shape, params) => {
+    return new ZodObject2({
       shape: () => shape,
       unknownKeys: "strip",
-      catchall: ZodNever.create(),
-      typeName: ZodFirstPartyTypeKind.ZodObject,
+      catchall: ZodNever2.create(),
+      typeName: ZodFirstPartyTypeKind2.ZodObject,
       ...processCreateParams(params)
     });
   };
-  ZodObject.strictCreate = (shape, params) => {
-    return new ZodObject({
+  ZodObject2.strictCreate = (shape, params) => {
+    return new ZodObject2({
       shape: () => shape,
       unknownKeys: "strict",
-      catchall: ZodNever.create(),
-      typeName: ZodFirstPartyTypeKind.ZodObject,
+      catchall: ZodNever2.create(),
+      typeName: ZodFirstPartyTypeKind2.ZodObject,
       ...processCreateParams(params)
     });
   };
-  ZodObject.lazycreate = (shape, params) => {
-    return new ZodObject({
+  ZodObject2.lazycreate = (shape, params) => {
+    return new ZodObject2({
       shape,
       unknownKeys: "strip",
-      catchall: ZodNever.create(),
-      typeName: ZodFirstPartyTypeKind.ZodObject,
+      catchall: ZodNever2.create(),
+      typeName: ZodFirstPartyTypeKind2.ZodObject,
       ...processCreateParams(params)
     });
   };
-  var ZodUnion = class extends ZodType {
+  var ZodUnion2 = class extends ZodType2 {
     _parse(input) {
       const { ctx } = this._processInputParams(input);
       const options = this._def.options;
@@ -26302,9 +26698,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             return result.result;
           }
         }
-        const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
+        const unionErrors = results.map((result) => new ZodError2(result.ctx.common.issues));
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_union,
+          code: ZodIssueCode2.invalid_union,
           unionErrors
         });
         return INVALID;
@@ -26358,9 +26754,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           ctx.common.issues.push(...dirty.ctx.common.issues);
           return dirty.result;
         }
-        const unionErrors = issues.map((issues2) => new ZodError(issues2));
+        const unionErrors = issues.map((issues2) => new ZodError2(issues2));
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_union,
+          code: ZodIssueCode2.invalid_union,
           unionErrors
         });
         return INVALID;
@@ -26370,50 +26766,50 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.options;
     }
   };
-  ZodUnion.create = (types, params) => {
-    return new ZodUnion({
+  ZodUnion2.create = (types, params) => {
+    return new ZodUnion2({
       options: types,
-      typeName: ZodFirstPartyTypeKind.ZodUnion,
+      typeName: ZodFirstPartyTypeKind2.ZodUnion,
       ...processCreateParams(params)
     });
   };
   var getDiscriminator = (type) => {
-    if (type instanceof ZodLazy) {
+    if (type instanceof ZodLazy2) {
       return getDiscriminator(type.schema);
     } else if (type instanceof ZodEffects) {
       return getDiscriminator(type.innerType());
-    } else if (type instanceof ZodLiteral) {
+    } else if (type instanceof ZodLiteral2) {
       return [type.value];
-    } else if (type instanceof ZodEnum) {
+    } else if (type instanceof ZodEnum2) {
       return type.options;
     } else if (type instanceof ZodNativeEnum) {
       return util.objectValues(type.enum);
-    } else if (type instanceof ZodDefault) {
+    } else if (type instanceof ZodDefault2) {
       return getDiscriminator(type._def.innerType);
-    } else if (type instanceof ZodUndefined) {
+    } else if (type instanceof ZodUndefined2) {
       return [void 0];
-    } else if (type instanceof ZodNull) {
+    } else if (type instanceof ZodNull2) {
       return [null];
-    } else if (type instanceof ZodOptional) {
+    } else if (type instanceof ZodOptional2) {
       return [void 0, ...getDiscriminator(type.unwrap())];
-    } else if (type instanceof ZodNullable) {
+    } else if (type instanceof ZodNullable2) {
       return [null, ...getDiscriminator(type.unwrap())];
     } else if (type instanceof ZodBranded) {
       return getDiscriminator(type.unwrap());
-    } else if (type instanceof ZodReadonly) {
+    } else if (type instanceof ZodReadonly2) {
       return getDiscriminator(type.unwrap());
-    } else if (type instanceof ZodCatch) {
+    } else if (type instanceof ZodCatch2) {
       return getDiscriminator(type._def.innerType);
     } else {
       return [];
     }
   };
-  var ZodDiscriminatedUnion = class _ZodDiscriminatedUnion extends ZodType {
+  var ZodDiscriminatedUnion2 = class _ZodDiscriminatedUnion extends ZodType2 {
     _parse(input) {
       const { ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.object) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.object,
           received: ctx.parsedType
         });
@@ -26424,7 +26820,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const option = this.optionsMap.get(discriminatorValue);
       if (!option) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_union_discriminator,
+          code: ZodIssueCode2.invalid_union_discriminator,
           options: Array.from(this.optionsMap.keys()),
           path: [discriminator]
         });
@@ -26476,7 +26872,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         }
       }
       return new _ZodDiscriminatedUnion({
-        typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
+        typeName: ZodFirstPartyTypeKind2.ZodDiscriminatedUnion,
         discriminator,
         options,
         optionsMap,
@@ -26484,9 +26880,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
     }
   };
-  function mergeValues(a, b) {
-    const aType = getParsedType(a);
-    const bType = getParsedType(b);
+  function mergeValues2(a, b) {
+    const aType = getParsedType2(a);
+    const bType = getParsedType2(b);
     if (a === b) {
       return { valid: true, data: a };
     } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
@@ -26494,7 +26890,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
       const newObj = { ...a, ...b };
       for (const key of sharedKeys) {
-        const sharedValue = mergeValues(a[key], b[key]);
+        const sharedValue = mergeValues2(a[key], b[key]);
         if (!sharedValue.valid) {
           return { valid: false };
         }
@@ -26509,7 +26905,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       for (let index = 0; index < a.length; index++) {
         const itemA = a[index];
         const itemB = b[index];
-        const sharedValue = mergeValues(itemA, itemB);
+        const sharedValue = mergeValues2(itemA, itemB);
         if (!sharedValue.valid) {
           return { valid: false };
         }
@@ -26522,17 +26918,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return { valid: false };
     }
   }
-  var ZodIntersection = class extends ZodType {
+  var ZodIntersection2 = class extends ZodType2 {
     _parse(input) {
       const { status, ctx } = this._processInputParams(input);
       const handleParsed = (parsedLeft, parsedRight) => {
         if (isAborted(parsedLeft) || isAborted(parsedRight)) {
           return INVALID;
         }
-        const merged = mergeValues(parsedLeft.value, parsedRight.value);
+        const merged = mergeValues2(parsedLeft.value, parsedRight.value);
         if (!merged.valid) {
           addIssueToContext(ctx, {
-            code: ZodIssueCode.invalid_intersection_types
+            code: ZodIssueCode2.invalid_intersection_types
           });
           return INVALID;
         }
@@ -26567,20 +26963,20 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       }
     }
   };
-  ZodIntersection.create = (left, right, params) => {
-    return new ZodIntersection({
+  ZodIntersection2.create = (left, right, params) => {
+    return new ZodIntersection2({
       left,
       right,
-      typeName: ZodFirstPartyTypeKind.ZodIntersection,
+      typeName: ZodFirstPartyTypeKind2.ZodIntersection,
       ...processCreateParams(params)
     });
   };
-  var ZodTuple = class _ZodTuple extends ZodType {
+  var ZodTuple2 = class _ZodTuple extends ZodType2 {
     _parse(input) {
       const { status, ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.array) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.array,
           received: ctx.parsedType
         });
@@ -26588,7 +26984,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       }
       if (ctx.data.length < this._def.items.length) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.too_small,
+          code: ZodIssueCode2.too_small,
           minimum: this._def.items.length,
           inclusive: true,
           exact: false,
@@ -26599,7 +26995,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const rest = this._def.rest;
       if (!rest && ctx.data.length > this._def.items.length) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.too_big,
+          code: ZodIssueCode2.too_big,
           maximum: this._def.items.length,
           inclusive: true,
           exact: false,
@@ -26631,18 +27027,18 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
     }
   };
-  ZodTuple.create = (schemas, params) => {
+  ZodTuple2.create = (schemas, params) => {
     if (!Array.isArray(schemas)) {
       throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
     }
-    return new ZodTuple({
+    return new ZodTuple2({
       items: schemas,
-      typeName: ZodFirstPartyTypeKind.ZodTuple,
+      typeName: ZodFirstPartyTypeKind2.ZodTuple,
       rest: null,
       ...processCreateParams(params)
     });
   };
-  var ZodRecord = class _ZodRecord extends ZodType {
+  var ZodRecord2 = class _ZodRecord extends ZodType2 {
     get keySchema() {
       return this._def.keyType;
     }
@@ -26653,7 +27049,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const { status, ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.object) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.object,
           received: ctx.parsedType
         });
@@ -26679,23 +27075,23 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.valueType;
     }
     static create(first, second, third) {
-      if (second instanceof ZodType) {
+      if (second instanceof ZodType2) {
         return new _ZodRecord({
           keyType: first,
           valueType: second,
-          typeName: ZodFirstPartyTypeKind.ZodRecord,
+          typeName: ZodFirstPartyTypeKind2.ZodRecord,
           ...processCreateParams(third)
         });
       }
       return new _ZodRecord({
-        keyType: ZodString.create(),
+        keyType: ZodString2.create(),
         valueType: first,
-        typeName: ZodFirstPartyTypeKind.ZodRecord,
+        typeName: ZodFirstPartyTypeKind2.ZodRecord,
         ...processCreateParams(second)
       });
     }
   };
-  var ZodMap = class extends ZodType {
+  var ZodMap2 = class extends ZodType2 {
     get keySchema() {
       return this._def.keyType;
     }
@@ -26706,7 +27102,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const { status, ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.map) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.map,
           received: ctx.parsedType
         });
@@ -26753,20 +27149,20 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       }
     }
   };
-  ZodMap.create = (keyType, valueType, params) => {
-    return new ZodMap({
+  ZodMap2.create = (keyType, valueType, params) => {
+    return new ZodMap2({
       valueType,
       keyType,
-      typeName: ZodFirstPartyTypeKind.ZodMap,
+      typeName: ZodFirstPartyTypeKind2.ZodMap,
       ...processCreateParams(params)
     });
   };
-  var ZodSet = class _ZodSet extends ZodType {
+  var ZodSet2 = class _ZodSet extends ZodType2 {
     _parse(input) {
       const { status, ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.set) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.set,
           received: ctx.parsedType
         });
@@ -26776,7 +27172,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (def.minSize !== null) {
         if (ctx.data.size < def.minSize.value) {
           addIssueToContext(ctx, {
-            code: ZodIssueCode.too_small,
+            code: ZodIssueCode2.too_small,
             minimum: def.minSize.value,
             type: "set",
             inclusive: true,
@@ -26789,7 +27185,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (def.maxSize !== null) {
         if (ctx.data.size > def.maxSize.value) {
           addIssueToContext(ctx, {
-            code: ZodIssueCode.too_big,
+            code: ZodIssueCode2.too_big,
             maximum: def.maxSize.value,
             type: "set",
             inclusive: true,
@@ -26837,16 +27233,16 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this.min(1, message);
     }
   };
-  ZodSet.create = (valueType, params) => {
-    return new ZodSet({
+  ZodSet2.create = (valueType, params) => {
+    return new ZodSet2({
       valueType,
       minSize: null,
       maxSize: null,
-      typeName: ZodFirstPartyTypeKind.ZodSet,
+      typeName: ZodFirstPartyTypeKind2.ZodSet,
       ...processCreateParams(params)
     });
   };
-  var ZodFunction = class _ZodFunction extends ZodType {
+  var ZodFunction2 = class _ZodFunction extends ZodType2 {
     constructor() {
       super(...arguments);
       this.validate = this.implement;
@@ -26855,7 +27251,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const { ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.function) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.function,
           received: ctx.parsedType
         });
@@ -26865,9 +27261,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         return makeIssue({
           data: args,
           path: ctx.path,
-          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap2(), en_default2].filter((x) => !!x),
           issueData: {
-            code: ZodIssueCode.invalid_arguments,
+            code: ZodIssueCode2.invalid_arguments,
             argumentsError: error48
           }
         });
@@ -26876,19 +27272,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         return makeIssue({
           data: returns,
           path: ctx.path,
-          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+          errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap2(), en_default2].filter((x) => !!x),
           issueData: {
-            code: ZodIssueCode.invalid_return_type,
+            code: ZodIssueCode2.invalid_return_type,
             returnTypeError: error48
           }
         });
       }
       const params = { errorMap: ctx.common.contextualErrorMap };
       const fn = ctx.data;
-      if (this._def.returns instanceof ZodPromise) {
+      if (this._def.returns instanceof ZodPromise2) {
         const me = this;
         return OK(async function(...args) {
-          const error48 = new ZodError([]);
+          const error48 = new ZodError2([]);
           const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
             error48.addIssue(makeArgsIssue(args, e));
             throw error48;
@@ -26905,12 +27301,12 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         return OK(function(...args) {
           const parsedArgs = me._def.args.safeParse(args, params);
           if (!parsedArgs.success) {
-            throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
+            throw new ZodError2([makeArgsIssue(args, parsedArgs.error)]);
           }
           const result = Reflect.apply(fn, this, parsedArgs.data);
           const parsedReturns = me._def.returns.safeParse(result, params);
           if (!parsedReturns.success) {
-            throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+            throw new ZodError2([makeReturnsIssue(result, parsedReturns.error)]);
           }
           return parsedReturns.data;
         });
@@ -26925,7 +27321,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     args(...items) {
       return new _ZodFunction({
         ...this._def,
-        args: ZodTuple.create(items).rest(ZodUnknown.create())
+        args: ZodTuple2.create(items).rest(ZodUnknown2.create())
       });
     }
     returns(returnType) {
@@ -26944,14 +27340,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
     static create(args, returns, params) {
       return new _ZodFunction({
-        args: args ? args : ZodTuple.create([]).rest(ZodUnknown.create()),
-        returns: returns || ZodUnknown.create(),
-        typeName: ZodFirstPartyTypeKind.ZodFunction,
+        args: args ? args : ZodTuple2.create([]).rest(ZodUnknown2.create()),
+        returns: returns || ZodUnknown2.create(),
+        typeName: ZodFirstPartyTypeKind2.ZodFunction,
         ...processCreateParams(params)
       });
     }
   };
-  var ZodLazy = class extends ZodType {
+  var ZodLazy2 = class extends ZodType2 {
     get schema() {
       return this._def.getter();
     }
@@ -26961,20 +27357,20 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
     }
   };
-  ZodLazy.create = (getter, params) => {
-    return new ZodLazy({
+  ZodLazy2.create = (getter, params) => {
+    return new ZodLazy2({
       getter,
-      typeName: ZodFirstPartyTypeKind.ZodLazy,
+      typeName: ZodFirstPartyTypeKind2.ZodLazy,
       ...processCreateParams(params)
     });
   };
-  var ZodLiteral = class extends ZodType {
+  var ZodLiteral2 = class extends ZodType2 {
     _parse(input) {
       if (input.data !== this._def.value) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
           received: ctx.data,
-          code: ZodIssueCode.invalid_literal,
+          code: ZodIssueCode2.invalid_literal,
           expected: this._def.value
         });
         return INVALID;
@@ -26985,21 +27381,21 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.value;
     }
   };
-  ZodLiteral.create = (value, params) => {
-    return new ZodLiteral({
+  ZodLiteral2.create = (value, params) => {
+    return new ZodLiteral2({
       value,
-      typeName: ZodFirstPartyTypeKind.ZodLiteral,
+      typeName: ZodFirstPartyTypeKind2.ZodLiteral,
       ...processCreateParams(params)
     });
   };
   function createZodEnum(values, params) {
-    return new ZodEnum({
+    return new ZodEnum2({
       values,
-      typeName: ZodFirstPartyTypeKind.ZodEnum,
+      typeName: ZodFirstPartyTypeKind2.ZodEnum,
       ...processCreateParams(params)
     });
   }
-  var ZodEnum = class _ZodEnum extends ZodType {
+  var ZodEnum2 = class _ZodEnum extends ZodType2 {
     _parse(input) {
       if (typeof input.data !== "string") {
         const ctx = this._getOrReturnCtx(input);
@@ -27007,7 +27403,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         addIssueToContext(ctx, {
           expected: util.joinValues(expectedValues),
           received: ctx.parsedType,
-          code: ZodIssueCode.invalid_type
+          code: ZodIssueCode2.invalid_type
         });
         return INVALID;
       }
@@ -27019,7 +27415,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         const expectedValues = this._def.values;
         addIssueToContext(ctx, {
           received: ctx.data,
-          code: ZodIssueCode.invalid_enum_value,
+          code: ZodIssueCode2.invalid_enum_value,
           options: expectedValues
         });
         return INVALID;
@@ -27063,8 +27459,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
     }
   };
-  ZodEnum.create = createZodEnum;
-  var ZodNativeEnum = class extends ZodType {
+  ZodEnum2.create = createZodEnum;
+  var ZodNativeEnum = class extends ZodType2 {
     _parse(input) {
       const nativeEnumValues = util.getValidEnumValues(this._def.values);
       const ctx = this._getOrReturnCtx(input);
@@ -27073,7 +27469,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         addIssueToContext(ctx, {
           expected: util.joinValues(expectedValues),
           received: ctx.parsedType,
-          code: ZodIssueCode.invalid_type
+          code: ZodIssueCode2.invalid_type
         });
         return INVALID;
       }
@@ -27084,7 +27480,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         const expectedValues = util.objectValues(nativeEnumValues);
         addIssueToContext(ctx, {
           received: ctx.data,
-          code: ZodIssueCode.invalid_enum_value,
+          code: ZodIssueCode2.invalid_enum_value,
           options: expectedValues
         });
         return INVALID;
@@ -27098,11 +27494,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   ZodNativeEnum.create = (values, params) => {
     return new ZodNativeEnum({
       values,
-      typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
+      typeName: ZodFirstPartyTypeKind2.ZodNativeEnum,
       ...processCreateParams(params)
     });
   };
-  var ZodPromise = class extends ZodType {
+  var ZodPromise2 = class extends ZodType2 {
     unwrap() {
       return this._def.type;
     }
@@ -27110,7 +27506,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const { ctx } = this._processInputParams(input);
       if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.promise,
           received: ctx.parsedType
         });
@@ -27125,19 +27521,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       }));
     }
   };
-  ZodPromise.create = (schema, params) => {
-    return new ZodPromise({
+  ZodPromise2.create = (schema, params) => {
+    return new ZodPromise2({
       type: schema,
-      typeName: ZodFirstPartyTypeKind.ZodPromise,
+      typeName: ZodFirstPartyTypeKind2.ZodPromise,
       ...processCreateParams(params)
     });
   };
-  var ZodEffects = class extends ZodType {
+  var ZodEffects = class extends ZodType2 {
     innerType() {
       return this._def.schema;
     }
     sourceType() {
-      return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+      return this._def.schema._def.typeName === ZodFirstPartyTypeKind2.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
     }
     _parse(input) {
       const { status, ctx } = this._processInputParams(input);
@@ -27258,7 +27654,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   ZodEffects.create = (schema, effect, params) => {
     return new ZodEffects({
       schema,
-      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      typeName: ZodFirstPartyTypeKind2.ZodEffects,
       effect,
       ...processCreateParams(params)
     });
@@ -27267,11 +27663,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return new ZodEffects({
       schema,
       effect: { type: "preprocess", transform: preprocess2 },
-      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      typeName: ZodFirstPartyTypeKind2.ZodEffects,
       ...processCreateParams(params)
     });
   };
-  var ZodOptional = class extends ZodType {
+  var ZodOptional2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 === ZodParsedType.undefined) {
@@ -27283,14 +27679,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.innerType;
     }
   };
-  ZodOptional.create = (type, params) => {
-    return new ZodOptional({
+  ZodOptional2.create = (type, params) => {
+    return new ZodOptional2({
       innerType: type,
-      typeName: ZodFirstPartyTypeKind.ZodOptional,
+      typeName: ZodFirstPartyTypeKind2.ZodOptional,
       ...processCreateParams(params)
     });
   };
-  var ZodNullable = class extends ZodType {
+  var ZodNullable2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 === ZodParsedType.null) {
@@ -27302,14 +27698,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.innerType;
     }
   };
-  ZodNullable.create = (type, params) => {
-    return new ZodNullable({
+  ZodNullable2.create = (type, params) => {
+    return new ZodNullable2({
       innerType: type,
-      typeName: ZodFirstPartyTypeKind.ZodNullable,
+      typeName: ZodFirstPartyTypeKind2.ZodNullable,
       ...processCreateParams(params)
     });
   };
-  var ZodDefault = class extends ZodType {
+  var ZodDefault2 = class extends ZodType2 {
     _parse(input) {
       const { ctx } = this._processInputParams(input);
       let data = ctx.data;
@@ -27326,15 +27722,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.innerType;
     }
   };
-  ZodDefault.create = (type, params) => {
-    return new ZodDefault({
+  ZodDefault2.create = (type, params) => {
+    return new ZodDefault2({
       innerType: type,
-      typeName: ZodFirstPartyTypeKind.ZodDefault,
+      typeName: ZodFirstPartyTypeKind2.ZodDefault,
       defaultValue: typeof params.default === "function" ? params.default : () => params.default,
       ...processCreateParams(params)
     });
   };
-  var ZodCatch = class extends ZodType {
+  var ZodCatch2 = class extends ZodType2 {
     _parse(input) {
       const { ctx } = this._processInputParams(input);
       const newCtx = {
@@ -27357,7 +27753,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             status: "valid",
             value: result2.status === "valid" ? result2.value : this._def.catchValue({
               get error() {
-                return new ZodError(newCtx.common.issues);
+                return new ZodError2(newCtx.common.issues);
               },
               input: newCtx.data
             })
@@ -27368,7 +27764,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           status: "valid",
           value: result.status === "valid" ? result.value : this._def.catchValue({
             get error() {
-              return new ZodError(newCtx.common.issues);
+              return new ZodError2(newCtx.common.issues);
             },
             input: newCtx.data
           })
@@ -27379,21 +27775,21 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.innerType;
     }
   };
-  ZodCatch.create = (type, params) => {
-    return new ZodCatch({
+  ZodCatch2.create = (type, params) => {
+    return new ZodCatch2({
       innerType: type,
-      typeName: ZodFirstPartyTypeKind.ZodCatch,
+      typeName: ZodFirstPartyTypeKind2.ZodCatch,
       catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
       ...processCreateParams(params)
     });
   };
-  var ZodNaN = class extends ZodType {
+  var ZodNaN2 = class extends ZodType2 {
     _parse(input) {
       const parsedType2 = this._getType(input);
       if (parsedType2 !== ZodParsedType.nan) {
         const ctx = this._getOrReturnCtx(input);
         addIssueToContext(ctx, {
-          code: ZodIssueCode.invalid_type,
+          code: ZodIssueCode2.invalid_type,
           expected: ZodParsedType.nan,
           received: ctx.parsedType
         });
@@ -27402,13 +27798,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return { status: "valid", value: input.data };
     }
   };
-  ZodNaN.create = (params) => {
-    return new ZodNaN({
-      typeName: ZodFirstPartyTypeKind.ZodNaN,
+  ZodNaN2.create = (params) => {
+    return new ZodNaN2({
+      typeName: ZodFirstPartyTypeKind2.ZodNaN,
       ...processCreateParams(params)
     });
   };
-  var ZodBranded = class extends ZodType {
+  var ZodBranded = class extends ZodType2 {
     _parse(input) {
       const { ctx } = this._processInputParams(input);
       const data = ctx.data;
@@ -27422,7 +27818,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.type;
     }
   };
-  var ZodPipeline = class _ZodPipeline extends ZodType {
+  var ZodPipeline = class _ZodPipeline extends ZodType2 {
     _parse(input) {
       const { status, ctx } = this._processInputParams(input);
       if (ctx.common.async) {
@@ -27473,11 +27869,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return new _ZodPipeline({
         in: a,
         out: b,
-        typeName: ZodFirstPartyTypeKind.ZodPipeline
+        typeName: ZodFirstPartyTypeKind2.ZodPipeline
       });
     }
   };
-  var ZodReadonly = class extends ZodType {
+  var ZodReadonly2 = class extends ZodType2 {
     _parse(input) {
       const result = this._def.innerType._parse(input);
       const freeze = (data) => {
@@ -27492,17 +27888,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return this._def.innerType;
     }
   };
-  ZodReadonly.create = (type, params) => {
-    return new ZodReadonly({
+  ZodReadonly2.create = (type, params) => {
+    return new ZodReadonly2({
       innerType: type,
-      typeName: ZodFirstPartyTypeKind.ZodReadonly,
+      typeName: ZodFirstPartyTypeKind2.ZodReadonly,
       ...processCreateParams(params)
     });
   };
   var late = {
-    object: ZodObject.lazycreate
+    object: ZodObject2.lazycreate
   };
-  var ZodFirstPartyTypeKind;
+  var ZodFirstPartyTypeKind2;
   (function(ZodFirstPartyTypeKind3) {
     ZodFirstPartyTypeKind3["ZodString"] = "ZodString";
     ZodFirstPartyTypeKind3["ZodNumber"] = "ZodNumber";
@@ -27540,39 +27936,39 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     ZodFirstPartyTypeKind3["ZodBranded"] = "ZodBranded";
     ZodFirstPartyTypeKind3["ZodPipeline"] = "ZodPipeline";
     ZodFirstPartyTypeKind3["ZodReadonly"] = "ZodReadonly";
-  })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-  var stringType = ZodString.create;
-  var numberType = ZodNumber.create;
-  var nanType = ZodNaN.create;
-  var bigIntType = ZodBigInt.create;
-  var booleanType = ZodBoolean.create;
-  var dateType = ZodDate.create;
-  var symbolType = ZodSymbol.create;
-  var undefinedType = ZodUndefined.create;
-  var nullType = ZodNull.create;
-  var anyType = ZodAny.create;
-  var unknownType = ZodUnknown.create;
-  var neverType = ZodNever.create;
-  var voidType = ZodVoid.create;
-  var arrayType = ZodArray.create;
-  var objectType = ZodObject.create;
-  var strictObjectType = ZodObject.strictCreate;
-  var unionType = ZodUnion.create;
-  var discriminatedUnionType = ZodDiscriminatedUnion.create;
-  var intersectionType = ZodIntersection.create;
-  var tupleType = ZodTuple.create;
-  var recordType = ZodRecord.create;
-  var mapType = ZodMap.create;
-  var setType = ZodSet.create;
-  var functionType = ZodFunction.create;
-  var lazyType = ZodLazy.create;
-  var literalType = ZodLiteral.create;
-  var enumType = ZodEnum.create;
+  })(ZodFirstPartyTypeKind2 || (ZodFirstPartyTypeKind2 = {}));
+  var stringType = ZodString2.create;
+  var numberType = ZodNumber2.create;
+  var nanType = ZodNaN2.create;
+  var bigIntType = ZodBigInt2.create;
+  var booleanType = ZodBoolean2.create;
+  var dateType = ZodDate2.create;
+  var symbolType = ZodSymbol2.create;
+  var undefinedType = ZodUndefined2.create;
+  var nullType = ZodNull2.create;
+  var anyType = ZodAny2.create;
+  var unknownType = ZodUnknown2.create;
+  var neverType = ZodNever2.create;
+  var voidType = ZodVoid2.create;
+  var arrayType = ZodArray2.create;
+  var objectType = ZodObject2.create;
+  var strictObjectType = ZodObject2.strictCreate;
+  var unionType = ZodUnion2.create;
+  var discriminatedUnionType = ZodDiscriminatedUnion2.create;
+  var intersectionType = ZodIntersection2.create;
+  var tupleType = ZodTuple2.create;
+  var recordType = ZodRecord2.create;
+  var mapType = ZodMap2.create;
+  var setType = ZodSet2.create;
+  var functionType = ZodFunction2.create;
+  var lazyType = ZodLazy2.create;
+  var literalType = ZodLiteral2.create;
+  var enumType = ZodEnum2.create;
   var nativeEnumType = ZodNativeEnum.create;
-  var promiseType = ZodPromise.create;
+  var promiseType = ZodPromise2.create;
   var effectsType = ZodEffects.create;
-  var optionalType = ZodOptional.create;
-  var nullableType = ZodNullable.create;
+  var optionalType = ZodOptional2.create;
+  var nullableType = ZodNullable2.create;
   var preprocessType = ZodEffects.createWithPreprocess;
   var pipelineType = ZodPipeline.create;
 
@@ -27619,7 +28015,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     defineLazy(inst, "shape", () => def.shape);
   });
   // @__NO_SIDE_EFFECTS__
-  function object(shape, params) {
+  function object2(shape, params) {
     const def = {
       type: "object",
       shape: shape ?? {},
@@ -27650,16 +28046,16 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   function objectFromShape(shape) {
     const values = Object.values(shape);
     if (values.length === 0)
-      return object({});
+      return object2({});
     const allV4 = values.every(isZ4Schema);
     const allV3 = values.every((s) => !isZ4Schema(s));
     if (allV4)
-      return object(shape);
+      return object2(shape);
     if (allV3)
       return objectType(shape);
     throw new Error("Mixed Zod versions detected in object shape.");
   }
-  function safeParse2(schema, data) {
+  function safeParse3(schema, data) {
     if (isZ4Schema(schema)) {
       const result2 = safeParse(schema, data);
       return result2;
@@ -27668,7 +28064,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const result = v3Schema.safeParse(data);
     return result;
   }
-  async function safeParseAsync2(schema, data) {
+  async function safeParseAsync3(schema, data) {
     if (isZ4Schema(schema)) {
       const result2 = await safeParseAsync(schema, data);
       return result2;
@@ -27896,7 +28292,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const res = {
       type: "array"
     };
-    if (def.type?._def && def.type?._def?.typeName !== ZodFirstPartyTypeKind.ZodAny) {
+    if (def.type?._def && def.type?._def?.typeName !== ZodFirstPartyTypeKind2.ZodAny) {
       res.items = parseDef(def.type._def, {
         ...refs,
         currentPath: [...refs.currentPath, "items"]
@@ -28450,7 +28846,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (refs.target === "openAi") {
       console.warn("Warning: OpenAI may not support records in schemas! Try an array of key-value pairs instead.");
     }
-    if (refs.target === "openApi3" && def.keyType?._def.typeName === ZodFirstPartyTypeKind.ZodEnum) {
+    if (refs.target === "openApi3" && def.keyType?._def.typeName === ZodFirstPartyTypeKind2.ZodEnum) {
       return {
         type: "object",
         required: def.keyType._def.values,
@@ -28474,20 +28870,20 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (refs.target === "openApi3") {
       return schema;
     }
-    if (def.keyType?._def.typeName === ZodFirstPartyTypeKind.ZodString && def.keyType._def.checks?.length) {
+    if (def.keyType?._def.typeName === ZodFirstPartyTypeKind2.ZodString && def.keyType._def.checks?.length) {
       const { type, ...keyType } = parseStringDef(def.keyType._def, refs);
       return {
         ...schema,
         propertyNames: keyType
       };
-    } else if (def.keyType?._def.typeName === ZodFirstPartyTypeKind.ZodEnum) {
+    } else if (def.keyType?._def.typeName === ZodFirstPartyTypeKind2.ZodEnum) {
       return {
         ...schema,
         propertyNames: {
           enum: def.keyType._def.values
         }
       };
-    } else if (def.keyType?._def.typeName === ZodFirstPartyTypeKind.ZodBranded && def.keyType._def.type._def.typeName === ZodFirstPartyTypeKind.ZodString && def.keyType._def.type._def.checks?.length) {
+    } else if (def.keyType?._def.typeName === ZodFirstPartyTypeKind2.ZodBranded && def.keyType._def.type._def.typeName === ZodFirstPartyTypeKind2.ZodString && def.keyType._def.type._def.checks?.length) {
       const { type, ...keyType } = parseBrandedDef(def.keyType._def, refs);
       return {
         ...schema,
@@ -28887,73 +29283,73 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   // node_modules/zod-to-json-schema/dist/esm/selectParser.js
   var selectParser = (def, typeName, refs) => {
     switch (typeName) {
-      case ZodFirstPartyTypeKind.ZodString:
+      case ZodFirstPartyTypeKind2.ZodString:
         return parseStringDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodNumber:
+      case ZodFirstPartyTypeKind2.ZodNumber:
         return parseNumberDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodObject:
+      case ZodFirstPartyTypeKind2.ZodObject:
         return parseObjectDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodBigInt:
+      case ZodFirstPartyTypeKind2.ZodBigInt:
         return parseBigintDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodBoolean:
+      case ZodFirstPartyTypeKind2.ZodBoolean:
         return parseBooleanDef();
-      case ZodFirstPartyTypeKind.ZodDate:
+      case ZodFirstPartyTypeKind2.ZodDate:
         return parseDateDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodUndefined:
+      case ZodFirstPartyTypeKind2.ZodUndefined:
         return parseUndefinedDef(refs);
-      case ZodFirstPartyTypeKind.ZodNull:
+      case ZodFirstPartyTypeKind2.ZodNull:
         return parseNullDef(refs);
-      case ZodFirstPartyTypeKind.ZodArray:
+      case ZodFirstPartyTypeKind2.ZodArray:
         return parseArrayDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodUnion:
-      case ZodFirstPartyTypeKind.ZodDiscriminatedUnion:
+      case ZodFirstPartyTypeKind2.ZodUnion:
+      case ZodFirstPartyTypeKind2.ZodDiscriminatedUnion:
         return parseUnionDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodIntersection:
+      case ZodFirstPartyTypeKind2.ZodIntersection:
         return parseIntersectionDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodTuple:
+      case ZodFirstPartyTypeKind2.ZodTuple:
         return parseTupleDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodRecord:
+      case ZodFirstPartyTypeKind2.ZodRecord:
         return parseRecordDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodLiteral:
+      case ZodFirstPartyTypeKind2.ZodLiteral:
         return parseLiteralDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodEnum:
+      case ZodFirstPartyTypeKind2.ZodEnum:
         return parseEnumDef(def);
-      case ZodFirstPartyTypeKind.ZodNativeEnum:
+      case ZodFirstPartyTypeKind2.ZodNativeEnum:
         return parseNativeEnumDef(def);
-      case ZodFirstPartyTypeKind.ZodNullable:
+      case ZodFirstPartyTypeKind2.ZodNullable:
         return parseNullableDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodOptional:
+      case ZodFirstPartyTypeKind2.ZodOptional:
         return parseOptionalDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodMap:
+      case ZodFirstPartyTypeKind2.ZodMap:
         return parseMapDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodSet:
+      case ZodFirstPartyTypeKind2.ZodSet:
         return parseSetDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodLazy:
+      case ZodFirstPartyTypeKind2.ZodLazy:
         return () => def.getter()._def;
-      case ZodFirstPartyTypeKind.ZodPromise:
+      case ZodFirstPartyTypeKind2.ZodPromise:
         return parsePromiseDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodNaN:
-      case ZodFirstPartyTypeKind.ZodNever:
+      case ZodFirstPartyTypeKind2.ZodNaN:
+      case ZodFirstPartyTypeKind2.ZodNever:
         return parseNeverDef(refs);
-      case ZodFirstPartyTypeKind.ZodEffects:
+      case ZodFirstPartyTypeKind2.ZodEffects:
         return parseEffectsDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodAny:
+      case ZodFirstPartyTypeKind2.ZodAny:
         return parseAnyDef(refs);
-      case ZodFirstPartyTypeKind.ZodUnknown:
+      case ZodFirstPartyTypeKind2.ZodUnknown:
         return parseUnknownDef(refs);
-      case ZodFirstPartyTypeKind.ZodDefault:
+      case ZodFirstPartyTypeKind2.ZodDefault:
         return parseDefaultDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodBranded:
+      case ZodFirstPartyTypeKind2.ZodBranded:
         return parseBrandedDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodReadonly:
+      case ZodFirstPartyTypeKind2.ZodReadonly:
         return parseReadonlyDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodCatch:
+      case ZodFirstPartyTypeKind2.ZodCatch:
         return parseCatchDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodPipeline:
+      case ZodFirstPartyTypeKind2.ZodPipeline:
         return parsePipelineDef(def, refs);
-      case ZodFirstPartyTypeKind.ZodFunction:
-      case ZodFirstPartyTypeKind.ZodVoid:
-      case ZodFirstPartyTypeKind.ZodSymbol:
+      case ZodFirstPartyTypeKind2.ZodFunction:
+      case ZodFirstPartyTypeKind2.ZodVoid:
+      case ZodFirstPartyTypeKind2.ZodSymbol:
         return void 0;
       default:
         return /* @__PURE__ */ ((_) => void 0)(typeName);
@@ -29113,7 +29509,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return value;
   }
   function parseWithCompat(schema, data) {
-    const result = safeParse2(schema, data);
+    const result = safeParse3(schema, data);
     if (!result.success) {
       throw result.error;
     }
@@ -29711,7 +30107,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             return reject(response);
           }
           try {
-            const parseResult = safeParse2(resultSchema, response.result);
+            const parseResult = safeParse3(resultSchema, response.result);
             if (!parseResult.success) {
               reject(parseResult.error);
             } else {
@@ -30476,7 +30872,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const method = methodValue;
       if (method === "tools/call") {
         const wrappedHandler = async (request, extra) => {
-          const validatedRequest = safeParse2(CallToolRequestSchema, request);
+          const validatedRequest = safeParse3(CallToolRequestSchema, request);
           if (!validatedRequest.success) {
             const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
             throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
@@ -30484,14 +30880,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           const { params } = validatedRequest.data;
           const result = await Promise.resolve(handler(request, extra));
           if (params.task) {
-            const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+            const taskValidationResult = safeParse3(CreateTaskResultSchema, result);
             if (!taskValidationResult.success) {
               const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
               throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
             }
             return taskValidationResult.data;
           }
-          const validationResult = safeParse2(CallToolResultSchema, result);
+          const validationResult = safeParse3(CallToolResultSchema, result);
           if (!validationResult.success) {
             const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
             throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
@@ -30864,10 +31260,6 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // node_modules/zod/index.js
-  init_external();
-  init_external();
-
   // node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
   var McpServer = class {
     constructor(serverInfo, options) {
@@ -31015,7 +31407,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       }
       const inputObj = normalizeObjectSchema(tool2.inputSchema);
       const schemaToParse = inputObj ?? tool2.inputSchema;
-      const parseResult = await safeParseAsync2(schemaToParse, args);
+      const parseResult = await safeParseAsync3(schemaToParse, args);
       if (!parseResult.success) {
         const error48 = "error" in parseResult ? parseResult.error : "Unknown error";
         const errorMessage = getParseErrorMessage(error48);
@@ -31040,7 +31432,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
       }
       const outputObj = normalizeObjectSchema(tool2.outputSchema);
-      const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
+      const parseResult = await safeParseAsync3(outputObj, result.structuredContent);
       if (!parseResult.success) {
         const error48 = "error" in parseResult ? parseResult.error : "Unknown error";
         const errorMessage = getParseErrorMessage(error48);
@@ -31253,7 +31645,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         }
         if (prompt.argsSchema) {
           const argsObj = normalizeObjectSchema(prompt.argsSchema);
-          const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
+          const parseResult = await safeParseAsync3(argsObj, request.params.arguments);
           if (!parseResult.success) {
             const error48 = "error" in parseResult ? parseResult.error : "Unknown error";
             const errorMessage = getParseErrorMessage(error48);
@@ -31413,7 +31805,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       this._registeredPrompts[name] = registeredPrompt;
       if (argsSchema) {
         const hasCompletable = Object.values(argsSchema).some((field) => {
-          const inner = field instanceof ZodOptional2 ? field._def?.innerType : field;
+          const inner = field instanceof ZodOptional ? field._def?.innerType : field;
           return isCompletable(inner);
         });
         if (hasCompletable) {
@@ -31896,249 +32288,30 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   }
 
-  // src/logger.ts
-  function createLogger(server, toolName) {
-    const emit = (level, message, fields) => {
-      const mcpLevel = level === "warn" ? "warning" : level;
-      const data = fields ? { message, fields } : message;
-      void server.sendLoggingMessage({ level: mcpLevel, data, logger: toolName }).catch(() => {
-      });
-      const prefix = `[${toolName}] [${level}] ${message}`;
-      const suffix = fields ? " " + safeStringify(fields) : "";
-      console.error(prefix + suffix);
-    };
-    return {
-      debug: (message, fields) => emit("debug", message, fields),
-      info: (message, fields) => emit("info", message, fields),
-      warn: (message, fields) => emit("warn", message, fields),
-      error: (message, fields) => emit("error", message, fields)
-    };
-  }
-  var noopLogger = {
-    debug: () => {
-    },
-    info: () => {
-    },
-    warn: () => {
-    },
-    error: () => {
+  // src/tool-core.ts
+  var TypedToolValidationError = class extends Error {
+    constructor(ajvErrors) {
+      super(`Invalid arguments: ${formatAjvErrors(ajvErrors)}`);
+      this.ajvErrors = ajvErrors;
+      this.name = "ValidationError";
     }
   };
-  function safeStringify(value) {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
+  function formatAjvErrors(errors) {
+    return errors.map((e) => {
+      const path = e.instancePath.length > 0 ? e.instancePath : "(root)";
+      return `${path}: ${e.message ?? "validation failed"}`;
+    }).join("; ");
   }
-
-  // src/memory.ts
-  var DRAIN_DELTA = /* @__PURE__ */ Symbol.for("trailblaze.memory.drainDelta");
-  var META_KEY_TRAILBLAZE = "trailblaze";
-  var META_KEY_MEMORY = "memory";
-  var META_KEY_MEMORY_DELTA = "memoryDelta";
-  var META_KEY_MEMORY_DELETIONS = "memoryDeletions";
-  var INTERPOLATE_PATTERNS = [
-    /\$\{([^}]+)\}/g,
-    /\{\{([^}]+)\}\}/g
-  ];
-  function createMemory(snapshot) {
-    const frozenSnapshot = new Map(
-      snapshot ? Object.entries(snapshot).filter(
-        // Defensive — the snapshot is supposed to be `Record<string, string>` from the
-        // Kotlin side, but `fromMeta` receives raw JSON. Skip non-string values rather
-        // than coercing so a producer-side bug surfaces as a missing key instead of a
-        // silently corrupted value.
-        ([, v]) => typeof v === "string"
-      ) : []
-    );
-    const DELETED = /* @__PURE__ */ Symbol("deleted");
-    const buffer = /* @__PURE__ */ new Map();
-    const get = (key) => {
-      if (buffer.has(key)) {
-        const v = buffer.get(key);
-        return v === DELETED ? void 0 : v;
-      }
-      return frozenSnapshot.get(key);
-    };
-    const has = (key) => {
-      if (buffer.has(key)) return buffer.get(key) !== DELETED;
-      return frozenSnapshot.has(key);
-    };
-    const set2 = (key, value) => {
-      buffer.set(key, value);
-    };
-    const del = (key) => {
-      buffer.set(key, DELETED);
-    };
-    const keys = () => {
-      const visible = new Set(frozenSnapshot.keys());
-      buffer.forEach((v, k) => {
-        if (v === DELETED) visible.delete(k);
-        else visible.add(k);
-      });
-      return [...visible];
-    };
-    const interpolate = (template) => {
-      let result = template;
-      for (const pattern of INTERPOLATE_PATTERNS) {
-        const re = new RegExp(pattern.source, "g");
-        result = result.replace(re, (_match, name) => get(name) ?? "");
-      }
-      return result;
-    };
-    const setJson = (key, value) => {
-      const serialized = JSON.stringify(value);
-      if (serialized === void 0) {
-        del(key);
-        return;
-      }
-      set2(key, serialized);
-    };
-    const getJson = (key) => {
-      const raw = get(key);
-      if (raw === void 0) return void 0;
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return void 0;
-      }
-    };
-    const drainDelta = () => {
-      const sets = /* @__PURE__ */ Object.create(null);
-      const deletions = [];
-      buffer.forEach((v, k) => {
-        if (v === DELETED) {
-          if (frozenSnapshot.has(k)) deletions.push(k);
-        } else if (frozenSnapshot.get(k) !== v) {
-          sets[k] = v;
-        }
-      });
-      return { sets, deletions };
-    };
-    const toJSON = () => {
-      const out = {};
-      frozenSnapshot.forEach((v, k) => {
-        out[k] = v;
-      });
-      buffer.forEach((v, k) => {
-        if (v === DELETED) delete out[k];
-        else out[k] = v;
-      });
-      return out;
-    };
-    const memory = {
-      get,
-      set: set2,
-      has,
-      keys,
-      delete: del,
-      interpolate,
-      setJson,
-      getJson,
-      [DRAIN_DELTA]: drainDelta,
-      toJSON
-    };
-    return memory;
-  }
-
-  // src/context.ts
-  var VALID_PLATFORMS = /* @__PURE__ */ new Set(["ios", "android", "web"]);
-  function fromMeta(meta3, logger) {
-    if (typeof meta3 !== "object" || meta3 === null) return void 0;
-    const bag = meta3;
-    const envelope = bag[META_KEY_TRAILBLAZE];
-    if (typeof envelope !== "object" || envelope === null) return void 0;
-    const tb = envelope;
-    const sessionId = tb["sessionId"];
-    const invocationId = tb["invocationId"];
-    if (typeof sessionId !== "string" || typeof invocationId !== "string") return void 0;
-    const baseUrl = typeof tb["baseUrl"] === "string" ? tb["baseUrl"] : void 0;
-    const runtimeRaw = tb["runtime"];
-    const runtime = runtimeRaw === "ondevice" ? "ondevice" : void 0;
-    const deviceBag = tb["device"];
-    if (typeof deviceBag !== "object" || deviceBag === null) return void 0;
-    const deviceRecord = deviceBag;
-    const platformRaw = deviceRecord["platform"];
-    if (typeof platformRaw !== "string" || !VALID_PLATFORMS.has(platformRaw)) {
-      return void 0;
-    }
-    const widthPixels = deviceRecord["widthPixels"];
-    const heightPixels = deviceRecord["heightPixels"];
-    const driverType = deviceRecord["driverType"];
-    if (typeof widthPixels !== "number" || typeof heightPixels !== "number" || typeof driverType !== "string") {
-      return void 0;
-    }
-    const memoryBag = tb[META_KEY_MEMORY];
-    const memorySnapshot = typeof memoryBag === "object" && memoryBag !== null ? memoryBag : void 0;
-    const memory = createMemory(memorySnapshot);
-    const target = parseTarget(tb["target"]);
-    return {
-      baseUrl,
-      runtime,
-      sessionId,
-      invocationId,
-      device: {
-        platform: platformRaw,
-        widthPixels,
-        heightPixels,
-        driverType
-      },
-      target,
-      memory,
-      logger: logger ?? noopLogger
-    };
-  }
-  function parseTarget(raw) {
-    if (typeof raw !== "object" || raw === null) return void 0;
-    const bag = raw;
-    const id = bag["id"];
-    const appIdsRaw = bag["appIds"];
-    if (typeof id !== "string" || !Array.isArray(appIdsRaw)) return void 0;
-    if (!appIdsRaw.every((entry) => typeof entry === "string")) return void 0;
-    const appIds = appIdsRaw;
-    const displayName = typeof bag["displayName"] === "string" ? bag["displayName"] : void 0;
-    const appId = typeof bag["appId"] === "string" ? bag["appId"] : void 0;
-    const resolvedBaseUrl = typeof bag["resolvedBaseUrl"] === "string" ? bag["resolvedBaseUrl"] : void 0;
-    const baseUrlsRaw = bag["baseUrls"];
-    const baseUrls = Array.isArray(baseUrlsRaw) && baseUrlsRaw.every((entry) => typeof entry === "string") ? baseUrlsRaw : void 0;
-    const resolveAppId = (options) => {
-      const fromTarget = appId || appIds[0];
-      if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
-      const fallback = options?.defaultAppId?.trim();
-      return fallback && fallback.length > 0 ? fallback : void 0;
-    };
-    const resolveBaseUrl = (options) => {
-      const fromTarget = resolvedBaseUrl || baseUrls && baseUrls[0];
-      if (typeof fromTarget === "string" && fromTarget.length > 0) return fromTarget;
-      const fallback = options?.defaultBaseUrl?.trim();
-      return fallback && fallback.length > 0 ? fallback : void 0;
-    };
-    const target = {
-      id,
-      displayName,
-      appIds,
-      appId,
-      baseUrls,
-      resolvedBaseUrl,
-      resolveAppId,
-      resolveBaseUrl
-    };
-    return target;
-  }
-
-  // src/tool.ts
-  var pendingTools = [];
-  function defineTypedTool(handler, inputSchema) {
+  function defineTypedTool(handler, inputSchema, compileValidator) {
     if (typeof handler !== "function") {
       throw new TypeError(
         "trailblaze.tool<I, O>(handler): argument must be a function. Got: " + (handler == null ? String(handler) : typeof handler) + "."
       );
     }
     let validator = null;
-    if (inputSchema != null) {
+    if (inputSchema != null && compileValidator != null) {
       try {
-        validator = ajv.compile(inputSchema);
+        validator = compileValidator(inputSchema);
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         console.warn(
@@ -32156,13 +32329,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       return handler(validatedArgs, toolContext);
     };
   }
-  var TypedToolValidationError = class extends Error {
-    constructor(ajvErrors) {
-      super(`Invalid arguments: ${formatAjvErrors(ajvErrors)}`);
-      this.ajvErrors = ajvErrors;
-      this.name = "ValidationError";
-    }
-  };
+
+  // src/tool.ts
+  var pendingTools = [];
   var MAX_STACK_LENGTH = 16384;
   var ajv = new import__.Ajv2020({
     allErrors: true,
@@ -32170,12 +32339,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     useDefaults: true,
     coerceTypes: false
   });
-  function formatAjvErrors(errors) {
-    return errors.map((e) => {
-      const path = e.instancePath.length > 0 ? e.instancePath : "(root)";
-      return `${path}: ${e.message ?? "validation failed"}`;
-    }).join("; ");
-  }
+  var ajvCompile = (schema) => ajv.compile(schema);
   function buildValidationErrorEnvelope(toolName, errors) {
     return {
       isError: true,
@@ -32192,7 +32356,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (schema == null) return null;
     if (typeof schema.safeParse !== "function") return null;
     try {
-      return external_exports3.toJSONSchema(schema);
+      return external_exports.toJSONSchema(schema);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn(
@@ -32204,7 +32368,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   function tool(arg0, arg1, arg2) {
     if (typeof arg0 === "function") {
       return defineTypedTool(
-        arg0
+        arg0,
+        void 0,
+        ajvCompile
       );
     }
     if (typeof arg0 === "object" && arg0 !== null && !Array.isArray(arg0) && typeof arg1 === "function" && arg2 === void 0) {
@@ -32212,7 +32378,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const inlineSchema = specObj.inputSchema && typeof specObj.inputSchema === "object" && !Array.isArray(specObj.inputSchema) ? specObj.inputSchema : void 0;
       return defineTypedTool(
         arg1,
-        inlineSchema
+        inlineSchema,
+        ajvCompile
       );
     }
     pendingTools.push({
@@ -32346,7 +32513,7 @@ ${framesOnly}` : envelopeText;
   function withPassthroughInputSchema(spec) {
     const schema = spec.inputSchema;
     if (!isRawShape(schema)) return spec;
-    return { ...spec, inputSchema: external_exports3.object(schema).passthrough() };
+    return { ...spec, inputSchema: external_exports.object(schema).passthrough() };
   }
   function isRawShape(schema) {
     if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return false;
@@ -32397,168 +32564,7 @@ ${framesOnly}` : envelopeText;
     await server.connect(await pickTransport());
   }
 
-  // src/view-hierarchy.ts
-  var SELECTOR_REGISTRY = /* @__PURE__ */ Symbol("trailblaze.viewHierarchy.selectorRegistry");
-  async function captureViewHierarchy(client, selectors2) {
-    const ownedSelectors = selectors2.slice();
-    const resolved = await resolveSelectors(client, ownedSelectors);
-    return buildSnapshot(resolved, ownedSelectors);
-  }
-  async function reCaptureViewHierarchy(client, base) {
-    const tagged = base;
-    const selectors2 = tagged[SELECTOR_REGISTRY];
-    if (!selectors2) {
-      throw new Error(
-        "reCaptureViewHierarchy: cannot refresh this snapshot \u2014 it wasn't built via captureViewHierarchy(). The refresh path is only used by callers that need a verify snapshot AFTER a state-mutating action (e.g. runConditionalActions's postcondition check). Either build the snapshot via captureViewHierarchy(client, [...selectors]) so the framework can refresh it, or skip postcondition-style verification."
-      );
-    }
-    return captureViewHierarchy(client, selectors2);
-  }
-  async function resolveSelectors(client, selectors2) {
-    const entries = await Promise.all(
-      selectors2.map(async (selector) => {
-        const key = selectorKey(selector);
-        const matches = await client.tools.findMatches({ selector });
-        return [key, matches];
-      })
-    );
-    const map2 = /* @__PURE__ */ new Map();
-    for (const [key, matches] of entries) {
-      map2.set(key, matches);
-    }
-    return map2;
-  }
-  function buildSnapshot(resolved, selectors2) {
-    const matchesFor = (selector) => {
-      const key = selectorKey(selector);
-      const matches = resolved.get(key);
-      if (matches === void 0) {
-        throw new Error(
-          `ViewHierarchy: selector ${JSON.stringify(selector)} was not pre-resolved. Add it to the selectors list passed to captureViewHierarchy(client, [...]).`
-        );
-      }
-      return matches;
-    };
-    const snap = {
-      visible(selector) {
-        return matchesFor(selector).length > 0;
-      },
-      find(selector) {
-        const matches = matchesFor(selector);
-        return matches.length > 0 ? matches[0] : null;
-      },
-      findAll(selector) {
-        return matchesFor(selector).slice();
-      },
-      [SELECTOR_REGISTRY]: selectors2
-    };
-    return snap;
-  }
-  function selectorKey(selector) {
-    return JSON.stringify(selector);
-  }
-
-  // src/conditional-action.ts
-  var ConditionalActionFailedError = class _ConditionalActionFailedError extends Error {
-    constructor(conditionalActionId, message, cause = null) {
-      super(message);
-      this.name = "ConditionalActionFailedError";
-      this.conditionalActionId = conditionalActionId;
-      this.cause = cause;
-      if (typeof Error.captureStackTrace === "function") {
-        Error.captureStackTrace(this, _ConditionalActionFailedError);
-      }
-    }
-  };
-  async function runConditionalActions(client, conditionalActions, presnapshot) {
-    if (conditionalActions.length === 0) {
-      return { handled: [] };
-    }
-    const snap = presnapshot ?? throwNoSnapshot();
-    const applicable = conditionalActions.filter(
-      (c) => !evalPostcondition(c, snap) && evalCondition(c, snap)
-    );
-    if (applicable.length === 0) {
-      return { handled: [] };
-    }
-    const handled = [];
-    for (const c of applicable) {
-      await runAction(c);
-      if (c.postcondition) {
-        const verifySnap = await reCaptureViewHierarchy(client, snap);
-        if (!evalPostcondition(c, verifySnap)) {
-          throw new ConditionalActionFailedError(
-            c.id,
-            `postcondition not satisfied after action for ${describe3(c)}`
-          );
-        }
-      }
-      handled.push(c.id);
-    }
-    return { handled };
-  }
-  function describe3(c) {
-    if (c.description && c.description.length > 0) {
-      return `conditional "${c.id}" (${c.description})`;
-    }
-    return `conditional "${c.id}"`;
-  }
-  function evalCondition(c, snap) {
-    try {
-      return Boolean(c.condition(snap));
-    } catch (e) {
-      throw new ConditionalActionFailedError(
-        c.id,
-        `condition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
-        e
-      );
-    }
-  }
-  function evalPostcondition(c, snap) {
-    if (!c.postcondition) return false;
-    try {
-      return Boolean(c.postcondition(snap));
-    } catch (e) {
-      throw new ConditionalActionFailedError(
-        c.id,
-        `postcondition predicate threw for ${describe3(c)}: ${formatError2(e)}`,
-        e
-      );
-    }
-  }
-  async function runAction(c) {
-    try {
-      await c.action();
-    } catch (e) {
-      if (e instanceof ConditionalActionFailedError) throw e;
-      throw new ConditionalActionFailedError(
-        c.id,
-        `action threw for ${describe3(c)}: ${formatError2(e)}`,
-        e
-      );
-    }
-  }
-  function formatError2(e) {
-    if (e instanceof Error) return e.message;
-    return String(e);
-  }
-  function throwNoSnapshot() {
-    throw new Error(
-      "runConditionalActions: presnapshot is required in Phase 2. Build one via `await captureViewHierarchy(client, [...selectors])` and pass it in, where the selectors are the ones your condition / postcondition predicates probe. See the `wikipedia_conditional_action_demo` example tool in the wikipedia trailmap for an end-to-end usage. The auto-acquire fallback lands when the host-side full-tree snapshot tool ships."
-    );
-  }
-
-  // src/generated/selectors.ts
-  var selectors = {
-    androidAccessibility: (args) => ({ androidAccessibility: args }),
-    androidMaestro: (args) => ({ androidMaestro: args }),
-    web: (args) => ({ web: args }),
-    compose: (args) => ({ compose: args }),
-    iosMaestro: (args) => ({ iosMaestro: args }),
-    iosAxe: (args) => ({ iosAxe: args })
-  };
-
-  // src/index.ts
+  // src/sub-process.ts
   var trailblaze = {
     tool,
     run

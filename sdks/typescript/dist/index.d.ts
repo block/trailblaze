@@ -5003,6 +5003,85 @@ export interface TrailblazeClientImpl {
  */
 export type TrailblazeClient = Omit<TrailblazeClientImpl, "callTool">;
 /**
+ * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring surface.
+ * Exposes the cross-tool primitives a typed handler can reach: [tools], [memory], [target].
+ *
+ * Deliberately narrower than `TrailblazeClient` / `TrailblazeContext`; grow it in lockstep with
+ * real demand (see the full inclusion-policy note that previously lived on this type in `tool.ts`).
+ */
+export interface ToolContext {
+	/** Compose other Trailblaze tools through the typed `tools.<name>(args)` namespace. */
+	tools: TrailblazeToolMethods;
+	/**
+	 * Per-invocation memory surface. Reads see the host snapshot + this invocation's writes;
+	 * writes are flushed back to the host on a successful return via the result envelope's
+	 * `_meta.trailblaze.memoryDelta` (subprocess path; bundle path buffers without flush).
+	 */
+	memory: TrailblazeMemory;
+	/**
+	 * Resolved-target descriptor (`target.platforms.<platform>` after device resolution).
+	 * `undefined` when the session has no target configured — optional-chain
+	 * (`ctx.target?.resolveAppId()`) when the tool should degrade gracefully.
+	 */
+	target?: TrailblazeTarget;
+}
+/**
+ * Public marker for "this tool takes no input." Declared as an `interface` (not
+ * `Record<string, never>`) so the analyzer's `ts-json-schema-generator` walks it as a named
+ * object type and emits `{"type":"object","additionalProperties":false}`.
+ */
+export interface EmptyInput {
+}
+/**
+ * Structured-config spec for the typed `trailblaze.tool<I, O>(spec, handler)` overload. Carries
+ * the namespaced framework hints (`supportedPlatforms`, `requiresContext`, `requiresHost`,
+ * `supportedDrivers`) the build-time analyzer (`ScriptedToolDefinitionAnalyzer`) extracts from
+ * each call site. **No `description`** — typed-tool descriptions live in the TSDoc above the
+ * `export const X = trailblaze.tool(...)` binding, which the analyzer reads.
+ *
+ * Field roles — see the full "registration gate" vs "metadata hint" discussion that previously
+ * lived in `tool.ts`. `inputSchema` is the one field consumed at the JS dispatch boundary (via
+ * the injected [defineTypedTool] validator); the rest flow into `_meta` via the analyzer.
+ */
+export interface TrailblazeTypedToolSpec {
+	/** Platforms this tool may register on. Empty / omitted = all platforms. */
+	supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
+	/** UX hint: this tool depends on a live driver context. NOT a registration filter. */
+	requiresContext?: boolean;
+	/** Host-only — skip registration on-device (Node/Bun APIs). Read before `_meta` on-device. */
+	requiresHost?: boolean;
+	/** Drivers this tool may register on. Empty / omitted = all drivers. */
+	supportedDrivers?: readonly string[];
+	/**
+	 * Advertise this tool to the LLM. `false` hides it from the LLM's tool menu while keeping it
+	 * dispatchable by name (composed by a parent tool) and resolvable for recorded replays — the
+	 * scripted-tool equivalent of an internal Kotlin step. NOT a registration filter; the tool still
+	 * registers. Omitted = `true`.
+	 */
+	surfaceToLlm?: boolean;
+	/**
+	 * Record this tool's invocation in the replayable `.trail.yaml`. `false` keeps an internal step a
+	 * parent tool composes out of the recording. NOT a registration filter; the tool still runs.
+	 * Omitted = `true`.
+	 */
+	isRecordable?: boolean;
+	/**
+	 * Optional JSON Schema for the typed tool's input. When present AND the caller injected a
+	 * validator compiler (full path), the runtime adapter validates `args` BEFORE the handler;
+	 * a failure throws [TypedToolValidationError]. On the slim path no compiler is injected, so
+	 * this is advisory only — the analyzer-derived `<TInput>` schema is the source of truth for
+	 * MCP advertisement either way. Plain JSON Schema literal, not a zod schema.
+	 */
+	inputSchema?: Record<string, unknown>;
+}
+/**
+ * Carrier returned by the typed authoring surface: a 3-arg adapter `(args, ctx, client) =>
+ * Promise<TResult>` — the call shape the synthesized scripted-tool wrapper invokes. The `<I, O>`
+ * type params are the load-bearing part for codegen; `ScriptedToolDefinitionAnalyzer` walks each
+ * `trailblaze.tool<I, O>(...)` call site to derive the `TrailblazeToolMap` entries.
+ */
+export type TypedToolDefinition<TInput = Record<string, never>, TResult = string> = (args: TInput, ctx: TrailblazeContext | undefined, client: TrailblazeClient) => Promise<TResult>;
+/**
  * Spec for a Trailblaze-authored tool authored via the **imperative**
  * `trailblaze.tool(name, spec, handler)` overload — a shallow wrapper over the raw
  * MCP SDK's `registerTool` spec shape. Carries `description` / `inputSchema` /
@@ -5080,239 +5159,6 @@ export interface TrailblazeToolResult {
 	isError?: boolean;
 	structuredContent?: unknown;
 }
-/**
- * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring
- * surface. Exposes the cross-tool primitives a typed handler can reach today:
- * [tools], [memory], and [target].
- *
- * Deliberately narrower than [TrailblazeClient] / [TrailblazeContext]. Per-need fields
- * (device, logger) can still be added later when a concrete typed-authored tool needs
- * them; the goal is to grow the surface in lockstep with real demand rather than
- * blanket-mirroring every field a Kotlin handler sees.
- *
- * ## Inclusion policy
- *
- * The bar for adding a field here is intentionally higher than "it's on `TrailblazeContext`."
- * A field gets added when (a) **multiple** typed tools in the repo have demonstrated demand
- * (one-off needs are usually a sign the tool wants the imperative `tool(name, spec, handler)`
- * form, not a permanent SDK expansion), and (b) the field's lifecycle matches the existing
- * set — injected per-call by `defineTypedTool`, originated from the host envelope.
- *
- * Concrete deliberate exclusion: **`device`** (platform / driver / screen dimensions). It's
- * on `TrailblazeContext` and the next obvious extension, but no typed tool in the repo today
- * needs it (the few that branch on platform do so via the spec's `supportedPlatforms` gate
- * instead). Open a PR-level discussion before adding it so the bar above is satisfied.
- *
- * **Memory on the bundle path.** When a typed tool runs in the on-device QuickJS bundle
- * runtime, the host ctx envelope doesn't yet carry a memory snapshot — `ctx.memory`
- * on that path is a no-op surface whose writes never flush back to the host. Subprocess
- * sessions get a fully-wired memory; bundle-path support lands in a follow-up.
- *
- * **Target on the bundle path.** Same caveat: `ctx.target` is populated whenever the
- * host envelope carries a resolved-target descriptor (both subprocess and on-device
- * paths emit it via their respective envelope builders), but it can still be
- * `undefined` for sessions with no target (web-only scratch tools, unit-test
- * fixtures). Typed handlers should optional-chain (`ctx.target?.resolveAppId()`)
- * when the surrounding tool ought to work outside a target-aware session.
- */
-export interface ToolContext {
-	/** Compose other Trailblaze tools through the typed `tools.<name>(args)` namespace. */
-	tools: TrailblazeToolMethods;
-	/**
-	 * Per-invocation memory surface mirroring [TrailblazeContext.memory]. Reads see the
-	 * host snapshot + this invocation's writes (read-your-own-writes); writes are flushed
-	 * back to the host on a successful return via the result envelope's
-	 * `_meta.trailblaze.memoryDelta`.
-	 */
-	memory: TrailblazeMemory;
-	/**
-	 * Resolved-target descriptor — the trailmap manifest's `target.platforms.<platform>`
-	 * data after the framework has consulted the connected device for which app id to
-	 * actually use. Provides [TrailblazeTarget.resolveAppId] (Android/iOS) and
-	 * [TrailblazeTarget.resolveBaseUrl] (web) for tools that need to compose
-	 * platform-specific package / URL references without hard-coding them.
-	 *
-	 * `undefined` when the session has no target configured (web-only scratch tools,
-	 * unit-test fixtures, envelopes from older daemons that predate the field).
-	 * Optional-chain when the tool should still degrade gracefully — typed handlers
-	 * that strictly require a target should throw a clear "no target" error on the
-	 * undefined branch rather than silently no-op.
-	 */
-	target?: TrailblazeTarget;
-}
-/**
- * Structured-config spec for the typed `trailblaze.tool<I, O>(spec, handler)` overload.
- *
- * Carries the namespaced framework hints that, in the YAML-descriptor world, were authored
- * under `_meta: { trailblaze/... }`. With the typed authoring surface, authors set them
- * directly as typed object fields and the build-time analyzer
- * (`ScriptedToolDefinitionAnalyzer`) extracts them from each `trailblaze.tool(...)` call
- * site — the runtime `_meta` JSON is synthesized downstream, never hand-authored.
- *
- * **No `description` field.** Tool descriptions live in the TSDoc block above each
- * `export const X = trailblaze.tool(...)` binding. The analyzer reads it via the
- * TypeScript compiler's `getJSDocCommentsAndTags()`. Forcing prose into TSDoc keeps the
- * IDE-hover text and the LLM-facing description as the same single source of truth and
- * eliminates the dual-source-of-truth question by construction — the compiler refuses to
- * accept a `description` field here, so there's no place else to put prose.
- *
- * Every field is optional; omitted means "use the framework default" (`false` for
- * booleans, empty list for the platform/driver gates which the runtime treats as
- * "unrestricted").
- *
- * ## Field roles — "registration gate" vs. "metadata hint"
- *
- * Fields on this spec fall into two categories. The categorization matters when
- * adding a new field — picking the wrong path means the runtime either silently
- * ignores the value or routes it through the wrong layer:
- *
- *  - **Registration gates** decide whether the tool is even registered for a
- *    given session. The runtime consults these BEFORE the tool reaches the
- *    LLM's tool list — a tool that fails its gate is invisible. Examples:
- *    [supportedPlatforms], [requiresHost], [supportedDrivers]. The on-device
- *    dispatch path reads `requiresHost` *before* `_meta` is loaded, so it's
- *    additionally promoted to the typed `InlineScriptToolConfig.requiresHost`
- *    slot at enrichment time.
- *  - **Metadata hints** are informational — they flow into the runtime `_meta`
- *    JSON and are surfaced in tool catalogs, agent warnings, and downstream
- *    consumers, but they do NOT gate registration. Example: [requiresContext].
- *    The runtime registers the tool either way; the hint just helps explain
- *    *why* the tool needs a live session.
- *
- * Adding a new field: decide which bucket it belongs in first. Gates need
- * coverage in `TrailblazeToolMeta.shouldRegister` and (when the gate is read
- * before `_meta`) a typed `InlineScriptToolConfig` slot. Hints just need the
- * namespaced `_meta` projection in `AnalyzerScriptedToolEnrichment`.
- *
- * @see TrailblazeToolSpec for the imperative `tool(name, spec, handler)` form's spec —
- *   distinct shape because the imperative path doesn't have access to TSDoc or `<I, O>`
- *   generics, so it carries `description` / `inputSchema` / `outputSchema` / raw `_meta`
- *   directly.
- */
-export interface TrailblazeTypedToolSpec {
-	/**
-	 * Platforms this tool may register on. Empty / omitted = all platforms. Lowercase
-	 * platform names — the runtime (`TrailblazeToolMeta.fromJsonObject`) normalizes to
-	 * uppercase before comparison against `TrailblazeDevicePlatform.name`.
-	 */
-	supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
-	/**
-	 * UX hint: this tool depends on a live driver context (a running target/session). The
-	 * agent surfaces this in tool catalogs and warnings. **Not a registration filter** —
-	 * the runtime registers the tool either way; the field is purely informational. See
-	 * `TrailblazeToolMeta.shouldRegister` for the filter set (drivers, platforms, host).
-	 */
-	requiresContext?: boolean;
-	/**
-	 * Host-only — skip registration on-device. Use for tools that need Node/Bun APIs
-	 * (`node:fs`, `node:child_process`, file locks) or otherwise can't run inside the
-	 * on-device QuickJS bundle. The on-device launcher passes `preferHostAgent=false` so a
-	 * `requiresHost: true` tool skips at registration without any extra branching.
-	 */
-	requiresHost?: boolean;
-	/**
-	 * Drivers this tool may register on. Empty / omitted = all drivers. Driver identifiers
-	 * as the runtime emits them — e.g. `"playwright-native"`, `"playwright-electron"`,
-	 * `"android-ondevice-accessibility"`. Finer-grained than [supportedPlatforms]; use this
-	 * when a tool depends on driver-specific capabilities that other drivers on the same
-	 * platform don't have.
-	 */
-	supportedDrivers?: readonly string[];
-	/**
-	 * Optional JSON Schema for the typed tool's input. When present, the runtime adapter
-	 * compiles it via ajv and validates the incoming `args` BEFORE invoking the handler;
-	 * a validation failure short-circuits dispatch by throwing a
-	 * `TypedToolValidationError` (`name = "ValidationError"`). The synthesized
-	 * host-side wrapper (`DaemonScriptedToolBundler.synthesizeWrapper` →
-	 * `QuickJsToolHost.callTool`) catches the throw and maps it onto the same
-	 * `isError: true` envelope shape any handler-thrown error rides through — so a
-	 * session-log reader sees one consistent error format regardless of failure
-	 * mode. (Direct callers of the returned `TypedToolDefinition` see the throw
-	 * unwrapped, useful for unit tests that pin the validation behavior — see the
-	 * tests in `tool.test.ts` that `await expect(...).rejects.toMatchObject(...)`.)
-	 * The envelope text content names the offending fields, so the LLM can
-	 * self-correct without crashing inside the handler.
-	 *
-	 * **Source of truth.** The canonical input type for a typed tool is the `<TInput>`
-	 * generic on the call (`trailblaze.tool<MyInput>(...)`), extracted at build time by
-	 * `ScriptedToolDefinitionAnalyzer`. The analyzer-derived schema is what populates
-	 * the runtime tool descriptor + MCP `_meta` advertisement, and it is what the LLM
-	 * sees. Setting `inputSchema:` here is an opt-in escape hatch for authors who want
-	 * the same schema reachable at the JS dispatch boundary — useful for catching the
-	 * "LLM sent malformed args" failure mode in environments where the static-analysis
-	 * pipeline hasn't injected the schema yet, OR for authors who want a narrower
-	 * runtime contract than the TS interface expresses.
-	 *
-	 * **Shape.** A JSON Schema object — e.g. `{ type: "object", properties: { q: { type:
-	 * "string" } }, required: ["q"] }`. Plain literal, not a zod schema; the typed
-	 * authoring surface intentionally does not depend on zod at the dispatch boundary
-	 * (zod's value lives in interface authoring, which the analyzer reads statically).
-	 *
-	 * **When to omit.** Bare-handler `trailblaze.tool<I, O>(handler)` form. No spec, no
-	 * runtime validation — relies on the analyzer + MCP advertisement to keep the LLM
-	 * honest.
-	 *
-	 * **NOT a SISTER-IMPL-TAG field.** Every other field on this spec
-	 * (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`)
-	 * is extracted by the analyzer's `RECOGNIZED_SPEC_FIELDS` set and projected
-	 * into namespaced `_meta` keys by the Kotlin side's `projectAnalyzerSpec`. This
-	 * field is deliberately the exception: the analyzer's job is to extract the
-	 * `<TInput>` interface into a JSON Schema for MCP advertisement, so flowing
-	 * `inputSchema:` *also* through the analyzer would either duplicate the
-	 * `<TInput>` schema (if both are present) or override it (if the author
-	 * intentionally narrowed). Today the field is consumed at the TS dispatch
-	 * boundary directly; the analyzer ignores it intentionally. If a future change
-	 * wants to surface this field in `_meta`, decide the precedence-vs-interface
-	 * rule first, then update `RECOGNIZED_SPEC_FIELDS` and `projectAnalyzerSpec` in
-	 * lockstep — see the SISTER-IMPL-TAG comment in
-	 * `sdks/typescript/tools/extract-tool-defs.mjs:RECOGNIZED_SPEC_FIELDS`.
-	 *
-	 * **Long-term plan.** Once the analyzer-injected sidecar lands (its schema
-	 * flows to the JS runtime via the synthesized QuickJS wrapper), this field
-	 * becomes redundant for typical tools — authors will get validation from the
-	 * `<TInput>` interface alone. The field will stick around as the narrower-
-	 * runtime-contract escape hatch but stops being the recommended way to wire
-	 * runtime validation.
-	 */
-	inputSchema?: Record<string, unknown>;
-}
-/**
- * Public marker for "this tool takes no input." TypeScript generic defaults are
- * positional, so an author who wants a typed result with NO input can't skip the
- * first type argument; they have to spell it. `EmptyInput` is the readable form of
- * that ceremony:
- *
- *   trailblaze.tool(async () => "ok")                                  // 0 args
- *   trailblaze.tool<MyInput>(async (i, ctx) => "ok")                   // typed input + string
- *   trailblaze.tool<EmptyInput, MyResult>(async (_, ctx) => ({...}))   // typed result + no input
- *   trailblaze.tool<MyInput, MyResult>(async (i, ctx) => ({...}))      // fully typed
- *
- * Declared as an `interface` (not `type = Record<string, never>`) so the analyzer's
- * `ts-json-schema-generator` walks it as a named object type and emits the expected
- * `{"type":"object", "additionalProperties": false}` schema. Authoring-time, it's
- * structurally equivalent to `Record<string, never>` for the no-properties case; the
- * runtime handler receives an empty object on every call.
- */
-export interface EmptyInput {
-}
-/**
- * Carrier returned by the typed authoring surface. Today it's a 3-arg adapter shaped
- * `(args, ctx, client) => Promise<TResult>` — the same call shape the existing scripted-tool
- * wrapper synthesizer (`DaemonScriptedToolBundler.synthesizeWrapper`) invokes against every
- * registered tool. The adapter unpacks `client.tools` into the typed [ToolContext] before
- * forwarding to the author's `(input, ctx)` handler, so a `.ts` author can write the typed
- * shape WITHOUT the runtime dispatcher having to learn about the alternative arity.
- *
- * The `<I, O>` type parameters remain the load-bearing part of the contract for codegen
- * — `ScriptedToolDefinitionAnalyzer` walks each `trailblaze.tool<I, O>(handler)` call site
- * via the TypeScript AST to derive [TrailblazeToolMap] entries. The runtime shape chosen
- * here is decoupled from extraction; this 3-arg adapter just ensures the synthesized
- * wrapper's `__userHandler(args, ctx, __client)` call site reaches the author's typed
- * handler with the right arguments. If a future change wants a richer descriptor returned
- * here (e.g. carrying metadata that the analyzer can't recover from the AST alone), update
- * both sides in lockstep.
- */
-export type TypedToolDefinition<TInput = Record<string, never>, TResult = string> = (args: TInput, ctx: TrailblazeContext | undefined, client: TrailblazeClient) => Promise<TResult>;
 /**
  * Declare a Trailblaze tool.
  *
@@ -6026,8 +5872,55 @@ export interface TrailblazeToolMap {
 		args: {
 			/** Selector to match against the current view hierarchy. */
 			selector: TrailblazeNodeSelector;
+			/**
+			 * Optional wait budget in milliseconds. Omit (the default) for a single point-in-time
+			 * snapshot. When set, the tool polls the LIVE hierarchy until at least one match appears
+			 * or the budget elapses, then returns whatever matched (an empty array if nothing did).
+			 * This is the non-throwing "wait until this selector is visible" probe for conditional
+			 * flows — use the result length as the gate (`matches.length === 0` → not visible within
+			 * the timeout). Prefer this over hand-rolling a poll loop on top of point-in-time calls.
+			 */
+			timeoutMs?: number;
 		};
 		result: MatchDescriptor[];
+	};
+	/**
+	 * Tap the element resolved by a [TrailblazeNodeSelector], using the runtime's
+	 * selector-resolved tap routing (ACTION_CLICK on a qualifying interactive leaf, coordinate
+	 * gesture otherwise — see `AccessibilityDeviceManager`) plus the usual animation settle.
+	 *
+	 * Prefer this over reading bounds from `findMatches` and tapping `tapOnPoint`: it preserves
+	 * the routing that makes clickable *wrapper* rows (text on a child view) actually fire, which
+	 * a raw coordinate tap can't guarantee. Pair with `findMatches({ selector, timeoutMs })` to
+	 * wait for the element first.
+	 *
+	 * Source: `TapOnByElementSelector.kt` (`tapOnElementBySelector`).
+	 */
+	tapOnElementBySelector: {
+		args: {
+			/** The node selector identifying the element to tap. */
+			nodeSelector: TrailblazeNodeSelector;
+			/** Set to true for a long press instead of a tap. Default false. */
+			longPress?: boolean;
+			/** Optional rationale logged alongside the tool call. */
+			reason?: string;
+		};
+		result: string;
+	};
+	/**
+	 * Wait for on-screen animations to settle, up to the given number of seconds (it returns
+	 * early once the UI is idle). Backed by Maestro's `WaitForAnimationToEnd` — use it to let a
+	 * transition finish before a follow-up tap or assertion, the scripted-tool equivalent of the
+	 * Kotlin agent's `WaitForAnimationToEndCommand` settle.
+	 *
+	 * Source: `WaitForIdleSyncTrailblazeTool.kt` (`wait`).
+	 */
+	wait: {
+		args: {
+			/** Maximum seconds to wait for animations to settle. Default 5. */
+			timeToWaitInSeconds?: number;
+		};
+		result: string;
 	};
 	/**
 	 * Assert an element with the given accessibility text is visible. DEPRECATED upstream
@@ -6051,12 +5944,8 @@ export interface TrailblazeToolMap {
 	};
 }
 /**
- * Namespace bundle authors import as `trailblaze`. Flat entry points (`tool`, `run`) also
- * export individually for anyone who prefers named imports over the namespace.
- *
- * Test-only helpers (e.g., `_clearPendingTools` in `./tool.js`) are deliberately NOT
- * re-exported here. The SDK's public surface is `tool`, `run`, `fromMeta`, and the type
- * exports above; tests that need internals import from the module's relative path directly.
+ * Namespace bundle authors import as `trailblaze` on the subprocess path. `tool` is the full
+ * dispatcher (typed + imperative forms, ajv-validated); `run` starts the MCP stdio server.
  */
 export declare const trailblaze: {
 	tool: typeof tool;

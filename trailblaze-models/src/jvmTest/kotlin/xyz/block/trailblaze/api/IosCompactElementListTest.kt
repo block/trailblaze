@@ -3,6 +3,7 @@ package xyz.block.trailblaze.api
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class IosCompactElementListTest {
@@ -54,6 +55,90 @@ class IosCompactElementListTest {
     val result = IosCompactElementList.build(root)
 
     assertContains(result.text, "UITextField \"Email address\"")
+  }
+
+  @Test
+  fun `wide short empty text field with hint and resourceId is not filtered as a scrollbar`() {
+    // Regression: an empty, unfocused SwiftUI TextField is captured by Maestro as a node carrying
+    // only hintText (the placeholder) + resourceId — no className, no clickable flag — with bounds
+    // like 16,78..386,112 (370x34). That aspect ratio (>10) previously tripped the
+    // horizontal-scrollbar heuristic in isSystemUi and the field was dropped from the list, so the
+    // agent couldn't see — or tap by ref — a field plainly on screen. Identifying metadata
+    // (resourceId / hintText) now exempts a node from the chrome heuristics.
+    val field =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            hintText = "Name",
+            resourceId = "field_name",
+          ),
+        bounds = TrailblazeNode.Bounds(16, 78, 386, 112),
+      )
+    val root = node(children = listOf(field))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "Name")
+    assertContains(result.text, "field_name")
+    assertTrue(
+      result.elementNodeIds.contains(field.nodeId),
+      "Empty text field with a placeholder + resourceId should get an element ref, not be filtered",
+    )
+  }
+
+  @Test
+  fun `resourceId-only field stays out of compact view but is surfaced with a ref under ALL_ELEMENTS`() {
+    // A SwiftUI TextField with NO placeholder exposes only an accessibility identifier — Maestro
+    // gives it just a resourceId (no text/hintText/accessibilityText, no className). It must NOT
+    // bloat the lean per-turn compact view (it isn't "meaningful"), but `requestDetailedViewHierarchy`
+    // (ALL_ELEMENTS) must surface it with a ref so the agent can see and tap it.
+    val field =
+      node(
+        detail = DriverNodeDetail.IosMaestro(resourceId = "field_secret"),
+        bounds = TrailblazeNode.Bounds(16, 78, 386, 112),
+      )
+    val root = node(children = listOf(field))
+
+    val compact = IosCompactElementList.build(root)
+    assertFalse(
+      compact.elementNodeIds.contains(field.nodeId),
+      "A label-less resourceId-only field should stay out of the lean compact view",
+    )
+
+    val all = IosCompactElementList.build(root, details = setOf(SnapshotDetail.ALL_ELEMENTS))
+    // Rendered as the generic `element` descriptor with the [id=…] annotation carrying the identity.
+    assertContains(all.text, "element")
+    assertContains(all.text, "field_secret")
+    assertTrue(
+      all.elementNodeIds.contains(field.nodeId),
+      "ALL_ELEMENTS should surface the resourceId-only field with a ref",
+    )
+  }
+
+  @Test
+  fun `even a clickable label-less id-only field is gated to ALL_ELEMENTS, not the compact view`() {
+    // A clickable element carrying only a resourceId (no text/hintText/accessibilityText/className)
+    // IS "meaningful" (clickable). The `element` fallback is gated EXPLICITLY on includeAllElements
+    // (not the branch's `includeAllElements || isMeaningful`), so even this meaningful node must NOT
+    // leak into the lean default compact view — that keeps the default byte-identical. It surfaces
+    // only under ALL_ELEMENTS (requestDetailedViewHierarchy).
+    val button =
+      node(
+        detail = DriverNodeDetail.IosMaestro(resourceId = "icon_button", clickable = true),
+        bounds = TrailblazeNode.Bounds(16, 78, 56, 118),
+      )
+    val root = node(children = listOf(button))
+
+    assertFalse(
+      IosCompactElementList.build(root).elementNodeIds.contains(button.nodeId),
+      "A clickable label-less id-only element must stay out of the lean default compact view",
+    )
+
+    val all = IosCompactElementList.build(root, details = setOf(SnapshotDetail.ALL_ELEMENTS))
+    assertContains(all.text, "icon_button")
+    assertTrue(
+      all.elementNodeIds.contains(button.nodeId),
+      "ALL_ELEMENTS should surface the clickable id-only element with a ref",
+    )
   }
 
   @Test

@@ -3,6 +3,8 @@ package xyz.block.trailblaze.scripting
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -786,6 +788,75 @@ class AnalyzerScriptedToolEnrichmentTest {
     assertEquals(JsonPrimitive(true), meta.get("trailblaze/requiresHost"))
   }
 
+  @Test
+  fun `analyzer-extracted surfaceToLlm and isRecordable promote the typed slots and fold into meta`() {
+    // The `.ts`-spec-as-single-source path: an author writes `surfaceToLlm: false` /
+    // `isRecordable: false` in the typed spec, the analyzer extracts them, and enrichment must
+    // BOTH set the typed `InlineScriptToolConfig` slots (read by the host in-process advertise +
+    // recording gates) AND fold the namespaced keys into `_meta` (read by the on-device launcher).
+    // The descriptor leaves both at their default `true`, so the AND combine yields `false`.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "internalStep.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "internalStep",
+          sourcePath = script.absolutePath,
+          spec = JsonObject(
+            mapOf(
+              "surfaceToLlm" to JsonPrimitive(false),
+              "isRecordable" to JsonPrimitive(false),
+            ),
+          ),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/internalStep.yaml", script = "./internalStep.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals(false, config.surfaceToLlm, "analyzer surfaceToLlm=false must promote the typed slot")
+    assertEquals(false, config.isRecordable, "analyzer isRecordable=false must promote the typed slot")
+    val meta = assertNotNull(config.meta)
+    assertEquals(JsonPrimitive(false), meta.get("trailblaze/surfaceToLlm"))
+    assertEquals(JsonPrimitive(false), meta.get("trailblaze/isRecordable"))
+  }
+
+  @Test
+  fun `default surfaceToLlm and isRecordable leave the typed slots true and emit no meta keys`() {
+    // No-regression pin: a normal tool (no opt-out anywhere) must keep the typed slots `true` and
+    // must NOT emit the namespaced keys — folding the `true` defaults would change the wire shape
+    // for nearly every tool and the runtime parsers already default to `true` on absence.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "normalTool.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "normalTool", sourcePath = script.absolutePath, spec = null))
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/normalTool.yaml", script = "./normalTool.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertTrue(config.surfaceToLlm)
+    assertTrue(config.isRecordable)
+    // meta is null here (no shortcuts, no explicit _meta, null spec) — no surface/record keys.
+    assertNull(config.meta?.get("trailblaze/surfaceToLlm"))
+    assertNull(config.meta?.get("trailblaze/isRecordable"))
+  }
+
   // ============================================================================
   // Partial single-tool descriptors — YAML carries `name:` + maybe `_meta:` /
   // shortcuts; analyzer fills description + inputSchema from the typed `.ts`.
@@ -1145,6 +1216,51 @@ class AnalyzerScriptedToolEnrichmentTest {
       "Analyzer-derived (must be preserved).",
       inherited.description,
       "entry without explicit description must inherit from the analyzer",
+    )
+  }
+
+  @Test
+  fun `per-entry _meta cannot re-introduce a surfaceToLlm true that contradicts the combined false slot`() {
+    // Regression for the typed-slot-vs-_meta divergence on the per-entry overlay path: a file-wide
+    // `surfaceToLlm: false` shortcut makes the typed slot false, but a per-entry raw
+    // `_meta:{trailblaze/surfaceToLlm: true}` is overlaid AFTER mergeMeta's fold. Without the
+    // re-assert, the on-device `_meta` (read by QuickJsToolMeta) would say true while the host's
+    // typed slot says false. Pin that the combined opt-out wins in BOTH.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "entryMeta.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "step", sourcePath = script.absolutePath, spec = null))
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "trailmap",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/entryMeta.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./entryMeta.ts",
+            // File-wide opt-out via the shortcut.
+            surfaceToLlm = false,
+            tools = listOf(
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(
+                name = "step",
+                // Contradictory per-entry raw `_meta` — must NOT win over the combined false.
+                meta = buildJsonObject { put("trailblaze/surfaceToLlm", JsonPrimitive(true)) },
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals(false, config.surfaceToLlm, "typed slot must reflect the file-wide opt-out")
+    assertEquals(
+      JsonPrimitive(false),
+      config.meta?.get("trailblaze/surfaceToLlm"),
+      "the combined opt-out must be re-asserted into `_meta` so on-device agrees with the typed slot",
     )
   }
 }

@@ -282,7 +282,8 @@ object AndroidCompactElementList {
       val boundsStr = if (includeBounds) boundsAnnotation(node) else ""
       val offscreenStr =
         if (includeOffscreen && isOffscreen(node, screenHeight)) " (offscreen)" else ""
-      lines.add("$indent[$ref] $descriptor$annotations$boundsStr$offscreenStr")
+      val invertedStr = if (hasInvertedBounds(node)) " (bounds-transformed)" else ""
+      lines.add("$indent[$ref] $descriptor$annotations$boundsStr$offscreenStr$invertedStr")
       elementNodeIds.add(node.nodeId)
       node.bounds?.let { elementBounds.add(it) }
       refMapping[ref] = node.nodeId
@@ -466,8 +467,15 @@ object AndroidCompactElementList {
     // standalone with no `[selected]` marker — and the agent can't tell which
     // bottom-nav tab is currently active.
     if (props.isSelected) return true
-    // Named content (text or contentDescription) that is important for accessibility
-    if (label != null && props.isImportantForAccessibility) return true
+    // Named content (text or contentDescription) is meaningful. Historically this required
+    // `isImportantForAccessibility=true` to filter out decorative wrappers, but that gate is
+    // now redundant: `TrailblazeNodeMapper.filterImportantForAccessibility()` already drops
+    // non-important wrappers (anything with children), and only keeps non-important LEAVES
+    // whose own label is the screen's readable content (the Compose `mergeDescendants` case).
+    // So by the time `isMeaningful()` runs, every non-important node still in the tree is a
+    // label-bearing leaf the LLM needs to see — gating on `isImportantForAccessibility` here
+    // would re-drop the very Compose leaves the upstream filter just preserved.
+    if (label != null) return true
     return false
   }
 
@@ -496,6 +504,10 @@ object AndroidCompactElementList {
   /** Checks if an element is below the visible screen area. */
   private fun isOffscreen(node: TrailblazeNode, screenHeight: Int): Boolean =
     CompactElementListUtils.isOffscreen(node, screenHeight)
+
+  /** Returns true when the node has inverted bounds (Compose graphicsLayer artifact). */
+  private fun hasInvertedBounds(node: TrailblazeNode): Boolean =
+    CompactElementListUtils.hasInvertedBounds(node)
 
   /**
    * Emits a non-tappable affordance for a scrolled-away editable field so the agent

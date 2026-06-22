@@ -1439,6 +1439,170 @@ class ResolvedTargetReportEmitterTest {
     }
   }
 
+  @Test
+  fun `toolset-delivered scripted tool earns a sidecar, not a bare matrix cell`() {
+    // Regression for the same-class gap that the tool-surface consolidation (#3831) made visible:
+    // `openUrl` is a scripted tool delivered via the `navigation` toolset, NOT a target's own
+    // `tools:`. Pre-fix, `collectScriptedTools` only read `target.tools` + trailmap exports, so a
+    // toolset-delivered scripted tool got a matrix row (via the catalog `toolNames`) but no
+    // `ToolDetail.Scripted` — it rendered as a plain, un-clickable cell. The fix resolves
+    // toolset-delivered scripted names to their descriptor so they earn a sidecar like any other
+    // scripted tool. Drives the real classpath catalog (navigation/openUrl); see navigation.yaml.
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.nav"),
+        toolSets = listOf("navigation"),
+        drivers = listOf("android-ondevice-instrumentation"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "navtarget",
+        target = TrailmapTargetConfig(displayName = "NavTarget", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(newDir("navtarget")),
+      target = AppTargetYamlConfig(id = "navtarget", displayName = "NavTarget", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val outDir = newDir("out")
+    ResolvedTargetReportEmitter.emit(
+      resolvedTargets = listOf(trailmap.target!!),
+      resolvedTrailmaps = listOf(trailmap),
+      outputDir = outDir,
+    )
+
+    // The fix's direct output: a Scripted sidecar for the toolset-delivered tool.
+    val sidecar = File(outDir, "navtarget/tools/openUrl.md")
+    assertTrue("expected a Scripted sidecar for toolset-delivered openUrl at $sidecar") { sidecar.exists() }
+    val sidecarText = sidecar.readText()
+    assertTrue("sidecar must declare the scripted source kind, got:\n$sidecarText") {
+      sidecarText.contains("- Kind: scripted")
+    }
+
+    // And the report must linkify openUrl to that sidecar — not the bare-backtick "no metadata" form.
+    val report = File(outDir, "navtarget.report.md").readText()
+    assertTrue("expected openUrl linkified to its sidecar, got:\n$report") {
+      report.contains("[`openUrl`](navtarget/tools/openUrl.md)")
+    }
+  }
+
+  @Test
+  fun `availability matrix scopes toolset-delivered scripted tools to the driver cells that delivered them`() {
+    // Regression for the automated review on PR #3832: a toolset-delivered scripted tool was
+    // unioned target-wide into `scriptedTools` and then marked ✅ across every driver column,
+    // never intersected with the (platform, driver) cells whose toolset actually resolved it. `openUrl` is a scripted tool delivered by the always-enabled `core_interaction`
+    // toolset (compatible with android/ios drivers, NOT web/playwright) and declares
+    // `supportedPlatforms: [android, ios]`. A dual-platform target (android + web) must therefore
+    // show `openUrl` ✅ under the Android driver column (where core_interaction resolves it) and
+    // BLANK under the Playwright column — its delivering toolset is driver-incompatible there.
+    // Pre-fix, the driver-agnostic scripted loop marked it ✅ on every column it wasn't filtered
+    // off by `supportedPlatforms`. Drives the real classpath catalog (core_interaction + openUrl).
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.scope.android"),
+        toolSets = listOf("navigation"),
+        drivers = listOf("android-ondevice-instrumentation"),
+      ),
+      "web" to PlatformConfig(
+        appIds = listOf("com.example.scope.web"),
+        toolSets = listOf("web_core"),
+        drivers = listOf("playwright-native"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "navscope",
+        target = TrailmapTargetConfig(displayName = "NavScope", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(newDir("navscope")),
+      target = AppTargetYamlConfig(id = "navscope", displayName = "NavScope", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val outDir = newDir("out")
+    ResolvedTargetReportEmitter.emit(
+      resolvedTargets = listOf(trailmap.target!!),
+      resolvedTrailmaps = listOf(trailmap),
+      outputDir = outDir,
+    )
+    val matrixSection = File(outDir, "navscope.report.md").readText()
+      .substringAfter("## Tool availability matrix")
+      .substringBefore("## Resolution trace")
+    val headerRow = matrixSection.lines().first { it.startsWith("| Tool ") }
+    val headers = headerRow.split("|").map { it.trim() }
+    val androidIdx = headers.indexOfFirst { it.startsWith("android-ondevice-instrumentation") }
+    val webIdx = headers.indexOfFirst { it.startsWith("playwright-native") }
+
+    val openUrlRow = matrixSection.lines().first { it.contains("`openUrl`") }
+    val openUrlCells = openUrlRow.split("|").map { it.trim() }
+    assertEquals(
+      "✅",
+      openUrlCells[androidIdx],
+      "openUrl must show ✅ under the Android driver that resolved its toolset, got row:\n$openUrlRow",
+    )
+    assertEquals(
+      "",
+      openUrlCells[webIdx],
+      "openUrl must be BLANK under the Playwright driver — no toolset delivered it there, got row:\n$openUrlRow",
+    )
+    // The script:<file> toolset label must still appear on the row (the per-cell path attaches it).
+    assertTrue("openUrl row must carry the script:openUrl.ts label, got:\n$openUrlRow") {
+      openUrlRow.contains("script:openUrl.ts")
+    }
+  }
+
+  @Test
+  fun `availability matrix marks an excluded toolset-delivered scripted tool with a cross`() {
+    // Companion to the scope test: a toolset-delivered scripted tool listed in `excluded_tools:`
+    // must render ❌ under the cell whose toolset would otherwise have surfaced it (mirrors the
+    // class-backed / YAML exclusion semantics). Pre-fix, toolset-delivered scripted tools bypassed
+    // exclusion filtering entirely and showed ✅ even when excluded (automated review on PR #3832).
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.navexcl"),
+        toolSets = listOf("navigation"),
+        drivers = listOf("android-ondevice-instrumentation"),
+        excludedTools = listOf("openUrl"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "navexcl",
+        target = TrailmapTargetConfig(displayName = "NavExcl", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(newDir("navexcl")),
+      target = AppTargetYamlConfig(id = "navexcl", displayName = "NavExcl", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val outDir = newDir("out")
+    ResolvedTargetReportEmitter.emit(
+      resolvedTargets = listOf(trailmap.target!!),
+      resolvedTrailmaps = listOf(trailmap),
+      outputDir = outDir,
+    )
+    val matrixSection = File(outDir, "navexcl.report.md").readText()
+      .substringAfter("## Tool availability matrix")
+      .substringBefore("## Resolution trace")
+    val openUrlRow = matrixSection.lines().firstOrNull { it.contains("`openUrl`") }
+    assertTrue("expected an openUrl row (excluded tools still surface as ❌), got:\n$matrixSection") {
+      openUrlRow != null
+    }
+    assertTrue("excluded openUrl must show ❌ under the android driver, got:\n$openUrlRow") {
+      openUrlRow!!.contains("❌")
+    }
+    assertFalse("excluded openUrl must NOT show ✅, got:\n$openUrlRow") {
+      openUrlRow!!.contains("✅")
+    }
+  }
+
   private fun newDir(name: String): File {
     val parent = createTempDirectory("resolved-target-report-test").toFile()
     tempDirs += parent

@@ -370,6 +370,102 @@ class TrailblazeNodeMapperTest {
     assertEquals(0, result.children.size, "All non-important nodes should be dropped regardless of interactive signals")
   }
 
+  // --- Compose readable-label fallback ---
+  // Jetpack Compose's default `mergeDescendants=true` sets isImportantForAccessibility=false
+  // on inner Text/Icon leaves because their content is supposed to be readable via the
+  // merged parent's contentDescription. When that merge doesn't fire (or the parent never
+  // gets a usable label) the dropped child carries the only readable text on screen, and
+  // the LLM gets a refless container it can't select. The filter therefore also keeps any
+  // non-important node that carries its own text or contentDescription — those are the
+  // signals an LLM-issued textRegex/contentDescriptionRegex selector can actually bind to.
+  // Interactive flags (clickable/editable/focusable) intentionally do NOT trigger the
+  // fallback; see the "drops non-important editable or clickable nodes" test for why.
+
+  @Test
+  fun `filterImportantForAccessibility keeps non-important leaf when text is set`() {
+    val root = node(
+      1, true,
+      listOf(
+        nodeWithDetail(
+          10,
+          DriverNodeDetail.AndroidAccessibility(
+            isImportantForAccessibility = false,
+            text = "Keypad",
+          ),
+        ),
+      ),
+    )
+    val result = root.filterImportantForAccessibility()
+    assertEquals(1, result.children.size)
+    assertEquals(10L, result.children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility keeps non-important leaf when contentDescription is set`() {
+    val root = node(
+      1, true,
+      listOf(
+        nodeWithDetail(
+          10,
+          DriverNodeDetail.AndroidAccessibility(
+            isImportantForAccessibility = false,
+            contentDescription = "Continue",
+          ),
+        ),
+      ),
+    )
+    val result = root.filterImportantForAccessibility()
+    assertEquals(1, result.children.size)
+    assertEquals(10L, result.children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility drops non-important leaf with blank text and contentDescription`() {
+    // Confirms the readable-label fallback uses isNullOrBlank, not just non-null. An empty
+    // string from a Compose semantic that synthesized an empty label must still drop, or
+    // we leak refless nodes into the simplified view.
+    val root = node(
+      1, true,
+      listOf(
+        nodeWithDetail(
+          10,
+          DriverNodeDetail.AndroidAccessibility(
+            isImportantForAccessibility = false,
+            text = "",
+            contentDescription = "   ",
+          ),
+        ),
+      ),
+    )
+    val result = root.filterImportantForAccessibility()
+    assertEquals(0, result.children.size)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility drops non-important wrapper with text but live children`() {
+    // The readable-label fallback is gated on LEAVES only — wrappers that carry a label but
+    // still have surviving children must drop so `containsChild` selectors that rely on
+    // non-important intermediates being filtered + their children promoted up keep working.
+    // See AccessibilityDeviceManagerTreeFilterTest's `containsChild …` test for the failure
+    // mode this guards against.
+    val root = node(
+      1, true,
+      listOf(
+        nodeWithDetail(
+          10,
+          DriverNodeDetail.AndroidAccessibility(
+            isImportantForAccessibility = false,
+            contentDescription = "Customer name 2",
+          ),
+          children = listOf(node(20, true)),
+        ),
+      ),
+    )
+    val result = root.filterImportantForAccessibility()
+    assertEquals(1, result.children.size, "Wrapper should drop; its important child promotes up")
+    assertEquals(20L, result.children[0].nodeId)
+  }
+
   // --- WebView exception ---
   // WebView descendants are HTML nodes whose `isImportantForAccessibility` is not set by
   // Chromium, and the WebView container itself is typically not marked important either.

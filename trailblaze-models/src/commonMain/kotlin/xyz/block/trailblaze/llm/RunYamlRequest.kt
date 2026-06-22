@@ -124,11 +124,10 @@ data class RunYamlRequest(
    * case. The runner's existing cycle/stuck detection still trips earlier when the LLM
    * spins on the same tool call.
    *
-   * Not honored by [AgentImplementation.MULTI_AGENT_V3], which has its own iteration knobs
-   * (see [xyz.block.trailblaze.agent.BlazeConfig]). The `init` block rejects the combination
-   * at construction time rather than silently dropping the cap, so direct RPC callers and
-   * tests can't bypass the invariant the CLI also enforces. Follow-up: wire V3 to an
-   * equivalent primitive so the flag means the same thing across agent implementations.
+   * Not honored by [AgentImplementation.MULTI_AGENT_V3], which manages its own iteration
+   * budget internally. The `init` block rejects the combination at construction time rather
+   * than silently dropping the cap, so direct RPC callers and tests can't bypass the
+   * invariant the CLI also enforces.
    */
   val maxLlmCalls: Int? = null,
 
