@@ -27,7 +27,8 @@ needed. Add a new trail by listing its slug in `TRAILS`.
 from pathlib import Path
 
 # Trail slugs that have a gallery section. Each maps to docs/report-assets/<slug>/.
-TRAILS = ["wikipedia"]
+# One per platform: web (wikipedia), iOS (ios-contacts), Android (clock).
+TRAILS = ["wikipedia", "ios-contacts", "clock"]
 
 _PENDING_HTML = """<!doctype html>
 <meta charset="utf-8">
