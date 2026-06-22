@@ -346,7 +346,14 @@ export interface CreateMockContextOptions {
   device?: {
     widthPixels?: number;
     heightPixels?: number;
+    /** MCP/subprocess-shaped driver yamlKey (`TrailblazeDevice.driverType`). */
     driverType?: string;
+    /**
+     * On-device QuickJS-shaped driver yamlKey (`TrailblazeDevice.driver`). Set this to model the
+     * `runtime: inProcess` envelope, where the driver arrives under `driver` rather than
+     * `driverType` — so a test can exercise a tool's driver branching on the in-process path.
+     */
+    driver?: string;
   };
   target?: TrailblazeTarget;
   memory?: Record<string, unknown>;
@@ -381,6 +388,15 @@ export interface CreateMockContextOptions {
 export interface QueuedFindMatchesClient extends TrailblazeClient {
   calls: Array<{ tool: string; args: Record<string, unknown> }>;
   queueFindMatches(responses: Array<MatchDescriptor[]>): void;
+  /**
+   * Queue the per-call boolean results for `waitUntilNotVisible` — the non-throwing
+   * disappearance probe (see `WaitUntilNotVisibleTrailblazeTool` / `built-in-tools.ts`). Each
+   * `client.tools.waitUntilNotVisible(...)` call dequeues the next boolean. Mirrors
+   * [queueFindMatches] so a flow that interleaves appearance probes (`findMatches`) and
+   * disappearance probes (`waitUntilNotVisible`) — the shape every launch step has — can model a
+   * moving UI across both. Like the findMatches queue, exhaustion is loud (throws with the args).
+   */
+  queueWaitUntilNotVisible(responses: boolean[]): void;
 }
 
 /**
@@ -394,6 +410,7 @@ export interface QueuedFindMatchesClient extends TrailblazeClient {
 export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const findMatchesQueue: Array<MatchDescriptor[]> = [];
+  const waitUntilNotVisibleQueue: boolean[] = [];
 
   const dispatch = (name: string, args: Record<string, unknown>): unknown => {
     calls.push({ tool: name, args });
@@ -405,6 +422,15 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
         );
       }
       return findMatchesQueue.shift();
+    }
+    if (name === "waitUntilNotVisible") {
+      if (waitUntilNotVisibleQueue.length === 0) {
+        throw new Error(
+          `createQueuedFindMatchesClient: no more waitUntilNotVisible responses queued; received ` +
+            `call with args=${JSON.stringify(args)}. Did the test forget a queueWaitUntilNotVisible?`,
+        );
+      }
+      return waitUntilNotVisibleQueue.shift();
     }
     return "";
   };
@@ -425,6 +451,9 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
     queueFindMatches(responses) {
       findMatchesQueue.push(...responses);
     },
+    queueWaitUntilNotVisible(responses) {
+      waitUntilNotVisibleQueue.push(...responses);
+    },
   };
 }
 
@@ -434,6 +463,8 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     widthPixels: opts.device?.widthPixels ?? 1080,
     heightPixels: opts.device?.heightPixels ?? 2400,
     driverType: opts.device?.driverType ?? "mock-driver",
+    // Mirrors the on-device QuickJS envelope's `driver` field; left undefined unless a test sets it.
+    driver: opts.device?.driver,
   };
 
   return {

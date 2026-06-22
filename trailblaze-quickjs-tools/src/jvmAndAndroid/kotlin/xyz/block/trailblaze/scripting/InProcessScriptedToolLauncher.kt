@@ -126,7 +126,16 @@ object InProcessScriptedToolLauncher {
     classLoader: ClassLoader? = InProcessScriptedToolLauncher::class.java.classLoader,
     logPrefix: String = "[InProcessScriptedToolLauncher]",
   ): List<LazyYamlScriptedToolRegistration> {
-    val resolved = resolveInProcessScriptedTools(toolNames, skipNames, logPrefix)
+    // Idempotent launch: skip tools already on the repo, not just the caller-supplied [skipNames].
+    // A host session can reach this launcher twice against the same repo — e.g. an iOS-host tool
+    // dispatch ensures the session's scripted-tool runtime (registering catalog tools like
+    // `openUrl`), then re-runs the resolved tool via `runYaml`, which launches catalog tools again.
+    // Without this guard the second pass hits `addDynamicTools`'s duplicate-name check and throws
+    // ("Dynamic tool 'openUrl' is already registered by another dynamic source"), crashing the whole
+    // session over a tool that's already present and working. Re-registering an identical catalog
+    // tool is a no-op, so skipping it is strictly safer than crashing.
+    val alreadyRegistered = toolRepo.getRegisteredDynamicTools().keys
+    val resolved = resolveInProcessScriptedTools(toolNames, skipNames + alreadyRegistered, logPrefix)
     if (resolved.isEmpty()) return emptyList()
 
     val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()

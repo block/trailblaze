@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.api
 
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 
 class ScreenshotScalingConfigTest {
 
@@ -43,5 +45,48 @@ class ScreenshotScalingConfigTest {
   fun `small image is not scaled up`() {
     // 320x480: both within bounds → returned as-is
     assertEquals(Pair(320, 480), config.computeScaledDimensions(320, 480))
+  }
+
+  @Test
+  fun `web default keeps more vertical detail on a landscape capture`() {
+    // 2560x1600 (1280x800 viewport at DPR 2.0), the common dev web capture.
+    // mobile-tuned DEFAULT (1536x768) squeezes it to ~1228x768 — the grainy case.
+    assertEquals(Pair(1228, 768), config.computeScaledDimensions(2560, 1600))
+    // web-tuned WEB (1536x1024) keeps the long side at 1536 and lets the height reach 960.
+    assertEquals(Pair(1536, 960), ScreenshotScalingConfig.WEB.computeScaledDimensions(2560, 1600))
+  }
+
+  @Test
+  fun `web default raises quality without touching the long-side cap`() {
+    assertEquals(0.90f, ScreenshotScalingConfig.WEB.compressionQuality)
+    assertEquals(0.80f, ScreenshotScalingConfig.DEFAULT.compressionQuality)
+    assertEquals(1536, ScreenshotScalingConfig.WEB.maxDimension1)
+  }
+
+  @AfterTest
+  fun resetEffectiveConfig() {
+    EffectiveScreenshotScalingConfig.clearForTests()
+  }
+
+  @Test
+  fun `effectiveForWeb uses the web default when the user has set no override`() {
+    EffectiveScreenshotScalingConfig.clearForTests()
+    assertEquals(ScreenshotScalingConfig.WEB, EffectiveScreenshotScalingConfig.effectiveForWeb)
+  }
+
+  @Test
+  fun `effectiveForWeb honors an explicit user customization unchanged`() {
+    // e.g. a user who ran `trailblaze config screenshot-format png` — web must not override it.
+    val userConfig = ScreenshotScalingConfig(imageFormat = TrailblazeImageFormat.PNG)
+    EffectiveScreenshotScalingConfig.setEffectiveDefault(userConfig)
+    assertSame(userConfig, EffectiveScreenshotScalingConfig.effectiveForWeb)
+  }
+
+  @Test
+  fun `effectiveForWeb honors an explicit config even when it equals the framework default`() {
+    // The fix for the value-equality gap: a user (or downstream distro) who explicitly pins the
+    // framework defaults must NOT be silently switched to the web default.
+    EffectiveScreenshotScalingConfig.setEffectiveDefault(ScreenshotScalingConfig.DEFAULT)
+    assertEquals(ScreenshotScalingConfig.DEFAULT, EffectiveScreenshotScalingConfig.effectiveForWeb)
   }
 }

@@ -74,11 +74,10 @@ interface TrailblazeSdkDtsBundleExtension {
 }
 
 /**
- * Registers `bundleTrailblazeSdkDts` and `verifyTrailblazeSdkDtsBundle` against the
- * [TrailblazeSdkDtsBundleExtension] paths. Same shape as [TrailblazeSdkBundlePlugin] — the
- * pairing exists for the same reason: the `.d.ts` bundle, like the `.js` bundle, is a
- * committed artifact that ships in JAR resources, and CI needs a byte-diff gate so SDK
- * source edits without a regen don't slip through.
+ * Registers `bundleTrailblazeSdkDts` against the [TrailblazeSdkDtsBundleExtension] paths. Same
+ * shape as [TrailblazeSdkBundlePlugin] — both generate a `@trailblaze/scripting` bundle that
+ * ships in JAR resources from `sdks/typescript/src/`. The bundle is a build artifact
+ * (gitignored), regenerated each build; the consuming packaging task depends on this generator.
  *
  * **Why not generalize the esbuild plugin to handle both?** The two bundlers take radically
  * different argv shapes (esbuild is bundle-mode + format flags; dts-bundle-generator is
@@ -97,9 +96,9 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
     project.tasks.register("bundleTrailblazeSdkDts") { task ->
       task.group = "build"
       task.description =
-        "Regenerates the committed @trailblaze/scripting declaration bundle " +
-          "(dist/index.d.ts). Manual-invocation: run after editing sdks/typescript/src/*.ts " +
-          "and commit the regenerated bundle alongside the source change."
+        "Regenerates the @trailblaze/scripting declaration + runtime bundle under dist/ (a " +
+          "gitignored build artifact) from sdks/typescript/src/. Wired ahead of resource " +
+          "packaging, so it runs as part of any build that ships dist/; can also be invoked directly."
 
       declareSdkDtsBundleInputs(task, ext, project)
       task.outputs.file(ext.sdkDtsBundleOutputFile).withPropertyName("sdkDtsBundle")
@@ -133,6 +132,14 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
 
       task.doFirst { requireExtensionConfigured(ext) }
       task.doLast {
+        // The bundles are build artifacts, not committed source, so every build that needs
+        // them installs the SDK's devDependencies (dts-bundle-generator, esbuild) from the
+        // committed bun.lock first. Idempotent — skips when node_modules is already present.
+        ensureSdkNodeModules(
+          sdkDir = ext.trailblazeSdkDir.get().asFile,
+          logFile = project.layout.buildDirectory
+            .file("tmp/bundle-trailblaze-sdk-install.log").get().asFile,
+        )
         val outputFile = ext.sdkDtsBundleOutputFile.get().asFile
         task.logger.lifecycle(
           "Regenerating SDK .d.ts bundle → ${outputFile.relativeTo(project.projectDir)}",
@@ -147,8 +154,7 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
         )
         task.logger.lifecycle(
           "Regenerated ${outputFile.relativeTo(project.projectDir)} " +
-            "(${outputFile.length() / 1024} KiB). Remember to `git add` and commit it " +
-            "alongside the SDK source change.",
+            "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
         )
 
         if (ext.sdkDtsTestingBundleOutputFile.isPresent) {
@@ -213,252 +219,6 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       }
     }
 
-    project.tasks.register("verifyTrailblazeSdkDtsBundle") { task ->
-      task.group = "verification"
-      task.description =
-        "Verifies the committed dist/index.d.ts matches a fresh dts-bundle-generator output. " +
-          "Fails with the regenerate command when they differ. Wired into CI static checks."
-
-      val tempBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-dts-bundle.d.ts")
-      val tempTestingBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-dts-testing-bundle.d.ts")
-      val tempTestingRuntime = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-testing-runtime.js")
-      val tempRuntimeBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-runtime-bundle.js")
-
-      declareSdkDtsBundleInputs(task, ext, project)
-      // Same conditional-collection pattern as `verifyTrailblazeSdkBundle` — keeps
-      // UP-TO-DATE correctness across the "bundle exists" vs "bundle missing" transition
-      // without surfacing Gradle's generic "input file does not exist" error before the
-      // friendly doLast guard can fire.
-      task.inputs.files(
-        project.provider {
-          if (!ext.sdkDtsBundleOutputFile.isPresent) return@provider emptyList<File>()
-          val committed = ext.sdkDtsBundleOutputFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedDtsBundle")
-      task.inputs.files(
-        project.provider {
-          if (!ext.sdkDtsTestingBundleOutputFile.isPresent) return@provider emptyList<File>()
-          val committed = ext.sdkDtsTestingBundleOutputFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedDtsTestingBundle")
-      task.inputs.files(
-        project.provider {
-          if (!ext.sdkTestingRuntimeOutputFile.isPresent) return@provider emptyList<File>()
-          val committed = ext.sdkTestingRuntimeOutputFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedSdkTestingRuntime")
-      task.inputs.files(
-        project.provider {
-          if (!ext.sdkRuntimeBundleOutputFile.isPresent) return@provider emptyList<File>()
-          val committed = ext.sdkRuntimeBundleOutputFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedSdkRuntimeBundle")
-      task.outputs.file(tempBundle).withPropertyName("regeneratedDtsBundle")
-      task.outputs.files(
-        project.provider {
-          if (ext.sdkDtsTestingBundleOutputFile.isPresent) {
-            project.files(tempTestingBundle)
-          } else {
-            project.files()
-          }
-        },
-      ).withPropertyName("regeneratedDtsTestingBundle")
-      task.outputs.files(
-        project.provider {
-          if (ext.sdkTestingRuntimeOutputFile.isPresent) {
-            project.files(tempTestingRuntime)
-          } else {
-            project.files()
-          }
-        },
-      ).withPropertyName("regeneratedSdkTestingRuntime")
-      task.outputs.files(
-        project.provider {
-          if (ext.sdkRuntimeBundleOutputFile.isPresent) {
-            project.files(tempRuntimeBundle)
-          } else {
-            project.files()
-          }
-        },
-      ).withPropertyName("regeneratedSdkRuntimeBundle")
-
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        val committed = ext.sdkDtsBundleOutputFile.get().asFile
-        if (!committed.exists()) {
-          throw GradleException(
-            "Committed .d.ts bundle missing at ${committed.absolutePath}. Run " +
-              "`./gradlew :trailblaze-models:bundleTrailblazeSdkDts` and commit the result.",
-          )
-        }
-
-        val tempBundleFile = tempBundle.get().asFile
-        runDtsBundleGenerator(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
-          outputFile = tempBundleFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/verify-trailblaze-sdk-dts-bundle.log").get().asFile,
-          appendRuntimeGlobals = true,
-        )
-
-        val committedBytes = committed.readBytes()
-        val regeneratedBytes = tempBundleFile.readBytes()
-        if (!committedBytes.contentEquals(regeneratedBytes)) {
-          throw GradleException(
-            "dist/index.d.ts does not match a fresh dts-bundle-generator output.\n" +
-              "Likely causes (in order of frequency):\n" +
-              "  1. You edited sdks/typescript/src/ (or sdks/typescript/runtime-globals.d.ts)\n" +
-              "     without regenerating the bundle.\n" +
-              "  2. A transitive dep (e.g. typescript, zod) drifted via registry resolution since\n" +
-              "     the bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
-              "     and re-run.\n" +
-              "  3. Your local node_modules drifted from bun.lock. Try\n" +
-              "     `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)` to restore exact\n" +
-              "     lockfile versions before regenerating.\n" +
-              "Regenerate the bundle and commit the result:\n" +
-              "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
-              "  git add ${committed.relativeTo(project.rootDir)} && git commit -m \"chore(sdk): regenerate dts bundle\"\n" +
-              "After regenerating, sanity-check the bundle end-to-end with:\n" +
-              "  ./trailblaze check TRAILMAP_ID    # e.g. playwrightSample\n" +
-              "(runs the bundled tsc against the trailmap's generated tsconfig — using an\n" +
-              "ALL_CAPS placeholder rather than the angle-bracket form so a developer\n" +
-              "who copies the line verbatim doesn't trip bash's stdin-redirection on the\n" +
-              "`<...>` characters).\n" +
-              "Committed bundle size: ${committedBytes.size} bytes\n" +
-              "Regenerated bundle size: ${regeneratedBytes.size} bytes",
-          )
-        }
-        task.logger.lifecycle(
-          "✓ dist/index.d.ts is fresh (${committedBytes.size} bytes match).",
-        )
-
-        // Optional sibling testing bundle. Same byte-diff gate; same regenerate
-        // hint. Skipped silently if the extension didn't configure a second output
-        // path so the plugin stays usable for the older single-bundle wiring.
-        if (ext.sdkDtsTestingBundleOutputFile.isPresent) {
-          val committedTesting = ext.sdkDtsTestingBundleOutputFile.get().asFile
-          if (!committedTesting.exists()) {
-            throw GradleException(
-              "Committed testing .d.ts bundle missing at ${committedTesting.absolutePath}. " +
-                "Run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` and commit the result.",
-            )
-          }
-          val tempTestingBundleFile = tempTestingBundle.get().asFile
-          runDtsBundleGenerator(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/testing.ts"),
-            outputFile = tempTestingBundleFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/verify-trailblaze-sdk-dts-testing-bundle.log").get().asFile,
-            appendRuntimeGlobals = false,
-          )
-          val committedTestingBytes = committedTesting.readBytes()
-          val regeneratedTestingBytes = tempTestingBundleFile.readBytes()
-          if (!committedTestingBytes.contentEquals(regeneratedTestingBytes)) {
-            throw GradleException(
-              "dist/testing.d.ts does not match a fresh dts-bundle-generator output.\n" +
-                "Regenerate the testing bundle and commit the result:\n" +
-                "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
-                "  git add ${committedTesting.relativeTo(project.rootDir)} && " +
-                "git commit -m \"chore(sdk): regenerate dts testing bundle\"\n" +
-                "Committed bundle size: ${committedTestingBytes.size} bytes\n" +
-                "Regenerated bundle size: ${regeneratedTestingBytes.size} bytes",
-            )
-          }
-          task.logger.lifecycle(
-            "✓ dist/testing.d.ts is fresh (${committedTestingBytes.size} bytes match).",
-          )
-        }
-
-        // Optional sibling testing runtime (`dist/testing.js`). Verified the same
-        // byte-diff way as the `.d.ts` bundles. `bun test` consumes this file via
-        // the per-trailmap tsconfig's `paths` mapping at runtime; the `.d.ts` covers
-        // tsc's typing path.
-        if (ext.sdkTestingRuntimeOutputFile.isPresent) {
-          val committedRuntime = ext.sdkTestingRuntimeOutputFile.get().asFile
-          if (!committedRuntime.exists()) {
-            throw GradleException(
-              "Committed testing runtime missing at ${committedRuntime.absolutePath}. " +
-                "Run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` and commit the result.",
-            )
-          }
-          val tempRuntimeFile = tempTestingRuntime.get().asFile
-          runEsbuildTranspile(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/testing.ts"),
-            outputFile = tempRuntimeFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/verify-trailblaze-sdk-testing-runtime.log").get().asFile,
-          )
-          val committedRuntimeBytes = committedRuntime.readBytes()
-          val regeneratedRuntimeBytes = tempRuntimeFile.readBytes()
-          if (!committedRuntimeBytes.contentEquals(regeneratedRuntimeBytes)) {
-            throw GradleException(
-              "dist/testing.js does not match a fresh esbuild transpile output.\n" +
-                "Regenerate and commit:\n" +
-                "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
-                "  git add ${committedRuntime.relativeTo(project.rootDir)} && " +
-                "git commit -m \"chore(sdk): regenerate testing runtime\"\n" +
-                "Committed size: ${committedRuntimeBytes.size} bytes\n" +
-                "Regenerated size: ${regeneratedRuntimeBytes.size} bytes",
-            )
-          }
-          task.logger.lifecycle(
-            "✓ dist/testing.js is fresh (${committedRuntimeBytes.size} bytes match).",
-          )
-        }
-
-        // Optional runtime ESM bundle (`dist/index.js`) — the value-import companion to
-        // `dist/index.d.ts`. Same byte-diff gate as the other artifacts. Bundled (not
-        // transpiled) because `src/index.ts` re-exports from sibling modules + pulls in
-        // zod / MCP-SDK runtime, so a transpile-only output would dangle on those
-        // imports at load time. See [runEsbuildEsmBundle] for the argv decisions.
-        if (ext.sdkRuntimeBundleOutputFile.isPresent) {
-          val committedRuntime = ext.sdkRuntimeBundleOutputFile.get().asFile
-          if (!committedRuntime.exists()) {
-            throw GradleException(
-              "Committed runtime ESM bundle missing at ${committedRuntime.absolutePath}. " +
-                "Run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` and commit the result.",
-            )
-          }
-          val tempRuntimeFile = tempRuntimeBundle.get().asFile
-          runEsbuildEsmBundle(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
-            outputFile = tempRuntimeFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/verify-trailblaze-sdk-runtime-bundle.log").get().asFile,
-          )
-          val committedRuntimeBytes = committedRuntime.readBytes()
-          val regeneratedRuntimeBytes = tempRuntimeFile.readBytes()
-          if (!committedRuntimeBytes.contentEquals(regeneratedRuntimeBytes)) {
-            throw GradleException(
-              "dist/index.js does not match a fresh esbuild ESM bundle output.\n" +
-                "Likely causes (in order of frequency):\n" +
-                "  1. You edited sdks/typescript/src/ without regenerating the bundle.\n" +
-                "  2. A transitive runtime dep (e.g. zod, @modelcontextprotocol/sdk) drifted\n" +
-                "     since the bundle was last committed. Try\n" +
-                "     `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
-                "     and re-run.\n" +
-                "Regenerate and commit:\n" +
-                "  ./gradlew :trailblaze-models:bundleTrailblazeSdkDts\n" +
-                "  git add ${committedRuntime.relativeTo(project.rootDir)} && " +
-                "git commit -m \"chore(sdk): regenerate runtime bundle\"\n" +
-                "Committed size: ${committedRuntimeBytes.size} bytes\n" +
-                "Regenerated size: ${regeneratedRuntimeBytes.size} bytes",
-            )
-          }
-          task.logger.lifecycle(
-            "✓ dist/index.js is fresh (${committedRuntimeBytes.size} bytes match).",
-          )
-        }
-      }
-    }
   }
 }
 
@@ -495,8 +255,8 @@ private fun requireExtensionConfigured(ext: TrailblazeSdkDtsBundleExtension) {
   }
 }
 
-// Shared bundle-source input declarations used by both `bundleTrailblazeSdkDts` and
-// `verifyTrailblazeSdkDtsBundle`. Inputs include the SDK sources, the package.json
+// Bundle-source input declarations for `bundleTrailblazeSdkDts` — they drive Gradle's
+// UP-TO-DATE check. Inputs include the SDK sources, the package.json
 // (controls the inlined-externals via the deps list), the local lockfile so a
 // `bun install` drift in zod or typescript invalidates UP-TO-DATE, and the
 // hand-authored [RUNTIME_GLOBALS_FILENAME] file whose contents are appended after
@@ -568,11 +328,108 @@ private fun requireRuntimeGlobalsFile(sdkDir: File): File {
   return f
 }
 
+/** Relative path (under [sdkDir]) of the install fingerprint stamp. */
+private const val SDK_INSTALL_STAMP_PATH = "node_modules/.trailblaze-install-lock"
+
+/** Current `bun.lock` contents for [sdkDir], or "" when the lockfile is absent. */
+private fun sdkLockText(sdkDir: File): String =
+  File(sdkDir, "bun.lock").let { if (it.exists()) it.readText() else "" }
+
 /**
- * Shared dts-bundle-generator invocation used by both `bundleTrailblazeSdkDts` (writes to
- * the committed path) and `verifyTrailblazeSdkDtsBundle` (writes to a temp path and
- * byte-diffs). Single source of truth for the argv — drift would make verify report false
- * positives on a clean bundle.
+ * Pure decision: does the SDK's `node_modules` need a (re)install before a bundle task shells out
+ * to dts-bundle-generator / esbuild? Extracted from [ensureSdkNodeModules] so this branchy
+ * skip-vs-reinstall logic is unit-testable without launching bun or Gradle (see
+ * `ShouldReinstallSdkNodeModulesTest`).
+ *
+ * Returns `true` (reinstall) unless BOTH tool binaries exist AND the recorded install fingerprint
+ * (`node_modules/.trailblaze-install-lock`) matches the current `bun.lock`. **Keying the skip on
+ * the lockfile — not just binary presence — is load-bearing:** a warm `node_modules` whose
+ * `bun.lock` has since changed still has the old binaries on disk, and skipping on existence alone
+ * would bundle against stale deps even though Gradle correctly re-ran the bundle task (`bun.lock`
+ * is a declared input), silently breaking the determinism guarantee this PR relies on.
+ */
+internal fun shouldReinstallSdkNodeModules(sdkDir: File): Boolean {
+  val dtsBin = File(sdkDir, "node_modules/.bin/dts-bundle-generator")
+  val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
+  val installStamp = File(sdkDir, SDK_INSTALL_STAMP_PATH)
+  return !(
+    dtsBin.exists() && esbuildBin.exists() &&
+      installStamp.exists() && installStamp.readText() == sdkLockText(sdkDir)
+  )
+}
+
+/**
+ * Ensure the SDK's devDependencies (`dts-bundle-generator`, `esbuild`) are installed before
+ * a bundle task shells out to them. The bundles are build artifacts rather than committed
+ * source, so every build that produces them installs `node_modules` from the committed
+ * `bun.lock` — `--frozen-lockfile` keeps the resolution byte-deterministic. The skip decision
+ * lives in [shouldReinstallSdkNodeModules]; on (re)install we record the `bun.lock` fingerprint
+ * so the next call can skip.
+ *
+ * Trailblaze is bun-only and bun is pinned via Hermit, so `bun` is expected on PATH for any
+ * build that compiles the framework. A missing `bun` (or a non-zero install) fails loud here
+ * with a directed message rather than a raw `IOException` stack trace or a silently-empty bundle.
+ *
+ * **Concurrency.** Three generator tasks across three projects call this against the SAME
+ * `sdks/typescript` dir. That is safe today only because `org.gradle.parallel` is OFF (commented
+ * out in `gradle.properties`), so a single build runs them sequentially. If parallel execution is
+ * ever enabled, these installs must be serialized (a shared install task the generators depend on,
+ * or a file lock) — concurrent `bun install` into one `node_modules` can corrupt it.
+ */
+internal fun ensureSdkNodeModules(sdkDir: File, logFile: File) {
+  if (!shouldReinstallSdkNodeModules(sdkDir)) return
+  val dtsBin = File(sdkDir, "node_modules/.bin/dts-bundle-generator")
+  val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
+  logFile.parentFile.mkdirs()
+  logFile.writeText("")
+  val proc = try {
+    ProcessBuilder("bun", "install", "--frozen-lockfile")
+      .directory(sdkDir)
+      .redirectErrorStream(true)
+      .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+      .start()
+  } catch (e: java.io.IOException) {
+    throw GradleException(
+      "Could not launch `bun` to install the @trailblaze/scripting SDK devDependencies in " +
+        "${sdkDir.absolutePath}. Trailblaze is bun-only and `bun` is a hard build prerequisite " +
+        "for generating the SDK bundles — put it on PATH by activating the repo's Hermit env " +
+        "(`source bin/activate-hermit`) or install it from https://bun.sh/. Cause: ${e.message}",
+      e,
+    )
+  }
+  try {
+    if (!proc.waitFor(15, TimeUnit.MINUTES)) {
+      throw GradleException(
+        "`bun install --frozen-lockfile` in ${sdkDir.absolutePath} did not finish within " +
+          "15 minutes — stuck or deadlocked. See ${logFile.absolutePath}.",
+      )
+    }
+    if (proc.exitValue() != 0) {
+      throw GradleException(
+        "`bun install --frozen-lockfile` failed (exit ${proc.exitValue()}) in " +
+          "${sdkDir.absolutePath}. The TS SDK's devDependencies are required to build the " +
+          "@trailblaze/scripting bundles. Ensure `bun` is on PATH (activate the repo's " +
+          "Hermit env: `source bin/activate-hermit`) and see ${logFile.absolutePath}.",
+      )
+    }
+    if (!dtsBin.exists() || !esbuildBin.exists()) {
+      throw GradleException(
+        "`bun install --frozen-lockfile` reported success but the expected binaries are still " +
+          "missing under ${sdkDir.absolutePath}/node_modules/.bin/ (dts-bundle-generator / " +
+          "esbuild). See ${logFile.absolutePath}.",
+      )
+    }
+  } finally {
+    if (proc.isAlive) proc.destroyForcibly()
+  }
+  // Record the lockfile we installed from so the next call skips a redundant install when
+  // `bun.lock` is unchanged. Best-effort — a write failure just means the next call re-installs.
+  runCatching { File(sdkDir, SDK_INSTALL_STAMP_PATH).writeText(sdkLockText(sdkDir)) }
+}
+
+/**
+ * Shared dts-bundle-generator invocation used by `bundleTrailblazeSdkDts`. Single source of
+ * truth for the argv — keeps the generated bundle byte-deterministic across machines.
  *
  * **What inlines.** `--external-inlines zod @modelcontextprotocol/sdk` pulls every `zod`
  * type the SDK transitively re-exports AND the small set of MCP-SDK types that surface
@@ -585,8 +442,7 @@ private fun requireRuntimeGlobalsFile(sdkDir: File): File {
  * `Cannot find module`.
  *
  * **`--no-check`** disables dts-bundle-generator's tsc validation of the generated bundle.
- * The validation is duplicative — `verifyTrailblazeSdkDtsBundle` already byte-compares
- * against a committed file, and per-trailmap `tsc --noEmit` in CI is the real consumer-side
+ * The validation is duplicative — per-trailmap `tsc --noEmit` in CI is the real consumer-side
  * gate. Running validation would also force this Gradle plugin onto the slower path of
  * spinning up a tsc instance per build for no incremental safety.
  */
@@ -608,7 +464,15 @@ private fun runDtsBundleGenerator(
   }
   outputFile.parentFile.mkdirs()
 
+  // Run dts-bundle-generator THROUGH bun rather than executing its `.bin` shim directly. The
+  // shim is `#!/usr/bin/env node`, so a direct exec needs `node` on PATH — but Trailblaze is
+  // bun-only and the CI agents that now build these bundles have no node (the direct exec
+  // failed with exit 127 = "node: No such file or directory" on the bun-only uber-JAR build).
+  // `bun <jsfile>` runs the CLI's JavaScript under bun, ignoring the node shebang, with no node
+  // required. (esbuild, by contrast, is a native binary bun symlinks into `.bin`, so it's
+  // invoked directly below.)
   val argv = listOf(
+    "bun",
     dtsBin.absolutePath,
     "--external-inlines", "zod", "@modelcontextprotocol/sdk",
     "--no-check",
@@ -619,11 +483,25 @@ private fun runDtsBundleGenerator(
   logFile.parentFile.mkdirs()
   logFile.writeText("")
 
-  val proc = ProcessBuilder(argv)
-    .directory(sdkDir)
-    .redirectErrorStream(true)
-    .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
-    .start()
+  // `argv[0]` is `bun` (we run dts-bundle-generator's JS through bun — see above). On a warm
+  // node_modules `ensureSdkNodeModules` returns early without ever launching bun, so this can be
+  // the first bun launch; if bun is off PATH, surface the same directed error rather than a raw
+  // IOException stack trace.
+  val proc = try {
+    ProcessBuilder(argv)
+      .directory(sdkDir)
+      .redirectErrorStream(true)
+      .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+      .start()
+  } catch (e: java.io.IOException) {
+    throw GradleException(
+      "Could not launch `bun` to run dts-bundle-generator in ${sdkDir.absolutePath}. Trailblaze " +
+        "is bun-only and `bun` is a hard build prerequisite for generating the SDK bundles — put " +
+        "it on PATH by activating the repo's Hermit env (`source bin/activate-hermit`) or install " +
+        "it from https://bun.sh/. Cause: ${e.message}",
+      e,
+    )
+  }
   try {
     if (!proc.waitFor(2, TimeUnit.MINUTES)) {
       throw GradleException(
@@ -658,9 +536,9 @@ private fun runDtsBundleGenerator(
  * (only type-only imports from sibling SDK files); a relative runtime import would dangle
  * after transpile because we deliberately don't ship sibling SDK source to the consumer.
  *
- * The verify task byte-diffs the regenerated output against the committed file, so the
- * argv must be stable across regenerations. Don't add timestamped banners or hash-based
- * suffixes here — they would invalidate the byte-diff gate.
+ * The argv must be stable across regenerations so the generated artifact is byte-reproducible
+ * across machines (the property that lets it be a gitignored build artifact). Don't add
+ * timestamped banners or hash-based suffixes here — they would break that reproducibility.
  */
 private fun runEsbuildTranspile(sdkDir: File, entryFile: File, outputFile: File, logFile: File) {
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
@@ -734,11 +612,11 @@ private fun runEsbuildTranspile(sdkDir: File, entryFile: File, outputFile: File,
  * bundle time. `--target=es2020` matches the per-trailmap tsconfig's `target: ES2022`
  * minus the small set of ES2022 features esbuild can't downlevel (top-level await
  * is fine in ESM at es2020 already). The `--banner:js=` is a hand-edit deterrent
- * the verify byte-diff gate naturally protects.
+ * (the file is a generated build artifact, not committed source).
  *
- * The verify task byte-diffs the regenerated output against the committed file, so
- * the argv must be stable across regenerations. Don't add timestamped banners or
- * hash-based suffixes — they would invalidate the gate.
+ * The argv must be stable across regenerations so the generated bundle is byte-reproducible
+ * across machines. Don't add timestamped banners or hash-based suffixes — they would break
+ * that reproducibility.
  */
 private fun runEsbuildEsmBundle(sdkDir: File, entryFile: File, outputFile: File, logFile: File) {
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
@@ -837,12 +715,10 @@ internal const val RUNTIME_GLOBALS_FILENAME: String = "runtime-globals.d.ts"
  * least-magic option, and the `runtime-globals.d.ts` file remains a hand-editable
  * artifact a human can read in isolation.
  *
- * **Determinism for the verify byte-diff gate.** Both `bundleTrailblazeSdkDts` (which
- * writes to the committed path) and `verifyTrailblazeSdkDtsBundle` (which writes to a
- * temp path and byte-diffs) call `runDtsBundleGenerator`, which calls this append in
- * the same place. As long as the file content is identical between runs, the
- * post-processed bundles are byte-identical too — the gate works without further
- * accommodation.
+ * **Determinism across machines.** `bundleTrailblazeSdkDts` calls `runDtsBundleGenerator`,
+ * which calls this append in the same place every run. As long as the runtime-globals file
+ * content is identical, the post-processed bundle is byte-identical across machines — the
+ * property that lets the bundle be a gitignored build artifact rather than committed source.
  */
 private fun appendRuntimeGlobals(sdkDir: File, outputFile: File) {
   val runtimeGlobalsFile = requireRuntimeGlobalsFile(sdkDir)

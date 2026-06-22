@@ -10,24 +10,18 @@
       - contacts_ios_openApp:
           dismissKeyboard: true
       - tapOnElementBySelector:
-          reason: The objective is to open the iOS Contacts app. The Contacts app icon is visible on the home screen with ref 'z698', so tapping it is the correct next step.
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: Contacts
-      - tapOnElementBySelector:
           reason: The contact 'John Appleseed' is already visible in the contacts list. Tapping on this contact will open its detail screen, which is the next step in the objective.
           nodeSelector:
             iosMaestro:
               textRegex: John Appleseed
             index: 1
       - assertVisibleBySelector:
-          reason: To verify that the 'John Appleseed' contact detail screen has rendered correctly, I need to assert that the element displaying 'John Appleseed' is visible on the screen. The view hierarchy confirms the presence and selection of this element with ref 's83', which matches the name requirement in the objective.
+          reason: Guard that the tap actually navigated to the contact detail card rather than staying on the list (where the same "John Appleseed" row is still visible). "Contact Photo & Poster" is a row unique to a contact's detail screen and is present across the iOS runtimes these trails target, unlike the iOS-26-only ContactCardHeaderView identifier.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Contact Photo & Poster
+      - assertVisibleBySelector:
+          reason: Verify the detail screen renders the contact name. The "John Appleseed" title is visible at the top of the card; no index is pinned because the name renders as a single title node here.
           nodeSelector:
             iosMaestro:
               textRegex: John Appleseed
-            index: 1
-      - assertVisibleBySelector:
-          reason: The node with ref 'o725' and text 'John Appleseed' appears at the top of the contact's detail screen, indicating this is the heading and verifying the detail view for 'John Appleseed' is rendered.
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: ContactCardHeaderView

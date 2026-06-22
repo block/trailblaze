@@ -40,6 +40,8 @@ import javax.imageio.ImageWriteParam
  *
  * @param screenshotScalingConfig Controls how screenshots are scaled and compressed.
  *   Applied consistently to all screenshot output (logging, LLM requests, snapshots).
+ *   Defaults to [EffectiveScreenshotScalingConfig.effectiveForWeb] so web captures aren't squeezed
+ *   by the mobile-portrait short-side cap; an explicit user-configured scaling still wins.
  * @param requestedDetails Detail types requested by the LLM for this snapshot.
  *   When non-empty, the [viewHierarchyTextRepresentation] will be enriched with the
  *   requested information (e.g., bounding boxes). Automatically cleared after consumption
@@ -51,7 +53,8 @@ class PlaywrightScreenState(
   private val viewportHeight: Int,
   private val browserEngine: BrowserEngine = BrowserEngine.CHROMIUM,
   private val tabContext: TabContext? = null,
-  private val screenshotScalingConfig: ScreenshotScalingConfig? = EffectiveScreenshotScalingConfig.effective,
+  private val screenshotScalingConfig: ScreenshotScalingConfig? =
+    EffectiveScreenshotScalingConfig.effectiveForWeb,
   private val requestedDetails: Set<ViewHierarchyDetail> = emptySet(),
   private val captureTimeoutMs: Double = CAPTURE_TIMEOUT_MS,
 ) : ScreenState {

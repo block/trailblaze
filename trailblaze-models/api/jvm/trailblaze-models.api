@@ -3582,6 +3582,7 @@ public final class xyz/block/trailblaze/api/EffectiveScreenshotScalingConfig {
 	public static final field INSTANCE Lxyz/block/trailblaze/api/EffectiveScreenshotScalingConfig;
 	public final fun clearForTests ()V
 	public final fun getEffective ()Lxyz/block/trailblaze/api/ScreenshotScalingConfig;
+	public final fun getEffectiveForWeb ()Lxyz/block/trailblaze/api/ScreenshotScalingConfig;
 	public final fun setEffectiveDefault (Lxyz/block/trailblaze/api/ScreenshotScalingConfig;)V
 }
 
@@ -3798,6 +3799,7 @@ public final synthetic class xyz/block/trailblaze/api/ScreenshotScalingConfig$$s
 public final class xyz/block/trailblaze/api/ScreenshotScalingConfig$Companion {
 	public final fun getDEFAULT ()Lxyz/block/trailblaze/api/ScreenshotScalingConfig;
 	public final fun getON_DEVICE ()Lxyz/block/trailblaze/api/ScreenshotScalingConfig;
+	public final fun getWEB ()Lxyz/block/trailblaze/api/ScreenshotScalingConfig;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -10642,17 +10644,19 @@ public final class xyz/block/trailblaze/model/TrailblazeHostAppTarget$DefaultTra
 }
 
 public final class xyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Ljava/util/Set;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Ljava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/Set;
 	public final fun component4 ()Ljava/util/Set;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;)Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;ILjava/lang/Object;)Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;
+	public final fun component5 ()Ljava/util/Set;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Ljava/util/Set;)Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Ljava/util/Set;ILjava/lang/Object;)Lxyz/block/trailblaze/model/TrailblazeHostAppTarget$ToolGroup;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDescription ()Ljava/lang/String;
 	public final fun getId ()Ljava/lang/String;
+	public final fun getScriptedToolNames ()Ljava/util/Set;
 	public final fun getToolClasses ()Ljava/util/Set;
 	public final fun getYamlToolNames ()Ljava/util/Set;
 	public fun hashCode ()I
@@ -10937,6 +10941,19 @@ public final class xyz/block/trailblaze/recording/WebDeviceScreenStream$DefaultI
 	public static fun getTrailblazeNodeTree (Lxyz/block/trailblaze/recording/WebDeviceScreenStream;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class xyz/block/trailblaze/recordings/DerivedTestIdentity {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/recordings/DerivedTestIdentity;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/recordings/DerivedTestIdentity;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/recordings/DerivedTestIdentity;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClassName ()Ljava/lang/String;
+	public final fun getMethodName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class xyz/block/trailblaze/recordings/TrailRecordings {
 	public static final field BLAZE_DOT_YAML Ljava/lang/String;
 	public static final field DEFAULT_NL_DEFINITION_FILENAME Ljava/lang/String;
@@ -10945,6 +10962,7 @@ public final class xyz/block/trailblaze/recordings/TrailRecordings {
 	public static final field TRAILBLAZE_DOT_YAML Ljava/lang/String;
 	public static final field UNIFIED_TRAIL_FILENAME Ljava/lang/String;
 	public final fun computePossibleFileNamesForDeviceClassifiers (Ljava/util/List;)Ljava/util/List;
+	public final fun deriveTestIdentityFromTrailPath (Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/recordings/DerivedTestIdentity;
 	public final fun findBestTrailForClassifiers (Ljava/util/List;Ljava/util/List;)Ljava/lang/String;
 	public final fun findBestTrailResourcePath (Ljava/lang/String;Ljava/util/List;Lkotlin/jvm/functions/Function1;)Ljava/lang/String;
 	public final fun getNL_DEFINITION_FILENAMES ()Ljava/util/List;
@@ -10952,6 +10970,7 @@ public final class xyz/block/trailblaze/recordings/TrailRecordings {
 	public final fun isRecordingFile (Ljava/lang/String;)Z
 	public final fun isTrailFile (Ljava/lang/String;)Z
 	public final fun isUnifiedTrailFile (Ljava/lang/String;)Z
+	public final fun shortTrailName (Ljava/lang/String;)Ljava/lang/String;
 }
 
 public final class xyz/block/trailblaze/toolcalls/CoreTools {
@@ -11231,6 +11250,7 @@ public class xyz/block/trailblaze/toolcalls/TrailblazeKoogTool : ai/koog/agents/
 public final class xyz/block/trailblaze/toolcalls/TrailblazeKoogTool$Companion {
 	public final fun parseKoogParameterType (Ljava/lang/String;Z)Lai/koog/agents/core/tools/ToolParameterType;
 	public final fun toKoogParameterDescriptor (Lxyz/block/trailblaze/toolcalls/TrailblazeToolParameterDescriptor;Z)Lai/koog/agents/core/tools/ToolParameterDescriptor;
+	public final fun toKoogParameterTypePreservingComposites (Lxyz/block/trailblaze/toolcalls/TrailblazeToolParameterDescriptor;)Lai/koog/agents/core/tools/ToolParameterType;
 	public final fun toKoogToolDescriptor (Lxyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor;Z)Lai/koog/agents/core/tools/ToolDescriptor;
 	public final fun toTrailblazeToolDescriptor (Lai/koog/agents/core/tools/ToolDescriptor;)Lxyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor;
 	public final fun toTrailblazeToolParameterDescriptor (Lai/koog/agents/core/tools/ToolParameterDescriptor;)Lxyz/block/trailblaze/toolcalls/TrailblazeToolParameterDescriptor;

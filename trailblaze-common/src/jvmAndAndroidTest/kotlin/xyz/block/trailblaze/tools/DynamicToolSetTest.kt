@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.tools
 
+import ai.koog.agents.core.tools.ToolParameterType
+import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -176,6 +179,42 @@ class DynamicToolSetTest {
     val names = repo.getCurrentToolDescriptors().map { it.name }.toSet()
     assertTrue("eraseText" in names, "YAML-defined eraseText must surface in tool descriptors")
     assertTrue("hideKeyboard" in names, "class-backed hideKeyboard must surface in tool descriptors")
+  }
+
+  @Test
+  fun `getCurrentToolDescriptors advertises setActiveToolSets toolSetIds as an array`() {
+    // Regression: round-tripping the LLM surface through the string-typed TrailblazeToolDescriptor
+    // collapsed this List<String> to String, so the model sent a string the array decoder rejected.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = TrailblazeToolSetCatalog.defaultEntries())
+
+    val descriptor = repo.getCurrentToolDescriptors()
+      .single { it.name == SetActiveToolSetsTrailblazeTool.TOOL_NAME }
+    val toolSetIds = descriptor.requiredParameters.single { it.name == "toolSetIds" }
+
+    assertEquals(
+      ToolParameterType.List(ToolParameterType.String),
+      toolSetIds.type,
+      "toolSetIds must surface as an array of strings, not a bare String",
+    )
+  }
+
+  @Test
+  fun `MULTI_AGENT_V3 wrapping preserves setActiveToolSets toolSetIds as an array`() {
+    // Mirrors the live provider chain (AndroidTrailblazeRule / TrailblazeHostYamlRunner):
+    // getCurrentToolDescriptors -> toTrailblazeToolDescriptor -> wrapToolsWithAnalysis. The wrapper
+    // used to hardcode every param to String, re-collapsing the list after the repo preserved it.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = TrailblazeToolSetCatalog.defaultEntries())
+    val providerTools = repo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+
+    val wrapped = InnerLoopScreenAnalyzer.wrapToolsWithAnalysis(providerTools)
+    val setActive = wrapped.single { it.name == SetActiveToolSetsTrailblazeTool.TOOL_NAME }
+    val toolSetIds = setActive.requiredParameters.single { it.name == "toolSetIds" }
+
+    assertEquals(
+      ToolParameterType.List(ToolParameterType.String),
+      toolSetIds.type,
+      "wrapped setActiveToolSets must keep toolSetIds as an array of strings",
+    )
   }
 
   @Test

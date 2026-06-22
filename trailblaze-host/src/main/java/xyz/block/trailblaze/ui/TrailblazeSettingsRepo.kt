@@ -151,7 +151,9 @@ class TrailblazeSettingsRepo(
         // Publish the user's screenshot config immediately on load so call sites
         // resolving `EffectiveScreenshotScalingConfig.effective` during early startup
         // (before the collector below runs) see the user values, not the framework default.
-        EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfig())
+        // Pass null when nothing is overridden so the web path can fall back to its own default
+        // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
+        EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
       },
     ),
   ).also { serverStateFlow ->
@@ -186,7 +188,7 @@ class TrailblazeSettingsRepo(
             )
           }
           EffectiveScreenshotScalingConfig.setEffectiveDefault(
-            newState.appConfig.screenshotScalingConfig(),
+            newState.appConfig.screenshotScalingConfigOrNull(),
           )
         }
     }

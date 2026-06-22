@@ -490,9 +490,7 @@ open class CliReportGenerator {
     val outcome = mapStatusToOutcome(status)
     val title = sessionInfo.trailConfig?.title
       ?: sessionInfo.trailConfig?.id
-      ?: sessionInfo.trailFilePath
-        ?.removePrefix("trails/")
-        ?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+      ?: sessionInfo.trailFilePath?.let { TrailRecordings.shortTrailName(it) }
       ?: sessionInfo.testName?.takeIf { it.isNotBlank() }?.let { name ->
         sessionInfo.testClass?.let { cls -> "$cls:$name" } ?: name
       }

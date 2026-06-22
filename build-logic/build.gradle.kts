@@ -36,20 +36,17 @@ gradlePlugin {
       id = "trailblaze.quickjs-bundle-assets"
       implementationClass = "TrailblazeQuickjsBundleAssetsPlugin"
     }
-    // Owns the `bundleTrailblazeSdk` / `verifyTrailblazeSdkBundle` task pair so the verify
-    // logic can be exercised by GradleTestKit (see TrailblazeSdkBundlePluginFunctionalTest).
-    // Inlining these tasks in `:trailblaze-scripting-bundle/build.gradle.kts` (where they
-    // originally lived) made them unreachable from any fixture project without copy-pasting
-    // the task body — and a forked copy would silently miss regressions in the production
-    // path. The plugin centralizes the bytes and the test runs that exact plugin code.
+    // Owns the `bundleTrailblazeSdk` task that generates the slim on-device SDK bundle
+    // (`trailblaze-sdk-bundle.js`) via esbuild. Lives in a plugin (rather than inline in
+    // `:trailblaze-scripting-bundle/build.gradle.kts`) so the bundler argv is centralized and
+    // shared with the dts plugin's `ensureSdkNodeModules` install helper.
     create("sdk-bundle") {
       id = "trailblaze.sdk-bundle"
       implementationClass = "TrailblazeSdkBundlePlugin"
     }
-    // Sibling of `sdk-bundle` for the declaration-bundle artifact (`dist/index.d.ts`).
-    // Same regenerate-and-commit / byte-diff verify cadence; different bundler binary
-    // (dts-bundle-generator instead of esbuild). See the plugin kdoc for why the two
-    // aren't unified.
+    // Sibling of `sdk-bundle` for the declaration + runtime bundle artifact (`dist/`).
+    // Same generate cadence; different bundler binary (dts-bundle-generator + esbuild instead
+    // of just esbuild). See the plugin kdoc for why the two aren't unified.
     create("sdk-dts-bundle") {
       id = "trailblaze.sdk-dts-bundle"
       implementationClass = "TrailblazeSdkDtsBundlePlugin"

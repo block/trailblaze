@@ -33,8 +33,10 @@ import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
+import xyz.block.trailblaze.android.uiautomator.ComposeSemanticsCollapseDetector
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import java.io.File
 
 /**
@@ -68,10 +70,40 @@ object MaestroAndroidUiAutomatorDriver : Driver {
     error("Unsupported Maestro Driver Call to ${this::class.simpleName}::close")
   }
 
-  override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
-    viewHiearchyXml = AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchy(),
-    excludeKeyboardElements = false,
-  )
+  // Resolve selectors against the standard bulk dump first — it's fast and produces the
+  // UiAutomator node shape every instrumentation selector was recorded against. Only when that
+  // dump shows a *collapsed* Compose surface (a content pane reduced to a childless host — e.g. a
+  // ComposeView inside a permanently-invisible ViewFactoryHolder that dumpWindowHierarchy() skips)
+  // do we pay the full refresh()ing accessibility-tree walk to recover it. Healthy captures (the
+  // overwhelming majority) keep the bulk dump and its shape, so the broad set of instrumentation
+  // trails is untouched; only the broken pane triggers the heavier recovery. Mirrors the
+  // collapse-recovery the screen-capture path already applies via recoverCollapsedComposeTree().
+  override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode {
+    val standard = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
+      viewHiearchyXml = AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchy(),
+      excludeKeyboardElements = excludeKeyboardElements,
+    )
+    val (deviceWidth, deviceHeight) = withUiDevice { displayWidth to displayHeight }
+    val standardVh = standard.toViewHierarchyTreeNode()
+    val collapsed = standardVh != null &&
+      ComposeSemanticsCollapseDetector.detectCollapsedComposeSurface(standardVh, deviceWidth, deviceHeight) != null
+    if (!collapsed) return standard
+
+    // Collapsed: recover through invisible host containers via the refresh()ing accessibility walk.
+    val recoveredXml = AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchyFromAccessibilityTree(visibleOnly = false)
+      ?: return standard
+    val recovered = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
+      viewHiearchyXml = recoveredXml,
+      excludeKeyboardElements = excludeKeyboardElements,
+    )
+    // Adopt only if the re-dump actually resolved the collapse and isn't smaller — otherwise the
+    // standard dump is no worse than a degenerate walk.
+    val recoveredVh = recovered.toViewHierarchyTreeNode()
+    val recoveredResolved = recoveredVh != null &&
+      ComposeSemanticsCollapseDetector.detectCollapsedComposeSurface(recoveredVh, deviceWidth, deviceHeight) == null &&
+      recoveredVh.aggregate().size >= (standardVh?.aggregate()?.size ?: 0)
+    return if (recoveredResolved) recovered else standard
+  }
 
   /**
    * I was going to compute this a single time, but then I realized the device could be resized or rotated which

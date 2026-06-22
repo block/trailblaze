@@ -10,11 +10,6 @@
       tools:
       - contacts_ios_openApp:
           dismissKeyboard: true
-      - tapOnElementBySelector:
-          reason: The objective requires opening the Contacts app. The current screen shows the app icons on the home screen, including Contacts. Tapping the Contacts icon will open the app, which matches the intention.
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: Contacts
   - step: |
       Call the `contacts_ios_searchContacts` tool with query="John",
       rowText="John Appleseed", openFirstResult=true.
@@ -24,9 +19,3 @@
           query: John
           rowText: John Appleseed
           openFirstResult: true
-      - tapOnElementBySelector:
-          reason: The current objective requires opening 'John Appleseed' after searching for 'John'. 'John Appleseed' is directly visible in the contacts list. Tapping on it will open the contact detail as required by the objective.
-          nodeSelector:
-            iosMaestro:
-              textRegex: John Appleseed
-            index: 1

@@ -1,0 +1,2 @@
+id: waitUntilNotVisible
+class: xyz.block.trailblaze.toolcalls.commands.WaitUntilNotVisibleTrailblazeTool

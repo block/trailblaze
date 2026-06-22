@@ -3,7 +3,7 @@ package xyz.block.trailblaze.android.agent
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import xyz.block.trailblaze.toolcalls.asToolType
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
@@ -22,7 +22,6 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
-import kotlin.reflect.full.starProjectedType
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -132,6 +131,62 @@ class KoogLlmSamplingSource(
     }
   }
 
+  @OptIn(ExperimentalUuidApi::class)
+  override suspend fun sampleToolCallWithKoogTools(
+    systemPrompt: String,
+    userMessage: String,
+    koogTools: List<ToolDescriptor>,
+    screenshotBytes: ByteArray?,
+    maxTokens: Int,
+    traceId: TraceId?,
+    screenContext: ScreenContext?,
+  ): SamplingResult {
+    if (koogTools.isEmpty()) {
+      return SamplingResult.Error("No tools provided for tool call sampling")
+    }
+
+    val messages = buildMessages(systemPrompt, userMessage, screenshotBytes)
+
+    return try {
+      val responses = llmClient.execute(
+        prompt = Prompt(
+          messages = messages,
+          id = Uuid.random().toString(),
+          params = LLMParams(
+            temperature = null,
+            speculation = null,
+            schema = null,
+            toolChoice = LLMParams.ToolChoice.Required, // Force tool use
+          ),
+        ),
+        model = llmModel.toKoogLlmModel(),
+        // Pass Koog tools directly so List/Object/Enum param types survive to the model, instead of
+        // the lossy String rebuild in sampleToolCall's converter (this is the on-device V3 path).
+        tools = koogTools,
+      )
+
+      val toolCall = responses.parts.filterIsInstance<MessagePart.Tool.Call>().firstOrNull()
+        ?: return SamplingResult.Error(
+          "LLM did not return a tool call. Response: ${responses.textContent()}"
+        )
+
+      val arguments = try {
+        Json.decodeFromString<JsonObject>(toolCall.args)
+      } catch (e: Exception) {
+        JsonObject(emptyMap())
+      }
+
+      SamplingResult.ToolCall(
+        toolName = toolCall.tool,
+        arguments = arguments,
+        stopReason = SamplingResult.StopReason.TOOL_USE,
+        model = llmModel.modelId,
+      )
+    } catch (e: Exception) {
+      SamplingResult.Error("LLM tool call request failed: ${e.message}")
+    }
+  }
+
   override fun isAvailable(): Boolean {
     // Client is provided at construction, so always available
     return true
@@ -181,22 +236,20 @@ class KoogLlmSamplingSource(
      * Converts a [TrailblazeToolDescriptor] to Koog's [ToolDescriptor].
      */
     private fun TrailblazeToolDescriptor.toKoogToolDescriptor(): ToolDescriptor {
-      val stringType = String::class.starProjectedType.asToolType()
-
       return ToolDescriptor(
         name = name,
         description = description ?: "",
         requiredParameters = requiredParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = stringType,
+            type = param.toKoogParameterTypePreservingComposites(),
             description = param.description ?: "",
           )
         },
         optionalParameters = optionalParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = stringType,
+            type = param.toKoogParameterTypePreservingComposites(),
             description = param.description ?: "",
           )
         },

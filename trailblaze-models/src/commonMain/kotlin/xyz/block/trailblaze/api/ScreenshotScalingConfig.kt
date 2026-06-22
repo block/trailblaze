@@ -70,6 +70,26 @@ data class ScreenshotScalingConfig(
      * `GetScreenStateRequest.withScreenshotScalingConfig`, so this constant is bypassed.
      */
     val ON_DEVICE = DEFAULT
+
+    /**
+     * Web/desktop-tuned default.
+     *
+     * [DEFAULT]'s 768 short-side cap is tuned for portrait phones, where the short side is
+     * the device's *width*. Web (and Electron) is captured in landscape, so that same cap
+     * clamps the *height* instead and crushes vertical detail — a 2560×1600 dev capture lands
+     * at ~1228×768, which is what makes web screenshots look grainy in reports. Web gets a
+     * larger short-side budget so landscape height keeps its detail: a 16:10 capture now lands
+     * at 1536×960 instead of 1228×768. The long-side cap stays at 1536 (≈ the 1568px long-edge
+     * vision guidance), so per-step LLM image token cost only rises modestly. WebP quality is
+     * bumped from 0.80 → 0.90 so the encoder stops introducing the blocky compression artifacts
+     * that read as "mush" on small UI text — a quality change only, with no effect on dimensions
+     * (and therefore none on vision token cost).
+     */
+    val WEB = ScreenshotScalingConfig(
+      maxDimension1 = 1536,
+      maxDimension2 = 1024,
+      compressionQuality = 0.90f,
+    )
   }
 }
 
@@ -91,6 +111,21 @@ object EffectiveScreenshotScalingConfig {
 
   val effective: ScreenshotScalingConfig
     get() = override ?: ScreenshotScalingConfig.DEFAULT
+
+  /**
+   * Effective scaling config for the web/Playwright path. When the user has set **no** screenshot
+   * overrides ([override] is null), the landscape-friendly [ScreenshotScalingConfig.WEB] default is
+   * used instead of the mobile-tuned [ScreenshotScalingConfig.DEFAULT] — web is captured in
+   * landscape and DEFAULT's 768 short-side cap crushes its height (see [ScreenshotScalingConfig.WEB]).
+   *
+   * The decision keys on whether an override was *set* — the host passes `null` to
+   * [setEffectiveDefault] when the user customized nothing (see
+   * `TrailblazeServerState.screenshotScalingConfigOrNull`) — **not** on value-equality with
+   * [ScreenshotScalingConfig.DEFAULT]. So an explicit user config wins unchanged even when it
+   * happens to equal the framework defaults (e.g. a downstream distro pinning the defaults).
+   */
+  val effectiveForWeb: ScreenshotScalingConfig
+    get() = override ?: ScreenshotScalingConfig.WEB
 
   /**
    * Resets the singleton to "no override" (so [effective] returns [ScreenshotScalingConfig.DEFAULT]).

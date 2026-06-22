@@ -3,7 +3,7 @@ package xyz.block.trailblaze.mcp.sampling
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import xyz.block.trailblaze.toolcalls.asToolType
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
@@ -40,7 +40,6 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
-import kotlin.reflect.full.starProjectedType
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -664,29 +663,23 @@ class LocalLlmSamplingSource(
     private const val MAX_CONSOLE_PREVIEW_LENGTH = 800
     private const val MAX_CONSOLE_RESPONSE_LENGTH = 1000
 
-    /**
-     * Converts a [TrailblazeToolDescriptor] to Koog's [ToolDescriptor].
-     *
-     * Note: Type information is not fully preserved since TrailblazeToolDescriptor
-     * only stores type names as strings. We use String type as a safe default.
-     */
+    // Mirrors [TrailblazeToolDescriptor] back to Koog, preserving the composite types the mirror can
+    // name (ARRAY/ENUM) rather than flattening every parameter to String.
     private fun TrailblazeToolDescriptor.toKoogToolDescriptor(): ToolDescriptor {
-      val stringType = String::class.starProjectedType.asToolType()
-
       return ToolDescriptor(
         name = name,
         description = description ?: "",
         requiredParameters = requiredParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = stringType,
+            type = param.toKoogParameterTypePreservingComposites(),
             description = param.description ?: "",
           )
         },
         optionalParameters = optionalParameters.map { param ->
           ToolParameterDescriptor(
             name = param.name,
-            type = stringType,
+            type = param.toKoogParameterTypePreservingComposites(),
             description = param.description ?: "",
           )
         },

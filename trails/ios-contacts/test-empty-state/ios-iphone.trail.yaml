@@ -7,9 +7,12 @@
   - step: Launch the iOS Contacts app from a cold start. Verify the navbar shows "Contacts" and the list root surface is visible. Do not tap anything.
     recording:
       tools:
-      - contacts_ios_openApp:
-          dismissKeyboard: true
       - launchApp:
           appId: com.apple.MobileAddressBook
           launchMode: FORCE_RESTART
-          reasoning: The Contacts app icon is visible on the home screen. Launching Contacts from a cold start using its bundle identifier is required to begin the flow and verify its root view and navbar.
+          reasoning: Launch Contacts from a cold start by its bundle identifier so the trail begins from the contacts list root regardless of prior state. Uses only framework primitives (no scripted tool) so this trail can join the pure-replay smoke set.
+      - assertVisibleBySelector:
+          reason: Verify the contacts list root rendered after the cold start by asserting the "Contacts" navbar title is visible. No row is tapped, matching the objective.
+          nodeSelector:
+            iosMaestro:
+              textRegex: Contacts

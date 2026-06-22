@@ -11,6 +11,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
@@ -189,14 +190,14 @@ class InnerLoopScreenAnalyzer(
         ToolParameterDescriptor(
           name = param.name,
           description = param.description ?: "",
-          type = String::class.starProjectedType.asToolType(), // Default to string - actual type is in schema
+          type = param.toKoogParameterTypePreservingComposites(),
         )
       }
       val originalOptional = tool.optionalParameters.map { param ->
         ToolParameterDescriptor(
           name = param.name,
           description = param.description ?: "",
-          type = String::class.starProjectedType.asToolType(),
+          type = param.toKoogParameterTypePreservingComposites(),
         )
       }
 

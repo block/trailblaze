@@ -288,6 +288,32 @@ class YamlBackedHostAppTargetTest {
   }
 
   @Test
+  fun `getCustomToolGroupsForDriver includes scripted names from platforms tools`() {
+    // The discovery-grouping leg of three-way parity: a scripted name in `platforms.<p>.tools:`
+    // must land in the default ToolGroup's scriptedToolNames bucket so grouped discovery
+    // (DeviceManagerToolSet / ToolDiscoveryToolSet via toMergedDescriptors) surfaces it alongside
+    // class- and YAML-backed tools. Before the scripted bucket, a scripted-only custom target
+    // returned emptyList() from getCustomToolGroupsForDriver and vanished from discovery.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        android:
+          tools: [openUrl]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val groups = target.getCustomToolGroupsForDriver(android)
+    assertTrue(groups.isNotEmpty(), "a scripted-only target must still produce a tool group")
+    assertTrue(
+      groups.any { group -> group.scriptedToolNames.any { it.toolName == "openUrl" } },
+      "scripted openUrl must land in a ToolGroup.scriptedToolNames bucket. Got: $groups",
+    )
+  }
+
+  @Test
   fun `min build version resolves by platform`() {
     val target = AppTargetYamlLoader.loadFromYaml(
       """

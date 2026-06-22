@@ -406,10 +406,23 @@ open class ScriptedToolDefinitionAnalyzer(
     private const val MAX_STREAM_IN_MESSAGE = 2_000
 
     /**
-     * Resolve the `bun` binary used to invoke the shim. Mirrors
-     * [LazyYamlScriptedToolRegistration.resolveEsbuildBinary]'s shape — PATH lookup,
-     * no walk-up fallback (unlike esbuild, bun isn't shipped under the SDK's
-     * `node_modules/.bin/`).
+     * Resolve the `bun` binary used to invoke the shim. Two resolution halves:
+     *
+     *  1. **`PATH` lookup** — covers a shell that's run `source bin/activate-hermit`
+     *     (which puts the hermit-pinned `bin/bun` on PATH), a Homebrew install, or any
+     *     globally-installed bun.
+     *  2. **Repo `bin/` walk-up** — when bun isn't on PATH, walk up from CWD looking for
+     *     the repo's hermit-pinned `bin/bun` symlink. This is the load-bearing fix for the
+     *     **fresh-daemon** case: the `./trailblaze` wrapper spawns the daemon JVM with
+     *     whatever PATH the calling shell had, and on a machine that already has JDK 21 the
+     *     wrapper never sourced hermit, so `bun` was absent from the daemon's PATH and every
+     *     meta-only / TS scripted-tool descriptor silently failed to enrich. The hermit
+     *     `bin/bun` symlink is committed to the repo, so the walk-up resolves it regardless
+     *     of how the daemon was launched — no `source bin/activate-hermit` required.
+     *
+     * Mirrors [LazyYamlScriptedToolRegistration.resolveEsbuildBinary]'s PATH-then-walk-up
+     * shape; the difference is the walk-up target (`bin/bun`, the committed hermit symlink,
+     * vs esbuild's SDK `node_modules/.bin/esbuild`).
      *
      * **Bun is the only JS runtime Trailblaze uses.** `setup.sh` installs bun
      * on every Runway CI agent, the SDK's own `bun install` populates the
@@ -422,19 +435,35 @@ open class ScriptedToolDefinitionAnalyzer(
      *
      * `bun.exe` is tried alongside `bun` for Windows-checkout walk-ups.
      *
-     * Returns null when bun is not on PATH. Downstream callers degrade
-     * gracefully — the analyzer reports "no tools extracted" and meta-only
-     * descriptors surface a "no bun on PATH" diagnostic instead of a silent
-     * failure.
+     * Returns null when bun is neither on PATH nor resolvable via the repo `bin/`
+     * walk-up. Downstream callers degrade gracefully — the analyzer reports "no tools
+     * extracted" and meta-only descriptors surface a "no bun" diagnostic instead of a
+     * silent failure.
      */
-    fun resolveBunBinary(): File? = resolveBunBinary(System.getenv("PATH"))
+    fun resolveBunBinary(): File? =
+      resolveBunBinary(
+        pathEnv = System.getenv("PATH"),
+        startDir = File(System.getProperty("user.dir") ?: ".").absoluteFile,
+      )
+
+    /**
+     * Composable form of the no-arg [resolveBunBinary]: PATH first (the bun-only contract),
+     * then the repo `bin/bun` walk-up from [startDir]. Pulled out (and `internal`) so a unit
+     * test can pin the actual production composition — a bun on PATH short-circuits the
+     * walk-up; an absent PATH bun falls through to it (the JDK-21 fresh-daemon case) — without
+     * mutating process env or depending on the host's CWD. The no-arg form just feeds this the
+     * live `PATH` + CWD.
+     */
+    internal fun resolveBunBinary(pathEnv: String?, startDir: File): File? =
+      resolveBunBinary(pathEnv) ?: resolveBunViaWalkup(startDir)
 
     /**
      * Overload for tests — accepts an explicit `PATH` string instead of
      * reading from the JVM env. Production callers use the no-arg form;
      * direct callers in this module mock PATH to pin the "bun-only" contract
      * (any other runtime on PATH must NOT be picked up) without mutating
-     * process env.
+     * process env. This half is PATH-only by design — the [resolveBunViaWalkup]
+     * fallback is composed in by the no-arg [resolveBunBinary].
      */
     internal fun resolveBunBinary(pathEnv: String?): File? {
       val path = pathEnv ?: return null
@@ -444,6 +473,46 @@ open class ScriptedToolDefinitionAnalyzer(
           val candidate = File(dir, name)
           if (candidate.exists() && candidate.canExecute()) return candidate
         }
+      }
+      return null
+    }
+
+    /**
+     * Walk-up half of [resolveBunBinary]: walk from [startDir] upward looking for the
+     * repo's committed hermit `bin/bun` (or `bin/bun.exe`) symlink. The hermit symlink
+     * `bin/bun -> .bun-<version>.pkg` is checked into the repo (see root CLAUDE.md
+     * "Toolchain"), so a daemon launched from anywhere under the repo tree resolves it
+     * even when the spawning shell never ran `source bin/activate-hermit` — closing the
+     * fresh-daemon gap where a JDK-21 host skipped hermit activation and shipped a daemon
+     * with no `bun` on PATH, leaving TS scripted-tool descriptors unregistered.
+     *
+     * **Repo-gated.** The walk-up only accepts a `bin/bun` that sits next to the repo's
+     * committed Hermit activation script (`bin/activate-hermit`). Without that gate the
+     * walk-up would hand back the first executable named `bin/bun` in *any* ancestor of CWD
+     * — so an installed CLI or an untrusted workspace that happens to carry a `bin/bun`
+     * helper could get it executed as the analyzer runtime instead of cleanly degrading to
+     * the previous missing-bun path. `bin/activate-hermit` is committed alongside the pinned
+     * `bin/bun -> .bun-<version>.pkg` symlink (root CLAUDE.md "Toolchain"), so its presence in
+     * the same `bin/` is a reliable marker that this is *this repo's* Hermit toolchain and not
+     * a coincidental `bin/bun`.
+     *
+     * Pulled out (and `internal`) so a unit test can pin the walk-up against an injected
+     * starting directory without depending on the host's actual CWD or repo layout. Requires
+     * the symlink target be executable, matching the PATH half's `canExecute()` guard.
+     */
+    internal fun resolveBunViaWalkup(startDir: File): File? {
+      var current: File? = startDir
+      while (current != null) {
+        val binDir = File(current, "bin")
+        // Only trust this `bin/` if it's the repo's Hermit toolchain dir (proven by the
+        // committed activation script), so we never execute an arbitrary ancestor's `bin/bun`.
+        if (File(binDir, "activate-hermit").isFile) {
+          for (name in listOf("bun", "bun.exe")) {
+            val candidate = File(binDir, name)
+            if (candidate.exists() && candidate.canExecute()) return candidate
+          }
+        }
+        current = current.parentFile
       }
       return null
     }

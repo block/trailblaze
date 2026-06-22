@@ -173,6 +173,17 @@ class CliConfigHelperScreenshotKeysTest {
     assertEquals(0.80f, effective.compressionQuality)
   }
 
+  @Test
+  fun `screenshotScalingConfigOrNull is null when nothing is overridden, materialized otherwise`() {
+    // No overrides → null, so the web path can fall back to its own default.
+    assertNull(CliConfigHelper.defaultConfig().screenshotScalingConfigOrNull())
+    // Any single override → a fully materialized config (no longer null).
+    val partial = CliConfigHelper.defaultConfig().copy(
+      screenshotImageFormat = TrailblazeImageFormat.PNG,
+    )
+    assertEquals(partial.screenshotScalingConfig(), partial.screenshotScalingConfigOrNull())
+  }
+
   // --- on-device RPC forwarding ----------------------------------------------
 
   @Test

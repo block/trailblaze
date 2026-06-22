@@ -4,6 +4,7 @@ import android.app.UiAutomation
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.Configurator
 import xyz.block.trailblaze.AdbCommandUtil
+import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.android.AndroidSdkVersion
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
@@ -68,9 +69,14 @@ object OnDeviceAccessibilityServiceSetup {
       // also use the non-suppressing flag.
       Configurator.getInstance().uiAutomationFlags =
         UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES
-      // Force reconnect UiAutomation with the new flag (replaces any existing connection).
-      InstrumentationRegistry.getInstrumentation()
-        .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+      // Force reconnect UiAutomation with the new flag (replaces any existing connection). Routed
+      // through InstrumentationUtil so the transient "Cannot call disconnect() while connecting"
+      // race during the flags=0 -> flags=1 transition is recovered (clear stale handle + reconnect)
+      // instead of aborting on-device startup — it was a top cause of flaky Android CI runs.
+      // If recovery is exhausted (a genuinely unrecoverable connection) this still throws, which is
+      // intentional: the Configurator flag above already governs future UiDevice acquisitions, and
+      // failing loud here surfaces a real broken-device state rather than silently degrading.
+      InstrumentationUtil.reconnectWithoutSuppressingAccessibility()
       Console.log("UiAutomation configured to not suppress accessibility services.")
     }
   }

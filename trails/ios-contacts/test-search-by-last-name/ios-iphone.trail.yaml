@@ -9,23 +9,6 @@
       tools:
       - contacts_ios_openApp:
           dismissKeyboard: true
-      - tapOnElementBySelector:
-          reason: The objective is to open Contacts. The Contacts app icon is visible with the ref 'z698' on the home screen, so I will tap it to launch the app.
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: Contacts
       - contacts_ios_searchAndVerify:
           query: Appleseed
           expectedName: John Appleseed
-      - tapOnElementBySelector:
-          reason: To open the contact for 'John Appleseed', which is the correct result for searching 'Appleseed'. This matches the objective's requirement to open the resulting contact.
-          nodeSelector:
-            iosMaestro:
-              textRegex: John Appleseed
-            index: 1
-      - assertVisibleBySelector:
-          reason: To verify that the detail screen for 'John Appleseed' is currently being shown, as required by the objective. The node with ref 's83' ('John Appleseed') should be visible at the top of the contact detail screen, confirming successful navigation.
-          nodeSelector:
-            iosMaestro:
-              textRegex: John Appleseed
-            index: 1

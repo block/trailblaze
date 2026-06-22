@@ -69,14 +69,8 @@ import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
-import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
-import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
+import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
-import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
-import xyz.block.trailblaze.scripting.ScriptedToolImportAnalyzer
-import xyz.block.trailblaze.scripting.partitionByImportClosure
-import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
-import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -91,6 +85,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
@@ -217,224 +212,17 @@ object TrailblazeHostYamlRunner {
     logsRepo: xyz.block.trailblaze.report.utils.LogsRepo,
     toolRepo: TrailblazeToolRepo,
     onProgressMessage: (String) -> Unit,
-  ): LaunchedScriptingRuntime? {
-    val sessionDir = logsRepo.getSessionDir(sessionId)
-
-    // 1. Inline scripted tools (target.tools: in trailmap manifests) — the #2749 path. Each
-    // tool routes to one of two runtimes:
-    //
-    //  - **Subprocess (bun / tsx)** — full Node API surface (`node:fs`, `node:child_process`,
-    //    etc.). Route through [InlineScriptToolServerSynthesizer] → MCP subprocess path so
-    //    the handler runs inside Node/Bun where those APIs exist. `sampleapp_writeArtifact.js`
-    //    is the canonical example.
-    //  - **QuickJS in-process** — no Node APIs, but composes via `client.callTool(...)`,
-    //    avoids subprocess fork overhead, and is the path used on-device by
-    //    `:trailblaze-quickjs-tools`. Bundle via [DaemonScriptedToolBundler]
-    //    (esbuild) and register as an in-process QuickJS-backed dynamic tool. The
-    //    LLM-shape `surfaceToLlm`/`requiresHost` filter that previously hid
-    //    `runCommand`/`mobile_clearAppData` from scripted-tool composition is bypassed via
-    //    [SessionScopedHostBinding].
-    //
-    // **Routing rule**: a tool runs in-process (QuickJS) unless its descriptor explicitly sets
-    // `runtime: subprocess`. There is no extension heuristic — a `.js`/`.mjs`/`.cjs` file is NOT
-    // auto-routed to a subprocess. In-process orchestration over framework tools is the default;
-    // a tool opts into bun/Node only when its own code needs `node:fs`, `node:child_process`, etc.
-    //
-    // **Why not `requiresHost: true`?** `_meta.trailblaze/requiresHost` is the
-    // LLM-visibility hint ("hide this from on-device") — it's set on tools whose
-    // semantics make them inappropriate for the on-device LLM, regardless of their
-    // runtime. Many tools that compose host-only Kotlin tools via `client.callTool` are
-    // correctly tagged `requiresHost: true` for visibility but DON'T need a Node runtime.
-    // Routing on `requiresHost` would push those tools through MCP where their
-    // `client.callTool` composition can't find the host tools the LLM-noise filter hides
-    // — exactly the bug #2749 set out to fix. Runtime selection is a separate concern.
-    val targetToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
-    val (nodeApiInlineTools, quickJsInlineTools) = targetToolConfigs.partition { tool ->
-      ScriptedToolRuntime.resolve(tool.runtime) == ScriptedToolRuntime.SUBPROCESS
-    }
-    val targetInlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
-      val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
-      if (esbuildBinary == null) {
-        // Use `Console.info` (not `Console.log`) so this critical breadcrumb survives the
-        // default CLI quiet mode (`CliInfrastructure.enableQuietMode()`). Without this,
-        // the entire QuickJS-inline-tool-registration phase silently no-ops on CI agents
-        // that don't have `esbuild` on PATH — the operator sees only the downstream
-        // failure surface ("Unsupported tool type for RPC execution: OtherTrailblazeTool"
-        // when a trail recording invokes a TS-migrated scripted tool) with no hint that
-        // the upstream bundler skipped. Visible diagnostic at the skip site closes a
-        // long-standing CI diagnostic gap.
-        //
-        // Also surface to the progress channel so the operator running `trailblaze trail`
-        // in CI mode sees the skip without grepping the daemon log.
-        Console.info(
-          "[#2749] esbuild binary not found on PATH or build-tree fallback locations — " +
-            "${quickJsInlineTools.size} inline scripted tool(s) will not be available this " +
-            "session. Install esbuild (e.g. via Homebrew or `bun install`) to enable inline " +
-            "scripted-tool dispatch.",
-        )
-        onProgressMessage(
-          "Skipping ${quickJsInlineTools.size} inline scripted tool(s): esbuild not found " +
-            "on PATH or in the Trailblaze SDK's `node_modules/.bin/` (both the flat and " +
-            "nested repo layouts are checked). Install esbuild or run `bun install` in the SDK dir.",
-        )
-        emptyList()
-      } else {
-        val bundler = DaemonScriptedToolBundler(esbuildBinary)
-        // Static-analysis pre-pass (#3190): before invoking the real bundler, walk each
-        // tool's import closure to find `node:*` builtins or known Node-only npm deps. A
-        // tool whose closure reaches any of those would fail the real bundle pass with a
-        // cryptic "Could not resolve" error AND tank session start for every sibling tool
-        // in the QuickJS partition — there's no per-tool isolation downstream. The
-        // analyzer lets us skip such tools cleanly with a directed breadcrumb, register
-        // the sibling tools that ARE on-device-viable, and leave the author with a
-        // one-line explanation of how to recover. See [partitionByImportClosure] for the
-        // full author-flag-honoring / per-tool isolation contract; logic lives there so
-        // the unit-test suite can pin the splice behavior without spinning up the runner.
-        val analyzer = ScriptedToolImportAnalyzer(esbuildBinary)
-        val partition = partitionByImportClosure(quickJsInlineTools, analyzer)
-        val toBundle = partition.toBundle
-        // Build registrations one by one so a partial failure (bad bundle, host-connect
-        // throw, addDynamicTools collision, etc.) can dispose the QuickJS engines we
-        // already created before rethrowing. Without this cleanup, every aborted session
-        // start would leak as many QuickJS engines as registrations had succeeded so far.
-        val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
-        try {
-          for (tool in toBundle) {
-            val bundlePath = bundler.bundleOne(File(tool.script), tool.name)
-            accumulated += LazyYamlScriptedToolRegistration.create(
-              toolConfig = tool,
-              bundlePath = bundlePath,
-              toolRepo = toolRepo,
-              sessionId = sessionId,
-            )
-          }
-          // addDynamicTools is the last opportunity to throw before LaunchedScriptingRuntime
-          // owns the registrations; if it raises (e.g. name collision against the existing
-          // repo), the cleanup below disposes the already-created hosts.
-          toolRepo.addDynamicTools(accumulated)
-        } catch (e: Throwable) {
-          Console.log(
-            "[TrailblazeHostYamlRunner] Rolling back ${accumulated.size} inline " +
-              "scripted-tool registration(s) due to startup failure: ${e.message}",
-          )
-          for (reg in accumulated) {
-            runCatching { reg.dispose() }
-          }
-          throw e
-        }
-        accumulated
-      }
-    } else {
-      emptyList()
-    }
-
-    // 1b. Toolset-delivered scripted tools — pre-compiled QuickJS bundles loaded from
-    // classpath. These bypass the esbuild pipeline entirely: their `.bundle.js` is committed
-    // at build time (via `bundleFrameworkScriptedTools`) and self-registers on
-    // `globalThis.__trailblazeTools` at eval, so `QuickJsToolHost.connect()` picks them up
-    // the same way it picks up esbuild-produced bundles.
-    val toolsetRegistrations = registerToolsetScriptedToolBundles(
-      toolRepo = toolRepo,
-      targetToolConfigs = targetToolConfigs,
-      sessionId = sessionId,
-      sessionDir = sessionDir,
-    )
-    val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
-
-    // 2. MCP subprocesses: synthesized wrappers for inline scripted tools whose effective
-    // runtime is SUBPROCESS — selected only via an explicit `runtime: subprocess` on the
-    // descriptor (see [ScriptedToolRuntime.resolve]; there is no extension heuristic).
-    // These run the handler in Node/Bun where Node APIs exist; this is what a tool like
-    // `sampleapp_writeArtifact` (which declares `runtime: subprocess`) relies on. If subprocess launch
-    // throws after the QuickJS-path inline registrations succeeded, the inline regs are
-    // stranded in the toolRepo with no cleanup handle — catch + dispose them before
-    // rethrowing so the same partial-construction guarantee applies across both blocks.
-    val mcpServers = if (nodeApiInlineTools.isNotEmpty()) {
-      InlineScriptToolServerSynthesizer.synthesize(
-        tools = nodeApiInlineTools,
-        outputDir = File(sessionDir, "inline-script-tools"),
-      )
-    } else {
-      emptyList()
-    }
-    val launchableCount = mcpServers.count { it.script != null }
-    val subprocessRuntime = if (launchableCount > 0) {
-      onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
-      try {
-        McpSubprocessRuntimeLauncher.launchAll(
-          mcpServers = mcpServers,
-          deviceInfo = deviceInfo,
-          config = config,
-          sessionId = sessionId,
-          sessionLogDir = sessionDir,
-          toolRepo = toolRepo,
-          // Null when no HTTP server was registered for this process (unit-tested runner paths).
-          // The launcher degrades gracefully — envelope omits `_meta.trailblaze.baseUrl` and no
-          // callbacks can fire, which is the right behaviour for those paths.
-          baseUrl = xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.get(),
-        )
-      } catch (e: Throwable) {
-        Console.log(
-          "[TrailblazeHostYamlRunner] Rolling back ${inlineRegistrations.size} inline " +
-            "scripted-tool registration(s) due to MCP server launch failure: ${e.message}",
-        )
-        for (reg in inlineRegistrations) {
-          runCatching { toolRepo.removeDynamicTool(reg.name) }
-          runCatching { reg.dispose() }
-        }
-        throw e
-      }
-    } else {
-      null
-    }
-
-    // If neither path produced anything actionable, no cleanup needed.
-    if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
-
-    return LaunchedScriptingRuntime(
-      subprocessRuntime = subprocessRuntime,
-      inlineRegistrations = inlineRegistrations,
-      toolRepo = toolRepo,
-    )
-  }
-
-  /**
-   * Loads pre-compiled QuickJS bundles for toolset-delivered scripted tools and registers
-   * them as [LazyYamlScriptedToolRegistration]s — bypassing the esbuild pipeline entirely.
-   *
-   * Each framework scripted tool commits a `.bundle.js` alongside its `.ts` source (produced
-   * by the `bundleFrameworkScriptedTools` Gradle task). This method loads those bundles from
-   * the classpath, writes them to session-scoped temp files, and feeds them to
-   * [LazyYamlScriptedToolRegistration.create] the same way the esbuild pipeline does for
-   * target-declared tools.
-   *
-   * Deduplicates against [targetToolConfigs] — a scripted tool already present in the
-   * target's `tools:` list is not re-registered here, so the target-declared version wins.
-   */
-  private suspend fun registerToolsetScriptedToolBundles(
-    toolRepo: TrailblazeToolRepo,
-    targetToolConfigs: List<InlineScriptToolConfig>,
-    sessionId: SessionId,
-    sessionDir: File,
-  ): List<LazyYamlScriptedToolRegistration> {
-    // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
-    // initially-active toolsets'. A toolset enabled later via `setActiveToolSets` is then
-    // already dispatchable (advertisement stays gated to the active set in TrailblazeToolRepo).
-    //
-    // Delegates to the SHARED in-process launcher (also used by the MCP daemon) so the host and
-    // daemon can't drift into two implementations of the same QuickJS dispatch. Target-declared
-    // scripted tools (target.tools:) are bundled separately and win on name collision, so they're
-    // passed as skipNames here.
-    return InProcessScriptedToolLauncher.launch(
-      toolRepo = toolRepo,
-      sessionId = sessionId,
-      sessionDir = sessionDir,
-      toolNames = toolRepo.allCatalogScriptedToolNames,
-      skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
-      classLoader = javaClass.classLoader,
-      logPrefix = "[TrailblazeHostYamlRunner]",
-    )
-  }
+  ): LaunchedScriptingRuntime? = HostScriptedToolLauncher.launch(
+    targetTestApp = targetTestApp,
+    config = config,
+    sessionId = sessionId,
+    deviceInfo = deviceInfo,
+    logsRepo = logsRepo,
+    toolRepo = toolRepo,
+    classLoader = javaClass.classLoader,
+    logPrefix = "[TrailblazeHostYamlRunner]",
+    onProgressMessage = onProgressMessage,
+  )
 
   /**
    * Common session lifecycle wrapper for trail execution.
@@ -1057,6 +845,12 @@ object TrailblazeHostYamlRunner {
       }
 
       if (runYamlRequest.config.sendSessionStartLog) {
+        // CLI / daemon runs have no JUnit Description, so derive a readable Suite::test
+        // identity from the trail path instead of a bare "ComposeRpc::run" (see
+        // deriveTestIdentityFromTrailPath). The driver name stays the path-less fallback.
+        val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
+          TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "ComposeRpc")
+        }
         loggingRule.logger.log(
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -1068,8 +862,8 @@ object TrailblazeHostYamlRunner {
               // separate resolvedInitialMemory field stays empty for the same reason.
               trailConfig = trailConfig?.copy(memory = null),
               trailFilePath = runYamlRequest.trailFilePath,
-              testClassName = "ComposeRpc",
-              testMethodName = "run",
+              testClassName = derivedTestIdentity?.className ?: "ComposeRpc",
+              testMethodName = derivedTestIdentity?.methodName ?: "run",
               trailblazeDeviceInfo = trailblazeDeviceInfo,
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
@@ -1352,6 +1146,10 @@ object TrailblazeHostYamlRunner {
         }
 
         if (runYamlRequest.config.sendSessionStartLog) {
+          // See ComposeRpc site — derive a readable Suite::test identity from the path.
+          val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
+            TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "Revyl")
+          }
           loggingRule.logger.log(
             session,
             TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -1361,8 +1159,8 @@ object TrailblazeHostYamlRunner {
                 // false-presence signal off this snapshot.
                 trailConfig = trailConfig?.copy(memory = null),
                 trailFilePath = runYamlRequest.trailFilePath,
-                testClassName = "Revyl",
-                testMethodName = "run",
+                testClassName = derivedTestIdentity?.className ?: "Revyl",
+                testMethodName = derivedTestIdentity?.methodName ?: "run",
                 trailblazeDeviceInfo = trailblazeDeviceInfo,
                 rawYaml = runYamlRequest.yaml,
                 hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
@@ -1805,14 +1603,18 @@ object TrailblazeHostYamlRunner {
       )?.let { subprocessRuntimes += it }
       if (runYamlRequest.config.sendSessionStartLog) {
         val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+        // See ComposeRpc site — derive a readable Suite::test identity from the path.
+        val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
+          TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "HostAccessibilityV3")
+        }
         loggingRule.logger.log(
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
             sessionStatus = SessionStatus.Started(
               trailConfig = trailConfig,
               trailFilePath = runYamlRequest.trailFilePath,
-              testClassName = "HostAccessibilityV3",
-              testMethodName = "run",
+              testClassName = derivedTestIdentity?.className ?: "HostAccessibilityV3",
+              testMethodName = derivedTestIdentity?.methodName ?: "run",
               trailblazeDeviceInfo = deviceInfo,
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
@@ -2269,6 +2071,10 @@ object TrailblazeHostYamlRunner {
       )?.let { subprocessRuntimes += it }
       if (runYamlRequest.config.sendSessionStartLog) {
         val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+        // See ComposeRpc site — derive a readable Suite::test identity from the path.
+        val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
+          TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "HostOnDeviceRpcRunner")
+        }
         loggingRule.logger.log(
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -2279,8 +2085,8 @@ object TrailblazeHostYamlRunner {
               // AgentMemory.seedFrom). Replay would otherwise read a false-presence signal.
               trailConfig = trailConfig?.copy(memory = null),
               trailFilePath = runYamlRequest.trailFilePath,
-              testClassName = "HostOnDeviceRpcRunner",
-              testMethodName = "run",
+              testClassName = derivedTestIdentity?.className ?: "HostOnDeviceRpcRunner",
+              testMethodName = derivedTestIdentity?.methodName ?: "run",
               trailblazeDeviceInfo = deviceInfo,
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),

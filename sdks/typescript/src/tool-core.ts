@@ -18,7 +18,7 @@
 import type { ErrorObject, ValidateFunction } from "ajv/dist/2020.js";
 
 import type { TrailblazeClient, TrailblazeToolMethods } from "./client.js";
-import type { TrailblazeContext, TrailblazeTarget } from "./context.js";
+import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
 import { createMemory, type TrailblazeMemory } from "./memory.js";
 
 /**
@@ -37,6 +37,20 @@ export interface ToolContext {
    * `_meta.trailblaze.memoryDelta` (subprocess path; bundle path buffers without flush).
    */
   memory: TrailblazeMemory;
+  /**
+   * Connected-device descriptor — platform, pixel dimensions, and the session's driver yamlKey
+   * (e.g. `"android-ondevice-accessibility"`). Lets a typed tool branch on the active
+   * driver/platform the way a Kotlin tool reads `agent.usesAccessibilityDriver` /
+   * `trailblazeDeviceInfo.platform`. `undefined` only when the tool is invoked outside a session
+   * envelope (ad-hoc MCP client, a unit test that didn't supply a context).
+   *
+   * ⚠️ The driver yamlKey lives under DIFFERENT field names per dispatch path: `driverType` on the
+   * MCP/subprocess envelope, `driver` on the on-device QuickJS (`runtime: inProcess`) envelope. A
+   * tool that branches on the driver must read BOTH, e.g.
+   * `ctx.device?.driverType ?? ctx.device?.driver` — reading only `driverType` silently misses the
+   * in-process path most mobile tools actually run under. See [TrailblazeDevice].
+   */
+  device?: TrailblazeDevice;
   /**
    * Resolved-target descriptor (`target.platforms.<platform>` after device resolution).
    * `undefined` when the session has no target configured — optional-chain
@@ -195,9 +209,14 @@ export function defineTypedTool<TInput, TResult>(
       throw new TypedToolValidationError(validator.errors ?? []);
     }
     const memory: TrailblazeMemory = legacyCtx?.memory ?? createMemory(undefined);
-    // `target` rides through from the legacy ctx untouched — `fromMeta` already injects the
-    // resolveAppId / resolveBaseUrl bindings on both paths; `undefined` when no session target.
-    const toolContext: ToolContext = { tools: client.tools, memory, target: legacyCtx?.target };
+    // `device` and `target` ride through from the legacy ctx untouched — `fromMeta` (and the
+    // on-device QuickJS host) populate both; `undefined` when invoked without a session envelope.
+    const toolContext: ToolContext = {
+      tools: client.tools,
+      memory,
+      device: legacyCtx?.device,
+      target: legacyCtx?.target,
+    };
     return handler(validatedArgs as TInput, toolContext);
   };
 }

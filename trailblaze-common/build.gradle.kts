@@ -277,10 +277,10 @@ fun esbuildScriptedTool(source: File, outFile: File) {
   // SDK never imports MCP). Both temp files are cleaned up in `finally`.
   //
   // The wrapper filename must be DETERMINISTIC (not `createTempFile`): esbuild emits the entry
-  // filename as a `// <name>` module comment in the output, and this `.bundle.js` is committed +
-  // byte-diffed by `verifyFrameworkScriptedToolsBundle`. A random suffix would make the committed
-  // artifact non-reproducible and fail the verify on every run. One source bundles at a time
-  // (sequential `forEach`), so a per-source name can't collide.
+  // filename as a `// <name>` module comment in the output. The `.bundle.js` is a build
+  // artifact regenerated each build, so a deterministic name keeps it byte-reproducible across
+  // machines (the same property the committed `bun.lock` guarantees for the inputs). One source
+  // bundles at a time (sequential `forEach`), so a per-source name can't collide.
   val wrapperFile = File(frameworkToolsDir, ".trailblaze-wrapper-${source.nameWithoutExtension}.ts")
   wrapperFile.writeText(synthesizeInProcessScriptedToolWrapper(source.name))
   val stdioStubFile =
@@ -331,12 +331,81 @@ fun esbuildScriptedTool(source: File, outFile: File) {
 
 tasks.register("bundleFrameworkScriptedTools") {
   group = "build"
-  description = "Regenerates the committed QuickJS .bundle.js for every framework scripted tool."
+  description = "Regenerates the QuickJS .bundle.js for every framework scripted tool (build artifact)."
+  // Declare inputs + outputs so Gradle UP-TO-DATE-skips this when nothing changed — parity with
+  // bundleTrailblazeSdk(Dts). Without these the task is wired into resource packaging (preBuild /
+  // *ProcessResources below) but has no staleness info, so esbuild would re-run on every build.
+  // Inputs: the tool `.ts` sources, the slim SDK source tree they bundle against, and the config
+  // that controls the bundle (package.json / bun.lock / the wrapper template). Output: the
+  // generated `.bundle.js` files.
+  inputs.files(project.provider { frameworkScriptedToolSources() }).withPropertyName("frameworkToolSources")
+  val sdkDir = frameworkRoot?.let { File(it, "sdks/typescript") }
+  if (sdkDir != null) {
+    inputs.files(project.provider { project.fileTree(File(sdkDir, "src")) }).withPropertyName("slimSdkSources")
+    inputs.files(
+      project.provider {
+        listOf(
+          File(sdkDir, "package.json"),
+          File(sdkDir, "bun.lock"),
+          File(sdkDir, "tools/in-process-wrapper-template.mjs"),
+        ).filter { it.exists() }
+      },
+    ).withPropertyName("sdkBundleConfig")
+  }
+  outputs.files(
+    project.provider {
+      frameworkScriptedToolSources().map { File(frameworkToolsDir, "${it.nameWithoutExtension}.bundle.js") }
+    },
+  ).withPropertyName("frameworkToolBundles")
   doLast {
     val sources = frameworkScriptedToolSources()
     if (sources.isEmpty()) {
       logger.lifecycle("No framework scripted tools to bundle.")
       return@doLast
+    }
+    // Remove orphaned bundles first: a `.bundle.js` whose source `.ts` was renamed or deleted
+    // would otherwise linger in this gitignored dir (there's no verify gate now) and still get
+    // packaged. Only bundles with a current source survive (and are overwritten below).
+    val expectedBundles = sources.map { "${it.nameWithoutExtension}.bundle.js" }.toSet()
+    frameworkToolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
+      ?.forEach { stale ->
+        logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
+        stale.delete()
+      }
+    // The `.bundle.js` files are build artifacts, not committed source, so install the slim
+    // SDK's esbuild from the committed bun.lock. Skip is keyed on the lockfile (not just binary
+    // presence) so a `bun.lock` bump forces a fresh install rather than bundling against stale
+    // deps. Mirrors `ensureSdkNodeModules` in TrailblazeSdkDtsBundlePlugin (which a build script
+    // can't call directly).
+    val sdkDir = frameworkRoot?.let { File(it, "sdks/typescript") }
+    if (sdkDir != null) {
+      val esbuildOk = File(sdkDir, "node_modules/.bin/esbuild").isFile
+      val lockText = File(sdkDir, "bun.lock").let { if (it.exists()) it.readText() else "" }
+      val installStamp = File(sdkDir, "node_modules/.trailblaze-install-lock")
+      val upToDate = esbuildOk && installStamp.exists() && installStamp.readText() == lockText
+      if (!upToDate) {
+        logger.lifecycle("Installing @trailblaze/scripting devDependencies (bun install --frozen-lockfile)")
+        val installProc = try {
+          ProcessBuilder("bun", "install", "--frozen-lockfile").directory(sdkDir).inheritIO().start()
+        } catch (e: java.io.IOException) {
+          throw GradleException(
+            "Could not launch `bun` to install @trailblaze/scripting devDependencies in $sdkDir. " +
+              "Trailblaze is bun-only and `bun` is a hard build prerequisite — put it on PATH via " +
+              "`source bin/activate-hermit` or install from https://bun.sh/. Cause: ${e.message}",
+            e,
+          )
+        }
+        if (!installProc.waitFor(15, TimeUnit.MINUTES)) {
+          installProc.destroyForcibly()
+          throw GradleException("`bun install --frozen-lockfile` timed out in $sdkDir.")
+        }
+        require(installProc.exitValue() == 0) {
+          "`bun install --frozen-lockfile` failed (exit ${installProc.exitValue()}) in $sdkDir — " +
+            "required to bundle framework scripted tools. Ensure `bun` is on PATH " +
+            "(`source bin/activate-hermit`)."
+        }
+        runCatching { installStamp.writeText(lockText) }
+      }
     }
     sources.forEach { src ->
       val out = File(frameworkToolsDir, "${src.nameWithoutExtension}.bundle.js")
@@ -346,36 +415,26 @@ tasks.register("bundleFrameworkScriptedTools") {
   }
 }
 
-// Intentionally NOT wired into `check`: esbuild requires `(cd sdks/typescript && bun install)`
-// first, so the gate runs in the same CI static-checks step that runs `verifyTrailblazeSdkBundle`
-// rather than burdening every local `./gradlew check`. Mirrors the `:trailblaze-models` SDK-bundle
-// convention. Local devs who edit a framework scripted tool's `.ts` run
-// `./gradlew :trailblaze-common:bundleFrameworkScriptedTools` and commit the regenerated bundle.
-tasks.register("verifyFrameworkScriptedToolsBundle") {
-  group = "verification"
-  description = "Verifies every committed framework scripted-tool .bundle.js matches a fresh build."
-  doLast {
-    val sources = frameworkScriptedToolSources()
-    val drift = mutableListOf<String>()
-    sources.forEach { src ->
-      val committed = File(frameworkToolsDir, "${src.nameWithoutExtension}.bundle.js")
-      val temp =
-        layout.buildDirectory.file("tmp/verify-${src.nameWithoutExtension}.bundle.js").get().asFile
-      temp.parentFile.mkdirs()
-      esbuildScriptedTool(src, temp)
-      when {
-        !committed.isFile -> drift += "${committed.name} (missing — never committed)"
-        !committed.readBytes().contentEquals(temp.readBytes()) -> drift += committed.name
-      }
-    }
-    if (drift.isNotEmpty()) {
-      throw GradleException(
-        "Framework scripted-tool bundle(s) out of date: ${drift.joinToString()}.\n" +
-          "Regenerate and commit:\n" +
-          "  ./gradlew :trailblaze-common:bundleFrameworkScriptedTools\n" +
-          "  git add ${frameworkToolsDir.relativeTo(rootDir)}/*.bundle.js",
-      )
-    }
-    logger.lifecycle("✓ All ${sources.size} framework scripted-tool bundle(s) are fresh.")
-  }
-}
+// The framework scripted-tool `.bundle.js` files (under src/commonMain/resources/.../tools,
+// gitignored) are build artifacts, not committed source. Wire `bundleFrameworkScriptedTools`
+// ahead of every task that packages this module's commonMain resources so the bundles are
+// present in the JVM jar and the Android APK/AAR (both Java resources AND assets — the
+// on-device QuickJS launcher reads them via the AssetManager). Ordering-only dependsOn, and
+// `matching {}.configureEach {}` tolerates a variant that lacks one of these task names.
+val bundleFrameworkToolsTask = tasks.named("bundleFrameworkScriptedTools")
+// Every task that consumes this module's commonMain resources must depend on the generator:
+// the generated `.bundle.js` lives under `src/commonMain/resources` AND is a declared task
+// output, so Gradle 8 hard-fails any consumer that reads it without a dependency edge
+// ("uses this output of task … without declaring … a dependency"). That consumer set spans
+// the KMP metadata/jvm/jvmTest `*ProcessResources` tasks, the Android resource/asset/JavaResource
+// merges, the publish `*SourcesJar`s, and `preBuild` (root of every Android variant graph).
+// Matched by name so new KMP/AGP variants are covered without re-enumerating; dependsOn is
+// ordering-only so the broad reach is safe.
+tasks.matching { t ->
+  t.name.endsWith("ProcessResources") ||
+    t.name == "preBuild" ||
+    t.name.endsWith("SourcesJar") ||
+    (t.name.startsWith("merge") &&
+      (t.name.endsWith("Resources") || t.name.endsWith("Assets") || t.name.endsWith("JavaResource")))
+}.configureEach { dependsOn(bundleFrameworkToolsTask) }
+

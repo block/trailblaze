@@ -78,6 +78,17 @@ node_modules/
 # at daemon init, never edited by hand.
 **/trails/config/dist/
 
+# `@trailblaze/scripting` SDK bundles — generated at build time from `sdks/typescript/src/`
+# (esbuild + dts-bundle-generator), shipped in the JVM jar + Android APK/AAR. They rewrite in
+# full on any SDK-source change, so they're build artifacts, not committed source. The Gradle
+# packaging tasks regenerate them (`:trailblaze-models:bundleTrailblazeSdkDts`,
+# `:trailblaze-scripting-bundle:bundleTrailblazeSdk`, `:trailblaze-common:bundleFrameworkScriptedTools`);
+# `bun` on PATH (Hermit-pinned) is the build prerequisite. The committed `bun.lock` pins their
+# inputs so regeneration is byte-deterministic.
+sdks/typescript/dist/
+trailblaze-scripting-bundle/src/jvmAndAndroid/resources/trailblaze/scripting/bundle/trailblaze-sdk-bundle.js
+trailblaze-common/src/commonMain/resources/trails/config/trailmaps/trailblaze/tools/*.bundle.js
+
 # Daemon local data — settings JSON, cache, in-progress logs. Created in the working
 # tree when the daemon's `appDataDirectory` points at the repo (developer convenience
 # for "run from source" setups), kept out of version control.
@@ -91,10 +102,10 @@ __pycache__/
 # NPM/bun lockfiles — ignored globally because most node_modules-using directories
 # in this tree (examples, fixtures) deliberately float deps. The ONE exception is
 # the framework's TypeScript SDK at `sdks/typescript/`, whose `bun.lock` IS
-# committed so the bundled artifacts (`trailblaze-sdk-bundle.js`,
-# `dist/index.d.ts`) regenerate byte-deterministically across CI and developer
-# machines. See the framework's pre-push checklist + the static-checks CI
-# script for the strict-lockfile install workflow.
+# committed so the build-time-generated bundles (`trailblaze-sdk-bundle.js`,
+# `dist/index.js`, `dist/index.d.ts` — see the SDK-bundle rule above) regenerate
+# byte-deterministically across CI and developer machines. The bundles themselves are
+# NOT committed; only the lockfile that pins their inputs is.
 package-lock.json
 bun.lock
 bun.lockb

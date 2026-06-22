@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.host.rules
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import org.junit.Rule
 import org.junit.rules.RuleChain
@@ -47,6 +49,8 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
+import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -76,7 +80,7 @@ abstract class BaseHostTrailblazeTest(
   customYamlToolNames: Set<ToolName> = setOf(),
   excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   maxRetries: Int = 0,
-  appTarget: TrailblazeHostAppTarget? = null,
+  private val appTarget: TrailblazeHostAppTarget? = null,
   explicitDeviceId: TrailblazeDeviceId? = null,
 ) {
 
@@ -565,6 +569,15 @@ abstract class BaseHostTrailblazeTest(
     if (sendSessionStartLog) {
       val session = loggingRule.session
       if (session != null) {
+        // A session that runs under a real JUnit harness carries a Description we can read the
+        // class/method from. CLI / daemon runs don't (the runner builds an anonymous
+        // `object : BaseHostTrailblazeTest`, whose simpleName is empty), so derive a readable
+        // `Suite::test` identity from the trail path instead of stamping this base class's name
+        // — that "BaseHostTrailblazeTest::run" subtitle in the Sessions list told the reader
+        // nothing and looked like a leftover JUnit artifact.
+        val derivedTestIdentity = trailFilePath?.let {
+          TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "Trailblaze")
+        }
         loggingRule.logger.log(
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -573,8 +586,11 @@ abstract class BaseHostTrailblazeTest(
               trailFilePath = trailFilePath,
               testClassName = loggingRule.description?.className
                 ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
-                ?: "BaseHostTrailblazeTest",
-              testMethodName = loggingRule.description?.methodName ?: "run",
+                ?: derivedTestIdentity?.className
+                ?: "Trailblaze",
+              testMethodName = loggingRule.description?.methodName
+                ?: derivedTestIdentity?.methodName
+                ?: "run",
               trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
@@ -587,7 +603,32 @@ abstract class BaseHostTrailblazeTest(
       }
     }
     currentToolTraceId = traceId
+    // Register this session's IN-PROCESS scripted tools (target.tools: + catalog) into the repo so
+    // the agent loop, recorded-replay re-execution, AND Kotlin composition via `invokeFrameworkTool`
+    // can resolve them by name. This is the host test rule's analog of the daemon's
+    // `TrailblazeHostYamlRunner` launch and the on-device `AndroidTrailblazeRule` registration —
+    // without it, a recorded composite launch tool that re-runs on replay and dispatches a
+    // TypeScript sub-step by name via `invokeFrameworkTool` would hit "Unknown framework tool".
+    // Subprocess scripted tools are intentionally NOT
+    // launched here (`includeSubprocess = false`) — no host test needs one, and `target.tools:` isn't
+    // platform-scoped, so launching them would fork the web sign-in subprocess on a mobile session.
+    var launchedScripting: LaunchedScriptingRuntime? = null
     try {
+      val session = loggingRule.session
+      if (session != null) {
+        launchedScripting = HostScriptedToolLauncher.launch(
+          targetTestApp = appTarget,
+          config = config,
+          sessionId = session.sessionId,
+          deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+          logsRepo = hostLoggingRule.logsRepo,
+          toolRepo = toolRepo,
+          classLoader = javaClass.classLoader,
+          logPrefix = "[BaseHostTrailblazeTest]",
+          includeSubprocess = false,
+          onProgressMessage = { Console.log("[BaseHostTrailblazeTest] $it") },
+        )
+      }
       if (!trailblazeYaml.hasActionableSteps(trailItems)) {
         val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
         val trailUrl = trailConfig?.metadata?.get("testRailUrl")
@@ -599,6 +640,9 @@ abstract class BaseHostTrailblazeTest(
       }
       runTrail(trailItems, useRecordedSteps)
     } finally {
+      // Free QuickJS engines + deregister the dynamic tools so a reused repo doesn't collide on a
+      // later session. NonCancellable so teardown completes even on trail timeout / abort.
+      launchedScripting?.let { runtime -> withContext(NonCancellable) { runtime.shutdownAll() } }
       currentToolTraceId = null
     }
     return loggingRule.session?.sessionId ?: SessionId("unknown")

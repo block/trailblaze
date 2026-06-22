@@ -327,9 +327,16 @@ class AndroidOnDeviceUiAutomatorScreenState(
         // Let any in-flight recomposition / semantics export settle before re-reading.
         // waitForIdle() returns as soon as the accessibility-event stream is quiet — not a sleep.
         runCatching { withUiDevice { waitForIdle() } }
-        // visibleOnly=true so recovery preserves dumpWindowHierarchy()'s visibility filtering —
-        // we only want to bust the stale cache, not broaden the tree to hidden nodes.
-        val refreshedXml = dumpViewHierarchyFromAccessibilityTree(visibleOnly = true) ?: continue
+        // visibleOnly=false so the walk reaches nodes inside invisible ViewFactoryHolder containers.
+        // A ComposeView whose host Compose AndroidView is transiently invisible (e.g. during a
+        // fragment transition or when am instrument suppressed accessibility at startup) shows up
+        // collapsed in dumpWindowHierarchy() but its parent ViewFactoryHolder has
+        // isVisibleToUser=false in the accessibility tree. With visibleOnly=true the recovery
+        // would skip that ViewFactoryHolder and never call refresh() on the ComposeView inside —
+        // so the stale-cache bust never happens and every attempt reports "still collapsed".
+        // visibleOnly=false matches the sparse-dump fallback's intent: walk through invisible
+        // containers to reach and refresh() the actual collapsed surface.
+        val refreshedXml = dumpViewHierarchyFromAccessibilityTree(visibleOnly = false) ?: continue
         val refreshedMaestro =
           MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
             viewHiearchyXml = refreshedXml,
@@ -395,10 +402,11 @@ class AndroidOnDeviceUiAutomatorScreenState(
       if (standardTextNodeCount < TEXT_NODE_FALLBACK_THRESHOLD) {
         Console.log("[dumpViewHierarchy] Sparse dump ($standardTextNodeCount text nodes); activating accessibility-tree fallback.")
         // visibleOnly defaults to false here ON PURPOSE — the sparse case wants the invisible
-        // ViewFactoryHolder content that dumpWindowHierarchy() skipped. This is the opposite
-        // intent from the Compose-collapse recovery in recoverCollapsedComposeTree(), which passes
-        // visibleOnly=true to preserve visibility filtering. Same dump helper, deliberately
-        // different filtering per caller.
+        // ViewFactoryHolder content that dumpWindowHierarchy() skipped. The Compose-collapse
+        // recovery in recoverCollapsedComposeTree() also passes visibleOnly=false for the same
+        // reason: a collapsed ComposeView often lives inside a ViewFactoryHolder whose
+        // isVisibleToUser is false, so the recovery must walk through it to reach and refresh()
+        // the collapsed surface. Same dump helper, same intent in both callers.
         val fallbackDump = dumpViewHierarchyFromAccessibilityTree()
         if (fallbackDump != null) {
           fallbackDump
@@ -509,11 +517,13 @@ class AndroidOnDeviceUiAutomatorScreenState(
      *
      * @param visibleOnly when true, skip nodes (and their subtrees) where
      *   [AccessibilityNodeInfo.isVisibleToUser] is false, matching [UiDevice.dumpWindowHierarchy]'s
-     *   visibility filtering. The sparse-dump fallback uses `false` (it *wants* the invisible
-     *   ViewFactoryHolder content `dumpWindowHierarchy` skipped); the Compose-collapse recovery
-     *   uses `true` so it only busts the stale cache without broadening the tree to hidden nodes.
+     *   visibility filtering. Both the sparse-dump fallback and the Compose-collapse recovery use
+     *   `false`: a collapsed ComposeView is often inside a [androidx.compose.ui.viewinterop.ViewFactoryHolder] whose
+     *   isVisibleToUser is false (e.g. during a fragment transition or after am instrument
+     *   suppressed accessibility at startup), so skipping invisible nodes would prevent refresh()
+     *   from ever reaching the collapsed surface.
      */
-    private fun dumpViewHierarchyFromAccessibilityTree(visibleOnly: Boolean = false): String? {
+    internal fun dumpViewHierarchyFromAccessibilityTree(visibleOnly: Boolean = false): String? {
       val executor = Executors.newSingleThreadExecutor()
       val future = executor.submit(Callable {
         val root = withUiAutomation { rootInActiveWindow }

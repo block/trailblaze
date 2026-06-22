@@ -63,4 +63,21 @@ class CaptureOptionsTest {
     // deliberately if NONE is meant to mean "no capture at all".
     assertEquals(CaptureOptions(), CaptureOptions.NONE)
   }
+
+  @Test
+  fun `web sprite tuning substitutes the larger defaults when the user has not overridden them`() {
+    val options = CaptureOptions()
+    assertEquals(CaptureOptions.WEB_SPRITE_HEIGHT, options.webSpriteFrameHeight())
+    assertEquals(CaptureOptions.WEB_SPRITE_QUALITY, options.webSpriteQuality())
+    // sanity: the web sprite is genuinely crisper than the mobile-tuned default
+    assertTrue(CaptureOptions.WEB_SPRITE_HEIGHT > CaptureOptions.DEFAULT_SPRITE_HEIGHT)
+    assertTrue(CaptureOptions.WEB_SPRITE_QUALITY > CaptureOptions.DEFAULT_SPRITE_QUALITY)
+  }
+
+  @Test
+  fun `web sprite tuning honors an explicit user override`() {
+    val options = CaptureOptions(spriteFrameHeight = 480, spriteQuality = 70)
+    assertEquals(480, options.webSpriteFrameHeight())
+    assertEquals(70, options.webSpriteQuality())
+  }
 }

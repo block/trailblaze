@@ -43,10 +43,28 @@ class McpSubprocessSession internal constructor(
   val transport: StdioClientTransport,
   val client: Client,
   val stderrCapture: StderrCapture,
+  /**
+   * Dedicated daemon thread draining the subprocess's stderr into [stderrCapture], owned by
+   * this session rather than by [transport]. See [connect] for why the transport must NOT own
+   * stderr on the crash path.
+   */
+  private val stderrPump: Thread,
 ) {
 
   /** True while the subprocess is still alive. Flips to false on exit / shutdown. */
   val isAlive: Boolean get() = spawnedProcess.process.isAlive
+
+  /**
+   * Blocks up to [millis] for the stderr pump to finish draining. Once the subprocess has
+   * exited, its stderr pipe reaches EOF and the pump terminates almost immediately. The crash
+   * path calls this after confirming the process has been reaped, so the captured tail is
+   * guaranteed complete before it is snapshotted into the error envelope. Best-effort: a
+   * timeout returns quietly and an interrupt is preserved (see [joinPreservingInterrupt]) so a
+   * wedged pump can never block error reporting.
+   */
+  internal fun awaitStderrDrained(millis: Long) {
+    joinPreservingInterrupt(stderrPump, millis)
+  }
 
   /**
    * Closes the MCP client (which closes the stdio transport + the process's stdin), then
@@ -63,6 +81,9 @@ class McpSubprocessSession internal constructor(
   suspend fun shutdown(exitWait: Duration = Duration.DEFAULT) = withContext(Dispatchers.IO) {
     runCatching { client.close() }
     destroyWithEscalation(spawnedProcess.process, exitWait)
+    // The subprocess is gone now, so its stderr pipe is at EOF and the pump is finishing its
+    // last reads — join it before closing the capture so the on-disk log ends up complete.
+    joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
     stderrCapture.close()
   }
 
@@ -124,14 +145,26 @@ class McpSubprocessSession internal constructor(
       stderrClassifier: (String) -> StdioClientTransport.StderrSeverity = DEFAULT_STDERR_CLASSIFIER,
     ): McpSubprocessSession {
       val process = spawnedProcess.process
+      // Pump stderr on a session-owned daemon thread instead of handing the error stream to
+      // the MCP transport. The transport tears its entire coroutine scope down the instant the
+      // child's stdout hits EOF — which is exactly the crash signal — and that cancellation
+      // races (and on a busy host, beats) its own stderr reader, so the child's final
+      // diagnostics never reach [stderrCapture]. The result is a [TrailblazeToolResult.Error.FatalError]
+      // that reports "(no stderr captured)" precisely when the stderr tail matters most.
+      // Reproduced as a flaky failure of SubprocessCrashEnvelopeTest under CPU contention (and
+      // as the deterministic red on the constrained CI runner). Owning the reader here keeps
+      // stderr capture alive independently of the transport, so the tail is complete whether
+      // the subprocess exits cleanly or dies mid-dispatch.
+      val stderrPump = startStderrPump(
+        process = process,
+        scriptName = spawnedProcess.scriptFile.name,
+        stderrCapture = stderrCapture,
+        classifier = stderrClassifier,
+      )
       val transport = StdioClientTransport(
         input = process.inputStream.asSource().buffered(),
         output = process.outputStream.asSink().buffered(),
-        error = process.errorStream.asSource().buffered(),
-        classifyStderr = { line ->
-          stderrCapture.accept(line)
-          stderrClassifier(line)
-        },
+        error = null,
       )
       val client = Client(clientInfo, ClientOptions())
       // Route scripted-tool `ctx.logger.*` calls — emitted by the subprocess as MCP
@@ -156,11 +189,102 @@ class McpSubprocessSession internal constructor(
         withContext(Dispatchers.IO) {
           destroyWithEscalation(process, Duration.DEFAULT)
         }
+        joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
         runCatching { stderrCapture.close() }
         throw t
       }
-      return McpSubprocessSession(spawnedProcess, transport, client, stderrCapture)
+      return McpSubprocessSession(spawnedProcess, transport, client, stderrCapture, stderrPump)
     }
+
+    /**
+     * Bound on how long the session-owned stderr pump is joined during teardown / handshake
+     * failure. Once the subprocess is gone the pump terminates almost immediately on the
+     * stderr EOF; this is only a backstop against a wedged read so cleanup can't hang.
+     */
+    internal const val STDERR_PUMP_JOIN_MS: Long = 2_000L
+
+    /**
+     * Starts a daemon thread that reads [process]'s stderr line by line into [stderrCapture]
+     * until EOF, surfacing error-severity lines (per [classifier]) to the host [Console] so a
+     * failing subprocess is visible in the daemon output. Capture into [stderrCapture] is
+     * unconditional; quieter lines live only in the per-session capture log. Owned by the
+     * session (see [connect]) rather than the MCP transport so a stdout-EOF crash can't cancel
+     * it before the child's final diagnostics are captured.
+     *
+     * A line the [classifier] grades [StdioClientTransport.StderrSeverity.FATAL] fails the
+     * session fast, mirroring the transport's old FATAL handling (which called its error
+     * handler and stopped processing): the subprocess is force-terminated, so its stdio reaches
+     * EOF and the in-flight / next dispatch surfaces the failure instead of continuing to talk
+     * to a server its own author declared dead. The default classifier never returns FATAL, so
+     * this only fires for a caller-supplied classifier that opts into it.
+     */
+    private fun startStderrPump(
+      process: Process,
+      scriptName: String,
+      stderrCapture: StderrCapture,
+      classifier: (String) -> StdioClientTransport.StderrSeverity,
+    ): Thread = Thread {
+      runCatching {
+        process.errorStream.bufferedReader().use { reader ->
+          while (true) {
+            val line = reader.readLine() ?: break
+            stderrCapture.accept(line)
+            routeStderrLine(line, scriptName, classifier(line)) {
+              // Mirror the transport's old fail-fast on a fatal-classified line: tear the
+              // subprocess down so the session can't keep dispatching to a doomed server.
+              runCatching { process.destroyForcibly() }
+            }
+          }
+        }
+      }
+    }.apply {
+      isDaemon = true
+      name = "trailblaze-mcp-stderr-$scriptName"
+      start()
+    }
+  }
+}
+
+/**
+ * Routes one already-captured stderr line by its [severity]: error-severity lines
+ * ([StdioClientTransport.StderrSeverity.WARNING] / [StdioClientTransport.StderrSeverity.FATAL])
+ * are surfaced to the host [Console] so a failing subprocess is visible in the daemon output;
+ * quieter levels stay in the per-session capture log only. A FATAL line additionally invokes
+ * [onFatal] — the pump wires that to force-terminating the subprocess, mirroring the transport's
+ * old fail-fast. Extracted so the severity → action mapping (including the otherwise
+ * caller-only FATAL path) is unit-testable without spawning a subprocess.
+ */
+internal fun routeStderrLine(
+  line: String,
+  scriptName: String,
+  severity: StdioClientTransport.StderrSeverity,
+  onFatal: () -> Unit,
+) {
+  when (severity) {
+    StdioClientTransport.StderrSeverity.FATAL -> {
+      Console.error("[$scriptName] $line")
+      onFatal()
+    }
+    StdioClientTransport.StderrSeverity.WARNING -> Console.error("[$scriptName] $line")
+    StdioClientTransport.StderrSeverity.INFO,
+    StdioClientTransport.StderrSeverity.DEBUG,
+    StdioClientTransport.StderrSeverity.IGNORE,
+    -> Unit
+  }
+}
+
+/**
+ * Joins [thread] for up to [millis], best-effort. A timeout returns quietly; an interrupt is
+ * swallowed but the thread's interrupt flag is restored so cancellation still propagates at the
+ * caller's next suspension point. Used for the session-owned stderr pump on every teardown path
+ * (drain-before-snapshot, shutdown, handshake-failure cleanup) so a wedged pump can never hang
+ * or silently eat an interrupt.
+ */
+private fun joinPreservingInterrupt(thread: Thread, millis: Long) {
+  try {
+    thread.join(millis)
+  } catch (_: InterruptedException) {
+    Thread.currentThread().interrupt()
   }
 }
 

@@ -389,7 +389,9 @@ object CliConfigHelper {
       // Seed the effective screenshot config from disk so standalone CLI processes
       // (no daemon) honour the user's saved overrides on the very first call.
       // The daemon's TrailblazeSettingsRepo collector keeps it fresh thereafter.
-      EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfig())
+      // Pass null when nothing is overridden so the web path can fall back to its own default
+      // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
+      EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
     }
 
   /**

@@ -19,7 +19,6 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import androidx.test.platform.app.InstrumentationRegistry
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -998,26 +997,31 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * available and falling back to the native AccessibilityService API otherwise.
      *
      * - **UiAutomation path**: No rate limit, no overhead. Requires an active instrumentation
-     *   test context (e.g., AndroidJUnitRunner). Uses
-     *   [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES] to prevent reconnection from
-     *   destroying our running accessibility service.
+     *   test context (e.g., AndroidJUnitRunner). Routed through
+     *   [InstrumentationUtil.withUiAutomation], which always requests
+     *   [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES] (so reconnection can't destroy
+     *   our running accessibility service) and transparently recovers a stale / half-connected
+     *   handle (e.g. one left over from a cancelled prior session) by clearing the cached handle,
+     *   reconnecting, and retrying the screenshot once before this method falls back to native.
+     *   See [InstrumentationUtil.withUiAutomation] for the exact handle signatures it recovers
+     *   from. Without that recovery a single wedged handle would silently degrade every
+     *   subsequent screenshot to the slower native path until the next reconnect.
      *
      * - **Native fallback** ([captureScreenshotNative]): Uses the AccessibilityService's own
      *   [takeScreenshot] API (API 30+), which enforces a 333ms minimum interval. Used when
-     *   the accessibility service runs standalone without instrumentation.
+     *   the accessibility service runs standalone without instrumentation, or when UiAutomation
+     *   recovery itself could not restore a working handle.
      *
      * **Important**: All code paths that obtain a [UiAutomation] reference must use
      * [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES]. Calling `getUiAutomation()`
      * without this flag (or with flags=0) will reconnect UiAutomation and destroy the running
-     * accessibility service. The [OnDeviceAccessibilityServiceSetup] Configurator ensures
-     * [UiDevice] uses the correct flags, but any direct `getUiAutomation()` calls elsewhere
-     * must also include the flag.
+     * accessibility service. Going through [InstrumentationUtil.withUiAutomation] is how this
+     * path guarantees the flag (and the shared stale-handle recovery) without re-deriving the
+     * signature list or reflection logic here.
      */
     fun captureScreenshot(): Bitmap? {
       return try {
-        InstrumentationRegistry.getInstrumentation()
-          .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
-          .takeScreenshot()
+        InstrumentationUtil.withUiAutomation { takeScreenshot() }
       } catch (e: Exception) {
         Console.log(
           "captureScreenshot: UiAutomation unavailable (${e.message}), " +

@@ -3,6 +3,15 @@ package xyz.block.trailblaze.recordings
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
 
+/**
+ * A readable `class::method` identity derived from a trail file path for non-JUnit
+ * (CLI / daemon) sessions. See [TrailRecordings.deriveTestIdentityFromTrailPath].
+ */
+data class DerivedTestIdentity(
+  val className: String,
+  val methodName: String,
+)
+
 object TrailRecordings {
 
   /**
@@ -68,6 +77,77 @@ object TrailRecordings {
   // ---------------------------------------------------------------------------
   // Utility methods — use these instead of inline .endsWith() / == checks
   // ---------------------------------------------------------------------------
+
+  /**
+   * Shortens a trail file path to a stable, human-readable name relative to the
+   * conventional `trails/` root — for user-facing surfaces (the Sessions list, the
+   * HTML/JSON reports).
+   *
+   * Strips everything up to and including the last `trails/` directory segment, then
+   * drops the [DOT_TRAIL_DOT_YAML_FILE_SUFFIX]. A path with no `trails/` segment is
+   * returned with only the suffix removed (best-effort — rare for authored trails).
+   *
+   * ```
+   * "/Volumes/ci/…/trails/ExperimentalIosTests/set_feature_flag.trail.yaml"
+   *     -> "ExperimentalIosTests/set_feature_flag"
+   * "trails/EvaluationLongTest/tenKey.trail.yaml" -> "EvaluationLongTest/tenKey"
+   * ```
+   *
+   * Why this exists: callers used to strip only a *literal leading* `trails/` prefix
+   * (`path.removePrefix("trails/")`). But a trail run through the CLI records
+   * `file.absolutePath` in its session log, which does not start with `trails/`, so the
+   * prefix strip was a no-op and the Sessions list showed the entire absolute path
+   * (e.g. `/Volumes/InstanceStore/.ci-storage/…/set_feature_flag`). Matching the last
+   * `trails/` segment anywhere in the path fixes both the relative and absolute forms.
+   *
+   * Backslashes are normalized to `/` first so a Windows `file.absolutePath`
+   * (`C:\repo\trails\Suite\case.trail.yaml`) shortens the same way — matching the
+   * `.replace('\\', '/')` convention the rest of the codebase uses for string-based
+   * path handling.
+   */
+  fun shortTrailName(trailFilePath: String): String =
+    trailFilePath
+      .replace('\\', '/')
+      .substringAfterLast("/trails/")
+      .removePrefix("trails/")
+      .removeSuffix(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+
+  /**
+   * Derives a readable `Suite::test` identity from a trail file path, for sessions that don't
+   * run under a JUnit harness (CLI / daemon runs). Such sessions have no real test class, so
+   * the host runners used to stamp an implementation base-class name
+   * (`BaseHostTrailblazeTest::run`, `HostAccessibilityV3::run`) that leaks internals and tells
+   * the reader nothing.
+   *
+   * Splits the `trails/`-relative [shortTrailName] into its last two path segments and uses them
+   * verbatim: the immediate parent directory becomes the "suite" class, and the trail file's
+   * base name becomes the "test method". The segments are already authored to be readable
+   * (`ExperimentalIosTests`, `set_feature_flag`), so they're kept as-is — passing them through a
+   * case normalizer would collapse intentional camelCase (e.g. `ExperimentalIosTests` →
+   * `Experimentaliostests`).
+   *
+   * ```
+   * ".../trails/ExperimentalIosTests/set_feature_flag.trail.yaml"
+   *     -> DerivedTestIdentity("ExperimentalIosTests", "set_feature_flag")
+   * ```
+   *
+   * Falls back to [fallbackClassName] when there is no parent segment (a trail directly under
+   * `trails/`), and to `"run"` when the path yields no usable method segment.
+   */
+  fun deriveTestIdentityFromTrailPath(
+    trailFilePath: String,
+    fallbackClassName: String,
+  ): DerivedTestIdentity {
+    val segments = shortTrailName(trailFilePath)
+      .split('/')
+      .filter { it.isNotBlank() }
+    val method = segments.lastOrNull()?.takeIf { it.isNotBlank() }
+    val suite = segments.getOrNull(segments.size - 2)?.takeIf { it.isNotBlank() }
+    return DerivedTestIdentity(
+      className = suite ?: fallbackClassName,
+      methodName = method ?: "run",
+    )
+  }
 
   /**
    * Returns `true` if [fileName] is a natural-language definition file

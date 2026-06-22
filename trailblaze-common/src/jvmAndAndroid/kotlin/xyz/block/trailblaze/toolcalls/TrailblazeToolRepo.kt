@@ -645,9 +645,15 @@ class TrailblazeToolRepo(
   }
 
   fun getCurrentToolDescriptors(): List<ToolDescriptor> {
-    return getCurrentTrailblazeToolDescriptors().map {
-      it.toKoogToolDescriptor(strict = false)
+    // Build from source types, not the string-typed TrailblazeToolDescriptor mirror, whose
+    // round-trip collapses non-primitive params (e.g. List<String>) to String via parseKoogParameterType.
+    val snapshot = snapshotRegisteredTools()
+    val classDescriptors = snapshot.toolClasses.mapNotNull { it.toKoogToolDescriptor() }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames)
+    val dynamicDescriptors = snapshot.advertisedDynamic().map {
+      it.trailblazeDescriptor.toKoogToolDescriptor(strict = false)
     }
+    return classDescriptors + yamlDescriptors + dynamicDescriptors
   }
 
   /**

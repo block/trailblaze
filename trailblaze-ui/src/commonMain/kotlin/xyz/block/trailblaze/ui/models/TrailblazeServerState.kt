@@ -187,6 +187,24 @@ data class TrailblazeServerState(
         compressionQuality = safeQuality,
       )
     }
+
+    /** True when the user has customized at least one screenshot scaling field. */
+    fun hasAnyScreenshotOverride(): Boolean =
+      screenshotImageFormat != null ||
+        screenshotMaxLongerSide != null ||
+        screenshotMaxShorterSide != null ||
+        screenshotCompressionQuality != null
+
+    /**
+     * Like [screenshotScalingConfig] but returns `null` when the user has overridden nothing,
+     * preserving the "unset" signal for [EffectiveScreenshotScalingConfig.setEffectiveDefault].
+     * That lets the web path ([EffectiveScreenshotScalingConfig.effectiveForWeb]) distinguish
+     * "no user config → use the web default" from "user explicitly set values that happen to
+     * equal the framework defaults → honor them". [effective] is unaffected (`null` still resolves
+     * to [ScreenshotScalingConfig.DEFAULT], which is what a fully-unset config materializes to).
+     */
+    fun screenshotScalingConfigOrNull(): ScreenshotScalingConfig? =
+      if (hasAnyScreenshotOverride()) screenshotScalingConfig() else null
   }
 
   @Serializable

@@ -632,6 +632,85 @@ class ToolDiscoveryToolSetTest {
   }
 
   @Test
+  fun `toMergedDescriptors surfaces scripted tool names alongside class and YAML`() = runTest {
+    // The discovery-grouping leg of three-way tool-backing parity. A ToolGroup's scripted (`.ts`)
+    // names must render into descriptors just like class-backed and YAML-defined names. openUrl is
+    // the canary scripted tool. Before the scripted bucket on ToolGroup, these names were silently
+    // dropped here, so a scripted-backed custom tool was invisible in grouped discovery even though
+    // the resolver / agent surface advertised it.
+    val scriptedGroup = TrailblazeHostAppTarget.ToolGroup(
+      id = "scripted",
+      description = "test",
+      toolClasses = emptySet(),
+      scriptedToolNames = setOf(ToolName("openUrl")),
+    )
+
+    val names = scriptedGroup.toMergedDescriptors().map { it.name }
+    assertContains(
+      names, "openUrl",
+      "toMergedDescriptors must surface scripted tool names (three-way parity). Got: $names",
+    )
+  }
+
+  @Test
+  fun `toMergedDescriptors merges all three backings without loss or duplicates`() = runTest {
+    // Three-way coexistence + dedup: a group carrying one name per backing (class / YAML / scripted)
+    // must render all three, and distinctBy must collapse any cross-backing name collision (class
+    // wins). Guards against the merge dropping a bucket or double-listing when the third (scripted)
+    // bucket was added.
+    val group = TrailblazeHostAppTarget.ToolGroup(
+      id = "threeway",
+      description = "test",
+      toolClasses = setOf(xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool::class),
+      yamlToolNames = setOf(ToolName("pressBack")),
+      scriptedToolNames = setOf(ToolName("openUrl")),
+    )
+    val names = group.toMergedDescriptors().map { it.name }
+    assertEquals(names.size, names.toSet().size, "toMergedDescriptors must dedupe by name. Got: $names")
+    assertContains(names, "hideKeyboard")
+    assertContains(names, "pressBack")
+    assertContains(names, "openUrl")
+  }
+
+  @Test
+  fun `TARGET mode no-device surfaces a custom scripted tool in toolsByPlatform`() = runTest {
+    // End-to-end guard for the NON-grouped discovery path (getCustomToolDescriptorsForPlatform):
+    // a target whose custom tools are scripted (`.ts`) must appear in TARGET-mode toolsByPlatform —
+    // the target's own custom surface, distinct from the global platformToolsets. openUrl has a real
+    // catalog descriptor; before the scripted union was added to the non-grouped path it was dropped
+    // here even though the grouped (toMergedDescriptors) path surfaced it. Isolating: this target
+    // declares no toolsets, so openUrl's presence is attributable to getCustomScriptedToolNamesForDriver.
+    val android = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    val scriptedTarget = object : TrailblazeHostAppTarget(
+      id = "scriptedcustom",
+      displayName = "Scripted Custom",
+    ) {
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+        if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.scripted.app") else null
+
+      override fun internalGetCustomToolsForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+      override fun getCustomScriptedToolNamesForDriver(
+        driverType: TrailblazeDriverType,
+      ): Set<ToolName> = if (driverType == android) setOf(ToolName("openUrl")) else emptySet()
+    }
+    val toolSet = createToolSet(allTargets = setOf(scriptedTarget), currentDriverType = null)
+
+    val obj = json.parseToJsonElement(toolSet.toolbox(target = "scriptedcustom")).jsonObject
+    val toolsByPlatform = obj["toolsByPlatform"]?.jsonArray
+    assertNotNull(toolsByPlatform, "TARGET mode no-device must produce toolsByPlatform. Got: $obj")
+    val androidTools = toolsByPlatform.first {
+      it.jsonObject["platform"]!!.jsonPrimitive.content == "Android"
+    }.jsonObject["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(
+      androidTools, "openUrl",
+      "custom scripted openUrl must surface in the non-grouped toolsByPlatform path. Got: $androidTools",
+    )
+  }
+
+  @Test
   fun `INDEX mode includes YAML-defined pressBack under navigation`() = runTest {
     // Regression guard: ToolDiscoveryToolSet.getToolDescriptorsForCategory must union
     // class-backed AND YAML-defined tool names per category. Before the fix, the

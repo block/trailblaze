@@ -82,12 +82,19 @@ abstract class TrailblazeHostAppTarget(
    * output can advertise them alongside [toolClasses]. Without this, name-only tools
    * referenced from toolset YAML (e.g. `eraseText`, `pressBack`) would silently drop
    * out of `toolbox` listings even though the executor accepts them.
+   *
+   * [scriptedToolNames] carries scripted (`.ts` / `.js`) tool names — the third backing — for the
+   * same reason: a target whose custom tools are scripted (e.g. `openUrl` via a toolset, or a name
+   * listed in `platforms.<p>.tools:`) would otherwise be missing from grouped discovery output even
+   * though the resolver ([getCustomScriptedToolNamesForDriver]) and the agent surface advertise it.
+   * Completes the three-way parity in the discovery-grouping path.
    */
   data class ToolGroup(
     val id: String,
     val description: String,
     val toolClasses: Set<KClass<out TrailblazeTool>>,
     val yamlToolNames: Set<ToolName> = emptySet(),
+    val scriptedToolNames: Set<ToolName> = emptySet(),
   )
 
   /**
@@ -100,13 +107,15 @@ abstract class TrailblazeHostAppTarget(
   open fun getCustomToolGroupsForDriver(driverType: TrailblazeDriverType): List<ToolGroup> {
     val tools = getCustomToolsForDriver(driverType)
     val yamlNames = getCustomYamlToolNamesForDriver(driverType)
-    if (tools.isEmpty() && yamlNames.isEmpty()) return emptyList()
+    val scriptedNames = getCustomScriptedToolNamesForDriver(driverType)
+    if (tools.isEmpty() && yamlNames.isEmpty() && scriptedNames.isEmpty()) return emptyList()
     return listOf(
       ToolGroup(
         id = id,
         description = "$displayName tools",
         toolClasses = tools,
         yamlToolNames = yamlNames,
+        scriptedToolNames = scriptedNames,
       ),
     )
   }

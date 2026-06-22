@@ -31,12 +31,12 @@ interface TrailblazeSelectorTsCodegenExtension {
 /**
  * Registers `generateSelectorsTs` (manual regenerate) and `verifySelectorsTs` (CI
  * freshness gate) for the selector-grammar TypeScript codegen described in the
- * 2026-05-22 "Kotlin canonical, TypeScript derived" devlog. Same regenerate-and-commit
- * cadence as the sibling SDK bundle plugins ([TrailblazeSdkDtsBundlePlugin],
- * [TrailblazeSdkBundlePlugin]), but the input is pure Kotlin source text and the
- * output is hand-rolled TS — no Node tool subprocess, so `verifySelectorsTs` is safe
- * to wire into `:check` directly (unlike `verifyTrailblazeSdkDtsBundle`, which is
- * gated by an upstream `bun install` step that only CI runs).
+ * 2026-05-22 "Kotlin canonical, TypeScript derived" devlog. Unlike the sibling SDK bundle
+ * plugins ([TrailblazeSdkDtsBundlePlugin], [TrailblazeSdkBundlePlugin]) — whose outputs are
+ * gitignored build artifacts regenerated each build — the generated `selectors.ts` is committed
+ * source text consumed by the SDK bundle. Because the input is pure Kotlin source and the output
+ * is hand-rolled TS (no Node tool subprocess), `verifySelectorsTs` is cheap enough to wire into
+ * `:check` directly and keep the committed file honest.
  */
 class TrailblazeSelectorTsCodegenPlugin : Plugin<Project> {
   override fun apply(project: Project) {
@@ -91,10 +91,8 @@ class TrailblazeSelectorTsCodegenPlugin : Plugin<Project> {
       //
       // No declared outputs by design: this task is a pure assertion (no artifacts to
       // produce), so it intentionally runs every invocation rather than relying on
-      // UP-TO-DATE skipping. Cheap enough — pure JVM, three small source files. The
-      // sibling `verifyTrailblazeSdkDtsBundle` declares a temp output to enable
-      // UP-TO-DATE skipping; here the cost of always re-running is negligible compared
-      // to the simplicity gain.
+      // UP-TO-DATE skipping. Cheap enough — pure JVM, three small source files; the cost of
+      // always re-running is negligible compared to the simplicity gain.
       task.inputs.files(
         project.provider {
           if (!ext.generatedTsFile.isPresent) return@provider emptyList<java.io.File>()

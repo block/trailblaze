@@ -73,8 +73,10 @@ class PlaywrightVideoCapture : CaptureStream {
     val spriteSheet = VideoSpriteExtractor.generateSpriteSheet(
       finalFile,
       fps = options.spriteFrameFps,
-      frameHeight = options.spriteFrameHeight,
-      webpQuality = options.spriteQuality,
+      // Web timeline frames render in a large pane — use the web-tuned height/quality so the
+      // scrubber isn't grainy. Mobile keeps the smaller default (see CaptureOptions).
+      frameHeight = options.webSpriteFrameHeight(),
+      webpQuality = options.webSpriteQuality(),
       isLandscape = true,
       // Playwright's WebM has real timestamps and the libx264 transcode preserves them, so
       // the duration sanity-check is normally a no-op here. Pass the wall-clock window so a

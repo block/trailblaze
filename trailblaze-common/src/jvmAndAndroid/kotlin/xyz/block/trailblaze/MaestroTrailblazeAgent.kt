@@ -40,6 +40,12 @@ abstract class MaestroTrailblazeAgent(
    * Session tool repo — threaded to the base so `OtherTrailblazeTool` instances (e.g.
    * subprocess MCP tool names in a trail YAML) can resolve through
    * [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo] before driver dispatch.
+   *
+   * Nullable with a default here on purpose: the host and test agents legitimately run without a
+   * repo. The two on-device Android subclasses (`AndroidMaestroTrailblazeAgent`,
+   * `AccessibilityTrailblazeAgent`) deliberately tighten this to a required, non-null constructor
+   * param — two separate JUnit rules construct them and a forgotten repo regressed once (#3920), so
+   * for those classes the compiler now forces the wiring. Don't "simplify" them back to a default.
    */
   trailblazeToolRepo: TrailblazeToolRepo? = null,
   /**

@@ -25,4 +25,19 @@ class McpSubprocessSessionTest {
   @Test fun `default client info identifies trailblaze`() {
     assertThat(McpSubprocessSession.DEFAULT_CLIENT_INFO.name).isEqualTo("trailblaze")
   }
+
+  @Test fun `routeStderrLine fires the fail-fast callback only for FATAL`() {
+    // FATAL is the contract the session-owned stderr pump must preserve from the old transport:
+    // a fatal-classified line tears the subprocess down. No default classifier returns FATAL, so
+    // this routing is the only coverage of that path.
+    var fatalCount = 0
+    routeStderrLine("boom", "fixture.js", StderrSeverity.FATAL) { fatalCount++ }
+    assertThat(fatalCount).isEqualTo(1)
+
+    for (nonFatal in listOf(StderrSeverity.WARNING, StderrSeverity.INFO, StderrSeverity.DEBUG, StderrSeverity.IGNORE)) {
+      var called = false
+      routeStderrLine("line", "fixture.js", nonFatal) { called = true }
+      assertThat(called).isEqualTo(false)
+    }
+  }
 }

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
@@ -93,25 +94,63 @@ class KoogTestAgentRunner(
 
   private suspend fun blaze(prompt: PromptStep): AgentTaskStatus {
     val startTime = Clock.System.now()
+    // Emit the objective lifecycle logs the AI path is responsible for — the shared per-step loop
+    // (TrailblazeRunnerUtil) only emits these on the RECORDED branch and delegates the unrecorded
+    // (AI) branch to the agent, exactly as the legacy TrailblazeRunner does. Without this pair,
+    // report/progress builders (which pair Start↔Complete) and recording-generation step grouping
+    // can't segment a KOOG-blazed step.
+    val session = sessionProvider()
+    logger.log(
+      session,
+      TrailblazeLog.ObjectiveStartLog(promptStep = prompt, session = session.sessionId, timestamp = startTime),
+    )
     // One trace id per step so this step's LLM request and every tool call it triggers share it —
     // otherwise runTrailblazeTools generates a fresh id per dispatch and report/storyboard code that
     // joins LLM + tool activity by traceId can't correlate them (or mark the actions AI-generated).
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL)
-    val result = runPromptsWithKoogStrategyGraph(
-      promptSteps = listOf(prompt),
-      agent = agent,
-      toolRepo = toolRepo,
-      screenStateProvider = screenStateProvider,
-      elementComparator = elementComparator,
-      llmClient = llmClient,
-      trailblazeLlmModel = trailblazeLlmModel,
-      logger = logger,
-      session = sessionProvider(),
-      traceId = traceId,
-      maxLlmCalls = maxLlmCalls,
-      systemPromptTemplate = currentSystemPrompt,
-    )
-    return result.toAgentTaskStatus(prompt, startTime)
+    var status: AgentTaskStatus? = null
+    try {
+      val result = runPromptsWithKoogStrategyGraph(
+        promptSteps = listOf(prompt),
+        agent = agent,
+        toolRepo = toolRepo,
+        screenStateProvider = screenStateProvider,
+        elementComparator = elementComparator,
+        llmClient = llmClient,
+        trailblazeLlmModel = trailblazeLlmModel,
+        logger = logger,
+        session = session,
+        traceId = traceId,
+        maxLlmCalls = maxLlmCalls,
+        systemPromptTemplate = currentSystemPrompt,
+      )
+      status = result.toAgentTaskStatus(prompt, startTime)
+      return status
+    } finally {
+      // Always close the objective lifecycle so the ObjectiveStartLog above is never left dangling
+      // for report/progress builders that pair Start↔Complete — even if the run THREW (e.g.
+      // max-iterations or an LLM error). On a throw `status` is still null, so synthesize a failed
+      // one. (The legacy AI path skips its complete log on a throw; this is strictly better.)
+      val completeStatus = status ?: AgentTaskStatus.Failure.ObjectiveFailed(
+        statusData = AgentTaskStatusData(
+          taskId = TaskId.generate(),
+          prompt = prompt.prompt,
+          callCount = 0,
+          taskStartTime = startTime,
+          totalDurationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
+        ),
+        llmExplanation = "Koog strategy graph ended without reporting a status (threw before completion)",
+      )
+      logger.log(
+        session,
+        TrailblazeLog.ObjectiveCompleteLog(
+          promptStep = prompt,
+          objectiveResult = completeStatus,
+          session = session.sessionId,
+          timestamp = Clock.System.now(),
+        ),
+      )
+    }
   }
 
   private fun TrailblazeToolResult.toAgentTaskStatus(

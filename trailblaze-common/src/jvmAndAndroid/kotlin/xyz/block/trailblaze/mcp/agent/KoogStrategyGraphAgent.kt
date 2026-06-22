@@ -282,6 +282,15 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
        * switching entirely, preserving the original fixed-surface behavior for any non-host caller.
        */
       onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
+      /**
+       * Tool descriptors to advertise to the LLM on the FIRST request, overriding the full registry
+       * surface. Used to scope a verification step to its assertion/observation tools (mirroring the
+       * legacy [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo.getToolDescriptorsForStep]): with no
+       * navigation tools advertised, `ToolChoice.Required` can't pick a scroll/tap, so a "verify X"
+       * objective can't mutate scroll/nav state and break a following step. `null` (the default)
+       * advertises the full registry surface — the original behavior for direction steps.
+       */
+      initialAdvertisedTools: List<ToolDescriptor>? = null,
     ): AIAgentGraphStrategy<String, String> =
       strategy(name) {
         // Forced tool-calling on every turn (ToolChoice.Required) — the LLM can't return free text.
@@ -303,7 +312,15 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
         // send-results node, both of which carry the just-produced tool results). Neither node
         // transforms its input value — they only rewrite the side-channel chat history.
         val prunePreRequest by node<String, String>("prunePreRequest") { input ->
-          llm.writeSession { prompt = pruneScreenStateHistory(prompt) }
+          llm.writeSession {
+            prompt = pruneScreenStateHistory(prompt)
+            // Scope the advertised surface for the first request (verification steps → assertion
+            // tools only). Persists for the rest of this run unless a config tool re-advertises via
+            // onToolSurfaceRefresh; a verify step has no config tool, so the scope holds throughout.
+            if (initialAdvertisedTools != null) {
+              tools = initialAdvertisedTools
+            }
+          }
           input
         }
         val prunePreSendResults by node<ReceivedToolResults, ReceivedToolResults>(
@@ -510,6 +527,9 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
      *   `setActiveToolSets`-style [xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool] changes the
      *   active toolsets mid-run, this lets the host re-advertise the new tool surface (and top up
      *   the live [toolRegistry] so the new tools dispatch). `null` keeps the fixed-surface behavior.
+     * @param initialAdvertisedTools Advertised-tool override for the first request — see [buildStrategy].
+     *   Pass a verification step's scoped descriptors so the agent can only assert, not navigate.
+     *   `null` advertises the full registry surface.
      * @return A ready-to-use agent.
      */
     fun createInProcess(
@@ -519,6 +539,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
       systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
       maxAgentIterations: Int = DEFAULT_MAX_ITERATIONS,
       onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
+      initialAdvertisedTools: List<ToolDescriptor>? = null,
     ): KoogStrategyGraphAgent {
       val agent = buildAgent(
         llmClient = llmClient,
@@ -527,6 +548,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
         systemPrompt = systemPrompt,
         maxAgentIterations = maxAgentIterations,
         onToolSurfaceRefresh = onToolSurfaceRefresh,
+        initialAdvertisedTools = initialAdvertisedTools,
       )
       return KoogStrategyGraphAgent(agent, toolRegistry)
     }
@@ -543,6 +565,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
       systemPrompt: String,
       maxAgentIterations: Int,
       onToolSurfaceRefresh: (() -> List<ToolDescriptor>?)? = null,
+      initialAdvertisedTools: List<ToolDescriptor>? = null,
     ): AIAgent<String, String> {
       // Koog 1.0.0 removed SingleLLMPromptExecutor — use MultiLLMPromptExecutor with one
       // (provider, client) entry instead (functionally equivalent for the single-client case).
@@ -579,6 +602,7 @@ with status=COMPLETED (or FAILED) and an explanation; that is the only way to fi
           },
           isHistoryTooBig = { it.messages.size > threshold },
           onToolSurfaceRefresh = onToolSurfaceRefresh,
+          initialAdvertisedTools = initialAdvertisedTools,
         ),
         toolRegistry = toolRegistry,
         systemPrompt = systemPrompt,

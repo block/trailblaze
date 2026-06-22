@@ -111,6 +111,43 @@ class InProcessScriptedToolLauncherTest {
   }
 
   /**
+   * Idempotent launch: a second `launch` against a repo that already has the tool registered must
+   * skip it rather than crash. Pre-fix, the second pass hit `addDynamicTools`'s duplicate-name check
+   * and threw "Dynamic tool 'openUrl' is already registered by another dynamic source" — which
+   * crashed any iOS-host daemon session that ensures the session's scripted tools (registering
+   * catalog tools) and then re-runs the resolved tool via `runYaml`, reaching this launcher again on
+   * the same repo. The first launch must still register; the second must register nothing new.
+   */
+  @Test
+  fun `launch is idempotent — a tool already on the repo is skipped, not re-registered`() = runBlocking {
+    val toolRepo = TrailblazeToolRepo.withDynamicToolSets()
+    val sessionDir = Files.createTempDirectory("inproc-idempotent-test").toFile()
+    var first: List<LazyYamlScriptedToolRegistration> = emptyList()
+    var second: List<LazyYamlScriptedToolRegistration> = emptyList()
+    try {
+      first = InProcessScriptedToolLauncher.launch(
+        toolRepo = toolRepo,
+        sessionId = SessionId.sanitized("inproc-idempotent-first"),
+        sessionDir = sessionDir,
+        toolNames = setOf(openUrl),
+      )
+      assertTrue(first.any { it.name == openUrl }, "first launch registers openUrl")
+
+      // Second launch on the SAME repo must not throw and must register nothing new.
+      second = InProcessScriptedToolLauncher.launch(
+        toolRepo = toolRepo,
+        sessionId = SessionId.sanitized("inproc-idempotent-second"),
+        sessionDir = sessionDir,
+        toolNames = setOf(openUrl),
+      )
+      assertTrue(second.isEmpty(), "second launch skips the already-registered openUrl")
+    } finally {
+      (first + second).forEach { runCatching { it.dispose() } }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
    * The host in-process recording gate: a registration whose config carries `isRecordable = false`
    * must produce a decoded tool that reports `getIsRecordableFromAnnotation() == false`, so
    * `logToolExecution` keeps the invocation out of the replayable `.trail.yaml`. The default

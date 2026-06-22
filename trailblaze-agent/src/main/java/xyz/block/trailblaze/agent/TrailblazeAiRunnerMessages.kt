@@ -12,6 +12,9 @@ object TrailblazeAiRunnerMessages {
 
   // Caps on `## REMEMBERED VALUES` rendering — prevent per-step prompt bloat from
   // unbounded variable accumulation and contain prompt-injection vectors in stored values.
+  // NOTE: the Koog strategy-graph agent mirrors this contract in
+  // KoogStrategyGraphHostRunner.renderRememberedValuesSection (separate module, can't share the
+  // private helper) — keep the two in sync if the caps/escaping change.
   private const val MAX_REMEMBERED_VALUES = 50
   private const val MAX_REMEMBERED_VALUE_LENGTH = 200
 

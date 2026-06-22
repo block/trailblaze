@@ -16,9 +16,10 @@ plugins {
   alias(libs.plugins.binary.compatibility.validator)
   alias(libs.plugins.vanniktech.maven.publish)
   id("trailblaze.bundled-config")
-  // Registers `bundleTrailblazeSdkDts` (manual regenerate) and
-  // `verifyTrailblazeSdkDtsBundle` (CI freshness gate) for the declaration-bundle
-  // artifact this module ships in JAR resources. See `TrailblazeSdkDtsBundlePlugin`.
+  // Registers `bundleTrailblazeSdkDts`, which generates the `@trailblaze/scripting` declaration
+  // + runtime bundle (`dist/`) this module ships in JAR resources. The bundle is a build
+  // artifact (gitignored, regenerated each build), not committed source. See
+  // `TrailblazeSdkDtsBundlePlugin`.
   id("trailblaze.sdk-dts-bundle")
   // Registers `generateSelectorsTs` and `verifySelectorsTs` for the selector-grammar
   // Kotlin → TS codegen described in the 2026-05-22 "Kotlin canonical, TypeScript
@@ -227,29 +228,35 @@ bundledTrailblazeConfig {
   regenerateCommand.set("./gradlew :trailblaze-models:generateBundledTrailblazeConfig")
 }
 
-// Ship the TypeScript scripted-tools SDK as a single committed declaration bundle at the
-// JAR resource path `trails/config/sdk/typescript/dist/index.d.ts`.
+// Ship the TypeScript scripted-tools SDK declaration + runtime bundle at the JAR resource
+// path `trails/config/sdk/typescript/dist/`. The bundle is generated at build time by
+// `bundleTrailblazeSdkDts` (esbuild + dts-bundle-generator) and is NOT committed to source —
+// it's a derived artifact that rewrites in full on any SDK-source change, so committing it
+// was pure diff noise. `copyTypescriptSdkResources` depends on the generate task below.
 // `WorkspaceTypeScriptSetup` extracts that single file into each workspace's
 // `<workspace>/.trailblaze/sdk/dist/index.d.ts` at compile / daemon-bootstrap time, and
 // per-trailmap tsconfigs point their `paths` mapping at it directly — no `node_modules/`,
 // no per-trailmap `package.json`, no workspace `tsconfig.base.json` extends chain.
 //
-// **Why a single committed bundle and not the SDK source tree.** Per-trailmap `tsc --noEmit`
+// **Why a rolled-up bundle and not the SDK source tree.** Per-trailmap `tsc --noEmit`
 // against extracted SDK source surfaced ~20 ambient-globals / unresolvable-imports errors
 // (DOM `URL`, Node `process`, `zod`, `@modelcontextprotocol/sdk` not on the trailmap's
 // classpath). A rolled-up declaration bundle has none of these: it's a pure type surface
 // with zod's exported types inlined, and the SDK implementation bodies (which reference
-// runtime globals) don't ship at all. See `TrailblazeSdkDtsBundlePlugin` for the
-// regenerate-and-commit workflow + CI byte-diff gate.
+// runtime globals) don't ship at all. See `TrailblazeSdkDtsBundlePlugin` for the generator.
 //
 // Output goes to `build/generated-resources/sdk/...`, registered as an additional
-// commonMain resources srcDir so it ships in the JAR. Authors edit `sdks/typescript/src/`
-// and run `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` to refresh
-// `dist/index.d.ts`; the same task is invoked manually after a `bun install` in the SDK
-// dir picks up a new zod / typescript version.
+// commonMain resources srcDir so it ships in the JAR. The `dist/` bundle is regenerated on
+// demand by `bundleTrailblazeSdkDts` (which `bun install`s the SDK devDependencies from the
+// committed `bun.lock` first); authors just edit `sdks/typescript/src/` — no manual regen or
+// commit step, the build refreshes the bundle whenever the source changes.
 val copyTypescriptSdkResources by tasks.registering(Copy::class) {
   group = "trailblaze"
   description = "Stages the TypeScript SDK declaration bundle into build/ for inclusion in this module's JAR resources."
+  // The `dist/` bundle is a build artifact (not committed), so regenerate it before staging
+  // it into JAR resources. `bundleTrailblazeSdkDts` runs esbuild + dts-bundle-generator from
+  // the committed `bun.lock`; it's UP-TO-DATE-skipped when the SDK source is unchanged.
+  dependsOn(tasks.named("bundleTrailblazeSdkDts"))
   // Path relative to `:trailblaze-models` project dir, so `../sdks/typescript` resolves
   // to the SDK source tree co-located alongside this module.
   from(layout.projectDirectory.file("../sdks/typescript/dist/index.d.ts"))
@@ -331,14 +338,11 @@ kotlin.sourceSets.commonMain.get().resources.srcDir(
   bundleScriptedToolAnalyzerShim.map { layout.buildDirectory.dir("generated-resources/analyzer").get() },
 )
 
-// `verifyTrailblazeSdkDtsBundle` is NOT wired into `check` — it requires
-// `node_modules/.bin/dts-bundle-generator`, which means CI agents have to run
-// `(cd sdks/typescript && bun install)` before invoking it. That installation step
-// happens in the same CI static-checks step that runs `verifyTrailblazeSdkBundle`, so
-// the verify task is gated through the CI pipeline rather than every developer's
-// `./gradlew check`. Local devs who edit SDK source run
-// `./gradlew :trailblaze-models:bundleTrailblazeSdkDts` manually; the CI gate catches
-// the case where someone forgets.
+// `bundleTrailblazeSdkDts` self-installs the SDK devDependencies (`bun install
+// --frozen-lockfile`) before running dts-bundle-generator / esbuild, so it needs only `bun`
+// on PATH (Hermit-pinned). `copyTypescriptSdkResources` depends on it, so the bundle is
+// regenerated as part of any build that packages this module's JAR resources — there's no
+// committed copy to drift and no separate verify gate.
 
 // NOT also wired into the Android source set's `assets.srcDir`: the SDK is only consumed
 // by the host-side `WorkspaceCompileBootstrap` (JVM-only), never by on-device test

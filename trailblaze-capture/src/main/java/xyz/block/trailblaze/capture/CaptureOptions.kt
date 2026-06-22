@@ -24,10 +24,38 @@ data class CaptureOptions(
   val hasAnyCaptureEnabled: Boolean
     get() = captureVideo || captureLogcat || captureIosLogs
 
+  /**
+   * Sprite frame height to use for the web/Playwright timeline.
+   *
+   * The timeline scrubber renders these sprite frames in a large pane, so the mobile-tuned
+   * [DEFAULT_SPRITE_HEIGHT] (360) gets upscaled and looks grainy. Web is captured in landscape
+   * at the ~800px-tall CSS viewport, so [WEB_SPRITE_HEIGHT] (720) keeps frames near the source
+   * video's native resolution. Substituted only when the user hasn't overridden
+   * [spriteFrameHeight] from the default via CLI flag / desktop setting — an explicit override
+   * is honored unchanged.
+   */
+  fun webSpriteFrameHeight(): Int =
+    if (spriteFrameHeight == DEFAULT_SPRITE_HEIGHT) WEB_SPRITE_HEIGHT else spriteFrameHeight
+
+  /**
+   * WebP quality to use for web/Playwright timeline sprite frames. Substitutes
+   * [WEB_SPRITE_QUALITY] (90) for the mobile-tuned [DEFAULT_SPRITE_QUALITY] (80) when the user
+   * hasn't overridden [spriteQuality]; an explicit override is honored unchanged.
+   */
+  fun webSpriteQuality(): Int =
+    if (spriteQuality == DEFAULT_SPRITE_QUALITY) WEB_SPRITE_QUALITY else spriteQuality
+
   companion object {
     val NONE = CaptureOptions()
     const val DEFAULT_SPRITE_FPS = 2
     const val DEFAULT_SPRITE_HEIGHT = 360
     const val DEFAULT_SPRITE_QUALITY = 80
+
+    /**
+     * Web/desktop timeline sprite tuning. The recorded web video is ~800px tall (the CSS
+     * viewport), so 720 stays near native — going higher would just upscale the source.
+     */
+    const val WEB_SPRITE_HEIGHT = 720
+    const val WEB_SPRITE_QUALITY = 90
   }
 }

@@ -472,6 +472,16 @@ class TrailblazeMcpServer(
       emptySet()
     }
 
+  private fun collectCustomScriptedToolNames(driverType: TrailblazeDriverType): Set<ToolName> =
+    try {
+      mcpBridge.getAvailableAppTargets().flatMap { target ->
+        target.getCustomScriptedToolNamesForDriver(driverType)
+      }.toSet()
+    } catch (e: Exception) {
+      Console.log("[TrailblazeMcpServer] Custom scripted tool loading failed: ${e.message}")
+      emptySet()
+    }
+
   private fun buildSyntheticDeviceInfo(
     deviceId: TrailblazeDeviceId,
     driverType: TrailblazeDriverType,
@@ -558,10 +568,17 @@ class TrailblazeMcpServer(
       // per-backing getters here — is what keeps a target's `excluded_tools: [openUrl]` (a scripted
       // tool) honored here in lockstep with the resolver, report, discovery, and on-device paths.
       val excluded = target.getExcludedToolSurfaceForDriver(driverType)
+      // Scripted tools the active targets declare via `platforms.<p>.tools:` / a toolset, beyond the
+      // trailmap-resolved set. Mirrors `collectCustomYamlToolNames` above so a scripted name surfaced
+      // by `getAgentToolboxForDriver` / discovery is also REGISTERED for dispatch here (the dispatch
+      // repo classifies it as scripted instead of "Unknown tool") AND handed to the launcher below so
+      // its bundle actually loads. Closes the inclusion-side advertise≠execute gap for scripted tools,
+      // the runtime parallel of the class/YAML `collect*` helpers.
+      val customScriptedToolNames = collectCustomScriptedToolNames(driverType)
       val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
         customToolClasses = collectCustomToolClasses(driverType),
         customYamlToolNames = collectCustomYamlToolNames(driverType) + resolvedFromTrailmap.yamlToolNames,
-        customScriptedToolNames = resolvedFromTrailmap.scriptedToolNames,
+        customScriptedToolNames = customScriptedToolNames + resolvedFromTrailmap.scriptedToolNames,
         excludedToolClasses = excluded.toolClasses,
         excludedYamlToolNames = excluded.yamlToolNames,
         excludedScriptedToolNames = excluded.scriptedToolNames,
@@ -571,18 +588,29 @@ class TrailblazeMcpServer(
       val launchSessionId = SessionId.sanitized("${sessionId}_${target.id}_${driverType.yamlKey}_script_tools")
       val sessionDir = logsRepo.getSessionDir(launchSessionId)
 
-      // Catalog/framework scripted tools (e.g. openUrl) the catalog could deliver. Launch them
-      // in-process through the SHARED QuickJS launcher — the SAME path the host runner uses — so a
-      // scripted tool dispatches host-local (its nested framework `client.callTool(...)` calls route
-      // back through the driver agent) instead of through a `bun` subprocess. This is the unification
-      // that makes "in-process by default" (#3819) hold on the daemon, not just the host. Inline
-      // tools (target.tools:) are excluded here and synthesized as a subprocess below; tools that opt
-      // into `runtime: subprocess` are skipped by the launcher itself.
+      // Catalog/framework scripted tools (e.g. openUrl) the catalog could deliver, PLUS the active
+      // targets' custom scripted names. Launch them in-process through the SHARED QuickJS launcher —
+      // the SAME path the host runner uses — so a scripted tool dispatches host-local (its nested
+      // framework `client.callTool(...)` calls route back through the driver agent) instead of through
+      // a `bun` subprocess. This is the unification that makes "in-process by default" (#3819) hold on
+      // the daemon, not just the host. Inline tools (target.tools:) are excluded here and synthesized
+      // as a subprocess below; tools that opt into `runtime: subprocess` are skipped by the launcher
+      // itself. Custom names that have no resolvable in-process bundle (e.g. a workspace-only tool not
+      // on the classpath) are logged + skipped by the launcher — graceful, no rollback.
+      //
+      // Subtract the target's `excluded_tools:` scripted opt-outs from the CUSTOM names before
+      // launching. `withDynamicToolSets` already drops them from the repo's advertised set, but a
+      // non-catalog custom name registered here would otherwise be advertised UNCONDITIONALLY by
+      // `TrailblazeToolRepo.advertisedDynamic()` (its active-set gate only applies to catalog names),
+      // re-surfacing an excluded tool — so a target that both declares and excludes a scripted tool
+      // would see "exclusion wins over custom" violated on the daemon. We deliberately do NOT subtract
+      // from `allCatalogScriptedToolNames`: catalog tools are all launched and gated at advertisement
+      // time by the active set, so an excluded catalog tool stays launched-but-not-advertised.
       val inProcessRegistrations = InProcessScriptedToolLauncher.launch(
         toolRepo = toolRepo,
         sessionId = launchSessionId,
         sessionDir = sessionDir,
-        toolNames = toolRepo.allCatalogScriptedToolNames,
+        toolNames = toolRepo.allCatalogScriptedToolNames + (customScriptedToolNames - excluded.scriptedToolNames),
         skipNames = inlineTools.map { ToolName(it.name) }.toSet(),
         logPrefix = "[TrailblazeMcpServer]",
       )

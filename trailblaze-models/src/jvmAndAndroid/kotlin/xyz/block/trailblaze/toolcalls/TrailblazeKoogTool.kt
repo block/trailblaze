@@ -105,5 +105,18 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
           ToolParameterType.String
         }
       }
+
+    // Composite-aware string-mirror -> Koog type: preserves ARRAY/ENUM that parseKoogParameterType
+    // flattens. ARRAY has no element type in the mirror, so it defaults to a list of strings.
+    fun TrailblazeToolParameterDescriptor.toKoogParameterTypePreservingComposites(): ToolParameterType =
+      when (type.trim().uppercase()) {
+        "INT", "INTEGER", "LONG" -> ToolParameterType.Integer
+        "FLOAT", "NUMBER", "DOUBLE" -> ToolParameterType.Float
+        "BOOLEAN", "BOOL" -> ToolParameterType.Boolean
+        "ARRAY" -> ToolParameterType.List(ToolParameterType.String)
+        "ENUM" -> validValues?.takeIf { it.isNotEmpty() }
+          ?.let { ToolParameterType.Enum(it.toTypedArray()) } ?: ToolParameterType.String
+        else -> ToolParameterType.String
+      }
   }
 }

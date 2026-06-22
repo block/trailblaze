@@ -35,6 +35,7 @@ import maestro.SwipeDirection
 import xyz.block.trailblaze.AdbCommandUtil.directionalSwipe
 import xyz.block.trailblaze.AdbCommandUtil.execShellCommand
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 
 /**
  * Utilities when running with Instrumentation and UiAutomation.
@@ -56,16 +57,60 @@ object InstrumentationUtil {
   private val uiAutomation: UiAutomation
     get() = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
 
+  // Stable lock for UiAutomation access. We deliberately do NOT synchronize on the `uiAutomation`
+  // getter result: evaluating that getter calls `getUiAutomation(flags)`, which can itself throw
+  // the stale-handle signature ("Cannot call disconnect() while connecting" / "Already connected")
+  // when the platform tears down a half-connected handle to swap flags (see
+  // [runWithStaleUiAutomationRecovery]). If that throw happened while evaluating the `synchronized`
+  // lock argument it would escape the recovery block entirely, the cached handle would never be
+  // cleared, and every subsequent call would keep hitting the same wedge. Locking on a dedicated
+  // object keeps the only `getUiAutomation()` evaluation inside `work(uiAutomation)` — i.e. inside
+  // the recovery block — so an acquisition-time stale handle is healed exactly like a use-time one.
+  private val uiAutomationLock = Any()
+
   fun <T> withInstrumentation(work: Instrumentation.() -> T): T = with(instrumentation) {
     work(instrumentation)
   }
 
-  fun <T> withUiAutomation(work: UiAutomation.() -> T): T = synchronized(uiAutomation) {
+  fun <T> withUiAutomation(work: UiAutomation.() -> T): T = synchronized(uiAutomationLock) {
     runWithStaleUiAutomationRecovery { work(uiAutomation) }
   }
 
   fun <T> withUiDevice(work: UiDevice.() -> T): T = synchronized(uiDevice) {
     runWithStaleUiAutomationRecovery { work(uiDevice) }
+  }
+
+  /**
+   * Forces the cached [UiAutomation] onto [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES],
+   * reconnecting when the active connection was established with different flags (e.g. the default
+   * flags=0 that suppresses accessibility services).
+   *
+   * Acquiring the automation during that flags=0 -> flags=1 transition is the one moment the
+   * platform can throw the transient "Cannot call disconnect() while connecting" race:
+   * [Instrumentation.getUiAutomation] disconnects the cached handle to swap flags, but the handle
+   * may still be mid-handshake from an earlier UiDevice / test-runner acquisition. Routing through
+   * [runWithStaleUiAutomationRecovery] clears the half-connected handle and reconnects fresh, so
+   * the race no longer aborts on-device startup — it had been surfacing as flaky "Run Eval Android
+   * Trails" / CLI-smoke failures on `main`.
+   *
+   * Idempotent: once the connection already carries the flag, [Instrumentation.getUiAutomation]
+   * returns the cached handle without reconnecting, so repeat calls are cheap no-ops.
+   *
+   * This is the resilient counterpart to a bare `getUiAutomation(flag)` call — callers that just
+   * need the non-suppressing connection established (e.g. on-device accessibility-service setup)
+   * should use this rather than touching [Instrumentation] directly.
+   *
+   * Threading: call during single-threaded setup (before the device action loop drives the
+   * device), not concurrently with [withUiAutomation] / [withUiDevice]. It reconnects the shared
+   * cached handle without holding `uiAutomationLock` (the dedicated monitor [withUiAutomation]
+   * now uses), so it isn't serialized against those callers. Setup is the only caller today and
+   * runs before any concurrent device work; a future concurrent caller should wrap it in
+   * `synchronized(uiAutomationLock)`.
+   */
+  fun reconnectWithoutSuppressingAccessibility() {
+    runWithStaleUiAutomationRecovery {
+      instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+    }
   }
 
   /**
@@ -96,19 +141,13 @@ object InstrumentationUtil {
       work()
     } catch (e: RuntimeException) {
       val msg = e.message.orEmpty()
-      // `Error while disconnecting UiAutomation` is a bare `RuntimeException` (not
-      // `IllegalStateException`) the platform throws when the inner remote object is
-      // already gone but the local handle hasn't been cleared yet — handle field reads
-      // `id=-1`, which is the stale-handle signature. The three pre-existing messages
-      // are all `IllegalStateException`-flavored. Both classes go through the same
-      // cache-clear-and-retry path; widening the catch to `RuntimeException` covers
-      // both. A non-stale `RuntimeException` falls through via the `throw e` below.
-      val isStaleHandleSignature =
-        msg.contains("UiAutomation not connected") ||
-          msg.contains("Cannot call disconnect()") ||
-          msg.contains("Already connected") ||
-          msg.contains("Error while disconnecting UiAutomation")
-      if (!isStaleHandleSignature) throw e
+      // The catch is widened to `RuntimeException` (not just `IllegalStateException`) because
+      // `Error while disconnecting UiAutomation` is a bare `RuntimeException`, while the others are
+      // `IllegalStateException`-flavored. All the recognized signatures share the same root cause (a
+      // stale / half-connected cached handle) and the same cache-clear-and-retry recovery — see
+      // [UiAutomationHandleErrors] for each one. A non-stale `RuntimeException` falls through via the
+      // `throw e` below.
+      if (!UiAutomationHandleErrors.isStaleHandleSignature(msg)) throw e
       Console.log(
         "[InstrumentationUtil] UiAutomation handle was stale (likely from a cancelled prior " +
           "session); attempting recovery. Original: $msg"

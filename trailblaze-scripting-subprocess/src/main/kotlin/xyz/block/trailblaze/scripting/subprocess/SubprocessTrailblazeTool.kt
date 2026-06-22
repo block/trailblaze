@@ -4,7 +4,9 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -25,6 +27,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import java.util.concurrent.TimeUnit
 
 /**
  * [ExecutableTrailblazeTool] adapter for a single subprocess-advertised MCP tool.
@@ -142,17 +145,73 @@ class SubprocessTrailblazeTool(
       // real in-flight callTool can be cancelled end-to-end.
       throw e
     } catch (e: Exception) {
+      // A subprocess that dies mid-dispatch closes its stdout; the MCP transport turns that EOF
+      // into a `CONNECTION_CLOSED` that unwinds into this catch. At that instant the OS has
+      // often not yet *reaped* the child — it's a zombie whose exit status hasn't been collected
+      // — so `process.isAlive` can still read `true` and `exitValue()` still throws. Reading
+      // them right now would misclassify a genuine crash as a transient transport failure
+      // (`ExceptionThrown`) and drop the exit code from the envelope, which is exactly the
+      // post-incident signal a [FatalError] is supposed to carry.
+      //
+      // Whether the reaper wins that race is a function of host scheduling pressure (the
+      // transport's coroutine hops between EOF and here vs. the reaper thread getting a slice),
+      // so it is timing-dependent rather than fixed — green on a roomy dev box, flaky-to-red on
+      // a constrained CI runner. Blocking briefly for the reap makes the classification and exit
+      // code deterministic regardless of host. `waitFor` returns immediately once the child is
+      // reaped — the cap is only fully paid on a genuine transient failure where the subprocess
+      // really is still running, in which case `isAlive = true` is the correct (delayed) answer
+      // and the session keeps dispatching. (The companion stderr race — the transport cancelling
+      // its stderr reader on the same EOF — is handled at the source by the session-owned stderr
+      // pump in McpSubprocessSession.connect; the drain call below just settles it here.)
+      val processExited = withContext(Dispatchers.IO) {
+        val exited = try {
+          session.spawnedProcess.process.waitFor(CRASH_REAP_GRACE_MS, TimeUnit.MILLISECONDS)
+        } catch (interrupted: InterruptedException) {
+          // The reap grace is best-effort: if we're interrupted while waiting, restore the
+          // interrupt flag (so cancellation still propagates at the next suspension point) and
+          // fall back to treating the subprocess as still alive. Letting the InterruptedException
+          // escape would replace the original dispatch failure `e` and lose the crash mapping.
+          Thread.currentThread().interrupt()
+          false
+        }
+        // Once the child is reaped its stderr pipe is at EOF; let the session-owned stderr pump
+        // finish draining the final diagnostic lines before the tail is snapshotted below, so a
+        // crash envelope carries the real stderr instead of an empty "(no stderr captured)".
+        // Reusing CRASH_REAP_GRACE_MS as the drain bound is deliberate: the pump finishes in well
+        // under it once the pipe is at EOF, so the same generous safety cap covers both waits.
+        if (exited) session.awaitStderrDrained(CRASH_REAP_GRACE_MS)
+        exited
+      }
       mapDispatchFailure(
         cause = e,
         toolName = advertisedName.toolName,
-        isAlive = session.isAlive,
+        isAlive = !processExited,
         stderrTail = session.stderrCapture.tailSnapshot(),
-        exitCode = runCatching { session.spawnedProcess.process.exitValue() }.getOrNull(),
+        exitCode = if (processExited) {
+          runCatching { session.spawnedProcess.process.exitValue() }.getOrNull()
+        } else {
+          null
+        },
         tool = this,
       )
     } finally {
       runCatching { callbackHandle?.close() }
     }
+  }
+
+  companion object {
+    /**
+     * Upper bound on how long the dispatch-failure path waits for a dying subprocess to be
+     * reaped before deciding whether the failure was a crash ([TrailblazeToolResult.Error.FatalError])
+     * or a transient transport error ([TrailblazeToolResult.Error.ExceptionThrown]).
+     *
+     * A crashed child is already a zombie by the time the transport surfaces the failure, so
+     * the reaper collects its status almost immediately and the wait returns well under this
+     * cap. The full window is only ever paid on a genuine transient failure where the
+     * subprocess is still alive — a rare error path — so a generous bound costs nothing in the
+     * common case while staying robust to reaper-scheduling jitter on a loaded CI host.
+     */
+    internal const val CRASH_REAP_GRACE_MS: Long = 2_000L
   }
 }
 

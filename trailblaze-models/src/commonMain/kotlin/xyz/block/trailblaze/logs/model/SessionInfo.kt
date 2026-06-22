@@ -63,7 +63,7 @@ data class SessionInfo(
       ?.takeIf { it.trim().uppercase() != MCP_TEST_CLASS_NAME }
     trailConfig?.title
       ?: trailConfig?.id
-      ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+      ?: trailFilePath?.takeIf { it.isNotBlank() }?.let { TrailRecordings.shortTrailName(it) }
       ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
         displayTestClass?.let { cls -> "$cls:$name" } ?: name
       }
@@ -88,7 +88,7 @@ data class SessionInfo(
    */
   @Transient
   val stableTestKey: String = trailConfig?.id
-    ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    ?: trailFilePath?.takeIf { it.isNotBlank() }?.let { TrailRecordings.shortTrailName(it) }
     ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
       testClass?.let { cls -> "$cls:$name" } ?: name
     }

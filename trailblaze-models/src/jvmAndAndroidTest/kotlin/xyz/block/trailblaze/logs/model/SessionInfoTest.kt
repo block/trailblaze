@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.model
 
 import kotlinx.datetime.Instant
+import xyz.block.trailblaze.yaml.TrailConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -17,16 +18,19 @@ class SessionInfoTest {
     testClass: String? = null,
     testName: String? = null,
     sessionId: String = "test_session_42",
+    trailFilePath: String? = null,
+    trailConfig: TrailConfig? = null,
   ): SessionInfo =
     SessionInfo(
       sessionId = SessionId(sessionId),
       latestStatus = SessionStatus.Unknown,
       timestamp = Instant.fromEpochMilliseconds(0),
       durationMs = 0,
-      trailFilePath = null,
+      trailFilePath = trailFilePath,
       hasRecordedSteps = false,
       testName = testName,
       testClass = testClass,
+      trailConfig = trailConfig,
     )
 
   @Test
@@ -71,5 +75,51 @@ class SessionInfoTest {
   fun `displayName uses just testName when testClass is null`() {
     val si = info(testClass = null, testName = "lonely test")
     assertEquals("lonely test", si.displayName)
+  }
+
+  // --- trailFilePath shortening (the CLI absolute-path regression) -----------------------
+
+  @Test
+  fun `displayName shortens an absolute trailFilePath to its trails-relative name`() {
+    // A trail run via the CLI records file.absolutePath, which doesn't start with "trails/".
+    // Before the fix this leaked the whole filesystem path into the Sessions list.
+    val si = info(
+      trailFilePath =
+        "/var/ci/workspace/checkout/src/test/resources/trails/ExperimentalIosTests/" +
+          "set_feature_flag.trail.yaml",
+    )
+    assertEquals("ExperimentalIosTests/set_feature_flag", si.displayName)
+  }
+
+  @Test
+  fun `displayName shortens a relative trails-prefixed path`() {
+    val si = info(trailFilePath = "trails/EvaluationLongTest/tenKey.trail.yaml")
+    assertEquals("EvaluationLongTest/tenKey", si.displayName)
+  }
+
+  @Test
+  fun `displayName prefers an explicit title over the trail path`() {
+    val si = info(
+      trailFilePath = "/abs/trails/ExperimentalIosTests/set_feature_flag.trail.yaml",
+      trailConfig = TrailConfig(title = "Set Feature Flag"),
+    )
+    assertEquals("Set Feature Flag", si.displayName)
+  }
+
+  @Test
+  fun `stableTestKey shortens an absolute trailFilePath`() {
+    // Retries must group by a stable key, not the machine-specific absolute path.
+    val si = info(
+      trailFilePath = "/abs/path/trails/ExperimentalIosTests/set_feature_flag.trail.yaml",
+    )
+    assertEquals("ExperimentalIosTests/set_feature_flag", si.stableTestKey)
+  }
+
+  @Test
+  fun `displayName ignores a blank trailFilePath and falls through`() {
+    // A blank (non-null) path must not short-circuit displayName to an empty string — it
+    // should fall through to testName, matching the takeIf guard the other tiers use.
+    val si = info(trailFilePath = "   ", testName = "fallback test")
+    assertEquals("fallback test", si.displayName)
   }
 }

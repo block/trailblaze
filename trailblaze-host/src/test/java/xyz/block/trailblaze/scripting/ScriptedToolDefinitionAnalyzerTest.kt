@@ -616,6 +616,124 @@ class ScriptedToolDefinitionAnalyzerTest {
     )
   }
 
+  // ── resolveBunViaWalkup — repo hermit `bin/bun` fallback ────────────────────
+  //
+  // The fresh-daemon fix. The `./trailblaze` wrapper spawns the daemon JVM with
+  // the calling shell's PATH; on a host that already has JDK 21 the wrapper never
+  // sourced `bin/activate-hermit`, so `bun` was absent from the daemon's PATH and
+  // every meta-only / TS scripted-tool descriptor silently failed to enrich,
+  // breaking a target's TypeScript launch-step tools that its launch orchestrator
+  // composes by name.
+  // The hermit `bin/bun` symlink is committed to the repo, so walking up from CWD
+  // resolves it regardless of how the daemon was launched. These tests pin the
+  // walk-up against an injected start dir (no dependency on the real repo layout).
+
+  // The walk-up is gated on the committed `bin/activate-hermit` marker so it only ever
+  // executes *this repo's* Hermit-pinned `bin/bun`, never a coincidental `bin/bun` in some
+  // ancestor of CWD. The helper plants both the marker and an executable `bin/bun`.
+  private fun planHermitBin(repoRoot: File): File {
+    val bin = File(repoRoot, "bin").apply { mkdirs() }
+    File(bin, "activate-hermit").writeText("#!/bin/sh\n# hermit activation marker\n")
+    return planFakeExecutable(bin, "bun")
+  }
+
+  @Test
+  fun `resolveBunViaWalkup finds bun at repo bin from the repo root`() {
+    val repoRoot = tempFolder.newFolder("walkup-repo-root")
+    val bun = planHermitBin(repoRoot)
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunViaWalkup(repoRoot)
+    assertEquals(bun.canonicalFile, resolved?.canonicalFile)
+  }
+
+  @Test
+  fun `resolveBunViaWalkup finds bun at repo bin from a deeply nested start dir`() {
+    // Mirrors the real-world daemon scenario: CWD is the repo root (or any dir
+    // under it) while the walk climbs ancestors to find the committed `bin/bun`.
+    val repoRoot = tempFolder.newFolder("walkup-nested-repo")
+    val bun = planHermitBin(repoRoot)
+    val deeplyNested =
+      File(repoRoot, "module/src/main/resources/trails/config/trailmaps/foo/tools").apply { mkdirs() }
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunViaWalkup(deeplyNested)
+    assertEquals(bun.canonicalFile, resolved?.canonicalFile)
+  }
+
+  @Test
+  fun `resolveBunViaWalkup returns null when no repo bin bun exists up the tree`() {
+    val isolated = tempFolder.newFolder("walkup-no-bun")
+    val nested = File(isolated, "some/empty/tree").apply { mkdirs() }
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunViaWalkup(nested)
+    assertNull(
+      resolved,
+      "expected null when no bin/bun is present up the tree; got ${resolved?.absolutePath}",
+    )
+  }
+
+  @Test
+  fun `resolveBunViaWalkup ignores a non-executable bin bun`() {
+    // Matches the PATH half's canExecute() guard — a permission-stripped or
+    // half-extracted symlink target must read as "not found" rather than handing
+    // back a binary the analyzer subprocess can't actually launch.
+    val repoRoot = tempFolder.newFolder("walkup-nonexec-bun")
+    val bin = File(repoRoot, "bin").apply { mkdirs() }
+    File(bin, "activate-hermit").writeText("#!/bin/sh\n") // present, so we reach the canExecute gate
+    File(bin, "bun").apply {
+      writeText("#!/bin/sh\necho nope\n")
+      // Deliberately do NOT set executable.
+    }
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunViaWalkup(repoRoot)
+    assertNull(resolved, "expected null for a non-executable bin/bun; got ${resolved?.absolutePath}")
+  }
+
+  @Test
+  fun `resolveBunViaWalkup ignores a bin bun without the hermit activation marker`() {
+    // Security gate (Codex review on #3929): an untrusted ancestor that carries an
+    // executable `bin/bun` but is NOT a Hermit-managed repo (no `bin/activate-hermit`)
+    // must be ignored, so the analyzer never executes an arbitrary project-local binary.
+    val untrusted = tempFolder.newFolder("walkup-no-hermit-marker")
+    val bin = File(untrusted, "bin").apply { mkdirs() }
+    planFakeExecutable(bin, "bun") // executable bun, but no activate-hermit marker beside it
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunViaWalkup(untrusted)
+    assertNull(
+      resolved,
+      "expected null for a bin/bun without the hermit activation marker; got ${resolved?.absolutePath}",
+    )
+  }
+
+  // ── resolveBunBinary(pathEnv, startDir) — the production composition ─────────
+  //
+  // The no-arg resolveBunBinary() feeds live PATH + CWD into this composition. These pin the
+  // PATH-first-then-walk-up behaviour (the actual production entry point used by the daemon's
+  // scripted-tool enrichment) without mutating process env.
+
+  @Test
+  fun `resolveBunBinary composition prefers a PATH bun over the repo walk-up`() {
+    val pathDir = tempFolder.newFolder("compose-path-bun")
+    val pathBun = planFakeExecutable(pathDir, "bun")
+    // startDir is a valid hermit repo too, but the bun-only contract resolves PATH first.
+    val repoRoot = tempFolder.newFolder("compose-repo-shadowed")
+    planHermitBin(repoRoot)
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunBinary(pathDir.absolutePath, repoRoot)
+    assertEquals(pathBun.canonicalFile, resolved?.canonicalFile)
+  }
+
+  @Test
+  fun `resolveBunBinary composition falls through to the repo walk-up when PATH has no bun`() {
+    // The JDK-21 fresh-daemon case: hermit never activated, so PATH carries no bun and the
+    // committed repo `bin/bun` must be found via the walk-up.
+    val repoRoot = tempFolder.newFolder("compose-fallback-repo")
+    val walkupBun = planHermitBin(repoRoot)
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunBinary(null, repoRoot)
+    assertEquals(walkupBun.canonicalFile, resolved?.canonicalFile)
+  }
+
+  @Test
+  fun `resolveBunBinary composition returns null when neither PATH nor the walk-up resolves bun`() {
+    val isolated = tempFolder.newFolder("compose-none")
+    val startDir = File(isolated, "deep/dir").apply { mkdirs() }
+    val resolved = ScriptedToolDefinitionAnalyzer.resolveBunBinary(null, startDir)
+    assertNull(resolved, "expected null when neither PATH nor the repo walk-up resolves bun")
+  }
+
   @Test
   fun `line number on the export const is captured for error reporting`() = runBlocking {
     assumeAnalyzerRunnable()

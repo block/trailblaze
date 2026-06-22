@@ -45,8 +45,25 @@ export interface TrailblazeDevice {
   platform: "ios" | "android" | "web";
   widthPixels: number;
   heightPixels: number;
-  /** The session's driver (`TrailblazeDriverType.yamlKey` on the Kotlin side). */
-  driverType: string;
+  /**
+   * The session's driver (`TrailblazeDriverType.yamlKey` on the Kotlin side), e.g.
+   * `"android-ondevice-accessibility"`. Carried on the MCP/subprocess envelope (this `fromMeta`
+   * path).
+   *
+   * ⚠️ The **on-device QuickJS** path (`runtime: inProcess`) injects a different device shape
+   * (`QuickJsDeviceContext`) that carries the same value under [driver] instead — see that field.
+   * A tool that must branch on the driver should read EITHER, e.g.
+   * `ctx.device?.driverType ?? ctx.device?.driver`, so it works on both dispatch paths.
+   */
+  driverType?: string;
+  /**
+   * The session's driver yamlKey as carried by the **on-device QuickJS** envelope
+   * (`QuickJsDeviceContext.driver`, populated from `TrailblazeDriverType.yamlKey`). Present only on
+   * the in-process bundle path; on the MCP/subprocess path the same value lives in [driverType].
+   * Read both when branching on the driver (the in-process path is the one most mobile tools
+   * actually run under).
+   */
+  driver?: string;
 }
 
 /**

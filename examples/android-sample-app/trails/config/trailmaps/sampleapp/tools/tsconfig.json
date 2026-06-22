@@ -1,17 +1,18 @@
-// Resolves `@trailblaze/scripting` for `.ts` tool files via the committed
-// central Trailblaze SDK bundle (see the `paths` mapping below for the
-// relative location). Committed so a fresh clone resolves imports in IDEs
-// (IntelliJ, VS Code, Cursor) without running `npm install` or
-// `trailblaze check` first.
+// Resolves `@trailblaze/scripting` for `.ts` tool files via the Trailblaze SDK
+// bundle (see the `paths` mapping below for the relative location at
+// `sdks/typescript/dist/`). That bundle is a build artifact — generated from
+// `sdks/typescript/src/` by the Gradle build (any `./gradlew` build that
+// packages the SDK, or `trailblaze check`), not committed — so IDE import
+// resolution (IntelliJ, VS Code, Cursor) works after the first build, not on a
+// bare fresh clone.
 //
 // Intentionally hand-authored (no `// FRAMEWORK-GENERATED` banner) — the
 // framework's `PerTrailmapTsconfigEmitter` writes a different shape whose
 // `paths` mapping points at the workspace-local SDK extract at
-// `<workspace>/.trailblaze/sdk/dist/`, which only exists AFTER
-// `trailblaze check` has run. The committed variant here instead points
-// up at the central committed SDK so resolution works on a fresh clone
-// with zero bootstrap. `trailblaze check` detects the missing framework
-// banner and preserves this file verbatim.
+// `<workspace>/.trailblaze/sdk/dist/`. This committed variant instead points up
+// at the repo's `sdks/typescript/dist/` so a single source-tree build covers
+// every example. `trailblaze check` detects the missing framework banner and
+// preserves this file verbatim.
 {
   "compilerOptions": {
     "target": "ES2022",

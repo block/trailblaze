@@ -10,11 +10,6 @@
       - contacts_ios_openApp:
           dismissKeyboard: true
       - tapOnElementBySelector:
-          reason: The Contacts app is visible on the home screen. Tapping it will open the Contacts app so I can locate the 'John Appleseed' contact.
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: Contacts
-      - tapOnElementBySelector:
           reason: The objective is to open the 'John Appleseed' contact, which is visible in the list. Tapping on it will display its details.
           nodeSelector:
             iosMaestro:
@@ -22,10 +17,10 @@
             index: 1
   - step: |
       Call the `contacts_ios_verifyContactStructure` tool with
-      name="John Appleseed", requireFields=["phone"].
+      name="John Appleseed", requireFields=["mobile"].
     recording:
       tools:
       - contacts_ios_verifyContactStructure:
           name: John Appleseed
           requireFields:
-          - phone
+          - mobile

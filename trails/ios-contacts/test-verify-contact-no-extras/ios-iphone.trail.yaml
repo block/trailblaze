@@ -10,11 +10,6 @@
       - contacts_ios_openApp:
           dismissKeyboard: true
       - tapOnElementBySelector:
-          reason: The Contacts app is visible on the home screen. Tapping on it will open the Contacts app, which is needed to find and open 'John Appleseed.'
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: Contacts
-      - tapOnElementBySelector:
           reason: The 'John Appleseed' contact is now visible in the contact list. Tapping it will open the desired contact as required by the objective.
           nodeSelector:
             iosMaestro:
@@ -27,9 +22,4 @@
       tools:
       - contacts_ios_verifyContactStructure:
           name: John Appleseed
-          requireFields: ""
-      - assertVisibleBySelector:
-          reason: The current objective requires verifying the structure of the contact page for 'John Appleseed'. The view hierarchy and screenshot confirm that the name 'John Appleseed' is visible as a heading, fulfilling the requirement for contacts_ios_verifyContactStructure with requireFields=[].
-          nodeSelector:
-            iosMaestro:
-              resourceIdRegex: ContactCardHeaderView
+          requireFields: []

@@ -8,29 +8,28 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 
 /**
- * Configuration for the `trailblaze.sdk-bundle` plugin. Both production
- * (`:trailblaze-scripting-bundle`) and the plugin's functional tests set these properties to
- * point at a TypeScript SDK source dir and a "committed" bundle output path; the plugin then
- * registers `bundleTrailblazeSdk` (regenerate-and-write) and `verifyTrailblazeSdkBundle`
- * (regenerate-to-temp and byte-diff) against them.
+ * Configuration for the `trailblaze.sdk-bundle` plugin. `:trailblaze-scripting-bundle` sets
+ * these properties to point at the TypeScript SDK source dir and the bundle output path; the
+ * plugin then registers `bundleTrailblazeSdk`, which regenerates the slim on-device SDK
+ * bundle from source via esbuild.
  */
 interface TrailblazeSdkBundleExtension {
   /** Root of the TS SDK package — contains `package.json`, `src/`, `node_modules/.bin/esbuild`. */
   val trailblazeSdkDir: DirectoryProperty
 
-  /** Path to the committed `trailblaze-sdk-bundle.js` that consumers ship as a resource. */
+  /**
+   * Output path for the generated `trailblaze-sdk-bundle.js` that consumers ship as a resource.
+   * A build artifact (gitignored), regenerated each build — not committed source.
+   */
   val sdkBundleOutputFile: RegularFileProperty
 }
 
 /**
- * Registers `bundleTrailblazeSdk` and `verifyTrailblazeSdkBundle` against the
- * [TrailblazeSdkBundleExtension] paths. Production wires `:trailblaze-scripting-bundle` to the
- * real SDK dir + committed bundle path; the functional test wires a fixture project to a
- * fresh esbuild output and a tmp committed path. Extracting the task bodies into this plugin
- * is what makes the verify task testable — when it lived inline in
- * `trailblaze-scripting-bundle/build.gradle.kts` referencing `layout.projectDirectory`, no
- * GradleTestKit fixture could exercise it without copying the entire task body and risking
- * drift.
+ * Registers `bundleTrailblazeSdk` against the [TrailblazeSdkBundleExtension] paths. The task
+ * installs the SDK devDependencies from the committed `bun.lock` ([ensureSdkNodeModules], shared
+ * with [TrailblazeSdkDtsBundlePlugin]) and runs esbuild to produce the bundle. Lives in a plugin
+ * (rather than inline in `trailblaze-scripting-bundle/build.gradle.kts`) so the bundler argv is a
+ * single source of truth shared across the build.
  */
 class TrailblazeSdkBundlePlugin : Plugin<Project> {
   override fun apply(project: Project) {
@@ -42,15 +41,23 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
     project.tasks.register("bundleTrailblazeSdk") { task ->
       task.group = "build"
       task.description =
-        "Regenerates the committed @trailblaze/scripting SDK bundle. Manual-invocation: " +
-          "run after editing sdks/typescript/src/*.ts and commit the regenerated bundle " +
-          "alongside the source change."
+        "Regenerates the @trailblaze/scripting slim SDK bundle (a gitignored build artifact) " +
+          "from sdks/typescript/src/ via esbuild. Wired ahead of resource packaging, so it " +
+          "runs as part of any build that ships the bundle; can also be invoked directly."
 
       declareSdkBundleInputs(task, ext, project)
       task.outputs.file(ext.sdkBundleOutputFile).withPropertyName("sdkBundle")
 
       task.doFirst { requireExtensionConfigured(ext) }
       task.doLast {
+        // The bundle is a build artifact, not committed source, so install the SDK's
+        // devDependencies (esbuild) from the committed bun.lock first. Idempotent — skips
+        // when node_modules is already present. Shared with TrailblazeSdkDtsBundlePlugin.
+        ensureSdkNodeModules(
+          sdkDir = ext.trailblazeSdkDir.get().asFile,
+          logFile = project.layout.buildDirectory
+            .file("tmp/bundle-trailblaze-sdk-install.log").get().asFile,
+        )
         val outputFile = ext.sdkBundleOutputFile.get().asFile
         task.logger.lifecycle(
           "Regenerating SDK bundle → ${outputFile.relativeTo(project.projectDir)}",
@@ -63,80 +70,11 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
         )
         task.logger.lifecycle(
           "Regenerated ${outputFile.relativeTo(project.projectDir)} " +
-            "(${outputFile.length() / 1024} KiB). Remember to `git add` and commit it alongside " +
-            "the SDK source change.",
+            "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
         )
       }
     }
 
-    project.tasks.register("verifyTrailblazeSdkBundle") { task ->
-      task.group = "verification"
-      task.description =
-        "Verifies the committed trailblaze-sdk-bundle.js matches a fresh esbuild output. " +
-          "Fails with the regenerate command when they differ. Wired into the CI " +
-          "static-checks step."
-
-      val tempBundle = project.layout.buildDirectory.file("tmp/verify-trailblaze-sdk-bundle.js")
-
-      declareSdkBundleInputs(task, ext, project)
-      // Track the committed bundle as a file collection that's empty when the file is
-      // absent. Two requirements collide here: editing the committed bundle by hand should
-      // invalidate UP-TO-DATE (so the verify task re-runs and catches the edit), AND the
-      // doLast "Committed bundle missing" check needs to be the actual gate when the bundle
-      // is absent. A plain `inputs.file(...).optional()` doesn't get us the second one —
-      // Gradle still throws "input file does not exist" because the property has a present
-      // value, just one pointing at a missing file. The conditional collection gives both:
-      // present file → snapshotted (invalidates UP-TO-DATE on edit); absent → empty snapshot
-      // → task runs → friendly doLast guard fires.
-      task.inputs.files(
-        project.provider {
-          if (!ext.sdkBundleOutputFile.isPresent) return@provider emptyList<File>()
-          val committed = ext.sdkBundleOutputFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedBundle")
-      task.outputs.file(tempBundle).withPropertyName("regeneratedBundle")
-
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        val committed = ext.sdkBundleOutputFile.get().asFile
-        if (!committed.exists()) {
-          throw GradleException(
-            "Committed bundle missing at ${committed.absolutePath}. Run " +
-              "`./gradlew :trailblaze-scripting-bundle:bundleTrailblazeSdk` and commit the result.",
-          )
-        }
-
-        val tempBundleFile = tempBundle.get().asFile
-        runEsbuildBundle(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          outputFile = tempBundleFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/verify-trailblaze-sdk-bundle.log").get().asFile,
-        )
-
-        val committedBytes = committed.readBytes()
-        val regeneratedBytes = tempBundleFile.readBytes()
-        if (!committedBytes.contentEquals(regeneratedBytes)) {
-          throw GradleException(
-            "trailblaze-sdk-bundle.js does not match a fresh esbuild output.\n" +
-              "Likely causes (in order of frequency):\n" +
-              "  1. You edited sdks/typescript/src/ without regenerating the bundle.\n" +
-              "  2. A transitive dep (e.g. esbuild) drifted via registry resolution since the\n" +
-              "     bundle was last committed. Try `(cd ${ext.trailblazeSdkDir.get().asFile.relativeTo(project.rootDir)} && bun install --frozen-lockfile)`\n" +
-              "     and re-run.\n" +
-              "Regenerate the bundle and commit the result:\n" +
-              "  ./gradlew :trailblaze-scripting-bundle:bundleTrailblazeSdk\n" +
-              "  git add ${committed.relativeTo(project.rootDir)} && git commit -m \"chore(bundle): regenerate\"\n" +
-              "Committed bundle size: ${committedBytes.size} bytes\n" +
-              "Regenerated bundle size: ${regeneratedBytes.size} bytes",
-          )
-        }
-        task.logger.lifecycle(
-          "✓ trailblaze-sdk-bundle.js is fresh (${committedBytes.size} bytes match).",
-        )
-      }
-    }
   }
 }
 
@@ -156,11 +94,10 @@ private fun requireExtensionConfigured(ext: TrailblazeSdkBundleExtension) {
   }
 }
 
-// Shared bundle-source input declarations used by both `bundleTrailblazeSdk` and
-// `verifyTrailblazeSdkBundle`. Keeping these in one place is load-bearing: if a future
-// input (e.g. `tsconfig.json`) is added to one task and forgotten on the other, the verify
-// gate silently stops protecting against that input's drift. The canonical (and only)
-// lockfile is `bun.lock` — Bun's text-based JSONC format, default since Bun 1.2 (Jan
+// Bundle-source input declarations for `bundleTrailblazeSdk`. These drive Gradle's
+// UP-TO-DATE check: when the SDK sources, `package.json`, or lockfile are unchanged the
+// generator is skipped and the previously-generated bundle is reused. The canonical (and
+// only) lockfile is `bun.lock` — Bun's text-based JSONC format, default since Bun 1.2 (Jan
 // 2025) and now floor-pinned via Hermit. Every input is wrapped in
 // `project.provider { if isPresent ... }` so the snapshotter tolerates an unconfigured
 // extension — the directed-error message from `requireExtensionConfigured` then fires
@@ -196,11 +133,9 @@ private fun declareSdkBundleInputs(
 }
 
 /**
- * Shared esbuild invocation used by both `bundleTrailblazeSdk` (writes to the committed
- * path) and `verifyTrailblazeSdkBundle` (writes to a temp path and byte-diffs). Keeping a
- * single source of truth for the argv is load-bearing: any drift between the two — banner
- * text, footer text, format/target flags — would make the verify check report false drift
- * on a clean bundle, or worse, pass while the regenerated artifact differs.
+ * esbuild invocation for `bundleTrailblazeSdk`. The argv (banner text, format/target flags)
+ * is kept stable so the generated bundle is byte-reproducible across machines — the property
+ * that lets it be a gitignored build artifact rather than committed source.
  */
 private fun runEsbuildBundle(sdkDir: File, outputFile: File, logFile: File) {
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
