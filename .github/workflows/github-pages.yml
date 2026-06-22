@@ -78,9 +78,14 @@ jobs:
             mkdir -p "$dest"
 
             # Tier 1: freshest completed run carrying the artifact (newest-first walk).
+            # `|| true`: the GitHub Actions default shell runs with errexit
+            # (`bash --noprofile --norc -eo pipefail {0}`), and this is a plain assignment,
+            # so a transient `gh run list` failure would otherwise abort the function and
+            # skip the tier-2 backfill. Swallow it and fall through to last-good instead.
             local run_ids run_id tmp f any
             run_ids="$(gh run list --workflow="$workflow" --branch main --status completed \
-              --limit 10 --json databaseId --jq '.[].databaseId')"
+              --limit 10 --json databaseId --jq '.[].databaseId' || true)"
+            [ -z "$run_ids" ] && echo "  no completed $workflow run found yet — trying the last-published site"
             for run_id in $run_ids; do
               tmp="$(mktemp -d)"
               if gh run download "$run_id" --name "$artifact" --dir "$tmp" 2>/dev/null; then
