@@ -113,7 +113,11 @@ jobs:
               fi
             done
           }
+          # One per gallery platform: web (wikipedia), iOS (contacts), Android (clock).
+          # Each pulls its own docs-report-<slug> artifact from the matching trail workflow.
           fetch_assets "wikipedia-trails.yml" "docs/report-assets/wikipedia"
+          fetch_assets "ios-contacts-trails.yml" "docs/report-assets/ios-contacts"
+          fetch_assets "clock-trails.yml" "docs/report-assets/clock"
 
       - name: Build MkDocs site
         run: mkdocs build --strict
