@@ -1,11 +1,9 @@
 name: Wikipedia Trails
 
 on:
-  # Runs on PRs targeting the default branch
-  pull_request:
-    branches: [ "main" ]
-
-  # Runs after merging to the default branch
+  # Runs after merging to the default branch. PR validation lives in
+  # pr-checks.yml so it can share that workflow's prebuilt Linux uber JAR
+  # instead of rebuilding the same artifact in a second workflow.
   push:
     branches: [ "main" ]
 
