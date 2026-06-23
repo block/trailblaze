@@ -90,51 +90,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # iOS simulator jobs need a macOS-built desktop JAR because
-  # `packageUberJarForCurrentOS` bundles OS-specific Skiko natives. Keep that
-  # single macOS build here for PR validation instead of rebuilding it in a
-  # standalone iOS workflow on every pull request.
-  build-macos-uber-jar:
-    if: github.event_name == 'pull_request'
-    runs-on: macos-15
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Build trailblaze uber JAR (with WASM template embedded)
-        env:
-          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
-        run: ./scripts/install-trailblaze-source.sh
-
-      - name: Stage artifact contents
-        run: |
-          mkdir -p trailblaze-uber-jar-macos
-          cp trailblaze-desktop/build/release/trailblaze.jar trailblaze-uber-jar-macos/
-          cp trailblaze-desktop/build/release/trailblaze trailblaze-uber-jar-macos/
-          ls -lh trailblaze-uber-jar-macos/
-
-      - name: Upload macOS uber JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-uber-jar-macos
-          path: trailblaze-uber-jar-macos/
-          if-no-files-found: error
-          retention-days: 7
-
   # Run Tests. Split into two parallel jobs so the slow
   # `:trailblaze-scripting-subprocess` test suite (~45min — spawns a `bun`/`tsx`
   # subprocess per test) doesn't gate the rest of the build behind a single
@@ -303,14 +258,14 @@ jobs:
           echo "Wikipedia trails failed - failing the workflow"
           exit 1
 
-  # PR-time iOS showcase validation shares the macOS uber JAR built above.
+  # PR-time iOS showcase validation shares the same uber JAR built above.
   # The standalone iOS workflow stays push-only so `main` still produces the
   # docs gallery artifact that GitHub Pages publishes.
   ios-contacts-trails:
     if: github.event_name == 'pull_request'
     runs-on: macos-15
     timeout-minutes: 60
-    needs: build-macos-uber-jar
+    needs: build-uber-jar
     env:
       OPENAI_API_KEY: no-key-set
 
@@ -329,10 +284,10 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - name: Download prebuilt macOS uber JAR
+      - name: Download prebuilt uber JAR
         uses: actions/download-artifact@v4
         with:
-          name: trailblaze-uber-jar-macos
+          name: trailblaze-uber-jar
           path: trailblaze-uber-jar/
 
       - name: Install trailblaze from prebuilt artifact

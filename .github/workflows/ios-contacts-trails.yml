@@ -2,7 +2,7 @@ name: iOS Contacts Trails
 
 on:
   # Runs after merging to the default branch. PR validation lives in
-  # pr-checks.yml so it can share that workflow's prebuilt macOS uber JAR
+  # pr-checks.yml so it can share that workflow's prebuilt uber JAR
   # instead of rebuilding the same artifact in a second workflow.
   push:
     branches: [ "main" ]
