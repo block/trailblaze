@@ -18,6 +18,14 @@ echo "Starting Android Test Execution (on-device)"
 echo "Working directory: $(pwd)"
 echo "========================================="
 
+# Assemble before starting the source-mode host server. `./trailblaze app`
+# launches Gradle in the background in GitHub Actions, and running another
+# Gradle invocation against the same checkout while that compile is still in
+# flight can corrupt Kotlin incremental cache ownership.
+echo "Assembling Android Tests..."
+./gradlew :examples:assembleDebugAndroidTest || TEST_FAILED=true
+echo "========================================="
+
 # Start Trailblaze server in background. The on-device instrumentation path
 # only needs a runnable host server; it does not need the release uber JAR
 # artifact. In GitHub Actions, the repo-local `./trailblaze` launcher defaults
@@ -31,15 +39,16 @@ if [ "$TEST_FAILED" != "true" ]; then
   ./trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
   TRAILBLAZE_PID=$!
   echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-  echo "Waiting for Trailblaze server to be ready on port $TRAILBLAZE_HTTPS_PORT (this may take up to 2 minutes)..."
+  echo "Waiting for Trailblaze server to be ready on port $TRAILBLAZE_HTTPS_PORT (this may take several minutes on a cold source build)..."
   sleep 10
-  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
+  for attempt in $(seq 1 120); do
+    nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1 && break || (echo "Attempt $attempt/120..." && sleep 5)
   done
   if ! nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1; then
     echo "ERROR: Trailblaze server failed to start on port $TRAILBLAZE_HTTPS_PORT"
     echo "=== Trailblaze logs ==="
     cat /tmp/trailblaze.log
+    kill "$TRAILBLAZE_PID" 2>/dev/null || echo "Trailblaze server already stopped"
     TEST_FAILED=true
   else
     echo "✓ Trailblaze server is running on port $TRAILBLAZE_HTTPS_PORT!"
@@ -57,9 +66,6 @@ echo "Logcat capture started with PID: $LOGCAT_PID"
 echo "========================================="
 
 # Run Android Tests
-echo "Assembling Android Tests..."
-./gradlew :examples:assembleDebugAndroidTest || TEST_FAILED=true
-
 if [ "$TEST_FAILED" != "true" ]; then
   echo "Running Android Tests..."
   ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" || TEST_FAILED=true
