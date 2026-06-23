@@ -231,16 +231,6 @@ tasks.matching { it.name == "packageUberJarForCurrentOS" }.configureEach {
   }
 }
 
-// Source-mode launches (`./trailblaze ...` in CI, or `./trailblaze --gradle ...`
-// locally) run this module's Compose Desktop `run` task. The app compiles workspace
-// trailmaps during startup, and meta-only scripted-tool descriptors need the
-// analyzer tooling under `sdks/typescript/node_modules`. Wire the same SDK install
-// task that the packaging/codegen paths use so source launches do not fail before
-// any Android instrumentation work starts.
-tasks.matching { it.name == "run" }.configureEach {
-  dependsOn(":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk")
-}
-
 val releaseArtifacts by tasks.registering(Copy::class) {
   description = "Builds the release JAR artifact for distribution"
   group = "distribution"
