@@ -4,6 +4,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.coroutines.async
@@ -76,6 +77,82 @@ class QuickJsToolHostTest {
     val greet = registered.single()
     assertEquals("greet", greet.name)
     assertEquals("Say hi", (greet.spec["description"] as JsonPrimitive).content)
+  }
+
+  @Test
+  fun `JSON-Schema enum on an on-device tool param surfaces as validValues on the descriptor`() = runBlocking {
+    // A `.ts` string-literal union (`"UP" | "DOWN" | …`) lowers to a JSON-Schema-shaped
+    // inputSchema with a sibling `enum` array. The on-device descriptor builder must thread those
+    // allowed values into the descriptor so the on-device agent's LLM sees the legal values instead
+    // of a bare `type: string` — matching the host path and the fidelity a Kotlin enum param gets.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      const trailblaze = {
+        tool(name, spec, handler) { tools[name] = { name, spec, handler }; },
+      };
+      trailblaze.tool(
+        "directional_swipe",
+        {
+          description: "Swipe",
+          inputSchema: {
+            type: "object",
+            properties: {
+              direction: { type: "string", description: "which direction", enum: ["UP", "DOWN", "LEFT", "RIGHT"] },
+              label: { type: "string" },
+            },
+            required: ["direction"],
+          },
+        },
+        async () => ({ content: [] }),
+      );
+      """.trimIndent(),
+    )
+
+    val descriptor = host.listTools().single().toTrailblazeToolDescriptor()
+    val direction = descriptor.requiredParameters.single { it.name == "direction" }
+    assertEquals("string", direction.type, "JSON-Schema enum keeps its underlying `string` type")
+    assertEquals(
+      listOf("UP", "DOWN", "LEFT", "RIGHT"),
+      direction.validValues,
+      "the enum's allowed values must surface on the on-device descriptor",
+    )
+    // A plain string param must not gain validValues.
+    assertNull(descriptor.optionalParameters.single { it.name == "label" }.validValues)
+  }
+
+  @Test
+  fun `JSON-Schema enum surfaces as validValues in the flat-author inputSchema shape too`() = runBlocking {
+    // The on-device descriptor builder has two parsing branches: the JSON-Schema shape
+    // (`{type:object, properties, required}`, covered above) and the flat-author shape
+    // (`{paramName: {type, ...}}`, where every key is a parameter and all are required). Both thread
+    // `validValues`, so pin the enum on the flat shape as well — it's a distinct code path.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      const trailblaze = {
+        tool(name, spec, handler) { tools[name] = { name, spec, handler }; },
+      };
+      trailblaze.tool(
+        "flat_swipe",
+        {
+          description: "Swipe",
+          inputSchema: {
+            direction: { type: "string", description: "which direction", enum: ["UP", "DOWN", "LEFT", "RIGHT"] },
+            label: { type: "string" },
+          },
+        },
+        async () => ({ content: [] }),
+      );
+      """.trimIndent(),
+    )
+
+    val descriptor = host.listTools().single().toTrailblazeToolDescriptor()
+    // Flat shape has no `required` list, so every parameter lands in requiredParameters.
+    val direction = descriptor.requiredParameters.single { it.name == "direction" }
+    assertEquals("string", direction.type)
+    assertEquals(listOf("UP", "DOWN", "LEFT", "RIGHT"), direction.validValues)
+    assertNull(descriptor.requiredParameters.single { it.name == "label" }.validValues)
   }
 
   @Test

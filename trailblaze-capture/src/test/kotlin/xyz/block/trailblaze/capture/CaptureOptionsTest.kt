@@ -3,6 +3,7 @@ package xyz.block.trailblaze.capture
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class CaptureOptionsTest {
@@ -48,20 +49,25 @@ class CaptureOptionsTest {
   }
 
   @Test
-  fun `default options enable video only`() {
+  fun `default options enable video and both device-log streams`() {
+    // Log capture is always-on by default (per-platform gating in CaptureSession.fromOptions
+    // means logcat only acts on Android and iOS logs only on iOS); video is on too.
     val options = CaptureOptions()
     assertTrue(options.captureVideo)
-    assertFalse(options.captureLogcat)
-    assertFalse(options.captureIosLogs)
+    assertTrue(options.captureLogcat)
+    assertTrue(options.captureIosLogs)
     assertTrue(options.hasAnyCaptureEnabled)
   }
 
   @Test
   fun `NONE has all capture flags off`() {
-    // CaptureOptions() defaults captureVideo=true; NONE follows the same default,
-    // so NONE.hasAnyCaptureEnabled is true. This pins the current behavior — change
-    // deliberately if NONE is meant to mean "no capture at all".
-    assertEquals(CaptureOptions(), CaptureOptions.NONE)
+    // NONE is explicitly all-off (the default constructor is now all-ON), so it genuinely
+    // means "no capture" — distinct from CaptureOptions().
+    assertFalse(CaptureOptions.NONE.captureVideo)
+    assertFalse(CaptureOptions.NONE.captureLogcat)
+    assertFalse(CaptureOptions.NONE.captureIosLogs)
+    assertFalse(CaptureOptions.NONE.hasAnyCaptureEnabled)
+    assertNotEquals(CaptureOptions(), CaptureOptions.NONE)
   }
 
   @Test

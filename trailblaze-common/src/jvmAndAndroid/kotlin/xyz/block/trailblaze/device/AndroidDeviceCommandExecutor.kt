@@ -331,6 +331,30 @@ expect class AndroidDeviceCommandExecutor(
   fun deleteFileFromDownloads(fileName: String)
 
   /**
+   * Writes raw bytes to an arbitrary absolute path on the device, creating parent directories
+   * as needed and overwriting any existing file.
+   *
+   * This is the low-level byte-transfer primitive: it moves a file **body** onto the device
+   * without going through the device shell's stdin, which is the one thing
+   * [executeShellCommand]-style composition can't do reliably:
+   *  - **Host JVM**: `adb push` (sync protocol). Bypasses the shell service entirely, so it isn't
+   *    subject to the stdin/EXIT-packet hang that piping a body through `adb shell` hits.
+   *  - **On-device**: a direct `java.io.File` write for app-writable paths, falling back to a
+   *    temp-file + `cp` for paths that need the `shell` UID (e.g. public storage on scoped-storage
+   *    devices). Neither path passes the body as a shell argument, so there is no `ARG_MAX` ceiling
+   *    the way a `base64 -d` argv would have.
+   *
+   * Filesystem-only: this does **not** register the file with MediaStore (a plain path write isn't
+   * MediaStore-indexed on scoped storage). If a consumer must find the file via a MediaStore query,
+   * register it separately (e.g. `cmd media_scanner scan <path>` / `content insert`); for the
+   * public Downloads MediaStore collection specifically, use [writeFileToDownloads] instead.
+   *
+   * @param devicePath Absolute destination path on the device (e.g. `/storage/emulated/0/Download/foo.bin`).
+   * @param content The file content as a byte array.
+   */
+  fun writeFileToDevice(devicePath: String, content: ByteArray)
+
+  /**
    * Return the installed apps on a device
    */
   fun listInstalledApps(): List<String>

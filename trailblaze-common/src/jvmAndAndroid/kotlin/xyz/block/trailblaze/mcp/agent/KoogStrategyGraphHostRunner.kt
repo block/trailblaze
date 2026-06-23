@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -219,6 +220,13 @@ suspend fun runPromptsWithKoogStrategyGraph(
     }
   }
 
+  // The screenshot decorator (which attaches the screen) and the logging decorator (which records it
+  // + the image-token breakdown) both need the current screen per request. Share ONE capture per
+  // request instead of each re-capturing (a full device round-trip apiece on the RPC driver): both
+  // read the same shared provider, and the outermost decorator clears it at the end of each request.
+  val sharedScreenCapture = SharedScreenStateCapture(screenStateProvider)
+  val sharedScreenProvider = sharedScreenCapture.asProvider()
+
   // Inner: emit a TrailblazeLlmRequestLog (token usage / cost, prompt + response messages,
   // toolOptions) for every Koog `execute(...)` at parity with the legacy runner — the AIAgent calls
   // the client directly, bypassing TrailblazeLogger.logLlmRequest.
@@ -228,7 +236,7 @@ suspend fun runPromptsWithKoogStrategyGraph(
     session = session,
     trailblazeLlmModel = trailblazeLlmModel,
     objective = objective,
-    screenStateProvider = screenStateProvider,
+    screenStateProvider = sharedScreenProvider,
     // Reuse the step trace id so each LLM request links to the tool calls it triggers.
     traceId = traceId ?: TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
   )
@@ -237,11 +245,14 @@ suspend fun runPromptsWithKoogStrategyGraph(
   // model perceives the rendered screen (set-of-mark), not just the accessibility text — parity with
   // the legacy runner's TrailblazeKoogLlmClientHelper. OUTERMOST so the LoggingLlmClient below sees
   // the post-attachment prompt and its token breakdown counts the image (the log stores attachments
-  // as a type marker, not bytes, so no log bloat); the real client receives the image last.
+  // as a type marker, not bytes, so no log bloat); the real client receives the image last. Its
+  // onRequestEnd clears the shared capture after each request — the screen is captured once and
+  // reused within the request, then released so it isn't retained until the next one.
   val screenshotAttachingLlmClient = ScreenshotAttachingLlmClient(
     delegate = loggingLlmClient,
-    screenStateProvider = screenStateProvider,
+    screenStateProvider = sharedScreenProvider,
     trailblazeLlmModel = trailblazeLlmModel,
+    onRequestEnd = sharedScreenCapture::clear,
   )
 
   // Render the system prompt the same way the legacy runner does — the template contains a
@@ -392,34 +403,41 @@ internal fun verifyScopeDisabledFromEnv(): Boolean =
   System.getenv(VERIFY_SCOPE_DISABLED_ENV)?.lowercase() in setOf("1", "true")
 
 /**
- * Drivers whose verify surface IS the generic `verification` toolset, so scoping a verify step to
- * [TrailblazeToolRepo.getToolDescriptorsForStep] advertises the right assertion tools. Other drivers
- * (Playwright/web, Revyl, iOS-Axe, Compose) build their verify path from a DRIVER-SPECIFIC
- * verification toolset (`web_verification`, `revyl_verification`, …) that `getToolDescriptorsForStep`
- * does not return — scoping there would drop those tools and regress verify steps, so they keep the
- * full surface (see [verifyScopedAdvertisedTools]). Extending scoping to those drivers needs a
- * driver-aware `getToolDescriptorsForStep` and is a separate change.
+ * Drivers for which a verify-only step is scoped to its verification tools (see
+ * [verifyScopedAdvertisedTools]). [TrailblazeToolRepo.getToolDescriptorsForStep] is now driver-aware
+ * — it returns each driver's compatible verification toolset(s), generic (`verification`) for Android
+ * on-device and driver-specific (`web_verification`, `revyl_verification`, …) for the rest — so the
+ * advertised surface is correct for every driver. This set is therefore a deliberate ROLL-OUT GUARD,
+ * not a correctness boundary: a driver is added here once verify scoping has been validated on its
+ * CI / device, so a regression on one driver can't silently affect another. A driver not listed keeps
+ * the full tool surface on verify steps (the pre-scoping behavior).
  *
- * Deliberately distinct from `TrailblazeToolRepo.KOOG_INSPECTION_DRIVERS` (which also lists the
- * Android on-device drivers but additionally `IOS_HOST`): that set gates the read-only
- * `requestDetailedViewHierarchy` inspection tool, a different concern. Don't unify them — `IOS_HOST`
- * builds its verify path from a driver-specific toolset, so it must stay OUT of verify-scoping.
+ * Currently covers the Android on-device drivers (validated on-device) plus the web (Playwright) and
+ * Revyl cloud drivers. Compose and the iOS drivers also have driver-aware verify surfaces now; add
+ * them here once their verify scoping is validated on the matching pipeline.
+ *
+ * Deliberately distinct from `TrailblazeToolRepo.KOOG_INSPECTION_DRIVERS` (which gates the read-only
+ * `requestDetailedViewHierarchy` inspection tool — a different concern). Don't unify them.
  */
 internal val VERIFY_SCOPE_DRIVERS: Set<TrailblazeDriverType> = setOf(
   TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
   TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+  TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+  TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+  TrailblazeDriverType.REVYL_ANDROID,
+  TrailblazeDriverType.REVYL_IOS,
 )
 
 /**
  * The tool descriptors to advertise to the Koog agent for [promptSteps], or `null` to advertise the
  * full registry surface.
  *
- * Returns the verification-scoped surface (the `verification` toolset + objectiveStatus, via
- * [TrailblazeToolRepo.getToolDescriptorsForStep]) only when ALL of:
- *  - the driver is in [VERIFY_SCOPE_DRIVERS] (the generic `verification` toolset is its real verify
- *    surface — Android on-device; web/Revyl/iOS keep the full surface so their driver-specific verify
- *    tools aren't dropped), AND
- *  - EVERY step in the block is a [VerificationStep] (matching what the legacy/V3 runners advertise).
+ * Returns the verification-scoped surface (the driver's verification toolset + objectiveStatus, via
+ * the now driver-aware [TrailblazeToolRepo.getToolDescriptorsForStep]) only when ALL of:
+ *  - the driver is in [VERIFY_SCOPE_DRIVERS] (the roll-out set — Android on-device, web, Revyl; a
+ *    driver not listed keeps the full surface), AND
+ *  - EVERY step in the block is a [VerificationStep] (matching what the legacy/V3 runners advertise), AND
+ *  - the resolved verify surface carries a real verify tool (not just objectiveStatus — see below).
  *
  * The scoped surface has no scroll/tap/navigate tool, so under `ToolChoice.Required` the agent can
  * only assert or observe; it can't "look for" the thing it's verifying by scrolling/tapping and
@@ -442,11 +460,26 @@ internal fun verifyScopedAdvertisedTools(
   toolRepo: TrailblazeToolRepo,
 ): List<ToolDescriptor>? {
   if (toolRepo.driverType !in VERIFY_SCOPE_DRIVERS) return null
-  return promptSteps
+  val scoped = promptSteps
     .takeIf { it.isNotEmpty() && it.all { step -> step is VerificationStep } }
     ?.let { toolRepo.getToolDescriptorsForStep(it.first()) }
-    ?.takeIf { it.isNotEmpty() }
+    ?: return null
+  // Scope only when a REAL verify surface resolved — at least one assertion/observation tool, not
+  // just objectiveStatus. getToolDescriptorsForStep always appends objectiveStatus, so if the
+  // driver's verification toolset isn't in the catalog the scoped list is objectiveStatus-only;
+  // advertising that under ToolChoice.Required would strand the agent (it could neither assert nor
+  // observe), so fall back to the full surface (null) instead.
+  return scoped.takeIf { list -> list.any { it.name != OBJECTIVE_STATUS_TOOL_NAME } }
 }
+
+/**
+ * The objectiveStatus tool's advertised name — the one descriptor a verify-scoped surface ALWAYS
+ * carries (the agent needs it to end the step). Used by [verifyScopedAdvertisedTools] to distinguish
+ * a real verify surface from an objectiveStatus-only one. Derived from the tool class so it can't
+ * drift from the `@TrailblazeToolClass` name.
+ */
+private val OBJECTIVE_STATUS_TOOL_NAME: String? =
+  ObjectiveStatusTrailblazeTool::class.toKoogToolDescriptor()?.name
 
 /**
  * Maps the agent's terminal `objectiveStatus` outcome to a [TrailblazeToolResult]. Pure (no Koog /

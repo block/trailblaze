@@ -32,4 +32,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 data class RunYamlCallbackResult(
   val session: TrailblazeSession,
   val lastToolSuccess: TrailblazeToolResult.Success? = null,
+  /**
+   * How many [TrailblazeToolLog][xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog]
+   * entries the on-device dispatch emitted while running this request's tool(s). The handler
+   * mirrors this onto [RunYamlResponse.onDeviceToolLogCount] so the host RPC agent can skip its
+   * own catch-all tool-log emit when the device already logged the tool, fixing the on-device
+   * double-logging in the session report (#3818). Defaults to `0` so callbacks that don't count
+   * (and the no-tool-ran case) leave the host's catch-all emit in place.
+   */
+  val onDeviceToolLogCount: Int = 0,
 )

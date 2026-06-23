@@ -354,6 +354,13 @@ open class ScriptedToolDefinitionAnalyzer(
     return results.sortedBy { it.absolutePath }
   }
 
+  // No diagnostic here on purpose: [analyze] extracts EVERY `.ts` in the dir, so logging the
+  // uncaptured-spec footgun at this layer would fire for tools that carry a full YAML descriptor
+  // (which supplies the gate the dropped spec would have) and aren't even being enriched — pure
+  // noise. The [uncapturedSpec] data signal is carried forward instead; the enrichment layer, which
+  // knows each descriptor's context, decides severity: a hard error for descriptor-less tools (spec
+  // is the only metadata source) and a targeted warning for a partial descriptor that ends up
+  // genuinely un-gated.
   private fun RawToolDefinition.toDefinition(): ScriptedToolDefinition =
     ScriptedToolDefinition(
       name = name,
@@ -363,6 +370,7 @@ open class ScriptedToolDefinitionAnalyzer(
       inputSchema = inputSchema,
       outputSchema = outputSchema,
       spec = spec,
+      uncapturedSpec = uncapturedSpec,
     )
 
   private fun truncate(s: String, maxLen: Int): String =
@@ -390,6 +398,12 @@ open class ScriptedToolDefinitionAnalyzer(
      * caveat in `extract-tool-defs.mjs`.
      */
     val spec: JsonObject? = null,
+    /**
+     * Emitted by the shim only in the dangerous case: the `(spec, handler)` overload was used with
+     * a non-inline spec reference, so [spec] is `null` and the whole spec was dropped. Defaults
+     * `false` for bare-handler / inline-literal calls (shim omits the key).
+     */
+    val uncapturedSpec: Boolean = false,
   )
 
   @Serializable
@@ -727,6 +741,15 @@ data class ScriptedToolDefinition(
    * canonical projection.
    */
   val spec: JsonObject? = null,
+  /**
+   * True when the author used the `(spec, handler)` overload but passed a non-inline reference
+   * the analyzer can't read (`const SPEC = {...}`, `Specs.foo`, a factory call), so the ENTIRE
+   * spec ([spec] is therefore `null`) was dropped — silently un-gating the tool's
+   * `supportedPlatforms` / `surfaceToLlm` / `requiresHost`. Callers MUST surface this: a warning in
+   * general, and a hard error where the spec is the only metadata source (a descriptor-less `.ts`).
+   * The fix is always to inline the spec object literal at the `trailblaze.tool(...)` call site.
+   */
+  val uncapturedSpec: Boolean = false,
 ) {
   init {
     // Forcing function: the analyzer caller treats schemas as JSON objects (passes

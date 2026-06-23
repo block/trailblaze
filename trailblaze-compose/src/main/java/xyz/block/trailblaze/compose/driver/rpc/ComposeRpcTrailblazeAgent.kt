@@ -2,8 +2,7 @@ package xyz.block.trailblaze.compose.driver.rpc
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
-import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.TrailblazeAgentContext
+import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
@@ -27,20 +26,16 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
-import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
-import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
-import xyz.block.trailblaze.toolcalls.isSuccess
-import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.utils.NoOpElementComparator
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.system.measureTimeMillis
 
 /**
- * [TrailblazeAgent] that delegates tool execution to a remote Compose app via RPC.
+ * [BaseTrailblazeAgent] that delegates tool execution to a remote Compose app via RPC.
  *
  * Parallel to [xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent] but sends tools over
  * HTTP to a [ComposeRpcServer] running inside the Compose application, rather than executing them
@@ -48,20 +43,20 @@ import kotlin.system.measureTimeMillis
  *
  * After each tool execution batch, captures a screenshot and view hierarchy via RPC and logs a
  * [TrailblazeLog.AgentDriverLog] so the HTML report can visualize what happened on screen.
+ *
+ * Extending [BaseTrailblazeAgent] (rather than implementing [TrailblazeAgent] directly) lets the
+ * shared Koog strategy-graph seam drive the Compose RPC driver: the per-tool dispatch lives in
+ * [executeTool] and the execution context in [buildExecutionContext], so `KoogTestAgentRunner`
+ * can reach `runTrailblazeTools` / `buildKoogToolExecutionContext` like every other driver agent.
  */
 class ComposeRpcTrailblazeAgent(
   private val rpcClient: ComposeRpcClient,
   override val trailblazeLogger: TrailblazeLogger,
   override val sessionProvider: TrailblazeSessionProvider,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
-  override val memory: AgentMemory = AgentMemory(),
-) : TrailblazeAgent,
-  TrailblazeAgentContext,
+  override val trailblazeToolRepo: TrailblazeToolRepo? = null,
+) : BaseTrailblazeAgent(),
   Closeable {
-
-  fun clearMemory() {
-    memory.clear()
-  }
 
   private val pendingDetailRequests =
     AtomicReference<Set<ComposeViewHierarchyDetail>>(emptySet())
@@ -76,6 +71,114 @@ class ComposeRpcTrailblazeAgent(
     }
   }
 
+  override fun buildExecutionContext(
+    traceId: TraceId,
+    screenState: ScreenState?,
+    screenStateProvider: (() -> ScreenState)?,
+  ): TrailblazeToolExecutionContext {
+    val effectiveScreenStateProvider = screenStateProvider ?: this.screenStateProvider
+    return TrailblazeToolExecutionContext(
+      screenState = screenState,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      sessionProvider = sessionProvider,
+      screenStateProvider = effectiveScreenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+      maestroTrailblazeAgent = null,
+      // Route nested framework-tool calls — a custom/scripted tool composing an action via
+      // `ctx.invokeFrameworkTool(...)` or a scripting callback — back through this agent so a nested
+      // ComposeExecutableTool dispatches over RPC. Without it the bridge falls back to
+      // `tool.execute(context)`, which every ComposeExecutableTool implements by throwing. Mirrors
+      // PlaywrightTrailblazeAgent. NoOpElementComparator is intentional: the nested tool reuses this
+      // batch's live screen/`screenStateProvider`, and no nested tool here does LLM element matching.
+      // This routes through the overridden `runTrailblazeTools`, so a nested composition emits its
+      // own post-batch AgentDriverLog screenshot (Playwright doesn't override the method, so it
+      // doesn't) — an acceptable extra report entry on the rare nested-composition path.
+      nestedToolExecutor = { nestedTool ->
+        runTrailblazeTools(
+          tools = listOf(nestedTool),
+          traceId = traceId,
+          screenState = screenState,
+          elementComparator = NoOpElementComparator,
+          screenStateProvider = effectiveScreenStateProvider,
+        ).result
+      },
+      // Threads the agent's tool repo through so Kotlin tools composing framework tools via
+      // `ctx.invokeFrameworkTool(...)` resolve them by name — same wiring as the in-process
+      // Compose / Playwright / Revyl agents. Without it the bridge throws "toolRepo not wired".
+      toolRepo = trailblazeToolRepo,
+    )
+  }
+
+  override fun executeTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+    toolsExecuted: MutableList<TrailblazeTool>,
+  ): TrailblazeToolResult {
+    val resolvedTraceId = context.traceId ?: TraceId.generate(TraceOrigin.TOOL)
+    return when (tool) {
+      // compose_request_details is applied CLIENT-SIDE — it is NOT sent over RPC. Instead it arms
+      // pendingDetailRequests so the NEXT getScreenState() carries the requested detail. Checked
+      // before ComposeExecutableTool because it is one (and would otherwise round-trip needlessly).
+      is ComposeRequestDetailsTool -> {
+        val toolStartTime = Clock.System.now()
+        toolsExecuted.add(tool)
+        pendingDetailRequests.set(tool.include.toSet())
+        val result = TrailblazeToolResult.Success(
+          message = "Requested details: ${tool.include.joinToString()}",
+        )
+        logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+        result
+      }
+
+      // Checked before the generic ExecutableTrailblazeTool branch: ComposeExecutableTool IS an
+      // ExecutableTrailblazeTool, but its execute() throws — it must run over RPC instead.
+      is ComposeExecutableTool -> {
+        val toolStartTime = Clock.System.now()
+        toolsExecuted.add(tool)
+        val rpcResult: RpcResult<ExecuteToolsResponse> =
+          runBlocking { rpcClient.executeTools(ExecuteToolsRequest(tools = listOf(tool))) }
+        when (rpcResult) {
+          is RpcResult.Success -> {
+            val result = rpcResult.data.results.firstOrNull() ?: TrailblazeToolResult.Success()
+            logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+            result
+          }
+
+          is RpcResult.Failure -> {
+            val errorMessage =
+              "RPC call failed: ${rpcResult.message} (${rpcResult.errorType})" +
+                (rpcResult.details?.let { " — $it" } ?: "")
+            val result = TrailblazeToolResult.Error.ExceptionThrown(errorMessage)
+            // Log the transport-failure dispatch too (parity with the success path and the
+            // other driver agents) so KOOG/runner reports can correlate a failed RPC tool call.
+            logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+            result
+          }
+        }
+      }
+
+      // Generic host-JVM executables (e.g. TakeSnapshotTool). Host-local subprocess MCP tools and
+      // MemoryTrailblazeTool never reach here — the base loop short-circuits them before executeTool.
+      is ExecutableTrailblazeTool -> {
+        val toolStartTime = Clock.System.now()
+        toolsExecuted.add(tool)
+        val result = runBlocking { tool.execute(context) }
+        logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+        result
+      }
+
+      else -> {
+        val errorMessage =
+          "Unsupported tool type ${tool::class.simpleName} in ComposeRpcTrailblazeAgent."
+        Console.log("Error: $errorMessage")
+        toolsExecuted.add(tool)
+        TrailblazeToolResult.Error.ExceptionThrown(errorMessage)
+      }
+    }
+  }
+
   override fun runTrailblazeTools(
     tools: List<TrailblazeTool>,
     traceId: TraceId?,
@@ -83,144 +186,31 @@ class ComposeRpcTrailblazeAgent(
     elementComparator: ElementComparator,
     screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeAgent.RunTrailblazeToolsResult {
+    // Resolve the trace id up front and hand the base loop a non-null id so this batch's per-tool
+    // logs and the post-batch AgentDriverLog screenshot below share one id (report code joins LLM
+    // and tool activity by traceId).
     val resolvedTraceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
-    val toolsExecuted = mutableListOf<TrailblazeTool>()
-    var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
-
-    // Separate tools that must run locally from those that go over RPC.
-    // Process them in order, batching consecutive ComposeExecutableTools for RPC.
     val overallStartTime = Clock.System.now()
-
-    for (tool in tools) {
-      when (tool) {
-        is MemoryTrailblazeTool -> {
-          toolsExecuted.add(tool)
-          val result = tool.execute(memory = memory, elementComparator = elementComparator)
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        is ComposeRequestDetailsTool -> {
-          val toolStartTime = Clock.System.now()
-          toolsExecuted.add(tool)
-          pendingDetailRequests.set(tool.include.toSet())
-          lastSuccessResult =
-            TrailblazeToolResult.Success(
-              message = "Requested details: ${tool.include.joinToString()}"
-            )
-          logToolExecution(tool, toolStartTime, resolvedTraceId, lastSuccessResult)
-        }
-
-        is ComposeExecutableTool -> {
-          val toolStartTime = Clock.System.now()
-          toolsExecuted.add(tool)
-          val rpcTools = listOf(tool)
-          var executionTimeMs: Long
-          val rpcResult: RpcResult<ExecuteToolsResponse>
-          executionTimeMs = measureTimeMillis {
-            rpcResult = runBlocking { rpcClient.executeTools(ExecuteToolsRequest(tools = rpcTools)) }
-          }
-
-          when (rpcResult) {
-            is RpcResult.Success -> {
-              val result = rpcResult.data.results.firstOrNull() ?: TrailblazeToolResult.Success()
-              logToolExecution(tool, toolStartTime, resolvedTraceId, result)
-              if (!result.isSuccess()) {
-                logScreenStateAfterExecution(
-                  tools = tools,
-                  startTime = overallStartTime,
-                  executionTimeMs = executionTimeMs,
-                  traceId = resolvedTraceId
-                )
-                return TrailblazeAgent.RunTrailblazeToolsResult(
-                  inputTools = tools,
-                  executedTools = toolsExecuted,
-                  result = result,
-                )
-              }
-              lastSuccessResult = result
-            }
-
-            is RpcResult.Failure -> {
-              val errorMessage =
-                "RPC call failed: ${rpcResult.message} (${rpcResult.errorType})" +
-                    (rpcResult.details?.let { " — $it" } ?: "")
-              return TrailblazeAgent.RunTrailblazeToolsResult(
-                inputTools = tools,
-                executedTools = toolsExecuted,
-                result = TrailblazeToolResult.Error.ExceptionThrown(errorMessage),
-              )
-            }
-          }
-        }
-
-        is ExecutableTrailblazeTool -> {
-          val toolStartTime = Clock.System.now()
-          toolsExecuted.add(tool)
-          val context =
-            TrailblazeToolExecutionContext(
-              screenState = null,
-              traceId = resolvedTraceId,
-              trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
-              sessionProvider = sessionProvider,
-              screenStateProvider = screenStateProvider,
-              trailblazeLogger = trailblazeLogger,
-              memory = memory,
-            )
-          val result = runBlocking { tool.execute(context) }
-          logToolExecution(
-            tool = tool,
-            timeBeforeExecution = toolStartTime,
-            traceId = resolvedTraceId,
-            result = result
-          )
-          if (!result.isSuccess()) {
-            logScreenStateAfterExecution(
-              tools = tools,
-              startTime = overallStartTime,
-              executionTimeMs = kotlin.time.Clock.System.now()
-                .toEpochMilliseconds() - overallStartTime.toEpochMilliseconds(),
-              traceId = resolvedTraceId,
-            )
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        else -> {
-          val errorMessage =
-            "Unsupported tool type ${tool::class.simpleName} in ComposeRpcTrailblazeAgent."
-          Console.log("Error: $errorMessage")
-          toolsExecuted.add(tool)
-          return TrailblazeAgent.RunTrailblazeToolsResult(
-            inputTools = tools,
-            executedTools = toolsExecuted,
-            result = TrailblazeToolResult.Error.ExceptionThrown(errorMessage),
-          )
-        }
-      }
-    }
-
-    // Capture screenshot + view hierarchy after execution for the HTML report
+    // Base loop: SnapshotCache frame, ThreadLocal context install, MemoryTrailblazeTool +
+    // HostLocalExecutableTrailblazeTool short-circuits, dynamic-tool resolution, early-exit on
+    // failure, then [executeTool] for each remaining tool.
+    val result = super.runTrailblazeTools(
+      tools = tools,
+      traceId = resolvedTraceId,
+      screenState = screenState,
+      elementComparator = elementComparator,
+      screenStateProvider = screenStateProvider,
+    )
+    // Capture ONE post-batch screenshot + view hierarchy for the HTML report, matching the
+    // pre-BaseTrailblazeAgent shape: once per batch, not once per tool. The default TRAILBLAZE_RUNNER
+    // path's recorded `tools:` blocks (a whole block dispatched as one batch) keep their single
+    // screenshot, while the KOOG path — which dispatches one tool per call — naturally gets one
+    // screenshot per tool. logScreenStateAfterExecution swallows RPC failures, so an errored batch
+    // still returns cleanly.
     val totalTimeMs =
       Clock.System.now().toEpochMilliseconds() - overallStartTime.toEpochMilliseconds()
     logScreenStateAfterExecution(tools, overallStartTime, totalTimeMs, resolvedTraceId)
-
-    return TrailblazeAgent.RunTrailblazeToolsResult(
-      inputTools = tools,
-      executedTools = toolsExecuted,
-      result = lastSuccessResult,
-    )
+    return result
   }
 
   /**

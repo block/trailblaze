@@ -90,7 +90,16 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
       ToolParameterDescriptor(
         name = name,
         description = description.orEmpty(),
-        type = parseKoogParameterType(type, strict),
+        // An enum-typed parameter carries its allowed values in `validValues` regardless of the
+        // `type` string — a JSON-Schema enum lowers to `type = "string"` with a sibling `enum`
+        // array (captured into validValues by the scripted/MCP descriptor builders). Emit a Koog
+        // `ToolParameterType.Enum` so the constraint reaches the LLM-facing function-call schema
+        // (`KoogToMcpExt.fillJsonSchema` renders it as `{"type":"string","enum":[…]}`), matching
+        // the fidelity a Kotlin `@Serializable` enum param gets via `asToolType`. Fall through to
+        // the primitive mapping when there's no enum.
+        type = validValues?.takeIf { it.isNotEmpty() }
+          ?.let { ToolParameterType.Enum(it.toTypedArray()) }
+          ?: parseKoogParameterType(type, strict),
       )
 
     fun parseKoogParameterType(typeString: String, strict: Boolean): ToolParameterType =
@@ -108,15 +117,21 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
 
     // Composite-aware string-mirror -> Koog type: preserves ARRAY/ENUM that parseKoogParameterType
     // flattens. ARRAY has no element type in the mirror, so it defaults to a list of strings.
-    fun TrailblazeToolParameterDescriptor.toKoogParameterTypePreservingComposites(): ToolParameterType =
-      when (type.trim().uppercase()) {
+    fun TrailblazeToolParameterDescriptor.toKoogParameterTypePreservingComposites(): ToolParameterType {
+      // `validValues` present → an enum constraint, regardless of the `type` string. A JSON-Schema
+      // enum lowers to `type = "string"` with a sibling `enum` array (captured into validValues),
+      // so keying only off `type == "ENUM"` would miss scripted/MCP enums — check validValues first.
+      validValues?.takeIf { it.isNotEmpty() }?.let { return ToolParameterType.Enum(it.toTypedArray()) }
+      return when (type.trim().uppercase()) {
         "INT", "INTEGER", "LONG" -> ToolParameterType.Integer
         "FLOAT", "NUMBER", "DOUBLE" -> ToolParameterType.Float
         "BOOLEAN", "BOOL" -> ToolParameterType.Boolean
         "ARRAY" -> ToolParameterType.List(ToolParameterType.String)
-        "ENUM" -> validValues?.takeIf { it.isNotEmpty() }
-          ?.let { ToolParameterType.Enum(it.toTypedArray()) } ?: ToolParameterType.String
+        // `type == "ENUM"` with no usable validValues is a misconfiguration; degrade to String
+        // rather than emit an empty Koog enum.
+        "ENUM" -> ToolParameterType.String
         else -> ToolParameterType.String
       }
+    }
   }
 }

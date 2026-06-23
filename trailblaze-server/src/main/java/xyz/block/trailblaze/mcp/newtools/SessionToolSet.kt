@@ -91,8 +91,9 @@ class SessionToolSet(
     session(action=DEVICE_LOGS, startMs=1772846521000, endMs=1772846525000) → logs in time window
 
     Video is captured by default when a session starts; device log capture (Android
-    logcat and iOS Simulator system logs) is off by default and is toggled per-platform
-    in the desktop app's settings.
+    logcat, iOS Simulator system logs, and web browser console) is also on by default,
+    scoped to the app under test, and can be disabled per-platform via the --no-capture-*
+    flags or the desktop app's settings.
     """
   )
   @Tool(McpToolProfile.TOOL_SESSION)

@@ -27,6 +27,7 @@ import xyz.block.trailblaze.playwright.PlaywrightElectronBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightNativeIdlingConfig
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.PlaywrightDesktopLaunchGooseTool
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
@@ -119,6 +120,10 @@ class BasePlaywrightElectronTest(
       toolClasses = resolvedWebToolSet.toolClasses + ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
       yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
+    // Bind the repo to the web driver so the KOOG verify-step surface scopes to `web_verification`
+    // (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS). Without this the
+    // repo's driverType is null and verify scoping no-ops.
+    driverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
   )
 
   private val trailblazeRunner: TrailblazeRunner by lazy {
@@ -273,6 +278,7 @@ class BasePlaywrightElectronTest(
       }
     }
     ensureWebNetworkCaptureStarted()
+    ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
     try {
       runTrail(trailItems, useRecordedSteps, agentImplementation, onStepProgress)
@@ -303,8 +309,29 @@ class BasePlaywrightElectronTest(
     }
   }
 
+  /**
+   * See [BasePlaywrightNativeTest.ensureWebConsoleCaptureStarted] — same
+   * always-on contract, applied to the Electron CDP-managed BrowserContext so
+   * trails exercising an Electron app capture browser-console output to
+   * `device.log` the same way.
+   */
+  private fun ensureWebConsoleCaptureStarted() {
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    try {
+      WebConsoleCapture.start(
+        ctx = browserManager.currentPage.context(),
+        sessionId = session.sessionId.value,
+        sessionDir = sessionDir,
+      )
+    } catch (e: Exception) {
+      Console.log("Auto-start of web console capture failed: ${e.message}")
+    }
+  }
+
   fun close() {
     runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
+    runCatching { WebConsoleCapture.stop(browserManager.currentPage.context()) }
     browserManager.close()
     electronAppManager.close()
   }

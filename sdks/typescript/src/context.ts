@@ -64,6 +64,17 @@ export interface TrailblazeDevice {
    * actually run under).
    */
   driver?: string;
+  /**
+   * The session device's instance identifier — the emulator serial (`emulator-5554`) on Android,
+   * the simulator UDID on iOS (sourced from `TrailblazeDeviceId.instanceId`). It's what host CLIs
+   * need to target this specific device, e.g.
+   * `ctx.tools.exec({ argv: ["xcrun","simctl","terminate", ctx.device.instanceId, "<bundleId>"] })`.
+   *
+   * Present on the **in-process QuickJS** path (the one mobile tools run under). Optional because
+   * older daemons, web-only sessions, and the MCP/subprocess envelope don't (yet) carry it — guard
+   * before use if your tool can run on those paths.
+   */
+  instanceId?: string;
 }
 
 /**
@@ -296,6 +307,10 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
   ) {
     return undefined;
   }
+  // Optional — not all daemons/envelopes carry it yet (see the field's kdoc). Parsed leniently:
+  // a missing/non-string value is simply absent, not an envelope error.
+  const instanceId =
+    typeof deviceRecord["instanceId"] === "string" ? (deviceRecord["instanceId"] as string) : undefined;
 
   // `_meta.trailblaze.memory` is a `Record<string, string>` snapshot of the host's
   // `AgentMemory.variables` at envelope build time. Wrap it in a `TrailblazeMemory` so
@@ -325,6 +340,7 @@ export function fromMeta(meta: unknown, logger?: TrailblazeLogger): TrailblazeCo
       widthPixels,
       heightPixels,
       driverType,
+      instanceId,
     },
     target,
     memory,

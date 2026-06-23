@@ -1609,6 +1609,14 @@ class ScriptedToolDefinitionAnalyzerTest {
 
     val def = analyzer.analyze(toolsDir).single()
     assertNull(def.spec, "expected null spec on the bare-handler overload")
+    // A 1-arg bare handler is NOT the dangerous "spec reference dropped" case — the lone
+    // argument IS the handler, not a spec. The footgun guard requires exactly 2 args, so this
+    // must stay false (otherwise every bare-handler tool would be flagged as un-gated).
+    assertEquals(
+      false,
+      def.uncapturedSpec,
+      "expected uncapturedSpec=false on the bare-handler overload (one arg, no spec to drop)",
+    )
   }
 
   @Test
@@ -1684,6 +1692,96 @@ class ScriptedToolDefinitionAnalyzerTest {
     // Unrecognized fields dropped.
     assertNull(spec["futureField"], "expected unknown field to be dropped")
     assertNull(spec["anotherUnknown"], "expected unknown field to be dropped")
+  }
+
+  @Test
+  fun `with-spec overload — every non-inline spec reference shape sets uncapturedSpec and drops the whole spec`() = runBlocking {
+    // Pins the JS shim's `specArgIsUncapturedReference()` footgun guard. When the
+    // (spec, handler) overload is used with a NON-inline spec argument — a named
+    // `const SPEC = {...}`, a `Specs.foo` member access, or a `makeSpec()` factory
+    // call — the analyzer's AST-only walk can't read the object literal, so the
+    // ENTIRE spec (supportedPlatforms / surfaceToLlm / requiresHost / …) is
+    // dropped, silently un-gating the tool. The shim flags that with
+    // `uncapturedSpec: true` so the Kotlin enrichment layer can warn (or hard-fail
+    // a descriptor-less tool) instead of shipping the un-gated tool.
+    // `AnalyzerScriptedToolEnrichmentTest` pins the resulting hard-error; this pins
+    // the upstream mjs-side DETECTION that feeds it.
+    //
+    // All three reference shapes share one code path (anything at arg 0 that isn't a
+    // function, an object literal, or a string literal), but pinning each guards
+    // against a future narrowing of the detection to only bare identifiers.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("uncaptured-spec-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "uncapturedSpecTools.ts",
+      """
+        |${declareTypedToolStub()}
+        |declare const Specs: { web: unknown };
+        |declare function makeSpec(): unknown;
+        |interface I { x: string; }
+        |
+        |// Each spec is authored as a non-inline reference rather than inline at the
+        |// call site — the analyzer can't resolve any of them, so the whole spec is dropped.
+        |const SPEC = { supportedPlatforms: ["web"] } as const;
+        |
+        |export const viaConstRef = trailblaze.tool<I>(SPEC, async () => "ok");
+        |export const viaMemberAccess = trailblaze.tool<I>(Specs.web, async () => "ok");
+        |export const viaFactoryCall = trailblaze.tool<I>(makeSpec(), async () => "ok");
+      """.trimMargin(),
+    )
+
+    val defsByName = analyzer.analyze(toolsDir).associateBy { it.name }
+    assertEquals(
+      setOf("viaConstRef", "viaMemberAccess", "viaFactoryCall"),
+      defsByName.keys,
+      "expected all three reference-shaped tools to be discovered",
+    )
+    defsByName.values.forEach { def ->
+      assertTrue(
+        def.uncapturedSpec,
+        "expected uncapturedSpec=true for non-inline spec reference '${'$'}{def.name}'",
+      )
+      assertNull(
+        def.spec,
+        "expected spec=null for '${'$'}{def.name}' — a non-inline reference can't be read, so the whole spec is dropped",
+      )
+    }
+  }
+
+  @Test
+  fun `with-spec overload — an inline-literal spec leaves uncapturedSpec false and captures the fields`() = runBlocking {
+    // Control for the uncapturedSpec footgun above: the SAME 2-arg (spec, handler)
+    // call shape, but with the spec inlined at the call site. The analyzer reads
+    // the literal, so the fields are captured AND `uncapturedSpec` stays false —
+    // the dangerous whole-spec-dropped signal must fire ONLY for the non-inline-
+    // reference case, never for every (spec, handler) call.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("captured-spec-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "capturedSpecTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |
+        |export const capturedSpecTool = trailblaze.tool<I>(
+        |  { supportedPlatforms: ["web"] },
+        |  async () => "ok",
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    assertEquals(
+      false,
+      def.uncapturedSpec,
+      "expected uncapturedSpec=false when the spec is an inline object literal",
+    )
+    val spec = def.spec ?: fail("expected non-null spec captured from the inline literal")
+    val platforms = spec["supportedPlatforms"]?.jsonArray
+      ?: fail("expected `supportedPlatforms` captured from the inline literal; got: $spec")
+    assertEquals(listOf("web"), platforms.map { it.jsonPrimitive.content })
   }
 
   @Test
@@ -2306,6 +2404,54 @@ class ScriptedToolDefinitionAnalyzerTest {
       keyA,
       keyB,
       "typescript package.json must participate in the dep key — a bump from 5.0.0 to 6.0.3 should flip the hash",
+    )
+  }
+
+  @Test
+  fun `bun lockfile participates in the dependency key`() {
+    // Pins the Codex-review fixup (#3975): the analyzer cache dep key must include the
+    // committed `bun.lock`, not just the ts-json-schema-generator / typescript
+    // package.json version pins. Without it, a transitive analyzer-tool dependency
+    // refreshed in the lockfile (generator + compiler versions unchanged) leaves the dep
+    // key — and every cached content key — identical, so the workspace analyzer cache
+    // serves stale definitions even though the bundled-config Gradle task (which DOES
+    // track bun.lock) re-runs. This is a focused unit test on the hash function; it
+    // mirrors the `typescript version pin participates` test above.
+    //
+    // Two synthetic SDK trees differ ONLY in their bun.lock contents — every other dep
+    // input (shim, dts, both package.json pins) is byte-identical.
+    val sdkA = tempFolder.newFolder("sdk-bunlock-a")
+    val sdkB = tempFolder.newFolder("sdk-bunlock-b")
+    listOf(sdkA, sdkB).forEach { dir ->
+      File(dir, "tools").mkdirs()
+      File(dir, "dist").mkdirs()
+      File(dir, "node_modules/typescript").mkdirs()
+      File(dir, "node_modules/ts-json-schema-generator").mkdirs()
+      File(dir, "tools/extract-tool-defs.mjs").writeText("// shared shim bytes\n")
+      File(dir, "dist/index.d.ts").writeText("// shared dts bytes\n")
+      File(dir, "node_modules/ts-json-schema-generator/package.json")
+        .writeText("""{"name":"ts-json-schema-generator","version":"2.9.0"}""")
+      File(dir, "node_modules/typescript/package.json")
+        .writeText("""{"name":"typescript","version":"6.0.3"}""")
+    }
+    // Only the lockfile differs — same shape as a transitive-dep refresh that leaves the
+    // generator + compiler versions untouched.
+    File(sdkA, "bun.lock").writeText("""{"lockfileVersion":1,"packages":{"left-pad":"1.3.0"}}""")
+    File(sdkB, "bun.lock").writeText("""{"lockfileVersion":1,"packages":{"left-pad":"1.3.1"}}""")
+
+    val keyA = ScriptedToolDefinitionCache.computeDependencyKey(
+      sdkA,
+      File(sdkA, "tools/extract-tool-defs.mjs"),
+    )
+    val keyB = ScriptedToolDefinitionCache.computeDependencyKey(
+      sdkB,
+      File(sdkB, "tools/extract-tool-defs.mjs"),
+    )
+    assertNotEquals(
+      keyA,
+      keyB,
+      "bun.lock must participate in the dep key — a transitive-dep refresh that leaves the " +
+        "generator/compiler package.json pins unchanged must still flip the hash",
     )
   }
 }

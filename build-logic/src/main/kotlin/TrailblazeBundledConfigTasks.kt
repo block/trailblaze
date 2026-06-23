@@ -8,10 +8,13 @@ import kotlinx.serialization.Serializable
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -74,6 +77,34 @@ abstract class TrailblazeBundledConfigExtension @Inject constructor(objects: Obj
    */
   val scriptRootDir: DirectoryProperty = objects.directoryProperty()
   val regenerateCommand: Property<String> = objects.property(String::class.java)
+
+  /**
+   * JSON produced by `:trailblaze-host`'s `BundledScriptedToolAnalyzeMain` (run via a `JavaExec`
+   * the plugin wires ahead of generate/verify). Lets a descriptor-less `.ts` tool be described from
+   * its `trailblaze.tool<I,O>({...})` declaration, with no hand-written YAML sidecar. Optional —
+   * when unset, only the kaml descriptor path resolves scripted tools (legacy behavior).
+   *
+   * Set by the plugin (not the consumer) when [analyzeDescriptorlessTools] is enabled.
+   */
+  val analyzerToolsJson: RegularFileProperty = objects.fileProperty()
+
+  /**
+   * Opt in to deriving descriptor-less `.ts` tools via the bun analyzer (a `JavaExec` against
+   * `:trailblaze-host`). Default off. Only modules that can depend on `:trailblaze-host` without a
+   * project cycle may enable this — notably NOT `:trailblaze-models` (which `:trailblaze-host`
+   * depends on). Compatible consumer modules opt in. When off, every scripted tool
+   * must carry a YAML descriptor (the pre-existing behavior), so upstream modules are unaffected.
+   */
+  val analyzeDescriptorlessTools: Property<Boolean> = objects.property(Boolean::class.java)
+
+  /**
+   * The `@trailblaze/scripting` SDK directory — the one carrying `tools/extract-tool-defs.mjs` +
+   * `node_modules/ts-json-schema-generator` the analyzer subprocess runs against. Required when
+   * [analyzeDescriptorlessTools] is enabled. Set by the consumer (whose layout knows where the SDK
+   * lives) rather than derived in the plugin, so this build-logic plugin carries no repo-specific
+   * path — the SDK's location differs between repository layouts.
+   */
+  val sdkDir: DirectoryProperty = objects.directoryProperty()
 }
 
 abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
@@ -98,6 +129,12 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
   @get:Input
   abstract val regenerateCommand: Property<String>
 
+  /** Analyzer-derived configs for descriptor-less `.ts` tools — see the extension field's kdoc. */
+  @get:InputFile
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val analyzerToolsJson: RegularFileProperty
+
   @TaskAction
   fun generate() {
     val generator = TrailmapTargetGenerator(
@@ -105,6 +142,7 @@ abstract class GenerateBundledTrailblazeConfigTask : DefaultTask() {
       targetsDir = targetsDir.asFile.get(),
       scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
+      analyzerToolsJson = analyzerToolsJson.orNull?.asFile,
     )
     val expected = generator.buildExpectedTargets()
     generator.deleteStaleGeneratedTargets(expected.keys)
@@ -140,6 +178,12 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
   @get:Input
   abstract val regenerateCommand: Property<String>
 
+  /** Analyzer-derived configs for descriptor-less `.ts` tools — see the extension field's kdoc. */
+  @get:InputFile
+  @get:Optional
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val analyzerToolsJson: RegularFileProperty
+
   @TaskAction
   fun verify() {
     val generator = TrailmapTargetGenerator(
@@ -147,6 +191,7 @@ abstract class VerifyBundledTrailblazeConfigTask : DefaultTask() {
       targetsDir = targetsDir.asFile.get(),
       scriptRootDir = scriptRootDir.orNull?.asFile,
       regenerateCommand = regenerateCommand.get(),
+      analyzerToolsJson = analyzerToolsJson.orNull?.asFile,
     )
     val expected = generator.buildExpectedTargets()
     val staleFiles = mutableListOf<String>()
@@ -200,11 +245,79 @@ internal class TrailmapTargetGenerator(
   private val targetsDir: File,
   private val regenerateCommand: String,
   private val scriptRootDir: File? = null,
+  /**
+   * Optional JSON emitted by `:trailblaze-host`'s `BundledScriptedToolAnalyzeMain` (run via a
+   * `JavaExec` ahead of this generator). Maps `trailmapId -> toolName -> InlineScriptToolConfig`
+   * for **descriptor-less** `.ts` tools — those resolved from their `trailblaze.tool<I,O>({...})`
+   * declaration by the analyzer instead of a hand-written YAML descriptor. Consumed as the fallback
+   * in [resolveScriptedToolList] for a `target.tools:` name that isn't backed by a YAML descriptor.
+   * `null` (no analyzer step wired) ⇒ the kaml descriptor path is the only resolver, unchanged.
+   */
+  private val analyzerToolsJson: File? = null,
 ) {
   /** Used for parsing trailmap manifests — strict mode off so unknown keys flow through. */
   private val yaml = Yaml(
     configuration = YamlConfiguration(strictMode = false, encodeDefaults = false),
   )
+
+  /**
+   * Lazily-parsed analyzer JSON ([analyzerToolsJson]) as `trailmapId -> toolName -> inline-tool
+   * map`. JSON is a subset of YAML 1.2, so the same kaml [yaml] parser reads it; each config is
+   * already in the per-tool inline shape this generator emits (`script` / `name` / `description` /
+   * `_meta` / `inputSchema`), except `script` is the analyzer's absolute path — relativized against
+   * [scriptRootDir] at splice time by [relativizeAnalyzerScript]. Empty when no analyzer JSON is
+   * wired or the file is absent/blank.
+   */
+  private val analyzerToolsByTrailmap: Map<String, Map<String, Map<String, Any?>>> by lazy {
+    val file = analyzerToolsJson?.takeIf { it.isFile } ?: return@lazy emptyMap()
+    val text = file.readText()
+    // A well-formed empty result is `{}`; a blank file means the analyzer step produced nothing
+    // (no descriptor-less tools) — treat as empty, not an error.
+    if (text.isBlank()) return@lazy emptyMap()
+    // But a non-blank file that doesn't parse as a JSON object is a corrupt / truncated write from
+    // the analyzeBundledScriptedTools task — fail loud rather than silently dropping every
+    // descriptor-less tool (which would surface later as a confusing "tool not found" in
+    // resolveScriptedToolList).
+    val root = yaml.parseToYamlNode(text) as? YamlMap
+      ?: throw GradleException(
+        "Analyzer scripted-tool JSON at ${file.absolutePath} is not a JSON object (unparseable or " +
+          "non-object content). It is produced by the analyzeBundledScriptedTools task; a corrupt " +
+          "or truncated write is the likely cause — re-run that task or clean the build directory.",
+      )
+    val out = linkedMapOf<String, Map<String, Map<String, Any?>>>()
+    root.entries.forEach { (tmKey, tmNode) ->
+      val toolsMap = tmNode as? YamlMap ?: return@forEach
+      val byTool = linkedMapOf<String, Map<String, Any?>>()
+      toolsMap.entries.forEach { (toolKey, cfgNode) ->
+        val cfg = (yamlNodeToPlain(cfgNode) as? Map<*, *>)?.entries
+          ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+          ?.toMap()
+          ?: return@forEach
+        byTool[toolKey.content] = cfg
+      }
+      out[tmKey.content] = byTool
+    }
+    out
+  }
+
+  /**
+   * Rewrite an analyzer-derived config's absolute `script:` to a [scriptRootDir]-relative path,
+   * mirroring the kaml path's relativization in [trailmapScriptedToolToInlineMaps] so the committed
+   * target YAML stays byte-identical across machines. No-op when `scriptRootDir` is unset or the
+   * path can't be relativized (the runtime then errors on the original path, matching the kaml path).
+   */
+  private fun relativizeAnalyzerScript(config: Map<String, Any?>): Map<String, Any?> {
+    val rawScript = config["script"] as? String ?: return config
+    val root = scriptRootDir ?: return config
+    val scriptFile = File(rawScript)
+    if (!scriptFile.isAbsolute) return config
+    val rel = try {
+      scriptFile.canonicalFile.relativeTo(root.canonicalFile).invariantSeparatorsPath
+    } catch (_: IllegalArgumentException) {
+      return config
+    }
+    return LinkedHashMap(config).apply { this["script"] = rel }
+  }
 
   fun buildExpectedTargets(): Map<File, String> {
     val expected = linkedMapOf<File, String>()
@@ -276,7 +389,7 @@ internal class TrailmapTargetGenerator(
         // here `targetTestApp.getInlineScriptTools()` would return empty and scripted-tool
         // dispatch would fall through to `OtherTrailblazeTool` at trail-run time.
         if (key == "tools") {
-          val resolved = resolveScriptedToolList(value, trailmapFile)
+          val resolved = resolveScriptedToolList(value, trailmapFile, trailmapId)
           if (resolved.isNotEmpty()) orderedTarget["tools"] = resolved
           return@forEach
         }
@@ -561,6 +674,7 @@ internal class TrailmapTargetGenerator(
   private fun resolveScriptedToolList(
     rawTools: Any?,
     trailmapFile: File,
+    trailmapId: String,
   ): List<Map<String, Any?>> {
     val list = rawTools as? List<*> ?: return emptyList()
     if (list.isEmpty()) return emptyList()
@@ -594,7 +708,18 @@ internal class TrailmapTargetGenerator(
             "once. Each scripted-tool name must appear at most once in `target.tools:`.",
         )
       }
-      val match = registry[toolName] ?: throw GradleException(
+      registry[toolName]?.let { match ->
+        return@flatMap trailmapScriptedToolToInlineMaps(match.descriptor, match.toolFile)
+          .filter { it["name"] == toolName }
+      }
+      // Descriptor-less `.ts` adopters: resolve from the analyzer JSON (see
+      // [analyzerToolsByTrailmap]) before failing. The kaml descriptor path above stays
+      // authoritative whenever a YAML descriptor exists — this fallback only fills the gap for a
+      // `.ts` with no sibling descriptor, mirroring the runtime loader's bare-`.ts` enrichment.
+      analyzerToolsByTrailmap[trailmapId]?.get(toolName)?.let { cfg ->
+        return@flatMap listOf(relativizeAnalyzerScript(cfg))
+      }
+      throw GradleException(
         buildString {
           append("Trailmap scripted tool name '$toolName' not found under ")
           append("${trailmapDir.resolve(SCRIPTED_TOOLS_DIR).absolutePath} ")
@@ -623,8 +748,6 @@ internal class TrailmapTargetGenerator(
           }
         },
       )
-      trailmapScriptedToolToInlineMaps(match.descriptor, match.toolFile)
-        .filter { it["name"] == toolName }
     }
   }
 

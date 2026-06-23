@@ -122,6 +122,7 @@ class QuickJsTrailblazeTool(
       device = QuickJsDeviceContext(
         platform = deviceInfo.trailblazeDriverType.platform.name,
         driver = deviceInfo.trailblazeDriverType.yamlKey,
+        instanceId = deviceInfo.trailblazeDeviceId.instanceId,
       ),
       target = target,
     )

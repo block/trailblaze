@@ -29,6 +29,7 @@ import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightNativeIdlingConfig
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.playwright.console.WebConsoleCapture
 import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.util.Console
@@ -164,6 +165,10 @@ open class BasePlaywrightNativeTest(
       toolClasses = resolvedWebToolSet.toolClasses + customToolClasses,
       yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
+    // Bind the repo to the web driver so the KOOG verify-step surface is driver-aware: a verify
+    // block scopes to `web_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors /
+    // VERIFY_SCOPE_DRIVERS). Without this the repo's driverType is null and verify scoping no-ops.
+    driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
   )
 
   private val trailblazeRunner: TrailblazeRunner by lazy {
@@ -349,6 +354,7 @@ open class BasePlaywrightNativeTest(
     // trail runs so every request — including any that fire during the very
     // first navigate — lands in <session-dir>/network.ndjson.
     ensureWebNetworkCaptureStarted()
+    ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
     if (!trailblazeYaml.hasActionableSteps(trailItems)) {
       val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
@@ -449,11 +455,35 @@ open class BasePlaywrightNativeTest(
     }
   }
 
+  /**
+   * Idempotently starts browser-console capture for the current session,
+   * appending every `console.*` message to `<session-dir>/device.log` so the
+   * report's Device Logs panel surfaces them — the web counterpart to Android
+   * logcat / iOS system-log capture. Unlike network capture this is always-on
+   * (console output is low-volume and there's no separate enable flag): the
+   * parallel to the docs gallery's always-on `adb logcat`. Guarded so a
+   * start failure never tears down the trail. No-op when no session is set.
+   */
+  private fun ensureWebConsoleCaptureStarted() {
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    try {
+      WebConsoleCapture.start(
+        ctx = browserManager.currentPage.context(),
+        sessionId = session.sessionId.value,
+        sessionDir = sessionDir,
+      )
+    } catch (e: Exception) {
+      Console.log("Auto-start of web console capture failed: ${e.message}")
+    }
+  }
+
   fun close() {
     // Always try to stop capture on test teardown — even when we don't own the
     // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
     // capture was never started.
     runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
+    runCatching { WebConsoleCapture.stop(browserManager.currentPage.context()) }
     // Stop the owned video capture (if any) BEFORE tearing the browser down — the
     // stream's registered finalizer needs the manager alive to close the BrowserContext
     // and flush the in-progress `.webm` to disk. No-op when an outer runner owns the

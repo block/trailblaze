@@ -16,7 +16,12 @@
               textRegex: John Appleseed
             index: 1
       - assertVisibleBySelector:
-          reason: Verify the contact detail screen rendered by asserting the "John Appleseed" name is visible. No index is pinned because the name renders as a single title node on the detail screen, and no version-specific identifier is used (the old ContactCardHeaderView id is iOS-26-only).
+          reason: Verify the contact detail screen actually opened by asserting its detail-only "Edit" button (top-right of the contact card) is visible. The contacts list root shows an "Add" button here instead of "Edit", so this proves the tap navigated to the detail screen rather than staying on the list — which a bare "John Appleseed" name check could not, since the name is also visible as a list row before the tap.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Edit
+      - assertVisibleBySelector:
+          reason: Verify the detail screen rendered the correct contact name by asserting "John Appleseed" is visible. No index is pinned because the name renders as a single title node on the detail screen, and no version-specific identifier is used (the old ContactCardHeaderView id is iOS-26-only).
           nodeSelector:
             iosMaestro:
               textRegex: John Appleseed

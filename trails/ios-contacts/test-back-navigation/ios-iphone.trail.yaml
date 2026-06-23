@@ -19,12 +19,12 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The navbar back button on a contact detail screen carries the accessibility label "Back". Tapping it pops back to the contacts list root. (The original recording flailed on Toolbar/Contacts selectors; "Back" is the label the live a11y tree actually exposes.)
+          reason: Tap the navbar back button to pop back to the contacts list root. On the iOS 18.6 simulators CI uses, the detail-screen back control exposes the accessibility label "Back" (verified live), and there is no element with a "BackButton" resourceId — so match on the label. The post-tap assertion below targets the list-only "Add" button rather than the navbar title, since the detail screen's back button also carries the label "Contacts".
           nodeSelector:
             iosMaestro:
               accessibilityTextRegex: Back
       - assertVisibleBySelector:
-          reason: Verify the contacts list root rendered again by asserting the "Contacts" navbar title is visible at the top of the list.
+          reason: Verify we returned to the contacts list root by asserting the list-only "Add" button (the "+" in the list navbar) is visible. The contact detail screen exposes an "Edit" button here instead of "Add", so this distinguishes the list root from the detail screen even if the back tap were to no-op. (Asserting the "Contacts" navbar title alone would not, because the detail screen's back button also carries the label "Contacts".)
           nodeSelector:
             iosMaestro:
-              textRegex: Contacts
+              accessibilityTextRegex: Add

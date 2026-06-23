@@ -527,7 +527,8 @@ object SettingsTabComposables {
         PreferenceToggle(
           label = "Capture iOS Simulator Logs",
           description = "Capture iOS Simulator system logs via `xcrun simctl spawn log stream`. " +
-            "Off by default — iOS log volume is very high and can fill local disks fast.",
+            "On by default — scoped to the app under test at info level (logcat-equivalent), " +
+            "not the system-wide firehose.",
           checked = serverState.appConfig.captureIosLogs,
           onCheckedChange = { checkedValue ->
             trailblazeSettingsRepo.updateAppConfig {

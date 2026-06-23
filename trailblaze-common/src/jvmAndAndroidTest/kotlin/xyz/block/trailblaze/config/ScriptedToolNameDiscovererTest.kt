@@ -211,4 +211,39 @@ class ScriptedToolNameDiscovererTest {
       ScriptedToolNameDiscoverer.bundleResourcePath(discovered)
     }
   }
+
+  @Test
+  fun `bundleResourcePathForScript maps a repo-relative script to the trailmaps asset path`() {
+    // A target's `target.tools:` entry carries a repo-root-relative `script:`; the on-device
+    // launcher resolves its bundle through this. The result must match the
+    // `${TRAILMAPS_DIR}/<trailmap>/tools/<base>.bundle.js` shape the build-time bundler stages to.
+    assertEquals(
+      "${TrailblazeConfigPaths.TRAILMAPS_DIR}/demo/tools/demo_launchStep.bundle.js",
+      ScriptedToolNameDiscoverer.bundleResourcePathForScript(
+        "some-module/src/commonMain/resources/trails/config/trailmaps/demo/tools/demo_launchStep.ts",
+      ),
+    )
+  }
+
+  @Test
+  fun `bundleResourcePathForScript tolerates backslashes and a bare filename`() {
+    assertEquals(
+      "${TrailblazeConfigPaths.TRAILMAPS_DIR}/demo/tools/x.bundle.js",
+      ScriptedToolNameDiscoverer.bundleResourcePathForScript(
+        "any\\prefix\\trails\\config\\trailmaps\\demo\\tools\\x.ts",
+      ),
+    )
+    // No trailmaps prefix: fall back to just the file's base name under the trailmaps root.
+    assertEquals(
+      "${TrailblazeConfigPaths.TRAILMAPS_DIR}/x.bundle.js",
+      ScriptedToolNameDiscoverer.bundleResourcePathForScript("x.ts"),
+    )
+  }
+
+  @Test
+  fun `bundleResourcePathForScript rejects a blank script`() {
+    assertFailsWith<IllegalArgumentException> {
+      ScriptedToolNameDiscoverer.bundleResourcePathForScript("   ")
+    }
+  }
 }

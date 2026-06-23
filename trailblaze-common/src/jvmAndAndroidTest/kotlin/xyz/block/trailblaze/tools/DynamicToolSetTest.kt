@@ -17,6 +17,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.getInitialToolClassesForDriver
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
@@ -477,6 +479,91 @@ class DynamicToolSetTest {
       "assertNotVisibleWithText" in verifyNames,
       "Default-catalog verification tools should NOT leak in when a custom catalog overrides",
     )
+  }
+
+  // -- getToolDescriptorsForStep(VerificationStep) driver-awareness --
+
+  /**
+   * A multi-driver catalog modeling the real verification-toolset layout: a generic `verification`
+   * toolset for Android on-device + iOS host, plus driver-specific `web_verification` (Playwright)
+   * and `revyl_verification` (Revyl). Each carries a DISTINCT verify tool so a leak across drivers
+   * is detectable. (All three stand-in tools are `surfaceToLlm = true` so they actually appear in
+   * the advertised descriptors.)
+   */
+  private fun multiDriverVerifyCatalog() = listOf(
+    ToolSetCatalogEntry(
+      id = "verification",
+      description = "generic assertion tools (android on-device + ios host)",
+      toolClasses = setOf(AssertVisibleTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.IOS_HOST,
+      ),
+    ),
+    ToolSetCatalogEntry(
+      id = "web_verification",
+      description = "web assertion tools (playwright)",
+      toolClasses = setOf(AssertEqualsTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+      ),
+    ),
+    ToolSetCatalogEntry(
+      id = "revyl_verification",
+      description = "revyl assertion tools",
+      toolClasses = setOf(AssertNotVisibleWithTextTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.REVYL_ANDROID,
+        TrailblazeDriverType.REVYL_IOS,
+      ),
+    ),
+  )
+
+  private fun verifyDescriptorNamesForDriver(driver: TrailblazeDriverType?): Set<String> =
+    TrailblazeToolRepo.withDynamicToolSets(catalog = multiDriverVerifyCatalog(), driverType = driver)
+      .getToolDescriptorsForStep(VerificationStep(verify = "probe"))
+      .map { it.name }
+      .toSet()
+
+  @Test
+  fun `VerificationStep advertises the generic verification toolset on Android on-device`() {
+    val names = verifyDescriptorNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+    assertTrue("assertVisible" in names, "Android should see the generic verification tool")
+    assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
+    // Driver-specific verify tools from OTHER drivers must not leak in.
+    assertFalse("assertEquals" in names, "web verification tool must not leak onto Android")
+    assertFalse("assertNotVisibleWithText" in names, "revyl verification tool must not leak onto Android")
+  }
+
+  @Test
+  fun `VerificationStep advertises the web verification toolset on Playwright`() {
+    val names = verifyDescriptorNamesForDriver(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
+    assertTrue("assertEquals" in names, "Playwright should see the web verification tool")
+    assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
+    assertFalse("assertVisible" in names, "generic Android verification tool must not leak onto web")
+    assertFalse("assertNotVisibleWithText" in names, "revyl verification tool must not leak onto web")
+  }
+
+  @Test
+  fun `VerificationStep advertises the revyl verification toolset on Revyl`() {
+    val names = verifyDescriptorNamesForDriver(TrailblazeDriverType.REVYL_IOS)
+    assertTrue("assertNotVisibleWithText" in names, "Revyl should see the revyl verification tool")
+    assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
+    assertFalse("assertVisible" in names, "generic Android verification tool must not leak onto Revyl")
+    assertFalse("assertEquals" in names, "web verification tool must not leak onto Revyl")
+  }
+
+  @Test
+  fun `VerificationStep with no driver falls back to the generic verification toolset`() {
+    // A null driver can't pick a driver-specific toolset, so it preserves the historical behavior:
+    // the generic `verification` toolset only (not every driver's verification toolset).
+    val names = verifyDescriptorNamesForDriver(driver = null)
+    assertTrue("assertVisible" in names, "null driver falls back to the generic verification tool")
+    assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
+    assertFalse("assertEquals" in names, "driver-specific web tool must not appear for a null driver")
+    assertFalse("assertNotVisibleWithText" in names, "driver-specific revyl tool must not appear for a null driver")
   }
 
   // -- entryToolClasses --

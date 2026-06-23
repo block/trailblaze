@@ -7,13 +7,18 @@ package xyz.block.trailblaze.capture
  */
 data class CaptureOptions(
   val captureVideo: Boolean = true,
-  /** Capture Android logcat (only takes effect when running on Android). */
-  val captureLogcat: Boolean = false,
   /**
-   * Capture iOS Simulator system logs via `xcrun simctl spawn log stream`. Off by default —
-   * iOS logs are firehose-volume and can fill local disks fast.
+   * Capture Android logcat (filtered to the app under test) to `device.log`. On by default
+   * (only takes effect when running on Android). Disable with `--no-capture-logcat`.
    */
-  val captureIosLogs: Boolean = false,
+  val captureLogcat: Boolean = true,
+  /**
+   * Capture the iOS Simulator system log via `xcrun simctl spawn log stream`. On by default
+   * (only takes effect when running on iOS). [xyz.block.trailblaze.capture.logcat.IosLogCapture]
+   * scopes the stream to the app under test at `--level info`, so this is the logcat-equivalent
+   * app log — not the system firehose. Disable with `--no-capture-ios-logs`.
+   */
+  val captureIosLogs: Boolean = true,
   /** Frames per second for sprite sheet extraction. */
   val spriteFrameFps: Int = DEFAULT_SPRITE_FPS,
   /** Height in pixels for each frame in the sprite sheet. Width scales proportionally. */
@@ -46,7 +51,12 @@ data class CaptureOptions(
     if (spriteQuality == DEFAULT_SPRITE_QUALITY) WEB_SPRITE_QUALITY else spriteQuality
 
   companion object {
-    val NONE = CaptureOptions()
+    /**
+     * No capture at all — every stream off. Explicit (not `CaptureOptions()`) because the
+     * constructor now defaults video/logcat/iOS-logs ON, so `CaptureOptions()` is the opposite
+     * of "none". Used as `CaptureStream.stop`'s default arg, where only sprite tuning is read.
+     */
+    val NONE = CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = false)
     const val DEFAULT_SPRITE_FPS = 2
     const val DEFAULT_SPRITE_HEIGHT = 360
     const val DEFAULT_SPRITE_QUALITY = 80

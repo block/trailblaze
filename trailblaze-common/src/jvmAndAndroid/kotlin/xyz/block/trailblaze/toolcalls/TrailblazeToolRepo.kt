@@ -682,6 +682,19 @@ class TrailblazeToolRepo(
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     )
 
+    /** Toolset id whose verify surface is the generic, driver-agnostic Android/iOS assertion set. */
+    const val GENERIC_VERIFICATION_TOOLSET_ID = "verification"
+
+    /**
+     * A catalog entry is a "verification" toolset when it's the generic [GENERIC_VERIFICATION_TOOLSET_ID]
+     * set or a driver-specific `*_verification` set (`web_verification`, `revyl_verification`,
+     * `compose_verification`). This naming convention is the contract between the verify-toolset YAML
+     * files and verify-step scoping ([getToolDescriptorsForStep] for a [VerificationStep]): a new
+     * driver's verify toolset just has to follow it to be picked up.
+     */
+    fun isVerificationToolsetId(id: String): Boolean =
+      id == GENERIC_VERIFICATION_TOOLSET_ID || id.endsWith("_verification")
+
     /**
      * Creates a [TrailblazeToolRepo] with dynamic toolset support.
      *
@@ -737,18 +750,71 @@ class TrailblazeToolRepo(
     }
   }
 
+  // The verification toolset(s) whose tools a `verify:` step may use, scoped to this repo's
+  // [driverType]: the generic `verification` set for Android on-device + iOS host, the
+  // driver-specific `web_verification` / `revyl_verification` / `compose_verification` for the
+  // rest. When [driverType] is null (test fixtures / driver-agnostic construction) we can't tell
+  // which driver-specific toolset applies, so we fall back to the historical generic `verification`
+  // toolset — preserving behavior for callers that never set a driver. Resolves via this repo's
+  // configured [toolSetCatalog] when present (so a custom test catalog is reflected) and otherwise
+  // the global [TrailblazeToolSetCatalog.defaultEntries]. Shared by [verifyTools] (the executable
+  // registry top-up) and [verifyStepToolDescriptors] (the advertised surface) so the two can't drift.
+  private fun verificationToolsetEntries(): List<ToolSetCatalogEntry> {
+    val catalog = toolSetCatalog ?: TrailblazeToolSetCatalog.defaultEntries()
+    val capturedDriver = driverType
+    return if (capturedDriver == null) {
+      catalog.filter { it.id == GENERIC_VERIFICATION_TOOLSET_ID }
+    } else {
+      catalog.filter { isVerificationToolsetId(it.id) && it.isCompatibleWith(capturedDriver) }
+    }
+  }
+
   // When running - verify: only provide the assertion tools and the objective status tool.
   // If you don't provide the objective status tool then the agent cannot complete the step.
-  // Resolves via this repo's configured [toolSetCatalog] when present so a test that wires up
-  // a custom catalog (e.g. extra app-specific entries) gets those reflected here too; falls
-  // back to the global [TrailblazeToolSetCatalog.defaultEntries] when no override was passed.
-  // Uses [entryToolClasses] (not [resolve]) so Invariant 3's isolation semantics hold — no
-  // alwaysEnabled meta/core_interaction tools leak into the VerificationStep surface.
   // Lazy so repos that never hit VerificationStep don't force catalog discovery.
+  //
+  // This is the CLASS-BACKED verify surface — every driver-compatible verification toolset's
+  // class-backed assertion tools (generic `assertVisible` / `assertNotVisibleWithText`, plus
+  // driver-specific ones like Revyl's class-backed `revyl_assert`) plus objectiveStatus. It is
+  // added to the executor-routed Koog registry (the `asToolRegistry` overloads) so those tools are
+  // always DISPATCHABLE on a verify step regardless of which toolsets are active. It MUST use the
+  // same driver-scoped entry selection as [verifyStepToolDescriptors] (the advertised surface):
+  // otherwise a driver-specific class-backed verify tool could be advertised but not registered,
+  // stranding the agent under `ToolChoice.Required` after a `setActiveToolSets` that drops it. The
+  // driver-specific YAML verify tools (`web_verifyTextVisible`, …) have no backing KClass, so they
+  // still reach the registry through the active toolsets (`advertisedDynamic`).
   private val verifyTools: Set<KClass<out TrailblazeTool>> by lazy {
-    val catalog = toolSetCatalog ?: TrailblazeToolSetCatalog.defaultEntries()
-    TrailblazeToolSetCatalog.entryToolClasses("verification", catalog) +
+    verificationToolsetEntries().flatMap { it.toolClasses }.toSet() +
       ObjectiveStatusTrailblazeTool::class
+  }
+
+  /**
+   * Advertised tool descriptors for a `verify:` step — the driver-appropriate assertion/observation
+   * tools plus objectiveStatus.
+   *
+   * Driver-aware on purpose (see [verificationToolsetEntries]): each driver builds its verify surface
+   * from a different verification toolset. Android on-device + iOS host use the generic `verification`
+   * toolset (class-backed `assertVisible` / `assertNotVisibleWithText`); web uses `web_verification`,
+   * Revyl uses `revyl_verification`, Compose uses `compose_verification`. Some contribute YAML-defined
+   * tools with no backing KClass. Returning only the generic class-backed set (the historical
+   * behavior) advertised Android assertion tools on a web/Revyl verify step and dropped that driver's
+   * real verify tools, so we build descriptors from both the class-backed and YAML-defined tools of
+   * every verification toolset compatible with this repo's [driverType].
+   *
+   * objectiveStatus is always included: without it the agent can't end a verify step.
+   */
+  private fun verifyStepToolDescriptors(): List<ToolDescriptor> {
+    val verifyEntries = verificationToolsetEntries()
+    val classDescriptors = verifyEntries
+      .flatMap { it.toolClasses }
+      .toSet()
+      .mapNotNull { it.toKoogToolDescriptor() }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
+      verifyEntries.flatMap { it.yamlToolNames }.toSet(),
+    )
+    val objectiveStatusDescriptor = ObjectiveStatusTrailblazeTool::class.toKoogToolDescriptor()
+    return (classDescriptors + yamlDescriptors + listOfNotNull(objectiveStatusDescriptor))
+      .distinctBy { it.name }
   }
 
   // On-demand "full screen" inspection for the in-process Koog agent loops (the
@@ -775,9 +841,9 @@ class TrailblazeToolRepo(
 
   // This function returns different tool descriptors based on the type of prompt step passed in.
   // The DirectionStep returns all registered trailblaze tool classes, while the VerificationStep
-  // will return a subset of the assert tool set.
+  // returns the driver-appropriate verify surface (see [verifyStepToolDescriptors]).
   fun getToolDescriptorsForStep(promptStep: PromptStep): List<ToolDescriptor> = when (promptStep) {
     is DirectionStep -> getCurrentToolDescriptors()
-    is VerificationStep -> verifyTools.mapNotNull { it.toKoogToolDescriptor() }
+    is VerificationStep -> verifyStepToolDescriptors()
   }
 }

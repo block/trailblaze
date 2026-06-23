@@ -75,6 +75,33 @@ abstract class TrailblazeLoggingRule(
   }
 
   /**
+   * Transient observers notified of every emitted [TrailblazeLog] for the duration of a
+   * [withLogObserver] call. Backed by a copy-on-write list so a register/remove on one thread is
+   * safe against the emit on another (the device dispatch can emit from a different coroutine
+   * thread than the one that installed the observer).
+   */
+  private val transientLogObservers =
+    java.util.concurrent.CopyOnWriteArrayList<(TrailblazeLog) -> Unit>()
+
+  /**
+   * Runs [block], invoking [observer] for every [TrailblazeLog] emitted while it executes, then
+   * removes the observer (even if [block] throws).
+   *
+   * The on-device RPC dispatch uses this to count how many `TrailblazeToolLog`s it emitted for a
+   * tool sent over RPC, so the host can skip its own duplicate `logToolExecution` and the tool
+   * renders once in the session report (#3818). Observers fire synchronously on the emitting
+   * thread before any disk/server write, so keep them cheap and non-blocking.
+   */
+  fun <T> withLogObserver(observer: (TrailblazeLog) -> Unit, block: () -> T): T {
+    transientLogObservers.add(observer)
+    return try {
+      block()
+    } finally {
+      transientLogObservers.remove(observer)
+    }
+  }
+
+  /**
    * LogEmitter that sends logs to server or disk.
    * Shared by both SessionManager and Logger.
    */
@@ -85,6 +112,10 @@ abstract class TrailblazeLoggingRule(
       // Notify additional log emitter (for test inspection, etc.)
       additionalLogEmitter?.emit(log)
 
+      // Notify any transient observers (e.g. the on-device dispatch counting its own tool logs
+      // for the host double-log fix). Cheap, synchronous, on the emitting thread.
+      transientLogObservers.forEach { it(log) }
+
       // Get session ID from current session
       val sessionId = session?.sessionId ?: SessionId("unknown")
       runBlocking(Dispatchers.IO) {
@@ -92,7 +123,15 @@ abstract class TrailblazeLoggingRule(
           try {
             val httpResult = trailblazeLogServerClient.postAgentLog(log)
             if (httpResult.status.value != 200) {
+              // A non-200 means the server rejected the log — fall back to disk just like the
+              // exception path below, so the log still lands somewhere durable. Without this, a
+              // reachable-but-erroring log server silently drops the log. That matters for the
+              // on-device tool-log count (#3818): the device counts a `TrailblazeToolLog` at
+              // emit time and the host skips its own catch-all emit on the strength of that
+              // count, so a dropped persist here would leave the tool absent from the report.
+              // The disk fallback keeps "counted" ⇒ "persisted (server or disk)" true.
               Console.log("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
+              writeLogToDisk(sessionId, log)
             }
           } catch (e: Exception) {
             Console.log("Failed to post agent log to server: ${e.message}")

@@ -318,8 +318,8 @@ class SessionCaptureCoordinator(
      */
     val DEFAULT_CAPTURE_OPTIONS = CaptureOptions(
       captureVideo = true,
-      captureLogcat = false,
-      captureIosLogs = false,
+      captureLogcat = true,
+      captureIosLogs = true,
       spriteFrameFps = 2,
       spriteFrameHeight = 720,
       spriteQuality = 80,

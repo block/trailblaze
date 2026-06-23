@@ -66,12 +66,17 @@ import xyz.block.trailblaze.util.Console
  * @param screenStateProvider Captures the current screen; its `annotatedScreenshotBytes` is attached.
  * @param trailblazeLlmModel The model — its `capabilityIds` gate whether a screenshot is attached.
  * @param enabled Master switch; defaults to the [DISABLE_SCREENSHOT_ENV] kill-switch. False ⇒ passthrough.
+ * @param onRequestEnd Invoked in a `finally` at the end of each [execute]. As the outermost decorator,
+ *   this is the per-request boundary — wire it to [SharedScreenStateCapture.clear] so the screen
+ *   captured this request (and reused by the inner logging client) is released afterwards and the next
+ *   request re-captures fresh. Runs even if the delegate throws. Defaults to no-op.
  */
 class ScreenshotAttachingLlmClient(
   private val delegate: LLMClient,
   private val screenStateProvider: () -> ScreenState,
   private val trailblazeLlmModel: TrailblazeLlmModel,
   private val enabled: Boolean = !screenshotsDisabledFromEnv(),
+  private val onRequestEnd: () -> Unit = {},
 ) : LLMClient() {
 
   /** Read once: whether this model can accept image input at all. A text-only model is never touched. */
@@ -90,14 +95,21 @@ class ScreenshotAttachingLlmClient(
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): Message.Assistant = delegate.execute(
-    // Only the tool-calling agent turns get a screenshot; the no-tool history-compression call
-    // doesn't. Skipped for text-only models and when the kill-switch is set. A capture/attach
-    // failure must never break the agent run — withCurrentScreenshot falls back to the text-only prompt.
-    prompt = if (enabled && modelSupportsVision && tools.isNotEmpty()) withCurrentScreenshot(prompt) else prompt,
-    model = model,
-    tools = tools,
-  )
+  ): Message.Assistant = try {
+    delegate.execute(
+      // Only the tool-calling agent turns get a screenshot; the no-tool history-compression call
+      // doesn't. Skipped for text-only models and when the kill-switch is set. A capture/attach
+      // failure must never break the agent run — withCurrentScreenshot falls back to the text-only prompt.
+      prompt = if (enabled && modelSupportsVision && tools.isNotEmpty()) withCurrentScreenshot(prompt) else prompt,
+      model = model,
+      tools = tools,
+    )
+  } finally {
+    // End of the per-request window. As the outermost decorator, this is where the shared screen
+    // capture is released so it isn't retained between requests (and the next request re-captures
+    // fresh). In a finally so it runs even if the delegate throws.
+    onRequestEnd()
+  }
 
   private fun withCurrentScreenshot(prompt: Prompt): Prompt = try {
     val bytes = screenStateProvider().annotatedScreenshotBytes

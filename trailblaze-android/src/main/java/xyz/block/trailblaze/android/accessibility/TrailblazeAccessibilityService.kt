@@ -284,14 +284,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       }
     }
 
-    fun getViewHierarchy(): TreeNode? {
-      val rootNode = getRootNodeInfo() ?: return null
-      return try {
-        rootNode.toTreeNode()
-      } finally {
-        rootNode.recycle()
-      }
-    }
+    fun getViewHierarchy(): TreeNode? = captureMergedScreenTrees().treeNode
 
     /**
      * Returns the raw [AccessibilityNodeInfo] root for direct, high-fidelity tree capture.
@@ -321,6 +314,45 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       val root = getApplicationWindowRoot() ?: return null
       refreshTreeInPlace(root)
       return root
+    }
+
+    /**
+     * Both shapes of the captured screen tree, built from the same single enumeration of window
+     * roots so the Maestro-shape [treeNode] and the accessibility-shape [accessibilityNode] never
+     * desync across two reads. [foregroundAppId] is the package of the primary (first/base)
+     * window root.
+     */
+    class MergedScreenTrees(
+      val treeNode: TreeNode?,
+      val accessibilityNode: AccessibilityNode?,
+      val foregroundAppId: String?,
+    )
+
+    /**
+     * Captures the screen as merged trees that include secondary windows (dialogs, popups,
+     * sub-panels) in addition to the active application window — see [getCaptureWindowRoots].
+     *
+     * Resolves every contributing window root once, refreshes each in place for text/state
+     * freshness (parity with [getRootNodeInfo]), then converts that single root list into both the
+     * Maestro [TreeNode] and the high-fidelity [AccessibilityNode] shapes. In the common
+     * single-window case both trees are identical to the historical single-root capture. Every
+     * resolved root is recycled before returning.
+     */
+    fun captureMergedScreenTrees(awaitStable: Boolean = true): MergedScreenTrees {
+      if (awaitStable) awaitTreeStable()
+      val roots = getCaptureWindowRoots()
+      if (roots.isEmpty()) return MergedScreenTrees(null, null, null)
+      return try {
+        roots.forEach { refreshTreeInPlace(it) }
+        MergedScreenTrees(
+          treeNode = roots.toMergedTreeNode(),
+          accessibilityNode = roots.toMergedAccessibilityNode(),
+          // packageName must be read before recycle() invalidates the node.
+          foregroundAppId = roots.first().packageName?.toString(),
+        )
+      } finally {
+        roots.forEach { it.recycle() }
+      }
     }
 
     /**
@@ -387,6 +419,86 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       applicationWindows.firstNotNullOfOrNull { it.root }?.let { return it }
 
       return service.rootInActiveWindow
+    }
+
+    /**
+     * Lightweight, framework-free description of an accessibility window used by
+     * [orderCaptureWindows] so the selection/ordering policy can be unit-tested without standing
+     * up an [AccessibilityWindowInfo] (which can't be constructed off-device). Mirrors the IME
+     * pure-function test seam ([isImeClassName], [parseDumpsysInputMethodShown]).
+     */
+    internal data class CaptureWindowInfo(
+      val id: Int,
+      val type: Int,
+      val layer: Int,
+      val isActive: Boolean,
+    )
+
+    /**
+     * Selects and orders the windows whose accessibility content should be merged into a single
+     * capture, given a snapshot of all enumerated windows.
+     *
+     * Policy:
+     * - **Include** every `TYPE_APPLICATION` window, active and non-active. Android exposes
+     *   dialogs, popups, sub-panels, spinner dropdowns, and companion/secondary app windows as
+     *   their own `TYPE_APPLICATION` windows — there is no separate sub-panel window type at the
+     *   [AccessibilityWindowInfo] level — so the non-active ones the previous single-window
+     *   capture dropped are exactly the dialog/popover content this merge needs to surface.
+     * - **Exclude** chrome that today's single-window capture never showed: the IME
+     *   (`TYPE_INPUT_METHOD`), status/nav System UI (`TYPE_SYSTEM`), accessibility overlays,
+     *   magnification, split-divider, and window-control windows. Keeping those out preserves
+     *   the existing IME-bypass behavior — the form, not the keyboard's keys.
+     * - **Order** by ascending `layer` (z-order), so the base application window comes first and
+     *   higher (dialog/popup) windows are appended after it. The active window is placed first
+     *   among equal layers so the primary app root stays the tree's first child, matching the
+     *   single-window shape callers see today.
+     *
+     * Pure function on plain ints/booleans so it's unit-testable without Robolectric.
+     */
+    internal fun orderCaptureWindows(windows: List<CaptureWindowInfo>): List<CaptureWindowInfo> =
+      windows
+        .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+        .sortedWith(compareBy({ it.layer }, { !it.isActive }))
+
+    /**
+     * Resolves the ordered list of window roots to merge into a single capture tree.
+     *
+     * Enumerates [getServiceWindows], runs the [orderCaptureWindows] policy to choose which
+     * windows contribute content, resolves each `getRoot()` with per-window null-safety (a root
+     * can transiently be null during a window transition — that window is simply skipped), and
+     * de-duplicates by node identity so a window that resolves to the same root as another isn't
+     * walked twice. Falls back to the single [getApplicationWindowRoot] when window enumeration
+     * is unavailable (older OEMs, `flagRetrieveInteractiveWindows` not honored) or yields no
+     * content window — preserving today's exact behavior in the common single-window case.
+     *
+     * The caller owns every returned [AccessibilityNodeInfo] and must recycle each one.
+     */
+    fun getCaptureWindowRoots(): List<AccessibilityNodeInfo> {
+      val windows = getServiceWindows()
+      if (windows.isNullOrEmpty()) {
+        return listOfNotNull(getApplicationWindowRoot())
+      }
+
+      val byId = windows.associateBy { it.id }
+      val ordered = orderCaptureWindows(
+        windows.map {
+          CaptureWindowInfo(id = it.id, type = it.type, layer = it.layer, isActive = it.isActive)
+        },
+      )
+
+      val roots = ArrayList<AccessibilityNodeInfo>(ordered.size)
+      for (windowInfo in ordered) {
+        val root = byId[windowInfo.id]?.root ?: continue
+        if (roots.any { it == root }) {
+          root.recycle()
+          continue
+        }
+        roots.add(root)
+      }
+
+      // Window enumeration is non-empty but no application window had a resolvable root
+      // (mid-transition, or only chrome enumerated) — fall back so capture never goes blank.
+      return roots.ifEmpty { listOfNotNull(getApplicationWindowRoot()) }
     }
 
     /**

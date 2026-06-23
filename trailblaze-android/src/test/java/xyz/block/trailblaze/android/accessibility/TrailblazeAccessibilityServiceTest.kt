@@ -1,8 +1,11 @@
 package xyz.block.trailblaze.android.accessibility
 
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService.Companion.CaptureWindowInfo
 
 /**
  * Unit tests for the IME class-name heuristic that backs
@@ -220,5 +223,90 @@ class TrailblazeAccessibilityServiceTest {
       """
         .trimIndent()
     assertTrue(TrailblazeAccessibilityService.parseDumpsysInputMethodShown(fixture))
+  }
+
+  // --- orderCaptureWindows ---
+  //
+  // Pure selection/ordering policy backing the multi-window capture merge. Decides which
+  // enumerated windows contribute content to the captured tree and in what z-order. References
+  // android `AccessibilityWindowInfo.TYPE_*` values, which are compile-time int constants
+  // (inlined — no android.jar runtime call), so this stays a plain JVM unit test.
+
+  private fun appWindow(id: Int, layer: Int, isActive: Boolean) =
+    CaptureWindowInfo(id, AccessibilityWindowInfo.TYPE_APPLICATION, layer, isActive)
+
+  @Test
+  fun `orderCaptureWindows keeps a single active application window`() {
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(appWindow(id = 1, layer = 0, isActive = true)),
+    )
+    assertEquals(listOf(1), result.map { it.id })
+  }
+
+  @Test
+  fun `orderCaptureWindows includes non-active application windows`() {
+    // A dialog/popover scenario: an active base app window plus higher-layer non-active app
+    // windows (Android exposes dialogs and popups as their own TYPE_APPLICATION windows). All
+    // carry capturable content the previous single-window capture dropped.
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(
+        appWindow(id = 1, layer = 0, isActive = true),
+        appWindow(id = 2, layer = 1, isActive = false),
+        appWindow(id = 3, layer = 2, isActive = false),
+      ),
+    )
+    assertEquals(listOf(1, 2, 3), result.map { it.id })
+  }
+
+  @Test
+  fun `orderCaptureWindows drops IME, system, and overlay chrome`() {
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(
+        appWindow(id = 1, layer = 1, isActive = true),
+        CaptureWindowInfo(2, AccessibilityWindowInfo.TYPE_INPUT_METHOD, layer = 5, isActive = false),
+        CaptureWindowInfo(3, AccessibilityWindowInfo.TYPE_SYSTEM, layer = 0, isActive = false),
+        CaptureWindowInfo(4, AccessibilityWindowInfo.TYPE_SYSTEM, layer = 10, isActive = false),
+        CaptureWindowInfo(
+          5, AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY, layer = 20, isActive = false,
+        ),
+      ),
+    )
+    assertEquals(listOf(1), result.map { it.id })
+  }
+
+  @Test
+  fun `orderCaptureWindows sorts by ascending layer so dialogs follow the base window`() {
+    // Input deliberately out of z-order; the higher-layer dialog must land after the base.
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(
+        appWindow(id = 2, layer = 5, isActive = false),
+        appWindow(id = 1, layer = 0, isActive = true),
+      ),
+    )
+    assertEquals(listOf(1, 2), result.map { it.id })
+  }
+
+  @Test
+  fun `orderCaptureWindows places the active window first among equal layers`() {
+    // Tie-break on the active flag so the interactive app root stays the tree's first child,
+    // matching the single-window shape callers see today.
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(
+        appWindow(id = 1, layer = 0, isActive = false),
+        appWindow(id = 2, layer = 0, isActive = true),
+      ),
+    )
+    assertEquals(listOf(2, 1), result.map { it.id })
+  }
+
+  @Test
+  fun `orderCaptureWindows returns empty when no content windows are present`() {
+    val result = TrailblazeAccessibilityService.orderCaptureWindows(
+      listOf(
+        CaptureWindowInfo(1, AccessibilityWindowInfo.TYPE_INPUT_METHOD, layer = 5, isActive = true),
+        CaptureWindowInfo(2, AccessibilityWindowInfo.TYPE_SYSTEM, layer = 0, isActive = false),
+      ),
+    )
+    assertTrue(result.isEmpty())
   }
 }

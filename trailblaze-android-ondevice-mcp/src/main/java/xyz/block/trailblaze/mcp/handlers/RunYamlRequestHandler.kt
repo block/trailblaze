@@ -111,7 +111,12 @@ class RunYamlRequestHandler(
 
   /** Terminal outcome signalled from inside the launched block to the sync awaiter. */
   private sealed interface Outcome {
-    data class Success(val lastToolSuccess: TrailblazeToolResult.Success?) : Outcome
+    data class Success(
+      val lastToolSuccess: TrailblazeToolResult.Success?,
+      /** Count of on-device `TrailblazeToolLog`s emitted for this run — mirrored onto
+       *  [RunYamlResponse.onDeviceToolLogCount] so the host can avoid double-logging (#3818). */
+      val onDeviceToolLogCount: Int,
+    ) : Outcome
 
     object Cancelled : Outcome
 
@@ -249,6 +254,9 @@ class RunYamlRequestHandler(
           // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
           // the handler already emitted it above via sessionManager.emitSessionStartLog().
           var lastToolSuccess: TrailblazeToolResult.Success? = null
+          // How many on-device tool logs this run emitted — surfaced to the host so it can skip
+          // its own catch-all tool-log emit and avoid double-logging the tool (#3818).
+          var onDeviceToolLogCount = 0
           val finalSession = when (request.agentImplementation) {
             AgentImplementation.TRAILBLAZE_RUNNER -> {
               Console.log("[RunYamlRequestHandler] Using TRAILBLAZE_RUNNER (legacy)")
@@ -258,6 +266,7 @@ class RunYamlRequestHandler(
               val callbackResult =
                 runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
               lastToolSuccess = callbackResult.lastToolSuccess
+              onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
               callbackResult.session
             }
 
@@ -283,6 +292,7 @@ class RunYamlRequestHandler(
                 val callbackResult =
                   runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
                 lastToolSuccess = callbackResult.lastToolSuccess
+                onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
                 callbackResult.session
               }
             }
@@ -301,6 +311,7 @@ class RunYamlRequestHandler(
               val callbackResult =
                 runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
               lastToolSuccess = callbackResult.lastToolSuccess
+              onDeviceToolLogCount = callbackResult.onDeviceToolLogCount
               callbackResult.session
             }
           }
@@ -341,7 +352,7 @@ class RunYamlRequestHandler(
             // Keep the session open
           }
 
-          outcome.complete(Outcome.Success(lastToolSuccess))
+          outcome.complete(Outcome.Success(lastToolSuccess, onDeviceToolLogCount))
         } catch (e: Exception) {
           // Propagate cancellation without capturing a failure screenshot —
           // cancelled sessions aren't failures. Signal the sync awaiter first so
@@ -439,7 +450,8 @@ class RunYamlRequestHandler(
             ),
           )
         }
-        val toolPayload = (resolved as? Outcome.Success)?.lastToolSuccess
+        val successOutcome = resolved as? Outcome.Success
+        val toolPayload = successOutcome?.lastToolSuccess
         return RpcResult.Success(
           RunYamlResponse(
             sessionId = session.sessionId,
@@ -449,6 +461,7 @@ class RunYamlRequestHandler(
             memorySnapshot = agentMemory.variables.toMap(),
             toolMessage = toolPayload?.message,
             toolStructuredContent = toolPayload?.structuredContent,
+            onDeviceToolLogCount = successOutcome?.onDeviceToolLogCount ?: 0,
           ),
         )
       }

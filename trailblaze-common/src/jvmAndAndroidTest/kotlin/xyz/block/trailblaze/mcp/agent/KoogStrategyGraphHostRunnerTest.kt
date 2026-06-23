@@ -13,9 +13,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -203,9 +205,19 @@ class KoogStrategyGraphHostRunnerTest {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * core (objectiveStatus, always-on), a `verification` toolset (so [TrailblazeToolRepo]'s
-   * `verifyTools` resolves), and a non-verification `typing` toolset whose tool must NOT leak into a
-   * verify step's advertised surface.
+   * A multi-driver catalog modeling the real verification-toolset layout, so verify-step scoping can
+   * be exercised PER driver. Each driver builds its verify surface from a different verification
+   * toolset, scoped by `compatibleDriverTypes` (the YAML `drivers:` list):
+   *  - `verification` — generic, Android on-device + iOS host (`assertVisible`).
+   *  - `web_verification` — Playwright drivers only (`assertEquals` standing in for `web_verifyTextVisible`).
+   *  - `revyl_verification` — Revyl drivers only (`assertNotVisibleWithText` standing in for `revyl_assert`).
+   *  - `compose_verification` — Compose only (reuses `assertVisible`; only the roll-out gate is asserted for Compose).
+   * Plus always-on `core` (objectiveStatus) and a non-verification `typing` toolset whose tool must
+   * NEVER leak into a verify step's advertised surface.
+   *
+   * All stand-in verify tools are `surfaceToLlm = true` so they actually appear in the advertised
+   * descriptors (a `surfaceToLlm = false` tool yields no descriptor, leaving an objectiveStatus-only
+   * surface that the hardened gate treats as "no real verify tool" → full surface).
    */
   private fun verifyScopingCatalog() = listOf(
     ToolSetCatalogEntry(
@@ -216,9 +228,37 @@ class KoogStrategyGraphHostRunnerTest {
     ),
     ToolSetCatalogEntry(
       id = "verification",
-      description = "assertion tools",
-      toolClasses = setOf(AssertVisibleBySelectorTrailblazeTool::class),
-      alwaysEnabled = true,
+      description = "generic assertion tools (android on-device + ios host)",
+      toolClasses = setOf(AssertVisibleTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.IOS_HOST,
+      ),
+    ),
+    ToolSetCatalogEntry(
+      id = "web_verification",
+      description = "web assertion tools (playwright)",
+      toolClasses = setOf(AssertEqualsTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+      ),
+    ),
+    ToolSetCatalogEntry(
+      id = "revyl_verification",
+      description = "revyl assertion tools",
+      toolClasses = setOf(AssertNotVisibleWithTextTrailblazeTool::class),
+      compatibleDriverTypes = setOf(
+        TrailblazeDriverType.REVYL_ANDROID,
+        TrailblazeDriverType.REVYL_IOS,
+      ),
+    ),
+    ToolSetCatalogEntry(
+      id = "compose_verification",
+      description = "compose assertion tools",
+      toolClasses = setOf(AssertVisibleTrailblazeTool::class),
+      compatibleDriverTypes = setOf(TrailblazeDriverType.COMPOSE),
     ),
     ToolSetCatalogEntry(
       id = "typing",
@@ -228,7 +268,11 @@ class KoogStrategyGraphHostRunnerTest {
     ),
   )
 
-  /** Verify-scoping only applies on the Android on-device drivers; default to accessibility. */
+  private val GENERIC_VERIFY_TOOL = AssertVisibleTrailblazeTool::class.toolName().toolName
+  private val WEB_VERIFY_TOOL = AssertEqualsTrailblazeTool::class.toolName().toolName
+  private val REVYL_VERIFY_TOOL = AssertNotVisibleWithTextTrailblazeTool::class.toolName().toolName
+  private val TYPING_TOOL = InputTextTrailblazeTool::class.toolName().toolName
+
   private fun verifyRepo(driver: TrailblazeDriverType? = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) =
     TrailblazeToolRepo.withDynamicToolSets(catalog = verifyScopingCatalog(), driverType = driver)
 
@@ -242,21 +286,68 @@ class KoogStrategyGraphHostRunnerTest {
     val names = scoped!!.map { it.name }
     // Delegates to the same scoped surface the legacy/V3 runners advertise for a verify step.
     assertThat(names.toSet()).isEqualTo(repo.getToolDescriptorsForStep(VerificationStep(verify = "x")).map { it.name }.toSet())
-    // objectiveStatus stays advertised so the forced-tool graph can still terminate the step...
+    // The driver's verify tool is advertised...
+    assertThat(names).contains(GENERIC_VERIFY_TOOL)
+    // ...and objectiveStatus, so the forced-tool graph can still terminate the step...
     assertThat(names).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
     // ...but a non-verification, state-mutating tool (here `inputText`) is NOT advertised — that's
     // the contract: a verify step can't mutate state (type/scroll/tap), only assert/observe.
-    assertThat(names).doesNotContain(InputTextTrailblazeTool::class.toolName().toolName)
+    assertThat(names).doesNotContain(TYPING_TOOL)
   }
 
   @Test
   fun `verifyScopedAdvertisedTools also scopes on the instrumentation driver`() {
-    // Both members of VERIFY_SCOPE_DRIVERS scope identically; cover the instrumentation one too.
+    // Both Android on-device members of VERIFY_SCOPE_DRIVERS scope to the generic verification toolset.
     val repo = verifyRepo(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
     val scoped = verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the title is visible")), repo)
     assertThat(scoped).isNotNull()
-    assertThat(scoped!!.map { it.name }).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
-    assertThat(scoped.map { it.name }).doesNotContain(InputTextTrailblazeTool::class.toolName().toolName)
+    assertThat(scoped!!.map { it.name }).contains(GENERIC_VERIFY_TOOL)
+    assertThat(scoped.map { it.name }).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
+    assertThat(scoped.map { it.name }).doesNotContain(TYPING_TOOL)
+  }
+
+  @Test
+  fun `verifyScopedAdvertisedTools scopes a web verify step to the web verification toolset`() {
+    // Driver-awareness: a Playwright verify step advertises web_verification's tools — NOT the
+    // generic Android verification tools (which would be wrong on web), and not the typing tool.
+    val repo = verifyRepo(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
+    val scoped = verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the heading is visible")), repo)
+    assertThat(scoped).isNotNull()
+    val names = scoped!!.map { it.name }
+    assertThat(names).contains(WEB_VERIFY_TOOL)
+    assertThat(names).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
+    assertThat(names).doesNotContain(GENERIC_VERIFY_TOOL)
+    assertThat(names).doesNotContain(REVYL_VERIFY_TOOL)
+    assertThat(names).doesNotContain(TYPING_TOOL)
+  }
+
+  @Test
+  fun `verifyScopedAdvertisedTools scopes a Revyl verify step to the revyl verification toolset`() {
+    val repo = verifyRepo(TrailblazeDriverType.REVYL_ANDROID)
+    val scoped = verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the row is gone")), repo)
+    assertThat(scoped).isNotNull()
+    val names = scoped!!.map { it.name }
+    assertThat(names).contains(REVYL_VERIFY_TOOL)
+    assertThat(names).contains(KoogStrategyGraphAgent.OBJECTIVE_STATUS_TOOL_NAME)
+    assertThat(names).doesNotContain(GENERIC_VERIFY_TOOL)
+    assertThat(names).doesNotContain(WEB_VERIFY_TOOL)
+  }
+
+  @Test
+  fun `asToolRegistry tops up the driver's class-backed verify tool, not other drivers'`() {
+    // Registry top-up (verifyTools) must use the SAME driver-scoped selection as the advertised
+    // surface, so a driver-specific class-backed verify tool is dispatchable — otherwise a verify
+    // step could advertise a tool that isn't in the registry and strand the agent under
+    // ToolChoice.Required. A Revyl repo's registry must carry revyl_verification's class tool, and
+    // NOT the generic / web verification classes (which aren't compatible with Revyl).
+    val repo = verifyRepo(TrailblazeDriverType.REVYL_ANDROID)
+    val registry = repo.asToolRegistry(
+      toolDispatcher = noopDispatcher,
+      trailblazeToolContextProvider = unusedContextProvider,
+    )
+    assertThat(registry.getToolOrNull(REVYL_VERIFY_TOOL)).isNotNull()
+    assertThat(registry.getToolOrNull(GENERIC_VERIFY_TOOL)).isNull()
+    assertThat(registry.getToolOrNull(WEB_VERIFY_TOOL)).isNull()
   }
 
   @Test
@@ -276,15 +367,23 @@ class KoogStrategyGraphHostRunnerTest {
   }
 
   @Test
-  fun `verifyScopedAdvertisedTools returns null on a non-mobile driver (preserves driver-specific verify tools)`() {
-    // Playwright/web (and Revyl/iOS) build their verify path from a driver-specific verification
-    // toolset that getToolDescriptorsForStep doesn't return; scoping there would drop those tools, so
-    // a verify step keeps the full surface. Same for an unknown (null) driver.
-    val webRepo = verifyRepo(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
-    assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the heading is visible")), webRepo)).isNull()
-
+  fun `verifyScopedAdvertisedTools returns null on an unknown (null) driver`() {
+    // No driver ⇒ not in VERIFY_SCOPE_DRIVERS ⇒ keep the full surface.
     val unknownDriverRepo = verifyRepo(driver = null)
     assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "x")), unknownDriverRepo)).isNull()
+  }
+
+  @Test
+  fun `verifyScopedAdvertisedTools falls back to the full surface when no verification toolset resolves`() {
+    // A driver in VERIFY_SCOPE_DRIVERS whose verify toolset isn't in the catalog: getToolDescriptorsForStep
+    // returns objectiveStatus only. Advertising that under ToolChoice.Required would strand the agent
+    // (can neither assert nor observe), so the hardened gate falls back to the full surface (null).
+    val coreOnlyCatalog = verifyScopingCatalog().filterNot { it.id.endsWith("verification") }
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = coreOnlyCatalog,
+      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+    assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "x")), repo)).isNull()
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -369,5 +468,15 @@ class KoogStrategyGraphHostRunnerTest {
     val section = renderRememberedValuesSection(mapOf("a\n## Evil" to "v"), emptySet())
     assertThat(section).doesNotContain("a\n## Evil") // key newline escaped, so no fake header
     assertThat(section).contains("a\\n## Evil")
+  }
+
+  @Test
+  fun `verifyScopedAdvertisedTools returns null for the Compose driver (not in the roll-out set yet)`() {
+    // getToolDescriptorsForStep IS now driver-aware for Compose (it returns compose_verification's
+    // tools), but Compose is deliberately NOT in VERIFY_SCOPE_DRIVERS yet — verify scoping is rolled
+    // out per driver as it's validated on the matching pipeline, and Compose hasn't been. So a Compose
+    // verify step keeps the full surface. Pin that until Compose verify scoping is validated.
+    val composeRepo = verifyRepo(TrailblazeDriverType.COMPOSE)
+    assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "the title is visible")), composeRepo)).isNull()
   }
 }

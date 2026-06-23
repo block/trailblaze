@@ -4,11 +4,14 @@ import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -40,6 +43,16 @@ import java.util.concurrent.TimeUnit
  */
 class DaemonScriptedToolBundler(
   private val esbuildBinary: File,
+  /**
+   * The slim `@trailblaze/scripting` in-process entry (`sdks/typescript/src/in-process.ts`) esbuild
+   * aliases the package to. The CALLER resolves this — INDEPENDENT of where [esbuildBinary] lives —
+   * so the slim profile applies even when esbuild is resolved from PATH (Homebrew, `npm -g`) rather
+   * than the SDK's own `node_modules` (see [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry]).
+   * When null, [inProcessSdkEntry] falls back to the legacy walk-up from [esbuildBinary] (which only
+   * works when esbuild IS the SDK's bundled binary), then to the full SDK. Resolution being the
+   * caller's responsibility mirrors how [esbuildBinary] itself is wired.
+   */
+  private val inProcessSdkEntryOverride: File? = null,
   private val cacheDir: File = File(
     TrailblazeDesktopUtil.getDefaultAppDataDirectory(),
     TrailblazeDesktopUtil.SCRIPTED_BUNDLES_CACHE_SUBDIR,
@@ -370,19 +383,38 @@ class DaemonScriptedToolBundler(
         "letter or _). Update the per-tool YAML descriptor's `name:` field to use a supported " +
         "character set."
     }
-    // SHA over (source bytes + tool name) so two tools that point at the same .ts but register
-    // under different names get distinct cache entries — the synthesized wrapper differs in
-    // the registry key and the named-import even if the user's code bytes are identical.
+    // esbuild's cwd is the wrapper's parent (= the script's dir), so metafile input paths — and the
+    // dep manifest derived from them — are expressed relative to here. Used to resolve those paths
+    // back to files when fingerprinting the dependency closure. A real trailmap tool always resolves
+    // to an absolute file with a parent; fail loudly on the degenerate parent-less case rather than
+    // silently resolving relative deps against the JVM cwd.
+    val scriptDir = scriptPath.parentFile
+      ?: throw IOException("Scripted-tool source has no parent directory: ${scriptPath.absolutePath}")
+
+    // Two-level, content-addressed cache key (the ccache "direct mode" shape):
+    //  - cheapKey identifies the ENTRY: SHA(source bytes + tool name + bundler-profile fingerprint).
+    //    Source bytes so two tools pointing at the same .ts under different names get distinct
+    //    entries; the profile fingerprint so a bundling-config change (slim alias, flag set, SDK
+    //    entry content) invalidates — see [bundlerProfileFingerprint].
+    //  - the per-entry dep MANIFEST ([depManifestFile]) records, from the last build, the set of
+    //    files esbuild actually bundled (discovered via `--metafile`, NOT a hand-rolled resolver).
+    //  - fullKey = SHA(cheapKey + fingerprint of those dep files' CURRENT bytes). Folding the dep
+    //    content INTO the key keeps the cache content-addressed (a given fullKey always maps to
+    //    identical bytes — preserving the concurrent-write safety the atomic rename relies on) AND
+    //    busts when a shared imported module changes even though the importing tool's own bytes
+    //    didn't. A self-contained tool has an empty dep set → fullKey is a pure function of cheapKey.
     val sourceBytes = scriptPath.readBytes()
-    // Mix the bundler-profile fingerprint into the key so a bundling-config change (the slim alias,
-    // the esbuild flag set, the in-process SDK entry's content) invalidates stale cached bundles —
-    // see [bundlerProfileFingerprint]. SHA over (source bytes + tool name + profile fingerprint).
-    val sha = sha256Hex(
-      sourceBytes + toolName.toByteArray(Charsets.UTF_8) + bundlerProfileFingerprint,
-    )
-    val outFile = File(cacheDir, "$sha.bundle.js")
-    if (outFile.isFile && outFile.length() > 0L) {
-      return outFile
+    val cheapKey = sha256Hex(sourceBytes + toolName.toByteArray(Charsets.UTF_8) + bundlerProfileFingerprint)
+    val depManifestFile = File(cacheDir, "$cheapKey.deps")
+    // Cache hit: if we know this entry's dep set from a prior build, re-derive the fullKey from those
+    // files' current bytes and return the artifact if it's present. A changed dep → different
+    // fullKey → miss → rebuild below (which rewrites the manifest). The manifest can only go stale
+    // when a dep's content changes, which itself changes the fullKey → miss → self-heals.
+    readDepManifest(depManifestFile)?.let { depPaths ->
+      val cached = File(cacheDir, "${fullCacheKey(cheapKey, depPaths, scriptDir)}.bundle.js")
+      if (cached.isFile && cached.length() > 0L) {
+        return cached
+      }
     }
     // Sweep stale wrapper files left by previous abrupt JVM exits (SIGKILL, OOM, hard daemon
     // crash) — the `finally { wrapperFile.delete() }` below only runs on normal returns and
@@ -491,48 +523,47 @@ class DaemonScriptedToolBundler(
     // from under the other process's esbuild invocation, surfacing as intermittent
     // "could not resolve" or partial-read failures. Co-located with the user's script so
     // esbuild's relative-import resolution finds the named export.
-    val wrapperFile = File.createTempFile("$WRAPPER_FILENAME_PREFIX$sha-", ".ts", scriptPath.parentFile)
+    val wrapperFile = File.createTempFile("$WRAPPER_FILENAME_PREFIX$cheapKey-", ".ts", scriptPath.parentFile)
     wrapperFile.writeText(synthesizeWrapper(scriptPath, toolName))
-    val tmpFile = File.createTempFile("$sha.", ".bundle.js.tmp", cacheDir)
+    val tmpFile = File.createTempFile("$cheapKey.", ".bundle.js.tmp", cacheDir)
+    // esbuild writes the exact set of files it bundled here (`--metafile`); we read it to fingerprint
+    // the dependency closure (and persist it as the manifest) instead of re-deriving imports ourselves.
+    val metafileFile = File.createTempFile("$cheapKey.", ".meta.json", cacheDir)
     try {
-      runEsbuild(entry = wrapperFile, output = tmpFile, userSource = scriptPath)
+      runEsbuild(entry = wrapperFile, output = tmpFile, metafileOut = metafileFile, userSource = scriptPath)
       if (!tmpFile.isFile || tmpFile.length() == 0L) {
         throw IOException(
           "esbuild reported success but ${tmpFile.absolutePath} is missing or empty " +
             "(source: ${scriptPath.absolutePath}).",
         )
       }
-      // ATOMIC_MOVE may fall back to a copy on filesystems that don't support rename
-      // semantics (rare on the OSes we run); REPLACE_EXISTING covers the concurrent-
-      // write race where another daemon already produced the same-SHA file first.
-      try {
-        java.nio.file.Files.move(
-          tmpFile.toPath(),
-          outFile.toPath(),
-          java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-        )
-      } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-        java.nio.file.Files.move(
-          tmpFile.toPath(),
-          outFile.toPath(),
-          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-        )
-      }
+      // Discover the dependency closure from esbuild's authoritative metafile, then content-address
+      // the artifact by (cheapKey + those files' current bytes) so a later edit to any of them busts
+      // the cache. The bundle is renamed into place FIRST, then the manifest is written — a crash in
+      // between leaves the bundle un-findable (next call sees no manifest → rebuilds) rather than
+      // serving a bundle whose dependency set we can no longer validate.
+      val depPaths = parseMetafileDepPaths(metafileFile)
+      // Content-addressed by fullKey: as dependencies change, new fullKeys are written and prior
+      // <fullKey>.bundle.js entries are orphaned. The cache has no GC (true of this content-addressed
+      // cache before this change too) — acceptable for a dev-time cache; revisit if cacheDir growth
+      // ever becomes a problem.
+      val outFile = File(cacheDir, "${fullCacheKey(cheapKey, depPaths, scriptDir)}.bundle.js")
+      atomicMove(tmpFile, outFile)
+      writeDepManifest(depManifestFile, depPaths)
+      return outFile
     } catch (e: Throwable) {
-      // Clean up the tmp file on any failure path so the cache dir doesn't accumulate
+      // Clean up the tmp bundle on any failure path so the cache dir doesn't accumulate
       // half-built bundles. Best-effort — if delete fails the file is still tmp-suffixed
       // and won't be picked up as a cache hit.
       tmpFile.delete()
       throw e
     } finally {
-      // Always delete the synthesized wrapper file. We co-locate it with the user's script
-      // (so esbuild's relative-import resolution finds the named export naturally) and that
-      // means a leak would clutter the user's source tree — best-effort cleanup keeps the
-      // tree tidy regardless of whether bundling succeeded.
+      // Always delete the synthesized wrapper + throwaway metafile. The wrapper is co-located with
+      // the user's script (so esbuild's relative-import resolution finds the named export), so a leak
+      // would clutter the user's source tree — best-effort cleanup keeps the tree tidy.
       wrapperFile.delete()
+      metafileFile.delete()
     }
-    return outFile
   }
 
   /**
@@ -637,32 +668,64 @@ class DaemonScriptedToolBundler(
    * never reach this bundler; they go through `InlineScriptToolServerSynthesizer` against the full
    * SDK.
    *
-   * Located by walking up from [esbuildBinary] to the `sdks/typescript` package directory (esbuild
-   * lives somewhere under its `node_modules`), then the slim entry is `src/in-process.ts`. Walk-up
-   * by directory name — rather than a fixed `../../` from the binary — is robust to the binary path
-   * being the `.bin/esbuild` symlink, the resolved real binary (`node_modules/esbuild/bin/esbuild`),
-   * or a platform package (`node_modules/@esbuild/<plat>/bin/esbuild`); all of those sit under
-   * `.../sdks/typescript/node_modules/...`.
+   * Resolution order:
+   *  1. [inProcessSdkEntryOverride] — what the caller resolved INDEPENDENT of the esbuild binary
+   *     location (the correct, robust path; production always supplies this).
+   *  2. Legacy fallback: walk up from [esbuildBinary] to the `sdks/typescript` package dir and take
+   *     `src/in-process.ts`. This ONLY works when esbuild is the SDK's bundled binary — when esbuild
+   *     came from PATH (Homebrew, `npm -g`) the walk-up lands in an unrelated tree and finds nothing.
+   *     That gap is exactly why the override exists; this remains for callers (e.g. tests) whose
+   *     esbuild IS in-tree and that don't bother resolving the entry separately.
    *
-   * Null if it can't be located (e.g. esbuild came from PATH, not the SDK's node_modules); the
-   * alias is then omitted and `@trailblaze/scripting` resolves from node_modules (the full SDK)
-   * exactly as before — a heavier bundle, but no failure. The fallback is logged so it isn't silent.
+   * Null if neither yields a file; the alias is then omitted and `@trailblaze/scripting` resolves
+   * from node_modules (the full ~1.2 MB SDK) — a heavier bundle, but no failure. Logged so it isn't
+   * silent.
    */
   private val inProcessSdkEntry: File? by lazy {
+    // A caller-supplied override that ISN'T a readable file (resolved-then-deleted, or a misconfigured
+    // TRAILBLAZE_SDK_DIR) is dropped — but say so explicitly, else the not-found message below ("no
+    // usable caller-supplied entry") understates that one was supplied and reads as a no-op during triage.
+    inProcessSdkEntryOverride?.takeUnless { it.isFile }?.let {
+      Console.log(
+        "[DaemonScriptedToolBundler] caller-supplied slim in-process SDK entry ${it.absolutePath} is not " +
+          "a readable file — ignoring it and falling back to the esbuild walk-up.",
+      )
+    }
+    val resolved = inProcessSdkEntryOverride?.takeIf { it.isFile } ?: legacyInProcessSdkEntryFromEsbuildWalkup()
+    if (resolved != null) {
+      // Positive breadcrumb so an operator can confirm the slim profile took effect (this fix's whole
+      // point) without inspecting bundle sizes. Suppressed in CLI quiet mode like the rest.
+      Console.log(
+        "[DaemonScriptedToolBundler] slim in-process SDK entry resolved at ${resolved.absolutePath}; " +
+          "on-device bundles use the slim @trailblaze/scripting profile (no full MCP SDK).",
+      )
+    } else {
+      Console.log(
+        "[DaemonScriptedToolBundler] slim in-process SDK entry (sdks/typescript/src/in-process.ts) not " +
+          "found (no usable caller-supplied entry, and the walk-up from esbuild at ${esbuildBinary.absolutePath} " +
+          "found no SDK tree). `@trailblaze/scripting` will resolve from node_modules (full SDK) — bundles " +
+          "will be heavier. Expected only when the SDK source isn't reachable (e.g. an installed CLI).",
+      )
+    }
+    resolved
+  }
+
+  /**
+   * Legacy fallback for [inProcessSdkEntry]: walk up from the esbuild binary to the `sdks/typescript`
+   * package dir and take `src/in-process.ts`. Only finds the entry when esbuild IS the SDK's bundled
+   * binary — when esbuild came from PATH (Homebrew, `npm -g`) it lands in an unrelated tree and finds
+   * nothing. That gap is why [inProcessSdkEntryOverride] exists; this remains for callers (e.g. tests)
+   * whose esbuild is in-tree and that don't resolve the entry separately.
+   */
+  private fun legacyInProcessSdkEntryFromEsbuildWalkup(): File? {
     var dir: File? = esbuildBinary.parentFile
     while (dir != null) {
       if (dir.name == "typescript" && dir.parentFile?.name == "sdks") {
-        return@lazy File(dir, "src/in-process.ts").takeIf { it.isFile }
+        return File(dir, "src/in-process.ts").takeIf { it.isFile }
       }
       dir = dir.parentFile
     }
-    Console.log(
-      "[DaemonScriptedToolBundler] slim in-process SDK entry (sdks/typescript/src/in-process.ts) not " +
-        "found by walking up from esbuild at ${esbuildBinary.absolutePath}. `@trailblaze/scripting` " +
-        "will resolve from node_modules (full SDK) — bundles will be heavier. Expected only when " +
-        "esbuild isn't the SDK's bundled binary.",
-    )
-    null
+    return null
   }
 
   /**
@@ -689,7 +752,141 @@ class DaemonScriptedToolBundler(
     sha256Hex(versionToken + sdkBytes + templateBytes).toByteArray(Charsets.UTF_8)
   }
 
-  private fun runEsbuild(entry: File, output: File, userSource: File) {
+  /**
+   * The content-addressed cache key: `SHA(cheapKey + dependency-content fingerprint)`. Folding the
+   * dependency closure's CURRENT content into the key keeps the cache content-addressed (a given key
+   * always maps to identical bytes — preserving the concurrent-write safety [atomicMove] relies on)
+   * while busting whenever a shared imported module changes even though the importing tool's own
+   * bytes did not. A self-contained tool has an empty [depPaths] → an empty fingerprint → the fullKey
+   * is a pure function of the cheapKey.
+   */
+  private fun fullCacheKey(cheapKey: String, depPaths: List<String>, scriptDir: File): String =
+    sha256Hex(cheapKey.toByteArray(Charsets.UTF_8) + depFingerprint(depPaths, scriptDir))
+
+  /**
+   * SHA-256 (as ASCII-hex bytes) over the CURRENT bytes of [depPaths], each prefixed by its path and
+   * taken in sorted order for determinism; an EMPTY array when [depPaths] is empty. [depPaths] are
+   * the manifest entries esbuild recorded, relative to [scriptDir] (esbuild's cwd); an absolute entry
+   * is used as-is. A path that no longer resolves contributes empty content, so deleting a dependency
+   * still changes the key.
+   */
+  private fun depFingerprint(depPaths: List<String>, scriptDir: File): ByteArray {
+    if (depPaths.isEmpty()) return ByteArray(0)
+    val acc = ByteArrayOutputStream()
+    for (path in depPaths.sorted()) {
+      // Resolve a relative metafile path against the script dir (esbuild's cwd); absolute paths are
+      // used as-is. The path is always folded into the hash; the file's content is added when it
+      // resolves to a readable file (a deleted dep → empty content → still changes the key).
+      val file = File(path).let { if (it.isAbsolute) it else File(scriptDir, path) }
+      acc.write(path.toByteArray(Charsets.UTF_8))
+      acc.write(0)
+      acc.write(
+        try {
+          file.readBytes()
+        } catch (_: IOException) {
+          ByteArray(0)
+        },
+      )
+      acc.write(0)
+    }
+    return sha256Hex(acc.toByteArray()).toByteArray(Charsets.UTF_8)
+  }
+
+  /**
+   * Reads the dependency manifest written by the previous build of this entry — the files esbuild
+   * actually bundled, one path per line (see [writeDepManifest]) — or null when no manifest exists
+   * yet (first build) or it can't be read. Paths are relative to the script dir (esbuild's cwd),
+   * exactly as the metafile expressed them.
+   */
+  private fun readDepManifest(manifestFile: File): List<String>? {
+    if (!manifestFile.isFile) return null
+    return try {
+      manifestFile.readLines().map { it.trim() }.filter { it.isNotEmpty() }
+    } catch (_: IOException) {
+      null
+    }
+  }
+
+  /**
+   * Atomically writes the dependency manifest (sorted, one path per line) for an entry. tmp-then-
+   * rename so a crash mid-write can't leave a half-written manifest a later cache check would misread.
+   */
+  private fun writeDepManifest(manifestFile: File, depPaths: List<String>) {
+    val tmp = File.createTempFile("${manifestFile.name}.", ".tmp", manifestFile.parentFile)
+    try {
+      tmp.writeText(depPaths.sorted().joinToString("\n"))
+      atomicMove(tmp, manifestFile)
+    } finally {
+      tmp.delete()
+    }
+  }
+
+  /**
+   * Extracts the set of files esbuild actually bundled from its `--metafile` JSON: every key under
+   * `inputs`, EXCLUDING the synthesized wrapper entry (an ephemeral temp file — see
+   * [WRAPPER_FILENAME_PREFIX]) and anything under `node_modules` (third-party deps are lockfile-
+   * pinned and would bloat the per-build hashing; the bundler-profile fingerprint already covers
+   * SDK/toolchain changes). Paths are returned verbatim from the metafile — relative to esbuild's
+   * cwd (the script dir), portable across checkouts of the same repo layout. A malformed/unreadable
+   * metafile yields an empty list (degrading to entry-only keying) rather than throwing.
+   *
+   * Using esbuild's own resolved input set is what makes the cache key track EXACTLY the files the
+   * real bundle depends on — relative imports transitively, plus tsconfig `paths` aliases,
+   * `package.json` `exports`, the `.js`→`.ts` rewrite, asset loaders, and the SDK's own transitive
+   * sources — with no hand-rolled resolver to drift from esbuild. ([ScriptedToolImportAnalyzer] walks
+   * the same metafile shape for a different purpose: host-only dependency detection.)
+   *
+   * `internal` for direct unit testing of the filtering, without driving a full esbuild bundle.
+   */
+  internal fun parseMetafileDepPaths(metafileFile: File): List<String> {
+    val inputKeys = try {
+      JSON_LENIENT.parseToJsonElement(metafileFile.readText())
+        .jsonObject["inputs"]
+        ?.jsonObject
+        ?.keys
+        ?: emptySet()
+    } catch (_: Throwable) {
+      Console.log(
+        "[DaemonScriptedToolBundler] could not parse esbuild metafile ${metafileFile.absolutePath}; " +
+          "the bundle cache will key on the tool source only until the next successful build",
+      )
+      return emptyList()
+    }
+    return inputKeys
+      .filter { path ->
+        // The wrapper temp file is always co-located with the script, so a basename match suffices;
+        // node_modules can sit at any depth, so match it as a path SEGMENT (not a substring, which
+        // would also drop a legitimate directory merely containing "node_modules" in its name).
+        !path.substringAfterLast('/').startsWith(WRAPPER_FILENAME_PREFIX) &&
+          !path.split('/').contains("node_modules")
+      }
+      .sorted()
+  }
+
+  /**
+   * Atomic rename of [src] onto [dst]. ATOMIC_MOVE may fall back to a copy on filesystems that don't
+   * support rename semantics (rare on the OSes we run); REPLACE_EXISTING covers the concurrent-write
+   * race where another daemon produced the same content-addressed file first (identical bytes, so the
+   * overwrite is benign).
+   */
+  private fun atomicMove(src: File, dst: File) {
+    try {
+      java.nio.file.Files.move(
+        src.toPath(),
+        dst.toPath(),
+        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+      )
+    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+      java.nio.file.Files.move(
+        src.toPath(),
+        dst.toPath(),
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+      )
+    }
+  }
+
+  private fun runEsbuild(entry: File, output: File, metafileOut: File, userSource: File) {
     // Followup #2749: unify esbuild flags with BundleAuthorToolsTask.
     // The flag set below mirrors `BundleAuthorToolsTask:267-278`. Risk #4 in the
     // 2749 plan documents that duplicating these constants is acceptable for A1;
@@ -703,6 +900,11 @@ class DaemonScriptedToolBundler(
       add("--format=iife")
       add("--target=es2020")
       add("--main-fields=module,main")
+      // Emit the metafile: esbuild records the exact set of input files it resolved + bundled, which
+      // [parseMetafileDepPaths] reads to fingerprint the dependency closure for the cache key. This is
+      // the authoritative dependency list (esbuild's own resolver), so the cache tracks precisely the
+      // files the real bundle depends on — no hand-rolled import resolution to drift from esbuild.
+      add("--metafile=${metafileOut.absolutePath}")
       add("--external:node:process")
       // Slim in-process profile: resolve `@trailblaze/scripting` to the typed-only slim entry so a
       // tool importing it doesn't drag the full ~1.2 MB MCP SDK into its on-device bundle. Omitted
@@ -810,6 +1012,9 @@ class DaemonScriptedToolBundler(
 
   companion object {
     private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
+    /** Lenient JSON reader for esbuild's `--metafile` output — see [parseMetafileDepPaths]. */
+    private val JSON_LENIENT = Json { ignoreUnknownKeys = true }
 
     /**
      * Version token folded into the per-tool cache key via [bundlerProfileFingerprint]. Bump this

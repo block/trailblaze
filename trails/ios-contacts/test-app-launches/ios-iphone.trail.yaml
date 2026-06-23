@@ -14,3 +14,8 @@
           nodeSelector:
             iosMaestro:
               textRegex: Contacts
+      - assertVisibleBySelector:
+          reason: Also assert the list-only "Add" button is visible to confirm this is the contacts list root specifically (not some other screen that happens to show the text "Contacts" — e.g. a detail screen's back button also carries the label "Contacts"). The list root shows "Add"; a contact detail screen shows "Edit" there instead.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add

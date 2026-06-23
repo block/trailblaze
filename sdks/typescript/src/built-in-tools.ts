@@ -363,6 +363,61 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Low-level framework primitive: write raw bytes (supplied as a base64 string) to an absolute
+     * path on the Android device, creating parent dirs and overwriting any existing file. Use it
+     * to seed any file — text or binary — that the device shell can't move reliably (a file body
+     * hangs `adb shell` on the host, and a base64 argv hits ARG_MAX on-device; this uses
+     * `adb push` / a direct file write instead).
+     *
+     * Filesystem only: it does NOT register MediaStore or set a MIME type (base64 carries no MIME,
+     * and the filesystem has no MIME concept). To write UTF-8 text, base64-encode the string and
+     * pass it here. If a consumer must find the file via a MediaStore query, register it separately
+     * with `android_adbShell` (`cmd media_scanner scan <path>` / `content insert --bind mime_type:…`).
+     * That layering — and keeping perms/owner/MIME on `adbShell` rather than as params here — is the
+     * framework-provides-primitives decision (devlog 2026-06-22). Android-only.
+     *
+     * Source: `AndroidWriteBytesToFileTrailblazeTool.kt` (`android_writeBytesToFile`).
+     */
+    android_writeBytesToFile: {
+      args: {
+        /** Absolute destination path (must start with `/`), e.g. `/storage/emulated/0/Download/setup.json`. */
+        devicePath: string;
+        /** File content as a base64-encoded byte string; decoded to raw bytes before writing. */
+        base64Content: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Run a process on the **host** JVM via argv (no shell). Host-only (`requiresHost = true`) — for
+     * **tool authors**, not the LLM (`surfaceToLlm = false`). The escape hatch for composing host
+     * CLIs from a scripted tool: iOS `xcrun simctl …` (pair with `ctx.device.instanceId` for the
+     * simulator UDID), `adb` host subcommands, build steps, etc.
+     *
+     * Each `argv` element is passed verbatim to `ProcessBuilder` — no shell metacharacter
+     * interpretation, so an interpolated value can't be re-read as `;`/`&&`/quotes. Opt into a shell
+     * explicitly with `argv: ["sh","-c","<cmd>"]`. Returns combined stdout/stderr; a non-zero exit
+     * (≠ `expectedExitCode`) surfaces as an error.
+     *
+     * Source: `ExecTrailblazeTool.kt` (`exec`).
+     */
+    exec: {
+      args: {
+        /** Process argv. Element 0 is the executable; the rest are literal arguments (no shell parsing). */
+        argv: string[];
+        /** Working directory for the subprocess. Defaults to the daemon's current working directory. */
+        workingDir?: string;
+        /** Exit code treated as success. Default 0. */
+        expectedExitCode?: number;
+        /** Optional per-line regex; only matching lines are kept in the success output (ignored on failure). */
+        outputFilterRegex?: string;
+        /** Wall-clock timeout in seconds before the subprocess is killed. Default: wait indefinitely. */
+        timeoutSeconds?: number;
+      };
+      result: string;
+    };
+
+    /**
      * Assert an element with the given accessibility text is visible. DEPRECATED upstream
      * in favor of the unified `assertVisible` selector path — kept here because the
      * recorded-trail format still emits this name.

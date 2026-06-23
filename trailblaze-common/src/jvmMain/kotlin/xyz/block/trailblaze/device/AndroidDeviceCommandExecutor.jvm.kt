@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.device
 
 import java.io.File
+import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
@@ -120,6 +121,28 @@ actual class AndroidDeviceCommandExecutor actual constructor(
         error("Failed to push $fileName to $remotePath")
       }
       Console.log("Wrote ${content.size} bytes to $remotePath via adb push")
+    } finally {
+      tempFile.delete()
+    }
+  }
+
+  actual fun writeFileToDevice(devicePath: String, content: ByteArray) {
+    // Stage the bytes in a host temp file and `adb push` them (sync protocol) — never through
+    // the shell, so we avoid the stdin/EXIT-packet hang that piping a body to `adb shell` hits.
+    val tempFile = File.createTempFile("trailblaze-write-", ".tmp")
+    try {
+      tempFile.writeBytes(content)
+      // `adb push` does not reliably create missing parent dirs; create them first. The path is
+      // single-quote-escaped (execAdbShellCommand joins args with spaces and hands them to the
+      // device shell unescaped) so a path with spaces/metacharacters can't split or inject.
+      File(devicePath).parent?.let { parent ->
+        shellCommand("mkdir", "-p", parent.shellEscape())
+      }
+      val pushed = AndroidHostAdbUtils.pushFile(deviceId, tempFile, devicePath)
+      if (!pushed) {
+        error("Failed to push ${content.size} bytes to $devicePath")
+      }
+      Console.log("Wrote ${content.size} bytes to $devicePath via adb push")
     } finally {
       tempFile.delete()
     }

@@ -359,6 +359,23 @@ class AnalyzerScriptedToolEnrichment(
           )
         }
         val def = defs.single()
+        // A meta-only descriptor (no YAML name/description/inputSchema/_meta) delegates EVERYTHING
+        // to the `.ts`. If the author used the (spec, handler) overload with a non-inline spec
+        // reference, the analyzer dropped the whole spec — there's no YAML to supply
+        // supportedPlatforms / surfaceToLlm, so the tool would silently ship un-gated. Fail loud
+        // (the general case is only a warning; here the spec is the sole metadata source). This is
+        // the safety net for agents vibe-authoring descriptor-less `.ts` tools.
+        if (def.uncapturedSpec) {
+          return ScriptedToolEnrichment.EnrichmentResult.Failed(
+            relativePath = deferred.relativePath,
+            reason = "${scriptFile.name}: trailblaze.tool(spec, handler) was called with a " +
+              "non-inline spec reference (e.g. `const SPEC = {...}` or a factory call), so its " +
+              "supportedPlatforms / surfaceToLlm / requiresHost were not captured. A descriptor-less " +
+              "tool has no YAML to supply them, so this would advertise an un-gated tool. Inline the " +
+              "spec object literal at the call site: " +
+              "`trailblaze.tool<I>({ supportedPlatforms: [\"ios\"] }, async (args, ctx) => { ... })`.",
+          )
+        }
         val analyzerSurfaceToLlm = (def.spec?.get("surfaceToLlm") as? JsonPrimitive)?.booleanOrNull ?: true
         val analyzerIsRecordable = (def.spec?.get("isRecordable") as? JsonPrimitive)?.booleanOrNull ?: true
         val effectiveSurfaceToLlm = descriptor.surfaceToLlm && analyzerSurfaceToLlm
@@ -384,7 +401,10 @@ class AnalyzerScriptedToolEnrichment(
             isRecordable = effectiveIsRecordable,
             runtime = descriptor.runtime,
             meta = merged,
-            inputSchema = def.inputSchemaObject,
+            // Inline any `$ref` (named enum / Record / nested type) the analyzer emitted so the
+            // downstream subprocess synthesizer + in-process descriptor see a self-contained
+            // schema — see [ScriptedToolSchemaRefFlattener].
+            inputSchema = ScriptedToolSchemaRefFlattener.flatten(def.inputSchemaObject),
           ),
         )
       }
@@ -437,12 +457,28 @@ class AnalyzerScriptedToolEnrichment(
     val inputSchema = if (entryInputSchema.isNotEmpty()) {
       buildInputSchemaObject(entryInputSchema)
     } else {
-      def.inputSchemaObject
+      // Inline any `$ref` (named enum / Record / nested type) the analyzer emitted so the
+      // downstream subprocess synthesizer + in-process descriptor see a self-contained schema —
+      // see [ScriptedToolSchemaRefFlattener]. The YAML-authored branch above never has refs.
+      ScriptedToolSchemaRefFlattener.flatten(def.inputSchemaObject)
     }
     // Merge meta with per-entry overrides applied last (entry wins over file-wide).
     val fileLevelSupportedPlatforms = descriptor.supportedPlatforms
     val effectiveSupportedPlatforms = entrySupportedPlatforms?.takeIf { it.isNotEmpty() }
       ?: fileLevelSupportedPlatforms
+    // Targeted footgun warning (noise-free): a partial descriptor whose `.ts` passed a non-inline
+    // spec reference (so the spec was dropped) AND that supplies no supportedPlatforms gate from the
+    // YAML either → the tool advertises on ALL platforms. YAML-gated tools (the common existing
+    // `const SPEC` + descriptor pattern) supply platforms here, so they stay silent.
+    if (def.uncapturedSpec && effectiveSupportedPlatforms.isNullOrEmpty()) {
+      Console.log(
+        "[AnalyzerScriptedToolEnrichment] tool '$entryName' (${scriptFile.name}): " +
+          "trailblaze.tool(spec, handler) uses a non-inline spec reference, so its spec was dropped, " +
+          "and no supportedPlatforms gate is supplied by the spec OR the descriptor — the tool will " +
+          "be advertised on ALL platforms. If unintended, inline the spec object literal at the " +
+          "`trailblaze.tool(...)` call site, or add supportedPlatforms to the descriptor.",
+      )
+    }
     val effectiveRequiresHost = entryRequiresHost ?: descriptor.requiresHost
     val analyzerRequiresHost = (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true
     // surfaceToLlm / isRecordable default `true`; `false` is the opt-out. Combine descriptor-side

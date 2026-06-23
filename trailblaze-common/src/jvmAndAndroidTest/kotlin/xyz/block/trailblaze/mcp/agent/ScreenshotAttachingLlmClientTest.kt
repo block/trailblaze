@@ -31,6 +31,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 /**
  * Unit tests for [ScreenshotAttachingLlmClient] — the decorator that gives the Koog strategy-graph
@@ -146,10 +147,8 @@ class ScreenshotAttachingLlmClientTest {
   // ScreenshotAttachingLlmClient — gating + fallback (what actually reaches the delegate)
   // ---------------------------------------------------------------------------------------------
 
-  // Build the test models off the real Koog capability id (`LLMCapability.Vision.Image.id` == "image"),
-  // NOT the literal "vision" string the hardcoded TrailblazeLlmModels constants happen to use — that
-  // string matches no Koog capability, so it would (correctly) read as non-vision. Using the canonical
-  // id keeps this test asserting the decorator's gate, not a quirk of a particular model constant.
+  // Build the test models with explicit capability ids (`LLMCapability.Vision.Image.id` == "image")
+  // so the test asserts the decorator's vision gate directly, independent of any model constant.
   private val visionModel = TrailblazeLlmModels.GPT_4O_MINI.copy(
     capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
@@ -290,5 +289,57 @@ class ScreenshotAttachingLlmClientTest {
     runBlocking { client.execute(input, visionModel.toKoogLlmModel(), stubTools) }
 
     assertThat(capturing.lastPrompt).isSameInstanceAs(input)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // onRequestEnd — the per-request boundary hook (wired to SharedScreenStateCapture.clear).
+  // ---------------------------------------------------------------------------------------------
+
+  /** Delegate that always throws, to prove onRequestEnd still fires on the exception path. */
+  private class ThrowingLlmClient : LLMClient() {
+    override fun llmProvider(): LLMProvider = TrailblazeLlmProvider.NONE_KOOG_LLM_PROVIDER
+    override suspend fun execute(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Message.Assistant =
+      throw RuntimeException("delegate boom")
+    override suspend fun executeMultipleChoices(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): LLMChoice =
+      throw NotImplementedError()
+    override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> =
+      throw NotImplementedError()
+    override suspend fun moderate(prompt: Prompt, model: LLModel): ModerationResult = throw NotImplementedError()
+    override fun close() = Unit
+  }
+
+  @Test
+  fun `onRequestEnd fires once after a successful execute`() {
+    var ends = 0
+    val client = ScreenshotAttachingLlmClient(
+      delegate = CapturingLlmClient(),
+      screenStateProvider = { FakeScreenState(screenshotBytes) },
+      trailblazeLlmModel = visionModel,
+      enabled = true,
+      onRequestEnd = { ends++ },
+    )
+
+    runBlocking { client.execute(textPrompt(), visionModel.toKoogLlmModel(), stubTools) }
+
+    assertThat(ends).isEqualTo(1)
+  }
+
+  @Test
+  fun `onRequestEnd fires even when the delegate throws (finally guarantee)`() {
+    // The whole point of clearing in a finally: the shared capture is released per request even on
+    // an LLM error, so a failed request can't leak its screenshot into the next one.
+    var ends = 0
+    val client = ScreenshotAttachingLlmClient(
+      delegate = ThrowingLlmClient(),
+      screenStateProvider = { FakeScreenState(screenshotBytes) },
+      trailblazeLlmModel = visionModel,
+      enabled = true,
+      onRequestEnd = { ends++ },
+    )
+
+    assertFailsWith<RuntimeException> {
+      runBlocking { client.execute(textPrompt(), visionModel.toKoogLlmModel(), stubTools) }
+    }
+    assertThat(ends).isEqualTo(1)
   }
 }

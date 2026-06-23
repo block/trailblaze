@@ -70,6 +70,7 @@ data class DeviceLogSource private constructor(
   private fun parseEpochMs(line: String): Long? = when (platform) {
     TrailblazeDevicePlatform.ANDROID -> AndroidDeviceLogParser.parseEpochMs(line)
     TrailblazeDevicePlatform.IOS -> IosDeviceLogParser.parseEpochMs(line)
+    TrailblazeDevicePlatform.WEB -> WebDeviceLogParser.parseEpochMs(line)
     // Auto-detect: Android format is unambiguous, try it first; fall back to iOS.
     else -> AndroidDeviceLogParser.parseEpochMs(line) ?: IosDeviceLogParser.parseEpochMs(line)
   }
@@ -78,6 +79,7 @@ data class DeviceLogSource private constructor(
   private fun stripTimestamp(line: String): String = when (platform) {
     TrailblazeDevicePlatform.ANDROID -> AndroidDeviceLogParser.splitTimestamp(line)?.second
     TrailblazeDevicePlatform.IOS -> IosDeviceLogParser.splitTimestamp(line)?.second
+    TrailblazeDevicePlatform.WEB -> WebDeviceLogParser.splitTimestamp(line)?.second
     else ->
       AndroidDeviceLogParser.splitTimestamp(line)?.second
         ?: IosDeviceLogParser.splitTimestamp(line)?.second
@@ -85,13 +87,17 @@ data class DeviceLogSource private constructor(
 
   /**
    * Routes to the right per-platform level parser. Android always returns *some* level
-   * (UNKNOWN if it can't tell); iOS returns null when it can't recognize the type code,
-   * which is when we fall back to Android-style heuristics.
+   * (UNKNOWN if it can't tell). iOS and web return null only when the line carries no type
+   * marker at all (no two-letter code / no `[...]` tag), which is when we fall back to
+   * Android-style heuristics; a recognized-shape-but-unknown marker maps straight to UNKNOWN
+   * without a fallback.
    */
   private fun parseLogLevel(content: String): LogLevel = when (platform) {
     TrailblazeDevicePlatform.ANDROID -> AndroidDeviceLogParser.parseLogLevel(content)
     TrailblazeDevicePlatform.IOS ->
       IosDeviceLogParser.parseLogLevel(content) ?: AndroidDeviceLogParser.parseLogLevel(content)
+    TrailblazeDevicePlatform.WEB ->
+      WebDeviceLogParser.parseLogLevel(content) ?: AndroidDeviceLogParser.parseLogLevel(content)
     else ->
       IosDeviceLogParser.parseLogLevel(content) ?: AndroidDeviceLogParser.parseLogLevel(content)
   }

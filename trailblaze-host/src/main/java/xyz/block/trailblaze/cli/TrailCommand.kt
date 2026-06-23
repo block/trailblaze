@@ -338,9 +338,25 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["--capture-logcat"],
-    description = ["Capture logcat output filtered to the app under test (local dev mode)"]
+    description = [
+      "Capture Android logcat (filtered to the app under test) to <session-dir>/device.log " +
+        "(only takes effect on Android). On by default; use --no-capture-logcat to disable.",
+    ],
+    negatable = true,
   )
-  var captureLogcat: Boolean = false
+  var captureLogcat: Boolean = true
+
+  @Option(
+    names = ["--capture-ios-logs"],
+    description = [
+      "Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to " +
+        "<session-dir>/device.log (only takes effect on iOS). On by default; the stream is " +
+        "scoped to the app under test (the logcat-equivalent app log, not the system firehose). " +
+        "Use --no-capture-ios-logs to disable.",
+    ],
+    negatable = true,
+  )
+  var captureIosLogs: Boolean = true
 
   @Option(
     names = ["--capture-network"],
@@ -354,7 +370,7 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["--capture-all"],
-    description = ["Enable all capture streams: video, logcat, network (local dev mode)"]
+    description = ["Enable all capture streams: video, logcat, iOS logs, network (local dev mode)"]
   )
   var captureAll: Boolean = false
 
@@ -372,6 +388,7 @@ open class TrailCommand : Callable<Int> {
     return CaptureOptions(
       captureVideo = captureVideo || captureAll,
       captureLogcat = captureLogcat || captureAll,
+      captureIosLogs = captureIosLogs || captureAll,
     )
   }
 
@@ -795,6 +812,7 @@ open class TrailCommand : Callable<Int> {
             selfHeal = selfHeal,
             captureVideo = captureVideo || captureAll,
             captureLogcat = captureLogcat || captureAll,
+            captureIosLogs = captureIosLogs || captureAll,
             captureNetworkTraffic = captureNetwork || captureAll,
             maxLlmCalls = resolveEffectiveMaxLlmCalls(),
             initialMemorySeeds = parsedMemorySeeds(),
@@ -1253,6 +1271,15 @@ open class TrailCommand : Callable<Int> {
       // bridging consistent across CLI and UI invocations.
       additionalInstrumentationArgs = runBlocking { config.additionalInstrumentationArgs() },
       composeRpcPort = composePort,
+      // Forward the CLI capture flags into the in-process (`--no-daemon`) run path. The daemon
+      // path forwards these via `CliRunRequest`; without this the no-daemon path dropped them
+      // and `DesktopYamlRunner` fell back to the persisted desktop appConfig — so
+      // `trailblaze run --no-daemon --capture-ios-logs` (and `--no-capture-video` /
+      // `--capture-logcat`) silently had no effect. `null` would mean "use appConfig"; pass the
+      // resolved flag instead. `--capture-all` folds into each via `captureOptions`.
+      captureVideo = captureOptions.captureVideo,
+      captureLogcat = captureOptions.captureLogcat,
+      captureIosLogs = captureOptions.captureIosLogs,
       onComplete = { result ->
         when (result) {
           is TrailExecutionResult.Success -> {

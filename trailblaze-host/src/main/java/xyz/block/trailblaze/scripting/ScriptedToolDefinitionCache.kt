@@ -311,6 +311,15 @@ internal class ScriptedToolDefinitionCache(
      *    drives the TypeScript compiler API to resolve type references; a `typescript`
      *    bump can subtly change extracted types even when `ts-json-schema-generator`
      *    stays the same. (Codex review.)
+     *  - The committed `<sdkDir>/bun.lock`. The two package.json pins above capture only
+     *    the generator's and compiler's OWN versions; the lockfile resolves the FULL
+     *    dependency tree, so a transitive dep of `ts-json-schema-generator` / `typescript`
+     *    being refreshed (without bumping either's own version) still flips the key. This
+     *    is the same input the bundled-config Gradle tasks track to re-run the analyzer on
+     *    a lockfile change — mixing it here means the analyzer's OWN workspace cache can't
+     *    then serve a stale entry and defeat that re-run. Absent in installed-CLI layouts
+     *    that ship `node_modules` without the lockfile → stable `<absent>` sentinel, same
+     *    as the package.json fallbacks. (Codex review on #3975.)
      *  - The `TRAILBLAZE_SDK_PACKAGE` env override. The shim recognizes
      *    `trailblaze.tool<...>(...)` calls only when the SDK is imported under the
      *    expected package name; flipping this env var changes which call sites count
@@ -343,6 +352,9 @@ internal class ScriptedToolDefinitionCache(
       } else {
         mixFile(md, "tsc-fallback-sdk-pkg", File(sdkDir, "package.json"))
       }
+      // Full resolved dependency tree via the committed lockfile — catches transitive-dep
+      // refreshes the two package.json pins above miss. Absent → `<absent>` sentinel (mixFile).
+      mixFile(md, "bunlock", File(sdkDir, "bun.lock"))
       // TRAILBLAZE_SDK_PACKAGE env override — null/empty when unset, in which case
       // we still mix in a stable sentinel so the digest captures "unset" as a
       // distinct state from "set to value X". Trim before digesting so a stray

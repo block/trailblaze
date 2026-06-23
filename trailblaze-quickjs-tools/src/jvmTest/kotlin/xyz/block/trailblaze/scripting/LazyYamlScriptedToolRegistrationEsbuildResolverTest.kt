@@ -216,7 +216,92 @@ class LazyYamlScriptedToolRegistrationEsbuildResolverTest {
     assertEquals(esbuild.canonicalPath, found?.canonicalPath)
   }
 
+  // ── In-process SDK entry walk-up (decoupled from esbuild — the slim-alias fix) ────────
+  //
+  // These pin [LazyYamlScriptedToolRegistration.resolveInProcessSdkEntryViaWalkup], which locates
+  // `sdks/typescript/src/in-process.ts` from the daemon CWD — deliberately NOT by walking up from
+  // the esbuild binary. The bug it fixes: `resolveEsbuildBinary` prefers an esbuild on PATH (e.g.
+  // `/opt/homebrew/bin/esbuild`); deriving the slim entry from THAT binary's location finds nothing,
+  // so the bundler inlines the full ~1.2 MB SDK into every on-device bundle. The function takes no
+  // esbuild argument at all, so the entry resolves regardless of where esbuild lives.
+
+  @Test
+  fun `slim-entry walk-up finds the flat layout - sdks_typescript_src`() {
+    val repoRoot = tempFolder.newFolder("slim-flat-repo")
+    val entry = plantFakeSlimEntry(repoRoot, "sdks/typescript/src/in-process.ts")
+    val found = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntryViaWalkup(repoRoot)
+    assertEquals(entry.canonicalPath, found?.canonicalPath)
+  }
+
+  @Test
+  fun `slim-entry walk-up finds the nested layout - opensource_sdks_typescript_src`() {
+    val repoRoot = tempFolder.newFolder("slim-nested-repo")
+    val entry = plantFakeSlimEntry(repoRoot, "opensource/sdks/typescript/src/in-process.ts")
+    val found = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntryViaWalkup(repoRoot)
+    assertEquals(entry.canonicalPath, found?.canonicalPath)
+  }
+
+  @Test
+  fun `slim-entry walk-up traverses ancestors from a deeply nested start dir`() {
+    // The real shape: the daemon's CWD (or a scripted tool's dir) is many levels below the SDK.
+    val repoRoot = tempFolder.newFolder("slim-walkup-repo")
+    val entry = plantFakeSlimEntry(repoRoot, "sdks/typescript/src/in-process.ts")
+    val deeplyNested = File(repoRoot, "module/src/main/resources/trails/config/trailmaps/foo/tools").apply { mkdirs() }
+    val found = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntryViaWalkup(deeplyNested)
+    assertEquals(entry.canonicalPath, found?.canonicalPath)
+  }
+
+  @Test
+  fun `slim-entry walk-up returns null when no SDK source exists up the tree`() {
+    val isolated = tempFolder.newFolder("no-slim-anywhere")
+    val nested = File(isolated, "some/empty/tree").apply { mkdirs() }
+    assertNull(
+      LazyYamlScriptedToolRegistration.resolveInProcessSdkEntryViaWalkup(nested),
+      "Expected null when no SDK source is present under the temp dir",
+    )
+  }
+
+  // ── In-process SDK entry: TRAILBLAZE_SDK_DIR branch (composition over the walk-up) ────
+
+  @Test
+  fun `slim-entry resolution prefers TRAILBLAZE_SDK_DIR when its src_in-process exists`() {
+    val sdkDir = tempFolder.newFolder("explicit-sdk")
+    val entry = File(sdkDir, "src/in-process.ts").apply { parentFile.mkdirs(); writeText("export const x = 1;\n") }
+    // startDir has its OWN walk-up entry; the explicit env dir must win.
+    val startRoot = tempFolder.newFolder("env-wins-start")
+    plantFakeSlimEntry(startRoot, "sdks/typescript/src/in-process.ts")
+
+    val found = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(sdkDirEnv = sdkDir.absolutePath, startDir = startRoot)
+    assertEquals(entry.canonicalPath, found?.canonicalPath, "TRAILBLAZE_SDK_DIR/src/in-process.ts must take precedence")
+  }
+
+  @Test
+  fun `slim-entry resolution falls through to the walk-up when TRAILBLAZE_SDK_DIR lacks the entry`() {
+    // Env dir set but has no src/in-process.ts → must NOT short-circuit to null; fall through to CWD walk-up.
+    val emptySdkDir = tempFolder.newFolder("explicit-sdk-empty")
+    val startRoot = tempFolder.newFolder("fallthrough-start")
+    val walkupEntry = plantFakeSlimEntry(startRoot, "sdks/typescript/src/in-process.ts")
+
+    val found = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(sdkDirEnv = emptySdkDir.absolutePath, startDir = startRoot)
+    assertEquals(walkupEntry.canonicalPath, found?.canonicalPath, "expected fall-through to the walk-up, not null")
+  }
+
+  @Test
+  fun `slim-entry resolution ignores a null or blank TRAILBLAZE_SDK_DIR and uses the walk-up`() {
+    val startRoot = tempFolder.newFolder("blank-env-start")
+    val walkupEntry = plantFakeSlimEntry(startRoot, "sdks/typescript/src/in-process.ts")
+
+    assertEquals(walkupEntry.canonicalPath, LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(null, startRoot)?.canonicalPath)
+    assertEquals(walkupEntry.canonicalPath, LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry("   ", startRoot)?.canonicalPath)
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────────────────────
+
+  private fun plantFakeSlimEntry(root: File, relativePath: String): File =
+    File(root, relativePath).apply {
+      parentFile.mkdirs()
+      writeText("export const slim = true;\n")
+    }
 
   private fun plantFakeEsbuild(root: File, relativePath: String): File {
     val candidate = File(root, relativePath).apply {

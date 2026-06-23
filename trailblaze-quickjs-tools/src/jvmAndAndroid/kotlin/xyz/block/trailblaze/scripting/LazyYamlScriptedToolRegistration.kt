@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.scripting
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -267,6 +268,65 @@ class LazyYamlScriptedToolRegistration private constructor(
     }
 
     /**
+     * Locates the slim `@trailblaze/scripting` in-process SDK entry
+     * (`sdks/typescript/src/in-process.ts`) that [DaemonScriptedToolBundler] aliases the package to.
+     *
+     * Resolved **independently of where esbuild lives** — deliberately NOT by walking up from the
+     * esbuild binary. [resolveEsbuildBinary] prefers an esbuild on `PATH` (Homebrew, `npm -g`, …),
+     * which sits in an unrelated tree; deriving the SDK source from that binary's location silently
+     * fails and the bundler falls back to inlining the full ~1.2 MB SDK into every on-device bundle.
+     * Resolving the entry from the daemon CWD instead keeps the slim profile working regardless of
+     * which esbuild is used.
+     *
+     * Honors `TRAILBLAZE_SDK_DIR` (the same explicit override the scripted-tool analyzer uses for
+     * installed-CLI scenarios where the SDK source isn't a CWD ancestor); otherwise walks up from
+     * the daemon CWD for the SDK source tree — mirroring [resolveEsbuildViaWalkup]'s flat and
+     * nested-monorepo layouts. Null when the SDK source isn't reachable (e.g. an installed CLI
+     * that doesn't ship it), in which case the bundler keeps its full-SDK fallback.
+     */
+    fun resolveInProcessSdkEntry(): File? =
+      resolveInProcessSdkEntry(
+        sdkDirEnv = System.getenv("TRAILBLAZE_SDK_DIR"),
+        startDir = File(System.getProperty("user.dir") ?: ".").absoluteFile,
+      )
+
+    /**
+     * Composition half of [resolveInProcessSdkEntry], split out (like [resolveEsbuildOnPath]) so a
+     * unit test can pin the `TRAILBLAZE_SDK_DIR` branch against injected values without touching the
+     * process environment: a blank/absent [sdkDirEnv] is ignored, and an explicit dir whose
+     * `src/in-process.ts` doesn't exist falls THROUGH to the [startDir] walk-up rather than
+     * short-circuiting to null. [sdkDirEnv] is resolved to an absolute path so a relative override
+     * isn't silently interpreted against the JVM cwd.
+     */
+    internal fun resolveInProcessSdkEntry(sdkDirEnv: String?, startDir: File): File? {
+      sdkDirEnv?.takeIf { it.isNotBlank() }?.let { sdkDir ->
+        File(File(sdkDir).absoluteFile, "src/in-process.ts").takeIf { it.isFile }?.let { return it }
+      }
+      return resolveInProcessSdkEntryViaWalkup(startDir)
+    }
+
+    /**
+     * Walk-up half of [resolveInProcessSdkEntry], split out so a unit test can pin it against an
+     * injected starting directory. Candidate order mirrors [resolveEsbuildViaWalkup]: the flat
+     * `sdks/typescript/...` layout first, the nested-monorepo layout as fallback.
+     */
+    internal fun resolveInProcessSdkEntryViaWalkup(startDir: File): File? {
+      val relativeCandidates = listOf(
+        "sdks/typescript/src/in-process.ts",
+        "opensource/sdks/typescript/src/in-process.ts",
+      )
+      var current: File? = startDir
+      while (current != null) {
+        for (rel in relativeCandidates) {
+          val candidate = File(current, rel)
+          if (candidate.isFile) return candidate
+        }
+        current = current.parentFile
+      }
+      return null
+    }
+
+    /**
      * Build a registration whose [QuickJsToolHost] is already connected to [bundlePath].
      *
      * Suspending because [QuickJsToolHost.connect] is — the JS evaluation that registers
@@ -309,7 +369,8 @@ class LazyYamlScriptedToolRegistration private constructor(
      * directly on the [JsonObject] shape that [InlineScriptToolConfig.inputSchema] uses
      * (vs. the MCP SDK's `ToolSchema` wrapper). Identical extraction logic — `properties`
      * map → `TrailblazeToolParameterDescriptor` per entry, partitioned by the top-level
-     * `required` list.
+     * `required` list, threading each property's JSON-Schema `enum` into
+     * [TrailblazeToolParameterDescriptor.validValues].
      */
     private fun buildDescriptor(config: InlineScriptToolConfig): TrailblazeToolDescriptor {
       val schema = config.inputSchema
@@ -323,6 +384,7 @@ class LazyYamlScriptedToolRegistration private constructor(
           name = propName,
           type = (propSchema["type"] as? JsonPrimitive)?.contentOrNull ?: "string",
           description = (propSchema["description"] as? JsonPrimitive)?.contentOrNull,
+          validValues = jsonSchemaEnumValues(propSchema),
         )
       }
       return TrailblazeToolDescriptor(
@@ -331,6 +393,27 @@ class LazyYamlScriptedToolRegistration private constructor(
         requiredParameters = all.filter { it.name in requiredNames },
         optionalParameters = all.filter { it.name !in requiredNames },
       )
+    }
+
+    /**
+     * Extracts a property schema's JSON-Schema `enum` array as a list of allowed string values, or
+     * null when the property declares no usable string `enum`. A TS string-literal union
+     * (`"UP" | "DOWN" | …`) lowers to `{ "type": "string", "enum": ["UP", "DOWN", …] }`, so this
+     * is what carries the allowed-value fidelity a Kotlin `@Serializable` enum param gets for free
+     * (koog surfaces those via `ToolParameterType.Enum`). Without it the LLM sees only `type:
+     * string` and never the legal values.
+     *
+     * **Only STRING enums are promoted** — see [xyz.block.trailblaze.scripting.mcp.toTrailblazeToolDescriptor]'s
+     * `enumValues` for the rationale (koog enums are string-only, so a non-string enum would emit a
+     * lying `{"type":"string",...}` schema). A non-string-typed enum keeps its primitive type and
+     * drops the constraint. An empty `enum` folds to null. Mirrors that matching extraction.
+     */
+    private fun jsonSchemaEnumValues(propSchema: JsonObject): List<String>? {
+      val type = (propSchema["type"] as? JsonPrimitive)?.contentOrNull
+      if (type != null && !type.equals("string", ignoreCase = true)) return null
+      return (propSchema["enum"] as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
+        ?.takeIf { it.isNotEmpty() }
     }
   }
 }

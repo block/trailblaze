@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.llm
 
+import ai.koog.prompt.llm.LLMCapability
 import xyz.block.trailblaze.agent.AgentTier
 
 /**
@@ -13,7 +14,7 @@ import xyz.block.trailblaze.agent.AgentTier
  *
  * For the two-tier agent architecture:
  * - **Inner Agent (Screen Analysis)**: Use cheap vision models like [GPT_4O_MINI], [CLAUDE_HAIKU], [GEMINI_FLASH]
- * - **Outer Agent (Planning)**: Use capable models like [GPT_4O], [CLAUDE_SONNET], [O1_MINI]
+ * - **Outer Agent (Planning)**: Use capable models like [GPT_4O], [CLAUDE_SONNET], [GEMINI_PRO]
  *
  * ## Cost Information
  *
@@ -43,7 +44,7 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 0.60,
     contextLength = 128_000,
     maxOutputTokens = 16_384,
-    capabilityIds = listOf("vision", "tools"),
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   /**
@@ -59,7 +60,7 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 4.00,
     contextLength = 200_000,
     maxOutputTokens = 8_192,
-    capabilityIds = listOf("vision", "tools"),
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   /**
@@ -75,11 +76,11 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 0.40,
     contextLength = 1_000_000,
     maxOutputTokens = 8_192,
-    capabilityIds = listOf("vision", "tools"),
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   // ==========================================================================
-  // Outer Agent Models (Capable, Reasoning)
+  // Outer Agent Models (Capable)
   // ==========================================================================
 
   /**
@@ -95,7 +96,7 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 10.00,
     contextLength = 128_000,
     maxOutputTokens = 16_384,
-    capabilityIds = listOf("vision", "tools"),
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   /**
@@ -111,29 +112,13 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 15.00,
     contextLength = 200_000,
     maxOutputTokens = 8_192,
-    capabilityIds = listOf("vision", "tools"),
-  )
-
-  /**
-   * o1-mini - OpenAI reasoning model for complex planning.
-   *
-   * Specialized for reasoning tasks, good for outer agent planning.
-   * Input: $3.00/1M tokens, Output: $12.00/1M tokens
-   */
-  val O1_MINI = TrailblazeLlmModel(
-    trailblazeLlmProvider = TrailblazeLlmProvider.OPENAI,
-    modelId = "o1-mini",
-    inputCostPerOneMillionTokens = 3.00,
-    outputCostPerOneMillionTokens = 12.00,
-    contextLength = 128_000,
-    maxOutputTokens = 65_536,
-    capabilityIds = listOf("reasoning"),
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   /**
    * Gemini 2.0 Pro - Capable outer agent model for Google.
    *
-   * Strong reasoning and multimodal capabilities.
+   * Capable multimodal vision model with a very large context window.
    * Input: $1.25/1M tokens, Output: $5.00/1M tokens (estimated)
    */
   val GEMINI_PRO = TrailblazeLlmModel(
@@ -143,7 +128,8 @@ object TrailblazeLlmModels {
     outputCostPerOneMillionTokens = 5.00,
     contextLength = 2_000_000,
     maxOutputTokens = 8_192,
-    capabilityIds = listOf("vision", "tools", "reasoning"),
+    // Dropped the no-op `"reasoning"` id (no matching Koog capability — it was silently ignored).
+    capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
   )
 
   // ==========================================================================
@@ -162,14 +148,13 @@ object TrailblazeLlmModels {
   )
 
   /**
-   * All models suitable for the outer agent (planning/reasoning).
+   * All models suitable for the outer agent (planning).
    *
-   * These models have strong reasoning capabilities.
+   * These models are capable, vision-capable planning models.
    */
   val OUTER_AGENT_MODELS: List<TrailblazeLlmModel> = listOf(
     GPT_4O,
     CLAUDE_SONNET,
-    O1_MINI,
     GEMINI_PRO,
   )
 

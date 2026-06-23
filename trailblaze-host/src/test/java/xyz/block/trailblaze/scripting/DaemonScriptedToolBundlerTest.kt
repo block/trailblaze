@@ -125,6 +125,38 @@ class DaemonScriptedToolBundlerTest {
   }
 
   @Test
+  fun `bundleOne honors a caller-supplied slim in-process entry (the override branch)`() = runBlocking {
+    // Pins the override branch of `inProcessSdkEntry`: production resolves the slim entry
+    // INDEPENDENTLY of esbuild's location (see LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry)
+    // and supplies it here, so the slim alias applies even when esbuild came from PATH (Homebrew,
+    // `npm -g`) rather than the SDK's own node_modules — the bug where every on-device bundle inlined
+    // the full ~1.2 MB SDK. A supplied entry takes precedence over (and short-circuits) the legacy
+    // walk-up-from-esbuild, and must still produce a slim bundle.
+    assumeEsbuildPresent()
+    val slimEntry = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry()
+    assumeTrue("slim in-process.ts not resolvable from the test CWD — skip", slimEntry != null)
+    val overrideBundler = DaemonScriptedToolBundler(
+      esbuildBinary = esbuild,
+      inProcessSdkEntryOverride = slimEntry,
+      cacheDir = tempFolder.newFolder("override-cache"),
+    )
+    val src = File(tempFolder.newFolder("overrideImport"), "slimTool.ts").apply {
+      writeText(
+        """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |export const slimTool = trailblaze.tool(async (input) => String(input.text).toUpperCase());
+        |""".trimMargin(),
+      )
+    }
+    val out = overrideBundler.bundleOne(src, toolName = "slimTool")
+    assertFalse(
+      out.readText().contains("@modelcontextprotocol"),
+      "a caller-supplied slim entry must keep @modelcontextprotocol/sdk OUT of the bundle (got ${out.length()} bytes)",
+    )
+    assertTrue(out.length() < 200_000L, "expected a slim KB-scale bundle; got ${out.length()} bytes")
+  }
+
+  @Test
   fun `slim in-process entry re-exports the full lightweight surface (selectors, conditionals, zod)`() = runBlocking {
     // Regression for the Codex P1 on #3838: the slim `in-process.ts` entry must be a drop-in for
     // `@trailblaze/scripting`, not expose only `trailblaze`/`tool`/`run`. A default-runtime tool that
@@ -176,6 +208,119 @@ class DaemonScriptedToolBundlerTest {
       firstMtime,
       second.lastModified(),
       "expected cache hit to leave bundle file untouched (mtime should not move)",
+    )
+  }
+
+  @Test
+  fun `bundleOne re-bundles when a transitively imported module changes (metafile-discovered deps)`() = runBlocking {
+    // Regression for #3951: the cache key folds in the dependency closure esbuild reports in its
+    // `--metafile`, so editing a TRANSITIVELY imported module (tool -> mid -> leaf) busts the cache
+    // even though the importing tool's own bytes are unchanged. Before the fix the daemon served a
+    // STALE bundle with the old inlined helper until the cache was cleared.
+    assumeEsbuildPresent()
+    val dir = tempFolder.newFolder("transitiveDeps")
+    val leaf = File(dir, "leaf.ts").apply { writeText("export const LEAF = 12321;\n") }
+    File(dir, "mid.ts").writeText("import { LEAF } from \"./leaf\";\nexport const MID = LEAF;\n")
+    val tool = File(dir, "transitiveTool.ts").apply {
+      writeText(
+        """
+        |import { MID } from "./mid";
+        |export function run(): void { console.log(MID); }
+        |""".trimMargin(),
+      )
+    }
+
+    val first = bundler.bundleOne(tool, toolName = "run")
+    assertTrue(first.readText().contains("12321"), "first bundle should inline the original leaf value")
+
+    // Unchanged source → cache hit (same path), confirming the dep fingerprint is stable.
+    val cached = bundler.bundleOne(tool, toolName = "run")
+    assertEquals(first.canonicalPath, cached.canonicalPath, "expected a cache hit when nothing changed")
+
+    // Edit the LEAF two levels down — neither the tool nor mid.ts changes.
+    leaf.writeText("export const LEAF = 45654;\n")
+    val afterEdit = bundler.bundleOne(tool, toolName = "run")
+
+    assertFalse(
+      first.canonicalPath == afterEdit.canonicalPath,
+      "editing a transitively-imported module must produce a NEW cache key (got a stale hit)",
+    )
+    assertTrue(
+      afterEdit.readText().contains("45654"),
+      "the re-bundled output must reflect the edited transitive dependency's new value",
+    )
+  }
+
+  @Test
+  fun `bundleOne keeps a self-contained tool's cache when an unrelated sibling changes`() = runBlocking {
+    // Guards against OVER-invalidation: a self-contained tool's metafile lists no shared deps, so an
+    // unrelated sibling that the tool does NOT import is absent from its dep manifest — the cache must
+    // NOT bust when that sibling appears or changes in the same directory.
+    assumeEsbuildPresent()
+    val dir = tempFolder.newFolder("selfContained")
+    val tool = File(dir, "selfContainedTool.ts").apply {
+      writeText("export function run(): void { console.log(7); }\n")
+    }
+
+    val first = bundler.bundleOne(tool, toolName = "run")
+    // An unrelated sibling the tool does NOT import appears (and then changes).
+    val unrelated = File(dir, "unrelated_sibling.ts").apply { writeText("export const X = 1;\n") }
+    val afterSiblingAdded = bundler.bundleOne(tool, toolName = "run")
+    unrelated.writeText("export const X = 2;\n")
+    val afterSiblingChanged = bundler.bundleOne(tool, toolName = "run")
+
+    assertEquals(
+      first.canonicalPath,
+      afterSiblingAdded.canonicalPath,
+      "a self-contained tool's cache must not bust when an unrelated sibling appears",
+    )
+    assertEquals(
+      first.canonicalPath,
+      afterSiblingChanged.canonicalPath,
+      "a self-contained tool's cache must not bust when an unrelated sibling changes",
+    )
+  }
+
+  @Test
+  fun `parseMetafileDepPaths keeps bundled inputs but drops the wrapper entry and node_modules`() {
+    // esbuild-FREE coverage of the one bit of OUR logic in dependency discovery: filtering esbuild's
+    // metafile `inputs` down to the files whose edits must bust the cache. Feed a hand-written
+    // metafile so this runs unconditionally (no esbuild binary needed).
+    val metafile = tempFolder.newFile("meta.json").apply {
+      writeText(
+        """
+        |{
+        |  "inputs": {
+        |    "${DaemonScriptedToolBundler.WRAPPER_FILENAME_PREFIX}abc-123.ts": { "bytes": 1 },
+        |    "importingTool.ts": { "bytes": 2 },
+        |    "shared_helper.ts": { "bytes": 3 },
+        |    "../../sdks/typescript/src/in-process.ts": { "bytes": 4 },
+        |    "../../sdks/typescript/node_modules/zod/index.js": { "bytes": 5 }
+        |  },
+        |  "outputs": {}
+        |}
+        |""".trimMargin(),
+      )
+    }
+
+    val deps = bundler.parseMetafileDepPaths(metafile)
+
+    // Wrapper entry (ephemeral temp) + node_modules filtered out; user files AND the SDK's own source
+    // kept (so editing either busts the cache). Sorted for a deterministic cache key.
+    assertEquals(
+      listOf("../../sdks/typescript/src/in-process.ts", "importingTool.ts", "shared_helper.ts"),
+      deps,
+      "expected the wrapper entry + node_modules filtered out, SDK src + user files kept (sorted)",
+    )
+  }
+
+  @Test
+  fun `parseMetafileDepPaths returns empty for a malformed metafile`() {
+    // A malformed metafile must degrade to entry-only keying (empty dep list), never throw.
+    val metafile = tempFolder.newFile("bad-meta.json").apply { writeText("{ not valid json ::") }
+    assertTrue(
+      bundler.parseMetafileDepPaths(metafile).isEmpty(),
+      "a malformed metafile must yield an empty dep list, not an exception",
     )
   }
 

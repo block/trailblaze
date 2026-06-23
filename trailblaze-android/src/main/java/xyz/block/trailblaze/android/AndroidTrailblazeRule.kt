@@ -54,9 +54,7 @@ import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.quickjs.tools.AndroidAssetBundleSource
 import xyz.block.trailblaze.quickjs.tools.BundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
-import xyz.block.trailblaze.quickjs.tools.QuickJsToolAdvertisement
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
-import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -708,44 +706,22 @@ open class AndroidTrailblazeRule(
   }
 
   /**
-   * Loads pre-compiled QuickJS bundles for toolset-delivered scripted tools from the APK's
-   * assets and registers them via [QuickJsToolBundleLauncher]. Mirrors the host-side
-   * `registerToolsetScriptedToolBundles` in [TrailblazeHostYamlRunner].
+   * Loads pre-compiled QuickJS bundles for this session's scripted tools (both the target's
+   * `target.tools:` declarations and the toolset/catalog-delivered ones) from the APK's assets and
+   * registers them into [toolRepo]. Delegates to the shared [OnDeviceScriptedToolBundleLauncher] so
+   * this rule and downstream on-device rules resolve on-device scripted tools identically; that
+   * launcher mirrors the host-side `HostScriptedToolLauncher`.
    */
   private suspend fun launchToolsetScriptedToolBundles(
     toolRepo: TrailblazeToolRepo,
     sessionId: xyz.block.trailblaze.logs.model.SessionId,
-  ): LaunchedQuickJsToolRuntime? {
-    // Register a bundle for EVERY scripted tool the catalog could deliver — not just the
-    // initially-active toolsets' — so a toolset enabled later via `setActiveToolSets` is already
-    // dispatchable on-device (advertisement stays gated to the active set in TrailblazeToolRepo).
-    // `skipNames` drops names already registered (e.g. via `quickjsToolBundles` / target.tools:):
-    // re-registering hard-fails the `addDynamicTools` collision guard, and it would invert the
-    // host-side precedence where target-declared tools win over toolset-delivered ones.
-    //
-    // Resolve + filter through the SAME `InProcessScriptedToolLauncher` the host/daemon path uses,
-    // so on-device and host agree on which catalog tools run in-process and where their bundles
-    // live — no second copy of that logic to drift. A typed tool's bundle is handler-only (no
-    // `spec`), so the LLM-facing descriptor + `_meta` gate come from the YAML descriptor via the
-    // shared `QuickJsToolAdvertisement.fromInlineScriptToolConfig`, matching the host path's source.
-    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(
-      toolNames = toolRepo.allCatalogScriptedToolNames,
-      skipNames = toolRepo.getRegisteredDynamicTools().keys,
-      logPrefix = "[toolset-scripted]",
-    )
-    if (resolved.isEmpty()) return null
-
-    return QuickJsToolBundleLauncher.launchAll(
-      bundles = resolved.map { McpServerConfig(script = it.bundleResourcePath) },
-      deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-      sessionId = sessionId,
+  ): LaunchedQuickJsToolRuntime? =
+    OnDeviceScriptedToolBundleLauncher.launchAll(
       toolRepo = toolRepo,
-      bundleSourceResolver = { entry -> AndroidAssetBundleSource(assetPath = entry.script!!) },
-      advertisementOverrides = resolved.associate {
-        it.name to QuickJsToolAdvertisement.fromInlineScriptToolConfig(it.config)
-      },
+      target = target,
+      sessionId = sessionId,
+      deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
     )
-  }
 
   override fun run(
     testYaml: String,

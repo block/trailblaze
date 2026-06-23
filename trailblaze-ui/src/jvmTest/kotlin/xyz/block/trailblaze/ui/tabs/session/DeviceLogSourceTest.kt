@@ -85,6 +85,31 @@ class DeviceLogSourceTest {
   }
 
   @Test
+  fun `parse with WEB platform extracts web console timestamps and level tags`() {
+    // Web console format: `yyyy-MM-dd HH:mm:ss.SSS [type] message`. After splitTimestamp strips
+    // the timestamp, content starts with the `[type]` tag the level parser reads.
+    val raw = "2026-06-22 14:23:45.678 [error] Failed to load resource: net::ERR_FAILED"
+    val parsed = DeviceLogSource.forPlatform(TrailblazeDevicePlatform.WEB).parse(raw)
+    assertEquals(1, parsed.lines.size)
+    val line = parsed.lines.single()
+    assertNotNull(line.epochMs)
+    assertEquals(LogLevel.ERROR, line.level)
+    // The timestamp prefix should be stripped — content begins with the bracketed type tag.
+    assertEquals("[error] Failed to load resource: net::ERR_FAILED", line.content)
+    // First (and only) line is at relative offset 0.
+    assertEquals("0:00.000", line.timestampDisplay)
+  }
+
+  @Test
+  fun `parse with WEB platform maps an unrecognized type tag to UNKNOWN without Android fallback`() {
+    // A well-formed-but-unrecognized console tag (e.g. `[table]`) must resolve to UNKNOWN — the
+    // line is web console output, so it should NOT fall through to the Android heuristic parser.
+    val raw = "2026-06-22 14:23:45.678 [table] columnar data"
+    val parsed = DeviceLogSource.forPlatform(TrailblazeDevicePlatform.WEB).parse(raw)
+    assertEquals(LogLevel.UNKNOWN, parsed.lines.single().level)
+  }
+
+  @Test
   fun `parse with ANDROID platform returns null epoch for iOS-format lines`() {
     // Routing means we DON'T fall back to iOS parsing when Android is declared explicitly.
     val raw = "2026-03-10 14:23:45.678-0700  MyApp[12345]: hello"

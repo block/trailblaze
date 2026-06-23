@@ -6,6 +6,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 class RunOnHostParams(
@@ -15,6 +16,13 @@ class RunOnHostParams(
   val forceStopTargetApp: Boolean,
   val additionalInstrumentationArgs: () -> Map<String, String>,
   val onProgressMessage: (String) -> Unit,
+  /**
+   * Fired with the session id the moment the session is created, BEFORE any trail steps run.
+   * Lets the caller start session-scoped capture that must already be live during execution
+   * (e.g. the iOS Simulator log stream). No-op by default; the Maestro host path invokes it so
+   * the daemon's capture coordinator starts during the run rather than after it finishes.
+   */
+  val onSessionStarted: (SessionId) -> Unit = {},
   /** RPC port for Compose driver connections. */
   val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
   /**

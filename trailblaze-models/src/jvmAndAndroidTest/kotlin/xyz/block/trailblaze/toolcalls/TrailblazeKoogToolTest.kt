@@ -11,6 +11,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.messageContains
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.parseKoogParameterType
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import kotlin.test.Test
@@ -129,5 +130,75 @@ class TrailblazeKoogToolTest {
     // signal the Tool Palette routes on, and the dialog should fall through to a text field
     // for plain Strings rather than rendering an empty dropdown.
     assertThat(label.validValues).isNull()
+  }
+
+  /**
+   * The reverse direction of the round-trip the test above pins: a Trailblaze descriptor whose
+   * parameter carries `validValues` must lower to a Koog [ToolParameterType.Enum] so the LLM-facing
+   * function-call schema constrains the argument to those values (`KoogToMcpExt.fillJsonSchema`
+   * renders `ToolParameterType.Enum` as `{"type":"string","enum":[…]}`).
+   *
+   * This is the downstream half of the scripted-tool enum fix: a `.ts` tool's `"UP" | "DOWN" | …`
+   * union lowers to a JSON-Schema `{ "type": "string", "enum": [...] }`, which the descriptor
+   * builders capture as `type = "string"` + `validValues`. Keying the Koog type off `validValues`
+   * (not the `"string"` type label) is what makes the enum reach the LLM. Pinned for BOTH strict
+   * modes since scripted tools register `strict = false` and YAML tools `strict = true`.
+   */
+  @Test fun `toKoogToolDescriptor lowers validValues to a Koog enum regardless of the type string`() {
+    listOf(true, false).forEach { strict ->
+      val descriptor = TrailblazeToolDescriptor(
+        name = "directional_swipe",
+        description = "Swipe",
+        requiredParameters = listOf(
+          // type = "string" with validValues set — exactly the shape the scripted/MCP descriptor
+          // builders produce for a JSON-Schema enum. The "string" label must NOT win over the enum.
+          TrailblazeToolParameterDescriptor(
+            name = "direction",
+            type = "string",
+            description = "which direction",
+            validValues = listOf("UP", "DOWN", "LEFT", "RIGHT"),
+          ),
+        ),
+        optionalParameters = listOf(
+          TrailblazeToolParameterDescriptor(name = "swipeOnElementText", type = "string", description = null),
+        ),
+      )
+
+      val koog = descriptor.toKoogToolDescriptor(strict = strict)
+      val direction = koog.requiredParameters.single { it.name == "direction" }
+      assertThat(direction.type).isEqualTo(ToolParameterType.Enum(arrayOf("UP", "DOWN", "LEFT", "RIGHT")))
+      // A plain string param (no validValues) must stay a String — no spurious enum.
+      assertThat(koog.optionalParameters.single { it.name == "swipeOnElementText" }.type)
+        .isEqualTo(ToolParameterType.String)
+    }
+  }
+
+  /**
+   * The sampling-source descriptor path (`KoogLlmSamplingSource`, `LocalLlmSamplingSource`,
+   * `InnerLoopScreenAnalyzer`) builds its Koog parameter type via
+   * [toKoogParameterTypePreservingComposites]. It must also honor `validValues` even when the
+   * `type` string is `"string"` (the JSON-Schema-enum shape), not only when it's the literal
+   * `"ENUM"` mirror — otherwise scripted/MCP enums would silently degrade to free-text on that path.
+   */
+  @Test fun `toKoogParameterTypePreservingComposites emits an enum from validValues even when type is string`() {
+    val fromStringTypedEnum = TrailblazeToolParameterDescriptor(
+      name = "direction",
+      type = "string",
+      validValues = listOf("UP", "DOWN"),
+    ).toKoogParameterTypePreservingComposites()
+    assertThat(fromStringTypedEnum).isEqualTo(ToolParameterType.Enum(arrayOf("UP", "DOWN")))
+
+    // The legacy "ENUM" type label keeps working too.
+    val fromEnumLabel = TrailblazeToolParameterDescriptor(
+      name = "direction",
+      type = "ENUM",
+      validValues = listOf("LEFT", "RIGHT"),
+    ).toKoogParameterTypePreservingComposites()
+    assertThat(fromEnumLabel).isEqualTo(ToolParameterType.Enum(arrayOf("LEFT", "RIGHT")))
+
+    // No validValues → plain string, no spurious empty enum.
+    val plain = TrailblazeToolParameterDescriptor(name = "label", type = "string")
+      .toKoogParameterTypePreservingComposites()
+    assertThat(plain).isEqualTo(ToolParameterType.String)
   }
 }

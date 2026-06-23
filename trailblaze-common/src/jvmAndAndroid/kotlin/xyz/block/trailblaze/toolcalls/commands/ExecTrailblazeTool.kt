@@ -47,9 +47,14 @@ internal const val EXEC_TOOL_NAME = "exec"
  * on failure. Wrapper tools that embed secrets (tokens, credentials, signed URLs) in
  * [argv] should inject them via environment variables instead of inlining them.
  */
+// `name` below is a string literal (not EXEC_TOOL_NAME): the static BuiltInToolsBindingDriftTest
+// scan regex-matches a quoted name right after `(`/`name =` and can't resolve a const, and `exec`
+// now has a typed binding in the SDK's built-in-tools.ts so it must be matchable. Keep the literal
+// adjacent to `(` (no comment between) or that scan misses it; ExecTrailblazeToolTest pins
+// name == "exec" so it can't drift from EXEC_TOOL_NAME (still used for advertisedToolName below).
 @Serializable
 @TrailblazeToolClass(
-  name = EXEC_TOOL_NAME,
+  name = "exec",
   surfaceToLlm = false,
   isRecordable = false,
   requiresHost = true,

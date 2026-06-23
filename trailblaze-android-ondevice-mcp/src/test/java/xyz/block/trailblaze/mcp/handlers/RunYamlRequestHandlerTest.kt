@@ -177,6 +177,40 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
+   * On-device double-log fix (#3818): the callback reports how many `TrailblazeToolLog`s the
+   * dispatch emitted via [RunYamlCallbackResult.onDeviceToolLogCount], and the handler mirrors
+   * it onto [xyz.block.trailblaze.llm.RunYamlResponse.onDeviceToolLogCount] so the host RPC
+   * agent can skip its own duplicate tool-log emit. This pins that wiring.
+   */
+  @Test
+  fun `callback onDeviceToolLogCount flows onto RunYamlResponse onDeviceToolLogCount`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ ->
+        RunYamlCallbackResult(session = session, onDeviceToolLogCount = 2)
+      },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(2, result.data.onDeviceToolLogCount)
+  }
+
+  /** Default path: a callback that doesn't count leaves `onDeviceToolLogCount` at 0, so the
+   *  host keeps its catch-all tool-log emit. */
+  @Test
+  fun `onDeviceToolLogCount defaults to zero when the callback reports none`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(0, result.data.onDeviceToolLogCount)
+  }
+
+  /**
    * Bidirectional memory sync — the handler creates one [AgentMemory] per request,
    * populates it from `request.memorySnapshot` BEFORE the callback runs (so on-device
    * tools can read host-written keys), passes it through to the callback, and then puts

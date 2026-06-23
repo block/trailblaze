@@ -177,6 +177,36 @@ object ScriptedToolNameDiscoverer {
   }
 
   /**
+   * Resolves the committed `.bundle.js` resource/asset path directly from a scripted tool's
+   * repo-root-relative `script:` path — the [bundleResourcePath] counterpart for callers that hold
+   * an [xyz.block.trailblaze.config.InlineScriptToolConfig] (a target's `target.tools:` entry)
+   * rather than a [DiscoveredDescriptor].
+   *
+   * Target-declared inline tools are surfaced from the bundled `targets/<id>.yaml` (a single
+   * classpath resource read, [TrailblazeHostAppTarget.getInlineScriptTools]) rather than the
+   * directory-recursive descriptor discovery [bundleResourcePath] feeds off. On Android the
+   * classloader can't enumerate resource directories, so the on-device launcher resolves those
+   * inline tools' bundles through this path instead — keyed off the `script:` already in the config.
+   *
+   * Maps e.g. `<module>/src/commonMain/resources/trails/config/trailmaps/<trailmap>/tools/X.ts`
+   * (or any layout prefix) to `trails/config/trailmaps/<trailmap>/tools/X.bundle.js`, matching the
+   * `${TRAILMAPS_DIR}/<trailmap>/tools/<base>.bundle.js` shape [bundleResourcePath] produces so the
+   * build-time bundler can stage to one place both loaders agree on.
+   */
+  fun bundleResourcePathForScript(script: String): String {
+    require(script.isNotBlank()) {
+      "Cannot resolve a .bundle.js path for a blank `script:`."
+    }
+    val normalized = script.replace('\\', '/')
+    val marker = "${TrailblazeConfigPaths.TRAILMAPS_DIR}/"
+    // Everything from the trailmaps root onward (`<trailmap>/tools/<base>.ext`); fall back to just
+    // the file name when the script path is authored without the standard trailmaps prefix.
+    val rel = normalized.substringAfter(marker, missingDelimiterValue = normalized.substringAfterLast('/'))
+    val base = rel.substringBeforeLast('.')
+    return "${TrailblazeConfigPaths.TRAILMAPS_DIR}/$base.bundle.js"
+  }
+
+  /**
    * Extracts the statically-declared name(s) from a descriptor, or empty if the descriptor needs
    * analyzer enrichment to be named (logged once so an author who expected toolset delivery sees
    * why their tool didn't resolve).

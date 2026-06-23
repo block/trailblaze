@@ -24,8 +24,8 @@ data class LogcatLine(
  *
  * Supports both Android epoch format (`1772846521.234`) and iOS datetime format
  * (`2026-03-10 14:23:45.678901-0700`). iOS log capture is supported at the capture-session
- * level when its toggle is enabled (off by default — high log volume); the parser also
- * handles previously-captured or imported device-log files regardless of the current toggle.
+ * level when its toggle is enabled (on by default, scoped to the app under test); the parser
+ * also handles previously-captured or imported device-log files regardless of the current toggle.
  */
 object LogcatParser {
 

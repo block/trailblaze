@@ -161,7 +161,7 @@ class QuickJsTrailblazeToolTest {
   }
 
   @Test
-  fun `execute populates ctx with sessionId and device platform and driver`() = runBlocking {
+  fun `execute populates ctx with sessionId and device platform, driver, and instanceId`() = runBlocking {
     // The handler returns its `ctx` parameter as JSON text so we can assert the shape
     // QuickJsTrailblazeTool.buildCtxEnvelope produced.
     val host = connect(
@@ -186,6 +186,13 @@ class QuickJsTrailblazeToolTest {
     assertEquals(
       TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.yamlKey,
       device["driver"]!!.jsonPrimitive.content,
+    )
+    // instanceId (emulator serial / iOS simulator UDID) must reach the ctx envelope so a TS tool
+    // can target the session device, e.g. `exec(["xcrun","simctl", ctx.device.instanceId, …])`.
+    // Matches the `TrailblazeDeviceId.instanceId` set in `buildContext()`.
+    assertEquals(
+      "quickjs-trailblaze-tool-test",
+      device["instanceId"]!!.jsonPrimitive.content,
     )
   }
 

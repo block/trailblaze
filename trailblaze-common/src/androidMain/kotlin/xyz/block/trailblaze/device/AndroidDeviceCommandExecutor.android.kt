@@ -120,6 +120,28 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     FileReadWriteUtil.deleteFromDownloadsIfExists(context, fileName)
   }
 
+  actual fun writeFileToDevice(devicePath: String, content: ByteArray) {
+    val destFile = File(devicePath)
+    try {
+      // Direct file write — works for app-writable paths. The bytes never transit a shell
+      // argument, so there's no ARG_MAX ceiling regardless of payload size.
+      destFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
+      FileOutputStream(destFile).use { it.write(content) }
+    } catch (_: Exception) {
+      // Fallback for paths that need the `shell` UID (e.g. public storage on scoped-storage
+      // devices): stage the bytes in our own cache dir (direct I/O, no size limit), then `cp`
+      // into place via the shell. `cp` reads the file rather than taking the body as an
+      // argument, so this also stays clear of ARG_MAX. Paths are single-quote-escaped.
+      val tempFile = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, destFile.name)
+      FileOutputStream(tempFile).use { it.write(content) }
+      destFile.parentFile?.let { parent ->
+        executeShellCommand("mkdir -p ${parent.absolutePath.shellEscape()}")
+      }
+      executeShellCommand("cp ${tempFile.absolutePath.shellEscape()} ${devicePath.shellEscape()}")
+      tempFile.delete()
+    }
+  }
+
   actual fun listInstalledApps(): List<String> {
     return AdbCommandUtil.listInstalledApps()
   }

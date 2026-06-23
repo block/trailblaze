@@ -716,6 +716,23 @@ object TrailblazeHostYamlRunner {
       classifiers = listOf(TrailblazeDeviceClassifier("desktop"), TrailblazeDeviceClassifier("compose")),
     )
 
+    val composeToolSet = TrailblazeToolSetCatalog.resolveForDriver(
+      driverType = TrailblazeDriverType.COMPOSE,
+      requestedIds = ComposeToolSetIds.ALL,
+    )
+    val toolRepo = TrailblazeToolRepo(
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "Compose RPC Tool Set",
+        toolClasses = composeToolSet.toolClasses,
+        yamlToolNames = composeToolSet.yamlToolNames,
+      ),
+      // Bind the repo to the Compose driver so the KOOG tool surface matches it: COMPOSE is not in
+      // KOOG_INSPECTION_DRIVERS, so the generic `requestDetailedViewHierarchy` inspection tool (which
+      // a null-driver repo injects) stays off the surface — Compose's own `compose_request_details`
+      // is the detail tool. KOOG-path only; the default runner's surface is unaffected.
+      driverType = TrailblazeDriverType.COMPOSE,
+    )
+
     // Wrap agent creation in try-catch so rpcClient is closed if setup fails before
     // the agent (which owns the client lifecycle) is constructed.
     val agent: ComposeRpcTrailblazeAgent
@@ -733,39 +750,16 @@ object TrailblazeHostYamlRunner {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+        // Thread the session tool repo through so framework-tool composition resolves by name and
+        // so the KOOG strategy graph's dynamic-tool execution context is satisfied.
+        trailblazeToolRepo = toolRepo,
       )
     } catch (e: Exception) {
       rpcClient.close()
       throw e
     }
 
-    val composeToolSet = TrailblazeToolSetCatalog.resolveForDriver(
-      driverType = TrailblazeDriverType.COMPOSE,
-      requestedIds = ComposeToolSetIds.ALL,
-    )
-    val toolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "Compose RPC Tool Set",
-        toolClasses = composeToolSet.toolClasses,
-        yamlToolNames = composeToolSet.yamlToolNames,
-      ),
-    )
-
     val screenStateProvider = agent.screenStateProvider
-
-    val trailblazeRunner = TrailblazeRunner(
-      screenStateProvider = screenStateProvider,
-      agent = agent,
-      llmClient = dynamicLlmClient.createLlmClient(),
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-      trailblazeToolRepo = toolRepo,
-      systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = {
-        loggingRule.session ?: error("Session not available - ensure test is running")
-      },
-      maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-    )
 
     val elementComparator = TrailblazeElementComparator(
       screenStateProvider = screenStateProvider,
@@ -773,6 +767,41 @@ object TrailblazeHostYamlRunner {
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       toolRepo = toolRepo,
     )
+
+    // Brain selection (legacy or KOOG). Recordings replay uniformly via the runner-util below
+    // regardless of agent — only unrecorded steps reach the selected brain. Mirrors the Revyl /
+    // on-device wiring; the default TRAILBLAZE_RUNNER path is unchanged.
+    val trailblazeRunner: TestAgentRunner =
+      if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
+        KoogTestAgentRunner(
+          agent = agent,
+          toolRepo = toolRepo,
+          screenStateProvider = screenStateProvider,
+          elementComparator = elementComparator,
+          llmClient = dynamicLlmClient.createLlmClient(),
+          trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+          logger = loggingRule.logger,
+          sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+          maxLlmCalls = runYamlRequest.maxLlmCalls,
+          // Use the same Compose-desktop system prompt the legacy runner uses (not the generic
+          // mobile prompt) so the agent gets the Compose semantics-tree + takeSnapshot guidance.
+          systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
+        )
+      } else {
+        TrailblazeRunner(
+          screenStateProvider = screenStateProvider,
+          agent = agent,
+          llmClient = dynamicLlmClient.createLlmClient(),
+          trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+          trailblazeToolRepo = toolRepo,
+          systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
+          trailblazeLogger = loggingRule.logger,
+          sessionProvider = {
+            loggingRule.session ?: error("Session not available - ensure test is running")
+          },
+          maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
+        )
+      }
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = composeToolSet.toolClasses,
@@ -884,10 +913,10 @@ object TrailblazeHostYamlRunner {
 
       for (item in trailItems) {
         val itemResult = when (item) {
-          // NOTE: Compose has no KOOG_STRATEGY_GRAPH branch. The shared Koog seam needs a
-          // BaseTrailblazeAgent (for the tool-execution context), but ComposeRpcTrailblazeAgent
-          // implements TrailblazeAgent/TrailblazeAgentContext directly and isn't one — so KOOG
-          // falls back to the legacy runner here until Compose's agent is migrated.
+          // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
+          // steps to the selected runner (legacy / KOOG). ComposeRpcTrailblazeAgent is now a
+          // BaseTrailblazeAgent, so the KOOG strategy graph drives it through the same seam as the
+          // other drivers. Default unchanged.
           is TrailYamlItem.PromptsTrailItem ->
             trailblazeRunnerUtil.runPromptSuspend(
               prompts = item.promptSteps,
@@ -1026,6 +1055,12 @@ object TrailblazeHostYamlRunner {
           toolClasses = revylToolSet.toolClasses,
           yamlToolNames = revylToolSet.yamlToolNames,
         ),
+        // Bind the repo to the Revyl driver so the KOOG verify-step surface scopes to
+        // `revyl_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS).
+        // Without this the repo's driverType is null and verify scoping no-ops. Also keeps the
+        // generic `requestDetailedViewHierarchy` inspection tool off the Revyl KOOG surface (Revyl
+        // is excluded from KOOG_INSPECTION_DRIVERS — its agent can't run that generic tool).
+        driverType = runOnHostParams.trailblazeDriverType,
       )
 
       val agent = RevylTrailblazeAgent(
@@ -1357,6 +1392,15 @@ object TrailblazeHostYamlRunner {
         }
       },
     ) { session ->
+      // Start session-scoped capture (e.g. the iOS Simulator log stream) the moment the
+      // session exists, BEFORE any trail steps run. This Maestro host runner executes the
+      // whole trail synchronously, so the daemon's post-run capture activation would otherwise
+      // start capture only after the trail finished and record nothing. Guarded so a
+      // capture-start failure never tears down the trail.
+      runCatching { runOnHostParams.onSessionStarted(session.sessionId) }
+        .onFailure {
+          Console.log("[runMaestroHostYaml] onSessionStarted callback threw — continuing: ${it.message}")
+        }
       // Spawn target-declared subprocess MCP servers + register their tools into the
       // session's repo. Runs before trail execution so the LLM's first tools/list reflects
       // the full registry. Fail-fast: if any spawn fails, executeTrailSession's catch path

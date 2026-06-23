@@ -3,6 +3,7 @@ package xyz.block.trailblaze.quickjs.tools
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -33,6 +34,17 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
  *
  * A property whose schema isn't an object (e.g. a stray primitive) is dropped rather than
  * crashing registration — bad authoring shouldn't take a session down.
+ *
+ * **Assumes a `$ref`-free `inputSchema`.** This projection reads each property's `type` / `enum`
+ * directly and has no `$ref` resolution. Analyzer-derived schemas reach here already flattened
+ * because `AnalyzerScriptedToolEnrichment` runs them through `ScriptedToolSchemaRefFlattener` (in
+ * `:trailblaze-host`) before they become an `InlineScriptToolConfig.inputSchema`. That flattening is
+ * what makes a named string-literal union (e.g. `type Dir = "UP" | "DOWN"`) arrive as an inline
+ * `{ type: string, enum: [...] }` so [JsonSchemaProperty.validValues] can surface its allowed values
+ * to the LLM. A stray `$ref` here doesn't crash — it falls back to the default `string` type — but it
+ * silently loses BOTH the type and the enum constraint, so any NEW path that feeds analyzer schemas
+ * to a consumer must flatten first (the subprocess synthesizer's zod converter, by contrast,
+ * hard-throws on a bare `$ref`).
  */
 internal fun RegisteredToolSpec.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor {
   val description = (spec[SPEC_KEY_DESCRIPTION] as? JsonPrimitive)?.contentOrNull
@@ -82,14 +94,36 @@ private data class JsonSchemaInputSchema(
 }
 
 /**
- * Per-property JSON Schema entry: `{ type, description }`. A bundle-side primitive or
+ * Per-property JSON Schema entry: `{ type, description, enum }`. A bundle-side primitive or
  * other shape that doesn't fit fails decode and is dropped at the call site.
+ *
+ * `enum` is modeled as a raw [JsonArray] (not `List<String>`) so a non-string enum doesn't fail
+ * decode and silently drop the whole property — [validValues] decides which entries are promotable.
  */
 @Serializable
 private data class JsonSchemaProperty(
   @SerialName(SCHEMA_KEY_TYPE) val type: String? = null,
   @SerialName(SCHEMA_KEY_DESCRIPTION) val description: String? = null,
-)
+  @SerialName(SCHEMA_KEY_ENUM) val enum: JsonArray? = null,
+) {
+  /**
+   * The `enum`'s allowed string values, or null when there's no usable string enum. Surfacing
+   * these into [TrailblazeToolParameterDescriptor.validValues] is what lets the on-device agent's
+   * LLM see a parameter's legal values (e.g. a `"UP" | "DOWN" | …` swipe direction) instead of a
+   * bare `type: string` — the same fidelity a Kotlin `@Serializable` enum param gets.
+   *
+   * **Only STRING enums are promoted** — see
+   * [xyz.block.trailblaze.scripting.mcp.toTrailblazeToolDescriptor]'s `enumValues` for the
+   * rationale (koog enums are string-only; surfacing a non-string enum would emit a lying
+   * `{"type":"string",...}` schema). A non-string-typed enum keeps its primitive type and drops
+   * the constraint.
+   */
+  fun validValues(): List<String>? {
+    if (type != null && !type.equals("string", ignoreCase = true)) return null
+    return enum?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
+      ?.takeIf { it.isNotEmpty() }
+  }
+}
 
 private fun JsonObject.tryDecodeAsJsonSchema(): JsonSchemaInputSchema? = try {
   QuickJsToolEnvelopeJson.decodeFromJsonElement(JsonSchemaInputSchema.serializer(), this)
@@ -107,6 +141,7 @@ private fun Map<String, JsonObject>.toParameterDescriptors(): List<TrailblazeToo
       name = propName,
       type = prop.type ?: DEFAULT_PARAMETER_TYPE,
       description = prop.description,
+      validValues = prop.validValues(),
     )
   }
 
@@ -118,6 +153,7 @@ private fun JsonObject.toParameterDescriptors(): List<TrailblazeToolParameterDes
       name = propName,
       type = prop.type ?: DEFAULT_PARAMETER_TYPE,
       description = prop.description,
+      validValues = prop.validValues(),
     )
   }
 
@@ -138,6 +174,7 @@ private const val SCHEMA_KEY_TYPE = "type"
 private const val SCHEMA_KEY_PROPERTIES = "properties"
 private const val SCHEMA_KEY_REQUIRED = "required"
 private const val SCHEMA_KEY_DESCRIPTION = "description"
+private const val SCHEMA_KEY_ENUM = "enum"
 
 // JSON Schema's `type: "object"` discriminator value — anything else (or absent) is not
 // the nested shape and falls back to flat-author parsing.

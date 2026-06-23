@@ -241,9 +241,10 @@ class DesktopYamlRunner(
           // trailblaze-common, so the on-device RunYamlRequestHandler runs it in-process (see the
           // on-device branch below). `preferHostAgent` opts back into running the loop host-side and
           // dispatching each tool over RPC (`runHostTrailblazeRunnerWithOnDeviceRpc`).
-          // Compose still falls back to the legacy runner (its agent isn't a BaseTrailblazeAgent).
-          // The earlier MCP-self-connection approach (and the deadlock it hit) is the reason the
-          // in-process executor route exists; see [KoogStrategyGraphAgent].
+          // Compose (the RPC driver) also rides this host seam now that ComposeRpcTrailblazeAgent is
+          // a BaseTrailblazeAgent — `runComposeYaml` builds a KoogTestAgentRunner when KOOG is
+          // selected. The earlier MCP-self-connection approach (and the deadlock it hit) is the
+          // reason the in-process executor route exists; see [KoogStrategyGraphAgent].
           runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH &&
             trailblazeDriverType !in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
             prefixedProgressMessage(
@@ -260,6 +261,11 @@ class DesktopYamlRunner(
                 forceStopTargetApp = forceStopTargetApp,
                 targetTestApp = targetTestApp,
                 additionalInstrumentationArgs = { emptyMap() },
+                // Start capture (iOS log stream / Android logcat) the moment the Maestro
+                // session is created, BEFORE the synchronous trail run — without this the
+                // post-run activation below starts too late to record anything. Idempotent
+                // with the post-run call, so non-Maestro host paths are unaffected.
+                onSessionStarted = captureSessionStarted,
                 composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
                 referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
                 noLogging = desktopAppRunYamlParams.noLogging,
@@ -381,6 +387,12 @@ class DesktopYamlRunner(
                   // Not required since this is "host", but is required "on-device"
                   emptyMap()
                 },
+                // Start session-scoped capture (iOS Simulator log stream → device.log, Android
+                // logcat) the moment the Maestro session is created, BEFORE the synchronous trail
+                // run. This default-agent branch previously started no capture at all for the
+                // local Maestro paths — the finally block's stopForSession had nothing to stop —
+                // so iOS logs never landed in the report. Coordinator skips WEB and is idempotent.
+                onSessionStarted = captureSessionStarted,
                 composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
                 referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
                 noLogging = desktopAppRunYamlParams.noLogging,

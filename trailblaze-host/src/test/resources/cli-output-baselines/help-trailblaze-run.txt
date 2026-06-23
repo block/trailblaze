@@ -5,12 +5,12 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze run [-hvV] [--capture-all] [--capture-logcat]
-                      [--capture-network] [--[no-]capture-video] [--[no-]
-                      headless] [--markdown] [--no-daemon] [--no-logging]
-                      [--no-report] [--[no-]save-recording] [--self-heal] [--
-                      [no-]use-recorded-steps] [-a=<agent>]
-                      [--compose-port=<composePort>] [-d=<device>]
+Usage: trailblaze run [-hvV] [--capture-all] [--[no-]capture-ios-logs] [--[no-]
+                      capture-logcat] [--capture-network] [--[no-]
+                      capture-video] [--[no-]headless] [--markdown]
+                      [--no-daemon] [--no-logging] [--no-report] [--[no-]
+                      save-recording] [--self-heal] [--[no-]use-recorded-steps]
+                      [-a=<agent>] [--compose-port=<composePort>] [-d=<device>]
                       [--driver=<driverType>] [--llm=<llm>]
                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
@@ -43,10 +43,19 @@ removed in a future release.
                                directory.
   -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
                                TRAILBLAZE_RUNNER
-      --capture-all          Enable all capture streams: video, logcat, network
-                               (local dev mode)
-      --capture-logcat       Capture logcat output filtered to the app under
-                               test (local dev mode)
+      --capture-all          Enable all capture streams: video, logcat, iOS
+                               logs, network (local dev mode)
+      --[no-]capture-ios-logs
+                             Capture the iOS Simulator system log via `xcrun
+                               simctl spawn log stream` to <session-dir>/device.
+                               log (only takes effect on iOS). On by default;
+                               the stream is scoped to the app under test (the
+                               logcat-equivalent app log, not the system
+                               firehose). Use --no-capture-ios-logs to disable.
+      --[no-]capture-logcat  Capture Android logcat (filtered to the app under
+                               test) to <session-dir>/device.log (only takes
+                               effect on Android). On by default; use
+                               --no-capture-logcat to disable.
       --capture-network      Auto-capture network requests/responses to
                                <session-dir>/network.ndjson on supported
                                devices (web today; mobile devices added as

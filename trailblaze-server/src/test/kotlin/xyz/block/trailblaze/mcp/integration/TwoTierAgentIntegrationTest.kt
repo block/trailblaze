@@ -17,6 +17,7 @@ import xyz.block.trailblaze.agent.StrategistResult
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import ai.koog.prompt.llm.LLMCapability
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -56,7 +57,7 @@ class TwoTierAgentIntegrationTest {
       outputCostPerOneMillionTokens = 30.0,
       contextLength = 128_000,
       maxOutputTokens = 4_096,
-      capabilityIds = listOf("vision", "tools"),
+      capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id),
     )
   }
 

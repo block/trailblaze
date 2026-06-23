@@ -449,6 +449,13 @@ class HostOnDeviceRpcTrailblazeAgent(
 
   private fun executeToolViaRpc(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult {
     val timeBeforeExecution = Clock.System.now()
+    // How many `TrailblazeToolLog`s the on-device dispatch emitted for this tool. Set from the
+    // RPC response on the success path; stays 0 on any failure path (no device log to defer to,
+    // so the host emit below stays the only record). Drives the host-side double-log skip below.
+    // Atomic because it's written inside the `runBlocking` block and read after it returns: the
+    // continuation happens to resume on the caller thread today, but a future `withContext` in
+    // the block must not be able to silently break the cross-thread visibility of the count.
+    val onDeviceToolLogCount = AtomicInteger(0)
     val result: TrailblazeToolResult = runBlocking {
       try {
         // Memory tokens are pre-resolved by callers (`executeTool`'s outer dispatch and
@@ -485,6 +492,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             // instance so writes from on-device tools (including TS handlers) are visible to
             // subsequent host-side or RPC dispatches.
             applyMemorySnapshot(first.data.memorySnapshot)
+            onDeviceToolLogCount.set(first.data.onDeviceToolLogCount)
             toToolResult(name, first, timeBeforeExecution)
           }
           is RpcResult.Failure -> {
@@ -511,6 +519,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             when (val retry: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
               is RpcResult.Success -> {
                 applyMemorySnapshot(retry.data.memorySnapshot)
+                onDeviceToolLogCount.set(retry.data.onDeviceToolLogCount)
                 toToolResult(name, retry, timeBeforeExecution)
               }
               is RpcResult.Failure -> {
@@ -541,24 +550,40 @@ class HostOnDeviceRpcTrailblazeAgent(
       }
     }
 
-    // Emit a host-side TrailblazeToolLog for every RPC-routed dispatch. The on-device
-    // `BaseTrailblazeAgent.runTrailblazeTools` loop emits its own log for the sub-tool when
-    // its dispatch path runs `logToolExecution`, but at least one path bypasses that on
-    // Android — `TapOnByElementSelector.execute` short-circuits straight to
-    // `agent.executeNodeSelectorTap` for accessibility nodeSelectors, routing around the
-    // device's emit site. Without a host-side log, `TrailblazeRecordingGenerator` sees zero
-    // `TrailblazeToolLog` files in the host's session dir (only the unrecordable
-    // `DelegatingTrailblazeToolLog`) and emits empty recordings. The host emit closes that
-    // gap. `dispatchedHostSide = false` is the correct semantic — the actual dispatch ran
-    // on device. A follow-up will centralize this emit into `BaseTrailblazeAgent` so every
-    // dispatcher branch logs uniformly and the per-driver logging duplication goes away.
-    if (traceId != null) {
+    // Emit a host-side TrailblazeToolLog ONLY when the on-device dispatch did not already log
+    // the tool itself. The device runs the tool through
+    // `BaseTrailblazeAgent.runTrailblazeTools` and, in the common path, emits its own
+    // `TrailblazeToolLog` (pulled back to the host via `adb pull` and merged into this same
+    // session). When that happens, a second host-side emit produces a duplicate: the one
+    // execution renders twice in the session report — an outer "host" span and a nested
+    // "on-device" span (#3818). So we defer to the device's log whenever it reported one
+    // (`onDeviceToolLogCount > 0`).
+    //
+    // The host emit is still required for the catch-all case where the on-device dispatch
+    // emits NO `TrailblazeToolLog` — e.g. a tool whose `execute` short-circuits straight to
+    // `agent.executeNodeSelectorTap` (accessibility nodeSelectors), which only produces
+    // driver-action logs and routes around the device's tool-log emit site. Without the host
+    // emit there, `TrailblazeRecordingGenerator` would see zero `TrailblazeToolLog` files in
+    // the host's session dir (only the unrecordable `DelegatingTrailblazeToolLog`) and emit
+    // empty recordings. `dispatchedHostSide = false` is the correct semantic — the actual
+    // dispatch ran on device.
+    if (traceId != null && onDeviceToolLogCount.get() == 0) {
       logToolExecution(
         tool = tool,
         timeBeforeExecution = timeBeforeExecution,
         traceId = traceId,
         result = result,
         dispatchedHostSide = false,
+      )
+    } else if (traceId != null) {
+      // Breadcrumb for the #3818 skip path: when a tool appears once (or not at all) in a
+      // report, this line tells a triager the host *deliberately* deferred to the device's
+      // own tool log rather than dropping its own. Mirrors the diagnostic-log density of the
+      // rest of this dispatcher (every RPC state transition logs).
+      Console.log(
+        "[HostOnDeviceRpcAgent] Skipping host-side tool log for " +
+          "'${tool::class.simpleName}' — on-device dispatch already emitted " +
+          "${onDeviceToolLogCount.get()} tool log(s) (#3818).",
       )
     }
     return result

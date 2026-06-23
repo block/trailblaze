@@ -16,3 +16,8 @@
           nodeSelector:
             iosMaestro:
               textRegex: Contacts
+      - assertVisibleBySelector:
+          reason: Also assert the list-only "Add" button is visible to confirm this is the contacts list root specifically (the text "Contacts" alone is not list-root-unique — a contact detail screen's back button also carries the label "Contacts"). The list root shows "Add"; a detail screen shows "Edit" there instead. assertVisibleBySelector is a framework primitive, so this keeps the trail scripted-tool-free for the pure-replay smoke set.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add

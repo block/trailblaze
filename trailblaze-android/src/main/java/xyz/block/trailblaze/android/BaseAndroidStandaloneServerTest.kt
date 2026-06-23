@@ -5,8 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Rule
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.api.ScreenState
@@ -114,15 +116,30 @@ abstract class BaseAndroidStandaloneServerTest {
       // Set the session on the logging rule so it's available to all components
       // that use sessionProvider (AndroidTrailblazeRule and its subcomponents)
       trailblazeLoggingRule.setSession(session)
+      // Count the `TrailblazeToolLog`s this dispatch emits so the host RPC agent can skip its
+      // own catch-all tool-log emit when the device already logged the tool — otherwise the
+      // single execution renders twice in the session report (#3818). Scoped to this one
+      // request via `withLogObserver`; on-device runs are serialized, so the observer only sees
+      // logs from this dispatch.
+      val toolLogCount = AtomicInteger(0)
+      val toolLogCounter: (TrailblazeLog) -> Unit = { log ->
+        if (log is TrailblazeLog.TrailblazeToolLog) toolLogCount.incrementAndGet()
+      }
       val lastToolSuccess: TrailblazeToolResult.Success? = try {
-        handleRunRequest(runYamlRequest, agentMemory)
+        trailblazeLoggingRule.withLogObserver(toolLogCounter) {
+          handleRunRequest(runYamlRequest, agentMemory)
+        }
       } finally {
         // Clear the session after execution to prevent stale sessions
         trailblazeLoggingRule.setSession(null)
       }
       // Session passes through unchanged; memory writes flow through the shared instance.
       // Tool payload is mirrored into the response envelope by the handler.
-      RunYamlCallbackResult(session = session, lastToolSuccess = lastToolSuccess)
+      RunYamlCallbackResult(
+        session = session,
+        lastToolSuccess = lastToolSuccess,
+        onDeviceToolLogCount = toolLogCount.get(),
+      )
     }
 
 }

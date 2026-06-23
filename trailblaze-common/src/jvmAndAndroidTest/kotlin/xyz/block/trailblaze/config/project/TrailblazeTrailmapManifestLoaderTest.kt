@@ -570,6 +570,7 @@ class TrailblazeTrailmapManifestLoaderTest {
           "android_grantPermission",
           "android_sendBroadcast",
           "android_systemUiDemoMode",
+          "android_writeBytesToFile",
         ),
         toolset.tools,
       )

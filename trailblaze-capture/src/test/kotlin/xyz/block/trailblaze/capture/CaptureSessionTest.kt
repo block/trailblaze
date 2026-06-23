@@ -43,7 +43,8 @@ class CaptureSessionTest {
   @Test
   fun `captureLogcat true on IOS does NOT add AndroidLogcatCapture`() {
     val session = CaptureSession.fromOptions(
-      CaptureOptions(captureVideo = false, captureLogcat = true),
+      // Explicitly disable iOS logs (now on by default) to isolate the logcat-on-iOS case.
+      CaptureOptions(captureVideo = false, captureLogcat = true, captureIosLogs = false),
       TrailblazeDevicePlatform.IOS,
     )
     // captureLogcat is Android-only — on iOS with no other streams enabled, fromOptions
@@ -70,7 +71,8 @@ class CaptureSessionTest {
   @Test
   fun `captureIosLogs true on ANDROID does NOT add IosLogCapture`() {
     val session = CaptureSession.fromOptions(
-      CaptureOptions(captureVideo = false, captureIosLogs = true),
+      // Explicitly disable logcat (now on by default) to isolate the iosLogs-on-Android case.
+      CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = true),
       TrailblazeDevicePlatform.ANDROID,
     )
     assertNull(session)
@@ -95,7 +97,8 @@ class CaptureSessionTest {
   @Test
   fun `captureVideo true on IOS produces no video stream (intentionally disabled)`() {
     val session = CaptureSession.fromOptions(
-      CaptureOptions(captureVideo = true),
+      // Disable the log streams (now on by default) so this isolates the video-on-iOS case.
+      CaptureOptions(captureVideo = true, captureLogcat = false, captureIosLogs = false),
       TrailblazeDevicePlatform.IOS,
     )
     // iOS video capture is gated by the TODO in CaptureSession — no stream selected.

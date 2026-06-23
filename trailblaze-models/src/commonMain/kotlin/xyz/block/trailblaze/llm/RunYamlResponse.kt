@@ -81,6 +81,28 @@ data class RunYamlResponse(
    * [toolMessage].
    */
   val toolStructuredContent: JsonElement? = null,
+
+  /**
+   * How many [xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog] entries the
+   * on-device dispatch emitted while running this request's tool(s).
+   *
+   * Used by the host RPC agent (`HostOnDeviceRpcTrailblazeAgent`, in `:trailblaze-host`)
+   * to avoid double-logging an on-device tool in the session report (#3818). The host serializes
+   * one tool per [RunYamlRequest] and dispatches it over RPC; the device runs it and (in the
+   * common path) emits its own `TrailblazeToolLog`, which is pulled back to the host and merged
+   * into the same session. Without this signal the host *also* emits a catch-all
+   * `logToolExecution` after the RPC returns, so the single execution renders twice in the
+   * timeline.
+   *
+   *  - `> 0` — the device already logged the tool; the host skips its own emit so the tool
+   *    appears exactly once.
+   *  - `0` — the on-device path emitted no tool log (e.g. a tool whose dispatch bypasses the
+   *    device emit site and only produces driver-action logs). The host still emits one so the
+   *    dispatch stays visible to recording / reports.
+   *
+   * Always `0` for fire-and-forget dispatches (no tool has executed yet).
+   */
+  val onDeviceToolLogCount: Int = 0,
 ) {
   init {
     require(success != null || memorySnapshot.isEmpty()) {
@@ -90,6 +112,10 @@ data class RunYamlResponse(
     require(success != null || (toolMessage == null && toolStructuredContent == null)) {
       "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry a tool " +
         "payload — no tool has executed yet."
+    }
+    require(success != null || onDeviceToolLogCount == 0) {
+      "RunYamlResponse for fire-and-forget dispatch (success=null) cannot report a non-zero " +
+        "onDeviceToolLogCount — no tool has executed yet."
     }
   }
 }

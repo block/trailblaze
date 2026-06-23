@@ -160,10 +160,10 @@ class BuiltInToolsBindingDriftTest {
   @Test
   fun `every tool name listed in built-in-tools_ts has a Kotlin TrailblazeToolClass annotation`() {
     val builtInToolsTs = locateBuiltInToolsTs()
-    val toolCallsCommandsDir = locateToolCallsCommandsDir()
+    val toolSourceRoot = locateTrailblazeToolSourceRoot()
 
     val tsNames = extractTsToolMapKeys(builtInToolsTs.readText())
-    val kotlinNames = extractKotlinAnnotationNames(toolCallsCommandsDir)
+    val kotlinNames = extractKotlinAnnotationNames(toolSourceRoot)
 
     assertTrue("Expected at least a few names listed in built-in-tools.ts; got 0") { tsNames.isNotEmpty() }
     assertTrue("Expected to discover Kotlin @TrailblazeToolClass annotations; got 0") { kotlinNames.isNotEmpty() }
@@ -175,7 +175,7 @@ class BuiltInToolsBindingDriftTest {
           appendLine("Drift detected — these tool names are declared in")
           appendLine("  $builtInToolsTs")
           appendLine("but no @TrailblazeToolClass(\"…\") annotation matches in")
-          appendLine("  $toolCallsCommandsDir")
+          appendLine("  $toolSourceRoot")
           appendLine()
           missing.sorted().forEach { appendLine("  - $it") }
           appendLine()
@@ -204,8 +204,16 @@ class BuiltInToolsBindingDriftTest {
     fail("Could not locate $anchor by walking up from ${System.getProperty("user.dir")}.")
   }
 
-  private fun locateToolCallsCommandsDir(): File {
-    val anchor = "trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/toolcalls/commands"
+  /**
+   * Locate the root package dir holding every `@TrailblazeToolClass` in `trailblaze-common`.
+   * Framework tools live in several subpackages under it — `toolcalls/commands` (tap / assert /
+   * swipe / launch), `mobile/tools` (`android_adbShell`, `android_grantPermission`,
+   * `android_writeFileToDownloads`, …), `android/tools` — so we anchor on the package root and
+   * `extractKotlinAnnotationNames` walks it recursively. (Scanning only `toolcalls/commands`
+   * would miss any `built-in-tools.ts` entry backed by a class in one of the sibling packages.)
+   */
+  private fun locateTrailblazeToolSourceRoot(): File {
+    val anchor = "trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze"
     var dir: File? = File(System.getProperty("user.dir")).absoluteFile
     while (dir != null) {
       val candidate = File(dir, anchor)
@@ -357,6 +365,13 @@ class BuiltInToolsBindingDriftTest {
     )
     // Match `@TrailblazeToolClass("name", ...)` and `@TrailblazeToolClass(name = "name", ...)`.
     // Non-greedy `[^"]*?` would also work; using `[^"]+?` to require a non-empty name.
+    //
+    // LIMITATION: this matches a quoted string LITERAL only — it can't resolve a const-valued
+    // name (`@TrailblazeToolClass(name = SOME_CONST)`), and a comment between `(` and `name` also
+    // defeats it. A const-named tool is therefore invisible to this guard. So any tool that gains
+    // a typed binding in built-in-tools.ts MUST declare its `@TrailblazeToolClass` name as a string
+    // literal adjacent to `(`/`name =` (see `ExecTrailblazeTool`, which switched off EXEC_TOOL_NAME
+    // for exactly this reason). Hardening the scan to resolve consts is a possible future change.
     private val KOTLIN_ANNOTATION_PATTERN = Regex(
       """@TrailblazeToolClass\s*\(\s*(?:name\s*=\s*)?"([^"]+?)"""",
     )

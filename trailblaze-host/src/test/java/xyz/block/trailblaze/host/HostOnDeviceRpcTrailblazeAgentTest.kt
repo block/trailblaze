@@ -996,6 +996,126 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
   }
 
+  // ── On-device double-log fix (#3818) ──────────────────────────────────────────────────────
+  //
+  // An RPC-routed tool is logged on-device (its `TrailblazeToolLog` is pulled back to the host
+  // and merged into the same session). Before the fix, `executeToolViaRpc` ALSO emitted a
+  // host-side `TrailblazeToolLog` for every dispatch, so the single execution rendered twice in
+  // the report. The device now reports how many tool logs it emitted via
+  // `RunYamlResponse.onDeviceToolLogCount`; the host skips its own emit when that count is > 0
+  // and keeps it (the recording catch-all) when the device logged nothing.
+
+  @Test
+  fun `host skips its tool-log emit when device reports it already logged the tool`() {
+    // Device reports it emitted a tool log for this dispatch — the host must NOT emit a second
+    // one, or the tool double-renders in the report (the #3818 bug).
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true,"onDeviceToolLogCount":1}"""
+    }
+
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // The on-device dispatch already logged the tool; the host adds nothing.
+    assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).isEmpty()
+  }
+
+  @Test
+  fun `host emits its catch-all tool-log when device reports it logged nothing`() {
+    // Device reports zero tool logs (the bypass case: e.g. an accessibility nodeSelector tap
+    // that only produces driver-action logs). The host must keep emitting so the dispatch
+    // stays visible to recording / reports.
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true,"onDeviceToolLogCount":0}"""
+    }
+
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    // Exactly one host-side tool log — the recording catch-all is preserved.
+    assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).hasSize(1)
+  }
+
+  @Test
+  fun `host treats an absent onDeviceToolLogCount as zero and emits its catch-all`() {
+    // Back-compat / default: a response omitting `onDeviceToolLogCount` decodes to 0, so the
+    // host keeps its catch-all emit (the safe default — worst case is the prior duplicate, never
+    // a dropped recording).
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    runBlocking {
+      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).hasSize(1)
+  }
+
+  @Test
+  fun `host honors the device count from the retry response after a re-warm`() {
+    // The count must be read off the RETRY response too, not just the first attempt. First call
+    // 500s (forcing the re-warm path), retry succeeds reporting it logged the tool — the host
+    // must still skip its own emit. Without reading `retry.data.onDeviceToolLogCount`, the host
+    // would double-log every tool that needed a re-warm.
+    val attempts = AtomicInteger(0)
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      if (attempts.incrementAndGet() == 1) {
+        HttpStatusCode.InternalServerError to
+          """{"errorType":"NETWORK_ERROR","message":"Network error during RPC call","details":"connect timeout"}"""
+      } else {
+        HttpStatusCode.OK to """{"sessionId":"test-session","success":true,"onDeviceToolLogCount":1}"""
+      }
+    }
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.OK to
+        """{"viewHierarchy":{},"screenshotBase64":null,"deviceWidth":1080,"deviceHeight":1920}"""
+    }
+
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
+    // Retry reported a device log → host defers, no duplicate.
+    assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).isEmpty()
+  }
+
+  @Test
+  fun `host skips its tool-log emit when there is no traceId to attach`() {
+    // The gate is `traceId != null && count == 0`. With a null traceId there's no trace to hang
+    // the log on, so the host never emits regardless of the device count. Pins the null-traceId
+    // half of the gate (the existing tests all pass a generated traceId).
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true,"onDeviceToolLogCount":0}"""
+    }
+
+    val captured = mutableListOf<TrailblazeLog>()
+    val agent = createAgent(trailblazeLogger = capturingLogger(captured))
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking { agent.runMaestroCommands(commands, traceId = null) }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()).isEmpty()
+  }
+
   /**
    * Regression net: scripted tools dispatched through this agent get
    * `ctx.target.resolveAppId()` populated. The bug this guards against was the agent's

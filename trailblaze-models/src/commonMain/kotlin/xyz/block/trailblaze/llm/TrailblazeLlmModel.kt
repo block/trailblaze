@@ -29,6 +29,12 @@ data class TrailblazeLlmModel(
   val imageTokenFormula: ImageTokenFormula = ImageTokenFormula.DEFAULT,
   val contextLength: Long,
   val maxOutputTokens: Long,
+  /**
+   * Koog [LLMCapability] ids (see [LlmCapabilitiesUtil] for the id↔capability mapping). Use the
+   * actual Koog ids — e.g. vision is `"image"` (`LLMCapability.Vision.Image.id`), NOT `"vision"`.
+   * An id that matches no capability is silently dropped by [capabilities], so a typo like `"vision"`
+   * makes the model read as non-vision and breaks vision-gated behavior (e.g. the screenshot attach).
+   */
   val capabilityIds: List<String>,
   val defaultTemperature: Double? = null,
   val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
@@ -131,7 +137,8 @@ data class TrailblazeLlmModel(
         outputCostPerOneMillionTokens = 0.0, // Unknown cost - client pays
         contextLength = 200_000, // Reasonable default
         maxOutputTokens = 8_192, // Reasonable default
-        capabilityIds = listOf("vision", "tools"), // Assume full capabilities
+        // Use the canonical Koog ids (vision = "image", not "vision") so this can't drift.
+        capabilityIds = listOf(LLMCapability.Vision.Image.id, LLMCapability.Tools.id), // Assume full capabilities ("image" = Koog Vision.Image)
       )
     }
 

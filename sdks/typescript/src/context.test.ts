@@ -25,6 +25,63 @@ function envelope(target?: unknown): unknown {
   };
 }
 
+describe("fromMeta: device block", () => {
+  // Builds an envelope whose device block is exactly `device`, so each test controls the
+  // instanceId shape (the shared `envelope()` helper hardcodes a device with no instanceId).
+  function withDevice(device: Record<string, unknown>): unknown {
+    return {
+      trailblaze: {
+        baseUrl: "http://localhost:52525",
+        sessionId: "session-abc",
+        invocationId: "inv-123",
+        device,
+        memory: {},
+      },
+    };
+  }
+
+  test("instanceId present is parsed onto ctx.device.instanceId", () => {
+    const ctx = fromMeta(
+      withDevice({
+        platform: "ios",
+        widthPixels: 1170,
+        heightPixels: 2532,
+        driverType: "ios-host",
+        instanceId: "ABC-123-UDID",
+      }),
+    );
+    expect(ctx?.device.instanceId).toBe("ABC-123-UDID");
+  });
+
+  test("instanceId absent leaves it undefined without dropping the envelope (older daemon / subprocess path)", () => {
+    const ctx = fromMeta(
+      withDevice({
+        platform: "android",
+        widthPixels: 1080,
+        heightPixels: 2400,
+        driverType: "android-ondevice-accessibility",
+      }),
+    );
+    expect(ctx).toBeDefined();
+    expect(ctx?.device.instanceId).toBeUndefined();
+    expect(ctx?.device.platform).toBe("android");
+  });
+
+  test("non-string instanceId is treated as absent (lenient parse), envelope still parses", () => {
+    const ctx = fromMeta(
+      withDevice({
+        platform: "android",
+        widthPixels: 1080,
+        heightPixels: 2400,
+        driverType: "android-ondevice-accessibility",
+        instanceId: 42,
+      }),
+    );
+    expect(ctx).toBeDefined();
+    expect(ctx?.device.instanceId).toBeUndefined();
+  });
+});
+
 describe("fromMeta: target block", () => {
   test("absent target leaves ctx.target undefined (older-daemon backward compat)", () => {
     const ctx = fromMeta(envelope());

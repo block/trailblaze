@@ -11,6 +11,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-06-22 | [Framework provides primitives; helpers are not framework](2026-06-22-framework-primitives-helpers-compose.md) | Decision |
 | 2026-06-17 | [Can the Kotlin Compiler Emit Our TypeScript Bindings Natively?](2026-06-17-kotlin-native-ts-bindings-spike.md) | Decision |
 | 2026-06-17 | [Consolidate scripted-tool surfaces: one SDK, per-tool runtime drives transport](2026-06-17-consolidate-scripted-tool-surfaces.md) | Decision |
 | 2026-05-28 | [Bun is the sole JavaScript runtime](2026-05-28-bun-only-runtime.md) | Devlog |

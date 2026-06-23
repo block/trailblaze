@@ -99,3 +99,19 @@ fun AccessibilityNodeInfo.toTreeNode(): TreeNode {
     selected = if (isSelected) true else null,
   )
 }
+
+/**
+ * Converts one or more window roots (in z-order; see
+ * [TrailblazeAccessibilityService.getCaptureWindowRoots]) into a single Maestro [TreeNode].
+ *
+ * A single root converts exactly as [toTreeNode] would on its own — identical to the historical
+ * single-window capture, so the common case is unchanged. Two or more roots are gathered under a
+ * synthetic, attribute-less container whose children are each window's subtree in the given
+ * order, so dialog/popup/sub-panel content captured from secondary windows appears in the tree
+ * after the base application window.
+ */
+fun List<AccessibilityNodeInfo>.toMergedTreeNode(): TreeNode? = when (size) {
+  0 -> null
+  1 -> this[0].toTreeNode()
+  else -> TreeNode(attributes = mutableMapOf(), children = map { it.toTreeNode() })
+}

@@ -77,6 +77,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     description: String? = null,
     inputSchema: JsonObject = JsonObject(mapOf("type" to JsonPrimitive("object"))),
     spec: JsonObject? = null,
+    uncapturedSpec: Boolean = false,
   ): ScriptedToolDefinition = ScriptedToolDefinition(
     name = name,
     sourcePath = sourcePath,
@@ -85,6 +86,7 @@ class AnalyzerScriptedToolEnrichmentTest {
     inputSchema = inputSchema,
     outputSchema = JsonObject(mapOf("type" to JsonPrimitive("string"))),
     spec = spec,
+    uncapturedSpec = uncapturedSpec,
   )
 
   /** Test seam: drives [AnalyzerScriptedToolEnrichment] with a fixed analyzer payload. */
@@ -140,6 +142,32 @@ class AnalyzerScriptedToolEnrichmentTest {
     // _meta carries the top-level supportedPlatforms shortcut.
     val platforms = assertIs<JsonArray>(config.meta?.get("trailblaze/supportedPlatforms"))
     assertEquals(JsonPrimitive("ios"), platforms.single())
+  }
+
+  @Test
+  fun `meta-only descriptor whose ts passes a non-inline spec reference hard-fails`() {
+    // The analyzer drops the whole spec when the (spec, handler) overload is given a `const SPEC`
+    // reference (uncapturedSpec=true). A meta-only descriptor has no YAML to supply the gates, so
+    // enrichment must FAIL loud rather than silently advertise an un-gated tool — the safety net for
+    // agents authoring descriptor-less `.ts` tools.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "swipe.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "swipe", sourcePath = script.absolutePath, uncapturedSpec = true))
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/swipe.ts", script = "./swipe.ts")),
+    )
+    val failed = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failed.reason.contains("non-inline spec reference") &&
+        failed.reason.contains("Inline the spec"),
+      "expected an actionable inline-the-spec message, got: ${failed.reason}",
+    )
   }
 
   @Test
@@ -855,6 +883,166 @@ class AnalyzerScriptedToolEnrichmentTest {
     // meta is null here (no shortcuts, no explicit _meta, null spec) — no surface/record keys.
     assertNull(config.meta?.get("trailblaze/surfaceToLlm"))
     assertNull(config.meta?.get("trailblaze/isRecordable"))
+  }
+
+  @Test
+  fun `meta-only descriptor inlines a named-enum input schema ref the analyzer emitted`() {
+    // Regression guard for the enum-param subprocess-registration bug. ts-json-schema-generator
+    // (expose:"all") emits a NAMED string-literal union (`type Dir = "UP" | "DOWN"`) as a property
+    // `$ref` into a sibling `definitions` bag. The subprocess wrapper's zod converter throws on a
+    // bare `$ref`, so enrichment MUST inline it before the schema reaches `InlineScriptToolConfig`.
+    // Pre-fix this passed `def.inputSchemaObject` through unchanged and this assertion fails.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "enumTool.ts")
+    val refSchema = JsonObject(
+      mapOf(
+        "type" to JsonPrimitive("object"),
+        "properties" to JsonObject(
+          mapOf("direction" to JsonObject(mapOf("\$ref" to JsonPrimitive("#/definitions/Dir")))),
+        ),
+        "definitions" to JsonObject(
+          mapOf(
+            "Dir" to JsonObject(
+              mapOf(
+                "type" to JsonPrimitive("string"),
+                "enum" to JsonArray(listOf(JsonPrimitive("UP"), JsonPrimitive("DOWN"))),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "enumTool", sourcePath = script.absolutePath, inputSchema = refSchema))
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(deferred(relativePath = "tools/enumTool.yaml", script = "./enumTool.ts")),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val schema = config.inputSchema
+    assertNull(schema["definitions"], "the definitions bag must be dropped after inlining")
+    val direction = assertIs<JsonObject>(
+      assertIs<JsonObject>(schema["properties"])["direction"],
+    )
+    assertNull(direction["\$ref"], "the enum \$ref must be inlined, not passed through to the synthesizer")
+    assertEquals(JsonPrimitive("string"), direction["type"])
+    assertEquals(
+      listOf(JsonPrimitive("UP"), JsonPrimitive("DOWN")),
+      assertIs<JsonArray>(direction["enum"]).toList(),
+    )
+  }
+
+  @Test
+  fun `partial single-tool descriptor inlines a named-enum ref from the analyzer`() {
+    // Same flattening, exercised through the partial single-tool branch (buildPartialConfig) where
+    // the descriptor names the export but leaves inputSchema to the analyzer.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "enumTool.ts")
+    val refSchema = JsonObject(
+      mapOf(
+        "type" to JsonPrimitive("object"),
+        "properties" to JsonObject(
+          mapOf("mode" to JsonObject(mapOf("\$ref" to JsonPrimitive("#/definitions/Mode")))),
+        ),
+        "definitions" to JsonObject(
+          mapOf(
+            "Mode" to JsonObject(
+              mapOf(
+                "type" to JsonPrimitive("string"),
+                "enum" to JsonArray(listOf(JsonPrimitive("FAST"), JsonPrimitive("SLOW"))),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "enumTool", sourcePath = script.absolutePath, inputSchema = refSchema))
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/enumTool.yaml",
+          descriptor = TrailmapScriptedToolFile(script = "./enumTool.ts", name = "enumTool"),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val mode = assertIs<JsonObject>(assertIs<JsonObject>(config.inputSchema["properties"])["mode"])
+    assertNull(mode["\$ref"])
+    assertEquals(
+      listOf(JsonPrimitive("FAST"), JsonPrimitive("SLOW")),
+      assertIs<JsonArray>(mode["enum"]).toList(),
+    )
+  }
+
+  @Test
+  fun `partial multi-tool descriptor inlines a named-enum ref per matched entry`() {
+    // The multi-tool branch (descriptor.tools list) flows through the same buildPartialConfig flatten
+    // site as the single-tool branch — pin that an enum `$ref` on a multi-tool entry inlines too.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "multiEnum.ts")
+    fun enumSchema(name: String, vararg values: String) = JsonObject(
+      mapOf(
+        "type" to JsonPrimitive("object"),
+        "properties" to JsonObject(
+          mapOf(name to JsonObject(mapOf("\$ref" to JsonPrimitive("#/definitions/E")))),
+        ),
+        "definitions" to JsonObject(
+          mapOf(
+            "E" to JsonObject(
+              mapOf(
+                "type" to JsonPrimitive("string"),
+                "enum" to JsonArray(values.map { JsonPrimitive(it) }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(name = "toolA", sourcePath = script.absolutePath, inputSchema = enumSchema("dir", "UP", "DOWN")),
+        stubDef(name = "toolB", sourcePath = script.absolutePath, inputSchema = enumSchema("mode", "FAST", "SLOW")),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/multiEnum.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./multiEnum.ts",
+            tools = listOf(
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(name = "toolA"),
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(name = "toolB"),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val byName = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single())
+      .configs.associateBy { it.name }
+    val dir = assertIs<JsonObject>(assertIs<JsonObject>(byName.getValue("toolA").inputSchema["properties"])["dir"])
+    assertNull(dir["\$ref"])
+    assertEquals(listOf(JsonPrimitive("UP"), JsonPrimitive("DOWN")), assertIs<JsonArray>(dir["enum"]).toList())
+    val mode = assertIs<JsonObject>(assertIs<JsonObject>(byName.getValue("toolB").inputSchema["properties"])["mode"])
+    assertNull(mode["\$ref"])
+    assertEquals(listOf(JsonPrimitive("FAST"), JsonPrimitive("SLOW")), assertIs<JsonArray>(mode["enum"]).toList())
   }
 
   // ============================================================================

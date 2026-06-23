@@ -176,6 +176,29 @@ internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCoun
   )
 }
 
+/**
+ * Converts one or more window roots (in z-order; see
+ * [TrailblazeAccessibilityService.getCaptureWindowRoots]) into a single [AccessibilityNode] tree.
+ *
+ * A single root converts exactly as [toAccessibilityNode] would on its own — identical to the
+ * historical single-window capture. Two or more roots are gathered under a synthetic container
+ * node whose children are each window's subtree in the given order, so dialog/popup/sub-panel
+ * content from secondary windows is included after the base application window. A shared
+ * [NodeIdCounter] keeps `nodeId` values unique across the merged windows.
+ */
+internal fun List<AccessibilityNodeInfo>.toMergedAccessibilityNode(): AccessibilityNode? =
+  when (size) {
+    0 -> null
+    1 -> this[0].toAccessibilityNode()
+    else -> {
+      val counter = NodeIdCounter()
+      AccessibilityNode(
+        nodeId = counter.next(),
+        children = map { it.toAccessibilityNode(counter) },
+      )
+    }
+  }
+
 /** Auto-incrementing counter for assigning node IDs within a single tree capture. Not thread-safe — intended for single-threaded recursive use only. */
 internal class NodeIdCounter {
   private var counter = 0L

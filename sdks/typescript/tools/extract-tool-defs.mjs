@@ -348,6 +348,11 @@ for (const arg of args) {
       // Skipping unknown shapes lets authors use the pattern today and benefit
       // from full metadata extraction once the resolver lands.
       const spec = extractToolSpec(init);
+      // Footgun guard: the (spec, handler) overload was used but the spec arg is a non-inline
+      // reference the analyzer can't read (`const SPEC = {...}` / a factory call), so the WHOLE
+      // spec — supportedPlatforms / surfaceToLlm / … — was dropped. Surface it so the Kotlin layer
+      // can warn (or hard-fail a descriptor-less tool) instead of silently shipping an un-gated tool.
+      const uncapturedSpec = !spec && specArgIsUncapturedReference(init);
 
       const { line } = sourceFile.getLineAndCharacterOfPosition(decl.getStart(sourceFile));
 
@@ -400,6 +405,9 @@ for (const arg of args) {
         // shape stable for existing consumers and lets the Kotlin decoder
         // treat absent-spec the same way it treats no-such-field.
         ...(spec ? { spec } : {}),
+        // Emitted only in the dangerous "spec ref, nothing captured" case (see above) so existing
+        // consumers that don't read it see an unchanged envelope.
+        ...(uncapturedSpec ? { uncapturedSpec: true } : {}),
       });
     }
   }
@@ -662,6 +670,34 @@ function extractToolSpec(callExpression) {
     captured[fieldName] = captured_value;
   }
   return Object.keys(captured).length > 0 ? captured : null;
+}
+
+/**
+ * True when the call uses the `(spec, handler)` overload but its spec argument is a non-inline
+ * reference the analyzer can't read — `trailblaze.tool<I>(SPEC, handler)` with `const SPEC = {...}`,
+ * `tool(Specs.foo, handler)`, or `tool(makeSpec(), handler)`. In every such case the ENTIRE spec
+ * (supportedPlatforms / surfaceToLlm / requiresHost / …) is dropped, silently un-gating the tool.
+ *
+ * Distinguished from the harmless forms:
+ *   - bare handler `tool(handler)` / `tool(namedHandlerFn)` — ONE arg, so not flagged;
+ *   - inline literal `tool({ ... }, handler)` — arg 0 is an object literal (captured, possibly
+ *     partially — that's the existing skip policy, not this whole-spec-dropped case);
+ *   - imperative `tool(name, spec, handler)` — arg 0 is a string literal.
+ *
+ * Requiring a second argument is what separates `tool(SPEC, handler)` (2 args → spec ref) from
+ * `tool(namedHandlerFn)` (1 arg → the handler itself is a reference, which is fine).
+ */
+function specArgIsUncapturedReference(callExpression) {
+  const args = callExpression.arguments;
+  // Scope to exactly the 2-arg typed overload `tool<I,O>(spec, handler)`. One arg is a bare handler;
+  // 3+ args is the imperative `tool(name, spec, handler)` form (a different shape the typed analyzer
+  // doesn't own) — neither is the "spec reference dropped" case this guard targets.
+  if (!args || args.length !== 2) return false;
+  const arg0 = args[0];
+  if (ts.isArrowFunction(arg0) || ts.isFunctionExpression(arg0)) return false;
+  if (ts.isObjectLiteralExpression(arg0)) return false;
+  if (ts.isStringLiteral(arg0)) return false;
+  return true;
 }
 
 /**

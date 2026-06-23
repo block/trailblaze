@@ -96,10 +96,11 @@ data class TrailblazeServerState(
      * to change the viewport box mid-session without rebuilding the context.
      */
     val webViewport: String? = null,
-    // Local dev capture settings
-    val captureLogcat: Boolean = false,
-    // Capture iOS Simulator system logs (off by default — extremely high volume).
-    val captureIosLogs: Boolean = false,
+    // Capture settings. Logcat on by default (filtered to the app under test, written to device.log).
+    val captureLogcat: Boolean = true,
+    // Capture the iOS Simulator system log. On by default: IosLogCapture scopes the stream to
+    // the app under test at --level info (logcat-equivalent), not the system-wide firehose.
+    val captureIosLogs: Boolean = true,
     /**
      * When true, every supported session auto-starts the framework network
      * capture engine — events stream to `<session-dir>/network.ndjson` with no

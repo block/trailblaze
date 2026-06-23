@@ -996,6 +996,66 @@ class TrailmapTargetGeneratorTest {
     )
   }
 
+  @Test
+  fun `descriptor-less target tools name resolves from the analyzer JSON with a relativized script`() {
+    // The analyzer-JSON fallback: a `target.tools:` name with NO sibling YAML descriptor is resolved
+    // from the JSON emitted by BundledScriptedToolAnalyzeMain (keyed trailmapId -> toolName ->
+    // inline config). The kaml descriptor path stays primary; this only fills the descriptor-less gap.
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      target:
+        display_name: MyApp
+        tools:
+          - myTool
+      """.trimIndent(),
+    )
+    // The descriptor-less `.ts` (no sibling myTool.yaml).
+    val tsFile = File(trailmapsDir, "myapp/tools/myTool.ts").apply {
+      writeText("export const myTool = trailblaze.tool(async () => \"ok\");\n")
+    }
+    // Analyzer JSON as BundledScriptedToolAnalyzeMain would emit it — `script` is an ABSOLUTE path.
+    val analyzerJson = File(newTempDir(), "analyzer-tool-defs.json")
+    analyzerJson.writeText(
+      """
+      {
+        "myapp": {
+          "myTool": {
+            "script": "${tsFile.absolutePath}",
+            "name": "myTool",
+            "description": "Does a thing.",
+            "_meta": { "trailblaze/supportedPlatforms": ["ios"] },
+            "inputSchema": { "type": "object", "properties": {} }
+          }
+        }
+      }
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = targetsDir,
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+      analyzerToolsJson = analyzerJson,
+    )
+    val content = generator.buildExpectedTargets().values.single()
+
+    assertTrue(content.contains("name: myTool"), "analyzer-derived tool missing from target: $content")
+    assertTrue(content.contains("Does a thing."), "analyzer-derived description missing: $content")
+    // `script` relativized to scriptRootDir, NOT the absolute analyzer path.
+    assertTrue(
+      content.contains("script: trails/config/trailmaps/myapp/tools/myTool.ts"),
+      "script should be relativized to scriptRootDir; got: $content",
+    )
+    assertTrue(!content.contains(tsFile.absolutePath), "absolute script path leaked into target: $content")
+    assertTrue(content.contains("trailblaze/supportedPlatforms"), "analyzer-derived _meta missing: $content")
+  }
+
   private fun newTempDir(): File =
     createTempDirectory("trailmap-target-generator-test").toFile().also { tempDirs += it }
 }

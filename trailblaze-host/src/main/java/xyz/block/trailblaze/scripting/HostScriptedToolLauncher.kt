@@ -118,7 +118,12 @@ object HostScriptedToolLauncher {
         )
         emptyList()
       } else {
-        val bundler = DaemonScriptedToolBundler(esbuildBinary)
+        // Resolve the slim in-process SDK entry independently of the esbuild binary's location: when
+        // esbuild comes from PATH (Homebrew, `npm -g`) rather than the SDK's own node_modules, the
+        // bundler's own walk-up-from-esbuild can't find it and would inline the full ~1.2 MB SDK into
+        // every on-device bundle. Supplying it here keeps the slim profile working regardless.
+        val inProcessSdkEntry = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry()
+        val bundler = DaemonScriptedToolBundler(esbuildBinary, inProcessSdkEntryOverride = inProcessSdkEntry)
         // Static-analysis pre-pass (#3190): a tool whose import closure reaches `node:*` builtins or
         // Node-only npm deps would fail the real bundle pass and tank session start for every
         // sibling tool in the QuickJS partition. The analyzer lets us skip such tools cleanly and

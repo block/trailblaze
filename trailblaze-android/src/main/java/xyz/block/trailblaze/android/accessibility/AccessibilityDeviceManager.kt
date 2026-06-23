@@ -373,7 +373,7 @@ class AccessibilityDeviceManager(
             return copyTextAndSetClipboard(result.node, action.nodeSelector)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
-            return copyTextAndSetClipboard(result.nodes.first(), action.nodeSelector)
+            return copyTextAndSetClipboard(pickPreferredMatch(result.nodes), action.nodeSelector)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* keep polling */ }
         }
@@ -453,7 +453,7 @@ class AccessibilityDeviceManager(
             return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
-            val center = result.nodes.first().centerPoint()
+            val center = pickPreferredMatch(result.nodes).centerPoint()
             return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* scroll and retry */ }
@@ -514,14 +514,8 @@ class AccessibilityDeviceManager(
    * Captures the current accessibility tree as a high-fidelity [AccessibilityNode] model.
    * This bypasses Maestro's `TreeNode` and captures the full richness of `AccessibilityNodeInfo`.
    */
-  fun getAccessibilityTree(): AccessibilityNode? {
-    val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo() ?: return null
-    return try {
-      rootNodeInfo.toAccessibilityNode()
-    } finally {
-      rootNodeInfo.recycle()
-    }
-  }
+  fun getAccessibilityTree(): AccessibilityNode? =
+    TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode
 
   /**
    * Resolves a [TrailblazeNodeSelector] against the live accessibility tree using a
@@ -662,14 +656,14 @@ class AccessibilityDeviceManager(
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
-            val first = result.nodes.first()
-            val center = first.centerPoint()
-              ?: error("First matched element has no bounds: ${action.nodeSelector.description()}")
+            val chosen = pickPreferredMatch(result.nodes)
+            val center = chosen.centerPoint()
+              ?: error("Matched element has no bounds: ${action.nodeSelector.description()}")
             Console.log(
-              "TrailblazeNode selector matched ${result.nodes.size} elements, using first at (${center.first}, ${center.second})"
+              "TrailblazeNode selector matched ${result.nodes.size} elements, using preferred (visible) match at (${center.first}, ${center.second})"
             )
             failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
-            tapOrLongPressOnResolvedNode(first, center.first, center.second, action.longPress)
+            tapOrLongPressOnResolvedNode(chosen, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
@@ -799,7 +793,7 @@ class AccessibilityDeviceManager(
             return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
-            val center = result.nodes.first().centerPoint()
+            val center = pickPreferredMatch(result.nodes).centerPoint()
             return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* keep polling */ }
@@ -918,6 +912,25 @@ internal fun planActionClickRoute(node: TrailblazeNode, longPress: Boolean): Act
 }
 
 internal fun TrailblazeNode.Bounds.toAndroidRect(): Rect = Rect(left, top, right, bottom)
+
+/**
+ * Chooses which node to act on when a selector matches more than one node.
+ *
+ * Merged-window capture (see [TrailblazeAccessibilityService.getCaptureWindowRoots]) can surface
+ * the same label from two windows at once: a popup/dialog window draws the on-screen control while
+ * the base application window still holds an off-screen, occluded node with identical text (e.g. a
+ * catalog tile scrolled behind a filter dropdown). The resolver orders matches by `bounds.top`, so
+ * the off-screen node — whose top happens to sort first — would win a blind `first()`, and the tap
+ * would land off-screen and silently no-op.
+ *
+ * Prefer the first match the framework reports as visible to the user; fall back to the resolver's
+ * first match when none carry that signal (non-Android details, or every match reports not-visible)
+ * so single-window behavior is unchanged.
+ */
+internal fun pickPreferredMatch(nodes: List<TrailblazeNode>): TrailblazeNode =
+  nodes.firstOrNull { node ->
+    (node.driverDetail as? DriverNodeDetail.AndroidAccessibility)?.isVisibleToUser == true
+  } ?: nodes.first()
 
 /**
  * Builds a one-line diagnostic string of the gate-relevant fields on [node] so a `[tap-route]`

@@ -72,11 +72,19 @@ internal data class QuickJsToolCtxEnvelope(
 /**
  * Device info the bundle handler can read from `ctx.device.platform` /
  * `ctx.device.driver` to specialize behavior per session shape.
+ *
+ * [instanceId] is the session device's instance identifier — the emulator serial
+ * (`emulator-5554`) on Android, the simulator UDID on iOS — sourced from
+ * `TrailblazeDeviceId.instanceId`. It's what host CLIs (`xcrun simctl`, `adb -s`) need to
+ * target this specific device, so a TS tool composing
+ * `ctx.tools.exec({ argv: ["xcrun","simctl", ctx.device.instanceId, …] })` can name the device
+ * without the host having to thread it in per call.
  */
 @Serializable
 internal data class QuickJsDeviceContext(
   val platform: String,
   val driver: String,
+  val instanceId: String,
 )
 
 /**

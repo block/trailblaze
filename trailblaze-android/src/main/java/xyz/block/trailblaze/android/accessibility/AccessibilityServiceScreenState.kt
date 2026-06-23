@@ -129,7 +129,10 @@ class AccessibilityServiceScreenState(
     // only the system status/nav-bar windows on CI emulators, dropping the TYPE_APPLICATION
     // window entirely. If an app's screen-reader-detection logic blocks Trailblaze, switch
     // that test to the UiAutomator driver instead of moving the tree read back to UiAutomation.
-    val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo()
+    // Merge all contributing windows (active app window plus any dialog/popup/sub-panel
+    // windows) into a single capture so secondary-window content is visible in both tree shapes.
+    // Node recycling and per-window refresh happen inside captureMergedScreenTrees().
+    val mergedTrees = TrailblazeAccessibilityService.captureMergedScreenTrees()
 
     // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()
     // is independent of AccessibilityNodeInfo traversal, and starting both concurrently also
@@ -147,21 +150,16 @@ class AccessibilityServiceScreenState(
       }
     } else null
 
-    try {
-      // packageName must be read before recycle() invalidates the node
-      foregroundAppId = rootNodeInfo?.packageName?.toString()
+    foregroundAppId = mergedTrees.foregroundAppId
 
-      viewHierarchy =
-        (rootNodeInfo?.toTreeNode()?.toViewHierarchyTreeNode()
-            ?: ViewHierarchyTreeNode())
-          .relabelWithFreshIds()
+    viewHierarchy =
+      (mergedTrees.treeNode?.toViewHierarchyTreeNode()
+          ?: ViewHierarchyTreeNode())
+        .relabelWithFreshIds()
 
-      val rawTree = rootNodeInfo?.toAccessibilityNode()?.toTrailblazeNode()
-      trailblazeNodeTree =
-        if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
-    } finally {
-      rootNodeInfo?.recycle()
-    }
+    val rawTree = mergedTrees.accessibilityNode?.toTrailblazeNode()
+    trailblazeNodeTree =
+      if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
 
     screenshotThread?.join()
 
