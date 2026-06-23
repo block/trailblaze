@@ -31,8 +31,11 @@ if [ ! -d "$LOGS_DIR" ]; then
 fi
 
 # ffmpeg with libwebp_anim is required for the animated --webp. The storyboard uses
-# bundled libwebp (no ffmpeg) and will still be produced if ffmpeg is absent.
+# bundled libwebp (no ffmpeg), so generate it in a separate CLI invocation below: if the
+# animated timeline preflight fails, the storyboard and HTML still publish.
+HAS_WEBP_ANIM=0
 if command -v ffmpeg >/dev/null 2>&1 && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libwebp_anim; then
+  HAS_WEBP_ANIM=1
   echo "✓ ffmpeg with libwebp_anim found"
 else
   echo "WARNING: ffmpeg with libwebp_anim not found — the animated timeline.webp will be skipped."
@@ -53,12 +56,18 @@ if [ -z "$SESSION_ID" ]; then
 fi
 echo "Using session: $SESSION_ID"
 
-# --no-gif: we only embed the WebP (GitHub/the docs render it the same, smaller file).
-# --max-size caps the animated WebP so it stays light on the docs page and well under
-# any inline limits; the HTML report itself is not size-capped (it's a download/link-out).
-echo "Exporting storyboard + animated WebP + interactive report..."
+# --max-size caps storyboard / animated WebP so they stay light on the docs page and well
+# under any inline limits; the HTML report itself is not size-capped (it's a download/link-out).
+echo "Exporting storyboard + interactive report..."
 trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
-  --storyboard --webp --no-gif --max-size=8MB
+  --storyboard --max-size=8MB
+
+if [ "$HAS_WEBP_ANIM" = 1 ]; then
+  # --no-gif: we only embed the WebP (GitHub/the docs render it the same, smaller file).
+  echo "Exporting animated WebP timeline..."
+  trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
+    --webp --no-gif --max-size=8MB
+fi
 
 echo "========================================="
 echo "Asset gen complete. Contents of $OUT_DIR:"

@@ -82,19 +82,28 @@ jobs:
             # (`bash --noprofile --norc -eo pipefail {0}`), and this is a plain assignment,
             # so a transient `gh run list` failure would otherwise abort the function and
             # skip the tier-2 backfill. Swallow it and fall through to last-good instead.
-            local run_ids run_id tmp f any
+            local run_ids run_id tmp f copied missing
             run_ids="$(gh run list --workflow="$workflow" --branch main --status completed \
               --limit 10 --json databaseId --jq '.[].databaseId' || true)"
             [ -z "$run_ids" ] && echo "  no completed $workflow run found yet — trying the last-published site"
             for run_id in $run_ids; do
               tmp="$(mktemp -d)"
               if gh run download "$run_id" --name "$artifact" --dir "$tmp" 2>/dev/null; then
-                any=0
+                copied=0
                 for f in $files; do
-                  [ -f "$tmp/$f" ] && cp -f "$tmp/$f" "$dest/$f" && echo "    ✓ $f (fresh, run $run_id)" && any=1
+                  if [ ! -f "$dest/$f" ] && [ -f "$tmp/$f" ]; then
+                    cp -f "$tmp/$f" "$dest/$f"
+                    echo "    ✓ $f (fresh, run $run_id)"
+                    copied=1
+                  fi
                 done
                 rm -rf "$tmp"
-                [ "$any" = 1 ] && break
+                missing=0
+                for f in $files; do
+                  [ -f "$dest/$f" ] || missing=1
+                done
+                [ "$missing" = 0 ] && break
+                [ "$copied" = 1 ] && echo "    still missing some $slug assets — checking older runs"
               else
                 rm -rf "$tmp"
               fi
