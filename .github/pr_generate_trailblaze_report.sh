@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Generate the CI `trailblaze_report.html` index for the trail run.
 #
-# Runs entirely off the prebuilt Trailblaze CLI installed on $PATH by the
-# upstream `build-uber-jar` job's `install-trailblaze-from-artifact.sh` step.
-# The WASM report template is bundled into the uber JAR's classpath (the
-# build-uber-jar job invokes Gradle with -Ptrailblaze.wasm=true), so there's
-# no separate `:trailblaze-ui:wasmJsBrowserProductionWebpack` /
-# `:trailblaze-report:run` Gradle dance — just one `trailblaze report` call.
+# Uses the prebuilt Trailblaze CLI when a workflow installed one from the
+# `build-uber-jar` artifact. Jobs that intentionally run without that artifact
+# (notably Android on-device instrumentation) fall back to the repo-local
+# `./trailblaze` launcher, which runs from source in GitHub Actions.
 set -e
 
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
+TRAILBLAZE_BIN="${TRAILBLAZE_BIN:-trailblaze}"
+if ! command -v "$TRAILBLAZE_BIN" >/dev/null 2>&1; then
+  if [ -x "./trailblaze" ]; then
+    TRAILBLAZE_BIN="./trailblaze"
+  else
+    echo "WARNING: trailblaze command not found and ./trailblaze is not executable - skipping report generation"
+    echo "========================================="
+    exit 0
+  fi
+fi
 
 echo "========================================="
 
@@ -20,7 +28,7 @@ if [ ! -d "$TRAILBLAZE_LOGS_DIR" ] || [ -z "$(ls -A "$TRAILBLAZE_LOGS_DIR" 2>/de
 fi
 
 echo "Generating Trailblaze report..."
-trailblaze report --output-dir "$TRAILBLAZE_LOGS_DIR"
+"$TRAILBLAZE_BIN" report --output-dir "$TRAILBLAZE_LOGS_DIR"
 
 # `trailblaze report --output-dir` writes `report.html` under the canonical name; the
 # downstream artifact step (.github/pr_create_artifacts.sh) and the workflow upload
