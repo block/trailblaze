@@ -27,17 +27,17 @@ from the Android, iOS, and web trails in this repo — no mockups. Click through
 full interactive reports, or browse the [Report Gallery](reports.md) for more.
 
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; align-items: start; margin: 1.5rem 0;">
-  <a href="/trailblaze/report-assets/clock/report.html" style="display: block; text-decoration: none;">
+  <a href="report-assets/clock/report.html" style="display: block; text-decoration: none;">
     <strong>Android</strong>
-    <img src="/trailblaze/report-assets/clock/timeline.webp" alt="Animated timeline of a recorded Trailblaze run setting an Android Clock alarm" style="display: block; width: 100%; margin-top: .5rem;" />
+    <img src="report-assets/clock/timeline.webp" alt="Animated timeline of a recorded Trailblaze run setting an Android Clock alarm" style="display: block; width: 100%; margin-top: .5rem;" />
   </a>
-  <a href="/trailblaze/report-assets/ios-contacts/report.html" style="display: block; text-decoration: none;">
+  <a href="report-assets/ios-contacts/report.html" style="display: block; text-decoration: none;">
     <strong>iOS</strong>
-    <img src="/trailblaze/report-assets/ios-contacts/timeline.webp" alt="Animated timeline of a recorded Trailblaze run exercising the iOS Contacts app" style="display: block; width: 100%; margin-top: .5rem;" />
+    <img src="report-assets/ios-contacts/timeline.webp" alt="Animated timeline of a recorded Trailblaze run exercising the iOS Contacts app" style="display: block; width: 100%; margin-top: .5rem;" />
   </a>
-  <a href="/trailblaze/report-assets/wikipedia/report.html" style="display: block; text-decoration: none;">
+  <a href="report-assets/wikipedia/report.html" style="display: block; text-decoration: none;">
     <strong>Web</strong>
-    <img src="/trailblaze/report-assets/wikipedia/timeline.webp" alt="Animated timeline of a recorded Trailblaze run against live Wikipedia" style="display: block; width: 100%; margin-top: .5rem;" />
+    <img src="report-assets/wikipedia/timeline.webp" alt="Animated timeline of a recorded Trailblaze run against live Wikipedia" style="display: block; width: 100%; margin-top: .5rem;" />
   </a>
 </div>
 

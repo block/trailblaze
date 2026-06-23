@@ -36,13 +36,13 @@ an emulator via Trailblaze's host-RPC Android driver — no LLM at replay time. 
 
 ### Storyboard
 
-[![Set-alarm clock trail storyboard — every step tiled into a grid](/trailblaze/report-assets/clock/storyboard.webp)](/trailblaze/report-assets/clock/report.html)
+[![Set-alarm clock trail storyboard — every step tiled into a grid](report-assets/clock/storyboard.webp)](report-assets/clock/report.html)
 
 ### Timeline
 
-[![Set-alarm clock trail timeline — animated walkthrough of each step](/trailblaze/report-assets/clock/timeline.webp)](/trailblaze/report-assets/clock/report.html)
+[![Set-alarm clock trail timeline — animated walkthrough of each step](report-assets/clock/timeline.webp)](report-assets/clock/report.html)
 
-[**Open the full interactive report →**](/trailblaze/report-assets/clock/report.html)
+[**Open the full interactive report →**](report-assets/clock/report.html)
 
 ---
 
@@ -54,13 +54,13 @@ verifying a contact — replayed on an iOS simulator, with no LLM at replay time
 
 ### Storyboard
 
-[![iOS Contacts trail storyboard — every step tiled into a grid](/trailblaze/report-assets/ios-contacts/storyboard.webp)](/trailblaze/report-assets/ios-contacts/report.html)
+[![iOS Contacts trail storyboard — every step tiled into a grid](report-assets/ios-contacts/storyboard.webp)](report-assets/ios-contacts/report.html)
 
 ### Timeline
 
-[![iOS Contacts trail timeline — animated walkthrough of each step](/trailblaze/report-assets/ios-contacts/timeline.webp)](/trailblaze/report-assets/ios-contacts/report.html)
+[![iOS Contacts trail timeline — animated walkthrough of each step](report-assets/ios-contacts/timeline.webp)](report-assets/ios-contacts/report.html)
 
-[**Open the full interactive report →**](/trailblaze/report-assets/ios-contacts/report.html)
+[**Open the full interactive report →**](report-assets/ios-contacts/report.html)
 
 ---
 
@@ -72,13 +72,13 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 
 ### Storyboard
 
-[![Wikipedia trail storyboard — every step tiled into a grid](/trailblaze/report-assets/wikipedia/storyboard.webp)](/trailblaze/report-assets/wikipedia/report.html)
+[![Wikipedia trail storyboard — every step tiled into a grid](report-assets/wikipedia/storyboard.webp)](report-assets/wikipedia/report.html)
 
 ### Timeline
 
-[![Wikipedia trail timeline — animated walkthrough of each step](/trailblaze/report-assets/wikipedia/timeline.webp)](/trailblaze/report-assets/wikipedia/report.html)
+[![Wikipedia trail timeline — animated walkthrough of each step](report-assets/wikipedia/timeline.webp)](report-assets/wikipedia/report.html)
 
-[**Open the full interactive report →**](/trailblaze/report-assets/wikipedia/report.html)
+[**Open the full interactive report →**](report-assets/wikipedia/report.html)
 
 *Want this for your own app? Every `trailblaze run` produces a session you can export
 the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
