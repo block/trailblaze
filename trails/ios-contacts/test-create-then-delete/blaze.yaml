@@ -1,6 +1,9 @@
-# End-to-end CRUD: creates a throwaway contact, verifies it landed, then
-# deletes it and confirms the list no longer surfaces the name. Demonstrates
-# the standard create+teardown pattern for trails that mutate the contacts db.
+# End-to-end CRUD showcase, written as natural-language INTENT — not tool calls.
+# Each step says *what* we want; the target system prompt + scripted-tool
+# descriptions let the agent pick the right tool (contacts_ios_createContact /
+# contacts_ios_deleteContact / …). A PM/QA can read these steps, and the recorded
+# `*.trail.yaml` replays them deterministically with no LLM. Keep steps to intent
+# — clear, not verbose; don't name tools or pass args here.
 - config:
     title: "Contacts (iOS): Create a contact then delete it"
     platform: ios
@@ -8,13 +11,7 @@
     target: contacts
     tags: [crud, slow]
 - prompts:
-    - step: |
-        Call the `contacts_ios_deleteContact` tool with name="Trailblaze Demo".
-        This is a defensive teardown — if a prior run left the contact behind,
-        we want to start clean.
-    - step: |
-        Call the `contacts_ios_createContact` tool with firstName="Trailblaze",
-        lastName="Demo", phoneNumber="5551234567".
-    - step: Verify the contacts list now shows a "Trailblaze Demo" row.
-    - step: |
-        Call the `contacts_ios_deleteContact` tool with name="Trailblaze Demo".
+    - step: Remove any leftover "Trailblaze Demo" contact so we start from a clean slate.
+    - step: Create a new contact named Trailblaze Demo with the phone number 555-123-4567.
+    - step: Verify the new "Trailblaze Demo" contact was saved.
+    - step: Delete the "Trailblaze Demo" contact.
