@@ -6,6 +6,9 @@ on:
   # instead of rebuilding the same artifact in a second workflow.
   push:
     branches: [ "main" ]
+  # Allow manual runs on any branch — e.g. to validate a runner-image bump or a
+  # new showcase recording on a PR branch before it merges to main.
+  workflow_dispatch:
 
 # Allow only one concurrent run per ref, cancelling any queued run when a
 # newer one is triggered (mirrors the pr-checks.yml concurrency policy).
