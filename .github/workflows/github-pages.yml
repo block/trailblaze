@@ -4,6 +4,11 @@ on:
   # Runs after merging to the default branch
   push:
     branches: [ "main" ]
+  # Allow manual redeploys — useful when a trail workflow finishes AFTER the
+  # push-triggered Pages run picked the previous run's artifact (the
+  # one-commit lag documented in the "Fetch report-gallery assets" step), so
+  # rolling the fresh assets to the site doesn't require an empty commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
