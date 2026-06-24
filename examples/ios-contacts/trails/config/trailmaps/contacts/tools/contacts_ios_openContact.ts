@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { nonEmptyString } from "./contacts_ios_shared";
+import { LABELS, nonEmptyString } from "./contacts_ios_shared";
 
 const DEFAULT_CONTACT_NAME = "John Appleseed";
 
@@ -41,6 +41,18 @@ export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
       query: name,
       rowText: name,
       openFirstResult: true,
+    });
+    // Confirm we actually navigated to the contact DETAIL screen before trusting the
+    // heading. A bare name assert is NOT sufficient: the contact name is also visible as
+    // a search-result row and even as the typed query in the search field, so when the
+    // contact doesn't exist the row tap lands on the search field (no navigation) and a
+    // name-only check still passes — a false "opened". The detail screen's top-right
+    // "Edit" button is the reliable detail-only anchor: the list/search screens surface
+    // "Add"/"Search" there, never "Edit". Asserting it first means a missing contact
+    // fails HERE, so callers wrapping this in `tryOrFalse` (e.g. the delete teardown)
+    // correctly treat it as "not found" instead of proceeding against the wrong screen.
+    await ctx.tools.assertVisibleWithAccessibilityText({
+      accessibilityText: LABELS.editButton,
     });
     await ctx.tools.assertVisibleWithAccessibilityText({
       accessibilityText: expectedHeading,

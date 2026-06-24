@@ -1,5 +1,5 @@
 import { trailblaze } from "@trailblaze/scripting";
-import { ensureContactsRoot, nonEmptyString, textIsVisible } from "./contacts_ios_shared";
+import { ensureContactsRoot, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_QUERY = "John";
 
@@ -64,10 +64,24 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
       return `Typed "${query}" into Contacts search and stopped (no result tapped).`;
     }
 
-    // Pre-flight: if iOS rendered the "No Results" banner, the next tap will
-    // fail with a generic "element not found". Surface the no-results state
-    // directly so the error message reflects the real cause.
-    if (await textIsVisible(ctx, "No Results")) {
+    // Pre-flight: surface the no-results state before the row tap below. This is
+    // load-bearing — without it, a query that matches nothing falls through to
+    // `tapOnElementWithText(rowText)`, which then matches the query text still
+    // showing in the *search field* (not a contact row), so no navigation
+    // happens and a caller's open-and-verify-name probe false-positives on that
+    // same search-field text. (That's exactly how the create-then-delete
+    // defensive teardown failed on a fresh simulator.)
+    //
+    // iOS renders the banner as `No Results for "<query>"`, so we must match it
+    // as a substring/regex. `assertVisibleWithAccessibilityText` is exact-match
+    // only (an exact "No Results" needle never matches the real banner), so probe
+    // with `assertNotVisibleWithText`, whose `text` is treated as a regex: it
+    // throws when an element matching "No Results" IS present, which `tryOrFalse`
+    // reports as `hasResults === false`.
+    const hasResults = await tryOrFalse(() =>
+      ctx.tools.assertNotVisibleWithText({ text: "No Results" }),
+    );
+    if (!hasResults) {
       throw new Error(
         `contacts_ios_searchContacts: query "${query}" returned no results.`,
       );

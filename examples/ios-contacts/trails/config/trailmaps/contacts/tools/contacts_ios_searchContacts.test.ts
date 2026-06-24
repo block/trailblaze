@@ -13,14 +13,19 @@ import { createMockClient, createMockContext } from "@trailblaze/scripting/testi
 import { contacts_ios_searchContacts } from "./contacts_ios_searchContacts";
 
 describe("contacts_ios_searchContacts", () => {
-  test("dispatches launchApp → assertVisible → swipe → tap Search → input → fires the No Results pre-flight branch", async () => {
-    // The default mock client returns success for every dispatch — including the
-    // `assertVisibleWithAccessibilityText({ accessibilityText: "No Results" })` probe the
-    // tool runs after typing the query. That probe-success is the exact condition the
-    // tool surfaces as a descriptive error instead of letting the subsequent row-tap fail
-    // with a generic "element not found". This is the agent's recommended ideal demo —
-    // exercises the real conditional logic without booting a simulator.
+  test("throws a descriptive no-results error when the 'No Results' banner is present", async () => {
+    // The no-results pre-flight probes with `assertNotVisibleWithText({ text: "No Results" })`
+    // — a NEGATIVE assertion whose `text` is treated as a regex, so it matches iOS's real
+    // `No Results for "<query>"` banner (an exact `assertVisibleWithAccessibilityText`
+    // needle never would — that gap let the not-found path tap the query text in the
+    // search field and report a false "opened"). The daemon fails that assertion when a
+    // matching element IS on screen, so stub it to throw: `tryOrFalse` turns that into
+    // `hasResults === false` and the tool surfaces the descriptive error.
     const client = createMockClient();
+    client.stub("assertNotVisibleWithText", {
+      textContent: "",
+      errorMessage: "element is visible",
+    });
     const ctx = createMockContext({ platform: "ios" });
 
     await expect(
@@ -35,7 +40,7 @@ describe("contacts_ios_searchContacts", () => {
       "swipe", // pull the search field into view
       "tapOnElementWithText", // focus the "Search" input
       "inputText", // type the query
-      "assertVisibleWithAccessibilityText", // "No Results" pre-flight probe — succeeds (mock default), fires the branch
+      "assertNotVisibleWithText", // no-results pre-flight probe — stubbed to fail (banner present), fires the branch
     ]);
     // The launchApp force-restart is a load-bearing implementation detail — the tool's
     // contract is "swipe-down from a known list-root state", not "swipe-down from
@@ -49,11 +54,38 @@ describe("contacts_ios_searchContacts", () => {
     expect(client.calls[2]?.args).toMatchObject({ direction: "DOWN" });
     expect(client.calls[3]?.args).toMatchObject({ text: "Search" });
     expect(client.calls[4]?.args).toMatchObject({ text: "Nobody" });
-    // The pre-flight probe ran with the right needle — confirms we reached the
-    // conditional rather than failing somewhere upstream.
-    expect(client.calls[5]?.args).toMatchObject({ accessibilityText: "No Results" });
-    // The row-tap was NOT called — the pre-flight branch short-circuited before it.
+    // The pre-flight probe ran with the right needle — a regex that matches the real
+    // `No Results for "<query>"` banner, not just the exact string "No Results".
+    expect(client.calls[5]?.args).toMatchObject({ text: "No Results" });
+    // The row-tap was NOT called — the no-results branch short-circuited before it.
     expect(client.calls).toHaveLength(6);
+  });
+
+  test("taps the first matching row when results are present", async () => {
+    // The default mock returns success for every dispatch — including the negative
+    // no-results probe, whose success means "no banner element on screen", i.e. results
+    // ARE present. The tool then taps the row matching `rowText` and returns.
+    const client = createMockClient();
+    const ctx = createMockContext({ platform: "ios" });
+
+    const result = await contacts_ios_searchContacts(
+      { query: "John", rowText: "John Appleseed" },
+      ctx,
+      client,
+    );
+
+    expect(client.calls.map((c) => c.tool)).toEqual([
+      "launchApp", // ensureContactsRoot — force-restart Contacts
+      "assertVisibleWithAccessibilityText", // ensureContactsRoot — "Contacts" list-root anchor
+      "swipe", // pull the search field into view
+      "tapOnElementWithText", // focus the "Search" input
+      "inputText", // type the query
+      "assertNotVisibleWithText", // no-results probe — passes (no banner) → results present
+      "tapOnElementWithText", // tap the result row
+    ]);
+    // The row tap targets `rowText`, not the raw query — the partial-prefix flow.
+    expect(client.calls[6]?.args).toMatchObject({ text: "John Appleseed" });
+    expect(result).toContain('opened the row matching "John Appleseed"');
   });
 
   test("returns early without probing No Results when openFirstResult is false", async () => {
@@ -84,13 +116,12 @@ describe("contacts_ios_searchContacts", () => {
     const client = createMockClient();
     const ctx = createMockContext({ platform: "ios" });
 
-    // No `query` → tool falls back to its `DEFAULT_QUERY` module constant. The exact
-    // default string is a tool-side implementation detail — assert via shape (non-empty
-    // string forwarded to inputText) rather than equality so a doc-only tweak to the
-    // default doesn't break the test.
-    await expect(
-      contacts_ios_searchContacts({}, ctx, client),
-    ).rejects.toThrow(/returned no results/);
+    // No `query` → tool falls back to its `DEFAULT_QUERY` module constant. Under the
+    // default mock the no-results probe passes (results present), so the tool completes;
+    // the exact default string is a tool-side implementation detail — assert via shape
+    // (non-empty string forwarded to inputText) rather than equality so a doc-only tweak
+    // to the default doesn't break the test.
+    await contacts_ios_searchContacts({}, ctx, client);
 
     const inputCall = client.calls.find((c) => c.tool === "inputText");
     expect(inputCall).toBeDefined();
