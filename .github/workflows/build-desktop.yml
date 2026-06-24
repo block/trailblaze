@@ -41,6 +41,14 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
+      - name: Setup Bun
+        # `-Ptrailblaze.wasm=true` packages this module's JAR resources, which
+        # runs `:trailblaze-models:bundleTrailblazeSdkDts` to roll up the
+        # `@trailblaze/scripting` declaration bundle. That task `bun install`s the
+        # SDK devDependencies and shells out to esbuild/dts-bundle-generator, so
+        # bun is a hard build prerequisite — without it on PATH the build fails.
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
