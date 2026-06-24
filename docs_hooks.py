@@ -21,14 +21,35 @@ any MISSING per-trail asset with the single committed, reusable generic placehol
 win — the hook only creates files that don't already exist.
 
 Runs automatically on every `mkdocs build`/`serve`; no workflow wiring or staging step
-needed. Add a new trail by listing its slug in `TRAILS`.
+needed. The gallery slugs come from the showcase manifest (`docs/showcase-trails.yml`),
+so adding/retargeting a platform there is the only edit needed.
 """
 
 from pathlib import Path
 
-# Trail slugs that have a gallery section. Each maps to docs/report-assets/<slug>/.
-# One per platform: web (wikipedia), iOS (ios-contacts), Android (clock).
-TRAILS = ["wikipedia", "ios-contacts", "clock"]
+import yaml
+
+# Gallery slugs (one report-assets/<slug>/ bucket per platform) are read from the
+# showcase manifest so they stay in sync with what CI publishes. The fallback is
+# used only if the manifest is missing/unreadable, so a strict docs build never
+# breaks on a manifest hiccup.
+_MANIFEST_NAME = "showcase-trails.yml"
+_FALLBACK_SLUGS = ["wikipedia", "ios-contacts", "clock"]
+
+
+def _gallery_slugs(docs_dir):
+    """Gallery slugs from docs/showcase-trails.yml; fall back to the known set."""
+    manifest = docs_dir / _MANIFEST_NAME
+    try:
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+        slugs = [
+            entry["slug"]
+            for entry in data.values()
+            if isinstance(entry, dict) and entry.get("slug")
+        ]
+        return slugs or _FALLBACK_SLUGS
+    except (OSError, yaml.YAMLError, AttributeError):
+        return _FALLBACK_SLUGS
 
 _PENDING_HTML = """<!doctype html>
 <meta charset="utf-8">
@@ -53,7 +74,7 @@ def on_pre_build(config):
         return
 
     pending_bytes = placeholder.read_bytes()
-    for trail in TRAILS:
+    for trail in _gallery_slugs(docs_dir):
         trail_dir = docs_dir / "report-assets" / trail
         trail_dir.mkdir(parents=True, exist_ok=True)
         for webp in ("storyboard.webp", "timeline.webp"):

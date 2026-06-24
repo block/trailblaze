@@ -17,13 +17,14 @@ jobs:
   # Pre-build the trailblaze uber JAR (with WASM template embedded) once and
   # publish it as an artifact for the downstream trails job. Mirrors the
   # `build-uber-jar` job in `pr-checks.yml` — see that file's header comment
-  # for the rationale. Runs on macos-15 (same runner OS as the downstream
+  # for the rationale. Runs on macos-26 (same runner OS as the downstream
   # trails job) because Compose Desktop's `packageUberJarForCurrentOS`
   # bundles the OS-specific Skiko native library, so a Linux-built JAR
   # wouldn't carry the macOS Skiko binary the downstream daemon loads at
-  # startup.
+  # startup. Both jobs must stay on the same macOS image so the arm64 Skiko
+  # binary built here matches the runner that loads it downstream.
   build-uber-jar:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
 
     steps:
@@ -72,10 +73,14 @@ jobs:
   # and ships inside the Trailblaze JAR. The XCTest runner is auto-installed
   # on the simulator at first connection.
   #
-  # Requires a macOS runner for iOS Simulator support. macOS-15 ships with
-  # Xcode 16 which includes iOS 18 simulator runtimes.
+  # Requires a macOS runner for iOS Simulator support. macos-26 ships Xcode 26
+  # with iOS 26 simulator runtimes (26.2 / 26.4 / 26.5 as of this writing) and
+  # iPhone 17 devices — the runtime the showcase recording in
+  # docs/showcase-trails.yml (test-create-then-delete) was captured on. The
+  # scripted Contacts tools drive the iOS 26 Contacts UI; older iOS (18 on
+  # macos-15) is not exercised by these recordings.
   ios-contacts-trails:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     needs: build-uber-jar
     env:
@@ -114,19 +119,22 @@ jobs:
           echo "Available iPhone simulators:"
           xcrun simctl list devices available | grep "iPhone"
 
-          # Prefer iPhone 16 Pro (available on Xcode 16 / macOS-15 runners).
-          # Fall back to the first available iPhone so the job degrades
-          # gracefully if the runner image changes the set of pre-installed
-          # simulators (e.g. Xcode minor update removes a device type).
+          # Prefer iPhone 17 Pro (present on iOS 26 runtimes on macos-26 runners —
+          # the device the showcase recording was captured on). Any iOS 26.x
+          # runtime works: the Contacts accessibility identifiers the recording
+          # asserts on are stable across iOS 26 minor versions. Fall back to the
+          # first available iPhone so the job degrades gracefully if the runner
+          # image rotates its pre-installed simulators (GitHub keeps only ~3
+          # runtime sets per image, so the exact minor version can change).
           SIMULATOR_UDID=$(
             xcrun simctl list devices available |
-            grep "iPhone 16 Pro " | grep -v "Max\|Plus" |
+            grep "iPhone 17 Pro " | grep -v "Max\|Plus" |
             head -1 |
             grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
           )
 
           if [ -z "$SIMULATOR_UDID" ]; then
-            echo "iPhone 16 Pro not found, falling back to first available iPhone..."
+            echo "iPhone 17 Pro not found, falling back to first available iPhone..."
             SIMULATOR_UDID=$(
               xcrun simctl list devices available |
               grep "iPhone" |

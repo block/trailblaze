@@ -48,9 +48,10 @@ an emulator via Trailblaze's host-RPC Android driver — no LLM at replay time. 
 
 ## Contacts (iOS)
 
-A recorded iOS trail exercising the system Contacts app — searching for, opening, and
-verifying a contact — replayed on an iOS simulator, with no LLM at replay time. Source:
-[`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts).
+A recorded iOS trail driving the system Contacts app through a full create→verify→delete
+lifecycle — creating a "Trailblaze Demo" contact with a phone number, confirming it landed
+in the list, then deleting it — replayed on an iOS simulator with no LLM at replay time.
+Source: [`trails/ios-contacts/test-create-then-delete`](https://github.com/block/trailblaze/tree/main/trails/ios-contacts/test-create-then-delete).
 
 ### Storyboard
 

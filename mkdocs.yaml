@@ -17,6 +17,12 @@ copyright: 'Copyright &copy; 2025 Block, Inc.'
 hooks:
   - docs_hooks.py
 
+# The showcase manifest is config for docs_hooks.py + the CI trail scripts, not a page —
+# keep it out of the published site. It still lives under docs/ (read from disk by the
+# hook) so the gallery's showcase choices sit next to the gallery they drive.
+exclude_docs: |
+  showcase-trails.yml
+
 theme:
   name: 'material'
   palette:

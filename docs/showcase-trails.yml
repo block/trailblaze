@@ -1,0 +1,37 @@
+# Report Gallery showcase trails — single source of truth.
+#
+# Each platform's published showcase report — the tiles on the docs landing page
+# (docs/index.md) and the Report Gallery (docs/reports.md) — is produced by
+# replaying ONE recorded trail in CI. This file names which trail that is, per
+# platform. To feature a different test case, point `recording:` at another
+# committed `*.trail.yaml`: CI replays it LAST so its session is the newest one,
+# which pr_generate_report_assets.sh exports and publishes under
+# report-assets/<slug>/, and the gallery embeds those assets.
+#
+# Consumed by:
+#   - .github/showcase-trail.sh                    (helper the run scripts call)
+#   - .github/pr_run_ios_contacts_trails.sh
+#   - .github/pr_run_wikipedia_trails.sh
+#   - .github/pr_run_android_tests_host_rpc.sh
+#   - docs_hooks.py                                (derives the gallery slugs)
+#
+# `slug` is the report-assets bucket: the folder name the docs tiles link to
+# (/report-assets/<slug>/...) AND the `docs-report-<slug>` CI artifact name the
+# GitHub Pages build fetches. Renaming a slug means updating those references in
+# index.md, reports.md, and .github/workflows/github-pages.yml too — so slugs are
+# kept stable here and only `recording:` is meant to change day to day.
+#
+# Not published to the site (see `exclude_docs` in mkdocs.yaml); it lives under
+# docs/ only so the showcase choices sit next to the gallery they drive.
+
+ios:
+  slug: ios-contacts
+  recording: trails/ios-contacts/test-create-then-delete/ios-iphone.trail.yaml
+
+android:
+  slug: clock
+  recording: trails/clock/set-alarm-730am/android.trail.yaml
+
+web:
+  slug: wikipedia
+  recording: trails/wikipedia/test-article-shakespeare/web.trail.yaml

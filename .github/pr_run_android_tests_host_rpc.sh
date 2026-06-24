@@ -65,7 +65,16 @@ if [ "$TEST_FAILED" != "true" ]; then
   echo "Running Trail via Trailblaze CLI..."
   # The trail has recorded tool sequences so LLM inference is never invoked.
   # The fake OPENAI_API_KEY from the workflow env satisfies the provider wiring.
-  trailblaze trail trails/clock/set-alarm-730am/android.trail.yaml || TEST_FAILED=true
+  # Showcase trail named for `android` in docs/showcase-trails.yml; its session
+  # is what pr_generate_report_assets.sh publishes to report-assets/clock/.
+  # Change the featured test case by editing that manifest — no edits here.
+  if ANDROID_SHOWCASE_TRAIL="$(./.github/showcase-trail.sh android recording)" && [ -n "$ANDROID_SHOWCASE_TRAIL" ]; then
+    echo "Android showcase trail (from docs/showcase-trails.yml): $ANDROID_SHOWCASE_TRAIL"
+    trailblaze trail "$ANDROID_SHOWCASE_TRAIL" || TEST_FAILED=true
+  else
+    echo "ERROR: could not resolve the android showcase trail from docs/showcase-trails.yml"
+    TEST_FAILED=true
+  fi
 else
   echo "Skipping test execution because daemon failed to start"
 fi

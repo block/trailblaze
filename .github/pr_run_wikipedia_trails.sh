@@ -73,7 +73,16 @@ if [ "$TEST_FAILED" != "true" ]; then
   echo "Running Wikipedia trail via Trailblaze CLI..."
   # The trail has recorded tool sequences so LLM inference is never invoked.
   # The fake OPENAI_API_KEY from the workflow env satisfies the provider wiring.
-  trailblaze trail trails/wikipedia/test-article-shakespeare/web.trail.yaml || TEST_FAILED=true
+  # Showcase trail named for `web` in docs/showcase-trails.yml; its session is
+  # what pr_generate_report_assets.sh publishes to report-assets/wikipedia/.
+  # Change the featured test case by editing that manifest — no edits here.
+  if WEB_SHOWCASE_TRAIL="$(./.github/showcase-trail.sh web recording)" && [ -n "$WEB_SHOWCASE_TRAIL" ]; then
+    echo "Web showcase trail (from docs/showcase-trails.yml): $WEB_SHOWCASE_TRAIL"
+    trailblaze trail "$WEB_SHOWCASE_TRAIL" || TEST_FAILED=true
+  else
+    echo "ERROR: could not resolve the web showcase trail from docs/showcase-trails.yml"
+    TEST_FAILED=true
+  fi
 else
   echo "Skipping test execution because daemon failed to start"
 fi

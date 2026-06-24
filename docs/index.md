@@ -33,7 +33,7 @@ full interactive reports, or browse the [Report Gallery](reports.md) for more.
   </a>
   <a href="report-assets/ios-contacts/report.html" style="display: block; text-decoration: none;">
     <strong>iOS</strong>
-    <img src="report-assets/ios-contacts/timeline.webp" alt="Animated timeline of a recorded Trailblaze run exercising the iOS Contacts app" style="display: block; width: 100%; margin-top: .5rem;" />
+    <img src="report-assets/ios-contacts/timeline.webp" alt="Animated timeline of a recorded Trailblaze run creating then deleting an iOS contact" style="display: block; width: 100%; margin-top: .5rem;" />
   </a>
   <a href="report-assets/wikipedia/report.html" style="display: block; text-decoration: none;">
     <strong>Web</strong>

@@ -77,13 +77,19 @@ if [ "$TEST_FAILED" != "true" ]; then
   # -d ios selects the booted simulator via the Maestro device service.
   # The bundled Maestro iOS driver auto-installs its XCTest runner on the
   # simulator at first connection — allow extra time in the workflow timeout.
-  trailblaze trail -d ios \
-    trails/ios-contacts/test-search-by-first-name/ios-iphone.trail.yaml \
-    || TEST_FAILED=true
-
-  trailblaze trail -d ios \
-    trails/ios-contacts/test-search-no-results/ios-iphone.trail.yaml \
-    || TEST_FAILED=true
+  # Replay the trail named for `ios` in docs/showcase-trails.yml; its session is
+  # what pr_generate_report_assets.sh exports to report-assets/ios-contacts/ for
+  # the docs gallery. Change the featured test case by editing that manifest —
+  # no edits here. (This is a self-contained CRUD trail: it creates its own
+  # throwaway contact, so it carries no dependency on the simulator's default
+  # sample contacts.)
+  if IOS_SHOWCASE_TRAIL="$(./.github/showcase-trail.sh ios recording)" && [ -n "$IOS_SHOWCASE_TRAIL" ]; then
+    echo "iOS showcase trail (from docs/showcase-trails.yml): $IOS_SHOWCASE_TRAIL"
+    trailblaze trail -d ios "$IOS_SHOWCASE_TRAIL" || TEST_FAILED=true
+  else
+    echo "ERROR: could not resolve the iOS showcase trail from docs/showcase-trails.yml"
+    TEST_FAILED=true
+  fi
 else
   echo "Skipping test execution because setup failed"
 fi
