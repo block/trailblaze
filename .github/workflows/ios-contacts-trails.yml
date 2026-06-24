@@ -171,13 +171,21 @@ jobs:
         continue-on-error: true
         run: ./.github/pr_generate_trailblaze_report.sh
 
-      - name: Install ffmpeg (for the animated-timeline WebP)
-        # macOS runners don't ship ffmpeg; the docs gallery's animated timeline.webp is
-        # muxed via `ffmpeg -c:v libwebp_anim`. The storyboard WebP uses bundled libwebp
-        # and needs no ffmpeg, so a brew hiccup only degrades the animation, never the run.
+      - name: Install ffmpeg-full (for the animated-timeline WebP)
+        # macOS runners don't ship ffmpeg, and homebrew-core's plain `ffmpeg` formula
+        # is NOT built against libwebp — so the `libwebp_anim` encoder the docs gallery's
+        # animated timeline.webp needs is missing, and `pr_generate_report_assets.sh`
+        # silently falls back to publishing the committed placeholder. The sister
+        # `ffmpeg-full` formula depends on `webp` and provides the encoder. It's
+        # keg-only (so it doesn't collide with a system `ffmpeg`), so prepend its bin
+        # dir to GITHUB_PATH so the report-asset step picks it up.
+        # The storyboard WebP uses bundled libwebp and needs no ffmpeg, so a brew
+        # hiccup only degrades the animation, never the run.
         if: always()
         continue-on-error: true
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
 
       - name: Generate docs report-gallery assets
         # Storyboard + animated-timeline WebP + interactive HTML report, consumed by the
