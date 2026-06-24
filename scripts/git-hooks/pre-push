@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+remote="${1:-}"
+url="${2:-}"
+zero="$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')"
+branch_owner="${USER:-$(whoami)}"
+bad_refs=""
+saw_non_delete_push=0
+
+append_bad_ref() {
+  local label="$1"
+  local branch="$2"
+  local entry="  - ${label}: ${branch}"
+
+  case "$branch" in
+    claude/* | codex/*)
+      case "
+${bad_refs}
+" in
+        *"
+${entry}
+"*) ;;
+        *) bad_refs="${bad_refs}${entry}
+" ;;
+      esac
+      ;;
+  esac
+}
+
+branch_from_ref() {
+  local ref="$1"
+  case "$ref" in
+    refs/heads/*) printf '%s\n' "${ref#refs/heads/}" ;;
+    *) return 1 ;;
+  esac
+}
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+  if [[ -z "${local_ref:-}" ]]; then
+    continue
+  fi
+
+  # Allow cleanup pushes such as `git push origin :codex/foo`.
+  if [[ "$local_oid" == "$zero" ]]; then
+    continue
+  fi
+
+  saw_non_delete_push=1
+
+  if local_branch="$(branch_from_ref "$local_ref")"; then
+    append_bad_ref "local branch" "$local_branch"
+  fi
+
+  if remote_branch="$(branch_from_ref "$remote_ref")"; then
+    append_bad_ref "remote branch" "$remote_branch"
+  fi
+done
+
+if [[ "$saw_non_delete_push" == "1" ]]; then
+  current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [[ -n "$current_branch" ]]; then
+    append_bad_ref "current branch" "$current_branch"
+  fi
+fi
+
+if [[ -n "$bad_refs" ]]; then
+  cat >&2 <<EOF
+Refusing to push agent-generated branch names.
+
+Branches prefixed with claude/ or codex/ are temporary agent defaults. Rename the branch to a
+human-readable name before pushing:
+
+  git branch -m ${branch_owner}/<short-description>
+  git push -u ${remote:-origin} HEAD
+
+If this checkout is also in an agent-created worktree, move that worktree to match the new
+branch name before continuing.
+
+Blocked refs:
+${bad_refs}
+EOF
+
+  if [[ -n "$url" ]]; then
+    echo "Remote: ${remote:-<unnamed>} (${url})" >&2
+  fi
+
+  exit 1
+fi
