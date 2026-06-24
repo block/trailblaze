@@ -261,9 +261,13 @@ jobs:
   # PR-time iOS showcase validation shares the same uber JAR built above.
   # The standalone iOS workflow stays push-only so `main` still produces the
   # docs gallery artifact that GitHub Pages publishes.
+  #
+  # Runs on macos-26 (Xcode 26 / iOS 26 simulators, iPhone 17 Pro) to match the
+  # showcase recording in docs/showcase-trails.yml — the scripted Contacts tools
+  # drive the iOS 26 Contacts UI. Kept in sync with .github/workflows/ios-contacts-trails.yml.
   ios-contacts-trails:
     if: github.event_name == 'pull_request'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     needs: build-uber-jar
     env:
@@ -300,15 +304,17 @@ jobs:
           echo "Available iPhone simulators:"
           xcrun simctl list devices available | grep "iPhone"
 
+          # Prefer iPhone 17 Pro (iOS 26 runtime on macos-26 — the device the
+          # showcase recording was captured on); fall back to the first iPhone.
           SIMULATOR_UDID=$(
             xcrun simctl list devices available |
-            grep "iPhone 16 Pro " | grep -v "Max\|Plus" |
+            grep "iPhone 17 Pro " | grep -v "Max\|Plus" |
             head -1 |
             grep -oE "[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}"
           )
 
           if [ -z "$SIMULATOR_UDID" ]; then
-            echo "iPhone 16 Pro not found, falling back to first available iPhone..."
+            echo "iPhone 17 Pro not found, falling back to first available iPhone..."
             SIMULATOR_UDID=$(
               xcrun simctl list devices available |
               grep "iPhone" |
