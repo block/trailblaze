@@ -307,8 +307,7 @@ object WasmReport {
     val indexHtmlFile = File(resourcesDir, "index.html")
     require(indexHtmlFile.exists()) { "index.html not found at ${indexHtmlFile.absolutePath}" }
 
-    val jsFile = File(buildDir, "composeApp.js")
-    require(jsFile.exists()) { "composeApp.js not found at ${jsFile.absolutePath}" }
+    val jsFile = findWebpackJsBundle(buildDir)
 
     val wasmFiles = buildDir.listFiles { _, name -> name.endsWith(".wasm") } ?: emptyArray()
     require(wasmFiles.isNotEmpty()) { "No WASM files found in ${buildDir.absolutePath}" }
@@ -365,24 +364,48 @@ object WasmReport {
     val compressedJsBase64 = compressStringToBase64(jsContent)
 
     Console.log("Creating embedded HTML...")
-    val embeddedHtml = createEmbeddedHtml(htmlTemplate, compressedJsBase64, wasmData)
+    val embeddedHtml = createEmbeddedHtml(htmlTemplate, compressedJsBase64, wasmData, jsFile.name)
 
     reportOutputFile.writeText(embeddedHtml)
+  }
+
+  private fun findWebpackJsBundle(buildDir: File): File {
+    val composeAppBundle = File(buildDir, "composeApp.js")
+    if (composeAppBundle.exists()) return composeAppBundle
+
+    val jsFiles = buildDir.listFiles { _, name -> name.endsWith(".js") }?.toList().orEmpty()
+    require(jsFiles.size == 1) {
+      "Expected exactly one JavaScript bundle in ${buildDir.absolutePath}, but found " +
+        "${jsFiles.size}: ${jsFiles.joinToString { it.name }}"
+    }
+    return jsFiles.single()
   }
 
   private fun createEmbeddedHtml(
     template: String,
     compressedJsBase64: String,
     wasmData: Map<String, String>,
+    jsBundleName: String = "composeApp.js",
   ): String {
-    val jsScriptRegex = """<script\s+type="application/javascript"\s+src="composeApp\.js"></script>""".toRegex()
+    val expectedScriptNames = listOf(jsBundleName, "composeApp.js").distinct()
+    val expectedScriptNamePattern = expectedScriptNames.joinToString("|") { Regex.escape(it) }
+    val jsScriptRegex =
+      """<script\s+type="application/javascript"\s+src="(?:$expectedScriptNamePattern)"></script>"""
+        .toRegex()
 
+    var replacedScriptTag = false
     val replaced = template.replace(jsScriptRegex) {
+      replacedScriptTag = true
       """
         ${createWasmLoaderScript(wasmData)}
         ${createWebpackPatchScript()}
         ${createJsLoaderScript(compressedJsBase64, wasmData)}
       """.trimIndent()
+    }
+    require(replacedScriptTag) {
+      "WasmReport.generateRaw: template is missing the JavaScript app script tag. Expected " +
+        expectedScriptNames.joinToString(prefix = "one of ", separator = ", ") { "`$it`" } +
+        " so the generated embedded report can replace it with the compressed JS loader."
     }
 
     // Check if the compressed data was already injected (it should be in generateRaw path)
@@ -585,9 +608,15 @@ object WasmReport {
         let patchedJs = jsCode;
         $wasmPatches
         
+        // Neutralize webpack's automatic-publicPath guard for the embedded (no script URL) context.
+        // Anchored on webpack's stable error MESSAGE and capturing the guard variable name, because
+        // a production (minified) bundle renames the variable (it is not always `scriptUrl`) — a
+        // name-specific regex silently stops matching after a Kotlin/webpack codegen bump, letting
+        // the throw fire and crashing the report with "Failed to load application". Capturing the
+        // variable lets us set it to "" regardless of its minified name.
         patchedJs = patchedJs.replace(
-          /if\s*\(!scriptUrl\)\s*throw\s+new\s+Error\([^)]+\);/g,
-          'if (!scriptUrl) { console.warn("Using empty publicPath for embedded context"); scriptUrl = ""; }'
+          /if\s*\(\s*!(\w+)\s*\)\s*throw\s+(?:new\s+)?Error\(\s*["']Automatic publicPath[^"']*["']\s*\)\s*;?/g,
+          'if (!${'$'}1) { console.warn("Using empty publicPath for embedded context"); ${'$'}1 = ""; }'
         );
         
         (0, eval)(patchedJs);

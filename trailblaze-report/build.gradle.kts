@@ -1,3 +1,9 @@
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.TaskAction
+
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.vanniktech.maven.publish)
@@ -28,29 +34,46 @@ tasks.register<JavaExec>("generateTestResultsArtifacts") {
   mainClass.set("xyz.block.trailblaze.report.GenerateTestResultsCliCommandKt")
 }
 
-val wasmEnabled = findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false
+abstract class PrepareReportTemplateDirTask : DefaultTask() {
+  @get:Input abstract val wasmEnabled: org.gradle.api.provider.Property<Boolean>
 
-val generateReportTemplate by tasks.registering(JavaExec::class) {
-  description = "Generates a blank report template HTML with embedded WASM UI (requires -Ptrailblaze.wasm=true)"
-  group = "report"
-  if (wasmEnabled) {
-    dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
-  }
-  classpath = sourceSets["main"].runtimeClasspath
-  mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
-  val templateBuildDir = layout.buildDirectory.dir("report-template")
-  doFirst {
-    if (!wasmEnabled) {
+  @get:OutputDirectory abstract val templateBuildDir: DirectoryProperty
+
+  @TaskAction
+  fun prepare() {
+    if (!wasmEnabled.get()) {
       throw GradleException(
         "generateReportTemplate requires WASM targets.\n" +
           "Run with: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true"
       )
     }
-    templateBuildDir.get().asFile.mkdirs()
+    val outputDir = templateBuildDir.get().asFile
+    if (!outputDir.mkdirs() && !outputDir.isDirectory) {
+      throw GradleException("Could not create report template output directory ${outputDir.absolutePath}")
+    }
   }
-  args(templateBuildDir.get().asFile.absolutePath)
+}
+
+val reportWasmEnabled = providers.gradleProperty("trailblaze.wasm").map(String::toBoolean).orElse(true)
+val reportTemplateBuildDir = layout.buildDirectory.dir("report-template")
+
+val prepareReportTemplateDir by tasks.registering(PrepareReportTemplateDirTask::class) {
+  wasmEnabled.set(reportWasmEnabled)
+  templateBuildDir.set(reportTemplateBuildDir)
+}
+
+val generateReportTemplate by tasks.registering(JavaExec::class) {
+  description = "Generates a blank report template HTML with embedded WASM UI (requires -Ptrailblaze.wasm=true)"
+  group = "report"
+  if (reportWasmEnabled.get()) {
+    dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
+  }
+  classpath = sourceSets["main"].runtimeClasspath
+  mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
+  dependsOn(prepareReportTemplateDir)
+  args(reportTemplateBuildDir.get().asFile.absolutePath)
   jvmArgs("-Dtrailblaze.rootDir=${rootProject.projectDir.absolutePath}")
-  outputs.file(templateBuildDir.map { it.file("trailblaze_report.html") })
+  outputs.file(reportTemplateBuildDir.map { it.file("trailblaze_report.html") })
 }
 
 dependencies {

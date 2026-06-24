@@ -64,4 +64,10 @@ class GeneratedSampleAppTests {
   @Test
   fun textInput() =
     rule.runFromAsset("android-ondevice-instrumentation/forms/text-input/android-phone.trail.yaml")
+
+  @Test
+  fun waitForContent() =
+    rule.runFromAsset(
+      "android-ondevice-instrumentation/loading/wait-for-content/android-phone.trail.yaml"
+    )
 }

@@ -5,6 +5,31 @@
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
     /**
+     * Launch the Sample App, open the Loading demo, start the load, and wait for "Content Loaded" to
+     * appear. Lands the trail on the loaded-content screen regardless of which delay (1s / 3s / 6s) is
+     * selected, because it waits for the result rather than sleeping a fixed amount of time.
+     */
+    sampleapp_launchToLoadedContent: {
+      args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * Wait (up to `timeoutMs`) for an element whose text equals `text` to appear, then return. Throws a
+     * clear timeout error if it never shows. Use this to make a step robust to a screen that loads with
+     * a variable delay — it waits for the result to appear instead of sleeping a fixed amount of time.
+     */
+    sampleapp_waitForText: {
+      args: {
+        /** The exact, visible text to wait for (e.g. "Content Loaded"). Matched as an anchored regex (`^…$`) against the live view hierarchy, with regex metacharacters escaped, so it matches the whole text of a node rather than a substring. */
+        text: string;
+        /** How long to wait, in milliseconds, before giving up. Defaults to 30000. The tool returns the moment the text appears, so this is an upper bound, not a sleep. */
+        timeoutMs?: number;
+      };
+      result: string;
+    };
+
+    /**
      * Write a text artifact to a per-session tmp directory on the host machine.
      */
     sampleapp_writeArtifact: {

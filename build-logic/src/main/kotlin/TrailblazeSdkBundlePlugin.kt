@@ -1,11 +1,16 @@
 import java.io.File
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
 
 /**
  * Configuration for the `trailblaze.sdk-bundle` plugin. `:trailblaze-scripting-bundle` sets
@@ -38,43 +43,61 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
       TrailblazeSdkBundleExtension::class.java,
     )
 
-    project.tasks.register("bundleTrailblazeSdk") { task ->
+    project.tasks.register("bundleTrailblazeSdk", BundleTrailblazeSdkTask::class.java) { task ->
       task.group = "build"
       task.description =
         "Regenerates the @trailblaze/scripting slim SDK bundle (a gitignored build artifact) " +
           "from sdks/typescript/src/ via esbuild. Wired ahead of resource packaging, so it " +
           "runs as part of any build that ships the bundle; can also be invoked directly."
 
+      task.trailblazeSdkDir.set(ext.trailblazeSdkDir)
+      task.sdkBundleOutputFile.set(ext.sdkBundleOutputFile)
+      task.projectDir.set(project.layout.projectDirectory)
+      task.installLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-install.log"))
+      task.bundleLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk.log"))
       declareSdkBundleInputs(task, ext, project)
-      task.outputs.file(ext.sdkBundleOutputFile).withPropertyName("sdkBundle")
-
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        // The bundle is a build artifact, not committed source, so install the SDK's
-        // devDependencies (esbuild) from the committed bun.lock first. Idempotent — skips
-        // when node_modules is already present. Shared with TrailblazeSdkDtsBundlePlugin.
-        ensureSdkNodeModules(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/bundle-trailblaze-sdk-install.log").get().asFile,
-        )
-        val outputFile = ext.sdkBundleOutputFile.get().asFile
-        task.logger.lifecycle(
-          "Regenerating SDK bundle → ${outputFile.relativeTo(project.projectDir)}",
-        )
-        runEsbuildBundle(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          outputFile = outputFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/bundle-trailblaze-sdk.log").get().asFile,
-        )
-        task.logger.lifecycle(
-          "Regenerated ${outputFile.relativeTo(project.projectDir)} " +
-            "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
-        )
-      }
     }
 
+  }
+}
+
+abstract class BundleTrailblazeSdkTask : DefaultTask() {
+  @get:Internal
+  abstract val trailblazeSdkDir: DirectoryProperty
+
+  @get:OutputFile
+  abstract val sdkBundleOutputFile: RegularFileProperty
+
+  @get:Internal
+  abstract val projectDir: DirectoryProperty
+
+  @get:Internal
+  abstract val installLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val bundleLogFile: RegularFileProperty
+
+  @TaskAction
+  fun bundle() {
+    requireExtensionConfigured(trailblazeSdkDir.isPresent, sdkBundleOutputFile.isPresent)
+    val sdkDir = trailblazeSdkDir.get().asFile
+    ensureSdkNodeModules(
+      sdkDir = sdkDir,
+      logFile = installLogFile.get().asFile,
+    )
+    val outputFile = sdkBundleOutputFile.get().asFile
+    logger.lifecycle(
+      "Regenerating SDK bundle → ${outputFile.relativeToOrSelf(projectDir.get().asFile)}",
+    )
+    runEsbuildBundle(
+      sdkDir = sdkDir,
+      outputFile = outputFile,
+      logFile = bundleLogFile.get().asFile,
+    )
+    logger.lifecycle(
+      "Regenerated ${outputFile.relativeToOrSelf(projectDir.get().asFile)} " +
+        "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
+    )
   }
 }
 
@@ -82,8 +105,8 @@ class TrailblazeSdkBundlePlugin : Plugin<Project> {
 // the extension is never configured. Without this, an unconfigured consumer hits Gradle's
 // generic "no value has been specified" snapshot error which doesn't name the extension
 // block. Mirrors the pattern `BundleTrailblazeTrailmapTask.generate()` uses for `trailmapsDir`.
-private fun requireExtensionConfigured(ext: TrailblazeSdkBundleExtension) {
-  if (!ext.trailblazeSdkDir.isPresent || !ext.sdkBundleOutputFile.isPresent) {
+private fun requireExtensionConfigured(trailblazeSdkDirPresent: Boolean, sdkBundleOutputFilePresent: Boolean) {
+  if (!trailblazeSdkDirPresent || !sdkBundleOutputFilePresent) {
     throw GradleException(
       "trailblaze.sdk-bundle: extension is not configured. Add to your build.gradle.kts:\n" +
         "  trailblazeSdkBundle {\n" +

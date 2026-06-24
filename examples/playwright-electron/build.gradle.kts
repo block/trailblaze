@@ -29,8 +29,6 @@ val npmInstallElectron by tasks.registering(Exec::class) {
   commandLine("npm", "install")
   inputs.file(sampleAppDir.resolve("package.json"))
   outputs.dir(sampleAppDir.resolve("node_modules"))
-  // Only run when the test task is explicitly in the execution graph (not during `check`)
-  onlyIf { gradle.taskGraph.hasTask(tasks.test.get()) }
 }
 
 val downloadElectronBinary by tasks.registering(Exec::class) {
@@ -39,7 +37,6 @@ val downloadElectronBinary by tasks.registering(Exec::class) {
   commandLine("sh", "provision-electron.sh")
   dependsOn(npmInstallElectron)
   outputs.upToDateWhen { false }
-  onlyIf { gradle.taskGraph.hasTask(tasks.test.get()) }
 }
 
 tasks.test {

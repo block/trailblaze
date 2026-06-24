@@ -67,11 +67,30 @@ internal data class QuickJsToolCtxEnvelope(
    * should act on. See [QuickJsTargetContext] for the field semantics.
    */
   val target: QuickJsTargetContext? = null,
+  /**
+   * NON-sensitive agent-memory snapshot captured at envelope-build time, mirroring the
+   * subprocess path's `_meta.trailblaze.memory` (built by
+   * `xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope`). Keys flagged via
+   * [xyz.block.trailblaze.AgentMemory.rememberSensitive] (passwords, PINs) are EXCLUDED — the
+   * same contract the subprocess envelope, the LLM context, and the log redaction enforce, so a
+   * bundled handler never receives secrets on any dispatch path. The SDK wraps this raw map into
+   * the `ctx.memory` surface (get/has/keys/delete/interpolate/setJson/getJson) on the in-process
+   * path, so `ctx.memory.interpolate("{{nonSensitiveToken}}")` resolves on-device while a
+   * `{{secretToken}}` deliberately resolves to empty. A TS tool that needs a credential passes
+   * the `{{token}}` through to a Kotlin device-command tool that interpolates it against full
+   * memory inside its own execute() — plaintext never enters the JS heap.
+   *
+   * Snapshot semantics: this is host memory as of THIS invocation's START. It does not
+   * live-update if a nested `ctx.tools.*` call mutates host memory mid-handler (the on-device
+   * bundle path buffers writes without flush today). A follow-up can refresh it at tool-call
+   * boundaries if a consumer ever needs read-your-nested-writes within one invocation.
+   */
+  val memory: Map<String, String> = emptyMap(),
 )
 
 /**
  * Device info the bundle handler can read from `ctx.device.platform` /
- * `ctx.device.driver` to specialize behavior per session shape.
+ * `ctx.device.driverType` to specialize behavior per session shape.
  *
  * [instanceId] is the session device's instance identifier — the emulator serial
  * (`emulator-5554`) on Android, the simulator UDID on iOS — sourced from
@@ -83,6 +102,11 @@ internal data class QuickJsToolCtxEnvelope(
 @Serializable
 internal data class QuickJsDeviceContext(
   val platform: String,
+  val driverType: String,
+  /**
+   * Deprecated compatibility alias for bundles authored against the early QuickJS envelope.
+   * `driverType` is the canonical SDK field and matches the subprocess/MCP envelope.
+   */
   val driver: String,
   val instanceId: String,
 )

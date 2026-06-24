@@ -418,6 +418,24 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
+     * Clear all data for an app, resetting it to a fresh-install state. Host-only
+     * (`requiresHost = true`), author-facing (`surfaceToLlm = false`). On Android delegates to
+     * `pm clear`; on iOS locates and empties the app's `simctl` data container. The escape hatch
+     * for a scripted launch step that needs the Kotlin `clearAppData` behavior (e.g. the Square
+     * iOS launch flow's data-clear prefix) without re-deriving the per-platform `simctl` / `adb`
+     * mechanics in TS.
+     *
+     * Source: `ClearAppDataTrailblazeTool.kt` (`mobile_clearAppData`).
+     */
+    mobile_clearAppData: {
+      args: {
+        /** App id to clear — Android package id or iOS bundle id (e.g. `com.squareup.square`). */
+        appId: string;
+      };
+      result: string;
+    };
+
+    /**
      * Assert an element with the given accessibility text is visible. DEPRECATED upstream
      * in favor of the unified `assertVisible` selector path — kept here because the
      * recorded-trail format still emits this name.
@@ -435,6 +453,104 @@ declare module "@trailblaze/scripting" {
         enabled?: boolean;
         selected?: boolean;
       };
+      result: string;
+    };
+
+    /**
+     * Run an `adb shell` command, argv-shaped (injection-safe). Returns the command's stdout on a
+     * zero exit; throws on a non-zero exit or I/O failure. Composition primitive for Android device
+     * control from scripted tools. Android-only.
+     *
+     * Source: `AdbShellTrailblazeTool.kt` (`android_adbShell`).
+     */
+    android_adbShell: {
+      args: {
+        /** Argv-shaped command, e.g. `["am", "force-stop", "com.example"]` (NOT one shell string). */
+        command: string[];
+        /** Optional debuggable-app id to run the command under via `run-as`. */
+        runAs?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Send a broadcast intent to the connected Android device. `action` and each extra `value`
+     * support `{{token}}` / `${token}` references, resolved host-side against the full agent memory
+     * at execution time — so a credential can be forwarded as an opaque token without the plaintext
+     * ever entering the JS heap. Non-LLM, non-recordable composition primitive. Android-only.
+     *
+     * Source: `AndroidSendBroadcastTrailblazeTool.kt` (`android_sendBroadcast`).
+     */
+    android_sendBroadcast: {
+      args: {
+        /** Intent action, e.g. `com.example.SIGNIN`. */
+        action: string;
+        /** Target component package (usually the app id). */
+        componentPackage: string;
+        /** Target component (receiver) class. */
+        componentClass: string;
+        /** Intent extras. `value` is the literal `am broadcast` text; `type` defaults to `string`. */
+        extras?: Array<{ key: string; value: string; type?: string }>;
+      };
+      result: string;
+    };
+
+    /**
+     * Write a UTF-8 text file into the device's public Downloads directory. On-device this writes via
+     * `MediaStore.Downloads` (so a consuming app's MediaStore query finds it under scoped storage);
+     * from the host it `adb push`es to `/storage/emulated/0/Download`. For an arbitrary raw path with
+     * no MediaStore registration, use `android_writeBytesToFile`. Android-only.
+     *
+     * Source: `AndroidWriteFileToDownloadsTrailblazeTool.kt` (`android_writeFileToDownloads`).
+     */
+    android_writeFileToDownloads: {
+      args: {
+        /** File name to create in Downloads, e.g. `setup.json`. */
+        fileName: string;
+        /** UTF-8 text content. */
+        content: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Grant a dangerous runtime permission to an app via `pm grant`. Android-only.
+     *
+     * Source: `AndroidGrantPermissionTrailblazeTool.kt` (`android_grantPermission`).
+     */
+    android_grantPermission: {
+      args: {
+        /** App id (package) to grant to. */
+        appId: string;
+        /** Permission name, e.g. `android.permission.CAMERA`. */
+        permission: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Grant an AppOps permission to an app via `appops set <op> allow`. Android-only.
+     *
+     * Source: `AndroidGrantAppOpsPermissionTrailblazeTool.kt` (`android_grantAppOpsPermission`).
+     */
+    android_grantAppOpsPermission: {
+      args: {
+        /** App id (package) to grant to. */
+        appId: string;
+        /** AppOps op, e.g. `MANAGE_EXTERNAL_STORAGE`. */
+        permission: string;
+      };
+      result: string;
+    };
+
+    /**
+     * List the app ids installed on the device. Android-only. The result is a JSON string of
+     * `{ "appIds": string[] }` (sorted) — `JSON.parse` it to read the array.
+     *
+     * Source: `ListInstalledAppsTrailblazeTool.kt` (`mobile_listInstalledApps`).
+     */
+    mobile_listInstalledApps: {
+      args: Record<string, never>;
       result: string;
     };
   }

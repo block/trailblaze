@@ -71,7 +71,7 @@ class AndroidCompactElementListTest {
   }
 
   @Test
-  fun `unchecked checkbox has no checked annotation`() {
+  fun `unchecked checkbox shows unchecked annotation`() {
     val cb = node(
       detail = DriverNodeDetail.AndroidAccessibility(
         className = "android.widget.CheckBox",
@@ -84,8 +84,7 @@ class AndroidCompactElementListTest {
     val root = node(children = listOf(cb))
     val result = AndroidCompactElementList.build(root)
 
-    assertContains(result.text, "CheckBox \"Accept terms\"")
-    assertTrue(!result.text.contains("[checked]"), "Unchecked should have no [checked] annotation")
+    assertContains(result.text, "CheckBox \"Accept terms\" [unchecked]")
   }
 
   @Test

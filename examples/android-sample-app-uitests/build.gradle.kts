@@ -1,3 +1,13 @@
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+
 plugins {
   alias(libs.plugins.android.library)
   alias(libs.plugins.kotlin.android)
@@ -87,12 +97,12 @@ android {
   }
 
   packaging {
-    exclude("META-INF/INDEX.LIST")
-    exclude("META-INF/AL2.0")
-    exclude("META-INF/LICENSE.md")
-    exclude("META-INF/LICENSE-notice.md")
-    exclude("META-INF/LGPL2.1")
-    exclude("META-INF/io.netty.versions.properties")
+    resources.excludes.add("META-INF/INDEX.LIST")
+    resources.excludes.add("META-INF/AL2.0")
+    resources.excludes.add("META-INF/LICENSE.md")
+    resources.excludes.add("META-INF/LICENSE-notice.md")
+    resources.excludes.add("META-INF/LGPL2.1")
+    resources.excludes.add("META-INF/io.netty.versions.properties")
   }
 
   compileOptions {
@@ -151,26 +161,24 @@ dependencies {
 // and writes a JUnit test class so the sample-app trails can run on a remote device farm.
 // Usage: ./gradlew :examples:android-sample-app-uitests:generateSampleAppTests
 // ---------------------------------------------------------------------------
-tasks.register("generateSampleAppTests") {
-  description = "Generate JUnit instrumentation tests from trail YAML files for remote device farm"
-  group = "trailblaze"
+abstract class GenerateSampleAppTestsTask : DefaultTask() {
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val trailsDir: DirectoryProperty
 
-  val trailsDir = file("../android-sample-app/trails/android-ondevice-instrumentation")
-  // Also pick up sample-app-targeted eval trails that live under the repo-root
-  // `trails/eval/android/sample-app/` per the [trails/eval/README.md] platform-only
-  // layout. Asset-staging for this dir is wired in [stageSampleAppEvalTrails] above —
-  // files land in the test APK at `eval/android/sample-app/<name>.trail.yaml`.
-  val evalSampleAppTrailsDir = sampleAppEvalTrailsDir
-  val outputFile =
-    file(
-      "src/androidTest/generated/xyz/block/trailblaze/examples/sampleapp/generated/GeneratedSampleAppTests.kt"
-    )
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val evalSampleAppTrailsDir: DirectoryProperty
 
-  inputs.dir(trailsDir)
-  inputs.dir(evalSampleAppTrailsDir)
-  outputs.file(outputFile)
+  @get:OutputFile abstract val outputFile: RegularFileProperty
 
-  doLast {
+  @get:Internal abstract val projectDir: DirectoryProperty
+
+  @TaskAction
+  fun generate() {
+    val trailsDir = trailsDir.get().asFile
+    val evalSampleAppTrailsDir = evalSampleAppTrailsDir.get().asFile
+    val outputFile = outputFile.get().asFile
     outputFile.parentFile.mkdirs()
 
     // Convert a dash-or-trail-file-prefix-style name to a camelCase JUnit test method.
@@ -181,8 +189,9 @@ tasks.register("generateSampleAppTests") {
         .joinToString("")
 
     val instrumentationTests =
-      fileTree(trailsDir)
-        .filter { it.name.endsWith(".trail.yaml") }
+      trailsDir
+        .walkTopDown()
+        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
         .map { trailFile ->
           val relPath = trailFile.relativeTo(trailsDir).path
           val testDirName = relPath.split("/").let { it[it.size - 2] }
@@ -195,8 +204,9 @@ tasks.register("generateSampleAppTests") {
     // `trails/eval/android/sample-app/` (e.g. `clipboard-round-trip.trail.yaml`).
     // The JUnit method name is derived from the filename (sans `.trail.yaml`).
     val evalSampleAppTests =
-      fileTree(evalSampleAppTrailsDir)
-        .filter { it.name.endsWith(".trail.yaml") }
+      evalSampleAppTrailsDir
+        .walkTopDown()
+        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
         .map { trailFile ->
           val relPath = trailFile.relativeTo(evalSampleAppTrailsDir).path
           val baseName = trailFile.name.removeSuffix(".trail.yaml")
@@ -205,7 +215,7 @@ tasks.register("generateSampleAppTests") {
           Pair(methodName, assetPath)
         }
 
-    val testMethods = (instrumentationTests + evalSampleAppTests).sortedBy { it.first }
+    val testMethods = (instrumentationTests + evalSampleAppTests).sortedBy { it.first }.toList()
 
     outputFile.writeText(
       buildString {
@@ -224,13 +234,45 @@ tasks.register("generateSampleAppTests") {
         appendLine()
         appendLine("  @get:Rule val rule = AndroidTrailblazeRule()")
         appendLine()
-        testMethods.forEach { (method, path) ->
-          appendLine("  @Test fun $method() = rule.runFromAsset(\"$path\")")
+        testMethods.forEachIndexed { index, (method, path) ->
+          appendLine("  @Test")
+          appendLine("  fun $method() =")
+          val runFromAsset = "rule.runFromAsset(\"$path\")"
+          if (runFromAsset.length <= 95) {
+            appendLine("    $runFromAsset")
+          } else {
+            appendLine("    rule.runFromAsset(")
+            appendLine("      \"$path\"")
+            appendLine("    )")
+          }
+          if (index != testMethods.lastIndex) appendLine()
         }
         appendLine("}")
       }
     )
 
-    println("Generated ${testMethods.size} tests → ${outputFile.relativeTo(projectDir)}")
+    logger.lifecycle(
+      "Generated ${testMethods.size} tests → ${outputFile.relativeTo(projectDir.get().asFile)}"
+    )
   }
+}
+
+tasks.register<GenerateSampleAppTestsTask>("generateSampleAppTests") {
+  description = "Generate JUnit instrumentation tests from trail YAML files for remote device farm"
+  group = "trailblaze"
+
+  trailsDir.set(
+    layout.projectDirectory.dir("../android-sample-app/trails/android-ondevice-instrumentation")
+  )
+  // Also pick up sample-app-targeted eval trails that live under the repo-root
+  // `trails/eval/android/sample-app/` per the [trails/eval/README.md] platform-only
+  // layout. Asset-staging for this dir is wired in [stageSampleAppEvalTrails] above —
+  // files land in the test APK at `eval/android/sample-app/<name>.trail.yaml`.
+  evalSampleAppTrailsDir.set(layout.projectDirectory.dir("../../../trails/eval/android/sample-app"))
+  outputFile.set(
+    layout.projectDirectory.file(
+      "src/androidTest/generated/xyz/block/trailblaze/examples/sampleapp/generated/GeneratedSampleAppTests.kt"
+    )
+  )
+  projectDir.set(layout.projectDirectory)
 }

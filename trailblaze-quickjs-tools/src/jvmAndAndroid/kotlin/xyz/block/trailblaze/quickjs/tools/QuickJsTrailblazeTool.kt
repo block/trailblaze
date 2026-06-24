@@ -117,14 +117,29 @@ class QuickJsTrailblazeTool(
         appId = toolExecutionContext.appId,
       )
     }
+    // NON-sensitive memory snapshot — mirrors the subprocess envelope's filter in
+    // `TrailblazeContextEnvelope` (`if (k !in sensitiveKeys) put(...)`). Values seeded via
+    // AgentMemory.rememberSensitive (merchant passwords, PINs) are WITHHELD from the bundle ctx
+    // on both dispatch paths, matching the existing contract that keeps secrets out of the LLM
+    // context, the scripting envelope, and logs. A TS tool that needs a credential passes the
+    // `{{token}}` through to a Kotlin device-command tool, which interpolates it against full
+    // memory inside its own execute() (the same pattern as InputTextTrailblazeTool et al.) — so
+    // plaintext never enters the JS heap. `filterKeys` builds the non-sensitive map directly off the
+    // live ConcurrentHashMap (weakly-consistent iteration, no full intermediate copy) so a sensitive
+    // value is never even copied into a throwaway map en route to the envelope.
+    val agentMemory = toolExecutionContext.memory
+    val nonSensitiveMemory =
+      agentMemory.variables.filterKeys { it !in agentMemory.sensitiveKeys }
     val ctx = QuickJsToolCtxEnvelope(
       sessionId = sessionId.value,
       device = QuickJsDeviceContext(
         platform = deviceInfo.trailblazeDriverType.platform.name,
+        driverType = deviceInfo.trailblazeDriverType.yamlKey,
         driver = deviceInfo.trailblazeDriverType.yamlKey,
         instanceId = deviceInfo.trailblazeDeviceId.instanceId,
       ),
       target = target,
+      memory = nonSensitiveMemory,
     )
     // The host expects the ctx as a JsonObject (it embeds it inline as a JS literal),
     // so encode-to-element rather than encode-to-string — saves a parse-back trip.

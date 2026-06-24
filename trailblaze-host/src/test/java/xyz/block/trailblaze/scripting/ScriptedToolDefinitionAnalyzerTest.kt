@@ -988,24 +988,19 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
-  fun `EmptyInput alias resolves to empty object schema for typed-output-no-input tools`() = runBlocking {
+  fun `SDK EmptyInput import resolves to empty object schema for typed-output-no-input tools`() = runBlocking {
     // The canonical "typed result, no input" shape. TypeScript generic defaults are
     // positional, so skipping the first type arg to default it isn't possible; authors
-    // spell `<EmptyInput, MyResult>`. Pin that the analyzer resolves `EmptyInput` as
-    // `Record<string, never>` (its underlying type) → empty object schema.
+    // spell `<EmptyInput, MyResult>`. Pin that the analyzer recognizes the SDK's
+    // imported `EmptyInput` sentinel as an empty object without asking
+    // ts-json-schema-generator to resolve the package-local root type.
     assumeAnalyzerRunnable()
     val toolsDir = tempFolder.newFolder("empty-input-trailmap-tools")
     writeTsFixture(
       toolsDir,
       "typedReturnNoInput.ts",
       """
-        |declare const trailblaze: { tool: (...args: unknown[]) => unknown };
-        |
-        |// Locally re-declared the way the SDK exports it (`import type { EmptyInput }`).
-        |// Interface (not `type = Record<string, never>`) so ts-json-schema-generator
-        |// emits a proper `{"type":"object",...}` schema rather than the empty `{}`
-        |// the `Record<string, never>` alias resolves to.
-        |interface EmptyInput { /* intentionally empty */ }
+        |import { trailblaze, type EmptyInput } from "@trailblaze/scripting";
         |
         |interface FetchedItem {
         |  id: string;
@@ -1021,16 +1016,14 @@ class ScriptedToolDefinitionAnalyzerTest {
     val defs = analyzer.analyze(toolsDir)
     val def = defs.firstOrNull { it.name == "fetchItem" }
       ?: fail("expected fetchItem; got: ${defs.map { it.name }}")
-    // Input schema: empty object via the interface. `ts-json-schema-generator` emits a
-    // schema with `"type": "object"` for an empty interface; the `properties` field may
-    // be absent (interpreted as "no properties declared") rather than `properties: {}`.
-    // Both are equivalent for the "no-input" semantic — assert only the type tag.
+    // Input schema: empty object via the SDK sentinel. The shim emits the same
+    // no-input schema used for omitted input type parameters.
     val inputType = (def.inputSchemaObject["type"] as? JsonPrimitive)?.contentOrNull
     assertEquals("object", inputType)
     val inputProperties = def.inputSchemaObject["properties"]?.jsonObject
     assertTrue(
       inputProperties == null || inputProperties.isEmpty(),
-      "expected absent or empty properties on EmptyInput interface; got: $inputProperties",
+      "expected absent or empty properties on SDK EmptyInput; got: $inputProperties",
     )
     // Output schema: the typed interface.
     val outputType = (def.outputSchemaObject["type"] as? JsonPrimitive)?.contentOrNull
@@ -1039,6 +1032,66 @@ class ScriptedToolDefinitionAnalyzerTest {
     assertTrue(
       outputProperties != null && outputProperties.containsKey("id") && outputProperties.containsKey("label"),
       "expected FetchedItem fields in output schema; got: $outputProperties",
+    )
+  }
+
+  @Test
+  fun `SDK EmptyInput type-only import alias resolves to empty object schema`() = runBlocking {
+    // Some tools import `trailblaze` from a local shared module but import `EmptyInput`
+    // type-only from the SDK. Pin that shape, including aliasing.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("empty-input-type-only-alias-tools")
+    writeTsFixture(
+      toolsDir,
+      "typeOnlyAliasNoInput.ts",
+      """
+        |declare const trailblaze: { tool: (...args: unknown[]) => unknown };
+        |import type { EmptyInput as NoInput } from "@trailblaze/scripting";
+        |
+        |export const typeOnlyAliasNoInput = trailblaze.tool<NoInput>({
+        |  handler: async () => "ok",
+        |});
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val inputType = (def.inputSchemaObject["type"] as? JsonPrimitive)?.contentOrNull
+    assertEquals("object", inputType)
+    val inputProperties = def.inputSchemaObject["properties"]?.jsonObject
+    assertTrue(
+      inputProperties == null || inputProperties.isEmpty(),
+      "expected absent or empty properties on aliased SDK EmptyInput; got: $inputProperties",
+    )
+  }
+
+  @Test
+  fun `local EmptyInput type is analyzed normally when not imported from SDK`() = runBlocking {
+    // The SDK sentinel handling must be import-aware. A user-defined type that
+    // happens to be named `EmptyInput` is still just a normal input schema.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("local-empty-input-tools")
+    writeTsFixture(
+      toolsDir,
+      "localEmptyInput.ts",
+      """
+        |import { trailblaze } from "@trailblaze/scripting";
+        |
+        |interface EmptyInput {
+        |  requiredValue: string;
+        |}
+        |
+        |export const localEmptyInput = trailblaze.tool<EmptyInput>({
+        |  handler: async () => "ok",
+        |});
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val properties = def.inputSchemaObject["properties"]?.jsonObject
+      ?: fail("expected local EmptyInput properties; got: ${def.inputSchema}")
+    assertTrue(
+      properties.containsKey("requiredValue"),
+      "expected local EmptyInput schema to include requiredValue; got: $properties",
     )
   }
 

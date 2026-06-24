@@ -1,4 +1,20 @@
+import java.io.RandomAccessFile
+import java.nio.channels.OverlappingFileLockException
 import java.util.concurrent.TimeUnit
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.Directory
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 
 plugins {
   alias(libs.plugins.kotlin.jvm)
@@ -70,62 +86,56 @@ val trailblazeScriptingSdkDir = layout.projectDirectory
  * longer a sibling `mcp-sdk/` install task. [label] appears in the Gradle warning + log
  * filename so CI failures attribute to the right source.
  */
-fun registerInstallTask(
-  taskName: String,
-  label: String,
-  workingDirProvider: org.gradle.api.file.Directory,
-  logName: String,
-  testGateDocString: String,
-  // When `true`, `bun install` failure throws GradleException and fails the build. Used for
-  // installs whose output is a prerequisite of runtime-artifact-producing tasks — e.g.
-  // `installTrailblazeScriptingSdk`, which `:trailblaze-bundled-config:compileTrailblazeWorkspace`
-  // and `:trailblaze-quickjs-tools` both `dependsOn`. Without this, a missing bun would
-  // silently produce a broken daemon JAR that fails at first SDK import. When `false`, the
-  // task only warns — appropriate for the sample-app MCP install, which is gated by the
-  // test's own `assumeTrue(node_modules/.install-ok)` skip.
-  failOnInstallError: Boolean,
-) = tasks.register(taskName) {
-  group = "verification"
-  val tone = if (failOnInstallError) "required" else "best-effort"
-  description = "Installs npm deps for $label via `bun install` ($tone)."
+abstract class InstallBunDepsTask : DefaultTask() {
+  @get:Input
+  abstract val label: Property<String>
 
-  val packageJson = workingDirProvider.file("package.json").asFile
-  val nodeModules = workingDirProvider.dir("node_modules").asFile
-  // Sentinel file touched only after a successful install. Using it as the declared task
-  // output (rather than the `node_modules` dir itself) fixes the Gradle up-to-date check on
-  // partial/truncated installs: if a developer Ctrl-C's during the first install, or
-  // `installTimeoutMinutes` fires mid-install, `node_modules/` exists but is incomplete.
-  // Declaring `.install-ok` as the output means the task is only "up to date" when install
-  // cleanly finished — subsequent `./gradlew test` runs re-install instead of starting the
-  // subprocess against a broken node_modules and failing with an opaque import error.
-  val installSentinel = workingDirProvider.file("node_modules/.install-ok").asFile
-  val workingDir = workingDirProvider.asFile
-  val installLog = layout.buildDirectory.file("tmp/$logName").get().asFile
+  @get:Input
+  abstract val testGateDocString: Property<String>
 
-  inputs.file(packageJson).withPropertyName("packageJson")
-  outputs.file(installSentinel).withPropertyName("installSentinel")
+  @get:Input
+  abstract val failOnInstallError: Property<Boolean>
 
-  doLast {
-    // 15 minutes is the default ceiling. It covers corporate proxies that aggressively
-    // rate-limit or drop connections (e.g. an internal npm registry mirror, where a fresh
-    // `bun install` can sit on triple-ECONNRESET retries before a 200). On CI and fast
-    // public-registry environments the install completes in well under a minute, and
-    // Gradle's input/output up-to-date check skips the task entirely on subsequent builds,
-    // so the headroom is paid at most once per developer-machine. Override via Gradle
-    // property for edge cases: `./gradlew test -PtrailblazeInstallTimeoutMinutes=30`.
-    // Clamp to a 1-minute floor so a stale CI config or fat-fingered `-P0` doesn't make
-    // `proc.waitFor(0, MINUTES)` return `false` instantly and mis-report a successful install
-    // as a timeout. Mirrors `InstallAuthorToolDepsTask`'s floor (same property name across
-    // both install tasks).
-    val installTimeoutMinutes = maxOf(
-      1L,
-      (project.findProperty("trailblazeInstallTimeoutMinutes") as? String)?.toLongOrNull() ?: 15L,
-    )
+  @get:Input
+  abstract val installTimeoutMinutes: Property<Long>
+
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val packageJson: RegularFileProperty
+
+  @get:Optional
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val lockFile: RegularFileProperty
+
+  @get:OutputFile
+  abstract val installSentinel: RegularFileProperty
+
+  @get:Internal
+  abstract val workingDir: DirectoryProperty
+
+  @get:Internal
+  abstract val installLog: RegularFileProperty
+
+  @get:Internal
+  abstract val rootDir: DirectoryProperty
+
+  @TaskAction
+  fun install() {
+    val label = label.get()
+    val testGateDocString = testGateDocString.get()
+    val failOnInstallError = failOnInstallError.get()
+    val installTimeoutMinutes = maxOf(1L, installTimeoutMinutes.get())
+    val installSentinel = installSentinel.get().asFile
+    val workingDir = workingDir.get().asFile
+    val installLog = installLog.get().asFile
+    val lockFile = lockFile.orNull?.asFile?.takeIf { it.isFile }
+    val sharedInstallStamp = File(workingDir, "node_modules/.trailblaze-install-lock")
 
     // Surface the one-time install cost in the Gradle console so a developer watching a
     // cold `./gradlew test` understands what's happening instead of staring at a silent wait.
     // `lifecycle` is the visible-by-default log level; Gradle's up-to-date cache suppresses
-    // this message (and the rest of `doLast`) on subsequent runs, so this only fires on
+    // this message (and the rest of the task action) on subsequent runs, so this only fires on
     // actual installs.
     logger.lifecycle(
       "Installing $label (one-time; Gradle's up-to-date check caches this on subsequent runs). " +
@@ -138,6 +148,24 @@ fun registerInstallTask(
     // run this is a no-op; on re-run after a failure it guarantees we don't mark the task
     // up-to-date if a subsequent install also fails silently.
     if (installSentinel.exists()) installSentinel.delete()
+
+    fun <T> withInstallLock(action: () -> T): T {
+      val installLockFile = File(workingDir, "node_modules/.trailblaze-install.lock")
+      installLockFile.parentFile.mkdirs()
+      RandomAccessFile(installLockFile, "rw").channel.use { channel ->
+        while (true) {
+          val lock = try {
+            channel.tryLock()
+          } catch (_: OverlappingFileLockException) {
+            null
+          }
+          if (lock != null) {
+            lock.use { return action() }
+          }
+          Thread.sleep(250)
+        }
+      }
+    }
 
     fun tryInstall(command: List<String>): Int = try {
       installLog.appendText("\n\n==== ${command.joinToString(" ")} (cwd=$workingDir) ====\n")
@@ -178,7 +206,11 @@ fun registerInstallTask(
     // bun is the sole supported JS runtime (see root CLAUDE.md / PR #3503). No npm fallback —
     // if bun isn't on PATH or `bun install` fails, surface that loudly rather than papering
     // over it with a parallel toolchain that would diverge from the lockfile bun resolves.
-    val installSucceeded = tryInstall(listOf("bun", "install")) == 0
+    val installCommand =
+      if (lockFile != null) listOf("bun", "install", "--frozen-lockfile") else listOf("bun", "install")
+    val installSucceeded = withInstallLock {
+      tryInstall(installCommand) == 0
+    }
 
     if (installSucceeded) {
       // Only touch the sentinel after a clean install. Gradle's up-to-date check then skips
@@ -186,12 +218,16 @@ fun registerInstallTask(
       // still exists.
       installSentinel.parentFile.mkdirs()
       installSentinel.writeText("ok\n")
+      if (lockFile != null) {
+        sharedInstallStamp.writeText(lockFile.readText())
+      }
     } else {
-      val rootDir = project.rootDir.absolutePath
+      val rootDir = rootDir.get().asFile.absolutePath
+      val installCommandString = installCommand.joinToString(" ")
       val message =
-        "Failed to install $label deps via `bun install`. $testGateDocString\n" +
+        "Failed to install $label deps via `$installCommandString`. $testGateDocString\n" +
           "  Install output:  ${installLog.absolutePath}\n" +
-          "  Manual install:  (cd $workingDir && bun install)\n" +
+          "  Manual install:  (cd $workingDir && $installCommandString)\n" +
           "  Trailblaze requires bun; activate the repo's Hermit env " +
           "(from repo root: $rootDir, run `source bin/activate-hermit`) " +
           "or install bun from https://bun.sh/."
@@ -202,6 +238,58 @@ fun registerInstallTask(
       }
     }
   }
+}
+
+fun registerInstallTask(
+  taskName: String,
+  label: String,
+  workingDirProvider: Directory,
+  logName: String,
+  testGateDocString: String,
+  // When `true`, `bun install` failure throws GradleException and fails the build. Used for
+  // installs whose output is a prerequisite of runtime-artifact-producing tasks — e.g.
+  // `installTrailblazeScriptingSdk`, which `:trailblaze-bundled-config:compileTrailblazeWorkspace`
+  // and `:trailblaze-quickjs-tools` both `dependsOn`. Without this, a missing bun would
+  // silently produce a broken daemon JAR that fails at first SDK import. When `false`, the
+  // task only warns — appropriate for the sample-app MCP install, which is gated by the
+  // test's own `assumeTrue(node_modules/.install-ok)` skip.
+  failOnInstallError: Boolean,
+) = tasks.register<InstallBunDepsTask>(taskName) {
+  group = "verification"
+  val tone = if (failOnInstallError) "required" else "best-effort"
+  description = "Installs npm deps for $label via `bun install` ($tone)."
+
+  this.label.set(label)
+  this.testGateDocString.set(testGateDocString)
+  this.failOnInstallError.set(failOnInstallError)
+  // 15 minutes is the default ceiling. It covers corporate proxies that aggressively
+  // rate-limit or drop connections (e.g. an internal npm registry mirror, where a fresh
+  // `bun install` can sit on triple-ECONNRESET retries before a 200). On CI and fast
+  // public-registry environments the install completes in well under a minute, and
+  // Gradle's input/output up-to-date check skips the task entirely on subsequent builds,
+  // so the headroom is paid at most once per developer-machine. Override via Gradle
+  // property for edge cases: `./gradlew test -PtrailblazeInstallTimeoutMinutes=30`.
+  installTimeoutMinutes.set(
+    providers.gradleProperty("trailblazeInstallTimeoutMinutes")
+      .map { it.toLongOrNull() ?: 15L }
+      .orElse(15L),
+  )
+  packageJson.set(workingDirProvider.file("package.json"))
+  val candidateLockFile = workingDirProvider.file("bun.lock")
+  if (candidateLockFile.asFile.isFile) {
+    lockFile.set(candidateLockFile)
+  }
+  // Sentinel file touched only after a successful install. Using it as the declared task
+  // output (rather than the `node_modules` dir itself) fixes the Gradle up-to-date check on
+  // partial/truncated installs: if a developer Ctrl-C's during the first install, or
+  // `installTimeoutMinutes` fires mid-install, `node_modules/` exists but is incomplete.
+  // Declaring `.install-ok` as the output means the task is only "up to date" when install
+  // cleanly finished — subsequent `./gradlew test` runs re-install instead of starting the
+  // subprocess against a broken node_modules and failing with an opaque import error.
+  installSentinel.set(workingDirProvider.file("node_modules/.install-ok"))
+  workingDir.set(workingDirProvider)
+  installLog.set(layout.buildDirectory.file("tmp/$logName"))
+  rootDir.set(rootProject.layout.projectDirectory)
 }
 
 val installSampleAppMcpTools = registerInstallTask(

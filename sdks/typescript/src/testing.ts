@@ -349,11 +349,19 @@ export interface CreateMockContextOptions {
     /** MCP/subprocess-shaped driver yamlKey (`TrailblazeDevice.driverType`). */
     driverType?: string;
     /**
-     * On-device QuickJS-shaped driver yamlKey (`TrailblazeDevice.driver`). Set this to model the
-     * `runtime: inProcess` envelope, where the driver arrives under `driver` rather than
-     * `driverType` — so a test can exercise a tool's driver branching on the in-process path.
+     * Deprecated on-device QuickJS-shaped driver yamlKey (`TrailblazeDevice.driver`). Accepted so
+     * tests can model older in-process envelopes; [createMockContext] normalizes it into
+     * `driverType` on the produced context.
      */
     driver?: string;
+    /**
+     * Simulator UDID / emulator serial (`TrailblazeDevice.instanceId`). Set this to exercise a
+     * tool that targets the device's host CLI directly — e.g. a step composing
+     * `ctx.tools.exec({ argv: ["xcrun","simctl","terminate", ctx.device.instanceId, "<bundleId>"] })`.
+     * Left undefined unless a test sets it, mirroring the production envelope where older daemons
+     * and non-mobile sessions don't carry it.
+     */
+    instanceId?: string;
   };
   target?: TrailblazeTarget;
   memory?: Record<string, unknown>;
@@ -462,9 +470,12 @@ export function createMockContext(opts: CreateMockContextOptions): TrailblazeCon
     platform: opts.platform,
     widthPixels: opts.device?.widthPixels ?? 1080,
     heightPixels: opts.device?.heightPixels ?? 2400,
-    driverType: opts.device?.driverType ?? "mock-driver",
-    // Mirrors the on-device QuickJS envelope's `driver` field; left undefined unless a test sets it.
+    driverType: opts.device?.driverType ?? opts.device?.driver ?? "mock-driver",
+    // Deprecated QuickJS alias; left undefined unless a test sets it.
     driver: opts.device?.driver,
+    // Mirrors the in-process QuickJS envelope's `instanceId` (simulator UDID / emulator serial);
+    // left undefined unless a test sets it.
+    instanceId: opts.device?.instanceId,
   };
 
   return {

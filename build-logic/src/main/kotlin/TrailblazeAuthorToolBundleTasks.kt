@@ -102,6 +102,15 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
   @get:Input
   abstract val bundleName: Property<String>
 
+  @get:Input
+  abstract val installTimeoutMinutes: Property<Long>
+
+  @get:Internal
+  abstract val rootDir: DirectoryProperty
+
+  @get:Internal
+  abstract val logFile: RegularFileProperty
+
   @TaskAction
   fun install() {
     val workingDir = packageJson.get().asFile.parentFile
@@ -111,12 +120,8 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
     // `proc.waitFor(0, MINUTES)` return `false` instantly and report a successful install
     // as a timeout. 15 minutes is the documented default; smaller-than-1 is never sensible.
     // Shared with `:trailblaze-scripting-subprocess`'s install tasks (same property name).
-    val installTimeoutMinutes = maxOf(
-      1L,
-      (project.findProperty("trailblazeInstallTimeoutMinutes") as? String)?.toLongOrNull() ?: 15L,
-    )
-    val logFile = project.layout.buildDirectory
-      .file("tmp/install-author-tool-$name.log").get().asFile
+    val timeoutMinutes = maxOf(1L, installTimeoutMinutes.get())
+    val logFile = logFile.get().asFile
     logFile.parentFile.mkdirs()
     logFile.writeText("")
     if (sentinel.exists()) sentinel.delete()
@@ -133,10 +138,10 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
         .redirectErrorStream(true)
         .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
         .start()
-      if (proc.waitFor(installTimeoutMinutes, TimeUnit.MINUTES)) {
+      if (proc.waitFor(timeoutMinutes, TimeUnit.MINUTES)) {
         proc.exitValue()
       } else {
-        logger.warn("${command.joinToString(" ")} did not finish within ${installTimeoutMinutes}m — killing.")
+        logger.warn("${command.joinToString(" ")} did not finish within ${timeoutMinutes}m — killing.")
         proc.destroyForcibly()
         proc.waitFor(10, TimeUnit.SECONDS)
         -1
@@ -160,7 +165,7 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
     val ok = tryInstall(listOf("bun", "install")) == 0
 
     if (!ok) {
-      val rootDir = project.rootDir.absolutePath
+      val rootDir = rootDir.get().asFile.absolutePath
       throw GradleException(
         "Failed to install author tool bundle deps for `$name` via `bun install`.\n" +
           "  Install output:  ${logFile.absolutePath}\n" +
@@ -270,6 +275,12 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
   @get:Input
   abstract val bundleName: Property<String>
 
+  @get:Internal
+  abstract val projectDir: DirectoryProperty
+
+  @get:Internal
+  abstract val logFile: RegularFileProperty
+
   @TaskAction
   fun bundle() {
     val source = sourceDir.get().asFile
@@ -314,8 +325,7 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
       )
     }
 
-    val logFile = project.layout.buildDirectory
-      .file("tmp/bundle-author-tool-${bundleName.get()}.log").get().asFile
+    val logFile = logFile.get().asFile
     logFile.parentFile.mkdirs()
     logFile.writeText("")
 
@@ -355,7 +365,7 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
     // outside [project.projectDir], which is a legitimate `outputFile` configuration (a
     // build-cache dir under the user's home, an ad-hoc test fixture path, etc.). Falling
     // back to the absolute path keeps the log readable in those cases.
-    logger.lifecycle("Bundling author tool `${bundleName.get()}` → ${output.relativeToOrSelf(project.projectDir)}")
+    logger.lifecycle("Bundling author tool `${bundleName.get()}` → ${output.relativeToOrSelf(projectDir.get().asFile)}")
 
     try {
       val proc = ProcessBuilder(argv)

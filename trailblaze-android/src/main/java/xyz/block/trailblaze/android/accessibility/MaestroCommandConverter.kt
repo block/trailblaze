@@ -205,8 +205,8 @@ object MaestroCommandConverter {
       // lowering. After issue #2910 `TrailblazeElementSelector.optional` is gone and the
       // `TapOnByElementSelector` lowering no longer emits this branch with `true`, so the
       // only remaining producers are inline Maestro YAML blocks parsed via
-      // `MaestroYamlParser.parseYaml` (e.g. the `assertVisible: optional: true` guard in
-      // `SquareLaunchAppSignedInTrailblazeTool.waitUntilPercentageLoadingTextIsDoneCommands`).
+      // `MaestroYamlParser.parseYaml` (e.g. an `assertVisible: optional: true` guard in a
+      // host-side launch helper).
       optional = command.optional,
     )
   }

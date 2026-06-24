@@ -1,10 +1,19 @@
+import javax.inject.Inject
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
-import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.Classpath
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 
 /**
  * Extension for the `trailblaze.dto-ts-codegen` plugin. A consuming module points the plugin at the
@@ -53,74 +62,110 @@ class TrailblazeDtoTsCodegenPlugin : Plugin<Project> {
       TrailblazeDtoTsCodegenExtension::class.java,
     )
 
-    val generate = project.tasks.register("generateDtoTs", JavaExec::class.java) { task ->
+    val generate = project.tasks.register("generateDtoTs", GenerateDtoTsTask::class.java) { task ->
       task.group = "build"
       task.description =
         "Regenerates the committed TypeScript DTO bindings from the Kotlin @Serializable models. " +
           "Run after changing an exported model or the root list, and commit the regenerated file."
-      task.classpath = ext.codegenClasspath
-      task.mainClass.set(ext.mainClass)
-      // Lazy: the output path is read at execution, after the consuming module configures it.
-      task.argumentProviders.add { listOf(ext.generatedTsFile.get().asFile.absolutePath) }
-      task.outputs.file(ext.generatedTsFile).withPropertyName("generatedDtoTs")
-      task.doFirst { requireConfigured(ext) }
+      task.codegenClasspath.from(ext.codegenClasspath)
+      task.generatorMainClass.set(ext.mainClass)
+      task.outputFile.set(ext.generatedTsFile)
     }
 
-    project.tasks.register("verifyDtoTs", JavaExec::class.java) { task ->
+    project.tasks.register("verifyDtoTs", VerifyDtoTsTask::class.java) { task ->
       task.group = "verification"
       task.description =
         "Verifies the committed TypeScript DTO bindings match a fresh codegen against the Kotlin " +
           "models. Fails with the regenerate command on drift. Wired into check."
-      task.classpath = ext.codegenClasspath
-      task.mainClass.set(ext.mainClass)
-
-      val freshFile = project.layout.buildDirectory.file("dto-ts-codegen/fresh-dto-bindings.ts")
-      task.argumentProviders.add { listOf(freshFile.get().asFile.absolutePath) }
-      // Treat the committed file as an INPUT (verify reads it to byte-diff; it never writes there).
-      // The conditional collection keeps the input declaration valid whether or not the committed
-      // file exists, so Gradle doesn't surface a generic "input file does not exist" error before
-      // the friendly doLast guard can fire with the regenerate command.
-      task.inputs.files(
-        project.provider {
-          if (!ext.generatedTsFile.isPresent) return@provider emptyList<java.io.File>()
-          val committed = ext.generatedTsFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedDtoTs")
-      task.outputs.file(freshFile).withPropertyName("freshDtoTs")
+      task.codegenClasspath.from(ext.codegenClasspath)
+      task.generatorMainClass.set(ext.mainClass)
+      task.committedFile.set(ext.generatedTsFile)
+      task.freshFile.set(project.layout.buildDirectory.file("dto-ts-codegen/fresh-dto-bindings.ts"))
+      task.regenerateTaskPath.set("${project.path}:generateDtoTs")
       // `check` runs verify but never generate, so this is ordering-only (NOT a dependency): if
       // both are scheduled in one build, verify runs after generate's write to the committed file.
       task.mustRunAfter(generate)
-
-      task.doFirst { requireConfigured(ext) }
-      task.doLast {
-        val committed = ext.generatedTsFile.get().asFile
-        if (!committed.exists()) {
-          throw GradleException(
-            "Committed DTO bindings missing at ${committed.absolutePath}. Run " +
-              "`./gradlew ${project.path}:generateDtoTs` and commit the result.",
-          )
-        }
-        val fresh = freshFile.get().asFile
-        if (committed.readText(Charsets.UTF_8) != fresh.readText(Charsets.UTF_8)) {
-          throw GradleException(
-            "TypeScript DTO bindings are out of date. Regenerate with:\n" +
-              "  ./gradlew ${project.path}:generateDtoTs\n" +
-              "and commit ${committed.absolutePath}.",
-          )
-        }
-      }
     }
 
     project.tasks.named("check") { it.dependsOn("verifyDtoTs") }
   }
+}
 
-  private fun requireConfigured(ext: TrailblazeDtoTsCodegenExtension) {
-    require(ext.mainClass.isPresent) {
+abstract class GenerateDtoTsTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
+  @get:Classpath
+  val codegenClasspath: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:Input
+  abstract val generatorMainClass: Property<String>
+
+  @get:OutputFile
+  abstract val outputFile: RegularFileProperty
+
+  @get:Inject
+  abstract val execOperations: ExecOperations
+
+  @TaskAction
+  fun generate() {
+    requireConfigured(generatorMainClass.isPresent, outputFile.isPresent)
+    execOperations.javaexec { spec ->
+      spec.classpath(codegenClasspath)
+      spec.mainClass.set(generatorMainClass)
+      spec.args(outputFile.get().asFile.absolutePath)
+    }
+  }
+}
+
+abstract class VerifyDtoTsTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
+  @get:Classpath
+  val codegenClasspath: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:Input
+  abstract val generatorMainClass: Property<String>
+
+  @get:Optional
+  @get:InputFile
+  abstract val committedFile: RegularFileProperty
+
+  @get:OutputFile
+  abstract val freshFile: RegularFileProperty
+
+  @get:Input
+  abstract val regenerateTaskPath: Property<String>
+
+  @get:Inject
+  abstract val execOperations: ExecOperations
+
+  @TaskAction
+  fun verify() {
+    requireConfigured(generatorMainClass.isPresent, committedFile.isPresent)
+    val fresh = freshFile.get().asFile
+    execOperations.javaexec { spec ->
+      spec.classpath(codegenClasspath)
+      spec.mainClass.set(generatorMainClass)
+      spec.args(fresh.absolutePath)
+    }
+    val committed = committedFile.get().asFile
+    if (!committed.exists()) {
+      throw GradleException(
+        "Committed DTO bindings missing at ${committed.absolutePath}. Run " +
+          "`./gradlew ${regenerateTaskPath.get()}` and commit the result.",
+      )
+    }
+    if (committed.readText(Charsets.UTF_8) != fresh.readText(Charsets.UTF_8)) {
+      throw GradleException(
+        "TypeScript DTO bindings are out of date. Regenerate with:\n" +
+          "  ./gradlew ${regenerateTaskPath.get()}\n" +
+          "and commit ${committed.absolutePath}.",
+      )
+    }
+  }
+}
+
+private fun requireConfigured(mainClassPresent: Boolean, generatedTsFilePresent: Boolean) {
+  require(mainClassPresent) {
       "trailblazeDtoTsCodegen.mainClass must be set to the generator's main class FQN."
-    }
-    require(ext.generatedTsFile.isPresent) {
+  }
+  require(generatedTsFilePresent) {
       "trailblazeDtoTsCodegen.generatedTsFile must be set to the committed output .ts path."
-    }
   }
 }

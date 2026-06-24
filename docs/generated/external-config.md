@@ -123,6 +123,14 @@ target:
   # session start.
   tools:
     - sampleapp_writeArtifact
+    # Authoring references — bare typed `.ts`, no `.yaml` sidecar (the framework reads the description
+    # from the JSDoc; the analyzer derives the input schema from the TS types). They show how to
+    # package the wait-until pattern as a reusable tool / a TypeScript trailhead, and are validated by
+    # their unit tests. They are NOT backed by a shipped runnable trail (compiling a workspace `.ts`
+    # tool needs the dev toolchain), like `sampleapp_writeArtifact`. The example's runnable wait demo
+    # is the pure-YAML `loading/wait-for-content` trail, which uses only built-in tools.
+    - sampleapp_waitForText
+    - sampleapp_launchToLoadedContent
 ```
 
 ## Authoring Toolsets
@@ -153,7 +161,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | Toolset | Always Enabled | Compatible Drivers | Tool Count |
 | --- | --- | --- | ---: |
 | `android_framework` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 3 |
-| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 6 |
+| `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 7 |
 | `compose_core` | No | `compose` | 6 |
 | `compose_verification` | No | `compose` | 2 |
 | `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 19 |

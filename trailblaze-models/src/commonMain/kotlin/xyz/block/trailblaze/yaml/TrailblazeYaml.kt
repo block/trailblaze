@@ -322,9 +322,9 @@ class TrailblazeYaml(
    * helper before iterating so a `config.skip:` marker short-circuits execution consistently
    * regardless of which entry point the YAML went through.
    *
-   * The CLI's pre-flight planner already honors `skip:` for the `trailblaze trail` / `trailblaze
-   * run` path; this helper exists so the *runtime* paths match. Without it, a trail with `skip:`
-   * set runs end-to-end whenever someone wires it into an instrumentation test instead of the CLI.
+   * The CLI's pre-flight planner already honors `skip:` for the `trailblaze run` path; this helper
+   * exists so the *runtime* paths match. Without it, a trail with `skip:` set runs end-to-end
+   * whenever someone wires it into an instrumentation test instead of the CLI.
    */
   fun firstSkipReason(trailItems: List<TrailYamlItem>): String? =
     extractTrailConfig(trailItems)?.skip?.trim()?.takeIf { it.isNotEmpty() }

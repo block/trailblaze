@@ -177,6 +177,15 @@ describe("createMockContext", () => {
     expect(ctx.memory.keys()).toEqual(["last"]);
   });
 
+  test("deprecated device.driver fixture is normalized into driverType", () => {
+    const ctx = createMockContext({
+      platform: "android",
+      device: { driver: "android-ondevice-accessibility" },
+    });
+    expect(ctx.device.driverType).toBe("android-ondevice-accessibility");
+    expect(ctx.device.driver).toBe("android-ondevice-accessibility");
+  });
+
   test("runtime: 'host' flattens to undefined on the context", () => {
     const ctx = createMockContext({ platform: "ios", runtime: "host" });
     expect(ctx.runtime).toBeUndefined();

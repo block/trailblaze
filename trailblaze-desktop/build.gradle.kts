@@ -77,10 +77,6 @@ val copyAndroidTestApkToResources by tasks.registering(Copy::class) {
   from(apkSourcePath)
   into(resourcesDir)
   rename { "trailblaze-ondevice-runner.apk" }
-
-  doFirst {
-    mkdir(resourcesDir)
-  }
 }
 
 // Make processResources depend on copying the APK

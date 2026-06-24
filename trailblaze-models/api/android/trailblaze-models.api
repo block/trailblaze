@@ -4774,6 +4774,7 @@ public final class xyz/block/trailblaze/config/ToolYamlConfig$Companion {
 
 public final class xyz/block/trailblaze/config/ToolYamlConfig$Mode : java/lang/Enum {
 	public static final field CLASS Lxyz/block/trailblaze/config/ToolYamlConfig$Mode;
+	public static final field METADATA Lxyz/block/trailblaze/config/ToolYamlConfig$Mode;
 	public static final field TOOLS Lxyz/block/trailblaze/config/ToolYamlConfig$Mode;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/config/ToolYamlConfig$Mode;

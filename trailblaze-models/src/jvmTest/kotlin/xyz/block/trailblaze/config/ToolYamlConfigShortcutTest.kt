@@ -338,6 +338,60 @@ class ToolYamlConfigShortcutTest {
   }
 
   @Test
+  fun `metadata-only trailhead (no class or tools body) passes validate and reports METADATA mode`() {
+    // A *.trailhead.yaml that attaches trailhead metadata to a tool registered elsewhere by the
+    // same id — e.g. a scripted `.ts` tool delivered via `target.tools:` that has no Kotlin class
+    // to point a `class:` body at. The referenced tool supplies description/params/flags.
+    val config = ToolYamlConfig(
+      id = "myapp_launchAppSignedIn",
+      trailhead = TrailheadMetadata(to = "myapp/android/home_signed_in"),
+    )
+    config.validate() // does not throw
+    assertEquals(ToolYamlConfig.Mode.METADATA, config.mode)
+    assertEquals("myapp/android/home_signed_in", config.trailhead?.to)
+  }
+
+  @Test
+  fun `metadata-only shortcut (no class or tools body) passes validate and reports METADATA mode`() {
+    val config = ToolYamlConfig(
+      id = "scripted_shortcut",
+      shortcut = ShortcutMetadata(from = "app/main", to = "app/detail"),
+    )
+    config.validate() // does not throw
+    assertEquals(ToolYamlConfig.Mode.METADATA, config.mode)
+  }
+
+  @Test
+  fun `metadata-only config still enforces trailhead to shape`() {
+    val config = ToolYamlConfig(
+      id = "th_metadata_blank_to",
+      trailhead = TrailheadMetadata(to = ""),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("'to:'"))
+  }
+
+  @Test
+  fun `metadata-only config rejects a body-bearing field (description)`() {
+    // Body-bearing fields have nothing to bind to without a class/tools body — they'd be silently
+    // ignored, so reject them. description/parameters/flags come from the referenced tool.
+    val config = ToolYamlConfig(
+      id = "th_metadata_with_description",
+      description = "not allowed on a metadata-only trailhead",
+      trailhead = TrailheadMetadata(to = "app/home"),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("metadata-only"))
+  }
+
+  @Test
+  fun `config with no body and no shortcut or trailhead is rejected`() {
+    val config = ToolYamlConfig(id = "empty_config")
+    val ex = assertFailsWith<IllegalStateException> { config.validate() }
+    assertTrue(ex.message!!.contains("nothing to register"))
+  }
+
+  @Test
   fun `trailhead block rejects blank to`() {
     val config = ToolYamlConfig(
       id = "th_blank_to",

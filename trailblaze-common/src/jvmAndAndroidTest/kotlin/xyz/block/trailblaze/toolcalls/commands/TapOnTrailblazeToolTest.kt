@@ -567,6 +567,65 @@ class TapOnTrailblazeToolTest {
 
   // endregion
 
+  // region iOS bare-node fast-path (TapTrailblazeTool → tapOnPoint)
+
+  @Test
+  fun `iOS bare node with no identifiable properties records as tapOnPoint`() {
+    // The three-dot icon button in the Dashboard Files grid has no text, accessibilityText,
+    // hintText, resourceId, and even clickable=false. TapTrailblazeTool must not run
+    // findBestSelector on the hitTest winner (which climbs to the root "Dashboard" view)
+    // but instead short-circuit to tapOnPoint using the LLM-selected node's coordinates.
+    val bareButton = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "n15",
+      bounds = TrailblazeNode.Bounds(161, 658, 185, 698),
+      driverDetail = DriverNodeDetail.IosMaestro(), // all defaults — no identifiable properties
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      driverDetail = DriverNodeDetail.IosMaestro(accessibilityText = "Dashboard"),
+      children = listOf(bareButton),
+    )
+    val agent = CapturingAgent()
+    val screen = object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth: Int = 402
+      override val deviceHeight: Int = 874
+      override val viewHierarchy = ViewHierarchyTreeNode()
+      override val trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS
+      override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+      override val trailblazeNodeTree: TrailblazeNode? = root
+    }
+    val context = TrailblazeToolExecutionContext(
+      screenState = screen,
+      traceId = null,
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = "t",
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+        ),
+        trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+        widthPixels = 402,
+        heightPixels = 874,
+      ),
+      sessionProvider = agent.sessionProvider,
+      trailblazeLogger = agent.trailblazeLogger,
+      memory = AgentMemory(),
+      maestroTrailblazeAgent = agent,
+    )
+
+    val executable = TapTrailblazeTool(ref = "n15").toExecutableTrailblazeTools(context)
+
+    assertEquals(1, executable.size)
+    val tapOnPoint = assertIs<TapOnPointTrailblazeTool>(executable[0])
+    // Center of Bounds(161,658,185,698) = (173, 678)
+    assertEquals(173, tapOnPoint.x)
+    assertEquals(678, tapOnPoint.y)
+  }
+
+  // endregion
+
   // region helpers
 
   private var nextId = 1L

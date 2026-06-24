@@ -1,0 +1,49 @@
+# Waiting for a screen that loads with a variable delay.
+#
+# The wait step uses the built-in `findMatches` tool with a `timeoutMs` budget: it polls the live
+# hierarchy and returns the instant "Content Loaded" appears, so the same recording replays cleanly
+# whichever delay (1s / 3s / 6s) the screen was left on — no fixed sleep. `findMatches` is exactly
+# the wait-until primitive the `sampleapp_waitForText` scripted tool wraps; see that tool and the
+# config README for why the on-device trail calls the built-in directly (workspace scripted tools
+# aren't bundled into the on-device APK).
+- config:
+    id: sample-app/loading/wait-for-content
+    target: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Loading" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Open the Loading demo by tapping the Loading navigation item.
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Loading
+  - step: Tap "Start Loading" to begin loading the content
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Start the (variable-delay) load.
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Start Loading
+  - step: Wait (event-driven) for the content to finish loading
+    recording:
+      tools:
+      - findMatches:
+          selector:
+            androidAccessibility:
+              textRegex: Content Loaded
+          timeoutMs: 30000
+  - verify: '"Content Loaded" is visible on the screen'
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Confirm the content finished loading.
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Content Loaded

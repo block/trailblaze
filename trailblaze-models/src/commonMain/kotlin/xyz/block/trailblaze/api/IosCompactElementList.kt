@@ -146,6 +146,22 @@ object IosCompactElementList {
         // Mirrors the IosAxe path's `hasIdentifiableProperties` gate.
         else if (includeAllElements && detail.hasIdentifiableProperties) "element"
         else {
+          // No label, no class name. Nodes with identifiable properties (e.g. resourceId)
+          // stay suppressed in the default view — they surface via ALL_ELEMENTS above.
+          // Only nodes that are ALSO identifier-less but still tappable get coordinates
+          // emitted here, so the LLM can use tapOnPoint with the exact tree position
+          // instead of visually estimating from the screenshot.
+          if (!detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
+            val bounds = node.bounds
+            if (bounds != null) {
+              val center = bounds.centerX to bounds.centerY
+              val ref = refTracker.ref(null, null, center.first, center.second)
+              lines.add("$indent[$ref] @(${center.first},${center.second})")
+              elementNodeIds.add(node.nodeId)
+              refMapping[ref] = node.nodeId
+              elementBounds.add(bounds)
+            }
+          }
           for (child in node.children) {
             buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
           }
@@ -189,9 +205,27 @@ object IosCompactElementList {
         }
       }
     } else {
-      // Structural/transparent: skip this node, recurse children at same depth
-      for (child in node.children) {
-        buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+      // Structural/transparent node. Recurse into children at the same depth so labeled
+      // descendants (e.g. a text label nested inside a row) still surface.
+      //
+      // Exception: bare leaf nodes — no children, no label, no class, no identifier — but
+      // with valid bounds. These are tappable elements that carry no accessibility metadata
+      // at all (e.g. an unlabelled three-dot icon button). Emit their exact center coordinates
+      // so the LLM can use tapOnPoint with the precise tree position instead of visually
+      // guessing from the screenshot. Only leaf nodes qualify; non-leaf nodes recurse so their
+      // labeled descendants still surface normally.
+      if (node.children.isEmpty() && node.bounds != null && label == null && shortClass.isEmpty() && !detail.hasIdentifiableProperties && (!offscreen || includeOffscreen)) {
+        val bounds = node.bounds
+        val center = bounds.centerX to bounds.centerY
+        val ref = refTracker.ref(null, null, center.first, center.second)
+        lines.add("$indent[$ref] @(${center.first},${center.second})")
+        elementNodeIds.add(node.nodeId)
+        refMapping[ref] = node.nodeId
+        elementBounds.add(bounds)
+      } else {
+        for (child in node.children) {
+          buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+        }
       }
     }
   }

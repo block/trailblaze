@@ -1,5 +1,251 @@
+import java.io.RandomAccessFile
+import java.nio.channels.OverlappingFileLockException
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.model.ObjectFactory
+import org.gradle.api.tasks.IgnoreEmptyDirectories
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFiles
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  val inputSources: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:OutputFiles
+  val outputBundles: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  val sdkSources: ConfigurableFileCollection = objects.fileCollection()
+
+  @get:Internal
+  abstract val sdkDir: DirectoryProperty
+
+  @get:Optional
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val scriptingSdkSrc: RegularFileProperty
+
+  @get:Optional
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val scriptingWrapperTemplate: RegularFileProperty
+
+  @get:Internal
+  abstract val outputDir: DirectoryProperty
+
+  @get:Internal
+  abstract val temporaryWorkDir: DirectoryProperty
+
+  @TaskAction
+  fun bundle() {
+    val toolsDir = outputDir.get().asFile
+    val sources = inputSources.files.sortedBy { it.name }
+    if (sources.isEmpty()) {
+      logger.lifecycle("No framework scripted tools to bundle.")
+      return
+    }
+
+    val expectedBundles = sources.map { "${it.nameWithoutExtension}.bundle.js" }.toSet()
+    toolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
+      ?.forEach { stale ->
+        logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
+        stale.delete()
+      }
+
+    if (sdkDir.isPresent) {
+      ensureSdkNodeModules(
+        sdk = sdkDir.get().asFile,
+        logFile = temporaryWorkDir.get().asFile.resolve("install-sdk-node-modules.log"),
+      )
+    }
+
+    sources.forEach { src ->
+      val out = File(toolsDir, "${src.nameWithoutExtension}.bundle.js")
+      logger.lifecycle("Bundling ${src.name} -> ${out.name}")
+      esbuildScriptedTool(
+        source = src,
+        outFile = out,
+        toolsDir = toolsDir,
+        sdkSource = scriptingSdkSrc.orNull?.asFile,
+        wrapperTemplate = scriptingWrapperTemplate.orNull?.asFile,
+        tempDir = temporaryWorkDir.get().asFile,
+      )
+    }
+  }
+
+  private fun isSdkNodeModulesUpToDate(sdk: File): Boolean {
+    val esbuildOk = File(sdk, "node_modules/.bin/esbuild").isFile
+    val lockText = File(sdk, "bun.lock").let { if (it.exists()) it.readText() else "" }
+    val installStamp = File(sdk, "node_modules/.trailblaze-install-lock")
+    return esbuildOk && installStamp.exists() && installStamp.readText() == lockText
+  }
+
+  private fun ensureSdkNodeModules(sdk: File, logFile: File) {
+    if (isSdkNodeModulesUpToDate(sdk)) return
+    val lockFile = File(sdk, "node_modules/.trailblaze-install.lock")
+    lockFile.parentFile.mkdirs()
+    RandomAccessFile(lockFile, "rw").channel.use { channel ->
+      while (true) {
+        val lock = try {
+          channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+          null
+        }
+        if (lock != null) {
+          lock.use {
+            if (isSdkNodeModulesUpToDate(sdk)) return
+            installSdkNodeModules(sdk, logFile)
+            return
+          }
+        }
+        Thread.sleep(250)
+      }
+    }
+  }
+
+  private fun installSdkNodeModules(sdk: File, logFile: File) {
+    val lockText = File(sdk, "bun.lock").let { if (it.exists()) it.readText() else "" }
+    val installStamp = File(sdk, "node_modules/.trailblaze-install-lock")
+    logFile.parentFile.mkdirs()
+    logFile.writeText("")
+    logger.lifecycle("Installing @trailblaze/scripting devDependencies (bun install --frozen-lockfile)")
+    val installProc = try {
+      ProcessBuilder("bun", "install", "--frozen-lockfile")
+        .directory(sdk)
+        .redirectErrorStream(true)
+        .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+        .start()
+    } catch (e: java.io.IOException) {
+      throw GradleException(
+        "Could not launch `bun` to install @trailblaze/scripting devDependencies in $sdk. " +
+          "Trailblaze is bun-only and `bun` is a hard build prerequisite — put it on PATH via " +
+          "`source bin/activate-hermit` or install from https://bun.sh/. Cause: ${e.message}",
+        e,
+      )
+    }
+    if (!installProc.waitFor(15, TimeUnit.MINUTES)) {
+      installProc.destroyForcibly()
+      throw GradleException("`bun install --frozen-lockfile` timed out in $sdk. See ${logFile.absolutePath}.")
+    }
+    require(installProc.exitValue() == 0) {
+      "`bun install --frozen-lockfile` failed (exit ${installProc.exitValue()}) in $sdk — " +
+        "required to bundle framework scripted tools. Ensure `bun` is on PATH " +
+        "(`source bin/activate-hermit`). See ${logFile.absolutePath}."
+    }
+    runCatching { installStamp.writeText(lockText) }
+  }
+
+  private fun synthesizeInProcessScriptedToolWrapper(
+    userScriptFileName: String,
+    templateFile: File,
+  ): String {
+    require(templateFile.isFile) { "Wrapper template not found at ${templateFile.absolutePath}" }
+    val header = buildString {
+      appendLine("// Synthetic entry generated by :trailblaze-common's framework scripted-tool bundler.")
+      appendLine("// Imports every typed-tool export from `$userScriptFileName`, builds a `client` shim")
+      appendLine("// over the host's `__trailblazeCall` binding, and registers each export on")
+      appendLine("// `globalThis.__trailblazeTools[<exportName>]` so QuickJsToolHost.callTool can dispatch it.")
+    }
+    val registration = buildString {
+      appendLine("for (const __exportName of Object.keys(__userModule)) {")
+      appendLine("  const __def = __userModule[__exportName];")
+      appendLine("  if (typeof __def !== 'function') continue;")
+      appendLine("  globalThis.__trailblazeTools[__exportName] = {")
+      appendLine("    handler: async (args, ctx) => {")
+      appendLine("      const result = await __def(args, ctx, __client);")
+      appendLine("      return __normalizeResult(result);")
+      appendLine("    },")
+      appendLine("  };")
+      appendLine("}")
+    }
+    return templateFile.readText()
+      .replace("// __TRAILBLAZE_HEADER__\n", header)
+      .replace("__TRAILBLAZE_IMPORT_SOURCE__", "./$userScriptFileName")
+      .replace("// __TRAILBLAZE_PRELUDE__\n", "")
+      .replace("// __TRAILBLAZE_REGISTRATION__\n", registration)
+  }
+
+  private fun esbuildScriptedTool(
+    source: File,
+    outFile: File,
+    toolsDir: File,
+    sdkSource: File?,
+    wrapperTemplate: File?,
+    tempDir: File,
+  ) {
+    requireNotNull(sdkSource) {
+      "@trailblaze/scripting slim SDK entry not found at sdks/typescript/src/in-process.ts."
+    }
+    requireNotNull(wrapperTemplate) {
+      "Scripted-tool wrapper template not found — expected sdks/typescript/tools/in-process-wrapper-template.mjs."
+    }
+    val esbuildBinary = sdkSource.parentFile.parentFile.resolve("node_modules/.bin/esbuild")
+    require(esbuildBinary.isFile) { "esbuild not found at ${esbuildBinary.absolutePath}" }
+    require(sdkSource.isFile) { "SDK source not found at ${sdkSource.absolutePath}" }
+    val logFile = tempDir.resolve("bundle-${source.nameWithoutExtension}.log")
+    logFile.parentFile.mkdirs()
+
+    val wrapperFile = File(toolsDir, ".trailblaze-wrapper-${source.nameWithoutExtension}.ts")
+    wrapperFile.writeText(synthesizeInProcessScriptedToolWrapper(source.name, wrapperTemplate))
+    val stdioStubFile = tempDir.resolve("_ondevice-stdio-stub.ts").apply {
+      parentFile.mkdirs()
+      writeText(
+        "/* GENERATED by :trailblaze-common bundler — esbuild --alias target for the " +
+          "on-device QuickJS path. */\n" +
+          "export class StdioServerTransport { " +
+          "constructor() { throw new Error(\"StdioServerTransport unavailable on-device\"); } }\n",
+      )
+    }
+    val argv = listOf(
+      esbuildBinary.absolutePath,
+      wrapperFile.absolutePath,
+      "--bundle",
+      "--platform=neutral",
+      "--format=iife",
+      "--target=es2020",
+      "--main-fields=module,main",
+      "--external:node:process",
+      "--alias:@trailblaze/scripting=${sdkSource.absolutePath}",
+      "--alias:@modelcontextprotocol/sdk/server/stdio.js=${stdioStubFile.absolutePath}",
+      "--outfile=${outFile.absolutePath}",
+    )
+    try {
+      val proc = ProcessBuilder(argv)
+        .directory(toolsDir)
+        .redirectErrorStream(true)
+        .redirectOutput(ProcessBuilder.Redirect.to(logFile))
+        .start()
+      if (!proc.waitFor(2, TimeUnit.MINUTES)) {
+        proc.destroyForcibly()
+        throw GradleException("esbuild timed out for ${source.name}. See ${logFile.absolutePath}.")
+      }
+      if (proc.exitValue() != 0) {
+        throw GradleException(
+          "esbuild failed for ${source.name} (exit ${proc.exitValue()}). See ${logFile.absolutePath}.",
+        )
+      }
+    } finally {
+      wrapperFile.delete()
+      stdioStubFile.delete()
+    }
+  }
+}
 
 plugins {
   alias(libs.plugins.android.library)
@@ -186,8 +432,6 @@ dependencyGuard {
 // build-time `BundleAuthorToolsTask` (build-logic) reads the same file; the daemon-time
 // `DaemonScriptedToolBundler` (:trailblaze-host) reads it from the classpath. That single template
 // retired the old three-way SISTER-IMPL-TAG duplication — there's nothing left to keep in lockstep.
-val frameworkToolsDir =
-  file("src/commonMain/resources/trails/config/trailmaps/trailblaze/tools")
 val frameworkRoot: File? = run {
   val marker = "sdks/typescript/package.json"
   var dir: File? = rootProject.projectDir
@@ -200,218 +444,40 @@ val frameworkRoot: File? = run {
   }
   null
 }
-val esbuildBinary = frameworkRoot?.let { File(it, "sdks/typescript/node_modules/.bin/esbuild") }
-val scriptingSdkSrc = frameworkRoot?.let { File(it, "sdks/typescript/src/in-process.ts") }
-val scriptingWrapperTemplate =
-  frameworkRoot?.let { File(it, "sdks/typescript/tools/in-process-wrapper-template.mjs") }
 
-fun frameworkScriptedToolSources(): List<File> =
-  frameworkToolsDir.listFiles()
-    ?.filter {
-      it.isFile && it.name.endsWith(".ts") &&
-        !it.name.endsWith(".d.ts") && !it.name.endsWith(".test.ts") &&
-        // Skip a synthesized registration wrapper left behind by a crashed bundle run — it's a
-        // build artifact, never a tool source (normal runs delete it in `finally`).
-        !it.name.startsWith(".trailblaze-wrapper-")
-    }
-    ?.sortedBy { it.name }
-    ?: emptyList()
-
-// Renders the in-process registration wrapper for a typed scripted-tool source file
-// (`export const <toolName> = trailblaze.tool<I>(...)`) from the ONE committed template,
-// `sdks/typescript/tools/in-process-wrapper-template.mjs`. Typed-tool exports do NOT self-register,
-// so the wrapper imports the file as a namespace, enumerates its function-valued exports, and
-// registers each on `globalThis.__trailblazeTools[<exportName>]`. The output is byte-for-byte what
-// the build-logic `BundleAuthorToolsTask` and the daemon-time `DaemonScriptedToolBundler` produce
-// for the same source — they all render the same template.
-//
-// Token substitution is duplicated here (a few `.replace` calls) only because this build script
-// can't import the build-logic plugin's renderer; the load-bearing JS lives in the template file,
-// not in this build script.
-fun synthesizeInProcessScriptedToolWrapper(userScriptFileName: String): String {
-  val templateFile = requireNotNull(scriptingWrapperTemplate) {
-    "Scripted-tool wrapper template not found — expected sdks/typescript/tools/in-process-wrapper-template.mjs."
-  }
-  require(templateFile.isFile) { "Wrapper template not found at ${templateFile.absolutePath}" }
-  val header = buildString {
-    appendLine("// Synthetic entry generated by :trailblaze-common's framework scripted-tool bundler.")
-    appendLine("// Imports every typed-tool export from `$userScriptFileName`, builds a `client` shim")
-    appendLine("// over the host's `__trailblazeCall` binding, and registers each export on")
-    appendLine("// `globalThis.__trailblazeTools[<exportName>]` so QuickJsToolHost.callTool can dispatch it.")
-  }
-  val registration = buildString {
-    appendLine("for (const __exportName of Object.keys(__userModule)) {")
-    appendLine("  const __def = __userModule[__exportName];")
-    appendLine("  if (typeof __def !== 'function') continue;")
-    appendLine("  globalThis.__trailblazeTools[__exportName] = {")
-    appendLine("    handler: async (args, ctx) => {")
-    appendLine("      const result = await __def(args, ctx, __client);")
-    appendLine("      return __normalizeResult(result);")
-    appendLine("    },")
-    appendLine("  };")
-    appendLine("}")
-  }
-  return templateFile.readText()
-    .replace("// __TRAILBLAZE_HEADER__\n", header)
-    .replace("__TRAILBLAZE_IMPORT_SOURCE__", "./$userScriptFileName")
-    // Multi-export: no single-export prelude — the empty replacement removes the token line.
-    .replace("// __TRAILBLAZE_PRELUDE__\n", "")
-    .replace("// __TRAILBLAZE_REGISTRATION__\n", registration)
-}
-
-fun esbuildScriptedTool(source: File, outFile: File) {
-  requireNotNull(esbuildBinary) {
-    "esbuild not found — run `bun install` in sdks/typescript/."
-  }
-  requireNotNull(scriptingSdkSrc) {
-    "@trailblaze/scripting slim SDK entry not found at sdks/typescript/src/in-process.ts."
-  }
-  require(esbuildBinary.isFile) { "esbuild not found at ${esbuildBinary.absolutePath}" }
-  require(scriptingSdkSrc.isFile) { "SDK source not found at ${scriptingSdkSrc.absolutePath}" }
-  val logFile =
-    layout.buildDirectory.file("tmp/bundle-${source.nameWithoutExtension}.log").get().asFile
-  logFile.parentFile.mkdirs()
-  // Synthesize a registration wrapper co-located with the source so esbuild resolves the relative
-  // `./<source>` import; bundle the wrapper, not the raw source (typed-tool exports don't
-  // self-register). Throw-only stdio stub mirrors the daemon-time bundler (defensive — the slim
-  // SDK never imports MCP). Both temp files are cleaned up in `finally`.
-  //
-  // The wrapper filename must be DETERMINISTIC (not `createTempFile`): esbuild emits the entry
-  // filename as a `// <name>` module comment in the output. The `.bundle.js` is a build
-  // artifact regenerated each build, so a deterministic name keeps it byte-reproducible across
-  // machines (the same property the committed `bun.lock` guarantees for the inputs). One source
-  // bundles at a time (sequential `forEach`), so a per-source name can't collide.
-  val wrapperFile = File(frameworkToolsDir, ".trailblaze-wrapper-${source.nameWithoutExtension}.ts")
-  wrapperFile.writeText(synthesizeInProcessScriptedToolWrapper(source.name))
-  val stdioStubFile =
-    layout.buildDirectory.file("tmp/_ondevice-stdio-stub.ts").get().asFile.apply {
-      parentFile.mkdirs()
-      writeText(
-        "/* GENERATED by :trailblaze-common bundler — esbuild --alias target for the " +
-          "on-device QuickJS path. */\n" +
-          "export class StdioServerTransport { " +
-          "constructor() { throw new Error(\"StdioServerTransport unavailable on-device\"); } }\n",
-      )
-    }
-  val argv = listOf(
-    esbuildBinary.absolutePath,
-    wrapperFile.absolutePath,
-    "--bundle",
-    "--platform=neutral",
-    "--format=iife",
-    "--target=es2020",
-    "--main-fields=module,main",
-    "--external:node:process",
-    "--alias:@trailblaze/scripting=${scriptingSdkSrc.absolutePath}",
-    "--alias:@modelcontextprotocol/sdk/server/stdio.js=${stdioStubFile.absolutePath}",
-    "--outfile=${outFile.absolutePath}",
-  )
-  try {
-    val proc = ProcessBuilder(argv)
-      .directory(frameworkToolsDir)
-      .redirectErrorStream(true)
-      // Overwrite (not append) so the log reflects only the latest esbuild run for this tool.
-      // Appending across Gradle runs grows the file unbounded and mixes stale output into triage.
-      .redirectOutput(ProcessBuilder.Redirect.to(logFile))
-      .start()
-    if (!proc.waitFor(2, TimeUnit.MINUTES)) {
-      proc.destroyForcibly()
-      throw GradleException("esbuild timed out for ${source.name}. See ${logFile.absolutePath}.")
-    }
-    if (proc.exitValue() != 0) {
-      throw GradleException(
-        "esbuild failed for ${source.name} (exit ${proc.exitValue()}). See ${logFile.absolutePath}.",
-      )
-    }
-  } finally {
-    wrapperFile.delete()
-    stdioStubFile.delete()
-  }
-}
-
-tasks.register("bundleFrameworkScriptedTools") {
+tasks.register<BundleFrameworkScriptedToolsTask>("bundleFrameworkScriptedTools") {
   group = "build"
   description = "Regenerates the QuickJS .bundle.js for every framework scripted tool (build artifact)."
-  // Declare inputs + outputs so Gradle UP-TO-DATE-skips this when nothing changed — parity with
-  // bundleTrailblazeSdk(Dts). Without these the task is wired into resource packaging (preBuild /
-  // *ProcessResources below) but has no staleness info, so esbuild would re-run on every build.
-  // Inputs: the tool `.ts` sources, the slim SDK source tree they bundle against, and the config
-  // that controls the bundle (package.json / bun.lock / the wrapper template). Output: the
-  // generated `.bundle.js` files.
-  inputs.files(project.provider { frameworkScriptedToolSources() }).withPropertyName("frameworkToolSources")
-  val sdkDir = frameworkRoot?.let { File(it, "sdks/typescript") }
-  if (sdkDir != null) {
-    inputs.files(project.provider { project.fileTree(File(sdkDir, "src")) }).withPropertyName("slimSdkSources")
-    inputs.files(
-      project.provider {
-        listOf(
-          File(sdkDir, "package.json"),
-          File(sdkDir, "bun.lock"),
-          File(sdkDir, "tools/in-process-wrapper-template.mjs"),
-        ).filter { it.exists() }
-      },
-    ).withPropertyName("sdkBundleConfig")
-  }
-  outputs.files(
-    project.provider {
-      frameworkScriptedToolSources().map { File(frameworkToolsDir, "${it.nameWithoutExtension}.bundle.js") }
+  val frameworkToolsDirectory =
+    layout.projectDirectory.dir("src/commonMain/resources/trails/config/trailmaps/trailblaze/tools")
+  val frameworkToolSources =
+    frameworkToolsDirectory.asFileTree.matching {
+      include("*.ts")
+      exclude("*.d.ts", "*.test.ts", ".trailblaze-wrapper-*")
+    }
+  inputSources.from(frameworkToolSources)
+  outputBundles.from(
+    provider {
+      frameworkToolSources.files.map { source ->
+        frameworkToolsDirectory.file("${source.nameWithoutExtension}.bundle.js").asFile
+      }
     },
-  ).withPropertyName("frameworkToolBundles")
-  doLast {
-    val sources = frameworkScriptedToolSources()
-    if (sources.isEmpty()) {
-      logger.lifecycle("No framework scripted tools to bundle.")
-      return@doLast
-    }
-    // Remove orphaned bundles first: a `.bundle.js` whose source `.ts` was renamed or deleted
-    // would otherwise linger in this gitignored dir (there's no verify gate now) and still get
-    // packaged. Only bundles with a current source survive (and are overwritten below).
-    val expectedBundles = sources.map { "${it.nameWithoutExtension}.bundle.js" }.toSet()
-    frameworkToolsDir.listFiles { f -> f.isFile && f.name.endsWith(".bundle.js") && f.name !in expectedBundles }
-      ?.forEach { stale ->
-        logger.lifecycle("Removing stale framework tool bundle ${stale.name} (no matching source)")
-        stale.delete()
-      }
-    // The `.bundle.js` files are build artifacts, not committed source, so install the slim
-    // SDK's esbuild from the committed bun.lock. Skip is keyed on the lockfile (not just binary
-    // presence) so a `bun.lock` bump forces a fresh install rather than bundling against stale
-    // deps. Mirrors `ensureSdkNodeModules` in TrailblazeSdkDtsBundlePlugin (which a build script
-    // can't call directly).
-    val sdkDir = frameworkRoot?.let { File(it, "sdks/typescript") }
-    if (sdkDir != null) {
-      val esbuildOk = File(sdkDir, "node_modules/.bin/esbuild").isFile
-      val lockText = File(sdkDir, "bun.lock").let { if (it.exists()) it.readText() else "" }
-      val installStamp = File(sdkDir, "node_modules/.trailblaze-install-lock")
-      val upToDate = esbuildOk && installStamp.exists() && installStamp.readText() == lockText
-      if (!upToDate) {
-        logger.lifecycle("Installing @trailblaze/scripting devDependencies (bun install --frozen-lockfile)")
-        val installProc = try {
-          ProcessBuilder("bun", "install", "--frozen-lockfile").directory(sdkDir).inheritIO().start()
-        } catch (e: java.io.IOException) {
-          throw GradleException(
-            "Could not launch `bun` to install @trailblaze/scripting devDependencies in $sdkDir. " +
-              "Trailblaze is bun-only and `bun` is a hard build prerequisite — put it on PATH via " +
-              "`source bin/activate-hermit` or install from https://bun.sh/. Cause: ${e.message}",
-            e,
-          )
-        }
-        if (!installProc.waitFor(15, TimeUnit.MINUTES)) {
-          installProc.destroyForcibly()
-          throw GradleException("`bun install --frozen-lockfile` timed out in $sdkDir.")
-        }
-        require(installProc.exitValue() == 0) {
-          "`bun install --frozen-lockfile` failed (exit ${installProc.exitValue()}) in $sdkDir — " +
-            "required to bundle framework scripted tools. Ensure `bun` is on PATH " +
-            "(`source bin/activate-hermit`)."
-        }
-        runCatching { installStamp.writeText(lockText) }
-      }
-    }
-    sources.forEach { src ->
-      val out = File(frameworkToolsDir, "${src.nameWithoutExtension}.bundle.js")
-      logger.lifecycle("Bundling ${src.name} → ${out.name}")
-      esbuildScriptedTool(src, out)
-    }
+  )
+  outputDir.set(frameworkToolsDirectory)
+  temporaryWorkDir.set(layout.buildDirectory.dir("tmp/framework-scripted-tools"))
+  frameworkRoot?.let { root ->
+    val sdkDirectory = File(root, "sdks/typescript")
+    sdkDir.set(layout.dir(provider { sdkDirectory }))
+    sdkSources.from(
+      fileTree(File(sdkDirectory, "src")) {
+        include("**/*.ts")
+        exclude("**/*.test.ts", "**/*.d.ts")
+      },
+    )
+    scriptingSdkSrc.set(layout.file(provider { File(sdkDirectory, "src/in-process.ts") }))
+    scriptingWrapperTemplate.set(
+      layout.file(provider { File(sdkDirectory, "tools/in-process-wrapper-template.mjs") }),
+    )
   }
 }
 
@@ -437,4 +503,3 @@ tasks.matching { t ->
     (t.name.startsWith("merge") &&
       (t.name.endsWith("Resources") || t.name.endsWith("Assets") || t.name.endsWith("JavaResource")))
 }.configureEach { dependsOn(bundleFrameworkToolsTask) }
-

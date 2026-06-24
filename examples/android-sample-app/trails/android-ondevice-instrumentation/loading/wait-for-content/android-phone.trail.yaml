@@ -1,0 +1,49 @@
+# Waiting for a screen that loads with a variable delay (instrumentation driver).
+#
+# The wait step uses the built-in `maestro` tool's `extendedWaitUntil`: it blocks until "Content
+# Loaded" is visible (up to the timeout), so the recording replays cleanly whichever delay (1s / 3s
+# / 6s) the screen was left on — no fixed sleep. That's exactly the instrumentation branch of the
+# `sampleapp_waitForText` scripted tool; see that tool and the config README for why the on-device
+# trail calls the built-in directly (workspace scripted tools aren't bundled into the on-device APK).
+- config:
+    id: sample-app/loading/wait-for-content
+    target: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Loading" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Open the Loading demo by tapping the Loading navigation item.
+          selector:
+            containsChild:
+              textRegex: Loading
+  - step: Tap "Start Loading" to begin loading the content
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Start the (variable-delay) load.
+          selector:
+            containsChild:
+              textRegex: Start Loading
+  - step: Wait (event-driven) for the content to finish loading
+    recording:
+      tools:
+      - maestro:
+          commands:
+          - extendedWaitUntil:
+              visible:
+                text: Content Loaded
+              timeout: 30000
+  - verify: '"Content Loaded" is visible on the screen'
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Confirm the content finished loading.
+          selector:
+            textRegex: Content Loaded

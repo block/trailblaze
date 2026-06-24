@@ -1,8 +1,19 @@
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.IgnoreEmptyDirectories
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 
 /**
  * Extension wiring for the `trailblaze.selector-ts-codegen` plugin. Consumers point at
@@ -45,7 +56,7 @@ class TrailblazeSelectorTsCodegenPlugin : Plugin<Project> {
       TrailblazeSelectorTsCodegenExtension::class.java,
     )
 
-    val generate = project.tasks.register("generateSelectorsTs") { task ->
+    val generate = project.tasks.register("generateSelectorsTs", GenerateSelectorsTsTask::class.java) { task ->
       task.group = "build"
       task.description =
         "Regenerates opensource/sdks/typescript/src/generated/selectors.ts from the " +
@@ -53,89 +64,21 @@ class TrailblazeSelectorTsCodegenPlugin : Plugin<Project> {
           "MatchDescriptor.kt, or TrailblazeNode.Bounds, and commit the regenerated " +
           "file alongside the source change."
 
-      declareInputs(task, ext, project)
-      task.outputs.file(ext.generatedTsFile).withPropertyName("generatedSelectorsTs")
-
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        val outputFile = ext.generatedTsFile.get().asFile
-        val (a, b, c) = resolveInputs(ext)
-        val rendered = runSelectorTsCodegen(a, b, c)
-        outputFile.parentFile.mkdirs()
-        outputFile.writeText(rendered, Charsets.UTF_8)
-        // Path is relative to the repo root, not the consuming module's project dir,
-        // because the committed `selectors.ts` lives in a sibling module
-        // (`:opensource/sdks/typescript`). `relativeTo(project.projectDir)` would throw
-        // for any output that escapes the module via `..` segments.
-        task.logger.lifecycle(
-          "Regenerated ${outputFile.relativeTo(project.rootDir)} " +
-            "(${outputFile.length()} bytes). Commit it alongside the Kotlin source " +
-            "change so CI's verifySelectorsTs gate stays green.",
-        )
-      }
+      task.kotlinSourceDir.set(ext.kotlinSourceDir)
+      task.generatedTsFile.set(ext.generatedTsFile)
+      task.rootDir.set(project.layout.projectDirectory)
     }
 
-    val verify = project.tasks.register("verifySelectorsTs") { task ->
+    val verify = project.tasks.register("verifySelectorsTs", VerifySelectorsTsTask::class.java) { task ->
       task.group = "verification"
       task.description =
         "Verifies the committed opensource/sdks/typescript/src/generated/selectors.ts " +
           "matches a fresh codegen against the Kotlin source-of-truth files. Fails with " +
           "the regenerate command when they differ. Wired into :trailblaze-models:check."
 
-      declareInputs(task, ext, project)
-      // Treat the committed file as an INPUT (not an output) — verify reads it to
-      // byte-diff against a fresh codegen; it never writes there. The conditional
-      // collection pattern keeps the input declaration valid across "file exists" vs
-      // "file missing" so Gradle doesn't surface a generic "input file does not exist"
-      // error before the friendly doLast guard can fire with the regenerate command.
-      //
-      // No declared outputs by design: this task is a pure assertion (no artifacts to
-      // produce), so it intentionally runs every invocation rather than relying on
-      // UP-TO-DATE skipping. Cheap enough — pure JVM, three small source files; the cost of
-      // always re-running is negligible compared to the simplicity gain.
-      task.inputs.files(
-        project.provider {
-          if (!ext.generatedTsFile.isPresent) return@provider emptyList<java.io.File>()
-          val committed = ext.generatedTsFile.get().asFile
-          if (committed.exists()) listOf(committed) else emptyList()
-        },
-      ).withPropertyName("committedSelectorsTs")
-
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        val committed = ext.generatedTsFile.get().asFile
-        if (!committed.exists()) {
-          throw GradleException(
-            "Committed selectors.ts missing at ${committed.absolutePath}. Run " +
-              "`./gradlew :trailblaze-models:generateSelectorsTs` and commit the result.",
-          )
-        }
-        val (a, b, c) = resolveInputs(ext)
-        val regenerated = runSelectorTsCodegen(a, b, c)
-        val committedText = committed.readText(Charsets.UTF_8)
-        if (committedText != regenerated) {
-          throw GradleException(
-            "selectors.ts does not match a fresh codegen against the Kotlin source.\n" +
-              "Likely causes:\n" +
-              "  1. You edited TrailblazeNodeSelector.kt / MatchDescriptor.kt / " +
-              "TrailblazeNode.Bounds without regenerating.\n" +
-              "  2. You hand-edited the generated file — the codegen output is the " +
-              "source of truth, not selectors.ts itself.\n" +
-              "Regenerate and commit:\n" +
-              "  ./gradlew :trailblaze-models:generateSelectorsTs\n" +
-              "  git add ${committed.relativeTo(project.rootDir)} && " +
-              "git commit -m \"chore(sdk): regenerate selectors.ts\"\n" +
-              "After regenerating, also rerun " +
-              "`./gradlew :trailblaze-models:bundleTrailblazeSdkDts` so the bundled " +
-              "dist/index.d.ts picks up the change.\n" +
-              "Committed size: ${committedText.length} chars\n" +
-              "Regenerated size: ${regenerated.length} chars",
-          )
-        }
-        task.logger.lifecycle(
-          "✓ selectors.ts is fresh (${committedText.length} chars match).",
-        )
-      }
+      task.kotlinSourceDir.set(ext.kotlinSourceDir)
+      task.committedTsFile.set(ext.generatedTsFile)
+      task.rootDir.set(project.layout.projectDirectory)
     }
     verify.configure { it.mustRunAfter(generate) }
 
@@ -145,8 +88,91 @@ class TrailblazeSelectorTsCodegenPlugin : Plugin<Project> {
   }
 }
 
-private fun requireExtensionConfigured(ext: TrailblazeSelectorTsCodegenExtension) {
-  if (!ext.kotlinSourceDir.isPresent || !ext.generatedTsFile.isPresent) {
+abstract class GenerateSelectorsTsTask : DefaultTask() {
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  abstract val kotlinSourceDir: DirectoryProperty
+
+  @get:OutputFile
+  abstract val generatedTsFile: RegularFileProperty
+
+  @get:Internal
+  abstract val rootDir: DirectoryProperty
+
+  @TaskAction
+  fun generate() {
+    requireExtensionConfigured(kotlinSourceDir.isPresent, generatedTsFile.isPresent)
+    val outputFile = generatedTsFile.get().asFile
+    val (a, b, c) = resolveInputs(kotlinSourceDir.get().asFile)
+    val rendered = runSelectorTsCodegen(a, b, c)
+    outputFile.parentFile.mkdirs()
+    outputFile.writeText(rendered, Charsets.UTF_8)
+    logger.lifecycle(
+      "Regenerated ${outputFile.relativeToOrSelf(rootDir.get().asFile)} " +
+        "(${outputFile.length()} bytes). Commit it alongside the Kotlin source " +
+        "change so CI's verifySelectorsTs gate stays green.",
+    )
+  }
+}
+
+abstract class VerifySelectorsTsTask : DefaultTask() {
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  abstract val kotlinSourceDir: DirectoryProperty
+
+  @get:Optional
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val committedTsFile: RegularFileProperty
+
+  @get:Internal
+  abstract val rootDir: DirectoryProperty
+
+  @get:Input
+  val alwaysRun: String = "verify"
+
+  @TaskAction
+  fun verify() {
+    requireExtensionConfigured(kotlinSourceDir.isPresent, committedTsFile.isPresent)
+    val committed = committedTsFile.get().asFile
+    if (!committed.exists()) {
+      throw GradleException(
+        "Committed selectors.ts missing at ${committed.absolutePath}. Run " +
+          "`./gradlew :trailblaze-models:generateSelectorsTs` and commit the result.",
+      )
+    }
+    val (a, b, c) = resolveInputs(kotlinSourceDir.get().asFile)
+    val regenerated = runSelectorTsCodegen(a, b, c)
+    val committedText = committed.readText(Charsets.UTF_8)
+    if (committedText != regenerated) {
+      throw GradleException(
+        "selectors.ts does not match a fresh codegen against the Kotlin source.\n" +
+          "Likely causes:\n" +
+          "  1. You edited TrailblazeNodeSelector.kt / MatchDescriptor.kt / " +
+          "TrailblazeNode.Bounds without regenerating.\n" +
+          "  2. You hand-edited the generated file — the codegen output is the " +
+          "source of truth, not selectors.ts itself.\n" +
+          "Regenerate and commit:\n" +
+          "  ./gradlew :trailblaze-models:generateSelectorsTs\n" +
+          "  git add ${committed.relativeToOrSelf(rootDir.get().asFile)} && " +
+          "git commit -m \"chore(sdk): regenerate selectors.ts\"\n" +
+          "After regenerating, also rerun " +
+          "`./gradlew :trailblaze-models:bundleTrailblazeSdkDts` so the bundled " +
+          "dist/index.d.ts picks up the change.\n" +
+          "Committed size: ${committedText.length} chars\n" +
+          "Regenerated size: ${regenerated.length} chars",
+      )
+    }
+    logger.lifecycle(
+      "✓ selectors.ts is fresh (${committedText.length} chars match).",
+    )
+  }
+}
+
+private fun requireExtensionConfigured(kotlinSourceDirPresent: Boolean, generatedTsFilePresent: Boolean) {
+  if (!kotlinSourceDirPresent || !generatedTsFilePresent) {
     throw GradleException(
       "trailblaze.selector-ts-codegen: extension is not configured. Add to your build.gradle.kts:\n" +
         "  trailblazeSelectorTsCodegen {\n" +
@@ -158,26 +184,11 @@ private fun requireExtensionConfigured(ext: TrailblazeSelectorTsCodegenExtension
 }
 
 private fun resolveInputs(
-  ext: TrailblazeSelectorTsCodegenExtension,
+  dir: java.io.File,
 ): Triple<java.io.File, java.io.File, java.io.File> {
-  val dir = ext.kotlinSourceDir.get().asFile
   return Triple(
     java.io.File(dir, "TrailblazeNodeSelector.kt"),
     java.io.File(dir, "MatchDescriptor.kt"),
     java.io.File(dir, "TrailblazeNode.kt"),
   )
-}
-
-private fun declareInputs(
-  task: org.gradle.api.Task,
-  ext: TrailblazeSelectorTsCodegenExtension,
-  project: Project,
-) {
-  task.inputs.files(
-    project.provider {
-      if (!ext.kotlinSourceDir.isPresent) return@provider emptyList<java.io.File>()
-      val (a, b, c) = resolveInputs(ext)
-      listOf(a, b, c).filter { it.exists() }
-    },
-  ).withPropertyName("kotlinSourceOfTruth")
 }

@@ -34,7 +34,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
   surfaceToScriptedTools = false,
   isVerification = true,
 )
-@LLMDescription("Asserts that an element with the provided selector is visible on the screen.")
+@LLMDescription("Asserts that an element with the provided selector is visible on the screen. Also matches state (checked/enabled/selected/stateDescription).")
 /**
  *  ----- DO NOT USE GIVE THIS TOOL TO THE LLM -----
  *

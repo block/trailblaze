@@ -44,6 +44,8 @@ import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
@@ -206,6 +208,50 @@ abstract class BaseHostTrailblazeTest(
     .outerRule(RetryRule(maxRetries = maxRetries))
     .around(loggingRule)
 
+  /**
+   * The session's resolved target ([appTarget] paired with this run's device), or null when no
+   * target was supplied. Surfaced to scripted tools as `ctx.target.{id, appIds, appId}` so a
+   * host-Maestro TS tool can resolve the installed app id from the target — #2699. The two V3
+   * on-device paths in [TrailblazeHostYamlRunner] already wire this; the host-Maestro path (iOS +
+   * Android local-device) previously left it null, so the FIRST host-Maestro TS tool to read
+   * `ctx.target` threw "requires a Trailblaze target context". Cheap (just wraps two refs); the
+   * device probe is deferred to [resolvedAppIdForSession].
+   */
+  private val resolvedTargetForSession: ResolvedTarget? =
+    appTarget?.let { ResolvedTarget(target = it, deviceId = trailblazeDeviceId) }
+
+  /**
+   * Device-resolved primary app id for [resolvedTargetForSession] — the declared candidate that's
+   * actually installed on this device. Lazy so the `simctl listapps` / `adb` probe runs once per
+   * session and only when a target-aware tool reads the envelope. Soft-fails to null (logged) so a
+   * target with no installed candidate surfaces as `ctx.target.resolveAppId() === undefined` and the
+   * launch fails downstream with a clearer message, mirroring the V3 path's contract.
+   */
+  private val resolvedAppIdForSession: String? by lazy {
+    val resolved = resolvedTargetForSession ?: return@lazy null
+    runCatching {
+      val installed = MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
+      // Android's AndroidHostAdbUtils.listInstalledPackages swallows adb failures and returns an
+      // empty set instead of throwing, so the onFailure branch below never fires for them. Detect
+      // the distinguishable "0 installed despite declared candidates" case and log it explicitly,
+      // so a downstream "ctx.target.resolveAppId() === undefined" is debuggable on Android too
+      // (mirrors the V1 resolution site in TrailblazeHostYamlRunner).
+      if (installed.isEmpty() && resolved.appIds.isNotEmpty()) {
+        Console.log(
+          "[BaseHostTrailblazeTest] getInstalledAppIds returned 0 packages for ${resolved.deviceId} " +
+            "despite target declaring [${resolved.appIds.joinToString()}] — appId will be null " +
+            "(likely a silent adb failure).",
+        )
+      }
+      resolved.target.getAppIdIfInstalled(resolved.platform, installed)
+    }.onFailure { e ->
+      Console.log(
+        "[BaseHostTrailblazeTest] appId resolution failed for ${resolved.deviceId} " +
+          "(declared [${resolved.appIds.joinToString()}]): ${e::class.simpleName}: ${e.message}",
+      )
+    }.getOrNull()
+  }
+
   val trailblazeAgent by lazy {
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
@@ -214,6 +260,8 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       nodeSelectorMode = config.nodeSelectorMode,
       trailblazeToolRepo = toolRepo,
+      resolvedTarget = resolvedTargetForSession,
+      appId = resolvedAppIdForSession,
     )
   }
 
@@ -558,7 +606,7 @@ abstract class BaseHostTrailblazeTest(
     // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
     // `planTrailExecution` planner. This base test path is exercised directly by JUnit eval
     // tests (not through the CLI), so without this short-circuit a skip-marked trail would
-    // run end-to-end here even though `trailblaze trail` would skip it.
+    // run end-to-end here even though `trailblaze run` would skip it.
     trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
       Console.log(
         "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"

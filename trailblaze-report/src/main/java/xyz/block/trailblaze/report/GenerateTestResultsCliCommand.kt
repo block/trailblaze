@@ -244,7 +244,6 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
             ci_job_id = hostCiContext.ci_job_id,
             logs_zip_filename = hostCiContext.logs_zip_filename,
-            logs_zip_url = hostCiContext.logs_zip_url,
             priority = sessionInfo.trailConfig?.priority,
           )
         )
@@ -443,12 +442,12 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     val ci_job_id: String? = null,
     val logs_zip_filename: String? = null,
     /**
-     * Deep-link URL for the per-session zip artifact. Resolved by the upload script via
+     * Legacy sidecar field retained only so old archives still decode. Older upload scripts
+     * resolved it via
      * `buildkite-agent artifact search` AFTER the upload completes (artifact IDs are assigned
-     * server-side, so the URL can only be filled in post-upload). The zip's *internal* sidecar
-     * always carries only the filename; the URL only lands in the *on-disk* sidecar that the
-     * report generator reads to populate the JSON test report. Nullable for local runs / pre-
-     * resolution archives — downstream consumers fall back to resolving the URL themselves.
+     * server-side, so the URL can only be filled in post-upload). Report generation no longer
+     * propagates this value because internal CI rewrites log zip links to the S3/CloudFront
+     * immutable run URL before publishing JSON reports.
      */
     val logs_zip_url: String? = null,
   )

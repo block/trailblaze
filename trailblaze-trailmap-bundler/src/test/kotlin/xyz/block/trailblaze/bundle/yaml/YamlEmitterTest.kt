@@ -171,6 +171,74 @@ class YamlEmitterTest {
     assertTrue("got: $out") { out.contains("- {}") }
   }
 
+  @Test
+  fun `renderMap emits an empty map value as flow-style so it round-trips to a map not null`() {
+    // Regression: a no-arg tool's `inputSchema.properties: {}` used to render as a bare
+    // `properties:` (no value), which re-parses as YAML null rather than an empty map — flagged
+    // by every PR review bot as a malformed inputSchema. Emit explicit `{}` instead.
+    val out = YamlEmitter.renderMap(
+      mapOf("inputSchema" to linkedMapOf("type" to "object", "properties" to emptyMap<String, Any?>())),
+    )
+    assertTrue("got: $out") { out.contains("properties: {}") }
+    // Round-trip: `properties` must decode to an empty map, NOT null.
+    val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+    val reparsed = YamlEmitter.yamlMapToMutable(yaml.parseToYamlNode(out) as YamlMap)
+    @Suppress("UNCHECKED_CAST")
+    val inputSchema = reparsed["inputSchema"] as Map<String, Any?>
+    assertEquals(emptyMap<String, Any?>(), inputSchema["properties"])
+  }
+
+  @Test
+  fun `renderMap emits an empty map as a list-item value as flow-style`() {
+    // The list-item map-value paths (first key on the dash line + subsequent keys) carry the same
+    // empty-map-to-null hazard as the block path; pin both here.
+    val out = YamlEmitter.renderMap(
+      mapOf("tools" to listOf(linkedMapOf("name" to "t", "inputSchema" to emptyMap<String, Any?>()))),
+    )
+    assertTrue("got: $out") { out.contains("inputSchema: {}") }
+    val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+    val reparsed = YamlEmitter.yamlMapToMutable(yaml.parseToYamlNode(out) as YamlMap)
+    @Suppress("UNCHECKED_CAST")
+    val tool = (reparsed["tools"] as List<Map<String, Any?>>).single()
+    assertEquals(emptyMap<String, Any?>(), tool["inputSchema"])
+  }
+
+  @Test
+  fun `renderMap emits an empty map nested two levels deep as flow-style`() {
+    // Recursion check: `a: { b: {} }` must render `b` as `{}` (not a bare null key) at depth.
+    val out = YamlEmitter.renderMap(mapOf("a" to linkedMapOf("b" to emptyMap<String, Any?>())))
+    assertTrue("got: $out") { out.contains("b: {}") }
+    val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+    val reparsed = YamlEmitter.yamlMapToMutable(yaml.parseToYamlNode(out) as YamlMap)
+    @Suppress("UNCHECKED_CAST")
+    val a = reparsed["a"] as Map<String, Any?>
+    assertEquals(emptyMap<String, Any?>(), a["b"])
+  }
+
+  @Test
+  fun `renderMap emits an empty list value as flow-style so it round-trips to a list not null`() {
+    // Symmetric with the empty-map fix: a bare `key:` for an empty list re-parses as null, so an
+    // empty list value must render as explicit `[]` to round-trip as a list.
+    val out = YamlEmitter.renderMap(linkedMapOf("name" to "t", "tags" to emptyList<String>()))
+    assertTrue("got: $out") { out.contains("tags: []") }
+    val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+    val reparsed = YamlEmitter.yamlMapToMutable(yaml.parseToYamlNode(out) as YamlMap)
+    assertEquals(emptyList<Any?>(), reparsed["tags"])
+  }
+
+  @Test
+  fun `renderMap emits an empty list as a list-item value as flow-style`() {
+    val out = YamlEmitter.renderMap(
+      mapOf("items" to listOf(linkedMapOf("name" to "t", "tags" to emptyList<String>()))),
+    )
+    assertTrue("got: $out") { out.contains("tags: []") }
+    val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+    val reparsed = YamlEmitter.yamlMapToMutable(yaml.parseToYamlNode(out) as YamlMap)
+    @Suppress("UNCHECKED_CAST")
+    val item = (reparsed["items"] as List<Map<String, Any?>>).single()
+    assertEquals(emptyList<Any?>(), item["tags"])
+  }
+
   // ---- 3+ level nesting (L1 regression coverage) ----
 
   @Test

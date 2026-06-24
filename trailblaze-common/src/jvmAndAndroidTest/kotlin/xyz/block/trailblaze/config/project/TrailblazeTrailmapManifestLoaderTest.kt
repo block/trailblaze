@@ -571,6 +571,7 @@ class TrailblazeTrailmapManifestLoaderTest {
           "android_sendBroadcast",
           "android_systemUiDemoMode",
           "android_writeBytesToFile",
+          "android_writeFileToDownloads",
         ),
         toolset.tools,
       )

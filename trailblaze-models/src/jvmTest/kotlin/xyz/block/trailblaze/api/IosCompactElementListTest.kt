@@ -142,6 +142,56 @@ class IosCompactElementListTest {
   }
 
   @Test
+  fun `bare clickable node with no label, class, or id gets exact coordinates in default view`() {
+    // A node with NO text, NO className, NO resourceId — just clickable=true — gets emitted
+    // as @(centerX,centerY) via the isMeaningful branch.
+    val button =
+      node(
+        detail = DriverNodeDetail.IosMaestro(clickable = true),
+        bounds = TrailblazeNode.Bounds(left = 143, top = 659, right = 203, bottom = 697),
+      )
+    val root = node(children = listOf(button))
+
+    val result = IosCompactElementList.build(root)
+    assertTrue(
+      result.elementNodeIds.contains(button.nodeId),
+      "A bare clickable node must appear in the default compact view with coordinates",
+    )
+    // Center of Bounds(143, 659, 203, 697) → (173, 678)
+    assertContains(result.text, "@(173,678)")
+  }
+
+  @Test
+  fun `bare leaf node with all-null properties gets coordinates via structural else branch`() {
+    // The real-world case: an iOS three-dot icon button with NO text, NO className, NO
+    // resourceId, and even clickable=false (iOS accessibility doesn't mark it interactive).
+    // Such a node fails isMeaningful entirely and falls into the structural "else" branch.
+    // It must still be emitted with coordinates so the LLM can use tapOnPoint precisely.
+    val threeDotsButton =
+      node(
+        detail = DriverNodeDetail.IosMaestro(), // all defaults — clickable=false
+        bounds = TrailblazeNode.Bounds(left = 161, top = 658, right = 185, bottom = 698),
+      )
+    val label =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "test.pdf"),
+        bounds = TrailblazeNode.Bounds(left = 75, top = 670, right = 130, bottom = 686),
+      )
+    val row = node(children = listOf(threeDotsButton, label))
+    val root = node(children = listOf(row))
+
+    val result = IosCompactElementList.build(root)
+    // Center of Bounds(161, 658, 185, 698) → (173, 678)
+    assertContains(result.text, "@(173,678)")
+    assertTrue(
+      result.elementNodeIds.contains(threeDotsButton.nodeId),
+      "Three-dot button nodeId must be in elementNodeIds",
+    )
+    // The labeled sibling must still appear too
+    assertContains(result.text, "test.pdf")
+  }
+
+  @Test
   fun `table view becomes container with children indented`() {
     val cell1 =
       node(

@@ -409,7 +409,7 @@ object AndroidCompactElementList {
     val stableId = props.uniqueId?.takeIf { it.isNotBlank() }
       ?: props.resourceId?.takeIf { it.isNotBlank() }
     if (stableId != null) parts.add("[id=$stableId]")
-    if (props.isCheckable && props.isChecked) parts.add("[checked]")
+    if (props.isCheckable) parts.add(if (props.isChecked) "[checked]" else "[unchecked]")
     if (props.isSelected) parts.add("[selected]")
     if (props.isFocused) parts.add("[focused]")
     if (!props.isEnabled) parts.add("[disabled]")

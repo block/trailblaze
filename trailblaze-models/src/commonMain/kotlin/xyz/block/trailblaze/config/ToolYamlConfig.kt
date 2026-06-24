@@ -56,8 +56,24 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *               charactersToErase: "{{params.charactersToErase}}"
  *   ```
  *
- * Exactly one of [toolClass] or [toolsList] must be present. Load-time validation enforces this
- * in [validate] — this class itself is a plain data holder to keep kaml deserialization boring.
+ * - **metadata-only** (no body) — a `*.shortcut.yaml` / `*.trailhead.yaml` that carries ONLY a
+ *   [shortcut] / [trailhead] block, attaching that navigation metadata to a tool registered
+ *   elsewhere by the same [id]. Use this when the underlying tool isn't Kotlin-backed (so there's
+ *   no class for a `class:` body) and you don't want to re-define it — e.g. a scripted (`.ts`) tool
+ *   delivered via a target's `target.tools:`. The referenced tool supplies description / parameters
+ *   / flags; this config contributes only the edge metadata.
+ *
+ *   ```yaml
+ *   # *.trailhead.yaml — marks the already-registered scripted tool `myapp_launchAppSignedIn`
+ *   # as a bootstrap trailhead landing at the given waypoint.
+ *   id: myapp_launchAppSignedIn
+ *   trailhead:
+ *     to: myapp/android/home_signed_in
+ *   ```
+ *
+ * Exactly one of [toolClass] or [toolsList] must be present, UNLESS the config is metadata-only
+ * (no body, but a [shortcut] / [trailhead] block). Load-time validation enforces this in [validate]
+ * — this class itself is a plain data holder to keep kaml deserialization boring.
  *
  * ## Shortcut tools and trailhead tools
  *
@@ -197,7 +213,15 @@ data class ToolYamlConfig(
         error("Tool '$id' declares both 'class:' and 'tools:' — exactly one is allowed")
       toolClass != null -> Mode.CLASS
       toolsList != null -> Mode.TOOLS
-      else -> error("Tool '$id' declares neither 'class:' nor 'tools:' — exactly one is required")
+      // No body, but a shortcut/trailhead block is present: a metadata-only config that attaches
+      // its navigation metadata to a tool registered elsewhere by the same `id` (e.g. a scripted
+      // `.ts` tool delivered via `target.tools:`, which has no Kotlin class for a `class:` body).
+      shortcut != null || trailhead != null -> Mode.METADATA
+      else ->
+        error(
+          "Tool '$id' declares neither 'class:' nor 'tools:' nor a 'shortcut:'/'trailhead:' " +
+            "metadata block — nothing to register"
+        )
     }
 
   /**
@@ -246,6 +270,36 @@ data class ToolYamlConfig(
             "Tool '$id' parameter name '$name' is invalid — must match ${PARAM_NAME_REGEX.pattern} " +
               "(no dots; those are reserved for namespace separators in {{params.x}} / {{memory.x}})"
           }
+        }
+      }
+      Mode.METADATA -> {
+        // Metadata-only: no `class:`/`tools:` body to reflect or compose. The shortcut/trailhead
+        // block (validated below) attaches to a tool registered elsewhere by the same `id`, which
+        // supplies the description / parameters / flags. Body-bearing fields have nothing to bind
+        // to here, so reject them rather than silently ignore.
+        require(description == null) {
+          "Tool '$id' is a metadata-only shortcut/trailhead (no 'class:'/'tools:' body); " +
+            "'description' is reflected from the referenced tool and must not be declared in YAML"
+        }
+        require(parameters.isEmpty()) {
+          "Tool '$id' is a metadata-only shortcut/trailhead; 'parameters' are reflected from the " +
+            "referenced tool and must not be declared in YAML"
+        }
+        require(surfaceToLlm == null) {
+          "Tool '$id' is a metadata-only shortcut/trailhead; 'surface_to_llm' is reflected from " +
+            "the referenced tool and must not be declared in YAML"
+        }
+        require(isRecordable == null) {
+          "Tool '$id' is a metadata-only shortcut/trailhead; 'is_recordable' is reflected from " +
+            "the referenced tool and must not be declared in YAML"
+        }
+        require(requiresHost == null) {
+          "Tool '$id' is a metadata-only shortcut/trailhead; 'requires_host' is reflected from " +
+            "the referenced tool and must not be declared in YAML"
+        }
+        require(isVerification == null) {
+          "Tool '$id' is a metadata-only shortcut/trailhead; 'is_verification' is reflected from " +
+            "the referenced tool and must not be declared in YAML"
         }
       }
     }
@@ -304,7 +358,15 @@ data class ToolYamlConfig(
     }
   }
 
-  enum class Mode { CLASS, TOOLS }
+  /**
+   * Authoring mode, derived from which body field is populated.
+   * - [CLASS]: `class:` body (Kotlin-backed tool).
+   * - [TOOLS]: `tools:` body (YAML-defined composition).
+   * - [METADATA]: no body — a shortcut/trailhead block attached to a tool registered elsewhere by
+   *   the same `id` (e.g. a scripted `.ts` tool). Never instantiated as a tool itself; consumed only
+   *   for its navigation metadata via `ToolYamlLoader.discoverShortcutsAndTrailheads`.
+   */
+  enum class Mode { CLASS, TOOLS, METADATA }
 
   companion object {
     /** Reserved identifier grammar for parameter names. Dots are forbidden — they separate

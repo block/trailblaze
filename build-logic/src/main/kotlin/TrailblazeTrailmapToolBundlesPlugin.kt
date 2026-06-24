@@ -95,14 +95,27 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
       "trails/config/trailmaps/$trailmapId/tools/$toolName.bundle.js"
 
     /**
-     * Returns the in-process scripted-tool entry `.ts` files in [toolsDir]: a `<name>.ts` that has a
-     * sibling `<name>.yaml` descriptor whose runtime isn't `subprocess`. This excludes `.test.ts`
-     * fixtures and shared helper modules (which have no descriptor), and subprocess tools (which
-     * can't run on-device — those need the full Node API surface). Sorted for deterministic task
+     * Returns the in-process scripted-tool entry `.ts` files in [toolsDir]. A `<name>.ts` qualifies
+     * when it is an in-process scripted tool that isn't a subprocess tool — established one of two
+     * ways:
+     *  - **Sidecar descriptor:** a sibling `<name>.yaml` whose runtime isn't `subprocess`.
+     *  - **Descriptor-less (TypeScript-only):** no `<name>.yaml`, but the `.ts` declares the tool
+     *    inline via `export const … = trailblaze.tool<…>(…)` and does not pin `runtime: subprocess`
+     *    in its inline spec. This mirrors the descriptor side, which derives such tools straight
+     *    from their TypeScript when no sidecar is present (PR #3981) — without this branch those
+     *    tools were silently dropped from the on-device bundle and failed at runtime with
+     *    "Unknown framework tool".
+     *
+     * Excludes `.test.ts` fixtures, `.d.ts`, and shared helper modules (which export plain functions
+     * and never call `trailblaze.tool`, so neither path matches them). Sorted for deterministic task
      * registration order.
      */
     fun inProcessToolSources(toolsDir: File): List<File> {
-      val subprocessRuntime = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
+      val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
+      // Inline `export const … = trailblaze.tool<…>(…)` / `trailblaze.tool(…)` registration marker.
+      val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
+      // Inline-spec counterpart to the `.yaml` `runtime: subprocess` gate.
+      val subprocessRuntimeTs = Regex("""runtime\s*:\s*["']?subprocess""")
       return (toolsDir.listFiles() ?: emptyArray())
         .filter { f ->
           f.isFile &&
@@ -110,7 +123,12 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
             !f.name.endsWith(".test.ts") &&
             !f.name.endsWith(".d.ts") &&
             File(toolsDir, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
-              yaml.isFile && !subprocessRuntime.containsMatchIn(yaml.readText())
+              if (yaml.isFile) {
+                !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
+              } else {
+                val text = f.readText()
+                toolExport.containsMatchIn(text) && !subprocessRuntimeTs.containsMatchIn(text)
+              }
             }
         }
         .sortedBy { it.name }
@@ -180,12 +198,19 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
           task.scriptingWrapperTemplate.set(
             project.layout.projectDirectory.file(wrapperTemplate.absolutePath),
           )
+          task.projectDir.set(project.layout.projectDirectory)
+          task.logFile.set(
+            project.layout.buildDirectory.file(
+              "tmp/bundle-trailmap-tool-$id-$toolName.log",
+            ),
+          )
           // Snapshot only the author-managed `.ts` sources for the up-to-date check (no
           // node_modules/ walk). esbuild --bundle inlines any sibling helper modules a tool
           // imports, so the whole tools dir's `.ts` is the change-detection surface.
           task.inputSources.from(
             project.layout.projectDirectory.dir(toolsDir.absolutePath).asFileTree.matching {
               it.include("**/*.ts")
+              it.exclude("**/.trailblaze-wrapper-*")
             },
           )
           // esbuild lives in the SDK's node_modules; install it first.

@@ -145,6 +145,35 @@ data class TapTrailblazeTool(
       )
     }
 
+    // Fast-path for iOS bare nodes: check the node the LLM explicitly picked (targetNode),
+    // NOT the hitTest winner. hitTest climbs to the nearest interactive ancestor —
+    // for an unlabelled three-dot button with clickable=false the ancestor is often the root
+    // "Dashboard" view, which has text/accessibilityText and would produce a
+    // "textRegex: Dashboard" selector that targets the wrong position at replay time.
+    // If the LLM-selected node itself has no identifiable properties (no text, accessibilityText,
+    // hintText, resourceId), there is nothing for the selector generator to anchor on; recording
+    // as a coordinate tap is the only reliable option.
+    //
+    // This check runs before the ViewHierarchyTreeNode lookup so it short-circuits cleanly
+    // without touching the legacy selector path at all.
+    if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+      val iosDetail = targetNode.driverDetail as? DriverNodeDetail.IosMaestro
+      if (iosDetail != null && !iosDetail.hasIdentifiableProperties) {
+        Console.log(
+          "### tap: '$ref' is a bare iOS node at (${center.first},${center.second}) — " +
+            "no selector properties on the selected node, recording as coordinate tap",
+        )
+        return listOf(
+          TapOnPointTrailblazeTool(
+            x = center.first,
+            y = center.second,
+            longPress = longPress,
+            reasoning = reasoning,
+          ),
+        )
+      }
+    }
+
     // Find the corresponding ViewHierarchyTreeNode by center point (needed for legacy selector path)
     val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) { node ->
       node.centerPoint?.let {
@@ -171,9 +200,11 @@ data class TapTrailblazeTool(
     // Using that node as the selector source is the round-trip validation: the generated
     // selector targets exactly what gets tapped. hitTest now prefers interactive nodes
     // over non-interactive decorative children (see TrailblazeNode.hitTest).
-    val nodeSelector = tree.hitTest(center.first, center.second)?.let { hitTestNode ->
+    val hitTestNode = tree.hitTest(center.first, center.second)
+
+    val nodeSelector = hitTestNode?.let { node ->
       try {
-        TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+        TrailblazeNodeSelectorGenerator.findBestSelector(tree, node)
       } catch (e: Exception) {
         Console.log(
           "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",

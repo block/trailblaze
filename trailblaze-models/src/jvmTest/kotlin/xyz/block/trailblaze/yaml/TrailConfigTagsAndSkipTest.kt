@@ -191,7 +191,7 @@ class TrailConfigTagsAndSkipTest {
     // BasePlaywrightElectronTest, BaseHostTrailblazeTest, BaseComposeTest) MUST
     // consult `firstSkipReason` BEFORE the loop — relying on the actionable-steps
     // gate is insufficient. If a future runner forgets the check, the YAML will
-    // run end-to-end even though `trailblaze trail` would have skipped it.
+    // run end-to-end even though `trailblaze run` would have skipped it.
     val items = trailblazeYaml.decodeTrail(
       """
       - config:

@@ -43,12 +43,6 @@ export interface ToolContext {
    * driver/platform the way a Kotlin tool reads `agent.usesAccessibilityDriver` /
    * `trailblazeDeviceInfo.platform`. `undefined` only when the tool is invoked outside a session
    * envelope (ad-hoc MCP client, a unit test that didn't supply a context).
-   *
-   * ⚠️ The driver yamlKey lives under DIFFERENT field names per dispatch path: `driverType` on the
-   * MCP/subprocess envelope, `driver` on the on-device QuickJS (`runtime: inProcess`) envelope. A
-   * tool that branches on the driver must read BOTH, e.g.
-   * `ctx.device?.driverType ?? ctx.device?.driver` — reading only `driverType` silently misses the
-   * in-process path most mobile tools actually run under. See [TrailblazeDevice].
    */
   device?: TrailblazeDevice;
   /**
@@ -208,15 +202,41 @@ export function defineTypedTool<TInput, TResult>(
     if (validator != null && !validator(validatedArgs)) {
       throw new TypedToolValidationError(validator.errors ?? []);
     }
-    const memory: TrailblazeMemory = legacyCtx?.memory ?? createMemory(undefined);
-    // `device` and `target` ride through from the legacy ctx untouched — `fromMeta` (and the
-    // on-device QuickJS host) populate both; `undefined` when invoked without a session envelope.
+    // `legacyCtx.memory` arrives in one of two shapes depending on dispatch path:
+    //   • Subprocess / MCP path: `fromMeta` already wrapped the inbound snapshot into a
+    //     `TrailblazeMemory` (the 8-method surface), so it passes through untouched.
+    //   • On-device QuickJS path: the injected `__ctx` literal carries `memory` as a raw
+    //     `Record<string,string>` snapshot (the Kotlin `QuickJsToolCtxEnvelope.memory` field) —
+    //     plain data with no methods. Wrap it via `createMemory` so on-device authors get the
+    //     same `ctx.memory.get/has/keys/interpolate/...` surface the subprocess path has.
+    // Either way the snapshot is the host's NON-sensitive memory (sensitive keys are filtered out
+    // of every scripting envelope on the Kotlin side), so no path ever exposes secrets to JS. The
+    // discriminator is the presence of a function-valued `interpolate` — a raw record has only
+    // string values, a `TrailblazeMemory` has methods.
+    const rawMemory = legacyCtx?.memory;
+    const memory: TrailblazeMemory =
+      rawMemory != null && typeof (rawMemory as TrailblazeMemory).interpolate === "function"
+        ? (rawMemory as TrailblazeMemory)
+        : createMemory(rawMemory as Record<string, string> | undefined);
+    // `device` and `target` ride through from the legacy ctx. Normalize the device block so typed
+    // handlers can consistently branch on `ctx.device.driverType`, even when invoked by an older
+    // on-device QuickJS host that only emitted the deprecated `driver` alias.
     const toolContext: ToolContext = {
       tools: client.tools,
       memory,
-      device: legacyCtx?.device,
+      device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,
     };
     return handler(validatedArgs as TInput, toolContext);
   };
+}
+
+function normalizeDevice(device: TrailblazeDevice | undefined): TrailblazeDevice | undefined {
+  if (device == null) return undefined;
+  const raw = device as TrailblazeDevice & { driverType?: string };
+  if (typeof raw.driverType === "string" && raw.driverType.length > 0) return device;
+  if (typeof raw.driver === "string" && raw.driver.length > 0) {
+    return { ...device, driverType: raw.driver };
+  }
+  return device;
 }

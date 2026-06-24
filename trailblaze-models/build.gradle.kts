@@ -300,6 +300,10 @@ kotlin.sourceSets.commonMain.get().resources.srcDir(
 val bundleScriptedToolAnalyzerShim by tasks.registering(Exec::class) {
   group = "trailblaze"
   description = "Bundles the scripted-tool analyzer shim into a self-contained .mjs for the JAR."
+  // The shim bundles `typescript` + `ts-json-schema-generator` from the SDK's node_modules.
+  // `bundleTrailblazeSdkDts` owns the SDK devDependency install, so run after it instead of
+  // racing a cold checkout where node_modules is not populated yet.
+  dependsOn(tasks.named("bundleTrailblazeSdkDts"))
   val sdkDir = layout.projectDirectory.dir("../sdks/typescript")
   val shimSrc = sdkDir.file("tools/extract-tool-defs.mjs")
   val tsjsgDir = sdkDir.dir("node_modules/ts-json-schema-generator")

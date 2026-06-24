@@ -267,6 +267,45 @@ class ToolYamlLoaderTrailmapBundledTest {
   }
 
   @Test
+  fun `metadata-only trailhead (no body) surfaces in discoverShortcutsAndTrailheads but not as a tool`() {
+    // A body-less *.trailhead.yaml attaches trailhead metadata to a tool registered elsewhere by
+    // the same id — e.g. a scripted `.ts` tool delivered via a target's `target.tools:`, which has
+    // no Kotlin class for a `class:` body. It must NOT be instantiated as a class/yaml tool (there's
+    // nothing to instantiate), but MUST surface in nav-metadata discovery so the picker / graph /
+    // toolbox still treat the underlying tool as a trailhead.
+    val root = newTempDir()
+    val trailmapDir = File(root, "trails/config/trailmaps/scripted").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: scripted
+      target:
+        display_name: Scripted
+      """.trimIndent(),
+    )
+    val trailheadsDir = File(trailmapDir, "trailheads/android").apply { mkdirs() }
+    File(trailheadsDir, "launch.trailhead.yaml").writeText(
+      """
+      id: scripted_launchAppSignedIn
+      trailhead:
+        to: scripted/android/home
+      """.trimIndent(),
+    )
+
+    withClasspathRoot(root) {
+      val classBacked = ToolYamlLoader.discoverAndLoadAll()
+      val yamlDefined = ToolYamlLoader.discoverYamlDefinedTools()
+      val navMeta = ToolYamlLoader.discoverShortcutsAndTrailheads()
+
+      val name = ToolName("scripted_launchAppSignedIn")
+      assertTrue(name !in classBacked, "metadata-only trailhead must not register as a class tool: $classBacked")
+      assertTrue(name !in yamlDefined, "metadata-only trailhead must not register as a yaml tool: $yamlDefined")
+      assertTrue(name in navMeta, "metadata-only trailhead must surface in nav-metadata discovery: ${navMeta.keys}")
+      assertEquals(ToolYamlConfig.Mode.METADATA, navMeta.getValue(name).mode)
+      assertEquals("scripted/android/home", navMeta.getValue(name).trailhead?.to)
+    }
+  }
+
+  @Test
   fun `same-basename tools in two different trailmaps both register without collision`() {
     // Pin: keying the discovery map by full `<trailmap-id>/tools/<name>.<kind>` rather than
     // basename means two trailmaps can ship a same-filename tool without one silently

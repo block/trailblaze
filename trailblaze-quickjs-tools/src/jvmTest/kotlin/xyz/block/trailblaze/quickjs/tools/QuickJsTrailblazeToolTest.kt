@@ -161,7 +161,7 @@ class QuickJsTrailblazeToolTest {
   }
 
   @Test
-  fun `execute populates ctx with sessionId and device platform, driver, and instanceId`() = runBlocking {
+  fun `execute populates ctx with sessionId and device platform, driverType, and instanceId`() = runBlocking {
     // The handler returns its `ctx` parameter as JSON text so we can assert the shape
     // QuickJsTrailblazeTool.buildCtxEnvelope produced.
     val host = connect(
@@ -185,6 +185,10 @@ class QuickJsTrailblazeToolTest {
     assertEquals("ANDROID", device["platform"]!!.jsonPrimitive.content)
     assertEquals(
       TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.yamlKey,
+      device["driverType"]!!.jsonPrimitive.content,
+    )
+    assertEquals(
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.yamlKey,
       device["driver"]!!.jsonPrimitive.content,
     )
     // instanceId (emulator serial / iOS simulator UDID) must reach the ctx envelope so a TS tool
@@ -194,6 +198,37 @@ class QuickJsTrailblazeToolTest {
       "quickjs-trailblaze-tool-test",
       device["instanceId"]!!.jsonPrimitive.content,
     )
+  }
+
+  @Test
+  fun `execute ctx memory carries non-sensitive vars but filters rememberSensitive keys`() = runBlocking {
+    // Security contract: a value seeded via AgentMemory.rememberSensitive (passwords, PINs) must
+    // NOT reach the on-device JS heap. buildCtxEnvelope filters AgentMemory.sensitiveKeys out of the
+    // ctx.memory snapshot, mirroring the subprocess envelope. This pins that filter end-to-end:
+    // the handler echoes its ctx back as JSON and we assert the sensitive key is absent.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readCtx"] = {
+        name: "readCtx",
+        spec: {},
+        handler: async (_args, ctx) => ({
+          content: [{ type: "text", text: JSON.stringify(ctx) }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val memory = AgentMemory().apply {
+      remember("visibleVar", "shown")
+      rememberSensitive("secretVar", "hidden")
+    }
+    val tool = QuickJsTrailblazeTool(host, ToolName("readCtx"), buildJsonObject {})
+    val result = tool.execute(buildContext(memory = memory))
+    val rendered = (result as TrailblazeToolResult.Success).message!!
+    val ctxMemory = kotlinx.serialization.json.Json.parseToJsonElement(rendered).jsonObject["memory"]!!.jsonObject
+    assertEquals("shown", ctxMemory["visibleVar"]!!.jsonPrimitive.content)
+    // The sensitive key is filtered out entirely — never serialized into the ctx envelope.
+    assertEquals(null, ctxMemory["secretVar"])
   }
 
   @Test
@@ -299,7 +334,9 @@ class QuickJsTrailblazeToolTest {
     return host
   }
 
-  private fun buildContext(): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+  private fun buildContext(
+    memory: AgentMemory = AgentMemory(),
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
     screenState = null,
     traceId = null,
     trailblazeDeviceInfo = TrailblazeDeviceInfo(
@@ -315,7 +352,7 @@ class QuickJsTrailblazeToolTest {
       TrailblazeSession(sessionId = SessionId(TEST_SESSION_ID), startTime = Clock.System.now())
     },
     trailblazeLogger = TrailblazeLogger.createNoOp(),
-    memory = AgentMemory(),
+    memory = memory,
   )
 
   companion object {

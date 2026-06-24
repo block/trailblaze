@@ -5,6 +5,7 @@
     <string name="tab_forms">Forms</string>
     <string name="tab_lists">Lists</string>
     <string name="tab_swipe">Swipe</string>
+    <string name="tab_loading">Loading</string>
     <string name="tab_settings">Settings</string>
 
     <!-- Taps Screen -->
@@ -28,6 +29,12 @@
 
     <!-- Swipe Screen -->
     <string name="page_label">Page %1$d</string>
+
+    <!-- Loading Screen -->
+    <string name="start_loading">Start Loading</string>
+    <string name="loading">Loading</string>
+    <string name="content_loaded">Content Loaded</string>
+    <string name="reset">Reset</string>
 
     <!-- Settings Screen -->
     <string name="enable_notifications">Enable Notifications</string>

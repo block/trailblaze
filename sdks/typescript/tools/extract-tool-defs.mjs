@@ -214,6 +214,7 @@ for (const arg of args) {
   // (relying on a build-time-injected global, like the test fixtures) still
   // works.
   const trailblazeLocalNames = collectTrailblazeAliases(sourceFile);
+  const emptyInputLocalNames = collectSdkNamedImportAliases(sourceFile, "EmptyInput");
 
   for (const stmt of sourceFile.statements) {
     if (!ts.isVariableStatement(stmt)) continue;
@@ -360,19 +361,23 @@ for (const arg of args) {
       // the SDK's `TInput = Record<string, never>` default.
       let inputSchema;
       if (inputTypeName) {
-        try {
-          inputSchema = generatorFor().createSchema(inputTypeName);
-        } catch (e) {
-          errors.push({
-            file: absFile,
-            name,
-            message:
-              `tool '${name}' input type '${inputTypeName}': ${describeGeneratorError(e)}`,
-          });
-          continue;
+        if (isSdkEmptyInputReference(inputTypeArg, emptyInputLocalNames)) {
+          inputSchema = emptyObjectSchema();
+        } else {
+          try {
+            inputSchema = generatorFor().createSchema(inputTypeName);
+          } catch (e) {
+            errors.push({
+              file: absFile,
+              name,
+              message:
+                `tool '${name}' input type '${inputTypeName}': ${describeGeneratorError(e)}`,
+            });
+            continue;
+          }
         }
       } else {
-        inputSchema = { type: "object", properties: {} };
+        inputSchema = emptyObjectSchema();
       }
       // Default output schema: `{"type":"string"}`. Matches the SDK's `TResult = string`
       // default — the "this tool returns a text message" shape that fits most tools.
@@ -538,6 +543,43 @@ function collectTrailblazeAliases(sourceFile) {
     }
   }
   return aliases;
+}
+
+/**
+ * Walk a source file's top-level imports and return the set of local identifiers
+ * bound to a named export from the configured Trailblaze SDK package. This is
+ * intentionally import-aware: a local `interface EmptyInput { ... }` should be
+ * analyzed like any other local type, while the SDK's exported `EmptyInput`
+ * represents the framework-level "no input" sentinel.
+ */
+function collectSdkNamedImportAliases(sourceFile, exportedName) {
+  const aliases = new Set();
+  for (const stmt of sourceFile.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    const moduleSpecifier = stmt.moduleSpecifier;
+    if (!ts.isStringLiteral(moduleSpecifier)) continue;
+    if (moduleSpecifier.text !== TRAILBLAZE_SDK_PACKAGE) continue;
+    const clause = stmt.importClause;
+    if (!clause) continue;
+    const bindings = clause.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const spec of bindings.elements) {
+      const sourceName = (spec.propertyName ?? spec.name).text;
+      if (sourceName !== exportedName) continue;
+      aliases.add(spec.name.text);
+    }
+  }
+  return aliases;
+}
+
+function isSdkEmptyInputReference(typeNode, emptyInputLocalNames) {
+  if (!typeNode || !ts.isTypeReferenceNode(typeNode)) return false;
+  const name = typeNode.typeName;
+  return ts.isIdentifier(name) && emptyInputLocalNames.has(name.text);
+}
+
+function emptyObjectSchema() {
+  return { type: "object", properties: {} };
 }
 
 /**

@@ -18,6 +18,7 @@ import {
   _clearPendingTools,
   type TrailblazeTypedToolSpec,
 } from "./tool.js";
+import { createMemory, type TrailblazeMemory } from "./memory.js";
 
 // Minimal McpServer test double. We only assert on the handler the SDK was registered with,
 // so we capture `(name, spec, handler)` from `registerTool` and call the handler directly
@@ -449,6 +450,70 @@ describe("tool() overload — typed authoring surface", () => {
     observedTarget = "<unset>";
     await definition({ x: "hi" }, undefined, fakeClient);
     expect(observedTarget).toBeUndefined();
+  });
+
+  test("typed handler receives canonical device.driverType when legacy ctx only has driver alias", async () => {
+    let observedDriverType: string | undefined;
+    const handler = async (
+      _input: { x: string },
+      ctx: { device?: { driverType: string; driver?: string } },
+    ): Promise<string> => {
+      observedDriverType = ctx.device?.driverType;
+      return "ok";
+    };
+    const definition = tool<{ x: string }>(handler);
+
+    await definition(
+      { x: "hi" },
+      {
+        device: {
+          platform: "android",
+          widthPixels: 1080,
+          heightPixels: 2400,
+          driver: "android-ondevice-accessibility",
+        },
+      } as never,
+      { tools: {} } as never,
+    );
+
+    expect(observedDriverType).toBe("android-ondevice-accessibility");
+  });
+
+  test("typed handler ctx.memory: raw on-device snapshot is wrapped, subprocess TrailblazeMemory passes through", async () => {
+    // The adapter accepts `legacyCtx.memory` in two shapes:
+    //   • On-device QuickJS path — a raw `Record<string,string>` (the Kotlin
+    //     `QuickJsToolCtxEnvelope.memory` snapshot, plain data, no methods). The adapter
+    //     wraps it via `createMemory` so the handler still gets the full surface.
+    //   • Subprocess path — an already-built `TrailblazeMemory` (from `fromMeta`), which
+    //     must pass through identically (the discriminator is a function-valued
+    //     `interpolate`).
+    let observedMemory: TrailblazeMemory | undefined;
+    const handler = async (_input: { x: string }, ctx: { memory: TrailblazeMemory }): Promise<string> => {
+      observedMemory = ctx.memory;
+      return "ok";
+    };
+    const definition = tool<{ x: string }>(handler);
+    const fakeClient = { tools: {} } as never;
+
+    // On-device shape: raw record gets wrapped into a working memory surface.
+    await definition(
+      { x: "hi" },
+      { memory: { greeting: "hello", name: "Ada" } } as never,
+      fakeClient,
+    );
+    expect(observedMemory?.get("greeting")).toBe("hello");
+    expect(observedMemory?.has("name")).toBe(true);
+    expect(observedMemory?.interpolate("{{greeting}} {{name}}")).toBe("hello Ada");
+
+    // Subprocess shape: a real TrailblazeMemory rides through unchanged (identity).
+    const built = createMemory({ token: "xyz" });
+    await definition({ x: "hi" }, { memory: built } as never, fakeClient);
+    expect(observedMemory).toBe(built);
+
+    // No memory on the envelope (older daemon / unit fixture) → empty, never throws.
+    await definition({ x: "hi" }, {} as never, fakeClient);
+    expect(observedMemory?.get("anything")).toBeUndefined();
+    expect(observedMemory?.interpolate("{{missingToken}}")).toBe("");
   });
 
   test("imperative tool(name, spec, handler) queues a pending registration", () => {

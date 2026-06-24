@@ -74,6 +74,8 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
         task.esbuildBinary.set(spec.esbuildBinary)
         task.scriptingSdkSrc.set(spec.scriptingSdkSrc)
         task.scriptingWrapperTemplate.set(spec.scriptingWrapperTemplate)
+        task.projectDir.set(project.layout.projectDirectory)
+        task.logFile.set(project.layout.buildDirectory.file("tmp/bundle-author-tool-${spec.name}.log"))
         // Snapshot only the author-managed files for up-to-date checks. Excludes the volatile
         // `node_modules/` populated by the install task (huge, would slow snapshotting and
         // produce spurious cache misses on every install) AND the install sentinel (an
@@ -92,7 +94,7 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
             srcDir.asFileTree.matching {
               it.include("**/*.ts", "**/*.js", "**/*.mjs", "**/*.cjs", "**/*.json")
               it.include("bun.lockb", "bun.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml")
-              it.exclude("node_modules/**", "**/.install-ok")
+              it.exclude("node_modules/**", "**/.install-ok", "**/.trailblaze-wrapper-*")
             }
           },
         )
@@ -116,6 +118,13 @@ class TrailblazeAuthorToolBundlePlugin : Plugin<Project> {
           task.bundleName.set(spec.name)
           task.packageJson.set(spec.sourceDir.file("package.json"))
           task.installSentinel.set(spec.sourceDir.file("node_modules/.install-ok"))
+          task.installTimeoutMinutes.set(
+            project.providers.gradleProperty("trailblazeInstallTimeoutMinutes")
+              .map { it.toLongOrNull() ?: 15L }
+              .orElse(15L),
+          )
+          task.rootDir.set(project.rootProject.layout.projectDirectory)
+          task.logFile.set(project.layout.buildDirectory.file("tmp/install-author-tool-${spec.name}.log"))
         }
         project.tasks.named("bundle${capName}AuthorTool").configure { it.dependsOn(installTask) }
       }

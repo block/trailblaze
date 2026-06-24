@@ -85,18 +85,24 @@ class TrailblazeQuickjsBundleAssetsPlugin : Plugin<Project> {
     container.all { spec ->
       val capName = spec.name.replaceFirstChar { it.uppercase() }
       val taskName = "stage${capName}QuickjsBundleAsset"
+      val assetPath = spec.assetPath
       val copyTask = project.tasks.register(taskName, Copy::class.java) { task ->
         task.group = "trailblaze"
         task.description =
           "Stages the `${spec.name}` QuickJS bundle into a test APK asset path " +
             "consumed via `assets.srcDirs(trailblazeQuickjsBundleAssets.stagingRoot)`."
-        // Pull the bundle task's outputs as a Provider so Gradle wires the implicit task
-        // dependency through the Provider chain — no `dependsOn(spec.bundleTask)` needed.
-        task.from(spec.bundleTask.map { it.get().outputs.files }) { copySpec ->
+        // Defer reading the bundle task until Gradle resolves task inputs. A consumer's
+        // `register("foo") { bundleTask.set(...) }` action runs after this container callback,
+        // and the provider preserves the producer task as the single source of truth.
+        val bundleFiles = spec.bundleTask.flatMap { bundleTask ->
+          project.provider { bundleTask.get().outputs.files }
+        }
+        task.dependsOn(spec.bundleTask)
+        task.from(bundleFiles) { copySpec ->
           // Flatten regardless of where the bundle plugin writes — the consumer reads
           // from a stable asset path, not the bundle plugin's internal layout.
           copySpec.eachFile { fcd: FileCopyDetails ->
-            fcd.relativePath = RelativePath.parse(true, spec.assetPath.get())
+            fcd.relativePath = RelativePath.parse(true, assetPath.get())
           }
         }
         task.into(stagingRoot)
@@ -132,8 +138,8 @@ abstract class TrailblazeQuickjsBundleAssetsExtension @Inject constructor(
 }
 
 /**
- * One registered bundle: which bundle task produces the .bundle.js, and where in the
- * staged asset tree it should land.
+ * One registered bundle: which producer task generates the .bundle.js, and where in the staged
+ * asset tree it should land.
  */
 abstract class QuickjsBundleAssetSpec @Inject constructor(
   /** Spec name (used to derive the `stage<Name>QuickjsBundleAsset` task name). */
@@ -143,8 +149,8 @@ abstract class QuickjsBundleAssetSpec @Inject constructor(
 
   /**
    * The bundle-producing task — typically a `bundle<Name>AuthorTool` registered by the
-   * `trailblaze.author-tool-bundle` plugin. The plugin reads its output via
-   * `it.outputs.files`, so the implicit task dependency flows through automatically.
+   * `trailblaze.author-tool-bundle` plugin. The plugin reads its output files lazily, so the
+   * implicit task dependency and output location stay owned by the producer task.
    */
   abstract val bundleTask: Property<TaskProvider<out Task>>
 

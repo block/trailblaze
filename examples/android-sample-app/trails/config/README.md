@@ -99,6 +99,45 @@ out to `bun test` against the mock client + mock context from
 - `tools/sampleapp_writeArtifact.test.ts` — exercises the host-only `sampleapp_writeArtifact` tool
   against real `node:fs` writes under the OS tmpdir; demonstrates the per-session
   sandbox layout, sessionId sanitization, and the `..`/absolute-path validation errors.
+- `tools/sampleapp_waitForText.test.ts` — exercises the `sampleapp_waitForText` "wait until visible"
+  tool with the mock context + queued `findMatches` client; asserts the dual-driver split
+  (accessibility → `findMatches`, instrumentation → Maestro `extendedWaitUntil`), the throw-on-timeout,
+  and the anchored/regex-escaped selector — all without a daemon or device.
+- `tools/sampleapp_launchToLoadedContent.test.ts` — exercises the TypeScript trailhead's
+  launch → open Loading tab → start load → `findMatches`-wait orchestration, and that it refuses a
+  non-accessibility driver up front.
+
+### The "wait for a loading screen" example
+
+The app's **Loading** tab swaps a spinner for a "Content Loaded" result after a delay you pick (1s /
+3s / 6s). The point: a screen that loads with a *variable* delay has to be waited **for**, not slept
+**through**. Trailblaze's event-driven wait — `findMatches({ selector, timeoutMs })` — returns the
+instant the target appears, so the same step passes whether the screen is fast or slow, no flaky
+fixed `delay()`. (That `findMatches` wait budget is the capability PR #3853, "Let TypeScript tools
+wait for an element to appear", added.)
+
+The runnable demo is **pure YAML**: the recorded per-driver variants under
+`trails/android-ondevice-accessibility/loading/wait-for-content/` and
+`trails/android-ondevice-instrumentation/loading/wait-for-content/` do the wait with no custom tool
+at all — `findMatches` with a `timeoutMs` budget on the accessibility driver, and `maestro`'s
+`extendedWaitUntil` on the instrumentation driver. These run anywhere (built-in tools only) and are
+the versions wired into the sample-app CI suites. `trails/loading/wait-for-content/blaze.yaml` is the
+natural-language authoring source.
+
+Two TypeScript tools accompany it as **authoring references** — how you'd package the same wait as a
+reusable scripted tool. They are validated by their unit tests (no daemon or device needed) and are
+not wired into a shipped runnable trail, because compiling a workspace `.ts` tool requires the dev
+toolchain (`bun`/`esbuild` on PATH) — so it isn't something a binary-install user can run by
+following a `trailblaze run …` snippet. (This mirrors `sampleapp_writeArtifact`, which also ships as
+a tool + test with no trail.)
+
+- `sampleapp_waitForText` (`tools/sampleapp_waitForText.ts`) — a reusable, driver-aware "wait until
+  this text is visible (or fail)" tool, the shape Trailblaze's own production app-launch tools use to
+  wait for a sign-in screen after a cold start.
+- `sampleapp_launchToLoadedContent` (`tools/sampleapp_launchToLoadedContent.ts`) — a TypeScript
+  *trailhead* (the first tool a trail runs): launch → open Loading tab → start load → wait for
+  "Content Loaded", composing `ctx.tools.launchApp` / `tapOnElementBySelector` /
+  `findMatches({ timeoutMs })`.
 
 For the `client.tools.X(...)` dispatch and `client.stub(name, response)` patterns, see
 the playwright-native trailmap's `.test.ts` samples — `sampleapp` only ships one host-only

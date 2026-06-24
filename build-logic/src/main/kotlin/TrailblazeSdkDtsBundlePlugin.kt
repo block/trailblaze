@@ -1,11 +1,19 @@
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.channels.OverlappingFileLockException
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
 
 /**
  * Configuration for the `trailblaze.sdk-dts-bundle` plugin. Sibling of the esbuild-driven
@@ -93,15 +101,25 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       TrailblazeSdkDtsBundleExtension::class.java,
     )
 
-    project.tasks.register("bundleTrailblazeSdkDts") { task ->
+    project.tasks.register("bundleTrailblazeSdkDts", BundleTrailblazeSdkDtsTask::class.java) { task ->
       task.group = "build"
       task.description =
         "Regenerates the @trailblaze/scripting declaration + runtime bundle under dist/ (a " +
           "gitignored build artifact) from sdks/typescript/src/. Wired ahead of resource " +
           "packaging, so it runs as part of any build that ships dist/; can also be invoked directly."
 
+      task.trailblazeSdkDir.set(ext.trailblazeSdkDir)
+      task.sdkDtsBundleOutputFile.set(ext.sdkDtsBundleOutputFile)
+      task.sdkDtsTestingBundleOutputFile.set(ext.sdkDtsTestingBundleOutputFile)
+      task.sdkTestingRuntimeOutputFile.set(ext.sdkTestingRuntimeOutputFile)
+      task.sdkRuntimeBundleOutputFile.set(ext.sdkRuntimeBundleOutputFile)
+      task.projectDir.set(project.layout.projectDirectory)
+      task.installLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-install.log"))
+      task.dtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts.log"))
+      task.testingDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-testing.log"))
+      task.testingRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-testing-runtime.log"))
+      task.runtimeBundleLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-runtime.log"))
       declareSdkDtsBundleInputs(task, ext, project)
-      task.outputs.file(ext.sdkDtsBundleOutputFile).withPropertyName("sdkDtsBundle")
       task.outputs.files(
         project.provider {
           if (ext.sdkDtsTestingBundleOutputFile.isPresent) {
@@ -130,100 +148,140 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
         },
       ).withPropertyName("sdkRuntimeBundle")
 
-      task.doFirst { requireExtensionConfigured(ext) }
-      task.doLast {
-        // The bundles are build artifacts, not committed source, so every build that needs
-        // them installs the SDK's devDependencies (dts-bundle-generator, esbuild) from the
-        // committed bun.lock first. Idempotent — skips when node_modules is already present.
-        ensureSdkNodeModules(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/bundle-trailblaze-sdk-install.log").get().asFile,
-        )
-        val outputFile = ext.sdkDtsBundleOutputFile.get().asFile
-        task.logger.lifecycle(
-          "Regenerating SDK .d.ts bundle → ${outputFile.relativeTo(project.projectDir)}",
-        )
-        runDtsBundleGenerator(
-          sdkDir = ext.trailblazeSdkDir.get().asFile,
-          entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
-          outputFile = outputFile,
-          logFile = project.layout.buildDirectory
-            .file("tmp/bundle-trailblaze-sdk-dts.log").get().asFile,
-          appendRuntimeGlobals = true,
-        )
-        task.logger.lifecycle(
-          "Regenerated ${outputFile.relativeTo(project.projectDir)} " +
-            "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
-        )
-
-        if (ext.sdkDtsTestingBundleOutputFile.isPresent) {
-          val testingOutputFile = ext.sdkDtsTestingBundleOutputFile.get().asFile
-          task.logger.lifecycle(
-            "Regenerating SDK testing .d.ts bundle → ${testingOutputFile.relativeTo(project.projectDir)}",
-          )
-          runDtsBundleGenerator(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/testing.ts"),
-            outputFile = testingOutputFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/bundle-trailblaze-sdk-dts-testing.log").get().asFile,
-            // The testing bundle is pure type helpers; no `URL` / `fetch` / `setTimeout`
-            // references — it would never USE the runtime-globals declarations, and
-            // appending them would needlessly re-declare ambient symbols that are
-            // already in the primary bundle (a consumer who pulls in both would see
-            // duplicate-identifier errors).
-            appendRuntimeGlobals = false,
-          )
-          task.logger.lifecycle(
-            "Regenerated ${testingOutputFile.relativeTo(project.projectDir)} " +
-              "(${testingOutputFile.length() / 1024} KiB).",
-          )
-        }
-
-        if (ext.sdkTestingRuntimeOutputFile.isPresent) {
-          val testingRuntimeFile = ext.sdkTestingRuntimeOutputFile.get().asFile
-          task.logger.lifecycle(
-            "Regenerating SDK testing runtime → ${testingRuntimeFile.relativeTo(project.projectDir)}",
-          )
-          runEsbuildTranspile(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/testing.ts"),
-            outputFile = testingRuntimeFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/bundle-trailblaze-sdk-testing-runtime.log").get().asFile,
-          )
-          task.logger.lifecycle(
-            "Regenerated ${testingRuntimeFile.relativeTo(project.projectDir)} " +
-              "(${testingRuntimeFile.length() / 1024} KiB).",
-          )
-        }
-
-        if (ext.sdkRuntimeBundleOutputFile.isPresent) {
-          val runtimeBundleFile = ext.sdkRuntimeBundleOutputFile.get().asFile
-          task.logger.lifecycle(
-            "Regenerating SDK runtime ESM bundle → ${runtimeBundleFile.relativeTo(project.projectDir)}",
-          )
-          runEsbuildEsmBundle(
-            sdkDir = ext.trailblazeSdkDir.get().asFile,
-            entryFile = File(ext.trailblazeSdkDir.get().asFile, "src/index.ts"),
-            outputFile = runtimeBundleFile,
-            logFile = project.layout.buildDirectory
-              .file("tmp/bundle-trailblaze-sdk-runtime.log").get().asFile,
-          )
-          task.logger.lifecycle(
-            "Regenerated ${runtimeBundleFile.relativeTo(project.projectDir)} " +
-              "(${runtimeBundleFile.length() / 1024} KiB).",
-          )
-        }
-      }
     }
 
   }
 }
 
-private fun requireExtensionConfigured(ext: TrailblazeSdkDtsBundleExtension) {
-  if (!ext.trailblazeSdkDir.isPresent || !ext.sdkDtsBundleOutputFile.isPresent) {
+abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
+  @get:Internal
+  abstract val trailblazeSdkDir: DirectoryProperty
+
+  @get:OutputFile
+  abstract val sdkDtsBundleOutputFile: RegularFileProperty
+
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkDtsTestingBundleOutputFile: RegularFileProperty
+
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkTestingRuntimeOutputFile: RegularFileProperty
+
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkRuntimeBundleOutputFile: RegularFileProperty
+
+  @get:Internal
+  abstract val projectDir: DirectoryProperty
+
+  @get:Internal
+  abstract val installLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val dtsLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val testingDtsLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val testingRuntimeLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val runtimeBundleLogFile: RegularFileProperty
+
+  @TaskAction
+  fun bundle() {
+    requireExtensionConfigured(
+      trailblazeSdkDirPresent = trailblazeSdkDir.isPresent,
+      sdkDtsBundleOutputFilePresent = sdkDtsBundleOutputFile.isPresent,
+      sdkDtsTestingBundleOutputFilePresent = sdkDtsTestingBundleOutputFile.isPresent,
+      sdkTestingRuntimeOutputFilePresent = sdkTestingRuntimeOutputFile.isPresent,
+    )
+    val sdkDir = trailblazeSdkDir.get().asFile
+    val projectDirectory = projectDir.get().asFile
+    ensureSdkNodeModules(
+      sdkDir = sdkDir,
+      logFile = installLogFile.get().asFile,
+    )
+
+    val outputFile = sdkDtsBundleOutputFile.get().asFile
+    logger.lifecycle(
+      "Regenerating SDK .d.ts bundle → ${outputFile.relativeToOrSelf(projectDirectory)}",
+    )
+    runDtsBundleGenerator(
+      sdkDir = sdkDir,
+      entryFile = File(sdkDir, "src/index.ts"),
+      outputFile = outputFile,
+      logFile = dtsLogFile.get().asFile,
+      appendRuntimeGlobals = true,
+    )
+    logger.lifecycle(
+      "Regenerated ${outputFile.relativeToOrSelf(projectDirectory)} " +
+        "(${outputFile.length() / 1024} KiB) [build artifact — not committed].",
+    )
+
+    if (sdkDtsTestingBundleOutputFile.isPresent) {
+      val testingOutputFile = sdkDtsTestingBundleOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK testing .d.ts bundle → ${testingOutputFile.relativeToOrSelf(projectDirectory)}",
+      )
+      runDtsBundleGenerator(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/testing.ts"),
+        outputFile = testingOutputFile,
+        logFile = testingDtsLogFile.get().asFile,
+        appendRuntimeGlobals = false,
+      )
+      logger.lifecycle(
+        "Regenerated ${testingOutputFile.relativeToOrSelf(projectDirectory)} " +
+          "(${testingOutputFile.length() / 1024} KiB).",
+      )
+    }
+
+    if (sdkTestingRuntimeOutputFile.isPresent) {
+      val testingRuntimeFile = sdkTestingRuntimeOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK testing runtime → ${testingRuntimeFile.relativeToOrSelf(projectDirectory)}",
+      )
+      runEsbuildTranspile(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/testing.ts"),
+        outputFile = testingRuntimeFile,
+        logFile = testingRuntimeLogFile.get().asFile,
+      )
+      logger.lifecycle(
+        "Regenerated ${testingRuntimeFile.relativeToOrSelf(projectDirectory)} " +
+          "(${testingRuntimeFile.length() / 1024} KiB).",
+      )
+    }
+
+    if (sdkRuntimeBundleOutputFile.isPresent) {
+      val runtimeBundleFile = sdkRuntimeBundleOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK runtime ESM bundle → ${runtimeBundleFile.relativeToOrSelf(projectDirectory)}",
+      )
+      runEsbuildEsmBundle(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/index.ts"),
+        outputFile = runtimeBundleFile,
+        logFile = runtimeBundleLogFile.get().asFile,
+      )
+      logger.lifecycle(
+        "Regenerated ${runtimeBundleFile.relativeToOrSelf(projectDirectory)} " +
+          "(${runtimeBundleFile.length() / 1024} KiB).",
+      )
+    }
+  }
+}
+
+private fun requireExtensionConfigured(
+  trailblazeSdkDirPresent: Boolean,
+  sdkDtsBundleOutputFilePresent: Boolean,
+  sdkDtsTestingBundleOutputFilePresent: Boolean,
+  sdkTestingRuntimeOutputFilePresent: Boolean,
+) {
+  if (!trailblazeSdkDirPresent || !sdkDtsBundleOutputFilePresent) {
     throw GradleException(
       "trailblaze.sdk-dts-bundle: extension is not configured. Add to your build.gradle.kts:\n" +
         "  trailblazeSdkDtsBundle {\n" +
@@ -237,8 +295,8 @@ private fun requireExtensionConfigured(ext: TrailblazeSdkDtsBundleExtension) {
   // runtime) silently ships an incomplete pair — the missing artifact only surfaces at
   // trailmap-author time as a `bun test` module-resolution failure or a tsc unresolved-import
   // error, which is failure-far-from-cause. Better to fail loud at Gradle configure time.
-  val testingDtsSet = ext.sdkDtsTestingBundleOutputFile.isPresent
-  val testingRuntimeSet = ext.sdkTestingRuntimeOutputFile.isPresent
+  val testingDtsSet = sdkDtsTestingBundleOutputFilePresent
+  val testingRuntimeSet = sdkTestingRuntimeOutputFilePresent
   if (testingDtsSet != testingRuntimeSet) {
     val missing = if (testingDtsSet) "sdkTestingRuntimeOutputFile" else "sdkDtsTestingBundleOutputFile"
     val present = if (testingDtsSet) "sdkDtsTestingBundleOutputFile" else "sdkTestingRuntimeOutputFile"
@@ -370,14 +428,35 @@ internal fun shouldReinstallSdkNodeModules(sdkDir: File): Boolean {
  * build that compiles the framework. A missing `bun` (or a non-zero install) fails loud here
  * with a directed message rather than a raw `IOException` stack trace or a silently-empty bundle.
  *
- * **Concurrency.** Three generator tasks across three projects call this against the SAME
- * `sdks/typescript` dir. That is safe today only because `org.gradle.parallel` is OFF (commented
- * out in `gradle.properties`), so a single build runs them sequentially. If parallel execution is
- * ever enabled, these installs must be serialized (a shared install task the generators depend on,
- * or a file lock) — concurrent `bun install` into one `node_modules` can corrupt it.
+ * **Concurrency.** Multiple generator tasks across multiple projects call this against the SAME
+ * `sdks/typescript` dir. Serialize the install itself with a file lock; concurrent `bun install`
+ * into one `node_modules` can fail or corrupt the install. Re-check inside the lock because another
+ * task may have completed the install while this caller was waiting.
  */
 internal fun ensureSdkNodeModules(sdkDir: File, logFile: File) {
   if (!shouldReinstallSdkNodeModules(sdkDir)) return
+  val lockFile = File(sdkDir, "node_modules/.trailblaze-install.lock")
+  lockFile.parentFile.mkdirs()
+  RandomAccessFile(lockFile, "rw").channel.use { channel ->
+    while (true) {
+      val lock = try {
+        channel.tryLock()
+      } catch (_: OverlappingFileLockException) {
+        null
+      }
+      if (lock != null) {
+        lock.use {
+          if (!shouldReinstallSdkNodeModules(sdkDir)) return
+          installSdkNodeModules(sdkDir, logFile)
+          return
+        }
+      }
+      Thread.sleep(250)
+    }
+  }
+}
+
+private fun installSdkNodeModules(sdkDir: File, logFile: File) {
   val dtsBin = File(sdkDir, "node_modules/.bin/dts-bundle-generator")
   val esbuildBin = File(sdkDir, "node_modules/.bin/esbuild")
   logFile.parentFile.mkdirs()

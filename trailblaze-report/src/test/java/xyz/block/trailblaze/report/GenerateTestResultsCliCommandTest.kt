@@ -697,11 +697,11 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
-  fun `host_ci_context sidecar populates logs_zip_url through to SessionResult`() {
-    // Forward-shape check: when the upload script's batched URL-resolution pass stamps
-    // logs_zip_url into the sidecar, the report generator must read it and propagate
-    // the value onto SessionResult.logs_zip_url so the uploaded JSON test report carries
-    // a clickable deep link per session (PR #3388 — additive on the JSON contract).
+  fun `host_ci_context sidecar logs_zip_url is decoded but not propagated`() {
+    // Back-compat check: old sidecars may carry authenticated artifact URLs. The report generator must
+    // still decode the sidecar for ci_job_id and logs_zip_filename, but it must not propagate the
+    // old authenticated URL into raw JSON reports. Internal CI rewrites logs_zip_url to the
+    // CloudFront/S3 immutable run URL before publishing report artifacts.
     val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
     val outputFile = File(logsDir, "results.json")
     try {
@@ -759,7 +759,7 @@ class GenerateTestResultsCliCommandTest {
       val row = report.results.single { it.session_id == sessionId }
       assertEquals("job-uuid-xyz", row.ci_job_id)
       assertEquals("logs_login_0__${sessionId.value}.zip", row.logs_zip_filename)
-      assertEquals(expectedUrl, row.logs_zip_url)
+      assertEquals(null, row.logs_zip_url)
     } finally {
       logsDir.deleteRecursively()
     }

@@ -96,16 +96,48 @@ object YamlEmitter {
     map.forEach { (key, value) ->
       when (value) {
         is Map<*, *> -> {
-          out.append(indent).append(key).append(":\n")
           @Suppress("UNCHECKED_CAST")
-          appendMap(out, value as Map<String, Any?>, indent + "  ")
+          appendMapValue(out, indent + key, value as Map<String, Any?>, indent + "  ")
         }
         is List<*> -> {
-          out.append(indent).append(key).append(":\n")
-          appendList(out, value, indent + "  ")
+          appendListValue(out, indent + key, value, indent + "  ")
         }
         else -> out.append(indent).append(key).append(": ").append(formatScalar(value)).append('\n')
       }
+    }
+  }
+
+  /**
+   * Render [child] as the value of a key whose line prefix is already known ([keyPrefix] — e.g.
+   * `"$indent$key"` in block context, `"$indent- $firstKey"` / `"$indent  $k"` in list context).
+   *
+   * An empty map is emitted as explicit flow-style `{}`: a bare `key:` with no value re-parses as
+   * YAML null rather than an empty map, so JSON-Schema consumers read `properties:` as a missing map
+   * instead of `{}` (the symptom that a no-arg tool's `inputSchema.properties: {}` produced before
+   * this guard). Mirrors the `- {}` handling for an empty map as a list item. A non-empty map renders
+   * as `keyPrefix:` followed by its entries indented at [childIndent].
+   */
+  private fun appendMapValue(out: StringBuilder, keyPrefix: String, child: Map<String, Any?>, childIndent: String) {
+    if (child.isEmpty()) {
+      out.append(keyPrefix).append(": {}\n")
+    } else {
+      out.append(keyPrefix).append(":\n")
+      appendMap(out, child, childIndent)
+    }
+  }
+
+  /**
+   * List-valued counterpart to [appendMapValue]: an empty list is emitted as explicit flow-style
+   * `[]` for the same reason an empty map is emitted as `{}` — a bare `key:` re-parses as YAML null,
+   * not an empty list. Mirrors the `- []` handling for an empty list as a list item. A non-empty list
+   * renders as `keyPrefix:` followed by its items at [childIndent].
+   */
+  private fun appendListValue(out: StringBuilder, keyPrefix: String, child: List<*>, childIndent: String) {
+    if (child.isEmpty()) {
+      out.append(keyPrefix).append(": []\n")
+    } else {
+      out.append(keyPrefix).append(":\n")
+      appendList(out, child, childIndent)
     }
   }
 
@@ -131,34 +163,34 @@ object YamlEmitter {
           val (firstKey, firstValue) = entries.first()
           when (firstValue) {
             is Map<*, *> -> {
-              out.append(indent).append("- ").append(firstKey).append(":\n")
               @Suppress("UNCHECKED_CAST")
-              appendMap(out, firstValue as Map<String, Any?>, indent + "    ")
+              appendMapValue(out, "$indent- $firstKey", firstValue as Map<String, Any?>, indent + "    ")
             }
             is List<*> -> {
-              out.append(indent).append("- ").append(firstKey).append(":\n")
-              appendList(out, firstValue, indent + "    ")
+              appendListValue(out, "$indent- $firstKey", firstValue, indent + "    ")
             }
             else -> out.append(indent).append("- ").append(firstKey).append(": ").append(formatScalar(firstValue)).append('\n')
           }
           entries.drop(1).forEach { (k, v) ->
             when (v) {
               is Map<*, *> -> {
-                out.append(indent).append("  ").append(k).append(":\n")
                 @Suppress("UNCHECKED_CAST")
-                appendMap(out, v as Map<String, Any?>, indent + "    ")
+                appendMapValue(out, "$indent  $k", v as Map<String, Any?>, indent + "    ")
               }
               is List<*> -> {
-                out.append(indent).append("  ").append(k).append(":\n")
-                appendList(out, v, indent + "    ")
+                appendListValue(out, "$indent  $k", v, indent + "    ")
               }
               else -> out.append(indent).append("  ").append(k).append(": ").append(formatScalar(v)).append('\n')
             }
           }
         }
         is List<*> -> {
-          out.append(indent).append("-\n")
-          appendList(out, value, indent + "  ")
+          if (value.isEmpty()) {
+            out.append(indent).append("- []\n")
+          } else {
+            out.append(indent).append("-\n")
+            appendList(out, value, indent + "  ")
+          }
         }
         else -> out.append(indent).append("- ").append(formatScalar(value)).append('\n')
       }

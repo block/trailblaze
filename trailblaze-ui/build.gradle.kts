@@ -2,7 +2,6 @@
 
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 plugins {
@@ -12,30 +11,15 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+val wasmEnabled = providers.gradleProperty("trailblaze.wasm").map(String::toBoolean).orElse(true).get()
+
 kotlin {
 
-  if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+  if (wasmEnabled) {
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
       outputModuleName.set("composeApp")
-      browser {
-        val rootDirPath = project.rootDir.path
-        val projectDirPath = project.projectDir.path
-        commonWebpackConfig {
-          outputFileName = "composeApp.js"
-          // Optimize for embedding - ensure single file output
-          // Configure output for better embedding - use mode to optimize for single file output
-          mode =
-            if (project.hasProperty("production")) KotlinWebpackConfig.Mode.PRODUCTION else KotlinWebpackConfig.Mode.DEVELOPMENT
-          devServer = (devServer ?: KotlinWebpackConfig.DevServer()).apply {
-            static = (static ?: mutableListOf()).apply {
-              // Serve sources to debug inside browser
-              add(rootDirPath)
-              add(projectDirPath)
-            }
-          }
-        }
-      }
+      browser()
       binaries.executable()
     }
   }
@@ -80,7 +64,7 @@ kotlin {
       implementation(libs.ktor.client.websockets)
 
     }
-    if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+    if (wasmEnabled) {
       wasmJsMain.dependencies {
         implementation(libs.ktor.client.js)
       }

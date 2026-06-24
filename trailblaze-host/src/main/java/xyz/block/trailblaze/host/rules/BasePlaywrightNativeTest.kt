@@ -316,7 +316,7 @@ open class BasePlaywrightNativeTest(
     // Honor `config.skip:` before SessionStarted is logged or web network capture is started —
     // matches the CLI's pre-flight `planTrailExecution` planner. The Playwright JUnit-eval
     // path drives this class directly (not through the CLI), so without this short-circuit a
-    // skip-marked trail would run end-to-end here even though `trailblaze trail` would skip it.
+    // skip-marked trail would run end-to-end here even though `trailblaze run` would skip it.
     trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
       Console.log(
         "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
