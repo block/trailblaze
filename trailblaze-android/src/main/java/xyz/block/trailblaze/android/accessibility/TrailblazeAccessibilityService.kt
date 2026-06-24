@@ -561,7 +561,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      *
      * Unlike a window-level signal, this works for Compose single-activity (intra-window)
      * navigation: it folds every node's bounds + class + text length into a cheap structural
-     * [treeSignature] and waits until that signature stays unchanged for [STABILITY_QUIET_MS] — the
+     * [sampleTree] signature and waits until it stays unchanged for [STABILITY_QUIET_MS] — the
      * out-of-process analog of Playwright's "same bounding box across consecutive animation frames"
      * actionability gate. Requiring a quiet window (not a single matching interval) keeps a slow or
      * janky transition from reading as stable while a frame merely hasn't advanced yet. A fresh
@@ -571,56 +571,132 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * proceeds rather than blocking forever. Disable with `TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY=1`
      * (read per-call, flippable on a running daemon). The event-quiet [waitForSettled] path stays
      * intact as a complementary first-pass signal.
+     *
+     * **Completeness, not just stability.** A quiet signature alone isn't enough on heavily-Compose
+     * apps: Compose commits its accessibility semantics asynchronously, so capture can land on a
+     * *partial* tree whose visible content is squished into one slice of the screen (the rest still
+     * reporting `(0,0,0,0)`) — and that partial tree is itself perfectly quiet. Before declaring the
+     * screen settled we run [HierarchyCoverageAssessor] over the content-bearing node bounds; if the
+     * quiet tree looks truncated we force a [refreshTreeInPlace] re-fetch from the source view and
+     * keep waiting (still bounded by [STABILITY_MAX_WAIT_MS]) for a tree that's both quiet *and*
+     * covers the screen. Diagnostic lines are prefixed `[capture-coverage]`. This completeness check
+     * is part of the gate, so `TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY=1` disables it along with the
+     * rest of the settle wait.
      */
     private fun awaitTreeStable() {
       if (treeStabilityGateDisabled()) return
+      val (screenWidth, screenHeight) = getScreenDimensions()
       val startUptimeMs = SystemClock.uptimeMillis()
       val deadlineUptimeMs = startUptimeMs + STABILITY_MAX_WAIT_MS
       var previousSignature: Long? = null
       var lastChangeUptimeMs = startUptimeMs
+      var loggedTruncated = false
       while (true) {
         val root = getApplicationWindowRoot() ?: return
-        val signature = try {
-          treeSignature(root)
+        try {
+          var sample = sampleTree(root)
+          val now = SystemClock.uptimeMillis()
+          if (sample.signature != previousSignature) {
+            previousSignature = sample.signature
+            lastChangeUptimeMs = now
+          } else if (now - lastChangeUptimeMs >= STABILITY_QUIET_MS) {
+            var assessment = HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
+            if (assessment.looksTruncated) {
+              // Signature is quiet but only a slice of the screen's content is present — likely a
+              // partial Compose semantics snapshot whose client-side node cache hasn't caught up.
+              // Force a fresh re-fetch from the source view and re-assess before trusting it; if the
+              // tree is genuinely complete now, we proceed, otherwise we keep waiting (re-confirming
+              // quiet on the refreshed signature) until the screen fills in or we hit the hard cap.
+              refreshTreeInPlace(root)
+              sample = sampleTree(root)
+              previousSignature = sample.signature
+              // Re-anchor the quiet window to a timestamp taken AFTER the refresh+resample, so the
+              // time the re-fetch itself took isn't mistaken for the refreshed tree having been quiet.
+              lastChangeUptimeMs = SystemClock.uptimeMillis()
+              assessment = HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
+            }
+            if (!assessment.looksTruncated) {
+              Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
+              return
+            }
+            if (!loggedTruncated) {
+              Console.log(
+                "[capture-coverage] settled tree looks truncated (${assessment.reason}); " +
+                  "holding for the full tree",
+              )
+              loggedTruncated = true
+            }
+          }
+          if (now >= deadlineUptimeMs) {
+            val finalAssessment =
+              HierarchyCoverageAssessor.assess(sample.bounds, screenWidth, screenHeight)
+            if (finalAssessment.looksTruncated) {
+              Console.log(
+                "[capture-coverage] proceeding after ${STABILITY_MAX_WAIT_MS}ms with a TRUNCATED " +
+                  "tree (${finalAssessment.reason}); selectors may miss visible elements",
+              )
+            } else {
+              Console.log("[settle] tree still changing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
+            }
+            return
+          }
         } finally {
           root.recycle()
-        }
-        val now = SystemClock.uptimeMillis()
-        if (signature != previousSignature) {
-          previousSignature = signature
-          lastChangeUptimeMs = now
-        } else if (now - lastChangeUptimeMs >= STABILITY_QUIET_MS) {
-          Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
-          return
-        }
-        if (now >= deadlineUptimeMs) {
-          Console.log("[settle] tree still changing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
-          return
         }
         Thread.sleep(STABILITY_FRAME_MS)
       }
     }
 
     /**
-     * Cheap structural signature of the live tree under [root]: a rolling hash of each reachable
-     * node's screen bounds + class name + text length, bounded by [STABILITY_MAX_DEPTH]. Two equal
-     * consecutive signatures mean the UI stopped moving; an animating node shifts its bounds and so
-     * changes the hash frame-to-frame.
+     * Result of one [sampleTree] walk: the structural [signature] (for the quiet check) and the
+     * per-node [HierarchyCoverageAssessor.NodeBounds] (for the completeness check), produced in a
+     * single tree traversal.
      */
-    private fun treeSignature(root: AccessibilityNodeInfo): Long {
+    private data class TreeSample(
+      val signature: Long,
+      val bounds: List<HierarchyCoverageAssessor.NodeBounds>,
+    )
+
+    /**
+     * One cheap walk of the live tree under [root], bounded by [STABILITY_MAX_DEPTH], producing both:
+     * - a rolling-hash [TreeSample.signature] over each reachable node's screen bounds + class name +
+     *   text length — two equal consecutive signatures mean the UI stopped moving (an animating node
+     *   shifts its bounds and so changes the hash frame-to-frame); and
+     * - the per-node bounds (+ visibility + whether the node carries text/contentDescription) the
+     *   [HierarchyCoverageAssessor] reads to tell a full screen from a partial slice.
+     */
+    private fun sampleTree(root: AccessibilityNodeInfo): TreeSample {
       var signature = SIGNATURE_SEED
+      val bounds = ArrayList<HierarchyCoverageAssessor.NodeBounds>()
       fun visit(node: AccessibilityNodeInfo, depth: Int) {
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val text = node.text
+        val contentDescription = node.contentDescription
         signature = mixNodeIntoSignature(
           signature,
-          bounds.left,
-          bounds.top,
-          bounds.right,
-          bounds.bottom,
+          rect.left,
+          rect.top,
+          rect.right,
+          rect.bottom,
           node.className,
-          node.text,
+          text,
         )
+        // Only content-bearing nodes affect the coverage verdict, so only allocate a NodeBounds for
+        // those — non-content containers are the bulk of a large tree and would be pure GC churn in
+        // this hot capture-time walk. (The signature above still folds in every node.)
+        if (!text.isNullOrBlank() || !contentDescription.isNullOrBlank()) {
+          bounds.add(
+            HierarchyCoverageAssessor.NodeBounds(
+              left = rect.left,
+              top = rect.top,
+              right = rect.right,
+              bottom = rect.bottom,
+              isVisibleToUser = node.isVisibleToUser,
+              hasText = true,
+            ),
+          )
+        }
         if (depth >= STABILITY_MAX_DEPTH) return
         for (i in 0 until node.childCount) {
           val child = node.getChild(i) ?: continue
@@ -632,7 +708,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         }
       }
       visit(root, 0)
-      return signature
+      return TreeSample(signature, bounds)
     }
 
     private fun treeStabilityGateDisabled(): Boolean {
@@ -1472,7 +1548,7 @@ private const val FNV_PRIME = 1099511628211L
 
 /**
  * Pure per-node mixing for the capture-time tree-stability gate (see the service's
- * `treeSignature` / `awaitTreeStable`). Folds one node's screen bounds + class + text length into
+ * `sampleTree` / `awaitTreeStable`). Folds one node's screen bounds + class + text length into
  * a rolling FNV-style hash. Bounds-sensitive: any change to a node's position or size changes the
  * result, so an animating tree yields a different signature frame-to-frame and a settled tree
  * yields a stable one. Side-effect-free so it is unit-testable without a device (see

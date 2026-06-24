@@ -12,6 +12,7 @@ android {
   compileSdk = 36
   defaultConfig {
     minSdk = 26
+    targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
   compileOptions {
@@ -85,6 +86,12 @@ dependencies {
   // (`useJUnitPlatform` is already enabled above for this module).
   testImplementation(libs.kotlin.test)
   testImplementation(libs.junit5.jupiter.engine)
+
+  // Connected (on-device) test deps. `androidx.test:core` provides ActivityScenario /
+  // InstrumentationRegistry used by HierarchyCoverageOnDeviceTest to bring the fixture Activity
+  // to the foreground and capture a real accessibility tree; the runner hosts the instrumentation.
+  androidTestImplementation(libs.androidx.test.core)
+  androidTestImplementation(libs.androidx.test.runner)
 }
 
 dependencyGuard {

@@ -44,4 +44,13 @@
       ai.koog.serialization.core,
       ai.koog.utils
   " />
+
+  <!-- Test-only fixture Activity for HierarchyCoverageOnDeviceTest. Declared here so the
+       androidTest APK can launch it via ActivityScenario; it ships only in the test APK. -->
+  <application>
+    <activity
+        android:name="xyz.block.trailblaze.android.accessibility.CoverageFixtureActivity"
+        android:exported="true"
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
+  </application>
 </manifest>
