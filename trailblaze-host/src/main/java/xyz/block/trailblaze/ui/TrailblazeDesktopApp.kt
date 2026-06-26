@@ -247,6 +247,11 @@ abstract class TrailblazeDesktopApp(
         // a desktop-app run started by the same user.
         captureNetworkTraffic = request.captureNetworkTraffic ||
           deviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic,
+        // Honor the desktop app's "agent execution location" toggle (Settings →
+        // preferHostAgent) so a delegated CLI run replays the same way the desktop
+        // app and CI do. Without this the model default (true = host-driven via RPC)
+        // always won, ignoring a user who chose on-device execution.
+        preferHostAgent = deviceManager.settingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
       ),
       // Use "cli" referrer (not "cli-daemon") so DesktopYamlRunner's shared-scope set
       // matches and parallel CLI delegations don't cancel each other.

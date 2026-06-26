@@ -204,7 +204,7 @@ parameters:
     type: integer
     required: false
 tools:
-  - maestro:
+  - mobile_maestro:
       commands:
         - eraseText:
             charactersToErase: "{{params.charactersToErase}}"

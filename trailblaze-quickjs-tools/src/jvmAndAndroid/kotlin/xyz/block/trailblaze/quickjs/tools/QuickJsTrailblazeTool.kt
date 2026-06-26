@@ -80,6 +80,13 @@ class QuickJsTrailblazeTool(
   override val rawToolArguments: JsonObject get() = args
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+    // Resolve ${key}/{{key}} memory tokens in the recorded args before they reach the JS engine.
+    // The AI path interpolates upstream (AgentUiActionExecutor.mapToTrailblazeTool); recorded-replay
+    // decodes args verbatim and never did, so a recorded `email: ${userEmail}` reached the
+    // bundle as the literal token and was typed as "undefined". Idempotent on the AI path (already-
+    // resolved args carry no tokens). rawToolArguments stays un-interpolated so replaying a tokenized
+    // trail keeps the token in a re-recording (on the AI path, args were already resolved upstream).
+    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args) as? JsonObject) ?: args
     val ctx = buildCtxEnvelope(toolExecutionContext)
     // Install the session context on the binding so nested client.callTool() calls from inside
     // the JS bundle can resolve it via SessionScopedHostBinding.callFromBundle. The QuickJS
@@ -89,7 +96,7 @@ class QuickJsTrailblazeTool(
     // doesn't leak the context into a subsequent unrelated dispatch on the same binding.
     binding?.activeContext = toolExecutionContext
     return try {
-      val resultJson = host.callTool(advertisedName.toolName, args, ctx)
+      val resultJson = host.callTool(advertisedName.toolName, resolvedArgs, ctx)
       resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
     } catch (e: CancellationException) {
       // Coroutine cancellation must propagate — swallowing breaks structured concurrency

@@ -34,7 +34,7 @@
   - step: Wait (event-driven) for the content to finish loading
     recording:
       tools:
-      - maestro:
+      - mobile_maestro:
           commands:
           - extendedWaitUntil:
               visible:

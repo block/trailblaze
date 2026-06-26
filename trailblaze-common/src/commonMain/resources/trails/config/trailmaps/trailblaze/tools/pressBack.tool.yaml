@@ -5,6 +5,6 @@ description: |
   afterward if the app is loading a new screen.
 parameters: []
 tools:
-  - maestro:
+  - mobile_maestro:
       commands:
         - back: {}

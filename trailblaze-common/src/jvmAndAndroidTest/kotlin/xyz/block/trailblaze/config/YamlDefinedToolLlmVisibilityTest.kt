@@ -50,7 +50,7 @@ class YamlDefinedToolLlmVisibilityTest {
           default: null
           description: Number of characters to erase.
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - eraseText:
                   charactersToErase: "{{params.charactersToErase}}"

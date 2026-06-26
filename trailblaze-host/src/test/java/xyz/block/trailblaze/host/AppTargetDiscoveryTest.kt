@@ -197,7 +197,7 @@ class AppTargetDiscoveryTest {
       description: Repo-root trailmap's android-only tool — must NOT register when env wins.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),
@@ -232,7 +232,7 @@ class AppTargetDiscoveryTest {
       description: Env-pointed example workspace's web tool — must register and win.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),
@@ -427,7 +427,7 @@ class AppTargetDiscoveryTest {
       description: Trailmap-local pure-YAML tool composed from the maestro back primitive.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),
@@ -492,7 +492,7 @@ class AppTargetDiscoveryTest {
         version landed in the registry.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
               - back: {}
@@ -546,7 +546,7 @@ class AppTargetDiscoveryTest {
       description: Workspace YAML-defined tool referenced from a workspace toolset.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),
@@ -663,7 +663,7 @@ class AppTargetDiscoveryTest {
       description: Workspace tool registered twice across two discover passes.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),

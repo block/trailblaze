@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.escapeForSelector
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -522,6 +523,133 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
     val selector = assertUniqueMatch(root, root)
     assertNotNull(selector)
+  }
+
+  // -- Stable text anchor: volatile trailing count is generalized (Fix A) --
+
+  /** Resolves [selector] against [tree], asserting a single match on the node with [text]. */
+  private fun assertResolvesToTextNode(
+    tree: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+    text: String,
+  ) {
+    val result = TrailblazeNodeSelectorResolver.resolve(tree, selector)
+    assertTrue(
+      result is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch,
+      "Expected SingleMatch but got $result for selector: ${selector.description()}",
+    )
+    val match = (result.node.driverDetail as DriverNodeDetail.AndroidAccessibility)
+    assertEquals(text, match.text)
+  }
+
+  @Test
+  fun `count-in-parens text generalizes so a changed count still resolves`() {
+    // Recording: a tab labeled with a live count. The generated text anchor must pin the
+    // stable head ("All tickets") and allow any count, so replay resolves even though the
+    // count moved (307 -> 12). Without the fix the literal pin "All tickets (307)" NoMatches.
+    nextId = 1L
+    val recorded = node(detail = DriverNodeDetail.AndroidAccessibility(text = "All tickets (307)"))
+    val sibling = node(detail = DriverNodeDetail.AndroidAccessibility(text = "My tickets (5)"))
+    val recordedRoot = node(children = listOf(recorded, sibling))
+
+    val selector = assertUniqueMatch(recordedRoot, recorded)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match.textRegex)
+
+    // Replay tree: same screen, count changed.
+    nextId = 100L
+    val replayTarget = node(detail = DriverNodeDetail.AndroidAccessibility(text = "All tickets (12)"))
+    val replaySibling = node(detail = DriverNodeDetail.AndroidAccessibility(text = "My tickets (9)"))
+    val replayRoot = node(children = listOf(replayTarget, replaySibling))
+
+    assertResolvesToTextNode(replayRoot, selector, "All tickets (12)")
+
+    // Negative control: the generalized anchor must NOT widen onto the unrelated sibling.
+    val onSibling = TrailblazeNodeSelectorResolver.resolve(
+      node(children = listOf(replaySibling)),
+      selector,
+    )
+    assertTrue(
+      onSibling is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch,
+      "Generalized 'All tickets' anchor must not match the 'My tickets' sibling, got $onSibling",
+    )
+  }
+
+  @Test
+  fun `trailing bare count text generalizes so a changed count still resolves`() {
+    nextId = 1L
+    val recorded = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Cart 3"))
+    val sibling = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Saved 8"))
+    val recordedRoot = node(children = listOf(recorded, sibling))
+
+    val selector = assertUniqueMatch(recordedRoot, recorded)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match.textRegex)
+
+    nextId = 100L
+    val replayTarget = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Cart 9"))
+    val replayRoot = node(children = listOf(replayTarget))
+
+    assertResolvesToTextNode(replayRoot, selector, "Cart 9")
+  }
+
+  @Test
+  fun `pure-numeric text stays literal so a different value does not match`() {
+    // A value-pinned label like a count badge: "307" must keep matching exactly "307"
+    // and reject "308", or value assertions silently pass on the wrong number.
+    nextId = 1L
+    val recorded = node(detail = DriverNodeDetail.AndroidAccessibility(text = "307"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Tickets"))
+    val recordedRoot = node(children = listOf(recorded, other))
+
+    val selector = assertUniqueMatch(recordedRoot, recorded)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals("307", match.textRegex, "pure-numeric text must stay literal, not be generalized")
+
+    val changed = node(detail = DriverNodeDetail.AndroidAccessibility(text = "308"))
+    val changedRoot = node(children = listOf(changed))
+    val result = TrailblazeNodeSelectorResolver.resolve(changedRoot, selector)
+    assertTrue(
+      result is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch,
+      "Literal '307' must not match '308', got $result",
+    )
+  }
+
+  @Test
+  fun `currency text stays literal so a different amount does not match`() {
+    nextId = 1L
+    val recorded = node(detail = DriverNodeDetail.AndroidAccessibility(text = "$3.00"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Total"))
+    val recordedRoot = node(children = listOf(recorded, other))
+
+    val selector = assertUniqueMatch(recordedRoot, recorded)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    // Same output escapeForSelector would have produced — no generalization of the amount.
+    assertEquals(escapeForSelector("$3.00"), match.textRegex)
+
+    val changed = node(detail = DriverNodeDetail.AndroidAccessibility(text = "$4.00"))
+    val changedRoot = node(children = listOf(changed))
+    val result = TrailblazeNodeSelectorResolver.resolve(changedRoot, selector)
+    assertTrue(
+      result is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch,
+      "Literal '\$3.00' must not match '\$4.00', got $result",
+    )
+  }
+
+  @Test
+  fun `plain text with no volatile count is byte-identical to escapeForSelector`() {
+    // Regression guard mirroring MinimizerTest's 'text-plus-className collapses to text alone':
+    // text that carries no trailing numeric must pass through unchanged so existing recordings
+    // and the minimizer's stability ordering are untouched.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Submit"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Cancel"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals(escapeForSelector("Submit"), match.textRegex)
+    assertEquals("Submit", match.textRegex)
   }
 
 }

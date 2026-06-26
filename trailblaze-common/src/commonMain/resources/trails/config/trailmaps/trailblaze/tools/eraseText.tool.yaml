@@ -15,7 +15,7 @@ parameters:
       Number of characters to erase from the end. Estimate from the field's current
       text in the view hierarchy. Omit to erase all text in the field.
 tools:
-  - maestro:
+  - mobile_maestro:
       commands:
         - eraseText:
             charactersToErase: "{{params.charactersToErase}}"

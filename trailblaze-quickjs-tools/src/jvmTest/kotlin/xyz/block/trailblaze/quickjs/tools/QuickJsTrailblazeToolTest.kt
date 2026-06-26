@@ -161,6 +161,33 @@ class QuickJsTrailblazeToolTest {
   }
 
   @Test
+  fun `execute interpolates memory tokens in recorded args before they reach the bundle`() = runBlocking {
+    // Regression: on the recorded-replay path a scripted tool's args are decoded verbatim and were
+    // never memory-interpolated, so `email: ${userEmail}` reached the bundle as the literal
+    // token (typed as "undefined" in the Square iOS sign-in). execute() must resolve ${key}/{{key}}
+    // from AgentMemory before dispatching, the way Kotlin command tools self-interpolate their text.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["echoEmail"] = {
+        name: "echoEmail",
+        spec: {},
+        handler: async (args) => ({ content: [{ type: "text", text: args.email }] }),
+      };
+      """.trimIndent(),
+    )
+    val memory = AgentMemory().apply { remember("userEmail", "user@example.com") }
+    val tool = QuickJsTrailblazeTool(host, ToolName("echoEmail"), buildJsonObject { put("email", "\${userEmail}") })
+    val result = tool.execute(buildContext(memory = memory))
+    assertEquals("user@example.com", (result as TrailblazeToolResult.Success).message)
+
+    // Idempotent: an already-resolved literal arg (the AI-path shape) is passed through unchanged.
+    val literalTool = QuickJsTrailblazeTool(host, ToolName("echoEmail"), buildJsonObject { put("email", "literal@example.com") })
+    val literalResult = literalTool.execute(buildContext(memory = memory))
+    assertEquals("literal@example.com", (literalResult as TrailblazeToolResult.Success).message)
+  }
+
+  @Test
   fun `execute populates ctx with sessionId and device platform, driverType, and instanceId`() = runBlocking {
     // The handler returns its `ctx` parameter as JSON text so we can assert the shape
     // QuickJsTrailblazeTool.buildCtxEnvelope produced.

@@ -1,7 +1,11 @@
 package xyz.block.trailblaze
 
-import xyz.block.trailblaze.util.Console
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.util.Console
 
 /**
  * This class allows the trailblaze agent to remember data from the screen for reference later.
@@ -102,5 +106,19 @@ class AgentMemory {
       }
     }
     return result
+  }
+
+  /**
+   * Recursively resolves `${key}`/`{{key}}` tokens in every string scalar of [element] via
+   * [interpolateVariables]. No-op when [variables] is empty; idempotent on a tree with no
+   * remaining tokens, so it is safe to call on args already resolved upstream (the AI path
+   * interpolates before the tool is built). Non-string scalars pass through unchanged.
+   */
+  fun interpolateVariablesInJson(element: JsonElement): JsonElement = when {
+    variables.isEmpty() -> element
+    element is JsonPrimitive && element.isString -> JsonPrimitive(interpolateVariables(element.content))
+    element is JsonObject -> JsonObject(element.mapValues { interpolateVariablesInJson(it.value) })
+    element is JsonArray -> JsonArray(element.map { interpolateVariablesInJson(it) })
+    else -> element
   }
 }

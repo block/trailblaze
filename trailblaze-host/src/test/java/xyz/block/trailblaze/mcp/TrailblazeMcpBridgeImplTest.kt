@@ -38,7 +38,7 @@ class TrailblazeMcpBridgeImplTest {
       requires_host: true
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),
@@ -89,13 +89,13 @@ class TrailblazeMcpBridgeImplTest {
       requires_host: true
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),

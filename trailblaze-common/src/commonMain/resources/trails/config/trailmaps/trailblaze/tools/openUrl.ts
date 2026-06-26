@@ -5,7 +5,7 @@ import { trailblaze } from "@trailblaze/scripting";
  *
  * Hands Maestro the same `openLink` command the former Kotlin `OpenUrlTrailblazeTool`
  * emitted, via the framework `maestro` tool reachable from scripted tools through
- * `ctx.tools.maestro(...)` (maestro is `surfaceToScriptedTools = true` and resolves through
+ * `ctx.tools.mobile_maestro(...)` (maestro is `surfaceToScriptedTools = true` and resolves through
  * the unfiltered framework-tool dispatch even though it isn't in any toolset). Maestro
  * implements `openLink` per platform, so a single call covers Android and iOS with no
  * per-platform branch.
@@ -34,7 +34,7 @@ export const openUrl = trailblaze.tool<OpenUrlInput>(
     // `maestro` isn't in the SDK's curated `TrailblazeToolMap`, so this composes via the runtime
     // `ctx.tools` Proxy rather than a statically-typed binding — the same framework-tool
     // composition convention `clock_clearAlarms.ts` uses for `ctx.tools.android_adbShell(...)`.
-    await ctx.tools.maestro({ commands: [{ openLink: url }] });
+    await ctx.tools.mobile_maestro({ commands: [{ openLink: url }] });
     return `Opened ${url}`;
   },
 );

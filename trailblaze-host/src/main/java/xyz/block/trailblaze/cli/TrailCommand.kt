@@ -1184,6 +1184,13 @@ open class TrailCommand : Callable<Int> {
         selfHeal = resolveEffectiveSelfHeal(),
         overrideSessionId = pinnedSessionId,
         captureNetworkTraffic = captureNetwork || captureAll,
+        // Honor the persisted desktop-app "agent execution location" setting (Settings →
+        // preferHostAgent) so a CLI run replays the same way the desktop app and CI do.
+        // Without this the CLI silently used the model default (true = host-driven via RPC),
+        // diverging from a user who has toggled on-device execution. Matches the recording-tab
+        // path (DeviceConnectionService) which already threads appConfig.preferHostAgent.
+        preferHostAgent =
+          config.trailblazeSettingsRepo.serverStateFlow.value.appConfig.preferHostAgent,
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,

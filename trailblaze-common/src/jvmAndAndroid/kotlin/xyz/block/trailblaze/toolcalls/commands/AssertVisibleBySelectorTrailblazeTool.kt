@@ -293,7 +293,14 @@ data class AssertVisibleBySelectorTrailblazeTool(
    *   — the text check binds to those. Resolving each inner against `matched.children`
    *   (not `matched` itself) avoids the matched outer container leaking into the candidate
    *   set if it happens to coincidentally satisfy the inner predicate.
-   * - Otherwise the matched element is itself the leaf and is the only candidate.
+   * - Otherwise, if the matched element carries its own readable text it is treated as the
+   *   leaf and is the only candidate (original behavior). If it has NO readable text, the
+   *   selector landed on a structural container (e.g. `android.view.View` / a RecyclerView)
+   *   while the asserted text lives on a descendant — fall back to the matched node's subtree
+   *   so the check finds that descendant. Without this, a textless-container match fails with
+   *   "Matched element has no readable text" even though the text is present in the subtree,
+   *   and the runtime LLM (which sees the text as a descendant in the hierarchy) re-issues the
+   *   identical assertion in a zero-progress loop until the per-step call budget is exhausted.
    */
   private fun collectTextCandidates(
     matched: TrailblazeNode,
@@ -303,7 +310,9 @@ data class AssertVisibleBySelectorTrailblazeTool(
       selector.containsChild?.let { add(it) }
       selector.containsDescendants?.let { addAll(it) }
     }
-    if (innerSelectors.isEmpty()) return listOf(matched)
+    if (innerSelectors.isEmpty()) {
+      return if (matched.extractText()?.isNotBlank() == true) listOf(matched) else matched.aggregate()
+    }
     val out = LinkedHashSet<TrailblazeNode>()
     for (inner in innerSelectors) {
       for (child in matched.children) {

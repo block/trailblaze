@@ -341,7 +341,7 @@ class ExternalConfigDocsGenerator(
         appendLine("    type: integer")
         appendLine("    required: false")
         appendLine("tools:")
-        appendLine("  - maestro:")
+        appendLine("  - mobile_maestro:")
         appendLine("      commands:")
         appendLine("        - eraseText:")
         appendLine("            charactersToErase: \"{{params.charactersToErase}}\"")

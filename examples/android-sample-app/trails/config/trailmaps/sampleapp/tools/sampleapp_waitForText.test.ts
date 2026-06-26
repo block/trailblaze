@@ -42,7 +42,7 @@ describe("sampleapp_waitForText — accessibility driver", () => {
       timeoutMs: 5_000,
     });
     // Never falls through to the Maestro branch on the accessibility driver.
-    expect(callsTo(c, "maestro")).toHaveLength(0);
+    expect(callsTo(c, "mobile_maestro")).toHaveLength(0);
     expect(result).toBe('"Content Loaded" became visible within 5s.');
   });
 
@@ -88,7 +88,7 @@ describe("sampleapp_waitForText — instrumentation driver", () => {
     );
 
     expect(callsTo(c, "findMatches")).toHaveLength(0);
-    const maestroCalls = callsTo(c, "maestro");
+    const maestroCalls = callsTo(c, "mobile_maestro");
     expect(maestroCalls).toHaveLength(1);
     // Same anchored/regex-escaped value as the accessibility branch (Maestro's text is regex-backed).
     expect(maestroCalls[0].args).toEqual({

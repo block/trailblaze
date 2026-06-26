@@ -71,7 +71,11 @@ class SubprocessTrailblazeTool(
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val legacyEnvelope = TrailblazeContextEnvelope.buildLegacyArgEnvelope(toolExecutionContext)
-    val argsWithContext = JsonObject(args + (TrailblazeContextEnvelope.RESERVED_KEY to legacyEnvelope))
+    // Resolve ${key}/{{key}} memory tokens in the recorded args before dispatch — same replay-path
+    // gap as QuickJsTrailblazeTool (the AI path interpolates upstream; recorded-replay didn't).
+    // Idempotent on the AI path. See AgentMemory.interpolateVariablesInJson.
+    val resolvedArgs = (toolExecutionContext.memory.interpolateVariablesInJson(args) as? JsonObject) ?: args
+    val argsWithContext = JsonObject(resolvedArgs + (TrailblazeContextEnvelope.RESERVED_KEY to legacyEnvelope))
     val session = sessionProvider()
     val sessionId = toolExecutionContext.sessionProvider.invoke().sessionId
 

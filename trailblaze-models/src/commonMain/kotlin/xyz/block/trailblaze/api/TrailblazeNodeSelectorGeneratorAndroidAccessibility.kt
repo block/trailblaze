@@ -37,7 +37,7 @@ internal fun androidAccessibilityStrategies(
     if (detail.text == null && detail.contentDescription != null) {
       detail.contentDescription.takeIf { it.isNotBlank() }?.let { desc ->
         selectorWith(
-          DriverNodeMatch.AndroidAccessibility(contentDescriptionRegex = escapeForSelector(desc)),
+          DriverNodeMatch.AndroidAccessibility(contentDescriptionRegex = stableTextAnchorRegex(desc)),
         )
       }
     } else {
@@ -61,7 +61,7 @@ internal fun androidAccessibilityStrategies(
   "Hint text" to {
     if (detail.text.isNullOrBlank() && detail.hintText != null) {
       detail.hintText.takeIf { it.isNotBlank() }?.let { hint ->
-        selectorWith(DriverNodeMatch.AndroidAccessibility(hintTextRegex = escapeForSelector(hint)))
+        selectorWith(DriverNodeMatch.AndroidAccessibility(hintTextRegex = stableTextAnchorRegex(hint)))
       }
     } else {
       null
@@ -85,7 +85,7 @@ internal fun androidAccessibilityStrategies(
   "Text" to {
     if (!detail.isEditable) {
       detail.text?.takeIf { it.isNotBlank() }?.let { text ->
-        selectorWith(DriverNodeMatch.AndroidAccessibility(textRegex = escapeForSelector(text)))
+        selectorWith(DriverNodeMatch.AndroidAccessibility(textRegex = stableTextAnchorRegex(text)))
       }
     } else {
       null
@@ -100,7 +100,7 @@ internal fun androidAccessibilityStrategies(
       if (text != null && className != null) {
         selectorWith(
           DriverNodeMatch.AndroidAccessibility(
-            textRegex = escapeForSelector(text),
+            textRegex = stableTextAnchorRegex(text),
             classNameRegex = escapeForIdentifier(className),
           ),
         )
@@ -119,7 +119,7 @@ internal fun androidAccessibilityStrategies(
       selectorWith(
         DriverNodeMatch.AndroidAccessibility(
           resourceIdRegex = escapeForIdentifier(rid),
-          textRegex = escapeForSelector(text),
+          textRegex = stableTextAnchorRegex(text),
         ),
       )
     } else {

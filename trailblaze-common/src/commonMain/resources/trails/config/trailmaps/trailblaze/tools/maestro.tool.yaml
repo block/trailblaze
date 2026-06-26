@@ -1,2 +1,5 @@
+# DEPRECATED back-compat alias. The raw-Maestro tool was renamed maestro -> mobile_maestro;
+# this descriptor keeps the legacy `maestro:` tool name resolvable by loading the deprecated
+# delegator, which forwards to mobile_maestro. Remove once no `maestro:` trails remain.
 id: maestro
-class: xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
+class: xyz.block.trailblaze.toolcalls.commands.MaestroDeprecatedTrailblazeTool

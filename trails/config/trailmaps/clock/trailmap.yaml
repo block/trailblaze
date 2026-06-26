@@ -12,14 +12,17 @@ dependencies:
   - trailblaze
 target:
   display_name: Google Clock
-  tools:
-    - clock_android_launchApp
-    - clock_clearAlarms
   platforms:
     android:
       app_ids:
         - com.google.android.deskclock
         - com.android.deskclock
+      # Scripted tools declared under their platform (rather than at `target.tools:`) so the
+      # platform↔tool association is explicit in the YAML; the trailmap loader hoists them
+      # into the delivered top-level tool list at load time.
+      tools:
+        - clock_android_launchApp
+        - clock_clearAlarms
     ios: {}
     web: {}
     compose: {}

@@ -290,12 +290,26 @@ class TrailblazeDeviceManager(
     // says it requires. [RunYamlRequest.driverType] is consumed downstream by
     // [AndroidStandaloneServerTest.handleRunRequest], which sets `driverTypeOverride` and
     // makes the rule resolve to the matching agent.
-    val trailConfigDriver = try {
-      createTrailblazeYaml().extractTrailConfig(yamlToRun)?.driver
-        ?.let { TrailblazeDriverType.fromString(it) }
+    val trailConfig = try {
+      createTrailblazeYaml().extractTrailConfig(yamlToRun)
     } catch (_: Exception) {
       null
     }
+    val trailConfigDriver = try {
+      trailConfig?.driver?.let { TrailblazeDriverType.fromString(it) }
+    } catch (_: Exception) {
+      null
+    }
+    // Honor `config.target` from the trail YAML so a trail runs against its declared target
+    // instead of whatever target is selected in the desktop app — mirrors the per-trail
+    // `config.driver` handling above. Falls back to the selected target when the trail declares
+    // none. Without this, the trail's `target:` was ignored and a trail launched whichever app
+    // the previously-selected target pointed at.
+    val trailConfigTarget = trailConfig?.target
+    val resolvedTargetAppName = trailConfigTarget ?: settingsState.appConfig.selectedTargetAppId
+    val resolvedTargetTestApp =
+      trailConfigTarget?.let { id -> availableAppTargets.find { it.id == id } }
+        ?: getCurrentSelectedTargetApp()
     val baseConfig = TrailblazeConfig(
       overrideSessionId = existingSessionId,
       sendSessionStartLog = sendSessionStartLog,
@@ -311,7 +325,7 @@ class TrailblazeDeviceManager(
       testName = "test",
       useRecordedSteps = useRecordedSteps,
       trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
-      targetAppName = settingsState.appConfig.selectedTargetAppId,
+      targetAppName = resolvedTargetAppName,
       trailFilePath = null,
       // Only override selfHeal when the caller set it; otherwise keep the config default.
       config = if (selfHeal != null) baseConfig.copy(selfHeal = selfHeal) else baseConfig,
@@ -328,7 +342,7 @@ class TrailblazeDeviceManager(
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = forceStopTargetApp,
       runYamlRequest = runYamlRequest,
-      targetTestApp = this.getCurrentSelectedTargetApp(),
+      targetTestApp = resolvedTargetTestApp,
       onProgressMessage = {},
       onConnectionStatus = {},
       additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),

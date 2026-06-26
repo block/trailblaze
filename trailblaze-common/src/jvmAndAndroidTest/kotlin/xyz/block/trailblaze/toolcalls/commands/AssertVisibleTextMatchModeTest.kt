@@ -120,6 +120,30 @@ class AssertVisibleTextMatchModeTest {
     assertTrue(result is TrailblazeToolResult.Success, "absent count must replay green")
   }
 
+  @Test
+  fun `textless container match finds the asserted text on a child (regression - MaxCalls loop)`() = runBlocking {
+    // Selector lands on a structural container (no readable text of its own) while the asserted
+    // text lives on a child — a mode-card-style container whose label is on a child node. Pre-fix
+    // this failed with "Matched element has no readable text" and the runtime LLM re-issued the
+    // identical assertion until its per-step call budget was exhausted.
+    val result = runReplayOnContainer(
+      containerResourceId = "mode_card",
+      childText = "Active on 12 devices",
+      expectedText = "Active on 12 devices",
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "text on a child of the matched container must be found")
+  }
+
+  @Test
+  fun `textless container without the expected text anywhere still fails (no false green)`() = runBlocking {
+    val result = runReplayOnContainer(
+      containerResourceId = "mode_card",
+      childText = "Standard mode",
+      expectedText = "Active on 12 devices",
+    )
+    assertTrue(result is TrailblazeToolResult.Error, "absent text must still fail — the subtree fallback must not auto-pass")
+  }
+
   // endregion
 
   // region legacy Maestro textRegex lowering (toMaestroCommands)
@@ -308,6 +332,45 @@ class AssertVisibleTextMatchModeTest {
     )
     val tool = AssertVisibleBySelectorTrailblazeTool(
       nodeSelector = nodeSelector,
+      expectedText = expectedText,
+      textMatchMode = mode,
+    )
+    return tool.execute(replayContext(tree))
+  }
+
+  /**
+   * Resolves to a textless structural container (matched by resourceId) whose asserted text lives
+   * on a [childText] child — exercises the subtree fallback in `collectTextCandidates`.
+   */
+  private suspend fun runReplayOnContainer(
+    containerResourceId: String,
+    childText: String,
+    expectedText: String,
+    mode: TextMatchMode = TextMatchMode.EXACT,
+  ): TrailblazeToolResult {
+    val child = TrailblazeNode(
+      nodeId = 3,
+      ref = "child1",
+      bounds = TrailblazeNode.Bounds(110, 210, 290, 250),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(text = childText),
+    )
+    val container = TrailblazeNode(
+      nodeId = 2,
+      ref = "card",
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(resourceId = containerResourceId),
+      children = listOf(child),
+    )
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      children = listOf(container),
+    )
+    val tool = AssertVisibleBySelectorTrailblazeTool(
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(resourceIdRegex = containerResourceId),
+      ),
       expectedText = expectedText,
       textMatchMode = mode,
     )

@@ -351,8 +351,27 @@ declare module "@trailblaze/scripting" {
      * when one exists; this is for faithful 1:1 ports of Kotlin steps that built Maestro orchestra
      * commands by hand (e.g. app launch / sign-in flows).
      *
-     * Source: `MaestroTrailblazeTool.kt` (`maestro`). The Kotlin tool's custom serializer maps the
-     * `{ commands: [...] }` payload onto a Maestro commands-list YAML before execution.
+     * Source: `MaestroTrailblazeTool.kt` (`mobile_maestro`). The Kotlin tool's custom serializer maps
+     * the `{ commands: [...] }` payload onto a Maestro commands-list YAML before execution.
+     *
+     * Mobile-only escape hatch: web is Playwright-native (`web_*`), so this is gated to
+     * android + ios. Author-only (`surfaceToLlm: false`) — the LLM uses the semantic tools.
+     */
+    mobile_maestro: {
+      args: {
+        /** Ordered list of Maestro command maps to run, in `MaestroYamlParser` flow shape. */
+        commands: Array<Record<string, unknown>>;
+      };
+      result: string;
+    };
+
+    /**
+     * @deprecated Renamed to `mobile_maestro`. This is a back-compat alias kept so existing
+     * `ctx.tools.maestro(...)` callsites and legacy `maestro:` trails keep working; it delegates
+     * to `mobile_maestro` at runtime (see `MaestroDeprecatedTrailblazeTool.kt`). Migrate to
+     * `ctx.tools.mobile_maestro(...)`.
+     *
+     * Source: `MaestroDeprecatedTrailblazeTool.kt` (`maestro`).
      */
     maestro: {
       args: {

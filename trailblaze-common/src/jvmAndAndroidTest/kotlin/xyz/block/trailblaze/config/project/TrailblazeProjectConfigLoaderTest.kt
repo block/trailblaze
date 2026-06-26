@@ -3,6 +3,7 @@ package xyz.block.trailblaze.config.project
 import java.io.File
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -189,6 +190,167 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `per-platform scripted tools hoist into target tools and strip from the platform section`() {
+    // Mirror of the build-time generator (TrailblazeBundledConfigTasks): scripted tools declared
+    // under `platforms.<p>.tools:` resolve into the delivered top-level `target.tools:` and are
+    // stripped from the per-platform `tools:` (so the YamlBackedHostAppTarget per-platform path
+    // doesn't re-resolve a descriptor-less name and warn). A non-scripted name (no descriptor) is
+    // left in place for the class-/YAML-backed routing.
+    val trailmapDir = File(tempFolder.root, "trailmaps/pp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: pp
+      target:
+        display_name: Per Platform
+        platforms:
+          android:
+            app_ids:
+              - com.example.pp
+            tools:
+              - ppAndroidTool
+              - someClassBackedTool
+          ios:
+            tools:
+              - ppIosTool
+      """.trimIndent(),
+    )
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/android_tool.yaml").writeText(
+      """
+      script: ./android_tool.js
+      name: ppAndroidTool
+      description: Android-only launch step.
+      supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    File(trailmapDir, "tools/ios_tool.yaml").writeText(
+      """
+      script: ./ios_tool.js
+      name: ppIosTool
+      description: iOS-only launch step.
+      supportedPlatforms: [ios]
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - pp
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)!!
+    val target = resolved.targets.single()
+
+    // Both per-platform scripted tools hoisted into the delivered top-level tools.
+    assertEquals(setOf("ppAndroidTool", "ppIosTool"), target.tools.orEmpty().map { it.name }.toSet())
+    // The scripted names are stripped from their platform sections, but the field is preserved
+    // (empty list, not null) — see the next test for why this matters under dep inheritance.
+    assertEquals(listOf("someClassBackedTool"), target.platforms?.get("android")?.tools)
+    assertEquals(emptyList(), target.platforms?.get("ios")?.tools)
+  }
+
+  @Test
+  fun `per-platform strip preserves empty list so deps don't override an author-cleared tools field`() {
+    // Pins the Codex P2 fix: a `platforms.<p>.tools:` list that was originally non-null but
+    // entirely scripted (all names hoisted out) must remain `emptyList()`, not `null`, so the
+    // downstream TrailmapDependencyResolver.closestWinsOverlay sees "overlay declared" and skips
+    // the dep default. Nulling here would let an inherited `defaults.<p>.tools` (class- or
+    // YAML-backed) sneak in even though the author declared a tools list.
+    val frameworkDir = File(tempFolder.root, "trailmaps/framework").apply { mkdirs() }
+    File(frameworkDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      defaults:
+        android:
+          tools:
+            - inheritedClassBackedTool
+      """.trimIndent(),
+    )
+    val targetDir = File(tempFolder.root, "trailmaps/myapp").apply { mkdirs() }
+    File(targetDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - framework
+      target:
+        display_name: MyApp
+        platforms:
+          android:
+            tools:
+              - myScriptedTool
+      """.trimIndent(),
+    )
+    File(targetDir, "tools").mkdirs()
+    File(targetDir, "tools/my_scripted.yaml").writeText(
+      """
+      script: ./my_scripted.js
+      name: myScriptedTool
+      description: Android scripted tool.
+      supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - myapp
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)!!
+    val target = resolved.targets.single { it.id == "myapp" }
+
+    assertEquals(setOf("myScriptedTool"), target.tools.orEmpty().map { it.name }.toSet())
+    // The dep's `inheritedClassBackedTool` MUST NOT show up — the author's explicit (now-empty
+    // after stripping the scripted name) `tools:` declaration must win over the dep default.
+    assertEquals(emptyList(), target.platforms?.get("android")?.tools)
+  }
+
+  @Test
+  fun `non-string supportedPlatforms entry in a per-platform tool fails at descriptor decode`() {
+    // A malformed `_meta.trailblaze/supportedPlatforms` (non-string element like 123) is caught at
+    // typed-decode time by `TrailmapScriptedToolFile._meta`'s validation — before the per-platform
+    // resolver ever sees the config. Pins this contract so the failure stays at the right layer
+    // (the descriptor-decode boundary) with a debuggable message naming the tool and the field.
+    val trailmapDir = File(tempFolder.root, "trailmaps/badmeta").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: badmeta
+      target:
+        display_name: BadMeta
+        platforms:
+          android:
+            tools:
+              - badTool
+      """.trimIndent(),
+    )
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "tools/bad_tool.yaml").writeText(
+      """
+      script: ./bad_tool.js
+      name: badTool
+      _meta:
+        trailblaze/supportedPlatforms:
+          - 123
+          - android
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - badmeta
+      """.trimIndent(),
+    )
+
+    val ex = assertFailsWith<IllegalArgumentException> {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)
+    }
+    assertTrue(
+      ex.message?.contains("badTool") == true && ex.message?.contains("supportedPlatforms") == true,
+      "error must name the tool and the field; got: ${ex.message}",
+    )
+  }
+
+  @Test
   fun `trailmap toolset and tool refs resolve relative to trailmap dir`() {
     val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(
@@ -338,7 +500,7 @@ class TrailblazeProjectConfigLoaderTest {
       description: Pure-YAML composed tool that doesn't belong in target.tools:
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - back: {}
       """.trimIndent(),

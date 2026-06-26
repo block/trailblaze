@@ -40,7 +40,7 @@ import xyz.block.trailblaze.util.Console
  * Authored trail YAML:
  * ```yaml
  * - tools:
- *     - maestro:
+ *     - mobile_maestro:
  *         commands:
  *           - extendedWaitUntil:
  *               notVisible: Gift card added to cart
@@ -51,7 +51,7 @@ import xyz.block.trailblaze.util.Console
  * ```
  */
 @Serializable(with = MaestroTrailblazeToolSerializer::class)
-@TrailblazeToolClass(name = "maestro", surfaceToLlm = false, isRecordable = true)
+@TrailblazeToolClass(name = "mobile_maestro", surfaceToLlm = false, isRecordable = true)
 @LLMDescription("Execute raw Maestro YAML commands directly. Prefer using specific Trailblaze tools instead.")
 data class MaestroTrailblazeTool(
   /** Full Maestro commands-list YAML (list items prefixed with `- `). */
@@ -129,11 +129,11 @@ object MaestroTrailblazeToolSerializer : KSerializer<MaestroTrailblazeTool> {
       is YamlInput -> {
         val node = decoder.node
         require(node is YamlMap) {
-          "Expected a map with 'commands' under 'maestro:', got ${node::class.simpleName}"
+          "Expected a map with a 'commands' list (mobile_maestro tool), got ${node::class.simpleName}"
         }
         val commandsNode = node.entries.entries
           .firstOrNull { it.key.content == "commands" }?.value
-          ?: error("Expected 'commands' key under 'maestro:'")
+          ?: error("Expected a 'commands' key in the mobile_maestro tool body")
         require(commandsNode is YamlList) {
           "Expected 'commands' to be a list, got ${commandsNode::class.simpleName}"
         }

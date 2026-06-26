@@ -3,12 +3,15 @@ dependencies:
   - trailblaze
 target:
   display_name: Google Calendar
-  tools:
-    - calendar_android_launchApp
   platforms:
     android:
       app_ids:
         - com.google.android.calendar
+      # Scripted tool declared under its platform (rather than at `target.tools:`) so the
+      # platform↔tool association is explicit in the YAML; the trailmap loader hoists it
+      # into the delivered top-level tool list at load time.
+      tools:
+        - calendar_android_launchApp
     ios: {}
     web: {}
     compose: {}

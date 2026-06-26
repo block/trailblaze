@@ -84,7 +84,7 @@ async function waitUntilTextShown(ctx: ToolContext, text: string, timeoutMs: num
     return;
   }
 
-  await ctx.tools.maestro({
+  await ctx.tools.mobile_maestro({
     commands: [
       {
         extendedWaitUntil: {

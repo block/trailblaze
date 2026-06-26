@@ -551,36 +551,54 @@ object MaestroYamlSerializer {
   private fun conditionToMaestroCommand(
     condition: Condition,
     timeout: Long?,
-  ): MaestroCommandYamlNode = if (condition.visible != null) {
-    MaestroCommandYamlNode(
-      type = "assertVisible",
-      stringProps = mutableMapOf<String, String>().apply {
-        putAll(extractStringProperties(condition.visible!!))
-        timeout?.let { put("timeout", it.toString()) }
-      },
-      nestedSelectorProps = extractNestedSelectorProperties(condition.visible!!),
-      nestedListSelectorProps = extractNestedListSelectorProperties(condition.visible!!),
-    )
-  } else if (condition.notVisible != null) {
-    MaestroCommandYamlNode(
-      type = "assertNotVisible",
-      stringProps = mutableMapOf<String, String>().apply {
-        putAll(extractStringProperties(condition.notVisible!!))
-        timeout?.let { put("timeout", it.toString()) }
-      },
-      nestedSelectorProps = extractNestedSelectorProperties(condition.notVisible!!),
-      nestedListSelectorProps = extractNestedListSelectorProperties(condition.notVisible!!),
-    )
-  } else if (condition.scriptCondition != null) {
-    MaestroCommandYamlNode(
-      type = "assertScript",
-      stringProps = mutableMapOf<String, String>().apply {
-        put("script", condition.scriptCondition!!.wrappedInQuotes())
-        timeout?.let { put("timeout", it.toString()) }
-      },
-    )
-  } else {
-    error("Unsupported state of Condition $condition $timeout")
+  ): MaestroCommandYamlNode {
+    // Maestro 2.6.1 removed `timeout` from `assertVisible`/`assertNotVisible` — the timeout-aware
+    // variant is `extendedWaitUntil`. Emit that form whenever a timeout is present so the YAML
+    // round-trips through both old and new Maestro versions without an "Unknown Property: timeout"
+    // parse error on the on-device runner.
+    if (timeout != null && (condition.visible != null || condition.notVisible != null)) {
+      val (nestedKey, selector) = if (condition.visible != null) {
+        "visible" to condition.visible!!
+      } else {
+        "notVisible" to condition.notVisible!!
+      }
+      return MaestroCommandYamlNode(
+        type = "extendedWaitUntil",
+        stringProps = mapOf("timeout" to timeout.toString()),
+        nestedSelectorProps = mapOf(
+          nestedKey to ElementSelectorData(
+            stringProps = extractStringProperties(selector),
+            nestedSelectorProps = extractNestedSelectorProperties(selector),
+            nestedListSelectorProps = extractNestedListSelectorProperties(selector),
+          ),
+        ),
+      )
+    }
+    return if (condition.visible != null) {
+      MaestroCommandYamlNode(
+        type = "assertVisible",
+        stringProps = extractStringProperties(condition.visible!!).toMutableMap(),
+        nestedSelectorProps = extractNestedSelectorProperties(condition.visible!!),
+        nestedListSelectorProps = extractNestedListSelectorProperties(condition.visible!!),
+      )
+    } else if (condition.notVisible != null) {
+      MaestroCommandYamlNode(
+        type = "assertNotVisible",
+        stringProps = extractStringProperties(condition.notVisible!!).toMutableMap(),
+        nestedSelectorProps = extractNestedSelectorProperties(condition.notVisible!!),
+        nestedListSelectorProps = extractNestedListSelectorProperties(condition.notVisible!!),
+      )
+    } else if (condition.scriptCondition != null) {
+      MaestroCommandYamlNode(
+        type = "assertScript",
+        stringProps = mutableMapOf<String, String>().apply {
+          put("script", condition.scriptCondition!!.wrappedInQuotes())
+          timeout?.let { put("timeout", it.toString()) }
+        },
+      )
+    } else {
+      error("Unsupported state of Condition $condition $timeout")
+    }
   }
 
   private fun getSingleOrMultilineValue(value: String): String {

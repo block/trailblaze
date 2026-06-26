@@ -283,7 +283,7 @@ Tests are authored in `.trail.yaml` format, which supports:
 #### Action Steps (Deterministic)
 
 ```yaml
-- maestro:
+- mobile_maestro:
     - tapOn: "Settings"
     - assertVisible: "Notifications"
 ```

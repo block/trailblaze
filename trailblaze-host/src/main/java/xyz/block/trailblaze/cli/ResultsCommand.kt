@@ -35,9 +35,8 @@ import java.util.concurrent.Callable
  *   v1 (legacy):  { "testCaseId": "C12345", "device": "android-phone", "schemaVersion": 1, "run": { … } }
  *   v2 (current): { "schema_version": 2, "test_case_id": "C12345", "device": "android-phone",
  *                   "consecutive_failures": N, "metadata": {…}, "result": {…} }
- * The reader normalizes both shapes into a [CellView] before rendering; new cells are written
- * in v2 (see [xyz.block.trailblaze.report.models.TestResultCell]) and old v1 cells are still
- * readable during the migration window.
+ * The reader normalizes both shapes into a [CellView] before rendering; the index repo is
+ * frozen (no longer written), so both v1 and v2 cells remain readable as historical records.
  *
  * The repo to query is resolved from `--repo` or the `TRAILBLAZE_RESULTS_REPO` env var
  * (in that order). Distributions that ship with a default repo do so by setting the env

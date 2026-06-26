@@ -3,16 +3,16 @@ package xyz.block.trailblaze.report.models
 import kotlinx.serialization.Serializable
 
 /**
- * Per-(test case, device) snapshot written into a test-results index repo.
+ * Per-(test case, device) snapshot of a CI test result.
  *
  * One [TestResultCell] is the canonical payload of `results/<scheme>/<case>/<device>/latest.json`
- * (and `latest_success.json`) in the test-results repo. The shape is intentionally a thin
- * envelope around the existing typed report data — [CiRunMetadata] and [SessionResult] are
- * reused verbatim from the report generator, so any consumer (the in-build HTML report,
+ * (and `latest_success.json`) in the durable results artifact store. The shape is intentionally
+ * a thin envelope around the existing typed report data — [CiRunMetadata] and [SessionResult]
+ * are reused verbatim from the report generator, so any consumer (the in-build HTML report,
  * triage tooling, ad-hoc analytics) can use the same `kotlinx.serialization` types to round-trip.
  *
- * The publisher computes [consecutive_failures] from the cell file's git history at write time;
- * it is the only piece of state that doesn't exist in the source [CiSummaryReport].
+ * [consecutive_failures] is computed from the cell's run history at write time; it is the only
+ * piece of state that doesn't exist in the source [CiSummaryReport].
  *
  * @property schema_version Schema version for forward compatibility.
  *
@@ -27,9 +27,9 @@ import kotlinx.serialization.Serializable
  *     mis-interpret a v(N+1) document — readers MUST reject `schema_version >
  *     CURRENT_SCHEMA_VERSION` (see `xyz.block.trailblaze.cli.ResultsShowCommand.CellView.MAX_SUPPORTED_SCHEMA_VERSION`).
  *   - During a transition window where both the old and new writers may publish, the new
- *     writer should preserve unknown fields from the existing on-disk file (see how
- *     `TestResultsRepoPublisher.writeCellFile` merges into existing content) so a vN reader
- *     can still find the fields it expects.
+ *     writer should preserve unknown fields from the existing on-disk file (merge new fields
+ *     onto the existing content rather than overwriting it) so a vN reader can still find the
+ *     fields it expects.
  * @property test_case_id Identifier for the case (e.g. `C12345`). Path-partitioned
  *   in the index repo so `git log results/testrail/<id>/<device>/latest.json` shows that
  *   cell's full history.

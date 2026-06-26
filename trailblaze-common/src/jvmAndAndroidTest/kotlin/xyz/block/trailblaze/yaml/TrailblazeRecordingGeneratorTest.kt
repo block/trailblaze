@@ -9,6 +9,11 @@ import assertk.assertions.startsWith
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
@@ -1150,5 +1155,80 @@ class TrailblazeRecordingGeneratorTest {
     val tools = prompts.promptSteps[0].recording!!.tools
     assertThat(tools.filter { it.name == "assertVisibleBySelector" }.size).isEqualTo(1)
     assertThat(tools.filter { it.name == "tapOnElementBySelector" }.size).isEqualTo(2)
+  }
+
+  /**
+   * Recording preservation for the `runIf` conditional scripted tool. When the agent invokes a
+   * registered scripted tool like `runIf`, the host path emits a single recordable
+   * [TrailblazeLog.TrailblazeToolLog] carrying the whole `{condition, then, else}` wrapper as its
+   * raw args (modeled here as [OtherTrailblazeTool], the on-the-fly representation of a tool not on
+   * the models classpath); the inner tool-calls it dispatches via `trailblaze.call` are NOT logged.
+   *
+   * So the recorder must persist the `runIf` wrapper VERBATIM — one top-level `runIf:` entry whose
+   * `then` keeps the inner `tapOnElementBySelector` nested inside it — and must NOT flatten it to the
+   * inner primitive. Flattening would discard the branch and turn the step back into the
+   * unconditional tap that flips state every run (the motivating flake). The size==1 + name=="runIf"
+   * assertions are the negative control: a flattened recording would surface the inner tap as the
+   * recorded tool instead.
+   */
+  @Test
+  fun runIfWrapperIsRecordedVerbatimNotFlattened() {
+    val runIfRaw = buildJsonObject {
+      putJsonObject("condition") {
+        putJsonObject("selector") {
+          putJsonObject("androidAccessibility") { put("textRegex", "Manual card entry") }
+          putJsonObject("childOf") {
+            putJsonObject("containsChild") {
+              putJsonObject("androidAccessibility") { put("isChecked", true) }
+            }
+          }
+        }
+      }
+      putJsonArray("then") {
+        addJsonObject {
+          putJsonObject("tapOnElementBySelector") {
+            put("reason", "Manual card entry toggle is on; tap to disable it.")
+            putJsonObject("nodeSelector") {
+              putJsonObject("containsChild") {
+                putJsonObject("androidAccessibility") { put("textRegex", "Manual card entry") }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    val step = DirectionStep(step = "If Manual card entry is on, tap to disable it")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(
+        tool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+          toolName = "runIf",
+          raw = runIfRaw,
+        ),
+        toolName = "runIf",
+      ),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    // The wrapper is recorded as a SINGLE tool named `runIf` — not flattened to its inner tap.
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
+    val recordedTools = prompts.promptSteps[0].recording!!.tools
+    assertThat(recordedTools.size).isEqualTo(1)
+    assertThat(recordedTools[0].name).isEqualTo("runIf")
+
+    // The condition and the nested `then` action survive verbatim in the recorded YAML.
+    assertThat(yaml).contains("runIf:")
+    assertThat(yaml).contains("condition:")
+    assertThat(yaml).contains("isChecked: true")
+    assertThat(yaml).contains("then:")
+    assertThat(yaml).contains("tapOnElementBySelector:")
+
+    // Decoded recording re-encodes identically — the verbatim wrapper round-trips.
+    val reencoded = trailblazeYaml.encodeToString(decoded)
+    assertThat(reencoded).isEqualTo(yaml)
   }
 }

@@ -6,6 +6,17 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertContains
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Coverage for the [AgentMemory] surface. The class is intentionally small (it backs the
@@ -52,6 +63,44 @@ class AgentMemoryTest {
     memory.remember("first", "Ada")
     memory.remember("last", "Lovelace")
     assertEquals("Ada Lovelace", memory.interpolateVariables("{{first}} \${last}"))
+  }
+
+  @Test
+  fun `interpolateVariablesInJson resolves tokens in nested objects and arrays and passes non-strings through`() {
+    val memory = AgentMemory()
+    memory.remember("email", "merchant@example.com")
+    memory.remember("id", "42")
+    val input = buildJsonObject {
+      put("email", "\${email}")
+      put("nested", buildJsonObject { put("who", "{{email}}") })
+      put(
+        "list",
+        buildJsonArray {
+          add(JsonPrimitive("id=\${id}"))
+          add(JsonPrimitive("literal"))
+        },
+      )
+      put("count", JsonPrimitive(7))
+      put("flag", JsonPrimitive(true))
+      put("nothing", JsonNull)
+    }
+    val out = memory.interpolateVariablesInJson(input).jsonObject
+    assertEquals("merchant@example.com", out["email"]!!.jsonPrimitive.content)
+    assertEquals("merchant@example.com", out["nested"]!!.jsonObject["who"]!!.jsonPrimitive.content)
+    assertEquals("id=42", out["list"]!!.jsonArray[0].jsonPrimitive.content)
+    assertEquals("literal", out["list"]!!.jsonArray[1].jsonPrimitive.content)
+    // Non-string scalars pass through untouched (not stringified).
+    assertEquals(7, out["count"]!!.jsonPrimitive.int)
+    assertEquals(true, out["flag"]!!.jsonPrimitive.boolean)
+    assertEquals(JsonNull, out["nothing"])
+  }
+
+  @Test
+  fun `interpolateVariablesInJson is a no-op when memory is empty`() {
+    val memory = AgentMemory()
+    val input = buildJsonObject { put("email", "\${email}") }
+    // Empty-variables short-circuit returns the element unchanged; the token is left intact.
+    assertEquals("\${email}", memory.interpolateVariablesInJson(input).jsonObject["email"]!!.jsonPrimitive.content)
   }
 
   @Test

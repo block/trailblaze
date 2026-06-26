@@ -1056,6 +1056,401 @@ class TrailmapTargetGeneratorTest {
     assertTrue(content.contains("trailblaze/supportedPlatforms"), "analyzer-derived _meta missing: $content")
   }
 
+  @Test
+  fun `per-platform scripted tools are hoisted into top-level tools and stripped from the platform section`() {
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "pp/tools").mkdirs()
+    File(trailmapsDir, "pp/tools/androidTool.yaml").writeText(
+      """
+      script: ./androidTool.ts
+      name: ppAndroidTool
+      supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "pp/tools/iosTool.yaml").writeText(
+      """
+      script: ./iosTool.ts
+      name: ppIosTool
+      supportedPlatforms: [ios]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "pp/trailmap.yaml").writeText(
+      """
+      id: pp
+      target:
+        display_name: PerPlatform
+        platforms:
+          android:
+            app_ids:
+              - com.example.pp
+            tools:
+              - ppAndroidTool
+          ios:
+            tools:
+              - ppIosTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val content = generator.buildExpectedTargets().values.single()
+
+    // Both per-platform scripted tools are hoisted into the delivered top-level `tools:` block,
+    // which is emitted before `platforms:` (the established convention).
+    assertTrue(content.contains("name: ppAndroidTool"), "android tool not hoisted into top-level tools: $content")
+    assertTrue(content.contains("name: ppIosTool"), "ios tool not hoisted into top-level tools: $content")
+    assertTrue(
+      content.indexOf("\ntools:") in 0 until content.indexOf("\nplatforms:"),
+      "top-level `tools:` must precede `platforms:`: $content",
+    )
+    // ...and stripped from the per-platform sections so the runtime YamlBackedHostAppTarget's
+    // PlatformConfig.tools path doesn't re-resolve a (descriptor-less) name and warn.
+    val asListEntry = { name: String -> Regex("^\\s*-\\s+$name\\s*$", RegexOption.MULTILINE).containsMatchIn(content) }
+    assertTrue(!asListEntry("ppAndroidTool"), "per-platform scripted name must be stripped from platform section: $content")
+    assertTrue(!asListEntry("ppIosTool"), "per-platform scripted name must be stripped from platform section: $content")
+  }
+
+  @Test
+  fun `cross-platform target tool coexists with per-platform tools in deterministic order`() {
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "mix/tools").mkdirs()
+    File(trailmapsDir, "mix/tools/cross.yaml").writeText(
+      """
+      script: ./cross.ts
+      name: crossTool
+      supportedPlatforms: [android, ios]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "mix/tools/a.yaml").writeText(
+      """
+      script: ./a.ts
+      name: aTool
+      supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "mix/tools/i.yaml").writeText(
+      """
+      script: ./i.ts
+      name: iTool
+      supportedPlatforms: [ios]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "mix/trailmap.yaml").writeText(
+      """
+      id: mix
+      target:
+        display_name: Mix
+        tools:
+          - crossTool
+        platforms:
+          android:
+            tools:
+              - aTool
+          ios:
+            tools:
+              - iTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val content = generator.buildExpectedTargets().values.single()
+
+    // Order: target-level first, then per-platform in platform-declaration order (android, ios).
+    val crossIdx = content.indexOf("name: crossTool")
+    val aIdx = content.indexOf("name: aTool")
+    val iIdx = content.indexOf("name: iTool")
+    assertTrue(crossIdx in 0 until aIdx && aIdx < iIdx, "unexpected top-level tool order: $content")
+  }
+
+  @Test
+  fun `per-platform scripted tool supporting another platform fails validation`() {
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "badpp/tools").mkdirs()
+    // Declares android+ios but is listed under a single platform — must fail.
+    File(trailmapsDir, "badpp/tools/wide.yaml").writeText(
+      """
+      script: ./wide.ts
+      name: wideTool
+      supportedPlatforms: [android, ios]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "badpp/trailmap.yaml").writeText(
+      """
+      id: badpp
+      target:
+        display_name: BadPerPlatform
+        platforms:
+          ios:
+            tools:
+              - wideTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("wideTool") == true, "error must name the tool; got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("supportedPlatforms") == true,
+      "error must explain the supportedPlatforms mismatch; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `non-scripted per-platform tool name is preserved in the platform section`() {
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    // No tools/ descriptors at all — a class-/YAML-backed tool name resolves to no scripted tool.
+    File(trailmapsDir, "passthrough").mkdirs()
+    File(trailmapsDir, "passthrough/trailmap.yaml").writeText(
+      """
+      id: passthrough
+      target:
+        display_name: Passthrough
+        platforms:
+          android:
+            tools:
+              - someClassBackedTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val content = generator.buildExpectedTargets().values.single()
+
+    // Kept in the platform section, NOT hoisted (no top-level `tools:` block emitted).
+    assertTrue(
+      Regex("^\\s*-\\s+someClassBackedTool\\s*$", RegexOption.MULTILINE).containsMatchIn(content),
+      "non-scripted per-platform name must be preserved: $content",
+    )
+    assertTrue(!content.contains("\ntools:"), "no top-level tools block should be emitted: $content")
+  }
+
+  @Test
+  fun `scripted tool declared under both target tools and a platform fails as duplicate`() {
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "duppp/tools").mkdirs()
+    File(trailmapsDir, "duppp/tools/dup.yaml").writeText(
+      """
+      script: ./dup.ts
+      name: dupTool
+      supportedPlatforms: [android]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "duppp/trailmap.yaml").writeText(
+      """
+      id: duppp
+      target:
+        display_name: DupPerPlatform
+        tools:
+          - dupTool
+        platforms:
+          android:
+            tools:
+              - dupTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("dupTool") == true, "error must name the tool; got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("declared in both") == true,
+      "error must call out the double declaration; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `cross-platform tool listed under a single platform section fails the single-platform rule first`() {
+    // A scripted tool with `supportedPlatforms: [android, ios]` listed under one platform section
+    // (e.g. only `android`) is caught by `validatePerPlatformScriptedTool` BEFORE any duplicate-
+    // detection runs. Cross-platform tools must live at `target.tools:`. This pins the validation-
+    // before-dedup ordering: if the order ever flipped, an author listing a multi-platform tool
+    // under one platform would silently hoist instead of getting the clearer "declare under
+    // target.tools:" guidance.
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "crossSingle/tools").mkdirs()
+    File(trailmapsDir, "crossSingle/tools/shared.yaml").writeText(
+      """
+      script: ./shared.ts
+      name: sharedTool
+      supportedPlatforms: [android, ios]
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "crossSingle/trailmap.yaml").writeText(
+      """
+      id: crossSingle
+      target:
+        display_name: CrossSingle
+        platforms:
+          android:
+            tools:
+              - sharedTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("sharedTool") == true, "error must name the tool; got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("supportedPlatforms") == true,
+      "error must explain the supportedPlatforms mismatch; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `tool with empty supportedPlatforms listed under two platforms fails as duplicate`() {
+    // A scripted tool whose `_meta` either omits `supportedPlatforms` or declares an empty list is
+    // not constrained by `validatePerPlatformScriptedTool` (which early-returns) — so an author
+    // mistakenly listing it under two `platforms.<p>.tools:` sections gets caught by the
+    // duplicate-detection guard in `recordScriptedTool`, not by validation. Pins that fallthrough
+    // so a refactor of either gate doesn't silently lose duplicate detection. SISTER-IMPL-TAG:
+    // trailmap-target-tools-dup-detection.
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "twoplat/tools").mkdirs()
+    // No `supportedPlatforms:` field on the descriptor → validation early-returns on this entry,
+    // so the duplicate-detection path runs.
+    File(trailmapsDir, "twoplat/tools/shared.yaml").writeText(
+      """
+      script: ./shared.ts
+      name: sharedTool
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "twoplat/trailmap.yaml").writeText(
+      """
+      id: twoplat
+      target:
+        display_name: TwoPlatform
+        platforms:
+          android:
+            tools:
+              - sharedTool
+          ios:
+            tools:
+              - sharedTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("sharedTool") == true, "error must name the tool; got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("declared in both") == true &&
+        ex.message?.contains("platforms.android.tools") == true &&
+        ex.message?.contains("platforms.ios.tools") == true,
+      "error must call out both platform sites; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `descriptor-less per-platform tools resolve from the analyzer JSON`() {
+    // Mirror of the analyzer-fallback test for `target.tools:` (above), but for the per-platform
+    // entry. A descriptor-less `.ts` listed under `platforms.<p>.tools:` should resolve from the
+    // analyzer JSON, hoist into the delivered top-level `tools:`, and be stripped from the
+    // platform section. Pins the analyzer fallback path on the per-platform resolver, which would
+    // otherwise be untested.
+    val scriptRoot = newTempDir()
+    val trailmapsDir = File(scriptRoot, "trails/config/trailmaps").apply { mkdirs() }
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "pp_analyzer/tools").mkdirs()
+    File(trailmapsDir, "pp_analyzer/trailmap.yaml").writeText(
+      """
+      id: pp_analyzer
+      target:
+        display_name: PerPlatformAnalyzer
+        platforms:
+          android:
+            tools:
+              - ppAnalyzerTool
+      """.trimIndent(),
+    )
+    val tsFile = File(trailmapsDir, "pp_analyzer/tools/ppAnalyzerTool.ts").apply {
+      writeText("export const ppAnalyzerTool = trailblaze.tool(async () => \"ok\");\n")
+    }
+    val analyzerJson = File(newTempDir(), "analyzer-tool-defs.json")
+    analyzerJson.writeText(
+      """
+      {
+        "pp_analyzer": {
+          "ppAnalyzerTool": {
+            "script": "${tsFile.absolutePath}",
+            "name": "ppAnalyzerTool",
+            "description": "Descriptor-less android tool.",
+            "_meta": { "trailblaze/supportedPlatforms": ["android"] },
+            "inputSchema": { "type": "object", "properties": {} }
+          }
+        }
+      }
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(
+      trailmapsDir = trailmapsDir,
+      targetsDir = targetsDir,
+      regenerateCommand = "./gradlew :foo:generate",
+      scriptRootDir = scriptRoot,
+      analyzerToolsJson = analyzerJson,
+    )
+    val content = generator.buildExpectedTargets().values.single()
+
+    // Analyzer-derived tool hoisted into top-level `tools:` ...
+    assertTrue(content.contains("name: ppAnalyzerTool"), "analyzer-derived tool missing: $content")
+    assertTrue(content.contains("Descriptor-less android tool."), "description missing: $content")
+    // ... and stripped from `platforms.android.tools:` (which becomes empty + dropped).
+    assertTrue(
+      !Regex("^\\s*-\\s+ppAnalyzerTool\\s*$", RegexOption.MULTILINE).containsMatchIn(content),
+      "per-platform analyzer tool name must be stripped from the platform section: $content",
+    )
+  }
+
+  @Test
+  fun `non-string supportedPlatforms entry in a per-platform tool fails loudly`() {
+    // `validatePerPlatformScriptedTool` strict-string guard: every entry of
+    // `_meta.trailblaze/supportedPlatforms` must be a string. A descriptor that ships a malformed
+    // list like `[123, "android"]` would, before the strict-string check, silently filter the
+    // non-string out and pass validation as if it were `["android"]` only — masking the malformed
+    // descriptor. The fail-loud guard names the offending value so authors can fix it.
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "badmeta/tools").mkdirs()
+    // Hand-author the `_meta` map with a non-string entry (123) alongside a valid one, all under
+    // the android platform — the descriptor itself looks fine to kaml; the violation lives inside
+    // `_meta`, which the validator inspects after the descriptor decode.
+    File(trailmapsDir, "badmeta/tools/bad.yaml").writeText(
+      """
+      script: ./bad.ts
+      name: badTool
+      _meta:
+        trailblaze/supportedPlatforms:
+          - 123
+          - android
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "badmeta/trailmap.yaml").writeText(
+      """
+      id: badmeta
+      target:
+        display_name: BadMeta
+        platforms:
+          android:
+            tools:
+              - badTool
+      """.trimIndent(),
+    )
+
+    val generator = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate")
+    val ex = assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(ex.message?.contains("badTool") == true, "error must name the tool; got: ${ex.message}")
+    assertTrue(
+      ex.message?.contains("non-string entry") == true &&
+        ex.message?.contains("supportedPlatforms") == true,
+      "error must name the violation type (non-string entry in supportedPlatforms); got: ${ex.message}",
+    )
+  }
+
   private fun newTempDir(): File =
     createTempDirectory("trailmap-target-generator-test").toFile().also { tempDirs += it }
 }

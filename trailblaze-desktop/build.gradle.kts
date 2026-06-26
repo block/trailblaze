@@ -35,6 +35,15 @@ configurations.all {
   exclude(group = "org.apache.httpcomponents.client5")
   exclude(group = "org.apache.httpcomponents.core5")
   exclude(group = "io.ktor", module = "ktor-client-apache5")
+  // GraalVM Enterprise polyglot runtime. maestro pulls both the community truffle-runtime and the
+  // EE truffle-enterprise; each ships a META-INF/services AbstractPolyglotImpl provider. Flattened
+  // into the uber JAR the two collide at one path and the merge keeps only one — EE — dropping the
+  // community PolyglotImpl, so maestro's GraalJS engine throws AbstractMethodError ("No
+  // implementation available") on the first ${...} script interpolation. Excluding the EE runtime
+  // leaves community as the sole, correct provider; it runs in interpreter mode on the standard JDK
+  // (EE needs the GraalVM compiler we don't ship). Works on a normal multi-jar classpath because the
+  // two service files stay separate there — the bug is uber-JAR-only.
+  exclude(group = "org.graalvm.truffle", module = "truffle-enterprise")
 }
 
 dependencies {

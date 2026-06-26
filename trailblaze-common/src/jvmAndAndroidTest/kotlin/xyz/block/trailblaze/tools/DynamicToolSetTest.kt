@@ -315,7 +315,7 @@ class DynamicToolSetTest {
     )
     val names = result.map { it.toolName().toolName }.toSet()
 
-    assertTrue("maestro" in names, "Target's custom overlay must surface in the result")
+    assertTrue("mobile_maestro" in names, "Target's custom overlay must surface in the result")
     assertFalse(
       "tap" in names,
       "Excluded wins over custom: tap is in both custom and excluded, must NOT be in result",

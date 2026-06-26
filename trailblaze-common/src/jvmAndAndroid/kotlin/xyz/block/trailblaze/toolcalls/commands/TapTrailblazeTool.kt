@@ -225,7 +225,6 @@ data class TapTrailblazeTool(
           return listOf(
             TapOnByElementSelector(
               reason = reasoning,
-              selector = nodeSelector.toTrailblazeElementSelector(),
               longPress = longPress,
               nodeSelector = nodeSelector,
             ),
@@ -240,7 +239,6 @@ data class TapTrailblazeTool(
           return listOf(
             TapOnByElementSelector(
               reason = reasoning,
-              selector = nodeSelector.toTrailblazeElementSelector(),
               longPress = longPress,
               nodeSelector = nodeSelector,
             ),

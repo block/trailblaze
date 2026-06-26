@@ -15,17 +15,36 @@ pluginManagement {
   // Downstream builds that wrap this tree pick the same plugins up via their own
   // `includeBuild` pointing at this `build-logic/`.
   includeBuild("build-logic")
+  // Repository URLs are resolved by name rather than written as literals here, so this file
+  // pins no specific registry host. The public Maven URLs in `gradle.properties` (`mavenRepo*`)
+  // are the defaults; a build may redirect resolution to a private mirror by exporting the
+  // matching `TRAILBLAZE_GRADLE_REPO_*` environment variable, without editing this file and
+  // without that host ever appearing in this tree. `mavenRepo` prefers the env var, then the
+  // Gradle property; a blank value from either is treated as unset (an exported-but-empty env var
+  // would otherwise become an invalid `uri("")`), and a clear error is raised if neither provides
+  // one. It is a block-local lambda because Gradle evaluates `pluginManagement {}` in isolation
+  // and can't see top-level helpers.
+  val mavenRepo = { envVar: String, propKey: String ->
+    (providers.environmentVariable(envVar).orNull?.takeIf(String::isNotBlank)
+      ?: providers.gradleProperty(propKey).orNull?.takeIf(String::isNotBlank))
+      ?: error("Set the $envVar environment variable or the $propKey Gradle property to a Maven repository URL")
+  }
   repositories {
-    mavenCentral()
-    google()
-    gradlePluginPortal()
+    maven { url = uri(mavenRepo("TRAILBLAZE_GRADLE_REPO_ANDROID", "mavenRepoAndroid")) }
+    maven { url = uri(mavenRepo("TRAILBLAZE_GRADLE_REPO_GOOGLE", "mavenRepoGoogle")) }
+    maven { url = uri(mavenRepo("TRAILBLAZE_GRADLE_REPO_PLUGINS", "mavenRepoPlugins")) }
   }
 }
 
 dependencyResolutionManagement {
+  val mavenRepo = { envVar: String, propKey: String ->
+    (providers.environmentVariable(envVar).orNull?.takeIf(String::isNotBlank)
+      ?: providers.gradleProperty(propKey).orNull?.takeIf(String::isNotBlank))
+      ?: error("Set the $envVar environment variable or the $propKey Gradle property to a Maven repository URL")
+  }
   repositories {
-    mavenCentral()
-    google()
+    maven { url = uri(mavenRepo("TRAILBLAZE_GRADLE_REPO_ANDROID", "mavenRepoAndroid")) }
+    maven { url = uri(mavenRepo("TRAILBLAZE_GRADLE_REPO_GOOGLE", "mavenRepoGoogle")) }
   }
 }
 

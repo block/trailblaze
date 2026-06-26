@@ -142,7 +142,7 @@ class YamlDefinedTrailblazeToolTest {
           type: string
           required: true
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - inputText:
                   text: "{{params.text}}"
@@ -171,7 +171,7 @@ class YamlDefinedTrailblazeToolTest {
           required: false
           default: "00123"
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - inputText:
                   text: "{{params.zipCode}}"
@@ -192,7 +192,7 @@ class YamlDefinedTrailblazeToolTest {
       description: References memory — not yet supported.
       parameters: []
       tools:
-        - maestro:
+        - mobile_maestro:
             commands:
               - inputText:
                   text: "{{memory.foo}}"

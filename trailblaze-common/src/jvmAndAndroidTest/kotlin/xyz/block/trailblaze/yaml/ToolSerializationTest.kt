@@ -31,6 +31,7 @@ import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeT
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroDeprecatedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
 
@@ -933,7 +934,7 @@ class ToolSerializationTest {
   fun deserializeMaestroTool() {
     val yaml = """
 - tools:
-    - maestro:
+    - mobile_maestro:
         commands:
           - extendedWaitUntil:
               notVisible: Gift card added to cart
@@ -945,7 +946,7 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].name).isEqualTo("mobile_maestro")
         assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
           // yaml holds the Maestro commands-list YAML; substring checks keep this stable
@@ -959,10 +960,38 @@ class ToolSerializationTest {
   }
 
   @Test
-  fun deserializeMaestroToolMultipleCommands() {
+  fun deserializeLegacyMaestroToolAlias() {
+    // Back-compat: trails authored before the `maestro` -> `mobile_maestro` rename still resolve,
+    // via the deprecated `maestro` alias that delegates to `mobile_maestro`.
     val yaml = """
 - tools:
     - maestro:
+        commands:
+          - extendedWaitUntil:
+              notVisible: Gift card added to cart
+              timeout: 20000
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroDeprecatedTrailblazeTool::class)
+        with(tools[0].trailblazeTool as MaestroDeprecatedTrailblazeTool) {
+          assertThat(yaml).contains("extendedWaitUntil")
+          assertThat(yaml).contains("Gift card added to cart")
+        }
+      }
+    }
+  }
+
+  @Test
+  fun deserializeMaestroToolMultipleCommands() {
+    val yaml = """
+- tools:
+    - mobile_maestro:
         commands:
           - assertVisible:
               text: Hello
@@ -987,7 +1016,7 @@ class ToolSerializationTest {
   fun maestroToolRoundTrip() {
     val yaml = """
 - tools:
-    - maestro:
+    - mobile_maestro:
         commands:
           - extendedWaitUntil:
               notVisible: Gift card added to cart
@@ -1002,7 +1031,7 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].name).isEqualTo("mobile_maestro")
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
           assertThat(yaml).contains("extendedWaitUntil")
         }
@@ -1014,7 +1043,7 @@ class ToolSerializationTest {
   fun deserializeMaestroSetOrientation() {
     val yaml = """
 - tools:
-    - maestro:
+    - mobile_maestro:
         commands:
           - setOrientation: LANDSCAPE_LEFT
     """.trimIndent()
@@ -1024,7 +1053,7 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].name).isEqualTo("mobile_maestro")
         assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
           assertThat(yaml).contains("setOrientation")
@@ -1038,7 +1067,7 @@ class ToolSerializationTest {
   fun maestroSetOrientationRoundTrip() {
     val yaml = """
 - tools:
-    - maestro:
+    - mobile_maestro:
         commands:
           - setOrientation: LANDSCAPE_LEFT
     """.trimIndent()
@@ -1051,7 +1080,7 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].name).isEqualTo("mobile_maestro")
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
           assertThat(yaml).contains("setOrientation")
         }

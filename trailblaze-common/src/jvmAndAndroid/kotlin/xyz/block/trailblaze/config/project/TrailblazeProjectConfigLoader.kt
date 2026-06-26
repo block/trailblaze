@@ -4,9 +4,13 @@ import java.io.File
 import java.io.IOException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
@@ -624,81 +628,93 @@ object TrailblazeProjectConfigLoader {
         )
       }
     }
-    val resolvedScriptedTools: List<InlineScriptToolConfig> =
-      declaredTargetTools
-        .flatMap { toolName ->
-          val match = scriptedToolRegistry[toolName]
-            ?: throw TrailblazeProjectConfigException(
-              buildString {
-                append("Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): ")
-                append("`target.tools:` references '$toolName' but no scripted-tool descriptor ")
-                append("with that `name:` was discovered under <trailmap>/tools/. ")
-                append(describeAvailableScriptedTools(scriptedToolRegistry))
-                append(" Tool names must match the `name:` field inside a `<trailmap>/tools/<file>.yaml` ")
-                append("descriptor (or one of its `tools:` entries) — `target.tools:` is a list of ")
-                append("names, not file paths.")
-                if (toolName.endsWith(".yaml") || toolName.contains('/')) {
-                  append(" Hint: '$toolName' looks like a file path; this field used to hold paths ")
-                  append("but now holds tool names — open the descriptor at that path and copy its ")
-                  append("`name:` field here.")
-                }
-                // If a descriptor was skipped during discovery whose trailmap-relative path's base
-                // matches the unknown tool name (the conventional `<name>.yaml`), point the
-                // author directly at it rather than relying on them grepping back through
-                // Console.log warnings.
-                val likelyCulprit = discovery.skipped.firstOrNull {
-                  it.substringAfterLast('/') == "$toolName.yaml"
-                }
-                if (likelyCulprit != null) {
-                  append(" Note: descriptor '$likelyCulprit' was skipped during discovery ")
-                  append("(see earlier log warning for the parse error). Fix that file to ")
-                  append("register the '$toolName' name.")
-                } else if (discovery.skipped.isNotEmpty()) {
-                  append(" Note: ${discovery.skipped.size} other descriptor(s) under ")
-                  append("<trailmap>/tools/ were skipped during discovery (see earlier log ")
-                  append("warnings); one of them may have been intended to declare '$toolName'.")
-                }
-              },
-            )
-          // For multi-tool descriptors, `toInlineScriptToolConfigs()` returns one config per
-          // entry — but we only want the entry matching `toolName`, not all of them. The
-          // descriptor's other entries are referenced separately via their own `target.tools:`
-          // entries (or omitted intentionally). Filtering by name keeps the surfaces aligned:
-          // one `target.tools:` entry → one runtime [InlineScriptToolConfig].
-          //
-          // Analyzer-enriched descriptors (meta-only, partial single-tool, and partial
-          // multi-tool) ride `match.enrichedConfig` instead — `toInlineScriptToolConfigs()`
-          // would either throw on missing fields (meta-only) or emit incomplete
-          // description / inputSchema (partial). The enrichment hook has already produced
-          // the resolved config with the analyzer-derived gaps filled in; surface it
-          // verbatim. Multi-tool partials still register one entry per `tools[].name`, so
-          // the registry hand-off is one enrichedConfig per name (no list flattening
-          // needed here).
-          val configs = if (match.enrichedConfig != null) {
-            listOf(match.enrichedConfig).filter { it.name == toolName }
+    // Target-level `target.tools:` — scripted-only by contract, so an unresolved name is a hard
+    // error with the rich descriptor-not-found diagnostic.
+    val targetLevelScriptedTools: List<InlineScriptToolConfig> =
+      declaredTargetTools.flatMap { toolName ->
+        resolveScriptedToolConfigsByName(toolName, scriptedToolRegistry, loadedManifest.source)
+          ?: throw TrailblazeProjectConfigException(
+            buildString {
+              append("Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): ")
+              append("`target.tools:` references '$toolName' but no scripted-tool descriptor ")
+              append("with that `name:` was discovered under <trailmap>/tools/. ")
+              append(describeAvailableScriptedTools(scriptedToolRegistry))
+              append(" Tool names must match the `name:` field inside a `<trailmap>/tools/<file>.yaml` ")
+              append("descriptor (or one of its `tools:` entries) — `target.tools:` is a list of ")
+              append("names, not file paths.")
+              if (toolName.endsWith(".yaml") || toolName.contains('/')) {
+                append(" Hint: '$toolName' looks like a file path; this field used to hold paths ")
+                append("but now holds tool names — open the descriptor at that path and copy its ")
+                append("`name:` field here.")
+              }
+              // If a descriptor was skipped during discovery whose trailmap-relative path's base
+              // matches the unknown tool name (the conventional `<name>.yaml`), point the
+              // author directly at it rather than relying on them grepping back through
+              // Console.log warnings.
+              val likelyCulprit = discovery.skipped.firstOrNull {
+                it.substringAfterLast('/') == "$toolName.yaml"
+              }
+              if (likelyCulprit != null) {
+                append(" Note: descriptor '$likelyCulprit' was skipped during discovery ")
+                append("(see earlier log warning for the parse error). Fix that file to ")
+                append("register the '$toolName' name.")
+              } else if (discovery.skipped.isNotEmpty()) {
+                append(" Note: ${discovery.skipped.size} other descriptor(s) under ")
+                append("<trailmap>/tools/ were skipped during discovery (see earlier log ")
+                append("warnings); one of them may have been intended to declare '$toolName'.")
+              }
+            },
+          )
+      }
+
+    // Per-platform `platforms.<p>.tools:` — mirror of the build-time generator
+    // (TrailblazeBundledConfigTasks.buildExpectedTargets). A name that resolves to a scripted tool
+    // is hoisted (deduped by name, after validating it's single-platform) into the delivered
+    // top-level tools and REMOVED from that platform's `tools:` — the generated/resolved target is
+    // loaded as a `YamlBackedHostAppTarget` whose `PlatformConfig.tools` path would otherwise
+    // re-resolve the (often descriptor-less `.ts`) name and warn. A non-scripted name (class-/
+    // YAML-backed tool) is kept in place. Keep this in lockstep with the build-time generator.
+    val mergedScriptedTools = linkedMapOf<String, InlineScriptToolConfig>()
+    val toolDeclarationSite = linkedMapOf<String, String>()
+    fun recordScriptedTool(cfg: InlineScriptToolConfig, site: String) {
+      toolDeclarationSite[cfg.name]?.let { previousSite ->
+        throw TrailblazeProjectConfigException(
+          "Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): scripted " +
+            "tool '${cfg.name}' is declared in both $previousSite and $site. Declare each scripted " +
+            "tool exactly once — under a single platform's `tools:` (platform-specific) or " +
+            "`target.tools:` (cross-platform).",
+        )
+      }
+      toolDeclarationSite[cfg.name] = site
+      mergedScriptedTools[cfg.name] = cfg
+    }
+    targetLevelScriptedTools.forEach { recordScriptedTool(it, "`target.tools:`") }
+
+    val rewrittenPlatforms: Map<String, PlatformConfig>? =
+      loadedManifest.manifest.target?.platforms?.mapValues { (platformKey, platformConfig) ->
+        val toolNames = platformConfig.tools ?: return@mapValues platformConfig
+        val retainedNames = mutableListOf<String>()
+        toolNames.forEach { toolName ->
+          val resolved = resolveScriptedToolConfigsByName(toolName, scriptedToolRegistry, loadedManifest.source)
+          if (resolved == null) {
+            retainedNames += toolName
           } else {
-            match.descriptor.toInlineScriptToolConfigs().filter { it.name == toolName }
-          }
-          // Resolve `script:` relative to the descriptor YAML file's parent directory so the
-          // downstream runtime bundler can read the source from a stable absolute path
-          // regardless of the daemon's cwd. Pure path math when the trailmap is filesystem-backed
-          // (the only variant the runtime bundler can read today); classpath-backed trailmaps pass
-          // the value through unchanged so the existing TODO surface for on-classpath script
-          // bundling stays explicit at the bundler call site.
-          val source = loadedManifest.source
-          if (source is TrailmapSource.Filesystem) {
-            val yamlDir = File(source.trailmapDir, match.relativePath).parentFile
-              ?: source.trailmapDir
-            configs.map { cfg ->
-              val raw = File(cfg.script)
-              if (raw.isAbsolute) cfg else cfg.copy(
-                script = File(yamlDir, cfg.script).toPath().normalize().toFile().absolutePath,
-              )
+            resolved.forEach { cfg ->
+              validatePerPlatformScriptedTool(cfg, platformKey, loadedManifest)
+              recordScriptedTool(cfg, "`platforms.$platformKey.tools:`")
             }
-          } else {
-            configs
           }
         }
+        // Preserve `emptyList()` (rather than nulling) when the original `tools:` was non-null but
+        // every name was a hoisted scripted tool. The downstream [TrailmapDependencyResolver.resolveTarget]
+        // (called after this resolver) uses null-as-missing semantics for `closestWinsOverlay`:
+        // `null` means "inherit dep defaults", an empty list means "explicitly clear". Nulling here
+        // would let an inherited `defaults.<platform>.tools` (class- or YAML-backed) sneak in even
+        // though the author declared a tools list that just happened to be entirely scripted.
+        platformConfig.copy(tools = retainedNames)
+      }
+
+    val resolvedScriptedTools: List<InlineScriptToolConfig> = mergedScriptedTools.values.toList()
     val resolvedSystemPrompt: String? =
       loadedManifest.manifest.target?.systemPromptFile?.let { path ->
         loadedManifest.source.readSibling(path)
@@ -712,6 +728,7 @@ object TrailblazeProjectConfigLoader {
         resolvedTools = resolvedScriptedTools,
         resolvedSystemPrompt = resolvedSystemPrompt,
       )
+      ?.let { config -> if (rewrittenPlatforms != null) config.copy(platforms = rewrittenPlatforms) else config }
     val resolvedToolsets = loadedManifest.manifest.toolsets
       .map { path -> loadTrailmapSibling(path, loadedManifest.source, ToolSetYamlConfig.serializer(), "trailmap toolset") }
 
@@ -777,6 +794,87 @@ object TrailblazeProjectConfigLoader {
       tools = resolvedTools,
       waypoints = resolvedWaypoints,
     )
+  }
+
+  /** `_meta` key (post-shortcut-merge) that carries a scripted tool's supported platforms. */
+  private const val META_SUPPORTED_PLATFORMS = "trailblaze/supportedPlatforms"
+
+  /**
+   * Resolve a single scripted-tool [toolName] against the per-trailmap [registry] to its runtime
+   * [InlineScriptToolConfig](s), or `null` if [toolName] is not a scripted tool (no descriptor and
+   * no analyzer-enriched config). Mirrors the build-time generator's `resolveScriptedToolByName`.
+   *
+   * Analyzer-enriched descriptors (meta-only / partial) ride [ScriptedToolRegistryEntry.enrichedConfig];
+   * otherwise the typed descriptor is expanded and filtered to the matching entry. Relative `script:`
+   * paths are resolved against the descriptor YAML's parent directory for filesystem-backed trailmaps
+   * (the only variant the runtime bundler reads today); classpath-backed sources pass through unchanged.
+   */
+  private fun resolveScriptedToolConfigsByName(
+    toolName: String,
+    registry: Map<String, ScriptedToolRegistryEntry>,
+    source: TrailmapSource,
+  ): List<InlineScriptToolConfig>? {
+    val match = registry[toolName] ?: return null
+    val configs = if (match.enrichedConfig != null) {
+      listOf(match.enrichedConfig).filter { it.name == toolName }
+    } else {
+      match.descriptor.toInlineScriptToolConfigs().filter { it.name == toolName }
+    }
+    // Defensive invariant: a registry hit means the descriptor declared [toolName] (the registry
+    // is keyed by every declared entry's `name:`), so the filter MUST produce at least one entry.
+    // An empty result means the descriptor's name index drifted from its declared `name:` fields —
+    // a logic bug in `discoverTrailmapScriptedTools` or `toInlineScriptToolConfigs` — and silently
+    // returning an empty list lets callers treat it as "resolved", dropping the tool. Fail loudly.
+    require(configs.isNotEmpty()) {
+      "Internal: scripted-tool descriptor at '${match.relativePath}' is registered under name " +
+        "'$toolName' but its decoded config(s) name no entry that matches — registry/descriptor " +
+        "name index has drifted. This is a logic bug in the trailmap loader, not an author error."
+    }
+    return if (source is TrailmapSource.Filesystem) {
+      val yamlDir = File(source.trailmapDir, match.relativePath).parentFile ?: source.trailmapDir
+      configs.map { cfg ->
+        val raw = File(cfg.script)
+        if (raw.isAbsolute) cfg else cfg.copy(
+          script = File(yamlDir, cfg.script).toPath().normalize().toFile().absolutePath,
+        )
+      }
+    } else {
+      configs
+    }
+  }
+
+  /**
+   * Validates that a scripted tool declared under `platforms.[platformKey].tools:` is genuinely
+   * single-platform: its `supportedPlatforms` (from the resolved `_meta`) must name only
+   * [platformKey] (or be absent/empty). Mirrors the build-time generator's
+   * `validatePerPlatformScriptedTool` so authoring mistakes fail the same way on both paths.
+   */
+  private fun validatePerPlatformScriptedTool(
+    cfg: InlineScriptToolConfig,
+    platformKey: String,
+    loadedManifest: LoadedTrailblazeTrailmapManifest,
+  ) {
+    val rawPlatforms = cfg.meta?.get(META_SUPPORTED_PLATFORMS) as? JsonArray ?: return
+    // Non-string entries in `_meta.trailblaze/supportedPlatforms` are caught earlier by the typed
+    // `TrailmapScriptedToolFile._meta` decode (which validates that every entry is a YAML string
+    // before we get here), so this `mapNotNull` is lenient — analyzer-derived configs that may
+    // not flow through that decode and any future construction path are treated leniently
+    // (non-string entries silently skip). The build-time generator (which reads the descriptor
+    // via the raw kaml tree API, bypassing the typed `_meta` decode) carries its own strict
+    // string-only guard at that boundary instead — see `TrailblazeBundledConfigTasks`.
+    val supportedPlatforms = rawPlatforms.mapNotNull {
+      (it as? JsonPrimitive)?.contentOrNull?.lowercase()
+    }
+    if (supportedPlatforms.isEmpty()) return
+    val platform = platformKey.lowercase()
+    if (supportedPlatforms.any { it != platform }) {
+      throw TrailblazeProjectConfigException(
+        "Trailmap '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}): scripted tool " +
+          "'${cfg.name}' is declared under `platforms.$platformKey.tools:` but its supportedPlatforms is " +
+          "$supportedPlatforms. A scripted tool listed under a single platform must support only that " +
+          "platform — declare a cross-platform tool under `target.tools:` instead.",
+      )
+    }
   }
 
   private const val TRAILMAP_WAYPOINTS_DIR = "waypoints"

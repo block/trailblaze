@@ -8,6 +8,42 @@ internal fun selectorWith(match: DriverNodeMatch): TrailblazeNodeSelector =
   TrailblazeNodeSelector.withMatch(match)
 
 /**
+ * Like [escapeForSelector] but tolerant of a volatile trailing count.
+ *
+ * Visible labels frequently carry a live count that changes between recording and replay
+ * ("All tickets (307)", "Cart 3"). [escapeForSelector] pins the whole string literally, so the
+ * selector fails to *resolve* on replay once the count moves (the resolver does a full-string
+ * regex match — see [TrailblazeNodeSelectorResolver] `matchesPattern`). This anchors the stable
+ * head and matches any count in its place:
+ *  - count in parentheses: `"All tickets (307)"` -> `\QAll tickets\E\s*\(\d[\d.,]*\)`
+ *  - trailing bare count:  `"Cart 3"`            -> `\QCart\E\s+\d[\d.,]*`
+ *
+ * Strings whose stable head is empty — pure numerics ("307") or currency/value-only labels
+ * ("$3.00") — fall through to [escapeForSelector] unchanged, so value-pinned assertions keep
+ * matching their exact text.
+ *
+ * Generalizing can only *widen* an anchor. Generators run this before [isUniqueMatch], so if the
+ * widened anchor stops being unique the strategy cascade falls through to a more specific one.
+ */
+internal fun stableTextAnchorRegex(text: String): String {
+  countInParensRegex.find(text)?.let { match ->
+    val head = match.groupValues[1].trimEnd()
+    if (head.isNotEmpty()) return Regex.escape(head) + """\s*\(\d[\d.,]*\)"""
+  }
+  trailingBareCountRegex.find(text)?.let { match ->
+    val head = match.groupValues[1].trimEnd()
+    if (head.isNotEmpty()) return Regex.escape(head) + """\s+\d[\d.,]*"""
+  }
+  return escapeForSelector(text)
+}
+
+/** "<head> (<count>)" — head, then a parenthesized run of digits/grouping separators. */
+private val countInParensRegex = Regex("""^(.*?)\s*\(\d[\d.,]*\)$""")
+
+/** "<head> <count>" — head, then a trailing whitespace-separated run of digits/grouping. */
+private val trailingBareCountRegex = Regex("""^(.*?)\s+\d[\d.,]*$""")
+
+/**
  * Builds a map from each child node's id to its parent node, for the entire tree.
  *
  * Used by every hierarchy and spatial strategy to walk upward from a target — pre-computed
@@ -56,9 +92,9 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
     val rid = detail.resourceId
     if (text != null || desc != null || hint != null || className != null || rid != null) {
       DriverNodeMatch.AndroidAccessibility(
-        textRegex = text?.let { escapeForSelector(it) },
-        contentDescriptionRegex = desc?.let { escapeForSelector(it) },
-        hintTextRegex = hint?.let { escapeForSelector(it) },
+        textRegex = text?.let { stableTextAnchorRegex(it) },
+        contentDescriptionRegex = desc?.let { stableTextAnchorRegex(it) },
+        hintTextRegex = hint?.let { stableTextAnchorRegex(it) },
         classNameRegex = className?.let { escapeForIdentifier(it) },
         resourceIdRegex = rid?.let { escapeForIdentifier(it) },
       )

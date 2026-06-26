@@ -50,7 +50,7 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *   is_recordable: true    # default — declare false to skip recording
  *   requires_host: false   # default — declare true to forbid on-device agents
  *   tools:
- *     - maestro:
+ *     - mobile_maestro:
  *         commands:
  *           - eraseText:
  *               charactersToErase: "{{params.charactersToErase}}"
