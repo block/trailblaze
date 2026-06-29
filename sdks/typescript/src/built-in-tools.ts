@@ -366,22 +366,6 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * @deprecated Renamed to `mobile_maestro`. This is a back-compat alias kept so existing
-     * `ctx.tools.maestro(...)` callsites and legacy `maestro:` trails keep working; it delegates
-     * to `mobile_maestro` at runtime (see `MaestroDeprecatedTrailblazeTool.kt`). Migrate to
-     * `ctx.tools.mobile_maestro(...)`.
-     *
-     * Source: `MaestroDeprecatedTrailblazeTool.kt` (`maestro`).
-     */
-    maestro: {
-      args: {
-        /** Ordered list of Maestro command maps to run, in `MaestroYamlParser` flow shape. */
-        commands: Array<Record<string, unknown>>;
-      };
-      result: string;
-    };
-
-    /**
      * Low-level framework primitive: write raw bytes (supplied as a base64 string) to an absolute
      * path on the Android device, creating parent dirs and overwriting any existing file. Use it
      * to seed any file — text or binary — that the device shell can't move reliably (a file body

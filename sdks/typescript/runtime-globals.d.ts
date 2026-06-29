@@ -6,10 +6,14 @@
 // subprocess (bun / Node) and the on-device QuickJS bundle. The host has everything
 // declared here natively; on-device gets a smaller, framework-installed subset
 // (`console.*` and `AbortController` are real shims in
-// `trailblaze-bundle-prelude.js`; `URL`, `setTimeout`, `fetch` are NOT — using them
-// from an on-device-eligible tool will fail at runtime). The type system declares
-// the union — the framework's Phase-D host-only marker (and the `.js`-on-device
-// hard error) handles routing.
+// `trailblaze-bundle-prelude.js`; `URL`, `setTimeout` are NOT — using them from an
+// on-device-eligible tool will fail at runtime). `fetch` is the special case: it's a
+// real binding wherever the framework installs the OkHttp-backed engine extension —
+// the host in-process QuickJS daemon installs it, and on-device is opt-in (off by
+// default), so an on-device-eligible tool must not assume `fetch` unless its runtime
+// opted in (see `:trailblaze-scripting-fetch`). The type system declares the union —
+// the framework's Phase-D host-only marker (and the `.js`-on-device hard error)
+// handles routing.
 //
 // What's deliberately NOT declared: `document`, `window`, `navigator`,
 // `localStorage`, and the rest of the DOM lib. Declaring them would tempt authors
@@ -185,8 +189,14 @@ declare global {
 
   // ---- fetch / Request / Response / Headers ----
   //
-  // Host-only at runtime; on-device `client.callTool` takes the
-  // `__trailblazeCallback` binding instead of `fetch`. The shapes below cover the
+  // Backed by a real OkHttp client on the host: the in-process QuickJS daemon installs
+  // an `OkHttpFetchExtension` (`:trailblaze-scripting-fetch`) that binds `globalThis.fetch`
+  // before a tool bundle evaluates. On-device this is opt-in (off by default); the host
+  // subprocess (bun / Node) has `fetch` natively. The host binding is unrestricted by default
+  // (reaches any host, like the `ctx.tools.exec` + curl it replaces — keeping a recorded run
+  // replay-deterministic is the author's responsibility); a deployment can opt into a host
+  // allow-list. A tool that needs a proxy uses `ctx.tools.exec` + curl or a `runtime: subprocess`
+  // tool (the binding deliberately has no proxy option). The shapes below cover the
   // subset of WHATWG fetch most tool authors need: GET / POST with a JSON body,
   // headers, an `AbortSignal`, and `.text()` / `.json()` / `.arrayBuffer()` on the
   // response. The streaming surface (`body`, `ReadableStream`) is declared loosely

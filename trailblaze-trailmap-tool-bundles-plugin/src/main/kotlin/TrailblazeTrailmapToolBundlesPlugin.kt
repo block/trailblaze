@@ -4,6 +4,7 @@ import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileCopyDetails
 import org.gradle.api.file.RelativePath
 import org.gradle.api.provider.Provider
@@ -40,13 +41,22 @@ import org.gradle.api.tasks.TaskProvider
  * plugins {
  *   alias(libs.plugins.android.library)
  *   alias(libs.plugins.kotlin.android)
- *   id("trailblaze.trailmap-tool-bundles")
+ *   id("xyz.block.trailblaze.trailmap-tool-bundles")
  * }
  *
- * trailblazeTrailmapToolBundles.trailmap(
- *   id = "myapp",
- *   toolsDir = rootProject.file("path/to/trailmaps/myapp/tools"),
- * )
+ * trailblazeTrailmapToolBundles {
+ *   // OPTIONAL — when unset, the plugin walks up from `rootProject.projectDir` looking for
+ *   // `sdks/typescript/package.json`. Set explicitly when consuming this plugin outside the
+ *   // Trailblaze framework source tree — point it at a directory whose layout matches
+ *   // `sdks/typescript/` (a `node_modules/.bin/esbuild`, a `src/in-process.ts`, and the
+ *   // `tools/in-process-wrapper-template.mjs` template).
+ *   sdkDir.set(layout.projectDirectory.dir("sdk-bundle"))
+ *
+ *   trailmap(
+ *     id = "myapp",
+ *     toolsDir = rootProject.file("path/to/trailmaps/myapp/tools"),
+ *   )
+ * }
  *
  * // Ship the staged bundles in the test APK + close AGP's implicit-dependency gap.
  * android {
@@ -56,40 +66,45 @@ import org.gradle.api.tasks.TaskProvider
  *   .configureEach { dependsOn(trailblazeTrailmapToolBundles.allStagingTasks) }
  * ```
  *
- * Mirroring [TrailblazeQuickjsBundleAssetsPlugin], the plugin owns bundling + staging but stays
- * AGP-unaware: the consumer wires `assets.srcDirs(...)` and the asset-task `dependsOn(...)` because
- * those couple to AGP versions the build-logic classpath deliberately doesn't carry.
+ * The plugin owns bundling + staging but stays AGP-unaware: the consumer wires
+ * `assets.srcDirs(...)` and the asset-task `dependsOn(...)` because those couple to AGP versions
+ * the plugin's classpath deliberately doesn't carry.
  */
 class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
   override fun apply(project: Project) {
     // Single staging root every bundle copies into a sub-path of, laid out as
     // `trails/config/trailmaps/<id>/tools/<name>.bundle.js` — the exact asset path the on-device
-    // launcher (`ScriptedToolNameDiscoverer.bundleResourcePathForScript`) resolves.
+    // launcher resolves.
     val stagingRoot: Provider<Directory> =
       project.layout.buildDirectory.dir("intermediates/trailblaze/trailmap-tool-bundle-assets")
     val stagingTasks: MutableList<TaskProvider<Copy>> = mutableListOf()
 
-    project.extensions.create(
+    val extension = project.extensions.create(
       "trailblazeTrailmapToolBundles",
       TrailblazeTrailmapToolBundlesExtension::class.java,
       project,
       stagingRoot,
       stagingTasks,
     )
+
+    // Framework-source-tree convenience: when the bundle is consumed inside the Trailblaze
+    // monorepo, the SDK's `node_modules/.bin/esbuild` is populated by a sibling Gradle task
+    // (`:trailblaze-scripting-subprocess:installTrailblazeScriptingSdk`). When that project
+    // is present in the consumer's build, default `sdkInstallTaskPath` to it so the bundle
+    // tasks transparently chain to the install — no extra config in the consumer's build
+    // script. External consumers (without that sibling project) leave the property unset
+    // and manage the SDK install themselves.
+    val candidateInstallPath = ":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk"
+    if (project.rootProject.findProject(":trailblaze-scripting-subprocess") != null) {
+      extension.sdkInstallTaskPath.convention(candidateInstallPath)
+    }
   }
 
   companion object {
     /**
-     * The SDK-install task that populates `sdks/typescript/node_modules/.bin/esbuild`. Shared with
-     * `:trailblaze-quickjs-tools` so we don't fork a second install task at the same `node_modules/`.
-     */
-    const val SDK_INSTALL_TASK_PATH = ":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk"
-
-    /**
-     * Asset-tree-relative path for a tool's bundle — kept in lockstep with the runtime resolver
-     * (`ScriptedToolNameDiscoverer.bundleResourcePathForScript`). `trailmaps` literal rather than the
-     * `TrailblazeConfigPaths.TRAILMAPS_DIR` constant because build-logic doesn't carry
-     * `:trailblaze-models` on its classpath.
+     * Asset-tree-relative path for a tool's bundle — kept in lockstep with the runtime
+     * resolver. Literal `trailmaps` rather than a constant from `:trailblaze-models` because
+     * this plugin's classpath deliberately doesn't carry that module.
      */
     fun assetPathFor(trailmapId: String, toolName: String): String =
       "trails/config/trailmaps/$trailmapId/tools/$toolName.bundle.js"
@@ -139,6 +154,26 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
 /**
  * DSL container exposed by the plugin. Declare each trailmap via [trailmap]; wire [stagingRoot] and
  * [allStagingTasks] into AGP from the consuming build script.
+ *
+ * ### External vs. framework-source-tree consumers
+ *
+ * The bundle task needs three things from a Trailblaze TypeScript SDK install:
+ *  - The `esbuild` binary at `<sdkDir>/node_modules/.bin/esbuild`
+ *  - The slim in-process entry at `<sdkDir>/src/in-process.ts`
+ *  - The wrapper template at `<sdkDir>/tools/in-process-wrapper-template.mjs`
+ *
+ * **For consumers building inside the Trailblaze framework source tree** (where the SDK lives
+ * at `<repo>/sdks/typescript/`), leave [sdkDir] unset — the plugin walks up from
+ * `rootProject.projectDir` looking for the SDK's marker `sdks/typescript/package.json` and
+ * wires everything automatically. This is the historical behavior; every existing
+ * apply-site keeps working unchanged.
+ *
+ * **For consumers building outside that tree** (e.g. an Android team's own repo), set [sdkDir]
+ * to the directory containing your SDK install. The directory layout must match
+ * `sdks/typescript/`'s — at minimum a `node_modules/.bin/esbuild` produced by
+ * `bun install`, a `src/in-process.ts`, and a `tools/in-process-wrapper-template.mjs`. Until
+ * `@trailblaze/scripting` is published to npm, an external consumer typically vendors a copy
+ * of the framework's `sdks/typescript/` directory and runs `bun install` in it.
  */
 abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
   private val project: Project,
@@ -147,6 +182,23 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
   /** The staging Copy tasks, for the consumer's AGP-asset-task `dependsOn(...)` wiring. */
   val allStagingTasks: MutableList<TaskProvider<Copy>>,
 ) {
+  /**
+   * Optional explicit Trailblaze TypeScript SDK install directory. When set, the plugin reads
+   * `<sdkDir>/node_modules/.bin/esbuild`, `<sdkDir>/src/in-process.ts`, and
+   * `<sdkDir>/tools/in-process-wrapper-template.mjs`. When unset, the plugin walks up from
+   * `rootProject.projectDir` to find `sdks/typescript/package.json` (the framework-source-tree
+   * convention).
+   */
+  abstract val sdkDir: DirectoryProperty
+
+  /**
+   * Optional Gradle task path that each per-tool bundle task should `dependsOn`, so an
+   * SDK-install step (e.g. `bun install` in the SDK directory) runs first. Set this when the
+   * consuming build owns a sibling task that populates the SDK's `node_modules/.bin/esbuild`;
+   * leave it unset when the consumer manages the install lifecycle some other way (manual,
+   * Gradle convention plugin, etc.).
+   */
+  abstract val sdkInstallTaskPath: org.gradle.api.provider.Property<String>
 
   /**
    * Bundle + stage every in-process scripted tool found in [toolsDir] under the trailmap [id].
@@ -161,14 +213,17 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
           "${toolsDir.absolutePath}. Pass the trailmap's scripted-tool source directory.",
       )
     }
-    val esbuild = project.defaultEsbuildBinary()
-    val sdkSrc = project.defaultScriptingSdkSrc()
-    val wrapperTemplate = project.defaultScriptingWrapperTemplate()
+    val sdkRoot: File? = sdkDir.orNull?.asFile ?: project.locateFrameworkSdkRoot()
+    val esbuild: File? = sdkRoot?.let { File(it, "node_modules/.bin/esbuild") }
+    val sdkSrc: File? = sdkRoot?.let { File(it, "src/in-process.ts") }
+    val wrapperTemplate: File? = sdkRoot?.let { File(it, "tools/in-process-wrapper-template.mjs") }
     if (esbuild == null || sdkSrc == null || wrapperTemplate == null) {
       throw GradleException(
         "trailblazeTrailmapToolBundles.trailmap(\"$id\"): could not locate the Trailblaze " +
-          "TypeScript SDK (sdks/typescript) from ${project.rootProject.projectDir}. esbuild / slim " +
-          "SDK entry / wrapper template are required to bundle scripted tools.",
+          "TypeScript SDK. Set `trailblazeTrailmapToolBundles.sdkDir` to the directory containing " +
+          "your @trailblaze/scripting install (with `node_modules/.bin/esbuild`, `src/in-process.ts`, " +
+          "and `tools/in-process-wrapper-template.mjs`), or place the framework's `sdks/typescript/` " +
+          "tree at or above `${project.rootProject.projectDir}` so the default walk-up can find it.",
       )
     }
 
@@ -213,8 +268,10 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
               it.exclude("**/.trailblaze-wrapper-*")
             },
           )
-          // esbuild lives in the SDK's node_modules; install it first.
-          task.dependsOn(TrailblazeTrailmapToolBundlesPlugin.SDK_INSTALL_TASK_PATH)
+          // esbuild lives in the SDK's node_modules; if the consumer's build owns an
+          // install task, run it first. External consumers that manage their install
+          // lifecycle themselves leave `sdkInstallTaskPath` unset.
+          sdkInstallTaskPath.orNull?.let { task.dependsOn(it) }
         }
 
       // Stage the produced bundle into the aggregated asset root at the exact path the on-device

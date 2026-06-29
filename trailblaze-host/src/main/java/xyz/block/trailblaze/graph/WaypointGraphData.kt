@@ -103,5 +103,8 @@ data class WaypointGraphShortcut(
 data class WaypointGraphTrailhead(
   val id: String,
   val description: String?,
-  val to: String,
+  /** Destination waypoint, or null for a [dynamic] trailhead whose destination varies by input. */
+  val to: String? = null,
+  /** True when this trailhead has no fixed destination waypoint (destination varies by input). */
+  val dynamic: Boolean = false,
 )

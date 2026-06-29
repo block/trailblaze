@@ -33,6 +33,7 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import java.io.File
 import java.io.IOException
@@ -52,7 +53,33 @@ class DesktopYamlRunner(
     private val startingConnectionClass = DeviceConnectionStatus.WithTargetDevice.StartingConnection::class
     @Suppress("unused")
     private val instrumentationRunningClass = DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning::class
+
+    /**
+     * Pure decision: did [status] end in the on-device UiAutomation wedge that only a server
+     * relaunch can clear? The wedge surfaces ONLY as the on-disk terminal status — the V1 RunYaml
+     * RPC is fire-and-forget and the readiness probe can't see it — so this is the host's single
+     * detection signal. Kept pure (no device, no RPC) so the relaunch decision is unit-testable.
+     *
+     * Matches strictly `Ended.Failed` carrying the non-recoverable stale-handle signature. Any
+     * other failure (assertion, element-not-found) and any non-failed terminal status return false:
+     * a relaunch only gives the NEXT trail a clean server, it never re-runs this trail, so an
+     * over-broad match would waste a reinstall+`am instrument` per failing trail and could mask a
+     * real on-device crash without ever turning a genuine failure green.
+     */
+    internal fun shouldRelaunchOnDeviceServer(status: SessionStatus?): Boolean =
+      status is SessionStatus.Ended.Failed &&
+        UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(status.exceptionMessage)
   }
+
+  /**
+   * Set when a trail's terminal status carries the non-recoverable UiAutomation wedge
+   * (see [shouldRelaunchOnDeviceServer]); consumed by [connectAndEnsureReady] to force-restart the
+   * shared on-device server before the NEXT trail, then cleared. This runner instance is the
+   * daemon-scoped singleton every trail in a CI job routes through, so the flag survives from the
+   * wedged trail to its successor.
+   */
+  @Volatile
+  private var instrumentationWedged: Boolean = false
 
   /**
    * Shortens device description by removing UUID identifiers.
@@ -294,6 +321,10 @@ class DesktopYamlRunner(
             val onDeviceRpc = OnDeviceRpcClient(
               trailblazeDeviceId = trailblazeDeviceId,
               sendProgressMessage = prefixedProgressMessage,
+              // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
+              // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
+              // session-status detection can't see) force-restarts the shared server next trail.
+              onNonRecoverableWedge = { instrumentationWedged = true },
             )
 
             runV3WithAccessibilityOnHost(
@@ -329,6 +360,10 @@ class DesktopYamlRunner(
             val onDeviceRpc = OnDeviceRpcClient(
               trailblazeDeviceId = trailblazeDeviceId,
               sendProgressMessage = prefixedProgressMessage,
+              // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
+              // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
+              // session-status detection can't see) force-restarts the shared server next trail.
+              onNonRecoverableWedge = { instrumentationWedged = true },
             )
 
             runHostAgentWithOnDeviceRpc(
@@ -356,7 +391,11 @@ class DesktopYamlRunner(
 
             val onDeviceRpc = OnDeviceRpcClient(
               trailblazeDeviceId = trailblazeDeviceId,
-              sendProgressMessage = prefixedProgressMessage
+              sendProgressMessage = prefixedProgressMessage,
+              // Arm at the single chokepoint every synchronous on-device RPC flows through, so a
+              // wedge surfacing on ANY path (including the `launchApp` pre-action, which the
+              // session-status detection can't see) force-restarts the shared server next trail.
+              onNonRecoverableWedge = { instrumentationWedged = true },
             )
 
             // Set driver type on request so the on-device server knows which driver to use
@@ -546,7 +585,19 @@ class DesktopYamlRunner(
       return status
     }
 
-    val initialStatus = doConnectAndEnable(forceRestart = false)
+    // Consume a wedge flag set by a prior trail (see [instrumentationWedged]): the shared on-device
+    // server is poisoned in a way the readiness probe can't see, so force-restart up front to hand
+    // this trail a clean server. Cleared only after the relaunch + readiness probe both succeed, so
+    // a failed relaunch keeps the flag armed for the next attempt.
+    val recoverFromPriorWedge = instrumentationWedged
+    val initialStatus = doConnectAndEnable(forceRestart = recoverFromPriorWedge)
+    if (recoverFromPriorWedge) {
+      onDeviceRpc.waitForReady(
+        requireAndroidAccessibilityService = requireAndroidAccessibilityService,
+      )
+      instrumentationWedged = false
+      return initialStatus
+    }
 
     // Step 2: readiness probe. This is the specific failure mode we retry — the instrumentation
     // process is alive (so `isAppRunning` returned true and `forceRestart=false` reused it) but
@@ -605,15 +656,27 @@ class DesktopYamlRunner(
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
 
-        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
-          dynamicLlmClient = dynamicLlmClient,
-          onDeviceRpc = onDeviceRpc,
-          runYamlRequest = runYamlRequest,
-          trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-          onProgressMessage = onProgressMessage,
-          targetTestApp = targetTestApp,
-          onSessionStarted = onSessionStarted,
-        )
+        // Same wedge recovery as the host-agent path: a mid-trail wedge is re-thrown (so the runner
+        // never returns the session id), but the terminal Ended.Failed status is written to disk
+        // first. Capture the live session id and arm the relaunch in a finally so the NEXT trail
+        // force-restarts the shared on-device server whether this run returns or propagates.
+        var v3SessionId: SessionId? = null
+        try {
+          TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+            dynamicLlmClient = dynamicLlmClient,
+            onDeviceRpc = onDeviceRpc,
+            runYamlRequest = runYamlRequest,
+            trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+            onProgressMessage = onProgressMessage,
+            targetTestApp = targetTestApp,
+            onSessionStarted = { sessionId ->
+              v3SessionId = sessionId
+              onSessionStarted(sessionId)
+            },
+          )
+        } finally {
+          armIfWedged(v3SessionId, onProgressMessage)
+        }
       }
     }
   }
@@ -650,16 +713,49 @@ class DesktopYamlRunner(
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
 
-        TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
-          dynamicLlmClient = dynamicLlmClient,
-          onDeviceRpc = onDeviceRpc,
-          runYamlRequest = runYamlRequest,
-          trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-          onProgressMessage = onProgressMessage,
-          targetTestApp = targetTestApp,
-          onSessionStarted = onSessionStarted,
-        )
+        // A mid-trail wedge on this path is re-thrown by `executeTrailSession`, so the runner
+        // never returns the wedged session's id — but the terminal `Ended.Failed` status (with
+        // the non-recoverable signature) is written to disk before the re-throw. Capture the live
+        // session id from `onSessionStarted` and arm the relaunch in a finally so detection fires
+        // whether the runner returns normally or propagates the wedge as an exception.
+        var hostAgentSessionId: SessionId? = null
+        try {
+          TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
+            dynamicLlmClient = dynamicLlmClient,
+            onDeviceRpc = onDeviceRpc,
+            runYamlRequest = runYamlRequest,
+            trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+            onProgressMessage = onProgressMessage,
+            targetTestApp = targetTestApp,
+            onSessionStarted = { sessionId ->
+              hostAgentSessionId = sessionId
+              onSessionStarted(sessionId)
+            },
+          )
+        } finally {
+          armIfWedged(hostAgentSessionId, onProgressMessage)
+        }
       }
+    }
+  }
+
+  /**
+   * Reads [sessionId]'s terminal status from disk and, when it carries the non-recoverable
+   * UiAutomation wedge (see [shouldRelaunchOnDeviceServer]), arms [instrumentationWedged] so the
+   * next trail force-restarts the shared on-device server. Shared by the V1 on-device path (which
+   * polls completion in [awaitOnDeviceSessionCompletion]) and the host-agent path (whose runner
+   * re-throws a mid-trail wedge, so detection runs in its `finally` against the on-disk status).
+   * No-op when [sessionId] is null or the status isn't the wedge signature.
+   */
+  private fun armIfWedged(sessionId: SessionId?, onProgressMessage: (String) -> Unit) {
+    if (sessionId == null) return
+    val status = trailblazeDeviceManager.logsRepo.getLogsForSession(sessionId).getSessionStatus()
+    if (shouldRelaunchOnDeviceServer(status)) {
+      instrumentationWedged = true
+      onProgressMessage(
+        "On-device UiAutomation wedged (non-recoverable); the on-device server will be " +
+          "force-restarted before the next trail.",
+      )
     }
   }
 
@@ -757,6 +853,9 @@ class DesktopYamlRunner(
     while (System.currentTimeMillis() - startTime < maxWaitMs) {
       val status = logsRepo.getLogsForSession(sessionId).getSessionStatus()
       if (status is SessionStatus.Ended) {
+        // Gate: ONLY the non-recoverable UiAutomation wedge arms a relaunch — never an ordinary
+        // failure, so a clean server is provisioned for the NEXT trail without re-running this one.
+        armIfWedged(sessionId, onProgressMessage)
         return
       }
       delay(pollIntervalMs)

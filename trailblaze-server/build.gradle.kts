@@ -26,6 +26,10 @@ dependencies {
   // shares the SAME in-process registration the host path uses (LazyYamlScriptedToolRegistration)
   // rather than synthesizing a subprocess — see InProcessScriptedToolLauncher.
   implementation(project(":trailblaze-quickjs-tools"))
+  // OkHttp-backed `fetch` for in-process scripted tools, kept out of the lean engine module — the
+  // daemon installs it (localhost-only) so MCP-launched scripted tools can reach a bound `fetch`
+  // the same way the host run path does. See `:trailblaze-scripting-fetch`.
+  implementation(project(":trailblaze-scripting-fetch"))
 
   implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)
@@ -59,6 +63,9 @@ dependencies {
 
   testImplementation(libs.ktor.client.okhttp)
   testImplementation(libs.ktor.server.test.host)
+  testImplementation(libs.ktor.server.cio)
+  testImplementation(libs.ktor.server.content.negotiation)
+  testImplementation(libs.ktor.serialization.kotlinx.json)
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.junit)
   testImplementation("io.ktor:ktor-client-cio:${libs.versions.ktor.get()}")

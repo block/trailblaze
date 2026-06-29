@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolMeta
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolSerializer
@@ -340,6 +341,7 @@ class LazyYamlScriptedToolRegistration private constructor(
       bundlePath: File,
       toolRepo: TrailblazeToolRepo,
       sessionId: SessionId,
+      engineExtension: QuickJsEngineExtension? = null,
     ): LazyYamlScriptedToolRegistration {
       // Construct the binding eagerly and hold a reference so the registration can set
       // the binding's `activeContext` on each dispatch. Without holding the reference,
@@ -350,6 +352,9 @@ class LazyYamlScriptedToolRegistration private constructor(
         bundleJs = bundlePath.readText(),
         bundleFilename = "${toolConfig.name}.bundle.js",
         hostBinding = binding,
+        // Optional engine extension (e.g. host-side `fetch`). Null on-device; the host launchers
+        // pass one so in-process scripted tools can reach a bound `fetch` instead of shelling curl.
+        engineExtension = engineExtension,
       )
       return LazyYamlScriptedToolRegistration(toolConfig, host, binding)
     }

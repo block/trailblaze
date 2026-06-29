@@ -15,6 +15,16 @@ pluginManagement {
   // Downstream builds that wrap this tree pick the same plugins up via their own
   // `includeBuild` pointing at this `build-logic/`.
   includeBuild("build-logic")
+  // The publishable `xyz.block.trailblaze.trailmap-tool-bundles` plugin lives in its own
+  // OSS module so external Android teams can consume it from Maven Central. Composite-build
+  // include here makes the plugin id resolvable to in-tree apply-sites without going through
+  // mavenLocal/snapshot republish on every change.
+  includeBuild("trailblaze-trailmap-tool-bundles-plugin")
+  // Sibling OSS plugin (Trailblaze's Android Gradle plugin) — same composite-include
+  // pattern as the trailmap-tool-bundles plugin above; external consumers reach the plugin via
+  // `plugins { id("xyz.block.trailblaze.android-gradle") version "..." }`,
+  // and this build resolves it from source.
+  includeBuild("trailblaze-android-gradle")
   // Repository URLs are resolved by name rather than written as literals here, so this file
   // pins no specific registry host. The public Maven URLs in `gradle.properties` (`mavenRepo*`)
   // are the defaults; a build may redirect resolution to a private mirror by exporting the
@@ -75,6 +85,7 @@ include(
   ":trailblaze-revyl",
   ":trailblaze-scripting",
   ":trailblaze-scripting-bundle",
+  ":trailblaze-scripting-fetch",
   ":trailblaze-scripting-mcp-common",
   ":trailblaze-scripting-subprocess",
   ":trailblaze-ui",

@@ -8,8 +8,8 @@ import xyz.block.trailblaze.network.Source
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 class NetworkLogSourceTest {
 
@@ -95,7 +95,7 @@ class NetworkLogSourceTest {
   }
 
   @Test
-  fun `REQUEST_START renders with arrow and no status`() {
+  fun `REQUEST_START carries the request glyph and emits no status token`() {
     val event = NetworkEvent(
       id = "abc",
       sessionId = "s1",
@@ -106,13 +106,32 @@ class NetworkLogSourceTest {
       urlPath = "/me",
       source = Source.PLAYWRIGHT_WEB,
     )
-    val parsed = NetworkLogSource.parse(encode(event))
-    val content = parsed.lines.single().content
-    // REQUEST_START uses → as the phase token. Don't pin the exact arrow byte so a
-    // future tweak (e.g. an ASCII fallback) doesn't flake the test.
-    assertContains(content, "GET ")
-    assertContains(content, "/me")
-    assertTrue(parsed.lines.single().level == LogLevel.INFO)
+    val line = NetworkLogSource.parse(encode(event)).lines.single()
+    // The outbound indicator is a Compose vector icon (LineGlyph.REQUEST), not a text
+    // glyph — a literal arrow renders as tofu in the WASM report viewer's font. So the
+    // content is just method + path, and the arrow lives on `glyph`.
+    assertEquals("GET /me", line.content)
+    assertEquals(LineGlyph.REQUEST, line.glyph)
+    assertFalse(line.content.contains("→"))
+    assertEquals(LogLevel.INFO, line.level)
+  }
+
+  @Test
+  fun `RESPONSE_END and FAILED carry no leading glyph`() {
+    // Only REQUEST_START gets an icon; response/failed render their status as text, which
+    // every font handles — pin that so a refactor doesn't sprout spurious icons.
+    assertEquals(null, NetworkLogSource.parse(encode(baseResponse(statusCode = 200))).lines.single().glyph)
+    val failed = NetworkEvent(
+      id = "abc",
+      sessionId = "s1",
+      timestampMs = 1L,
+      phase = Phase.FAILED,
+      method = "POST",
+      url = "https://api.example.com/timeout",
+      urlPath = "/timeout",
+      source = Source.PLAYWRIGHT_WEB,
+    )
+    assertEquals(null, NetworkLogSource.parse(encode(failed)).lines.single().glyph)
   }
 
   // ──────────────────────────────────────────────────────────────────────────

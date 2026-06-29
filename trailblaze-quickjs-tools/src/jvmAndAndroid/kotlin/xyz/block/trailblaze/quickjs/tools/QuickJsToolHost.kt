@@ -288,11 +288,19 @@ class QuickJsToolHost internal constructor(
      * @param hostBinding optional callback for `trailblaze.call(name, args)` from inside
      *   handler bodies. Pass `null` when the bundle isn't expected to compose; the SDK shim
      *   throws a clear error if the binding is missing and a handler tries to call out.
+     * @param engineExtension optional hook to install extra globals/bindings into the engine
+     *   BEFORE the author bundle evaluates — e.g. an OkHttp-backed `fetch` (see
+     *   `:trailblaze-scripting-fetch`). Kept out of this lean engine module so the on-device APK
+     *   doesn't drag in the extension's transitive deps; each runtime opts in by passing one
+     *   (the host daemon installs `fetch`; on-device leaves it `null` unless a caller opts in).
+     *   The install runs after the `console` shim and before the bundle, so a tool handler can
+     *   reference whatever it binds.
      */
     suspend fun connect(
       bundleJs: String,
       bundleFilename: String = "tools.bundle.js",
       hostBinding: HostBinding? = null,
+      engineExtension: QuickJsEngineExtension? = null,
       logSink: (String) -> Unit = DEFAULT_LOG_SINK,
     ): QuickJsToolHost {
       val quickJs = QuickJs.create(Dispatchers.Default)
@@ -343,6 +351,12 @@ class QuickJsToolHost internal constructor(
           "console-shim.js",
           false,
         )
+        // Optional engine extension (e.g. an OkHttp-backed `fetch`). Installed after the
+        // console shim and BEFORE the author bundle so a tool handler can reference whatever
+        // globals it binds. Kept as a caller-supplied hook so this module stays free of the
+        // extension's transitive deps (OkHttp etc.) — the on-device APK only pays for it if a
+        // caller actually opts in.
+        engineExtension?.install(quickJs)
         // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
         // here as a side effect.
         quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)
@@ -385,6 +399,26 @@ data class RegisteredToolSpec(
  */
 fun interface HostBinding {
   suspend fun callFromBundle(name: String, argsJson: String): String
+}
+
+/**
+ * Optional hook for installing extra globals / native bindings into a [QuickJsToolHost]'s engine
+ * before the author bundle evaluates. The mechanism that lets a heavier capability (e.g. an
+ * OkHttp-backed `fetch`) live in its own module while this engine module stays dependency-lean —
+ * the analogue of the optional [HostBinding], but for arbitrary engine setup rather than the
+ * `trailblaze.call(...)` round-trip specifically.
+ *
+ * Implementations receive the live [com.dokar.quickjs.QuickJs] and typically register an
+ * `asyncFunction` plus a small JS shim (the same idiom [QuickJsToolHost.connect] uses for
+ * `__trailblazeCall` and `console`). The reference implementation is
+ * `OkHttpFetchExtension` in `:trailblaze-scripting-fetch`.
+ *
+ * Author-only by posture: an extension surfaces capabilities to scripted-tool authors, never to
+ * the LLM (same as [HostBinding] and `ctx.tools.exec`). Install is [suspend] because engine
+ * `evaluate` is.
+ */
+fun interface QuickJsEngineExtension {
+  suspend fun install(quickJs: com.dokar.quickjs.QuickJs)
 }
 
 /**

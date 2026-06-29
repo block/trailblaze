@@ -439,9 +439,6 @@ ID).
 
 ## Future Considerations
 
-The architecture is designed to support:
-
-- **Additional platform drivers** - Web, desktop, or custom UI frameworks
-- **Multiple LLM providers** - Currently supports OpenAI, extensible to others
-- **Benchmark integration** - Run AndroidWorld/OSWorld against Trailblaze
-- **Distributed execution** - Coordinate agents across multiple devices
+The architecture is designed to support additional platform drivers beyond today's
+Android / iOS / Web / Compose / Electron set, more LLM providers, and distributed
+execution across multiple devices.

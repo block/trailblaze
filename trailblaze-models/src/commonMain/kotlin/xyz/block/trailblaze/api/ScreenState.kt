@@ -137,6 +137,17 @@ interface ScreenState {
     get() = null
 
   /**
+   * Optional structural-coverage assessment of the captured hierarchy at the moment this screen
+   * state was built. Populated on Android (where the on-device settle gate watches for partial /
+   * truncated accessibility trees); null on every other driver and on Android captures where the
+   * gate couldn't form an opinion (gate disabled, window root unreadable). Logs that carry a
+   * captured screen state surface this so consumers can spot tree-truncation trends without
+   * grepping `[capture-coverage]` lines out of logcat.
+   */
+  val captureCoverage: CaptureCoverage?
+    get() = null
+
+  /**
    * Current-state context for the outer agent, prepended to [screenSummaryAfter] in
    * [ExecutionResult.Success] so it knows where it landed after each action.
    *

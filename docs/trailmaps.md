@@ -5,6 +5,11 @@ its toolsets, scripted tools, and waypoints together. Trailmaps are the recommen
 authoring going forward — a workspace declares which trailmaps it loads, and each trailmap groups
 everything needed to test one app surface in one directory.
 
+A trailmap is also the **unit of distribution**: once a team has authored one for their app, other
+teams can pick it up either by cloning the workspace, by `file:` / `github:` reference, or
+(eventually) by npm package. See [Publishing a Trailmap](publishing-a-trailmap.md) for the three
+tiers and what works today vs. what's planned.
+
 ## Layout
 
 A trailmap lives in a directory and is anchored by a `trailmap.yaml` manifest:
@@ -197,6 +202,51 @@ descriptor's `name:` field). See
 [Scripted Tools — Legacy Reference](scripted_tools.md) for the full descriptor schema
 and the field-level conventions in
 [`TrailmapScriptedToolFile.kt`](https://github.com/block/trailblaze/blob/main/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/config/project/TrailmapScriptedToolFile.kt).
+
+### Per-platform scripted tools
+
+Trailmaps that ship distinct iOS and Android tools (or web and mobile) declare each
+platform-specific tool under `platforms.<p>.tools:`. Cross-platform tools — anything
+whose `supportedPlatforms` spans more than one platform — stay at the top level under
+`target.tools:`. The build-time generator and runtime loader both hoist either site
+into the delivered target's top-level `tools:` block; declaring a tool under its
+platform is purely an authoring-time aid, so the platform↔tool association is
+explicit in the YAML rather than inferred from each `.ts`'s `supportedPlatforms`
+gate alone.
+
+```yaml
+# trails/config/trailmaps/myapp/trailmap.yaml
+id: myapp
+target:
+  display_name: MyApp
+  # CROSS-PLATFORM (>1 platform) — declared at target level
+  tools:
+    - myapp_inputTextRandom         # supportedPlatforms: ["android", "ios"]
+  platforms:
+    android:
+      app_ids: [com.example.myapp]
+      tool_sets: [core_interaction, verification]
+      tools:
+        - myapp_android_launchAppSignedIn   # supportedPlatforms: ["android"]
+    ios:
+      app_ids: [com.example.myapp.ios]
+      tool_sets: [core_interaction, verification]
+      tools:
+        - myapp_ios_launchAppSignedIn       # supportedPlatforms: ["ios"]
+```
+
+Validation rule: a scripted tool listed under `platforms.<p>.tools:` must declare
+`supportedPlatforms` naming **only** that platform. A tool that supports more than one
+platform belongs under `target.tools:`. The trailmap loader rejects the mismatch with
+a load-time error so the authoring shape is self-consistent.
+
+When a trailmap targets only one platform there's nothing to split — every tool
+necessarily applies to that one platform, so they all sit at the top level under
+`target.tools:` and the `platforms.<p>.tools:` block is unused. The
+[`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts)
+trailmap in the OSS tree is the canonical single-platform shape and lists its tools
+at `target.tools:` for that reason. The split shape above is what you reach for once a
+trailmap grows past one platform.
 
 ## Tool YAML file suffixes — `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`
 

@@ -10,8 +10,10 @@ import xyz.block.trailblaze.util.Console
  * [SessionLogSource] for `<session-dir>/network.ndjson` — one [ParsedLogLine] per
  * captured [NetworkEvent].
  *
- * Format: `<METHOD> <STATUS|→|FAILED> [<duration>ms] <urlPath>`. REQUEST_START shows
- * the arrow; RESPONSE_END shows the status code; FAILED shows the literal token.
+ * Format: `<METHOD> [<STATUS|FAILED>] [<duration>ms] <urlPath>`. RESPONSE_END shows the
+ * status code and FAILED shows the literal token; REQUEST_START emits no status token and
+ * instead carries [LineGlyph.REQUEST] so the panel draws a forward-arrow vector icon
+ * (a text `→` renders as tofu in the WASM report viewer's font).
  *
  * Severity mapping:
  * - 4xx / 5xx response codes and FAILED → [LogLevel.ERROR]
@@ -59,6 +61,7 @@ object NetworkLogSource : SessionLogSource {
         content = formatEvent(event),
         epochMs = event.timestampMs,
         level = mapLevel(event),
+        glyph = glyphFor(event),
       )
     }
     return ParsedLog(
@@ -72,11 +75,19 @@ object NetworkLogSource : SessionLogSource {
   /** Render an event as a single line: `POST 204 [90ms] /v1/cdp/batch`. */
   internal fun formatEvent(event: NetworkEvent): String = buildString {
     append(event.method)
-    append(' ')
+    // REQUEST_START emits no status token — its outbound indicator is the forward-arrow
+    // vector icon the panel draws from [LineGlyph.REQUEST] (see [glyphFor]). A text `→`
+    // here would render as tofu in the WASM report viewer's font.
     when (event.phase) {
-      Phase.REQUEST_START -> append('→')
-      Phase.RESPONSE_END -> append(event.statusCode ?: "?")
-      Phase.FAILED -> append("FAILED")
+      Phase.REQUEST_START -> {}
+      Phase.RESPONSE_END -> {
+        append(' ')
+        append(event.statusCode ?: "?")
+      }
+      Phase.FAILED -> {
+        append(' ')
+        append("FAILED")
+      }
     }
     event.durationMs?.let {
       append(" [")
@@ -86,6 +97,13 @@ object NetworkLogSource : SessionLogSource {
     append(' ')
     append(event.urlPath.ifEmpty { event.url })
   }
+
+  /**
+   * Leading icon marker for the line. Only REQUEST_START carries one (the outbound arrow);
+   * RESPONSE_END and FAILED render their status as plain text, which the font handles fine.
+   */
+  internal fun glyphFor(event: NetworkEvent): LineGlyph? =
+    if (event.phase == Phase.REQUEST_START) LineGlyph.REQUEST else null
 
   /**
    * Maps the event onto the panel's universal severity vocabulary.

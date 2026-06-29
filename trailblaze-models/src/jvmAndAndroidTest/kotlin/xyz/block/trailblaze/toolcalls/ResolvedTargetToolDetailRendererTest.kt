@@ -5,6 +5,7 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.Serializable
@@ -523,5 +524,51 @@ class ResolvedTargetToolDetailRendererTest {
     val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "wikipedia")
     assertTrue("sidecar origin") { md.contains("<!-- Sidecar for target: wikipedia -->") }
     assertTrue("sidecar regen hint") { md.contains("<!-- Regenerate with: trailblaze check -->") }
+  }
+
+  // ── matrixKindAndSource (availability-matrix Kind/Source columns) ─────────────────────
+
+  @Test
+  fun `matrixKindAndSource labels a class-backed tool Kotlin with its simple class name`() {
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.ClassBacked(
+      name = "greetTool",
+      kclass = GreetTool::class,
+    )
+    assertEquals("Kotlin" to "`GreetTool`", ResolvedTargetToolDetailRenderer.matrixKindAndSource(detail))
+  }
+
+  @Test
+  fun `matrixKindAndSource labels a YAML-defined tool YAML with its tool id`() {
+    val config = ToolYamlConfig(
+      id = "eraseText",
+      description = null,
+      parameters = emptyList(),
+      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(name = "eraseText", config = config)
+    assertEquals("YAML" to "`eraseText`", ResolvedTargetToolDetailRenderer.matrixKindAndSource(detail))
+  }
+
+  @Test
+  fun `matrixKindAndSource labels a scripted tool TypeScript with just the ts filename`() {
+    // Source is the base name only — not the full (possibly absolute) script path the runtime carries.
+    val config = InlineScriptToolConfig(
+      script = "/abs/workspace/trailmaps/blog/tools/makePost.ts",
+      name = "makePost",
+      description = "Author a new post.",
+      inputSchema = buildJsonObject { put("type", JsonPrimitive("object")) },
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.Scripted(
+      name = "makePost",
+      config = config,
+      originTrailmapId = "blog",
+      consumerTrailmapId = "blog",
+    )
+    assertEquals("TypeScript" to "`makePost.ts`", ResolvedTargetToolDetailRenderer.matrixKindAndSource(detail))
+  }
+
+  @Test
+  fun `matrixKindAndSource renders dash-dash for an unclassifiable (null) tool`() {
+    assertEquals("-" to "-", ResolvedTargetToolDetailRenderer.matrixKindAndSource(null))
   }
 }

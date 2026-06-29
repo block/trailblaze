@@ -1122,4 +1122,89 @@ class InlineScriptToolServerSynthesizerTest {
     val message = (ex ?: error("expected an exception")).message ?: ""
     assertThat(message).contains("duplicate tool name 'dup_tool'")
   }
+
+  @Test fun `union (anyOf) input property registers without crashing and advertises the tool`() {
+    runBlocking {
+      assumeTrue(
+        "bun must be on PATH to exercise the synthesized inline tool host path",
+        runtimeAvailable(),
+      )
+      authorFile.writeText(
+        """
+        export async function runIfLike(args, ctx, client) {
+          return "selector" in (args.condition ?? {}) ? "by-selector" : "by-tool";
+        }
+        """.trimIndent() + "\n",
+      )
+      // Mirrors runIf's `condition: { selector } | { tool }` — a union (anyOf, no top-level
+      // `type`) whose first branch carries an empty `{}` property. This exact shape used to
+      // throw "unsupported JSON Schema type" and tear down inline-tool registration.
+      val generated = InlineScriptToolServerSynthesizer.synthesize(
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = authorFile.absolutePath,
+            name = "runIfLike",
+            description = "Tool with a union-typed condition input.",
+            inputSchema = Json.parseToJsonElement(
+              """
+              {
+                "type": "object",
+                "properties": {
+                  "condition": {
+                    "anyOf": [
+                      {"type": "object", "properties": {"selector": {}}, "required": ["selector"]},
+                      {"type": "object", "properties": {"tool": {"type": "string"}}, "required": ["tool"]}
+                    ]
+                  }
+                },
+                "required": ["condition"]
+              }
+              """.trimIndent(),
+            ).jsonObject,
+          ),
+        ),
+        outputDir = generatedDir,
+      )
+
+      val spawned = McpSubprocessSpawner.spawn(config = generated.single(), context = baseContext)
+      val stderrLog = File(tmpDir, "union-tool.stderr.log")
+      val session = runCatching {
+        McpSubprocessSession.connect(
+          spawnedProcess = spawned,
+          stderrCapture = StderrCapture(stderrLog),
+        )
+      }.getOrElse { t ->
+        val stderr = if (stderrLog.isFile) stderrLog.readText() else "(no stderr captured)"
+        throw AssertionError("Union-schema inline tool failed during connect. stderr:\n$stderr", t)
+      }
+      try {
+        val listed = session.client.listTools(ListToolsRequest()).tools
+        assertThat(listed.map { it.name }).containsExactlyInAnyOrder("runIfLike")
+        assertThat(listed.single().inputSchema.toString()).contains("condition")
+      } finally {
+        session.shutdown()
+        val exited = spawned.process.waitFor(10, TimeUnit.SECONDS)
+        if (!exited) {
+          spawned.process.destroyForcibly()
+          spawned.process.waitFor(5, TimeUnit.SECONDS)
+        }
+        assertThat(exited).isEqualTo(true)
+      }
+    }
+  }
+
+  @Test fun `synthesized wrapper preserves the unsupported-type guardrail`() {
+    // Real union/empty-{} support must NOT degrade the converter into a blanket pass-through:
+    // a genuinely-unsupported JSON Schema type must still throw. The converter functions are
+    // static in every wrapper, so asserting the throw text is present pins the guardrail.
+    val wrapper = InlineScriptToolServerSynthesizer.renderWrapperScript(
+      tool = InlineScriptToolConfig(
+        script = authorFile.absolutePath,
+        name = "anyTool",
+        description = "Any tool.",
+      ),
+      authorFile = authorFile,
+    )
+    assertThat(wrapper).contains("uses unsupported JSON Schema type")
+  }
 }

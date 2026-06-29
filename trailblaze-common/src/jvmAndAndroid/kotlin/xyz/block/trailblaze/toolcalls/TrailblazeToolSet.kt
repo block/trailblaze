@@ -9,7 +9,6 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailb
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroDeprecatedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
@@ -47,9 +46,6 @@ abstract class TrailblazeToolSet(
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
       // Raw Maestro command passthrough - not for LLM, only for legacy/escape-hatch usage
       MaestroTrailblazeTool::class,
-      // DEPRECATED back-compat alias: resolves the legacy `maestro:` tool name and delegates to
-      // `mobile_maestro`. Keeps pre-rename trails running; remove once none remain.
-      MaestroDeprecatedTrailblazeTool::class,
 
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,

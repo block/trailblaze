@@ -334,10 +334,24 @@ data class ToolYamlConfig(
       }
     }
     trailhead?.let { th ->
-      require(th.to.isNotBlank()) {
-        "Tool '$id' trailhead block must declare a non-blank 'to:' waypoint id"
+      // A trailhead is a deterministic bootstrap. Most land on a single known waypoint (`to:`),
+      // but some — e.g. a deep-link launcher whose destination varies by input — have no fixed
+      // destination; those set `dynamic: true` instead of `to:`. The two are mutually exclusive:
+      // `dynamic: true` says "destination varies, don't anchor me to a waypoint."
+      val dest = th.to
+      if (th.dynamic) {
+        require(dest == null) {
+          "Tool '$id' trailhead block sets 'dynamic: true' (destination varies by input), so it " +
+            "must not also declare a 'to:' waypoint. Drop 'to:', or drop 'dynamic:' and name the " +
+            "single destination."
+        }
+      } else {
+        require(!dest.isNullOrBlank()) {
+          "Tool '$id' trailhead block must declare a non-blank 'to:' waypoint id, or set " +
+            "'dynamic: true' for a trailhead whose destination varies by input."
+        }
+        requireValidWaypointIdShape(id = id, fieldName = "trailhead.to", value = dest)
       }
-      requireValidWaypointIdShape(id = id, fieldName = "trailhead.to", value = th.to)
     }
   }
 
@@ -435,7 +449,18 @@ data class ShortcutMetadata(
  */
 @Serializable
 data class TrailheadMetadata(
-  val to: String,
+  /**
+   * The single waypoint this trailhead lands on. Required unless [dynamic] is true. Null only for
+   * [dynamic] trailheads, whose destination varies by input (e.g. a deep-link launcher).
+   */
+  val to: String? = null,
+  /**
+   * Marks a trailhead whose destination is not a single fixed waypoint — it varies by input, so no
+   * `to:` is specified. Mutually exclusive with [to] (enforced in [ToolYamlConfig.validate]). Such a
+   * trailhead is a real bootstrap (the `trailhead:` block's presence is what makes it a trailhead),
+   * it just isn't anchored to a waypoint in the navigation graph.
+   */
+  val dynamic: Boolean = false,
 )
 
 /**

@@ -42,18 +42,28 @@ export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
       rowText: name,
       openFirstResult: true,
     });
-    // Confirm we actually navigated to the contact DETAIL screen before trusting the
-    // heading. A bare name assert is NOT sufficient: the contact name is also visible as
-    // a search-result row and even as the typed query in the search field, so when the
-    // contact doesn't exist the row tap lands on the search field (no navigation) and a
-    // name-only check still passes — a false "opened". The detail screen's top-right
-    // "Edit" button is the reliable detail-only anchor: the list/search screens surface
-    // "Add"/"Search" there, never "Edit". Asserting it first means a missing contact
-    // fails HERE, so callers wrapping this in `tryOrFalse` (e.g. the delete teardown)
-    // correctly treat it as "not found" instead of proceeding against the wrong screen.
-    await ctx.tools.assertVisibleWithAccessibilityText({
-      accessibilityText: LABELS.editButton,
+    // Confirm we actually reached the contact DETAIL screen before trusting the
+    // heading. A name-only check is NOT sufficient: when the contact doesn't exist
+    // the row tap lands on the search field (no navigation) and the typed query keeps
+    // `name` visible, so a heading assert still passes — a false "opened". The detail
+    // screen's top-right "Edit" button is the reliable detail-only anchor (the
+    // list/search screens surface "Add"/"Cancel" there, never "Edit"). We resolve it
+    // via `findMatches` against the iOS accessibility tree — `assertVisibleWith-
+    // AccessibilityText` matches *visible* text only and can't see the accessibility-
+    // labeled "Edit" control — and throw when it's absent, so callers wrapping this in
+    // `tryOrFalse` (e.g. the delete teardown) correctly treat a missing contact as
+    // "not found" instead of proceeding against the search screen.
+    const editAnchors = await ctx.tools.findMatches({
+      selector: { iosMaestro: { accessibilityTextRegex: LABELS.editButton } },
+      timeoutMs: 5000,
     });
+    if (editAnchors.length === 0) {
+      throw new Error(
+        `Did not reach the contact detail screen for "${name}" — the ` +
+          `"${LABELS.editButton}" anchor never appeared (the contact likely ` +
+          `does not exist).`,
+      );
+    }
     await ctx.tools.assertVisibleWithAccessibilityText({
       accessibilityText: expectedHeading,
     });

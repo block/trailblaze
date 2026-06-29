@@ -1,9 +1,11 @@
 ---
 title: Android On-Device Testing
 ---
-### Add the Trailblaze `androidTestImplementation` Gradle Dependency
-Trailblaze was just open sourced and is not yet published as an artifact. You can try it out with the `examples` project
-for now by cloning the repo and building as source.
+### Install the Trailblaze CLI
+Install `trailblaze` on your `PATH` first — `brew install block/tap/trailblaze` is the
+quickest path. The instructions below assume the CLI is reachable so on-device
+instrumentation tests can be authored and run against the sample project under
+`examples/`.
 ### Pass your LLM Provider API Key to Instrumentation
 1. Set up your provider API key on the development machine in your shell environment.
    The environment variable names are defined in `LlmProviderEnvVarUtil`.
@@ -41,3 +43,16 @@ class MyTrailblazeTest {
   }
 }
 ```
+
+### Auto-generate JUnit shells from `.trail.yaml` files
+When you have many trails recorded as `.trail.yaml` files, the
+`xyz.block.trailblaze.android-gradle` Gradle plugin can
+generate the one-liner JUnit shell for each trail automatically — drop a
+`<methodName>.trail.yaml` under `src/androidTest/assets/trails/<ClassName>/`
+and the matching `@Test fun <methodName>()` appears on the next build, no
+Kotlin edit. Useful for modules with dozens of trails where every shell is the
+same `rule.runFromAsset(...)` boilerplate.
+
+See the plugin's
+[README](https://github.com/block/trailblaze/tree/main/trailblaze-android-gradle)
+for the application snippet and the inline-rule / extending-base emit modes.

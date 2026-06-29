@@ -4,7 +4,7 @@ title: Project Layout
 
 # Project Layout
 
-Trailblaze imposes almost no structure on your project. Put trail files wherever makes sense — pass them to the CLI by path or shell glob; the MCP server and desktop UI auto-discover trails below your workspace root.
+Trailblaze imposes almost no structure on your project. Put trail files wherever makes sense — pass them to the CLI by path or shell glob; the desktop UI auto-discovers trails below your workspace root.
 
 This page is about trail/workspace discovery and how trail files run. For the detailed
 shape of `trails/config/` itself — trailmaps, legacy targets, toolsets, tools, provider
@@ -154,15 +154,6 @@ trailblaze run flows/**/*.trail.yaml --no-daemon   # always runs in-process
 
 Both paths run the same files in the same order.
 
-## MCP integration
-
-The MCP server (`trailblaze mcp`) exposes discovery through two tool actions:
-
-- `trail(action=LIST)` — paginated list of every trail discovered under the MCP server's trails directory, with titles extracted from each trail's YAML header. The trails directory currently defaults to `./trails` relative to where the MCP server was started; launch the server from your project root to scope discovery to your workspace. A Phase 5 settings cleanup will align this with the CLI's walk-up workspace rule; until then, `cd` to the right directory before `trailblaze mcp`.
-- `trail(action=RUN, name=<name>)` — MCP-only: resolves a bare name (e.g., `login` or `checkout`) to a specific trail file via `findTrailByName`, which walks the same tree and picks the first match by filename or parent-directory-name. Then runs it.
-
-Both apply the same excludes and anchor rule as the CLI. An agent that asks for "login" won't accidentally find a stale cached copy under `build/`.
-
 ## Common questions
 
 **Do I need a `trails/` directory?**
@@ -174,7 +165,7 @@ project-level workspace model: `trails/` is the anchor directory, and
 Yes, and it's often clearer. Put a trail next to the code it covers (e.g., `features/checkout/checkout.trail.yaml`) and run it with `trailblaze run features/checkout/checkout.trail.yaml`, point the CLI at the directory (`trailblaze run features/checkout/`), or glob the whole tree with `trailblaze run features/**/*.trail.yaml`.
 
 **Can I run a trail by bare name from the CLI?**
-No — `trailblaze run` takes file paths, shell globs, or directory paths, not names, and errors out if an argument isn't an existing file or directory. Bare-name lookup is an MCP-only feature (`trail(action=RUN, name="login")` in the MCP tool set). If an AI agent resolves two files with the same base name under the same workspace, the first match in filesystem-visit order wins; prefer unique directory names (e.g. `flows/login/blaze.yaml` vs `flows/login-alt/blaze.yaml`) so agents land on the trail you expect.
+No — `trailblaze run` takes file paths, shell globs, or directory paths, not names, and errors out if an argument isn't an existing file or directory. If you have two trails with the same base name under the same workspace, prefer unique directory names (e.g. `flows/login/blaze.yaml` vs `flows/login-alt/blaze.yaml`) so that path-based runs are unambiguous.
 
 **Why doesn't my `.cache/mytrail.trail.yaml` get picked up?**
 It's not an excluded directory (`.cache` isn't in the hardcoded list), so it should be picked up. If it isn't, check that the file actually ends in `.trail.yaml` or is named exactly `blaze.yaml`, and that no ancestor directory is one of the excluded names (`build/`, `.gradle/`, `.git/`, `node_modules/`, `.trailblaze/`).

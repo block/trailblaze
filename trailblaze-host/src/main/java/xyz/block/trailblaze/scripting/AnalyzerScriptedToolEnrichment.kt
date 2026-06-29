@@ -394,7 +394,11 @@ class AnalyzerScriptedToolEnrichment(
           InlineScriptToolConfig(
             script = scriptFile.absolutePath,
             name = def.name,
-            description = def.description,
+            // Description precedence: spec `description` (NEW middle tier) over the analyzer's
+            // TSDoc-derived `def.description`. A meta-only descriptor carries no YAML
+            // `description:` (that's the partial-descriptor shape), so the YAML override tier is
+            // absent here — see [specDescriptionOf] and the precedence note on `buildPartialConfig`.
+            description = specDescriptionOf(def.spec) ?: def.description,
             requiresHost = descriptor.requiresHost ||
               (def.spec?.get("requiresHost") as? JsonPrimitive)?.booleanOrNull == true,
             surfaceToLlm = effectiveSurfaceToLlm,
@@ -421,8 +425,9 @@ class AnalyzerScriptedToolEnrichment(
    *
    *  - `name` — always the YAML's [entryName] (load-bearing for `target.tools:`
    *    resolution + per-trailmap dup detection).
-   *  - `description` — YAML's [entryDescription] when non-null, else the analyzer's
-   *    TSDoc-extracted description.
+   *  - `description` — three-tier precedence (most-authoritative first): YAML's
+   *    [entryDescription] when non-null, else the typed spec's `description`
+   *    ([specDescriptionOf]), else the analyzer's TSDoc-extracted description.
    *  - `inputSchema` — YAML's [entryInputSchema] when non-empty, else the analyzer's
    *    `<I>`-generic-extracted JSON Schema.
    *  - `_meta` — merged via [mergeMeta] from descriptor-side keys (file-wide + per-entry
@@ -448,7 +453,7 @@ class AnalyzerScriptedToolEnrichment(
     entryIsRecordable: Boolean?,
     def: ScriptedToolDefinition,
   ): InlineScriptToolConfig {
-    val description = entryDescription ?: def.description
+    val description = entryDescription ?: specDescriptionOf(def.spec) ?: def.description
     // YAML inputSchema is the author's flat `Map<String, ScriptedToolProperty>` shape.
     // When present, translate it into the JSON-Schema object the runtime expects (same
     // translation the legacy `TrailmapScriptedToolFile.toInlineScriptToolConfig()` uses,
@@ -687,6 +692,25 @@ class AnalyzerScriptedToolEnrichment(
   }
 
   /**
+   * Extract the typed spec's `description` field — the NEW middle tier in the description
+   * precedence (YAML sidecar `description:` > spec `description` > TSDoc-derived). Unlike the
+   * gate fields (`supportedPlatforms`, `surfaceToLlm`, …) which project into `_meta` via
+   * [projectAnalyzerSpec], `description` is the tool's PRIMARY descriptor field, so it routes
+   * straight into [InlineScriptToolConfig.description] at the two resolution sites
+   * (`resolveOrFail`'s meta-only branch and [buildPartialConfig]).
+   *
+   * Returns `null` (treated upstream as "fall through to the next tier") when the spec is absent,
+   * has no `description` key, or carries a non-string / blank value. The analyzer's inline-literal
+   * extractor only captures a string literal here; the `isString` + `isNotBlank` guards defend
+   * against a malformed `as any` value (e.g. `description: true`) silently winning over the TSDoc.
+   */
+  private fun specDescriptionOf(spec: JsonObject?): String? =
+    (spec?.get("description") as? JsonPrimitive)
+      ?.takeIf { it.isString }
+      ?.content
+      ?.takeIf { it.isNotBlank() }
+
+  /**
    * Project the analyzer's bare-field-name spec object (`supportedPlatforms`,
    * `requiresContext`, ...) into the namespaced `_meta:` shape the runtime
    * (`TrailblazeToolMeta.fromJsonObject`) reads (`trailblaze/supportedPlatforms`,
@@ -714,6 +738,11 @@ class AnalyzerScriptedToolEnrichment(
     // but the runtime ignores it. There is no compile-time enforcement that the sites
     // agree — adding a parity test (or extracting a shared constant in a model module)
     // is tracked as a follow-up.
+    //
+    // `description` is deliberately ABSENT below: it's a primary-descriptor field, not a
+    // `_meta` gate, so it routes into `InlineScriptToolConfig.description` via
+    // [specDescriptionOf] (called at the description-resolution sites) instead of being
+    // projected here. The two runtime `_meta` parsers above correctly never read it.
     analyzerSpec["supportedPlatforms"]?.let { projected["trailblaze/supportedPlatforms"] = it }
     analyzerSpec["requiresContext"]?.let { projected["trailblaze/requiresContext"] = it }
     analyzerSpec["requiresHost"]?.let { projected["trailblaze/requiresHost"] = it }

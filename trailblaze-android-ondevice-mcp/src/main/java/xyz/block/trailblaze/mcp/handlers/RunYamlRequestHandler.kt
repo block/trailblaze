@@ -23,8 +23,10 @@ import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
@@ -40,6 +42,29 @@ private suspend fun defaultWaitForSettled() {
     TrailblazeAccessibilityService.waitForSettled()
   }
 }
+
+/**
+ * Default implementation of the wedge-liveness probe seam (shape #5). A run that exceeds the
+ * handler await cap exits via cancellation, so its launched-job catch never classifies the
+ * failure — the cap-time response would otherwise carry no wedge signal even when the device is
+ * actually wedged. This makes one cheap synchronous `UiAutomation` touch: if the cached handle
+ * is wedged, [InstrumentationUtil.withUiAutomation] routes through `runWithStaleUiAutomationRecovery`
+ * and (after its in-process retry fails) throws the non-recoverable signature, which we classify
+ * and report. A healthy device returns immediately.
+ *
+ * Top-level (not a handler method) for the same reason as [defaultWaitForSettled]: JVM unit tests
+ * construct the handler with a test lambda and never load the Android [InstrumentationUtil].
+ *
+ * NOTE: on-device-validation-pending — the behavior of this probe against a genuinely wedged
+ * handle has not yet been exercised on a real device. It is a minimal, side-effect-free read.
+ */
+private fun defaultProbeUiAutomationWedge(): Boolean =
+  try {
+    InstrumentationUtil.withUiAutomation { /* a no-op touch is enough to surface a wedged handle */ }
+    false
+  } catch (e: Exception) {
+    UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(e.message)
+  }
 
 /**
  * Handler for test execution requests.
@@ -101,6 +126,13 @@ class RunYamlRequestHandler(
    * class requires the Android framework.
    */
   private val waitForSettled: suspend () -> Unit = ::defaultWaitForSettled,
+  /**
+   * Seam for the timeout-time UiAutomation liveness probe (shape #5). Returns true when a
+   * synchronous on-device touch reveals the non-recoverable stale-handle wedge. Default reads
+   * the live Android [InstrumentationUtil]; JVM unit tests override with a fake that returns a
+   * fixed boolean, since loading [InstrumentationUtil] requires the Android framework.
+   */
+  private val probeUiAutomationWedge: () -> Boolean = ::defaultProbeUiAutomationWedge,
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
 
   private val sessionManager = loggingRule.sessionManager
@@ -120,7 +152,12 @@ class RunYamlRequestHandler(
 
     object Cancelled : Outcome
 
-    data class Failure(val message: String) : Outcome
+    data class Failure(
+      val message: String,
+      /** True when [message]'s source exception carried the non-recoverable UiAutomation
+       *  stale-handle wedge signature — surfaced onto [RunYamlResponse.nonRecoverableWedge]. */
+      val nonRecoverableWedge: Boolean,
+    ) : Outcome
   }
 
 
@@ -383,6 +420,10 @@ class RunYamlRequestHandler(
           )
 
           if (request.config.sendSessionEndLog) {
+            // Pass the raw exception through UNCHANGED so V1's on-disk
+            // SessionStatus.Ended.Failed.exceptionMessage keeps the verbatim wedge signature
+            // for the host's session-status matcher (PR #4119). The typed tag below is the
+            // additive structured signal, not a replacement for that text.
             sessionManager.endSession(
               session = session,
               isSuccess = false,
@@ -390,7 +431,16 @@ class RunYamlRequestHandler(
             )
           }
 
-          outcome.complete(Outcome.Failure(e.message ?: e::class.simpleName ?: "Unknown error"))
+          // Classify the wedge at the source so the awaitCompletion=true response can carry the
+          // typed signal (shape #4). Uses the same pure matcher the host's session-status detection
+          // and the RPC string-match arms use, so they can't drift apart.
+          val wedged = UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(e.message)
+          outcome.complete(
+            Outcome.Failure(
+              message = e.message ?: e::class.simpleName ?: "Unknown error",
+              nonRecoverableWedge = wedged,
+            ),
+          )
         }
       }
 
@@ -441,12 +491,21 @@ class RunYamlRequestHandler(
               )
             }
           }
+          // Shape #5: a timeout exits via cancellation, so the launched-job catch never
+          // classified this failure. Take one cheap synchronous UiAutomation touch to see whether
+          // the device is actually wedged (vs. a slow-but-healthy tool) and surface the typed tag
+          // so the host can arm recovery from a timeout too. We set ONLY the field — the on-disk
+          // status stays Ended.Cancelled (above), since flake-classification / retry consumers key
+          // on Cancelled and a status flip would risk regressing them. (Validation-pending on a
+          // real wedged device.)
+          val timedOutWhileWedged = probeUiAutomationWedge()
           return RpcResult.Success(
             RunYamlResponse(
               sessionId = session.sessionId,
               success = false,
               errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
               memorySnapshot = agentMemory.variables.toMap(),
+              nonRecoverableWedge = timedOutWhileWedged,
             ),
           )
         }
@@ -462,6 +521,10 @@ class RunYamlRequestHandler(
             toolMessage = toolPayload?.message,
             toolStructuredContent = toolPayload?.structuredContent,
             onDeviceToolLogCount = successOutcome?.onDeviceToolLogCount ?: 0,
+            // Shape #4: this is the exact site that produced the host-missed wedge shape — a
+            // mid-trail/pre-action failure resolved inline on the awaitCompletion=true path.
+            // Carry the typed wedge tag through so the host arms recovery without string-matching.
+            nonRecoverableWedge = (resolved as? Outcome.Failure)?.nonRecoverableWedge == true,
           ),
         )
       }

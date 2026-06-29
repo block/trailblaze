@@ -211,8 +211,6 @@ class YamlSyntaxHighlighter(
       "prompts",
       "tools",
       "mobile_maestro",
-      // Deprecated alias of mobile_maestro — kept so legacy `maestro:` trails still highlight.
-      "maestro",
       "step",
       "verify",
       "recording",

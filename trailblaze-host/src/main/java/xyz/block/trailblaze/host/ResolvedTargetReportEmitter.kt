@@ -560,8 +560,10 @@ object ResolvedTargetReportEmitter {
    *    toolset, or just no overlap).
    *
    * The "Toolset(s)" column walks the runtime registry's catalog membership for each tool
-   * name so a reader can see which `tool_sets:` declaration brought it in; scripted tools
-   * carry a `script:<filename>` pseudo-toolset label so the source kind is still legible.
+   * name so a reader can see which `tool_sets:` declaration brought it in. It is a pure
+   * grouping view, so a tool delivered per-target via `target.tools:` (with no toolset)
+   * renders `-` there. The separate "Kind" (Kotlin / YAML / TypeScript) and "Source"
+   * (class / tool id / `.ts` file) columns report each tool's backing instead.
    *
    * **Tracked retirement.** `TargetToolBaselineGenerator` (in `:docs:generator`) currently
    * emits the same matrix shape into per-target docs via a Gradle generator task. Once
@@ -661,9 +663,9 @@ object ResolvedTargetReportEmitter {
     // Toolset-delivered scripted tools (e.g. `openUrl` via the `navigation` toolset) are scoped
     // per (platform, driver) below — unlike target-root scripted tools they only resolve under the
     // cells whose toolset actually contributed them. Index them by name so the per-cell loop can
-    // attach the `script:<file>` label + respect `supportedPlatforms` (automated review on PR
-    // #3832 flagged that a target-wide union showed `openUrl` ✅ under driver columns whose toolset
-    // never delivered it).
+    // respect `supportedPlatforms` (automated review on PR #3832 flagged that a target-wide union
+    // showed `openUrl` ✅ under driver columns whose toolset never delivered it). Their real toolset
+    // id is attributed by `attributeToolsetsFor`; the `Kind`/`Source` columns carry the `.ts` file.
     val toolsetScriptedByName = agentToolbox.scriptedTools
       .filter { it.deliveredByToolset }
       .associateBy { it.tool.name }
@@ -691,13 +693,11 @@ object ResolvedTargetReportEmitter {
           val entry = entries.getOrPut(toolName) { Entry() }
           entry.included += cell
           attributeToolsetsFor(toolName, platform, driver, entry)
-          toolsetScriptedByName[toolName]?.let { entry.toolSets += "script:${File(it.tool.script).name}" }
         }
         for (toolName in excluded) {
           val entry = entries.getOrPut(toolName) { Entry() }
           entry.excluded += cell
           attributeToolsetsFor(toolName, platform, driver, entry)
-          toolsetScriptedByName[toolName]?.let { entry.toolSets += "script:${File(it.tool.script).name}" }
         }
       }
     }
@@ -712,8 +712,9 @@ object ResolvedTargetReportEmitter {
     for (scripted in agentToolbox.scriptedTools) {
       if (scripted.deliveredByToolset) continue
       val entry = entries.getOrPut(scripted.tool.name) { Entry() }
-      val scriptFile = File(scripted.tool.script).name
-      entry.toolSets += "script:$scriptFile"
+      // No toolset attribution: a target-root scripted tool isn't delivered through a `tool_sets:`
+      // entry, so it stays out of the `Toolset(s)` grouping column (renders `-` unless a toolset
+      // also references it by name). Its TypeScript backing is reported by `Kind`/`Source`.
       // A target-root scripted tool the target also lists in `excluded_tools:` is opted out: mark
       // it ❌ on the columns where its platform excludes it (mirrors the toolset-delivered branch
       // above, which routes scripted names through `candidates - exclusions`). Without this the
@@ -732,11 +733,12 @@ object ResolvedTargetReportEmitter {
     }
 
     val headers = driverColumns.map { (platform, driver) -> "$driver (${platform.uppercase()})" }
-    appendLine("| Tool | Toolset(s) | ${headers.joinToString(" | ")} |")
-    appendLine("|------|------------|${headers.joinToString("|") { ":---:" }}|")
+    appendLine("| Tool | Toolset(s) | Kind | Source | ${headers.joinToString(" | ")} |")
+    appendLine("|------|------------|------|--------|${headers.joinToString("|") { ":---:" }}|")
     for (toolName in entries.keys.sorted()) {
       val entry = entries[toolName]!!
       val toolSetLabel = entry.toolSets.joinToString(", ").ifEmpty { "-" }
+      val (kind, source) = ResolvedTargetToolDetailRenderer.matrixKindAndSource(toolDetails[toolName])
       val cells = driverColumns.map { col ->
         when {
           col in entry.excluded -> "❌"
@@ -744,7 +746,7 @@ object ResolvedTargetReportEmitter {
           else -> ""
         }
       }
-      appendLine("| ${toolCell(toolName, target.id, toolDetails)} | $toolSetLabel | ${cells.joinToString(" | ")} |")
+      appendLine("| ${toolCell(toolName, target.id, toolDetails)} | $toolSetLabel | $kind | $source | ${cells.joinToString(" | ")} |")
     }
     appendLine()
   }

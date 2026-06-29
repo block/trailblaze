@@ -4,7 +4,7 @@
 
 # `tap`
 
-Tap an element by its ref ID from the snapshot. Use the short hash ref shown in square brackets (e.g., y778 from [y778] "Network & internet"). These refs are stable across captures of the same screen.
+Tap an element by its ref ID from the snapshot. Use the short hash ref shown in square brackets (e.g., y778 from [y778] "Network & internet"). These refs are stable across captures of the same screen. To enter a value on a number pad, PIN pad, or keypad, tap each digit button.
 
 ## Source
 

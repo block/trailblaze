@@ -83,13 +83,11 @@ actual fun signalExportPlaybackEnded() {
 }
 
 actual suspend fun loadNetworkLogs(sessionId: String): String? {
-    // TODO(https://github.com/block/trailblaze/issues/125): WasmReport.kt does not yet
-    // embed a `network_logs/<sessionId>` entry into the hosted-report bundle, so this
-    // dispatch always falls through to the index.html "no key" branch and returns null.
-    // The Network tab therefore never appears on hosted reports today. Once `WasmReport`
-    // grows a `compressedNetworkLogs` parameter and `index.html` gains a `network_logs/`
-    // lookup branch (mirroring the existing `device_logs/` path), this function returns
-    // data without further changes here.
+    // WasmReport embeds a `network_logs/<sessionId>` entry (gzip+base64 NDJSON, wrapped as a
+    // JSON string) into the hosted-report bundle, and index.html dispatches the `network_logs/`
+    // key prefix to it (mirroring the `device_logs/` path). When a session captured no network
+    // traffic the key is absent and the dispatcher returns the "no entry" sentinel, so the
+    // Network tab simply doesn't appear for that session.
     val json = fetchReportJsonOrNull("network_logs/$sessionId") ?: return null
     return decodeWrappedStringOrPassThrough(json)
 }

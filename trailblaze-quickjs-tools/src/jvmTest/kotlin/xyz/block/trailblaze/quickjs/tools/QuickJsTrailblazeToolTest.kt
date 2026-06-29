@@ -209,7 +209,11 @@ class QuickJsTrailblazeToolTest {
     val ctx = kotlinx.serialization.json.Json.parseToJsonElement(rendered).jsonObject
     assertEquals(TEST_SESSION_ID, ctx["sessionId"]!!.jsonPrimitive.content)
     val device = ctx["device"]!!.jsonObject
-    assertEquals("ANDROID", device["platform"]!!.jsonPrimitive.content)
+    // Lowercase, matching the `@trailblaze/scripting` SDK contract (`ToolContext.device.platform`
+    // is `"ios" | "android" | "web"`). The runtime previously emitted the uppercase enum `.name`
+    // ("ANDROID"), which silently broke every cross-platform scripted tool that branches on
+    // `ctx.device.platform === "android"` on-device.
+    assertEquals("android", device["platform"]!!.jsonPrimitive.content)
     assertEquals(
       TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.yamlKey,
       device["driverType"]!!.jsonPrimitive.content,

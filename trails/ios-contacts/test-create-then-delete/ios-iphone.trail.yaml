@@ -20,13 +20,13 @@
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: The objective is to verify that the contacts list now shows a 'Trailblaze Demo' row. The UI hierarchy and screenshot both show a visible element with the text 'Trailblaze Demo', confirming the presence of the required contact.
-          selector:
-            index: "67"
+          reason: >-
+            Verify the contacts list now shows a 'Trailblaze Demo' row by asserting its
+            visible text — the same shape sibling passing trails (e.g.
+            test-open-known-contact) use to assert a contact name is visible.
           nodeSelector:
             iosMaestro:
-              resourceIdRegex: ContactCardHeaderView
-          expectedText: Trailblaze Demo
+              textRegex: Trailblaze Demo
   - step: Delete the "Trailblaze Demo" contact.
     recording:
       tools:

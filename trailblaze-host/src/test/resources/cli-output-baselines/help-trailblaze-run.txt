@@ -6,7 +6,7 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze run [-hvV] [--capture-all] [--[no-]capture-ios-logs] [--[no-]
-                      capture-logcat] [--capture-network] [--[no-]
+                      capture-logcat] [--[no-]capture-network] [--[no-]
                       capture-video] [--[no-]headless] [--markdown]
                       [--no-daemon] [--no-logging] [--no-report] [--[no-]
                       save-recording] [--self-heal] [--[no-]use-recorded-steps]
@@ -56,11 +56,14 @@ removed in a future release.
                                test) to <session-dir>/device.log (only takes
                                effect on Android). On by default; use
                                --no-capture-logcat to disable.
-      --capture-network      Auto-capture network requests/responses to
+      --[no-]capture-network Auto-capture network requests/responses to
                                <session-dir>/network.ndjson on supported
                                devices (web today; mobile devices added as
                                engines land). Mirrors the desktop-app "Capture
-                               Network Traffic" toggle.
+                               Network Traffic" toggle. On by default; use
+                               --no-capture-network to disable. When neither
+                               flag is passed, inherits the desktop app's saved
+                               setting.
       --[no-]capture-video   Record device screen video for the session (on by
                                default, use --no-capture-video to disable)
       --compose-port=<composePort>

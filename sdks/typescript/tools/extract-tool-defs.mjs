@@ -23,6 +23,7 @@
 //           // identifier references are NOT resolved today — only inline
 //           // literal values are captured. See "spec extraction" comment in
 //           // the implementation below.
+//           "description": "Open the sample app.",
 //           "supportedPlatforms": ["web"],
 //           "requiresContext": true,
 //           "requiresHost": false,
@@ -108,8 +109,17 @@ const TRAILBLAZE_SDK_PACKAGE =
  *   - `.../QuickJsToolMeta.fromSpec`                     (in-process runtime parser)
  * Adding a new field to `TrailblazeTypedToolSpec` requires updating all these
  * sites; there is no compile-time check that they agree.
+ *
+ * **`description` is the exception — a primary-descriptor field, NOT a `_meta`
+ * key.** It's captured here like any other recognized field, but on the Kotlin
+ * side `AnalyzerScriptedToolEnrichment` routes it into the resolved tool
+ * description (YAML sidecar `description:` > spec `description` > TSDoc) rather
+ * than projecting it into `_meta`. So `projectAnalyzerSpec` deliberately does NOT
+ * forward it, and the two runtime `_meta` parsers above never read it — the
+ * description rides the tool's primary descriptor envelope, which they don't touch.
  */
 const RECOGNIZED_SPEC_FIELDS = new Set([
+  "description",
   "supportedPlatforms",
   "requiresContext",
   "requiresHost",

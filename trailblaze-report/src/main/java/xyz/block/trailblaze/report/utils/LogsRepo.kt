@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -57,7 +58,10 @@ class LogsRepo(
   private val _sessionsFlow = MutableStateFlow<List<SessionId>>(emptyList())
   val sessionsFlow: StateFlow<List<SessionId>> = _sessionsFlow.asStateFlow()
 
-  private val _sessionLogsFlows = mutableMapOf<SessionId, MutableStateFlow<List<TrailblazeLog>>>()
+  // ConcurrentHashMap so reads are lock-free and create-if-absent is atomic via computeIfAbsent.
+  // Accessed from the UI (collectAsState), the two init collectors, and external callers
+  // (awaitLog, DeviceApiEndpoint), all on separate coroutines.
+  private val _sessionLogsFlows = ConcurrentHashMap<SessionId, MutableStateFlow<List<TrailblazeLog>>>()
 
   // Reactive StateFlow for SessionInfo objects (auto-updates when sessions or their logs change)
   private val _sessionInfoFlow = MutableStateFlow<List<SessionInfo>>(emptyList())
@@ -80,8 +84,10 @@ class LogsRepo(
     .map { it.size }
     .stateIn(fileOperationScope, SharingStarted.Eagerly, 0)
 
-  // Track jobs watching individual session logs for SessionInfo updates
-  private val sessionInfoWatcherJobs = mutableMapOf<SessionId, Job>()
+  // Track jobs watching individual session logs for SessionInfo updates. ConcurrentHashMap so
+  // the sessionsFlow collector can snapshot keys concurrently with the activeSessionsFlow
+  // collector mutating it. Only the activeSessionsFlow collector writes (single writer).
+  private val sessionInfoWatcherJobs = ConcurrentHashMap<SessionId, Job>()
 
   init {
     // Ensure the logs directory exists
@@ -94,72 +100,54 @@ class LogsRepo(
       // Start watching session list immediately for reactive updates
       startWatchingSessionList()
 
-      // Initialize SessionInfo flow and keep it updated.
-      // Only create file watchers for in-progress sessions to avoid the overhead
-      // of watching hundreds of completed historical session directories.
+      // (A) Keep the SessionInfo flow populated/refreshed from the current session-ID list.
+      // This is what the UI session list renders and what activeSessionsFlow is derived from.
+      // Removed sessions are pruned here implicitly (they drop out of sessionsFlow.value);
+      // their cached log flows are cleared by the session-list watcher.
       fileOperationScope.launch {
-        sessionsFlow.collect { sessionIds ->
-          // Read session info: use direct disk read (no watcher) for initial scan,
-          // cached flow (with watcher) for sessions we're already tracking.
-          val sessionInfos = sessionIds.mapNotNull { sessionId ->
-            if (sessionId in sessionInfoWatcherJobs) {
-              // Already watching — use the cached/reactive path
-              getSessionInfo(sessionId)
-            } else {
-              // Not yet watching — read directly from disk without creating a watcher
-              getSessionInfoDirect(sessionId)
-            }
-          }
-          _sessionInfoFlow.value = sessionInfos
+        sessionsFlow.collect { rebuildSessionInfo() }
+      }
 
-          // Cancel watchers for removed sessions
-          val removedSessions = sessionInfoWatcherJobs.keys - sessionIds.toSet()
-          removedSessions.forEach { sessionId ->
-            sessionInfoWatcherJobs[sessionId]?.cancel()
-            sessionInfoWatcherJobs.remove(sessionId)
-            fileWatcherByTrailblazeSession.remove(sessionId)?.stopWatching()
-            _sessionLogsFlows.remove(sessionId)
-          }
+      // (B) Manage per-session log watchers off the *active* (in-progress) set rather than
+      // the raw session-ID list.
+      //
+      // Why activeSessionsFlow and not sessionsFlow: a freshly-started session's directory
+      // is created before its first log is written, so the sessionsFlow emission that
+      // announces it resolves to a null status and the session is dropped from the active
+      // set (see scheduleSessionInfoRetry). It only becomes known-in-progress once that
+      // retry patches _sessionInfoFlow — an event sessionsFlow never re-emits for, because
+      // the session-ID set didn't change. Keying watcher startup on sessionsFlow therefore
+      // left newly-started sessions with no per-session watcher: getSessionLogsFlow() stayed
+      // frozen at its initial snapshot, so the live Timeline never advanced and the status
+      // never flipped to Ended (leaving the device "busy" and Cancel a no-op). activeSessions-
+      // Flow re-emits on the retry patch, so the watcher starts as soon as the session is
+      // known to be running.
+      fileOperationScope.launch {
+        activeSessionsFlow.collect { activeSessions ->
+          val activeSessionIds = activeSessions.map { it.sessionId }.toSet()
 
-          // Only start watching sessions that are in-progress (active).
-          // Completed sessions' logs won't change, so no need to watch them.
-          val activeSessionIds = sessionInfos
-            .filter { it.latestStatus.isInProgress }
-            .map { it.sessionId }
-            .toSet()
-
+          // Start a watcher + SessionInfo-refresh job for any session that became active
+          // and isn't being watched yet. The refresh job is what propagates a running
+          // session's log changes (including its eventual Ended transition) into the UI.
+          // This collector is the single writer of sessionInfoWatcherJobs; the maps are
+          // ConcurrentHashMaps and the create-if-absent work is atomic (computeIfAbsent inside
+          // ensureWatchingSession), so no extra lock is needed here.
           activeSessionIds.forEach { sessionId ->
-            if (sessionId !in sessionInfoWatcherJobs) {
+            if (!sessionInfoWatcherJobs.containsKey(sessionId)) {
               ensureWatchingSession(sessionId)
               sessionInfoWatcherJobs[sessionId] = fileOperationScope.launch {
-                getSessionLogsFlow(sessionId).collect {
-                  // When an active session's logs change, refresh SessionInfo.
-                  // Reuse the existing cached SessionInfo for completed (non-watched)
-                  // sessions — their logs don't change, so there is no reason to
-                  // re-read their log files from disk on every update.
-                  // Use update{} for an atomic read-compute-write so concurrent log
-                  // events from multiple in-progress sessions don't clobber each other.
-                  _sessionInfoFlow.update { currentInfo ->
-                    val cachedInfoById = currentInfo.associateBy { it.sessionId }
-                    sessionsFlow.value.mapNotNull { sid ->
-                      when {
-                        sid in sessionInfoWatcherJobs -> getSessionInfo(sid)
-                        else -> cachedInfoById[sid] ?: getSessionInfoDirect(sid)
-                      }
-                    }
-                  }
-                }
+                getSessionLogsFlow(sessionId).collect { rebuildSessionInfo() }
               }
+              Console.log("[LogsRepo] Started watching active session: $sessionId")
             }
           }
 
-          // Stop watching sessions that have completed since we last checked
-          val completedSessions = sessionInfoWatcherJobs.keys - activeSessionIds
-          completedSessions.forEach { sessionId ->
-            sessionInfoWatcherJobs[sessionId]?.cancel()
-            sessionInfoWatcherJobs.remove(sessionId)
+          // Stop watching sessions that are no longer active (completed or removed).
+          // Keep _sessionLogsFlows for completed sessions (cached data is still useful).
+          val noLongerActive = (sessionInfoWatcherJobs.keys - activeSessionIds).toList()
+          noLongerActive.forEach { sessionId ->
+            sessionInfoWatcherJobs.remove(sessionId)?.cancel()
             fileWatcherByTrailblazeSession.remove(sessionId)?.stopWatching()
-            // Keep _sessionLogsFlows for completed sessions (cached data is still useful)
           }
         }
       }
@@ -178,9 +166,28 @@ class LogsRepo(
   }
 
   /**
+   * Rebuilds [_sessionInfoFlow] from the current session-ID list. Watched (in-progress)
+   * sessions use the cached/reactive path; the rest reuse their existing cached info or fall
+   * back to a direct disk read. update{} keeps the read-compute-write atomic so concurrent log
+   * events from multiple in-progress sessions don't clobber each other.
+   */
+  private fun rebuildSessionInfo() {
+    _sessionInfoFlow.update { currentInfo ->
+      val cachedInfoById = currentInfo.associateBy { it.sessionId }
+      val watched = sessionInfoWatcherJobs.keys.toSet()
+      sessionsFlow.value.mapNotNull { sid ->
+        when {
+          sid in watched -> getSessionInfo(sid)
+          else -> cachedInfoById[sid] ?: getSessionInfoDirect(sid)
+        }
+      }
+    }
+  }
+
+  /**
    * A map of trailblaze session IDs to their corresponding file watcher services.
    */
-  private val fileWatcherByTrailblazeSession = mutableMapOf<TrailblazeSessionId?, FileWatchService>()
+  private val fileWatcherByTrailblazeSession = ConcurrentHashMap<TrailblazeSessionId, FileWatchService>()
 
   /**
    * File watcher for the logs directory to monitor session creation/deletion.
@@ -324,7 +331,7 @@ class LogsRepo(
    * The flow will be updated reactively as new logs are written.
    */
   fun getSessionLogsFlow(sessionId: SessionId): StateFlow<List<TrailblazeLog>> {
-    return _sessionLogsFlows.getOrPut(sessionId) {
+    return _sessionLogsFlows.computeIfAbsent(sessionId) {
       // Read from disk to initialize the flow (only happens once per session).
       // File watching is NOT started here — only active sessions get watchers,
       // started explicitly via ensureWatchingSession().
@@ -396,7 +403,7 @@ class LogsRepo(
    * fall into this category. Review feedback on PR #3018 caught the cache-vs-watcher race.
    */
   fun ensureWatchingSession(sessionId: SessionId) {
-    val flow = _sessionLogsFlows.getOrPut(sessionId) {
+    val flow = _sessionLogsFlows.computeIfAbsent(sessionId) {
       MutableStateFlow(getLogsForSession(sessionId))
     }
     startWatchingSessionForFlow(sessionId, flow)
@@ -533,7 +540,10 @@ class LogsRepo(
       return
     }
     
-    if (fileWatcherByTrailblazeSession[sessionId] == null) {
+    // computeIfAbsent makes "create + register + start" atomic per session, so concurrent
+    // callers (the activeSessionsFlow collector, awaitLog, the DeviceApiEndpoint frame
+    // producer) can't double-create a watcher or race the map.
+    fileWatcherByTrailblazeSession.computeIfAbsent(sessionId) {
       val sessionDir = getSessionDir(sessionId)
       Console.log("[LogsRepo] Starting session watcher for flow: $sessionId")
       val fileWatchService = FileWatchService(
@@ -541,7 +551,6 @@ class LogsRepo(
         debounceDelayMs = 50L, // Faster for immediate UI updates (especially cancellation)
       )
 
-      fileWatcherByTrailblazeSession[sessionId] = fileWatchService
       fileWatchService.startWatching()
 
       fileOperationScope.launch {
@@ -564,6 +573,8 @@ class LogsRepo(
           Console.log("[LogsRepo] Flow collection ended for session $sessionId: ${e.message}")
         }
       }
+
+      fileWatchService
     }
   }
 

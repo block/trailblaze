@@ -9,6 +9,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
+import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -69,6 +70,13 @@ object HostScriptedToolLauncher {
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
     val sessionDir = logsRepo.getSessionDir(sessionId)
+
+    // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
+    // via `ctx.tools.exec`). Unrestricted by default — same reach as the `curl` it replaces; a
+    // deployment that wants to constrain it passes a FetchHostAllowlist. One shared instance per
+    // launch (OkHttp pools connections). On-device leaves this null; the engine module never sees
+    // OkHttp.
+    val fetchExtension = OkHttpFetchExtension()
 
     // Idempotent launch: skip target-declared tools already registered on this repo by an earlier
     // pass in the same session. The daemon can reach this launcher twice against one repo (e.g. an
@@ -142,6 +150,7 @@ object HostScriptedToolLauncher {
               bundlePath = bundlePath,
               toolRepo = toolRepo,
               sessionId = sessionId,
+              engineExtension = fetchExtension,
             )
           }
           // Last opportunity to throw before LaunchedScriptingRuntime owns the registrations; if it
@@ -175,6 +184,7 @@ object HostScriptedToolLauncher {
       skipNames = targetToolConfigs.map { ToolName(it.name) }.toSet(),
       classLoader = classLoader,
       logPrefix = logPrefix,
+      engineExtension = fetchExtension,
     )
     val inlineRegistrations = targetInlineRegistrations + toolsetRegistrations
 

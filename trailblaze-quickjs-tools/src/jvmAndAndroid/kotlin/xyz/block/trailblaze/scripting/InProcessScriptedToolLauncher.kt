@@ -5,6 +5,7 @@ import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -125,6 +126,10 @@ object InProcessScriptedToolLauncher {
     skipNames: Set<ToolName> = emptySet(),
     classLoader: ClassLoader? = InProcessScriptedToolLauncher::class.java.classLoader,
     logPrefix: String = "[InProcessScriptedToolLauncher]",
+    // Optional engine extension installed into every bundle's QuickJS engine (e.g. an
+    // OkHttp-backed `fetch`). Null on-device; host launchers pass one. See
+    // [xyz.block.trailblaze.quickjs.tools.QuickJsEngineExtension].
+    engineExtension: QuickJsEngineExtension? = null,
   ): List<LazyYamlScriptedToolRegistration> {
     // Idempotent launch: skip tools already on the repo, not just the caller-supplied [skipNames].
     // A host session can reach this launcher twice against the same repo — e.g. an iOS-host tool
@@ -164,6 +169,7 @@ object InProcessScriptedToolLauncher {
           bundlePath = bundleFile,
           toolRepo = toolRepo,
           sessionId = sessionId,
+          engineExtension = engineExtension,
         )
       }
 

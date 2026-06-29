@@ -157,6 +157,41 @@ object TrailblazeHostYamlRunner {
     .toolClasses
 
   /**
+   * Builds the `onAfterRecordedTool` hook for the native on-device-RPC replay path so the report
+   * gets one per-step screenshot per replayed tool.
+   *
+   * Replayed accessibility selector tools (`assertVisibleBySelector` / `tapOnElementBySelector`)
+   * run on-device via `executeNodeSelector*`, which emits screenshot-bearing `AgentDriverLog`s on
+   * the device but no host-visible log — the host's catch-all emit is a screenshot-less
+   * `TrailblazeToolLog`. With no host-side screenshot per step, the report's timeline shows "No
+   * screenshots yet". This hook captures one host-side screenshot per replayed tool (via the same
+   * RPC `screenshotProvider` uses) and logs it as a `TrailblazeSnapshotLog`, so every replayed step
+   * has an image in the report regardless of whether the device's driver logs reach the host
+   * session dir. Side effects are injected so the contract is unit-testable without a real device.
+   */
+  internal fun perReplayedToolScreenshotHook(
+    sessionProvider: () -> TrailblazeSession?,
+    captureScreenState: suspend () -> ScreenState?,
+    logSnapshot: (session: TrailblazeSession, screen: ScreenState, displayName: String) -> Unit,
+  ): suspend (TrailblazeTool) -> Unit = lambda@{ tool: TrailblazeTool ->
+    try {
+      val session = sessionProvider() ?: return@lambda
+      // A transient empty (non-null) framebuffer usually clears within a frame, so retry once on
+      // empty; logScreenState drops still-empty bytes, making a persistent failure a clean skip.
+      val screen = captureScreenState()?.takeIf { it.hasScreenshotBytes() }
+        ?: captureScreenState()
+        ?: return@lambda
+      logSnapshot(session, screen, "replayStep: ${tool::class.simpleName ?: "unknown"}")
+    } catch (e: kotlinx.coroutines.CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.log("[replay-capture] per-step snapshot failed: ${e.message}")
+    }
+  }
+
+  private fun ScreenState.hasScreenshotBytes(): Boolean = (screenshotBytes?.size ?: 0) >= 4
+
+  /**
    * Exports trace data after a session ends. Tries posting to the server first;
    * falls back to writing directly to the session logs directory on disk.
    *
@@ -1613,6 +1648,10 @@ object TrailblazeHostYamlRunner {
           memory = sharedAgentMemory,
           resolvedTarget = resolvedTargetForSession,
           appId = appIdForSessionLazy.value,
+          // The trail file's directory lets host-local tools resolve repo-relative files (e.g. a
+          // committed account.json) against the trail on disk rather than the daemon's CWD/env,
+          // which a persistent daemon doesn't share with the per-run trail-source clone.
+          workingDirectory = runYamlRequest.trailFilePath?.let { File(it).parentFile },
         )
       },
       memory = sharedAgentMemory,
@@ -2061,7 +2100,15 @@ object TrailblazeHostYamlRunner {
           Console.log("[migration-capture] post-tool snapshot failed: ${e.message}")
         }
       }
-    } else null
+    } else {
+      perReplayedToolScreenshotHook(
+        sessionProvider = { loggingRule.session },
+        captureScreenState = { agent.captureScreenState() },
+        logSnapshot = { session, screen, displayName ->
+          loggingRule.logger.logSnapshot(session = session, screenState = screen, displayName = displayName)
+        },
+      )
+    }
 
     val runnerUtil = TrailblazeRunnerUtil(
       trailblazeRunner = runner,

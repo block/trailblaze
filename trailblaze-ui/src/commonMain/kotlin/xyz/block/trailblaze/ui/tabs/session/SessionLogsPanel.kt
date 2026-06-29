@@ -30,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterList
@@ -478,6 +479,23 @@ fun SessionLogsPanel(
                     softWrap = false,
                     modifier = Modifier.padding(end = 6.dp),
                   )
+                }
+                // Leading vector icon (e.g. the network outbound-request arrow). Drawn as a
+                // Compose icon rather than a text glyph so it renders on the WASM report
+                // viewer, whose font has no arrow/emoji coverage. Excluded from selection so
+                // copying log text doesn't pick up a stray glyph.
+                parsed.glyph?.let { glyph ->
+                  DisableSelection {
+                    Icon(
+                      imageVector = when (glyph) {
+                        LineGlyph.REQUEST -> Icons.AutoMirrored.Filled.ArrowForward
+                      },
+                      contentDescription = null,
+                      tint = parsed.level.textColor(),
+                      modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                  }
                 }
                 Text(
                   text = parsed.content,

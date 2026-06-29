@@ -49,6 +49,7 @@ kotlin = "2.4.0"
 kotlinpoet = "2.2.0"
 kotlinx-datetime = "0.7.1-0.6.x-compat" # Compat build providing kotlinx.datetime.Clock alongside kotlin.time.Clock
 kotlinx-serialization = "1.11.0"
+openapi-generator = "7.23.0"
 ktor = "3.5.0" # Server engine drives the whole netty graph (core + codec-http2) to one aligned 4.2.x line.
 logback = "1.5.21"
 maestro = "2.6.1"
@@ -227,4 +228,5 @@ paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 dagp = { id = "com.autonomousapps.dependency-analysis", version.ref = "dagp" }
 wire = { id = "com.squareup.wire", version.ref = "wire" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
 binary-compatibility-validator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "binary-compatibility-validator" }

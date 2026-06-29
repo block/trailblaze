@@ -74,7 +74,26 @@ data class ParsedLogLine(
   val epochMs: Long?,
   /** Severity bucket — sources without a level concept emit [LogLevel.UNKNOWN]. */
   val level: LogLevel,
+  /**
+   * Optional leading icon for the line, rendered by [SessionLogsPanel] as a Compose
+   * vector icon — NOT a font glyph. Vector icons render on every platform, including the
+   * WASM report viewer whose bundled font has no coverage for arrows/emoji (a literal `→`
+   * shows up as tofu there). Null = no icon, just text. Defaulted so plain free-text
+   * sources (e.g. [DeviceLogSource]) don't have to set it.
+   */
+  val glyph: LineGlyph? = null,
 )
+
+/**
+ * Leading-icon markers a [SessionLogSource] can attach to a [ParsedLogLine]. The panel
+ * maps each to a Compose vector icon so it renders regardless of the platform font's glyph
+ * coverage — the WASM report viewer can't render a text `→`. Kept as a plain enum so the
+ * data tier stays UI-framework-free.
+ */
+enum class LineGlyph {
+  /** An outbound request (network REQUEST_START) — drawn as a forward arrow. */
+  REQUEST,
+}
 
 /**
  * One source's raw content as fed into [SessionLogsPanel]. [rawContent] is nullable so

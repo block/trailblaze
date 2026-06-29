@@ -65,14 +65,34 @@ export interface EmptyInput { /* intentionally empty — see kdoc */ }
  * Structured-config spec for the typed `trailblaze.tool<I, O>(spec, handler)` overload. Carries
  * the namespaced framework hints (`supportedPlatforms`, `requiresContext`, `requiresHost`,
  * `supportedDrivers`) the build-time analyzer (`ScriptedToolDefinitionAnalyzer`) extracts from
- * each call site. **No `description`** — typed-tool descriptions live in the TSDoc above the
- * `export const X = trailblaze.tool(...)` binding, which the analyzer reads.
+ * each call site.
+ *
+ * **`description` precedence — where the LLM-facing description comes from.** A typed tool's
+ * description is resolved in this order, most-authoritative first:
+ *   1. a YAML sidecar `description:` (when the tool has a `<tool>.yaml` descriptor — already
+ *      authoritative for bundled / sidecar tools),
+ *   2. this spec's [description] field (NEW — set it here to make the LLM-facing intent explicit
+ *      and co-located with the other registration config),
+ *   3. the JSDoc/TSDoc block above the `export const X = trailblaze.tool(...)` binding, which the
+ *      analyzer reads as the catch-all fallback (the historical behavior).
+ *
+ * Prefer [description] over relying on the doc comment when the LLM-facing wording matters: the
+ * TSDoc doubles as developer documentation, so implementation notes parked there leak to the
+ * model. Setting [description] keeps the LLM contract obvious next to `supportedPlatforms` /
+ * `surfaceToLlm` and leaves the doc comment free for author-facing prose.
  *
  * Field roles — see the full "registration gate" vs "metadata hint" discussion that previously
- * lived in `tool.ts`. `inputSchema` is the one field consumed at the JS dispatch boundary (via
- * the injected [defineTypedTool] validator); the rest flow into `_meta` via the analyzer.
+ * lived in `tool.ts`. [inputSchema] is the one field consumed at the JS dispatch boundary (via
+ * the injected [defineTypedTool] validator); [description] routes into the tool's primary
+ * descriptor (NOT `_meta`); the remaining gate fields flow into `_meta` via the analyzer.
  */
 export interface TrailblazeTypedToolSpec {
+  /**
+   * LLM-facing description for this tool. When set, it overrides the JSDoc/TSDoc above the
+   * binding (but a YAML sidecar `description:` still wins — see the precedence note on this
+   * interface). Omit it to fall back to the doc comment, which the analyzer reads.
+   */
+  description?: string;
   /** Platforms this tool may register on. Empty / omitted = all platforms. */
   supportedPlatforms?: ReadonlyArray<"web" | "android" | "ios" | "desktop">;
   /** UX hint: this tool depends on a live driver context. NOT a registration filter. */

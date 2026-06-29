@@ -1638,6 +1638,48 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — description is extracted when authored`() = runBlocking {
+    // `description` is a recognized `TrailblazeTypedToolSpec` field (RECOGNIZED_SPEC_FIELDS). The
+    // analyzer captures the spec's `description` into `ScriptedToolDefinition.spec["description"]`
+    // so the enrichment layer can route it into the resolved tool description as the middle
+    // precedence tier (YAML > spec > TSDoc). The TSDoc here is intentionally DIFFERENT text so the
+    // test pins that both are extracted independently — the spec one in `spec`, the TSDoc one in
+    // the top-level `description` — and that the analyzer leaves the precedence to the Kotlin layer.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-description-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "describedTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |/** TSDoc fallback that should NOT win when the spec sets description. */
+        |export const describedTool = trailblaze.tool<I, O>(
+        |  { description: "Explicit LLM-facing description from the spec." },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    assertEquals(
+      JsonPrimitive("Explicit LLM-facing description from the spec."),
+      spec["description"],
+      "expected the spec's `description` literal to be captured into ScriptedToolDefinition.spec",
+    )
+    // The TSDoc is still captured separately on the top-level description field — the analyzer
+    // extracts both and never picks a winner; the Kotlin enrichment layer applies the precedence.
+    assertEquals(
+      "TSDoc fallback that should NOT win when the spec sets description.",
+      def.description,
+      "expected the TSDoc to remain on def.description alongside the spec description",
+    )
+  }
+
+  @Test
   fun `bare-handler overload — spec is null when no spec object is passed`() = runBlocking {
     // The bare-handler form (arg 0 is an arrow/function) carries no spec, so
     // `ScriptedToolDefinition.spec` must be null — never an empty object. The

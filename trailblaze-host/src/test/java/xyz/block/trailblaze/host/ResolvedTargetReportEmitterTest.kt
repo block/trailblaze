@@ -1208,8 +1208,8 @@ class ResolvedTargetReportEmitterTest {
       .substringBefore("## Resolution trace")
     val createPostRow = matrixSection.lines().firstOrNull { it.contains("`createPost`") }
     assertTrue("expected scripted createPost row, got:\n$matrixSection") { createPostRow != null }
-    assertTrue("scripted toolset label must be `script:createPost.ts`, got:\n$createPostRow") {
-      createPostRow!!.contains("script:createPost.ts")
+    assertTrue("scripted createPost must show Kind `TypeScript` and Source `createPost.ts`, got:\n$createPostRow") {
+      createPostRow!!.contains("TypeScript") && createPostRow.contains("`createPost.ts`")
     }
     assertTrue("scripted createPost must show ✅ under playwright-native, got:\n$createPostRow") {
       createPostRow!!.contains("✅")
@@ -1550,9 +1550,10 @@ class ResolvedTargetReportEmitterTest {
       openUrlCells[webIdx],
       "openUrl must be BLANK under the Playwright driver — no toolset delivered it there, got row:\n$openUrlRow",
     )
-    // The script:<file> toolset label must still appear on the row (the per-cell path attaches it).
-    assertTrue("openUrl row must carry the script:openUrl.ts label, got:\n$openUrlRow") {
-      openUrlRow.contains("script:openUrl.ts")
+    // The tool's TypeScript backing now shows in the dedicated Kind/Source columns — the matrix
+    // no longer overloads the Toolset(s) column with a `script:<file>` label.
+    assertTrue("openUrl row must show Kind `TypeScript` and Source `openUrl.ts`, got:\n$openUrlRow") {
+      openUrlRow.contains("TypeScript") && openUrlRow.contains("`openUrl.ts`")
     }
   }
 

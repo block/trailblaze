@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -196,6 +197,13 @@ sealed interface TrailblazeLog {
     val driverMigrationTreeNode: TrailblazeNode? = null,
     override val screenshotFile: String?,
     val action: AgentDriverAction,
+    /**
+     * Structural-coverage assessment of the captured hierarchy at the moment this driver event
+     * was logged — populated on Android (the only driver whose on-device gate computes it) and
+     * null everywhere else. See [CaptureCoverage] for the semantics; intended for the report
+     * aggregator and other programmatic consumers, not human reading.
+     */
+    val captureCoverage: CaptureCoverage? = null,
     override val durationMs: Long,
     override val session: SessionId,
     override val timestamp: Instant,
@@ -330,6 +338,13 @@ sealed interface TrailblazeLog {
     val driverMigrationTreeNode: TrailblazeNode? = null,
     /** Human-readable compact text representation of the view hierarchy (same format used in LLM prompts). */
     val viewHierarchyText: String? = null,
+    /**
+     * Structural-coverage assessment of the captured hierarchy at the moment this snapshot was
+     * taken — populated on Android (the only driver whose on-device gate computes it) and null
+     * everywhere else. See [CaptureCoverage] for the semantics; intended for the report
+     * aggregator and other programmatic consumers, not human reading.
+     */
+    val captureCoverage: CaptureCoverage? = null,
     override val deviceWidth: Int,
     override val deviceHeight: Int,
     override val session: SessionId,

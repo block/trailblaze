@@ -43,6 +43,42 @@ object WasmReport {
   /** Low FPS for WASM embedded frames to keep report file size reasonable. */
   private const val WASM_VIDEO_FPS = 2
 
+  /**
+   * Floor on a sprite's unique-frame count below which it can be degenerate — a handful of
+   * distinct frames can't represent a real test run even a short one. A sprite at or above this
+   * floor always renders.
+   */
+  private const val MIN_USEFUL_UNIQUE_FRAMES = 8
+
+  /**
+   * Total-logical-frame count above which a sub-floor unique count is treated as a near-static
+   * recording stretched across the timeline (massive aliasing) rather than a genuinely short
+   * clip. ~30s at the 2fps sprite sampling — comfortably above any short, low-motion-but-valid
+   * recording, while the canonical broken case (3 unique / 234 total) clears it with huge margin.
+   */
+  private const val MIN_ALIASING_TOTAL_FRAMES = 60
+
+  /**
+   * A sprite is degenerate when its unique (deduplicated) frame count is below
+   * [MIN_USEFUL_UNIQUE_FRAMES] AND either (a) it has lots of total logical frames
+   * ([totalFrameCount] >= [MIN_ALIASING_TOTAL_FRAMES]) — i.e. a near-static recording massively
+   * aliased across the whole timeline, the broken-screenrecord case — or (b) it has fewer unique
+   * frames than the per-step screenshots it would replace. The total-frame rule is the reliable
+   * signal: [stepScreenshotCount] collapses to ~2 in replay mode (recorded steps emit few
+   * screenshot-bearing logs), so it can't be the only denominator. A short healthy clip has
+   * unique ≈ total (little dedup) and a small total, so neither rule fires. [uniqueFrameCount]
+   * null means a legacy sheet with no dedup data — conservatively not degenerate.
+   */
+  internal fun isSpriteDegenerate(
+    uniqueFrameCount: Int?,
+    totalFrameCount: Int,
+    stepScreenshotCount: Int,
+  ): Boolean {
+    if (uniqueFrameCount == null) return false
+    if (uniqueFrameCount >= MIN_USEFUL_UNIQUE_FRAMES) return false
+    return totalFrameCount >= MIN_ALIASING_TOTAL_FRAMES || uniqueFrameCount < stepScreenshotCount
+  }
+
   /** Max raw logcat file size to embed (5MB). Larger files are skipped to keep report small. */
   private const val MAX_LOGCAT_RAW_BYTES = 5L * 1024 * 1024
 
@@ -98,11 +134,15 @@ object WasmReport {
 
     // Extract video frames for embedding in WASM reports (trimmed to test execution window)
     Console.log("\nExtracting video frames for WASM embedding...")
-    val (videoFrameImages, videoTrimInfo) = extractVideoFrames(logsRepo, validSessionIds)
+    val (videoFrameImages, videoTrimInfo, degenerateSpriteSessions) =
+      extractVideoFrames(logsRepo, validSessionIds)
 
-    // Load capture_metadata.json for each session, adjusting timestamps to trimmed window
+    // Load capture_metadata.json for each session, adjusting timestamps to trimmed window.
+    // Sessions whose sprite was degenerate get their VIDEO_FRAMES artifact stripped so the
+    // timeline prefers the per-step screenshot slideshow over a near-static frame scrubber.
     Console.log("\nLoading capture metadata...")
-    val captureMetadataMap = loadCaptureMetadata(logsRepo, validSessionIds, videoTrimInfo)
+    val captureMetadataMap =
+      loadCaptureMetadata(logsRepo, validSessionIds, videoTrimInfo, degenerateSpriteSessions)
     val compressedCaptureMetadata = captureMetadataMap.mapValues { (_, json) ->
       compressStringToBase64(json)
     }
@@ -110,6 +150,10 @@ object WasmReport {
     // Load device logs (logcat) for each session
     Console.log("\nLoading device logs...")
     val compressedDeviceLogs = loadAndCompressDeviceLogs(logsRepo, validSessionIds)
+
+    // Load network logs (network.ndjson) for each session
+    Console.log("\nLoading network logs...")
+    val compressedNetworkLogs = loadAndCompressNetworkLogs(logsRepo, validSessionIds)
 
     // When useRelativeImageUrls is true, skip image embedding entirely so the report stays
     // small. This is useful for very large CI runs where embedding hundreds of screenshots
@@ -133,6 +177,7 @@ object WasmReport {
         videoFrameImages = videoFrameImages,
         compressedCaptureMetadata = compressedCaptureMetadata,
         compressedDeviceLogs = compressedDeviceLogs,
+        compressedNetworkLogs = compressedNetworkLogs,
       )
     } else {
       Console.log("Generating report from raw WASM UI build artifacts...")
@@ -146,6 +191,7 @@ object WasmReport {
         videoFrameImages = videoFrameImages,
         compressedCaptureMetadata = compressedCaptureMetadata,
         compressedDeviceLogs = compressedDeviceLogs,
+        compressedNetworkLogs = compressedNetworkLogs,
       )
     }
 
@@ -199,6 +245,7 @@ object WasmReport {
     videoFrameImages: Map<String, ByteArray> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
     compressedDeviceLogs: Map<String, String> = emptyMap(),
+    compressedNetworkLogs: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
 
@@ -271,6 +318,7 @@ object WasmReport {
           compressedImages = compressedImages,
           compressedCaptureMetadata = compressedCaptureMetadata,
           compressedDeviceLogs = compressedDeviceLogs,
+          compressedNetworkLogs = compressedNetworkLogs,
           imageAliases = imageAliases,
         )
         // Part 3: everything after the placeholder.
@@ -291,6 +339,7 @@ object WasmReport {
     videoFrameImages: Map<String, ByteArray> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
     compressedDeviceLogs: Map<String, String> = emptyMap(),
+    compressedNetworkLogs: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
 
@@ -337,13 +386,14 @@ object WasmReport {
     val htmlTemplate = rawTemplate.replace(
       compressedDataPlaceholder,
       createCompressedDataBlock(
-        compressedSessionJson,
-        compressedSessionInfoJson,
-        compressedPerSessionLogs,
-        compressedImages,
-        compressedCaptureMetadata,
-        compressedDeviceLogs,
-        imageAliases,
+        compressedSessionJson = compressedSessionJson,
+        compressedSessionInfoJson = compressedSessionInfoJson,
+        compressedPerSessionLogs = compressedPerSessionLogs,
+        compressedImages = compressedImages,
+        compressedCaptureMetadata = compressedCaptureMetadata,
+        compressedDeviceLogs = compressedDeviceLogs,
+        compressedNetworkLogs = compressedNetworkLogs,
+        imageAliases = imageAliases,
       ),
     )
 
@@ -423,6 +473,7 @@ object WasmReport {
     compressedImages: Map<String, String> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
     compressedDeviceLogs: Map<String, String> = emptyMap(),
+    compressedNetworkLogs: Map<String, String> = emptyMap(),
     imageAliases: Map<String, String> = emptyMap(),
   ): String = buildString {
     append("window.trailblaze_report_compressed = {\n")
@@ -443,6 +494,12 @@ object WasmReport {
     append("},\n")
     append("  device_logs: {")
     append(compressedDeviceLogs.entries.joinToString(",") { (id, data) ->
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedId\":\"$data\""
+    })
+    append("},\n")
+    append("  network_logs: {")
+    append(compressedNetworkLogs.entries.joinToString(",") { (id, data) ->
       val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
       "\"$escapedId\":\"$data\""
     })
@@ -479,6 +536,7 @@ object WasmReport {
     compressedImages: Map<String, String> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
     compressedDeviceLogs: Map<String, String> = emptyMap(),
+    compressedNetworkLogs: Map<String, String> = emptyMap(),
     imageAliases: Map<String, String> = emptyMap(),
   ) {
     writer.write("window.trailblaze_report_compressed = {\n")
@@ -506,6 +564,15 @@ object WasmReport {
     writer.write("  device_logs: {")
     first = true
     compressedDeviceLogs.forEach { (id, data) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedId\":\"$data\"")
+    }
+    writer.write("},\n")
+    writer.write("  network_logs: {")
+    first = true
+    compressedNetworkLogs.forEach { (id, data) ->
       if (!first) writer.write(",")
       first = false
       val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -947,9 +1014,10 @@ object WasmReport {
   private fun extractVideoFrames(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
-  ): Pair<Map<String, ByteArray>, Map<String, TrimmedVideoInfo>> {
+  ): Triple<Map<String, ByteArray>, Map<String, TrimmedVideoInfo>, Set<String>> {
     val frames = LinkedHashMap<String, ByteArray>()
     val trimInfo = LinkedHashMap<String, TrimmedVideoInfo>()
+    val degenerateSpriteSessions = LinkedHashSet<String>()
     for (sessionId in sessionIds) {
       val sessionDir = File(logsRepo.logsDir, sessionId.value)
       val metadataFile = File(sessionDir, "capture_metadata.json")
@@ -964,7 +1032,9 @@ object WasmReport {
           entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO_FRAMES"
         }
         if (spritesArtifact != null) {
-          extractFromSpriteSheet(sessionId, sessionDir, spritesArtifact, logsRepo, frames, trimInfo)
+          val degenerate =
+            extractFromSpriteSheet(sessionId, sessionDir, spritesArtifact, logsRepo, frames, trimInfo)
+          if (degenerate) degenerateSpriteSessions.add(sessionId.value)
           continue
         }
 
@@ -977,10 +1047,23 @@ object WasmReport {
       }
     }
     Console.log("  Total video frames: ${frames.size} unique + ${imageAliases.size} aliased (${frames.size + imageAliases.size} logical)")
-    return frames to trimInfo
+    return Triple(frames, trimInfo, degenerateSpriteSessions)
   }
 
-  /** Crops individual frames from a pre-built sprite sheet — no ffmpeg needed. */
+  /** Count of per-step screenshots the slideshow would show — one per screenshot-bearing log. */
+  private fun stepScreenshotCount(logs: List<TrailblazeLog>): Int = logs.count { log ->
+    when (log) {
+      is TrailblazeLog.AgentDriverLog -> log.screenshotFile != null
+      is TrailblazeLog.TrailblazeSnapshotLog -> true
+      else -> false
+    }
+  }
+
+  /**
+   * Crops individual frames from a pre-built sprite sheet — no ffmpeg needed. Returns true when
+   * the sprite is degenerate (so the caller drops its VIDEO_FRAMES artifact and the timeline
+   * falls back to per-step screenshots); no frames are embedded in that case.
+   */
   private fun extractFromSpriteSheet(
     sessionId: SessionId,
     sessionDir: File,
@@ -988,32 +1071,42 @@ object WasmReport {
     logsRepo: LogsRepo,
     frames: MutableMap<String, ByteArray>,
     trimInfo: MutableMap<String, TrimmedVideoInfo>,
-  ) {
-    val filename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return
-    val startMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
-    val endMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+  ): Boolean {
+    val filename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return false
+    val startMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return false
+    val endMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return false
     val spriteFile = File(sessionDir, filename)
-    if (!spriteFile.exists()) return
+    if (!spriteFile.exists()) return false
 
     // Parse sprite metadata
     val metaFile = File(sessionDir, "video_sprites.txt")
-    if (!metaFile.exists()) return
+    if (!metaFile.exists()) return false
     val props = metaFile.readLines().associate {
       val (k, v) = it.split("=", limit = 2)
       k.trim() to v.trim()
     }
-    val fps = props["fps"]?.toIntOrNull() ?: return
-    val frameCount = props["frames"]?.toIntOrNull() ?: return
-    val frameHeight = props["height"]?.toIntOrNull() ?: return
+    val fps = props["fps"]?.toIntOrNull() ?: return false
+    val frameCount = props["frames"]?.toIntOrNull() ?: return false
+    val frameHeight = props["height"]?.toIntOrNull() ?: return false
     val columns = props["columns"]?.toIntOrNull() ?: 1
     val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }
     val uniqueFrameCount = props["uniqueFrames"]?.toIntOrNull()
     val rows = props["rows"]?.toIntOrNull() ?: (uniqueFrameCount ?: frameCount)
 
-    Console.log("  Loading sprite sheet for ${sessionId.value}/$filename ($frameCount frames at ${fps}fps)")
-
     // Trim to test execution window
     val logs = logsRepo.getLogsForSession(sessionId)
+    val steps = stepScreenshotCount(logs)
+    if (isSpriteDegenerate(uniqueFrameCount, frameCount, steps)) {
+      Console.log(
+        "  Skipping degenerate sprite for ${sessionId.value}/$filename " +
+          "($uniqueFrameCount unique of $frameCount total frames, $steps step screenshots); " +
+          "timeline will use per-step screenshots.",
+      )
+      return true
+    }
+
+    Console.log("  Loading sprite sheet for ${sessionId.value}/$filename ($frameCount frames at ${fps}fps)")
+
     val sortedLogs = logs.sortedBy { it.timestamp }
     val firstLogMs = sortedLogs.firstOrNull()?.timestamp?.toEpochMilliseconds()
     val lastLogMs = sortedLogs.lastOrNull()?.timestamp?.toEpochMilliseconds()
@@ -1035,7 +1128,7 @@ object WasmReport {
       decodeSpriteSheetWebP(spriteFile, sessionId)
     } else {
       javax.imageio.ImageIO.read(spriteFile)
-    } ?: return
+    } ?: return false
     val spriteWidth = spriteImage.width
 
     // Crop each frame and write as JPEG bytes, deduplicating via frameMap.
@@ -1077,6 +1170,7 @@ object WasmReport {
       "    Cropped $totalCropped frames from sprite sheet (frames $firstFrameIndex..$lastFrameIndex)" +
         if (aliasCount > 0) ", $aliasCount aliased as duplicates" else ""
     )
+    return false
   }
 
   /**
@@ -1190,6 +1284,7 @@ object WasmReport {
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
     trimInfo: Map<String, TrimmedVideoInfo> = emptyMap(),
+    degenerateSpriteSessions: Set<String> = emptySet(),
   ): Map<String, String> {
     val result = LinkedHashMap<String, String>()
     for (sessionId in sessionIds) {
@@ -1197,7 +1292,14 @@ object WasmReport {
       val metadataFile = File(sessionDir, "capture_metadata.json")
       if (!metadataFile.exists()) continue
       try {
-        val metadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
+        val rawMetadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
+        // Degenerate sprite: drop the VIDEO_FRAMES artifact so the WASM timeline finds no sprite
+        // and falls back to the per-step screenshot slideshow.
+        val metadata = if (sessionId.value in degenerateSpriteSessions) {
+          stripVideoFramesArtifact(rawMetadata)
+        } else {
+          rawMetadata
+        }
         val trim = trimInfo[sessionId.value]
         val adjusted = if (trim != null) {
           // Rewrite VIDEO artifact timestamps to the trimmed test window
@@ -1240,6 +1342,17 @@ object WasmReport {
     return result
   }
 
+  /** Returns [metadata] with every VIDEO_FRAMES artifact removed from its `artifacts` array. */
+  private fun stripVideoFramesArtifact(metadata: JsonElement): JsonElement {
+    val artifacts = metadata.jsonObject["artifacts"]?.jsonArray ?: return metadata
+    val filtered = artifacts.filter { it.jsonObject["type"]?.jsonPrimitive?.content != "VIDEO_FRAMES" }
+    return kotlinx.serialization.json.buildJsonObject {
+      metadata.jsonObject.forEach { (key, value) ->
+        if (key == "artifacts") put(key, kotlinx.serialization.json.JsonArray(filtered)) else put(key, value)
+      }
+    }
+  }
+
   /**
    * Loads and compresses device logs (`device.log` — legacy `logcat.txt` / `system_log`
    * filenames are also recognized via [LogcatParser.findDeviceLogFile]) for each session.
@@ -1277,6 +1390,51 @@ object WasmReport {
     }
     if (result.isEmpty()) {
       Console.log("  No device logs found for any session")
+    }
+    return result
+  }
+
+  /**
+   * Loads and compresses the framework network-capture file (`network.ndjson`, one
+   * [xyz.block.trailblaze.network.NetworkEvent] per line) for each session. Returns a map of
+   * session ID to gzip+base64-compressed NDJSON content, embedded under the report's
+   * `network_logs` data block. The Wasm UI's `loadNetworkLogs` fetches `network_logs/<id>`,
+   * unwraps it, and the Network tab renders it via `NetworkLogSource`.
+   *
+   * Mirrors [loadAndCompressDeviceLogs] — the same size budget applies: files larger than
+   * [MAX_LOGCAT_RAW_BYTES] are skipped, and content is capped to the last
+   * [MAX_LOGCAT_LINES_PER_SESSION] lines (the most recent traffic, most useful for debugging).
+   * Sessions with no capture file (capture disabled, or a platform with no engine yet) are
+   * simply absent from the returned map.
+   */
+  private fun loadAndCompressNetworkLogs(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+  ): Map<String, String> {
+    val result = LinkedHashMap<String, String>()
+    for (sessionId in sessionIds) {
+      val sessionDir = File(logsRepo.logsDir, sessionId.value)
+      val ndjsonFile = File(sessionDir, "network.ndjson")
+      if (!ndjsonFile.exists() || ndjsonFile.length() == 0L) continue
+      if (ndjsonFile.length() > MAX_LOGCAT_RAW_BYTES) {
+        Console.log("  Skipping network logs for ${sessionId.value} — too large (${ndjsonFile.length() / 1024}KB > ${MAX_LOGCAT_RAW_BYTES / 1024}KB)")
+        continue
+      }
+      try {
+        val allLines = ndjsonFile.readLines()
+        val content = allLines.takeLast(MAX_LOGCAT_LINES_PER_SESSION).joinToString("\n")
+        val truncated = allLines.size > MAX_LOGCAT_LINES_PER_SESSION
+        // Wrap as a JSON string so the JS decompression pipeline's JSON.parse() succeeds.
+        // ActualsWasm.loadNetworkLogs unwraps it back to raw NDJSON before parsing.
+        val jsonEncoded = compactJsonReformatter.encodeToString(content)
+        result[sessionId.value] = compressStringToBase64(jsonEncoded)
+        Console.log("  Loaded network logs for ${sessionId.value} (${ndjsonFile.length() / 1024}KB raw, ${allLines.size} lines${if (truncated) ", truncated to last $MAX_LOGCAT_LINES_PER_SESSION" else ""})")
+      } catch (e: Exception) {
+        Console.log("  WARNING: Failed to load network logs for ${sessionId.value}: ${e.message}")
+      }
+    }
+    if (result.isEmpty()) {
+      Console.log("  No network logs found for any session")
     }
     return result
   }

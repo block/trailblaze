@@ -114,7 +114,7 @@ class MaestroTrailblazeToolTest {
   @Test
   fun `maestro YAML short names from docs-maestro-dev decode to commands`() {
     // https://docs.maestro.dev/reference/commands-available is the canonical spec. The
-    // `maestro:` tool block in a trail feeds its YAML straight to MaestroYamlParser, so
+    // `mobile_maestro:` tool block in a trail feeds its YAML straight to MaestroYamlParser, so
     // the accepted surface is whatever Maestro's YAML reference accepts.
     val commands = MaestroYamlParser.parseYaml(
       """
@@ -152,37 +152,6 @@ class MaestroTrailblazeToolTest {
       val result = tool.execute(createContext())
 
       assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
-    }
-  }
-
-  @Test
-  fun `deprecated maestro delegator forwards execution to mobile_maestro`() {
-    runBlocking {
-      val command = TapOnElementCommand(selector = ElementSelector(textRegex = "OK"))
-      val yaml = MaestroYamlSerializer.toYaml(listOf(command), includeConfiguration = false)
-
-      // The same payload run through the canonical tool and the deprecated `maestro` alias must
-      // behave identically — the delegator just forwards execute() to MaestroTrailblazeTool.
-      val canonical = MaestroTrailblazeTool(yaml).execute(createContext())
-      val delegated = MaestroDeprecatedTrailblazeTool(yaml).execute(createContext())
-
-      assertThat(canonical).isInstanceOf(TrailblazeToolResult.Success::class)
-      assertThat(delegated).isInstanceOf(TrailblazeToolResult.Success::class)
-    }
-  }
-
-  @Test
-  fun `deprecated maestro delegator surfaces a parse error forwarded from mobile_maestro`() {
-    runBlocking {
-      val result = MaestroDeprecatedTrailblazeTool(
-        yaml = """
-        - totallyFakeCommand:
-            bogus: value
-        """.trimIndent(),
-      ).execute(createContext())
-
-      assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
-      assertThat((result as TrailblazeToolResult.Error).errorMessage).contains("failed to deserialize")
     }
   }
 }

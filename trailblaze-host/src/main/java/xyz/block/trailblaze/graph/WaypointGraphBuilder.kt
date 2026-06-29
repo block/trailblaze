@@ -143,6 +143,7 @@ object WaypointGraphBuilder {
           id = toolName.toolName,
           description = config.description,
           to = meta.to,
+          dynamic = meta.dynamic,
         )
       }
     }

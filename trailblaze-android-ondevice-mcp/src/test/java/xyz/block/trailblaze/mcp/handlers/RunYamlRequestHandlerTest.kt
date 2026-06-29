@@ -30,6 +30,7 @@ import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -262,6 +263,102 @@ class RunYamlRequestHandlerTest {
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
     assertEquals(false, result.data.success)
     assertEquals("widget not found", result.data.errorMessage)
+  }
+
+  // A failure message reconstructed from the same shared phrases `InstrumentationUtil` throws and
+  // `UiAutomationHandleErrors` matches on — so this test fails if the emitted text and the matcher
+  // ever drift apart (same discipline as OnDeviceRpcClientWedgeTest).
+  private val nonRecoverableWedgeMessage =
+    "${UiAutomationHandleErrors.NON_RECOVERABLE_RETRY_FAILED_PHRASE}. The on-device server's " +
+      "instrumentation is in a ${UiAutomationHandleErrors.NON_RECOVERABLE_STATE_PHRASE} — kill the " +
+      "test APK process and re-launch. Original error: UiAutomation not connected"
+
+  /**
+   * Shape #4 — on-device source tag: when the launched job's failure carries the non-recoverable
+   * UiAutomation wedge signature, the awaitCompletion=true response is tagged
+   * `nonRecoverableWedge = true` so the host arms recovery from the structured field rather than
+   * re-matching the error string downstream.
+   */
+  @Test
+  fun `wedge-signature failure tags the response nonRecoverableWedge true`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> throw IllegalStateException(nonRecoverableWedgeMessage) },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(false, result.data.success)
+    assertTrue(result.data.nonRecoverableWedge, "Expected the wedge tag to be set")
+  }
+
+  /** Negative control: an ordinary failure must leave `nonRecoverableWedge = false`. */
+  @Test
+  fun `ordinary failure leaves the response nonRecoverableWedge false`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> throw RuntimeException("widget not found") },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(false, result.data.success)
+    assertFalse(result.data.nonRecoverableWedge, "Ordinary failures must not set the wedge tag")
+  }
+
+  /** Successful runs are never tagged, regardless of the probe. */
+  @Test
+  fun `successful run leaves the response nonRecoverableWedge false`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ -> RunYamlCallbackResult(session = session) },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(true, result.data.success)
+    assertFalse(result.data.nonRecoverableWedge)
+  }
+
+  /**
+   * Shape #5 — timeout liveness probe: when the run exceeds the handler await cap AND the on-device
+   * liveness probe detects the wedge, the timeout response is tagged `nonRecoverableWedge = true`.
+   * The probe seam stands in for the Android `InstrumentationUtil.withUiAutomation` touch.
+   */
+  @Test
+  fun `timeout with a wedged liveness probe tags the response nonRecoverableWedge true`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> awaitCancellation() },
+      probeUiAutomationWedge = { true },
+    )
+
+    val dispatch = async { handler.handle(testRequest.copy(awaitCompletion = true)) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1_000)
+    advanceUntilIdle()
+
+    val result = dispatch.await()
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(false, result.data.success)
+    assertTrue(result.data.errorMessage?.contains("timed out") == true)
+    assertTrue(result.data.nonRecoverableWedge, "Expected the timeout wedge tag to be set")
+  }
+
+  /** Negative control: a timeout on a HEALTHY device (probe returns false) is not tagged. */
+  @Test
+  fun `timeout with a healthy liveness probe leaves the response nonRecoverableWedge false`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> awaitCancellation() },
+      probeUiAutomationWedge = { false },
+    )
+
+    val dispatch = async { handler.handle(testRequest.copy(awaitCompletion = true)) }
+    advanceTimeBy(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS + 1_000)
+    advanceUntilIdle()
+
+    val result = dispatch.await()
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(false, result.data.success)
+    assertFalse(result.data.nonRecoverableWedge, "A healthy-device timeout must not set the wedge tag")
   }
 
   /**
@@ -603,6 +700,7 @@ class RunYamlRequestHandlerTest {
     runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> RunYamlCallbackResult,
     progressManager: ProgressSessionManager? = null,
     waitForSettled: suspend () -> Unit = { /* no-op */ },
+    probeUiAutomationWedge: () -> Boolean = { false },
   ): RunYamlRequestHandler {
     // StandardTestDispatcher lets the test control when the launched block runs, which is
     // what makes the virtual-time advanceTimeBy in the timeout test actually trigger the
@@ -627,6 +725,8 @@ class RunYamlRequestHandlerTest {
       // Swap the Android `TrailblazeAccessibilityService.waitForSettled` call — loading that
       // class requires the Android framework which isn't on the JVM test classpath.
       waitForSettled = waitForSettled,
+      // Swap the Android `InstrumentationUtil.withUiAutomation` liveness probe for the same reason.
+      probeUiAutomationWedge = probeUiAutomationWedge,
     )
   }
 

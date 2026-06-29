@@ -104,6 +104,10 @@ dependencies {
   // (not in :trailblaze-scripting-subprocess) because the wire-in lives in
   // TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny.
   implementation(project(":trailblaze-quickjs-tools"))
+  // OkHttp-backed `fetch` for in-process scripted tools (host daemon opts in; localhost-only by
+  // default). Isolated in its own module so the lean engine module stays OkHttp-free — see
+  // `:trailblaze-scripting-fetch`.
+  implementation(project(":trailblaze-scripting-fetch"))
   implementation(libs.compose.ui.test.junit4)
   implementation(project(":trailblaze-playwright"))
   implementation(project(":trailblaze-report"))

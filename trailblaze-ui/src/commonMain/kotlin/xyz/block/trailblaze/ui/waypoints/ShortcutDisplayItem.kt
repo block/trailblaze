@@ -52,6 +52,11 @@ data class TrailheadDisplayItem(
   val id: String,
   /** Human-readable description from the YAML, if any. */
   val description: String?,
-  /** Destination waypoint id this trailhead lands at. */
-  val to: String,
+  /**
+   * Destination waypoint id this trailhead lands at, or null for a [dynamic] trailhead whose
+   * destination varies by input — those have no fixed target and so draw no entry edge on the map.
+   */
+  val to: String? = null,
+  /** True when this trailhead's destination varies by input (no fixed waypoint to anchor to). */
+  val dynamic: Boolean = false,
 )

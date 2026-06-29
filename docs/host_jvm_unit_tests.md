@@ -8,7 +8,7 @@ Gradle or an IDE.
 ## Device requirements
 When running host JVM unit tests, make sure you have only one Android device,
 Android emulator, or iOS simulator running at once. If running a web test,
-ensure all iOS and Android devices are not connected. Maestro auto-discovers the
+ensure all iOS and Android devices are not connected. Trailblaze auto-discovers the
 currently running device, so multiple devices can cause failures.
 The desktop app supports multiple connected devices.
 ## Running tests

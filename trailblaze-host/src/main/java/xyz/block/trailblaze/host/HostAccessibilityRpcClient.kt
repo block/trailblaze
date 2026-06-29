@@ -214,11 +214,20 @@ class HostAccessibilityRpcClient(
               screenSummaryAfter = "Tool '$toolName' executed via accessibility driver",
               durationMs = durationMs,
             )
-            false -> ExecutionResult.Failure(
-              error = rpcResult.data.errorMessage
-                ?: "Tool '$toolName' execution failed on-device",
-              recoverable = true,
-            )
+            false -> {
+              // Shape #4 (mid-trail execute) + shape #1 (routed dispatch): the device tagged the
+              // inline failure as a non-recoverable wedge. Arm server recovery from the structured
+              // field — the RPC Failure-arm string matches never see this (it's an RpcResult.Success
+              // carrying success=false), so this typed read is the only path that catches it here.
+              if (rpcResult.data.nonRecoverableWedge) {
+                rpcClient.armNonRecoverableWedge()
+              }
+              ExecutionResult.Failure(
+                error = rpcResult.data.errorMessage
+                  ?: "Tool '$toolName' execution failed on-device",
+                recoverable = true,
+              )
+            }
             null -> ExecutionResult.Failure(
               error = "On-device server returned null success inline — contract violation " +
                 "for awaitCompletion=true (expected true/false, got null)",
@@ -333,6 +342,12 @@ class HostAccessibilityRpcClient(
       is RpcResult.Success -> when (rpcResult.data.success) {
         true -> true
         false -> {
+          // Shape #3 (pre-action wedge): executePreAction returns a bare Boolean, so the typed
+          // wedge kind can't propagate up to a caller that could arm later — arming MUST happen
+          // here, at the site that sees the structured field, before we collapse to `false`.
+          if (rpcResult.data.nonRecoverableWedge) {
+            rpcClient.armNonRecoverableWedge()
+          }
           Console.log(
             "[HostAccessibilityRpcClient] Pre-action failed on-device: " +
               (rpcResult.data.errorMessage ?: "no error message"),
@@ -361,11 +376,13 @@ class HostAccessibilityRpcClient(
       .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
     when (val first = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
-      is RpcResult.Failure -> Console.log(
-        "[HostAccessibilityRpcClient] GetScreenState ${first.errorType}: ${first.message}" +
-          (first.details?.let { "\n  Details: $it" } ?: "") +
-          "\n  Re-warming connection and retrying once.",
-      )
+      is RpcResult.Failure -> {
+        Console.log(
+          "[HostAccessibilityRpcClient] GetScreenState ${first.errorType}: ${first.message}" +
+            (first.details?.let { "\n  Details: $it" } ?: "") +
+            "\n  Re-warming connection and retrying once.",
+        )
+      }
     }
     try {
       // This client always drives the accessibility driver (V3 + on-host path), so the re-warm

@@ -140,6 +140,7 @@ object AccessibilityTrailRunner {
                 ?.driverMigrationTreeNode,
             screenshotFile = screenshotFilename,
             action = driverAction,
+            captureCoverage = screenState.captureCoverage,
             durationMs = durationMs,
             timestamp = timestamp,
             session = session.sessionId,

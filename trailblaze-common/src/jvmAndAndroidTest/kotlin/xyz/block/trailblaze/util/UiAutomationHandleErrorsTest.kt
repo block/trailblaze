@@ -63,7 +63,7 @@ class UiAutomationHandleErrorsTest {
     listOf(
       "java.lang.NullPointerException",
       "Element not found: Text matching regex: Forms",
-      "Timed out waiting for run to complete after 600s",
+      "Timed out waiting for run to complete: no progress for 600s",
       "",
     ).forEach { message ->
       assertFalse("did not expect stale-handle match for: $message", UiAutomationHandleErrors.isStaleHandleSignature(message))

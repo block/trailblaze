@@ -120,6 +120,7 @@ import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
+import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
@@ -613,6 +614,9 @@ class TrailblazeMcpServer(
         toolNames = toolRepo.allCatalogScriptedToolNames + (customScriptedToolNames - excluded.scriptedToolNames),
         skipNames = inlineTools.map { ToolName(it.name) }.toSet(),
         logPrefix = "[TrailblazeMcpServer]",
+        // Install a real (unrestricted) `fetch` so scripted tools can make HTTP calls without
+        // shelling curl — matches the host run path. See `:trailblaze-scripting-fetch`.
+        engineExtension = OkHttpFetchExtension(),
       )
 
       // Inline scripted tools (target.tools:) keep going through the subprocess synthesizer.

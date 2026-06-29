@@ -85,63 +85,46 @@ List what's connected, then pin this terminal to one of them:
 ```bash
 trailblaze device list
 
-# Pin: remembers this terminal's device + target so every follow-up call
-# inherits them without repeating the flags. Other terminals stay independent.
+# Pin this terminal to a device + target. Subsequent calls inherit both,
+# so you don't have to repeat -d / --target on every command.
 trailblaze device connect android --target default
 ```
 
-The short form `android` works when only one Android device is connected; with
-two or more, use the fully-qualified `android/<id>` form shown by `device list`
-(same for `ios/<udid>`). `web` is always unambiguous.
+`device list` shows Android emulators (`android/emulator-5554`), iOS simulators
+(`ios/<simulator-id>`), and any web targets. For `device connect`, the short form
+`android` works when only one Android device is connected; with two or more, pass
+the fully-qualified `android/<id>` shown by `device list` (same for `ios/<udid>`).
+`web` is always unambiguous.
 
-You'll see Android emulators (`android/emulator-5554`), iOS simulators
-(`ios/<simulator-id>`), and any web targets. After the pin, device-acting CLI
-calls that take a `-d/--device` flag (`snapshot`, `tool`, `blaze`, `ask`, `verify`,
-`session start`, `session stop`, `run`) inherit the pinned device automatically — no
-`-d <device>` flag needed. `session save` is implicit (saves the current session)
-and doesn't take `-d`. For CI / scripts that prefer determinism, pass `-d <platform>`
-(or `-d <platform>/<id>`) on each call as an override; explicit flags win over the
-pin. `mcp` accepts `--device` / `--target` at startup to pre-bind the MCP session
-(so the agent's first tool call already has a device); workspace and setup commands
-(`config`, `app`, `device list`) don't take `-d`. `run` inherits the pin just like
-the action commands, but each replay spawns a fresh session rather than reattaching
-to the pinned interactive one.
+That's it — you're ready to drive. To swap target without disconnecting, use
+`trailblaze device rebind --target <new>`; to release, `trailblaze device disconnect`.
 
-How the pin works under the hood: `trailblaze device connect` records this terminal's
-shell PID alongside the bound device in `~/.trailblaze/shell-device-pins-<port>.json`.
-Subsequent CLI calls from the same terminal look up that entry and use it as the
-default. The pin survives daemon restarts. Open a second terminal and it gets its
-own slot — pinning device A in one terminal doesn't leak into another. For scripts
-and CI where each call is a fresh shell, pass `--device <id>` on every command
-instead — the pin file is per-shell-PID and won't carry. (`TRAILBLAZE_DEVICE` is
-also honored as a manual override, but `--device` is the recommended form.)
+### Device pinning — reference details
 
-If your pinned device goes away (emulator killed, simulator shut down, USB cable
-unplugged), the next CLI call fails with the standard `Device bind failed`
-envelope and self-evicts the pin in the background, so the call *after* that
-falls through to autodetect — if exactly one device is connected, it'll be used
-silently; if zero or multiple, you get the appropriate error. Autodetect (the
-single-device convenience) doesn't write a pin either: it just uses the one
-connected device for that one call. Pinning is always an explicit
-`device connect` action.
+You can skip this on first read. It covers what the pin actually does, which commands
+respect it, and how to override it in CI.
 
-### Precedence between TRAILBLAZE_DEVICE and the file-pin
+After `device connect`, every device-acting CLI call (`snapshot`, `tool`, `step`, `ask`,
+`verify`, `session start/stop`, `run`) picks up the pinned device automatically — no
+`-d` flag needed. Workspace and setup commands (`config`, `app`, `device list`) don't
+take `-d`. `mcp` takes `--device` / `--target` at startup to pre-bind the MCP session
+so the agent's first tool call already has a device.
 
-Resolution order, highest priority first:
+**Multiple terminals stay independent.** The pin is per-shell-PID, recorded in
+`~/.trailblaze/shell-device-pins-<port>.json`. Pinning device A in one terminal doesn't
+leak into another, and the pin survives daemon restarts. For CI scripts (each call is a
+fresh shell), pass `--device <id>` on every command — the per-shell pin won't carry.
+
+**Resolution order**, highest priority first:
 
 1. Explicit `--device <id>` flag on the command.
-2. `TRAILBLAZE_DEVICE` environment variable (manual override; mostly relevant
-   for CI scripts that explicitly export it).
-3. This terminal's file-pin (written by `trailblaze device connect`).
-4. Autodetect when exactly one device is connected.
+2. `TRAILBLAZE_DEVICE` env var (manual override, mostly for CI).
+3. This terminal's file-pin (from `trailblaze device connect`).
+4. Autodetect — used when exactly one device is connected.
 
-So `export TRAILBLAZE_DEVICE=ios/<udid>` in your shell shadows the file-pin —
-useful if you want a per-shell override without disturbing the pinned device for
-the rest of your work. Unset the env var to fall back to the pin.
-
-To swap target without disconnecting, use `trailblaze device rebind --target <new>`. To
-release, `trailblaze device disconnect` — clears this terminal's pin so the next
-session starts clean.
+**If your pinned device goes away** (emulator killed, USB unplugged), the next call
+fails with `Device bind failed` and self-evicts the pin; the call *after* that falls
+through to autodetect.
 
 ## Drive the Device
 
@@ -196,8 +179,6 @@ pin this terminal to a device + target so subsequent calls don't have to repeat 
 If your agent can run a shell command, it can drive a device. No SDK to install, no
 protocol to negotiate, no provider keys to wire on the agent's side.
 
-If your agent is an MCP client (e.g. Claude Code via `claude mcp add trailblaze -- trailblaze mcp --device android --target default`), the MCP shim auto-binds device + target on initialize from those flags — your agent doesn't have to call `device(...)` first. See [MCP Integration](mcp/index.md) for the config snippets.
-
 ## Save the Session as a Trail
 
 While the session was running, Trailblaze recorded every step. Persist the recording
@@ -233,10 +214,35 @@ trailblaze run flows/login.trail.yaml -d android --self-heal
 By default `trailblaze run` replays the recorded tool sequence with **no LLM in the
 loop** — fast, deterministic, cheap. This is the path CI takes.
 
+### When does the LLM actually run?
+
+A reasonable question for a cost-conscious team. The short answer:
+
+| Step / mode | LLM called? |
+|---|---|
+| A step with a `recording:` block (replay) | **No** — deterministic, replays the recorded tool calls. |
+| A bare `step:` (no `recording:`) | **Yes** — the agent picks the tools and selectors live. |
+| `verify:` (vision assertion) | **Yes** — an LLM judges the screenshot against the prose claim. |
+| `--self-heal` (any step that drifted) | **Yes** — only on the failing step, only when `--self-heal` is set. |
+| Authoring mode: `trailblaze step "…"`, `trailblaze ask "…"`, `trailblaze verify "…"` | **Yes** — these are the built-in-agent surface. |
+
+So a fully-recorded trail with no `verify:` steps and no `--self-heal` is 100% LLM-free
+at replay. Add `verify:` steps when you want vision-grade assertions that survive
+selector drift; add `--self-heal` opt-in in CI when you'd rather an agent try to patch a
+drifted step than fail the build. The Ollama path is keyless if you want to stand this
+up without paying anything.
+
 `--self-heal` opts in to small-drift recovery: if a recorded step doesn't match the
 screen anymore, Trailblaze's built-in agent patches the failing step against the live
 screen and updates the recording on success. Self-heal is opt-in by design; the default
 is fail-loud so real flakes don't get silently masked.
+
+**Self-heal needs an LLM** (it's the LLM that figures out the new selector against the
+drifted screen). Set a provider key once (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY`, or `OPENROUTER_API_KEY`) — or run a local model via Ollama with no
+key — and you're set. See [LLM Configuration](llm_configuration.md) for the full list
+of supported providers and how teams configure shared gateways. Plain `trailblaze run`
+without `--self-heal` doesn't touch an LLM at all.
 
 When drift is larger than self-heal can handle — anything that needs project context,
 log inspection, or judgment about intent — your coding agent does the repair. It reads
@@ -269,33 +275,26 @@ hierarchy — human judgment, no re-recording. Same viewer for iOS, Android, and
 The third rung of the adoption ladder. Tools you add to your agent's surface become
 first-class commands the next time your agent drives a device.
 
-- **Custom commands** like `login` or `addToCart`, written in a typed language with
-  type-safe bindings, with LLM-facing descriptions you write for the tool and each
-  parameter. Your agent reads those descriptions to decide when and how to call them.
-  Every call — yours, the built-ins, or third-party — is recordable and replayable.
+- **Custom commands** ([Scripted Tools](scripted-tools-typed-authoring.md)) like `login`
+  or `addToCart`, written in TypeScript with type-safe bindings, with LLM-facing
+  descriptions you write for the tool and each parameter. Your agent reads those
+  descriptions to decide when and how to call them. Every call — yours, the built-ins,
+  or third-party — is recordable and replayable. Tools run in an embedded JavaScript
+  sandbox shipped inside Trailblaze (no separate Node install, no `node_modules`); the
+  rare tool that needs full Node APIs opts into a Bun subprocess with one flag.
 - **Named waypoints** for your screens, so the agent can ask "am I on the Inbox?", land
-  on a waypoint after a step, or use waypoints as trail checkpoints.
-- **Trailmaps** to bundle tools + waypoints + recorded trails per app, shared across
-  teams.
-
-These are active prototypes — landing now, worth knowing about, see the linked devlogs
-for current state:
-
-- **Trailmaps** ([devlog](devlog/2026-05-12-npm-distribution-for-trailmaps.md)) —
-  reusable target-aware capability bundles, designed to distribute via npm.
-- **Scripted Tools** ([devlog](devlog/2026-04-22-scripting-sdk-authoring-vision.md)) —
-  custom tools with the `@trailblaze/scripting` SDK, executed in a QuickJS sandbox or
-  host subprocess.
-- **Waypoints** ([devlog](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md)) —
-  named, assertable app locations defined structurally, never by content.
-- **Trail-as-Tool** ([devlog](devlog/2026-04-21-run-trail-tool-proposal.md)) — expose a
-  saved trail as a tool so other trails (and agents) can call it.
+  on a waypoint after a step, or use waypoints as trail checkpoints. Waypoints are an
+  active prototype — see the [devlog](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md).
+- **[Trailmaps](trailmaps.md)** to bundle tools + waypoints + recorded trails per app,
+  shared across teams — the unit of authoring going forward.
 
 ## Built-in Agent (Fallback)
 
-Trailblaze ships a built-in agent — `blaze`, plus the vision primitives `ask` and
-`verify` — for cases where you don't have a coding agent in the loop. It's the same agent
-that powers `--self-heal` and the recommended CI workflow.
+Trailblaze ships a built-in agent — `trailblaze step`, plus the vision primitives
+`trailblaze ask` and `trailblaze verify` — for cases where you don't have a coding agent
+in the loop. It's the same agent that powers `--self-heal` and the recommended CI
+workflow. (`trailblaze blaze` remains accepted as a deprecated alias of
+`trailblaze step`.)
 
 These commands appear under `Built-in agent:` at the bottom of `trailblaze --help`,
 below the recommended deterministic primitives. They require an LLM:

@@ -103,6 +103,28 @@ data class RunYamlResponse(
    * Always `0` for fire-and-forget dispatches (no tool has executed yet).
    */
   val onDeviceToolLogCount: Int = 0,
+
+  /**
+   * Set by the on-device server when this run's terminal failure (or its timeout-time liveness
+   * probe) was classified as the NON-recoverable Android `UiAutomation` stale-handle wedge —
+   * the state that only a server relaunch can clear (see
+   * [xyz.block.trailblaze.util.UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature]).
+   *
+   * This is the structured at-the-source signal: the host reads this one field rather than
+   * re-deriving the wedge from a string-matched error message downstream. It rides only the
+   * `awaitCompletion = true` responses — the inline `success = false` / timeout shapes — so a
+   * mid-trail or pre-action wedge surfaces typed instead of as plain text the host has to
+   * recognize.
+   *
+   * A `Boolean` (not an enum) is deliberate: `RunYamlResponse` decodes with
+   * `ignoreUnknownKeys = true` but `coerceInputValues` unset, so a future enum constant a newer
+   * device emits would fail to decode on an older host. A boolean is wire-safe and
+   * forward-compatible across host/device version skew.
+   *
+   * Always `false` for fire-and-forget dispatches (no terminal state is known when the response
+   * is returned) and for ordinary failures (assertion, element-not-found, transport).
+   */
+  val nonRecoverableWedge: Boolean = false,
 ) {
   init {
     require(success != null || memorySnapshot.isEmpty()) {

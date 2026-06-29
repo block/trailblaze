@@ -19,6 +19,7 @@ import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.ReportTemplateResolver
 import xyz.block.trailblaze.report.WasmReport
+import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
@@ -525,6 +526,7 @@ open class CliReportGenerator {
       started_at_epoch_ms = firstLog?.timestamp?.toEpochMilliseconds(),
       completed_at = lastLog?.timestamp?.toIso8601String(),
       completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
+      accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
     )
   } catch (e: Exception) {
     Console.error("Warning: failed to build result for session ${sessionId.value}: ${e.message}")

@@ -34,9 +34,12 @@ import java.io.File
  * Generates per-target documentation under `docs/internal/targets/`. Two artifacts per target:
  *
  *   1. **`TARGET_<id>.md`** — the matrix view: every tool in the resolved toolbox shown in
- *      alphabetical order with toolset membership and a per-driver availability column
- *      (✅ / ❌). Checked into the repo and diffed in CI so any toolset/target YAML change
- *      that affects the surface is immediately visible.
+ *      alphabetical order with its toolset membership, its backing (`Kind`: Kotlin / YAML /
+ *      TypeScript), the file/class it comes from (`Source`), and a per-driver availability
+ *      column (✅ / ❌). The `Toolset(s)` column is a pure grouping view — a tool delivered
+ *      per-target via `target.tools:` (rather than through a toolset) renders `-` there and is
+ *      identified by the `Kind` + `Source` columns instead. Checked into the repo and diffed in
+ *      CI so any toolset/target YAML change that affects the surface is immediately visible.
  *   2. **`<id>/tools/<toolName>.md`** — per-tool sidecar (one file per tool in the matrix)
  *      rendered by [ResolvedTargetToolDetailRenderer], the same renderer the workspace
  *      `trailblaze check` command emits per-target sidecars from. Sharing the renderer
@@ -205,7 +208,7 @@ class TargetToolBaselineGenerator(
 
     val toolEntries = mutableMapOf<String, ToolEntry>()
 
-    // Scripted-tool configs by name — used for the matrix `script:` label and the per-tool sidecar.
+    // Scripted-tool configs by name — used for the matrix `Source` column (the `.ts` file) and the per-tool sidecar.
     // Populated from BOTH delivery mechanisms: toolset-delivered scripted tools (resolved from the
     // catalog descriptor in the loop below) and target-declared `target.tools:` ones (further down).
     val scriptedToolsByName = mutableMapOf<String, InlineScriptToolConfig>()
@@ -273,16 +276,18 @@ class TargetToolBaselineGenerator(
     // `supportedPlatforms: [android]` is restricted to Android drivers in the table;
     // omitting the field defaults to every driver the target supports.
     //
-    // Label as `script:<filename>` — "this tool came from a JS/TS module," with the
-    // filename being the `.ts`/`.js` script the descriptor's `script:` points at.
+    // These tools are delivered per-target (NOT via a toolset), so they contribute NO entry to
+    // the `Toolset(s)` column — a target-delivered scripted tool with no toolset renders `-`
+    // there, exactly like a class/YAML tool that isn't in any toolset. "It's a TypeScript tool
+    // from `<file>.ts`" is reported by the separate `Kind` + `Source` columns instead (see
+    // ResolvedTargetToolDetailRenderer.matrixKindAndSource), keeping `Toolset(s)` a pure
+    // toolset-membership view. A scripted tool a
+    // toolset ALSO references by name still shows that toolset id (added by the loop above).
     // (`scriptedToolsByName` is declared above so toolset-delivered scripted tools populate it too.)
     config.tools?.forEach { inlineScript ->
       val toolName = inlineScript.name
-      val scriptFile = File(inlineScript.script)
-      val tsLabel = "script:${scriptFile.name}"
       val supportedDrivers = driversForScriptedTool(inlineScript, allDrivers)
       val entry = toolEntries.getOrPut(toolName) { ToolEntry() }
-      entry.toolSets.add(tsLabel)
       for (dt in supportedDrivers) {
         if (toolName in (excluded[dt] ?: emptySet())) {
           entry.excludedOn.add(dt)
@@ -307,15 +312,23 @@ class TargetToolBaselineGenerator(
       trailmapDir = trailmapDir,
     )
 
+    // Classify each tool once for the matrix's `Kind`/`Source` columns. Reuses the same
+    // [buildToolDetail] resolution that drives the per-tool sidecars (class-backed / YAML-defined
+    // / scripted), so the matrix and the sidecar can never disagree on a tool's backing.
+    val toolDetails = toolEntries.keys.associateWith { name ->
+      buildToolDetail(name, target.id, resolver, yamlDefinedByName, scriptedToolsByName, trailmapDir)
+    }
+
     // Column headers
     val driverHeaders = allDrivers.map { "${it.yamlKey} (${it.platform.name})" }
 
-    appendLine("| Tool | Toolset(s) | ${driverHeaders.joinToString(" | ")} |")
-    appendLine("|------|------------|${driverHeaders.joinToString("|") { ":---:" }}|")
+    appendLine("| Tool | Toolset(s) | Kind | Source | ${driverHeaders.joinToString(" | ")} |")
+    appendLine("|------|------------|------|--------|${driverHeaders.joinToString("|") { ":---:" }}|")
 
     for (toolName in toolEntries.keys.sorted()) {
       val entry = toolEntries[toolName]!!
       val tsLabel = entry.toolSets.sorted().joinToString(", ").ifEmpty { "-" }
+      val (kind, source) = ResolvedTargetToolDetailRenderer.matrixKindAndSource(toolDetails[toolName])
       val cells = allDrivers.map { dt ->
         when {
           dt in entry.excludedOn -> EXCLUDED
@@ -328,7 +341,7 @@ class TargetToolBaselineGenerator(
       } else {
         toolName
       }
-      appendLine("| $toolCell | $tsLabel | ${cells.joinToString(" | ")} |")
+      appendLine("| $toolCell | $tsLabel | $kind | $source | ${cells.joinToString(" | ")} |")
     }
     appendLine()
 

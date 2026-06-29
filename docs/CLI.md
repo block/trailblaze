@@ -316,7 +316,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--capture-video` | Record device screen video for the session (on by default, use --no-capture-video to disable) | - |
 | `--capture-logcat` | Capture Android logcat (filtered to the app under test) to <session-dir>/device.log (only takes effect on Android). On by default; use --no-capture-logcat to disable. | - |
 | `--capture-ios-logs` | Capture the iOS Simulator system log via `xcrun simctl spawn log stream` to <session-dir>/device.log (only takes effect on iOS). On by default; the stream is scoped to the app under test (the logcat-equivalent app log, not the system firehose). Use --no-capture-ios-logs to disable. | - |
-| `--capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. | - |
+| `--capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. On by default; use --no-capture-network to disable. When neither flag is passed, inherits the desktop app's saved setting. | - |
 | `--capture-all` | Enable all capture streams: video, logcat, iOS logs, network (local dev mode) | - |
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
 | `-h`, `--help` | Show this help message and exit. | - |

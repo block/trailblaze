@@ -885,6 +885,207 @@ class AnalyzerScriptedToolEnrichmentTest {
     assertNull(config.meta?.get("trailblaze/isRecordable"))
   }
 
+  // ============================================================================
+  // Description precedence — YAML sidecar > spec `description` > TSDoc-derived.
+  // `description` is the tool's primary descriptor field (NOT a `_meta` gate), so
+  // it routes into `InlineScriptToolConfig.description` rather than `_meta`.
+  // ============================================================================
+
+  @Test
+  fun `analyzer-extracted spec description wins over the TSDoc on a meta-only descriptor`() {
+    // The NEW middle tier on the meta-only (resolveOrFail) branch: a meta-only descriptor has no
+    // YAML `description:`, so the typed spec's `description` must win over the analyzer's
+    // TSDoc-derived `def.description`. Without the routing, the implementation-note-y TSDoc would
+    // silently become the LLM-facing description — the exact footgun this field closes.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "describedTool.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "describedTool",
+          sourcePath = script.absolutePath,
+          description = "TSDoc-derived (must lose to the spec).",
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Spec description (must win)."))),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/describedTool.yaml", script = "./describedTool.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("Spec description (must win).", config.description)
+    // Description is a primary descriptor field — it does NOT leak into the namespaced `_meta`.
+    assertNull(config.meta?.get("trailblaze/description"))
+  }
+
+  @Test
+  fun `blank or non-string spec description falls back to the TSDoc on a meta-only descriptor`() {
+    // Defensive guard in `specDescriptionOf`: a blank (or, via `as any`, non-string) spec
+    // `description` must NOT shadow the TSDoc — it resolves to null and resolution falls through
+    // to `def.description`. Pins that a malformed spec value can't silently blank the description.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "blankDescTool.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "blankDescTool",
+          sourcePath = script.absolutePath,
+          description = "TSDoc fallback (must win when the spec value is unusable).",
+          // Whitespace-only string + a stray non-string value — both ignored by specDescriptionOf.
+          spec = JsonObject(
+            mapOf(
+              "description" to JsonPrimitive("   "),
+              "requiresContext" to JsonPrimitive(true),
+            ),
+          ),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/blankDescTool.yaml", script = "./blankDescTool.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("TSDoc fallback (must win when the spec value is unusable).", config.description)
+  }
+
+  @Test
+  fun `spec description is the middle tier on a partial single-tool descriptor without a YAML description`() {
+    // Partial single-tool (buildPartialConfig) branch: the YAML names the export but supplies no
+    // `description:`, so the typed spec's `description` wins over the analyzer's TSDoc.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "tool.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "tool",
+          sourcePath = script.absolutePath,
+          description = "TSDoc (lowest tier).",
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Spec description (middle tier)."))),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/tool.yaml",
+          descriptor = TrailmapScriptedToolFile(script = "./tool.ts", name = "tool"),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("Spec description (middle tier).", config.description)
+  }
+
+  @Test
+  fun `YAML description wins over both the spec description and the TSDoc on a partial single-tool descriptor`() {
+    // Full three-tier precedence on the buildPartialConfig branch: an author who writes all three
+    // gets the YAML `description:` (top tier). Guards against a refactor that lets the new spec
+    // tier leapfrog the author-explicit YAML override.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "tool.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "tool",
+          sourcePath = script.absolutePath,
+          description = "TSDoc (lowest tier).",
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Spec description (middle tier)."))),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/tool.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./tool.ts",
+            name = "tool",
+            description = "YAML description (top tier, must win).",
+          ),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("YAML description (top tier, must win).", config.description)
+  }
+
+  @Test
+  fun `spec description applies per entry on a partial multi-tool descriptor`() {
+    // Multi-tool (buildPartialConfig per entry) branch: one entry has a YAML `description:`
+    // (wins over its spec), the other leaves it blank and falls through to its spec `description`
+    // (which in turn wins over that entry's TSDoc). Pins the precedence holds independently per entry.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "multi.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "entryWithYamlDesc",
+          sourcePath = script.absolutePath,
+          description = "TSDoc A (lowest).",
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Spec A (middle)."))),
+        ),
+        stubDef(
+          name = "entryWithSpecDesc",
+          sourcePath = script.absolutePath,
+          description = "TSDoc B (lowest).",
+          spec = JsonObject(mapOf("description" to JsonPrimitive("Spec B (middle, must win)."))),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/multi.yaml",
+          descriptor = TrailmapScriptedToolFile(
+            script = "./multi.ts",
+            tools = listOf(
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(
+                name = "entryWithYamlDesc",
+                description = "YAML A (top, must win).",
+              ),
+              xyz.block.trailblaze.config.project.TrailmapScriptedToolEntry(
+                name = "entryWithSpecDesc",
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    val byName = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single())
+      .configs.associateBy { it.name }
+    assertEquals("YAML A (top, must win).", assertNotNull(byName["entryWithYamlDesc"]).description)
+    assertEquals("Spec B (middle, must win).", assertNotNull(byName["entryWithSpecDesc"]).description)
+  }
+
   @Test
   fun `meta-only descriptor inlines a named-enum input schema ref the analyzer emitted`() {
     // Regression guard for the enum-param subprocess-registration bug. ts-json-schema-generator

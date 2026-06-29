@@ -92,9 +92,10 @@ class HostAccessibilityRpcClientTest {
   private fun createClient(
     memory: AgentMemory = AgentMemory(),
     toolExecutionContextProvider: ((TraceId?) -> xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext)? = null,
+    onDeviceRpcClient: OnDeviceRpcClient = rpcClient,
   ): HostAccessibilityRpcClient =
     HostAccessibilityRpcClient(
-      rpcClient = rpcClient,
+      rpcClient = onDeviceRpcClient,
       toolRepo = TrailblazeToolRepo.withDynamicToolSets(),
       runYamlRequestTemplate = testRunYamlRequest,
       sessionProvider =
@@ -106,10 +107,9 @@ class HostAccessibilityRpcClientTest {
         },
       toolExecutionContextProvider = toolExecutionContextProvider,
       memory = memory,
-      // Collapse production's 10s re-warm budget + 500ms poll into ~50ms / 1ms so any future
-      // wedge-recovery test on this client doesn't pay real-clock retry delays. Today no test
-      // exercises the slow path, but the override mirrors HostOnDeviceRpcTrailblazeAgentTest's
-      // pattern so the speedup is preserved if/when one is added.
+      // Collapse production's 10s re-warm budget + 500ms poll into ~50ms / 1ms so any
+      // re-warm path that probes a failing server doesn't pay real-clock retry delays.
+      // Mirrors HostOnDeviceRpcTrailblazeAgentTest's pattern.
       reWarmTimeoutMs = 50L,
       reWarmPollIntervalMs = 1L,
     )
@@ -647,6 +647,104 @@ class HostAccessibilityRpcClientTest {
       )
     }
     assertThat(sharedMemory.variables.isEmpty()).isTrue()
+  }
+
+  // ── Structured wedge arming (V3 on-device-source redesign) ──────────────────────────────────
+  //
+  // The on-device server tags an awaitCompletion=true RunYamlResponse with
+  // `nonRecoverableWedge = true` at the source. That wedge arrives as an RpcResult.Success carrying
+  // success=false, so the RPC Failure-arm string matches never see it — the host reads the typed
+  // field and calls `armNonRecoverableWedge()`. These tests drive the real OnDeviceRpcClient with a
+  // breaker lambda (no spy, no laundered types — same pattern as OnDeviceRpcClientWedgeTest) and
+  // assert the breaker fires on the typed signal and stays quiet without it.
+
+  /** A success=false response whose typed `nonRecoverableWedge` field is set by [wedged]. */
+  private fun runYamlInlineFailureBody(wedged: Boolean): String =
+    """{"sessionId":"host-top-level-session","success":false,""" +
+      """"errorMessage":"on-device failure","nonRecoverableWedge":$wedged}"""
+
+  @Test
+  fun `execute arms the wedge breaker when the device tags the inline failure`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = true)
+    }
+
+    var armed = false
+    val armingClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val result = runBlocking {
+      createClient(onDeviceRpcClient = armingClient).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+    armingClient.close()
+
+    assertThat(result).isInstanceOf(ExecutionResult.Failure::class)
+    assertThat(armed).isTrue()
+  }
+
+  @Test
+  fun `execute does not arm the wedge breaker on an ordinary inline failure`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = false)
+    }
+
+    var armed = false
+    val armingClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val result = runBlocking {
+      createClient(onDeviceRpcClient = armingClient).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+    armingClient.close()
+
+    assertThat(result).isInstanceOf(ExecutionResult.Failure::class)
+    assertThat(armed).isFalse()
+  }
+
+  @Test
+  fun `executePreAction arms the wedge breaker when the device tags the inline failure`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = true)
+    }
+
+    var armed = false
+    val armingClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val launchTool = InputTextTrailblazeTool(text = "ignored")
+    val succeeded = runBlocking {
+      createClient(onDeviceRpcClient = armingClient).executePreAction(
+        launchTool,
+        testRunYamlRequest.copy(awaitCompletion = true),
+      )
+    }
+    armingClient.close()
+
+    assertThat(succeeded).isFalse()
+    assertThat(armed).isTrue()
+  }
+
+  @Test
+  fun `executePreAction does not arm the wedge breaker on an ordinary inline failure`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = false)
+    }
+
+    var armed = false
+    val armingClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val launchTool = InputTextTrailblazeTool(text = "ignored")
+    val succeeded = runBlocking {
+      createClient(onDeviceRpcClient = armingClient).executePreAction(
+        launchTool,
+        testRunYamlRequest.copy(awaitCompletion = true),
+      )
+    }
+    armingClient.close()
+
+    assertThat(succeeded).isFalse()
+    assertThat(armed).isFalse()
   }
 
   private fun runYamlSuccessBody(): String =

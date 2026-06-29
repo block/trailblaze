@@ -5,6 +5,7 @@ import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -93,6 +94,8 @@ class AccessibilityServiceScreenState(
   private var _screenshotBytes: ByteArray = ByteArray(0)
   private var foregroundAppId: String? = null
   private var currentActivity: String? = null
+  override var captureCoverage: CaptureCoverage? = null
+    private set
 
   init {
     val (displayWidth, displayHeight) = TrailblazeAccessibilityService.getScreenDimensions()
@@ -133,6 +136,7 @@ class AccessibilityServiceScreenState(
     // windows) into a single capture so secondary-window content is visible in both tree shapes.
     // Node recycling and per-window refresh happen inside captureMergedScreenTrees().
     val mergedTrees = TrailblazeAccessibilityService.captureMergedScreenTrees()
+    captureCoverage = mergedTrees.captureCoverage
 
     // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()
     // is independent of AccessibilityNodeInfo traversal, and starting both concurrently also

@@ -15,10 +15,9 @@ does (prose your team reads) and *how* it runs (recorded steps your CI replays
 deterministically with no LLM at replay time).
 
 Trailblaze is not its own coding agent. Claude Code, Cursor, Codex, Goose, Aider — your
-editor's agent — does the planning. Trailblaze handles the device. (If you'd rather run
-the included built-in agent end-to-end, that's [available too](#built-in-agent-fallback)
-— it's the same agent that powers `--self-heal` and the CI fallback path, just not the
-headline integration anymore.)
+editor's agent — does the planning. Trailblaze handles the device. (A built-in agent
+ships in the box for cases where you don't have a coding agent in the loop — see
+[Built-in Agent (Fallback)](#built-in-agent-fallback).)
 
 ## See a real run
 
@@ -61,9 +60,9 @@ trailblaze tool tap ref=ab42 -s "Tap sign in"
 ```
 
 Paste those into a Claude Code, Codex, Cursor, or Goose session and your agent is already
-authoring trails. (Every device-acting command — `snapshot`, `tool`, `blaze`, `ask`,
+authoring trails. (Every device-acting command — `snapshot`, `tool`, `step`, `ask`,
 `verify`, `session start/stop`, `run` — also accepts `-d <platform>` as a per-call
-override, and `--target <app>` where supported (`tool`, `blaze`, `session start`,
+override, and `--target <app>` where supported (`tool`, `step`, `session start`,
 `mcp`) — useful in CI / scripts that prefer determinism over shell state.) A longer
 walkthrough lives in [Getting Started](getting_started.md).
 
@@ -79,7 +78,7 @@ Three rungs. You can stop at any of them.
    test, or open it in the [Trace Viewer](#trace-viewer) — same artifact, three uses,
    no LLM at replay.
 3. **Compose your own agent surface.** Give your agent first-class commands like `login`
-   or `addToCart`, named [waypoints](#waypoints) for your screens, and
+   or `addToCart`, named [waypoints](#active-prototype-waypoints) for your screens, and
    [trailmaps](#trailmaps) shared across teams. Curate exactly what your agent sees:
    surface your `login`, hide the low-level taps, pick four of twenty primitives if
    that's what your tests need. Custom commands are typed and replayable; every call —
@@ -165,26 +164,32 @@ opt-in so real flakes don't get silently masked.
 - **Multi-device CLI sessions** — drive Android + iOS + web from the same shell, in
   parallel, each with its own bound device.
 
-## Active Prototypes
+## Trailmaps
 
-Trailblaze is moving fast. These are landing now and are worth knowing about even if
-they're not stable yet.
+A **trailmap** is everything one app needs to be testable, in one self-contained
+directory: the custom tools your agent uses to drive the app (`login`, `addToCart`),
+the framework toolsets you want exposed (`core_interaction`, `verification`), named
+locations in the app, and the recorded trails that exercise it. An app team publishes
+the trailmap once; other teams (and your CI, and live agents) consume it. Concretely
+it's a folder with one `trailmap.yaml` manifest plus a few `.ts` files for the custom
+tools — see [Your First Trailmap](your-first-trailmap.md) for the full walkthrough,
+and [Publishing a Trailmap](publishing-a-trailmap.md) for the distribution tiers (local
+workspace, GitHub repo, npm package).
 
-### Trailmaps
+If you've used **Page Object** (web testing) or **Robot Pattern** (Android) — reusable
+helper layers that wrap raw UI primitives into business-level actions like `login` and
+`addToCart`, so individual tests read like "log in, add to cart, check out" instead of
+"tap 4, type 'foo', tap 12" — a trailmap is the same instinct made shippable: a
+published library plus a navigation model plus runnable proof, rather than a bag of
+helper methods buried inside one test suite. (If you haven't used either, you can
+ignore the comparison — the description above is self-contained.)
 
-A **trailmap** is a reusable bundle of target-aware capabilities — tools, waypoints,
-navigation routes, and recorded trails — that an app team publishes once and that both
-human authors and live agents consume. Think of it as *the Robot Pattern, generalized
-and shippable*: not just a bag of helper methods inside one test suite, but a published
-library plus a navigation model plus runnable proof that the model still works.
-
-See: the [Trailmaps guide](trailmaps.md) for the manifest schema, per-file scripted
-tools, and the workspace-vs-classpath precedence rule. Background:
+See the [Trailmaps guide](trailmaps.md) for the manifest schema and the
+workspace-vs-classpath precedence rule. Background:
 [npm Distribution for Trailmaps](devlog/2026-05-12-npm-distribution-for-trailmaps.md),
-[Target Trailmaps: Local-First Packaging](devlog/2026-04-26-target-packs-local-first.md),
-[Trailblaze as the Robot Pattern — and More](devlog/2026-04-26-robot-pattern-plus-packs.md).
+[Target Trailmaps: Local-First Packaging](devlog/2026-04-26-target-packs-local-first.md).
 
-### Scripted Tools (TypeScript)
+## Scripted Tools (TypeScript)
 
 **Start here:** [Your First Trailmap](your-first-trailmap.md) walks one tool from an
 empty directory to a passing run. Once you're past the first run, the per-tool
@@ -196,8 +201,9 @@ trailmap with no Kotlin code, no Gradle build, and no per-tool YAML descriptor. 
 inputs as a TypeScript interface, write the handler against the typed
 `ctx.tools.<name>(args)` composition surface, and the framework derives the schema, the
 LLM-facing description, and the IDE bindings from the `.ts` file itself. Tools execute
-in a QuickJS sandbox on-device by default, or in a host subprocess when they need
-Node-compatible APIs.
+in an embedded JavaScript sandbox shipped inside Trailblaze (no separate Node install,
+no `node_modules`); tools that need full Node APIs opt into a Bun subprocess with one
+flag.
 
 Two worked target trailmaps live in the OSS tree as full-shape references to copy —
 [`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts) (iOS, host driver) and
@@ -209,25 +215,18 @@ documented as a [Legacy Reference](scripted_tools.md); existing legacy tools kee
 working unmodified — new authoring should use the typed shape. Background:
 [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md).
 
-### Waypoints
+## Active Prototype: Waypoints
 
-A **waypoint** is a named, assertable location in the app — defined structurally
-(element identity, stable labels), never by content. Waypoints power the agent's mental
-map of an app: it can ask "am I on the Inbox?", land on a waypoint after a step, or use
-waypoints as checkpoints for trails. The `matchWaypoint` tool runs against captured
-session state and returns clean matches plus near-misses (off by one assertion), so
-authors iterate without staged pipelines.
+Trailblaze is moving fast. **Waypoints** are landing now and worth knowing about even
+though they're not yet stable: named, assertable locations in the app, defined
+structurally (element identity, stable labels), never by content. Waypoints power the
+agent's mental map of an app: it can ask "am I on the Inbox?", land on a waypoint after
+a step, or use waypoints as trail checkpoints. The `matchWaypoint` tool runs against
+captured session state and returns clean matches plus near-misses (off by one
+assertion), so authors iterate without staged pipelines.
 
 See: [Waypoints and App Navigation Graphs](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md),
 [Waypoint Discovery via matchWaypoint](devlog/2026-04-21-waypoint-discovery-and-matching.md).
-
-### Trail-as-Tool
-
-A trail can itself be exposed as a tool, so an agent (or a higher-level trail) can call
-it like any other capability. This makes flows composable: a `loginAsTestUser` trail
-becomes a one-line setup step inside any other test.
-
-See: [runTrail Trail-as-Tool Primitive](devlog/2026-04-21-run-trail-tool-proposal.md).
 
 ## Built for an evolving ecosystem
 
@@ -253,9 +252,7 @@ trailblaze config llm anthropic/claude-sonnet-4-20250514
 The built-in agent implements features from the
 [Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) research line: exception handling
 for popups and stuck states, reflection and self-correction, task decomposition,
-cross-app memory, and enhanced recording for robust replay. See
-[Architecture / Multi-Agent V3](architecture.md#multi-agent-v3-architecture) for the
-details.
+cross-app memory, and enhanced recording for robust replay.
 
 For serious authoring work, you want a real coding agent (Claude Code, Cursor, Codex)
 driving the Trailblaze primitives instead — those bring your codebase, log inspection,

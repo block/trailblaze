@@ -84,6 +84,7 @@
         const SESSION_PREFIX = 'session/';
         const CAPTURE_METADATA_PREFIX = 'capture_metadata/';
         const DEVICE_LOGS_PREFIX = 'device_logs/';
+        const NETWORK_LOGS_PREFIX = 'network_logs/';
 
         // Type-appropriate empty fallback when no compressed source exists or decompression fails.
         // Kotlin side expects: /logs -> List, other -> Object. (No `/yaml` callers exist —
@@ -149,6 +150,13 @@
                     compressedData = window.trailblaze_report_compressed.device_logs[sessionId];
                 }
             }
+            // Network logs lookup (network_logs/SESSION_ID)
+            else if (key.startsWith(NETWORK_LOGS_PREFIX)) {
+                const sessionId = key.substring(NETWORK_LOGS_PREFIX.length);
+                if (window.trailblaze_report_compressed.network_logs) {
+                    compressedData = window.trailblaze_report_compressed.network_logs[sessionId];
+                }
+            }
 
             // Decompress the data if found
             if (compressedData) {
@@ -181,6 +189,11 @@
                                 const sessionId = key.substring(DEVICE_LOGS_PREFIX.length);
                                 if (window.trailblaze_report_compressed.device_logs) {
                                     delete window.trailblaze_report_compressed.device_logs[sessionId];
+                                }
+                            } else if (key.startsWith(NETWORK_LOGS_PREFIX)) {
+                                const sessionId = key.substring(NETWORK_LOGS_PREFIX.length);
+                                if (window.trailblaze_report_compressed.network_logs) {
+                                    delete window.trailblaze_report_compressed.network_logs[sessionId];
                                 }
                             } else {
                                 // Flat keys: sessions, session_info, session_detail, etc.

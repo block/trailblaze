@@ -46,11 +46,12 @@ data class TrailblazeConfig(
    * When true, supported sessions auto-start the framework network capture engine for
    * the duration of the run — `<session-dir>/network.ndjson` is populated without any
    * per-trail capture-start call. Currently honored by Playwright web + Electron;
-   * on-device mobile engines plug into the same flag. Mirrors
-   * the desktop-app `captureLogcat` pattern. Off by default; flip via the desktop
-   * settings toggle, the `--capture-network` CLI flag, or set on this config directly.
+   * on-device mobile engines plug into the same flag (a no-op until an activator is
+   * registered). Mirrors the desktop-app `captureLogcat` pattern. On by default;
+   * disable via the desktop settings toggle, the `--no-capture-network` CLI flag, or
+   * set on this config directly.
    */
-  val captureNetworkTraffic: Boolean = false,
+  val captureNetworkTraffic: Boolean = true,
 ) {
   companion object {
     val DEFAULT = TrailblazeConfig()

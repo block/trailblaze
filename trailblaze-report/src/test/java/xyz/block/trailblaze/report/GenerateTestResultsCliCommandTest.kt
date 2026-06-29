@@ -7,6 +7,7 @@ import java.io.PrintStream
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.datetime.Instant
@@ -15,6 +16,8 @@ import kotlinx.serialization.json.Json
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -766,6 +769,120 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `accessibility_truncation rolls up captureCoverage from driver logs into the JSON`() {
+    // End-to-end guard for the report wiring of PR #4143: an AgentDriverLog carrying a
+    // looksTruncated CaptureCoverage must surface in the report JSON under
+    // accessibility_truncation.captures_truncated. The aggregator's own unit tests
+    // (AccessibilityTruncationSummaryTest) cover fromLogs(); this pins the call-site wiring in
+    // GenerateTestResultsCliCommand and the JSON shape downstream consumers will read.
+    val logsDir = Files.createTempDirectory("trailblaze-report-a11y-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_06_26_android_truncated_session")
+      val deviceInfo = androidDeviceInfo()
+      val started = Instant.parse("2026-06-26T12:00:00Z")
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/android-a11y.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "exerciseTruncation",
+            testClassName = "AndroidA11yTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = started,
+        ),
+      )
+      // Two captures: one flagged truncated, one fine. Aggregator should count both in
+      // captures_total and only the first in captures_truncated.
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_AgentDriverLog.json",
+        log = TrailblazeLog.AgentDriverLog(
+          viewHierarchy = ViewHierarchyTreeNode(),
+          screenshotFile = "screenshot_truncated.png",
+          action = AgentDriverAction.TapPoint(x = 540, y = 1200),
+          captureCoverage = CaptureCoverage(
+            contentNodes = 6,
+            zeroBoundsContentNodes = 0,
+            horizontalCoverage = 0.17,
+            verticalCoverage = 0.92,
+            looksTruncated = true,
+            reason = "content spans 17% of width, jammed against the right edge " +
+              "(left 82% empty) across 6 node(s)",
+          ),
+          durationMs = 320,
+          session = sessionId,
+          timestamp = started.plus(2.seconds),
+          deviceHeight = 2400,
+          deviceWidth = 1080,
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "003_AgentDriverLog.json",
+        log = TrailblazeLog.AgentDriverLog(
+          viewHierarchy = ViewHierarchyTreeNode(),
+          screenshotFile = "screenshot_complete.png",
+          action = AgentDriverAction.TapPoint(x = 540, y = 1500),
+          captureCoverage = CaptureCoverage(
+            contentNodes = 14,
+            zeroBoundsContentNodes = 0,
+            horizontalCoverage = 0.94,
+            verticalCoverage = 0.88,
+            looksTruncated = false,
+            reason = "content spans 94% of width / 88% of height — looks complete",
+          ),
+          durationMs = 280,
+          session = sessionId,
+          timestamp = started.plus(4.seconds),
+          deviceHeight = 2400,
+          deviceWidth = 1080,
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "004_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = started.plus(5.seconds),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val summary = report.results.single().accessibility_truncation
+      assertNotNull(summary, "accessibility_truncation must be populated when logs carry coverage")
+      assertEquals(2, summary.captures_total)
+      assertEquals(1, summary.captures_truncated)
+      assertEquals(1, summary.examples.size)
+      assertTrue(
+        summary.examples.single().reason.contains("right edge"),
+        "the example should carry the detector's reason verbatim — got ${summary.examples.single().reason}",
+      )
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `recorded session that made an LLM call is reported as RECORDING_WITH_AI`() {
     // End-to-end guard for the AI_ONLY-mislabel fix: a recorded trail (hasRecordedSteps = true)
     // that emits even one TrailblazeLlmRequestLog must surface as RECORDING_WITH_AI, not AI_ONLY.
@@ -1098,6 +1215,20 @@ class GenerateTestResultsCliCommandTest {
       widthPixels = 1280,
       heightPixels = 720,
       classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+    )
+  }
+
+  private fun androidDeviceInfo(): TrailblazeDeviceInfo {
+    val deviceId = TrailblazeDeviceId(
+      instanceId = "android-emulator",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    return TrailblazeDeviceInfo(
+      trailblazeDeviceId = deviceId,
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      widthPixels = 1080,
+      heightPixels = 2400,
+      classifiers = listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier()),
     )
   }
 

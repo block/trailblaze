@@ -105,12 +105,13 @@ data class TrailblazeServerState(
      * When true, every supported session auto-starts the framework network
      * capture engine — events stream to `<session-dir>/network.ndjson` with no
      * per-trail capture-start call required. Currently honored by Playwright
-     * (web + Electron); on-device mobile engines plug
-     * into the same flag. Off by default because the per-event I/O adds cost
-     * on the engine's callback thread; flip on when investigating analytics
-     * signals or any cross-cutting network behavior.
+     * (web + Electron); on-device mobile engines plug into the same flag (a no-op
+     * until an activator is registered). On by default so network traffic is
+     * available in the run timeline and report without having to remember to opt
+     * in; turn it off here (or via `--no-capture-network`) if the per-event I/O
+     * cost on the engine's callback thread matters for a given run.
      */
-    val captureNetworkTraffic: Boolean = false,
+    val captureNetworkTraffic: Boolean = true,
     /**
      * When true, the desktop app connects the device's analytics agent for the
      * duration of a run so events emitted during the trail can be surfaced in the

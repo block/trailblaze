@@ -27,6 +27,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
@@ -245,6 +246,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             ci_job_id = hostCiContext.ci_job_id,
             logs_zip_filename = hostCiContext.logs_zip_filename,
             priority = sessionInfo.trailConfig?.priority,
+            accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
           )
         )
       } catch (e: Exception) {

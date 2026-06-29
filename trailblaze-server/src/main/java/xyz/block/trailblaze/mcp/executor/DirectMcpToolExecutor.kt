@@ -11,6 +11,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
+import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -129,6 +130,9 @@ class DirectMcpToolExecutor(
         sessionDir = sessionDir,
         toolNames = availableScriptedToolNames,
         logPrefix = "[DirectMcpToolExecutor]",
+        // Install a real (unrestricted) `fetch` so scripted tools can make HTTP calls without
+        // shelling curl — matches the host run path. See `:trailblaze-scripting-fetch`.
+        engineExtension = OkHttpFetchExtension(),
       )
     }
   }

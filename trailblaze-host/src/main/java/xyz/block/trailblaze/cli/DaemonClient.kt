@@ -53,11 +53,20 @@ class DaemonClient(
    * the fallback ping fires).
    */
   private val pollIntervalMs: Long = RUN_POLL_INTERVAL_MS,
+  /**
+   * How long the run may go WITHOUT a new progress message before the client gives up — an
+   * inactivity watchdog, not a wall-clock cap (see [RUN_POLL_TIMEOUT_MS]). Resolved once from
+   * [RUN_POLL_TIMEOUT_ENV_VAR] in production; tests inject a small window directly.
+   */
+  private val runPollTimeoutMs: Long = resolveRunPollTimeoutMs(),
 ) : java.io.Closeable {
 
   init {
     require(pollIntervalMs > 0) {
       "pollIntervalMs must be positive, was $pollIntervalMs"
+    }
+    require(runPollTimeoutMs > 0) {
+      "runPollTimeoutMs must be positive, was $runPollTimeoutMs"
     }
   }
 
@@ -268,17 +277,24 @@ class DaemonClient(
     // Poll for status
     var lastProgress: String? = null
     val pollStartTime = System.currentTimeMillis()
+    // Inactivity watchdog: the deadline is measured from the LAST forward progress, not from run
+    // start. A run that keeps advancing (a fresh progressMessage each step) is never abandoned;
+    // only one that goes silent for the whole window — a genuinely wedged daemon whose /ping may
+    // still answer — is timed out. Reset below whenever progress changes. Because lastProgressAtMs
+    // only ever moves forward from pollStartTime, this deadline is always >= the old start-anchored
+    // cap, so the change can never kill a run EARLIER than the previous flat timeout did.
+    var lastProgressAtMs = pollStartTime
     var consecutiveErrors = 0
     try {
       while (true) {
         kotlinx.coroutines.delay(pollIntervalMs)
 
-        // Overall timeout to prevent infinite polling if daemon crashes
-        if (System.currentTimeMillis() - pollStartTime > RUN_POLL_TIMEOUT_MS) {
+        // Time out only after a full window with NO forward progress (wedged daemon backstop).
+        if (System.currentTimeMillis() - lastProgressAtMs > runPollTimeoutMs) {
           return CliRunResponse(
             success = false,
             error =
-              "Timed out waiting for run to complete after ${RUN_POLL_TIMEOUT_MS / 1000}s",
+              "Timed out waiting for run to complete: no progress for ${runPollTimeoutMs / 1000}s",
           )
         }
 
@@ -355,11 +371,15 @@ class DaemonClient(
             continue // Transient network error, keep polling
           }
 
-        // Emit progress updates
+        // Emit progress updates and reset the inactivity watchdog on forward progress. NB: the
+        // ping-healthy-after-burst message in resolveConsecutivePollErrors deliberately does NOT
+        // reset the watchdog — a daemon that pings but never advances the run is exactly the wedged
+        // state the backstop exists to catch.
         val progress = status.progressMessage
         if (progress != null && progress != lastProgress) {
           onProgress(progress)
           lastProgress = progress
+          lastProgressAtMs = System.currentTimeMillis()
         }
 
         when (status.state) {
@@ -491,15 +511,82 @@ class DaemonClient(
     const val POLL_INTERVAL_MS = 500L
 
     /**
-     * Overall timeout for polling a run to completion (10 minutes).
+     * Default inactivity window for polling a run to completion (10 minutes).
      *
-     * Lowered from 30 min to 10 min so a wedged daemon fails fast and the next CI cycle
-     * starts sooner. The honest happy-path runtime for a single-trail CI session is well
-     * under 10 minutes (a Wikipedia trail completes in seconds; a long multi-screen flow in a
-     * couple of minutes), so 10 min gives a 3-5× headroom over the typical case while
-     * still cutting the failure-mode wait by 20 minutes vs. the historical 30 min.
+     * This is NOT a wall-clock cap on total runtime — it is the maximum time the run may go
+     * WITHOUT a new progress message before the client abandons it (see the watchdog in
+     * [runAsync]). A run that keeps advancing — emitting a fresh `progressMessage` each step —
+     * runs as long as it needs; only one that goes silent for the whole window (a wedged daemon
+     * whose `/ping` may still answer) is timed out. This deliberately lets a legitimately
+     * slow-but-progressing trail finish instead of being killed at a flat deadline while the
+     * daemon is still doing real work.
+     *
+     * Previously a flat wall-clock cap measured from run start: any run exceeding 10 min total
+     * was killed regardless of health, which abandoned healthy long-running trails even while the
+     * daemon was still advancing steps. A deliberately-contended parallel-stress CI step (whose
+     * copies serialize on a shared login lock) can legitimately approach 10 min, and the old cap
+     * reported the slowest copy failed while its run was still progressing — the daemon went on to
+     * complete it. The watchdog can only push the deadline later than the old cap, never earlier,
+     * so the change is strictly safe for every pipeline: it converts false timeouts into passes
+     * and never introduces a new early kill.
+     *
+     * Override per-invocation with [RUN_POLL_TIMEOUT_ENV_VAR].
      */
     const val RUN_POLL_TIMEOUT_MS = 10 * 60 * 1000L
+
+    /**
+     * Env var to override [RUN_POLL_TIMEOUT_MS] (the inactivity window), in milliseconds. Read
+     * once when a [DaemonClient] is constructed (per CLI command). Lower it to fail fast while
+     * triaging a wedged daemon; raise it for a pipeline whose trails legitimately go quiet for
+     * long stretches. A missing / unparseable / non-positive value falls back to the default; a
+     * positive value below [MIN_RUN_POLL_TIMEOUT_MS] is clamped up to it. Any time the env var is
+     * actually honored (or clamped) a single diagnostic line is logged so a CI consumer can trace
+     * which value was in effect when an unexpected timeout fired.
+     */
+    const val RUN_POLL_TIMEOUT_ENV_VAR = "TRAILBLAZE_RUN_POLL_TIMEOUT_MS"
+
+    /** Floor for [RUN_POLL_TIMEOUT_ENV_VAR] so a fat-fingered tiny value can't abandon every run instantly. */
+    const val MIN_RUN_POLL_TIMEOUT_MS = 1_000L
+
+    /** Resolve the inactivity-watchdog window from [RUN_POLL_TIMEOUT_ENV_VAR] (read once per construction). */
+    fun resolveRunPollTimeoutMs(): Long = parseRunPollTimeoutMs(System.getenv(RUN_POLL_TIMEOUT_ENV_VAR))
+
+    /**
+     * Pure resolution of the inactivity-watchdog window from a raw env-var string (extracted so the
+     * parsing rules are unit-testable without touching the process environment). Rules:
+     *  - `null` / unparseable / non-positive (`<= 0`) → [RUN_POLL_TIMEOUT_MS] default. Non-positive
+     *    is treated as invalid (NOT clamped): otherwise a `=0` would clamp to the sub-second floor
+     *    and make any run that goes quiet for ~1s fail as timed out, instead of the intended default.
+     *  - positive but below [MIN_RUN_POLL_TIMEOUT_MS] → clamped up to the floor.
+     *  - positive and >= the floor → honored as-is.
+     *
+     * Logs a single `[DaemonClient]` diagnostic whenever the env var is set (honored, clamped, or
+     * rejected) so an unexpected timeout can be traced to the value that was actually in effect.
+     */
+    internal fun parseRunPollTimeoutMs(raw: String?): Long {
+      if (raw == null) return RUN_POLL_TIMEOUT_MS
+      val parsed = raw.toLongOrNull()
+      if (parsed == null || parsed <= 0) {
+        Console.error(
+          "[DaemonClient] $RUN_POLL_TIMEOUT_ENV_VAR='$raw' is not a positive number of " +
+            "milliseconds — using default ${RUN_POLL_TIMEOUT_MS}ms.",
+        )
+        return RUN_POLL_TIMEOUT_MS
+      }
+      val clamped = parsed.coerceAtLeast(MIN_RUN_POLL_TIMEOUT_MS)
+      if (clamped != parsed) {
+        Console.error(
+          "[DaemonClient] $RUN_POLL_TIMEOUT_ENV_VAR=${parsed}ms is below the " +
+            "${MIN_RUN_POLL_TIMEOUT_MS}ms floor — clamped to ${clamped}ms.",
+        )
+      } else {
+        Console.error(
+          "[DaemonClient] run-poll inactivity timeout overridden via " +
+            "$RUN_POLL_TIMEOUT_ENV_VAR=${clamped}ms.",
+        )
+      }
+      return clamped
+    }
 
     /**
      * Max consecutive poll errors before falling back to a /ping health check.

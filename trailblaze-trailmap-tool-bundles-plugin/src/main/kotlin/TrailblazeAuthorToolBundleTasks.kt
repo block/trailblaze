@@ -536,3 +536,13 @@ internal fun Project.defaultEsbuildBinary(): java.io.File? =
   locateFrameworkRoot(rootProject.projectDir)?.let {
     File(it, "sdks/typescript/node_modules/.bin/esbuild")
   }
+
+/**
+ * Returns the framework's TypeScript SDK directory — the parent of the marker
+ * `sdks/typescript/package.json` walk-up. Used by `TrailblazeTrailmapToolBundlesExtension`
+ * as the resolver-root when its `sdkDir` property is unset, so consumers in the
+ * framework source tree don't have to configure anything. External consumers set
+ * `sdkDir` explicitly and bypass this helper entirely.
+ */
+internal fun Project.locateFrameworkSdkRoot(): java.io.File? =
+  locateFrameworkRoot(rootProject.projectDir)?.let { File(it, "sdks/typescript") }

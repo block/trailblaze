@@ -32,6 +32,7 @@ import maestro.TreeNode
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.android.AndroidSdkVersion
+import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -326,6 +327,15 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       val treeNode: TreeNode?,
       val accessibilityNode: AccessibilityNode?,
       val foregroundAppId: String?,
+      /**
+       * Last [CaptureCoverage] the settle gate computed against the live accessibility tree.
+       * Null when the gate is disabled (`TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY=1`), the
+       * application window root wasn't readable, or the screen dimensions were unknown — i.e.
+       * any state where the detector couldn't form an opinion. Otherwise carries the same
+       * verdict (`looksTruncated`, coverage fractions, reason) that the `[capture-coverage]`
+       * log line reports, so downstream session-log emitters can surface it as structured data.
+       */
+      val captureCoverage: CaptureCoverage?,
     )
 
     /**
@@ -339,9 +349,12 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * resolved root is recycled before returning.
      */
     fun captureMergedScreenTrees(awaitStable: Boolean = true): MergedScreenTrees {
-      if (awaitStable) awaitTreeStable()
+      val coverage = if (awaitStable) awaitTreeStable() else null
       val roots = getCaptureWindowRoots()
-      if (roots.isEmpty()) return MergedScreenTrees(null, null, null)
+      // A verdict from awaitTreeStable() describes a tree it sampled; if no roots resolve here we
+      // had nothing to merge and the verdict no longer corresponds to a captured tree. Drop it so
+      // downstream consumers never see a non-null CaptureCoverage paired with a null treeNode.
+      if (roots.isEmpty()) return MergedScreenTrees(null, null, null, captureCoverage = null)
       return try {
         roots.forEach { refreshTreeInPlace(it) }
         MergedScreenTrees(
@@ -349,6 +362,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           accessibilityNode = roots.toMergedAccessibilityNode(),
           // packageName must be read before recycle() invalidates the node.
           foregroundAppId = roots.first().packageName?.toString(),
+          captureCoverage = coverage,
         )
       } finally {
         roots.forEach { it.recycle() }
@@ -583,16 +597,29 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * is part of the gate, so `TRAILBLAZE_DISABLE_SETTLE_TREE_STABILITY=1` disables it along with the
      * rest of the settle wait.
      */
-    private fun awaitTreeStable() {
-      if (treeStabilityGateDisabled()) return
+    private fun awaitTreeStable(): CaptureCoverage? {
+      if (treeStabilityGateDisabled()) return null
       val (screenWidth, screenHeight) = getScreenDimensions()
+      // Without real screen dimensions the assessor has nothing to compare bounds against and
+      // emits a sentinel "skipping coverage check" verdict (looksTruncated=false, zero coverage).
+      // Returning that downstream would lie to consumers — the [MergedScreenTrees.captureCoverage]
+      // kdoc, the per-capture log field, and the report aggregator all treat null as "not
+      // measured" and a present object as a real verdict. Bail out null so a degraded device
+      // (the only time this happens in practice) doesn't get counted in `captures_total`.
+      if (screenWidth <= 0 || screenHeight <= 0) {
+        Console.log(
+          "[capture-coverage] skipping coverage check — screen dimensions unreadable " +
+            "(${screenWidth}x${screenHeight}); captureCoverage will be null on this capture",
+        )
+        return null
+      }
       val startUptimeMs = SystemClock.uptimeMillis()
       val deadlineUptimeMs = startUptimeMs + STABILITY_MAX_WAIT_MS
       var previousSignature: Long? = null
       var lastChangeUptimeMs = startUptimeMs
       var loggedTruncated = false
       while (true) {
-        val root = getApplicationWindowRoot() ?: return
+        val root = getApplicationWindowRoot() ?: return null
         try {
           var sample = sampleTree(root)
           val now = SystemClock.uptimeMillis()
@@ -617,7 +644,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             }
             if (!assessment.looksTruncated) {
               Console.log("[settle] tree stable after ${now - startUptimeMs}ms")
-              return
+              return assessment
             }
             if (!loggedTruncated) {
               Console.log(
@@ -633,12 +660,15 @@ class TrailblazeAccessibilityService : AccessibilityService() {
             if (finalAssessment.looksTruncated) {
               Console.log(
                 "[capture-coverage] proceeding after ${STABILITY_MAX_WAIT_MS}ms with a TRUNCATED " +
-                  "tree (${finalAssessment.reason}); selectors may miss visible elements",
+                  "tree (${finalAssessment.reason}). The screen may render fully but only that " +
+                  "slice is reachable via accessibility — this could be an accessibility bug in " +
+                  "the app under test (e.g. incomplete Compose semantics, a custom view that " +
+                  "doesn't populate AccessibilityNodeInfo); selectors may miss visible elements",
               )
             } else {
               Console.log("[settle] tree still changing after ${STABILITY_MAX_WAIT_MS}ms — proceeding")
             }
-            return
+            return finalAssessment
           }
         } finally {
           root.recycle()

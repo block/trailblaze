@@ -53,9 +53,10 @@ export type {
  * **For the typed declarative overload — `trailblaze.tool<I, O>(spec, handler)` —
  * use [TrailblazeTypedToolSpec] instead.** The typed spec carries structured
  * registration-gate fields (`supportedPlatforms`, `requiresContext`,
- * `requiresHost`, `supportedDrivers`) but **no `description`** — descriptions
- * for typed tools live in the TSDoc above the `export const`, where the analyzer
- * reads them.
+ * `requiresHost`, `supportedDrivers`) plus an optional `description` (the typed
+ * spec's `description`, when omitted, falls back to the TSDoc above the
+ * `export const`, which the analyzer reads — see [TrailblazeTypedToolSpec] for
+ * the full YAML > spec > TSDoc precedence).
  *
  * The surface is intentionally narrow. Fields that aren't wired here can be added as authors
  * ask for them — nothing about `registerPendingTools` prevents forwarding additional keys.
@@ -318,22 +319,23 @@ function specToJsonSchema(
  *
  *  - **Typed declarative — with spec.** `tool<I, O>(spec, handler)` — same as the
  *    bare-handler form, but the first positional arg is a [TrailblazeTypedToolSpec]
- *    carrying structured config (`supportedPlatforms`, `requiresContext`,
+ *    carrying structured config (`description`, `supportedPlatforms`, `requiresContext`,
  *    `requiresHost`, `supportedDrivers`). The spec is captured by the build-time
- *    analyzer for synthesizing `_meta` on the MCP tool advertisement; at runtime it's
- *    discarded (the spec is a compile-time signal, not a runtime value). Use this
- *    overload when a tool needs gating or driver/platform restriction; reach for the
- *    bare-handler form when no metadata is needed.
+ *    analyzer for synthesizing the tool advertisement (description + `_meta`); at runtime
+ *    it's discarded (the spec is a compile-time signal, not a runtime value). Use this
+ *    overload when a tool needs gating, driver/platform restriction, or an explicit
+ *    LLM-facing description; reach for the bare-handler form when no metadata is needed.
  *
  *      trailblaze.tool<I, O>(
- *        { supportedPlatforms: ["web"], requiresContext: true },
+ *        { description: "Open the sample app.", supportedPlatforms: ["web"] },
  *        async (input, ctx) => { ... },
  *      )
  *
- * Tool descriptions live in TSDoc on the `export const X = trailblaze.tool(...)`
- * binding — there is intentionally no `description` field on [TrailblazeTypedToolSpec].
- * The analyzer reads the binding's TSDoc and the input/output interface field TSDoc to
- * synthesize the runtime tool description and per-property `description` keys.
+ * A typed tool's LLM-facing description resolves as YAML sidecar `description:` > the spec's
+ * `description` > the TSDoc above the `export const X = trailblaze.tool(...)` binding. When the
+ * spec omits `description`, the analyzer falls back to that TSDoc (the historical behavior); it
+ * always reads the input/output interface field TSDoc to synthesize the per-property
+ * `description` keys regardless.
  *
  * Dispatch is by first-arg type:
  *  - function → typed bare-handler

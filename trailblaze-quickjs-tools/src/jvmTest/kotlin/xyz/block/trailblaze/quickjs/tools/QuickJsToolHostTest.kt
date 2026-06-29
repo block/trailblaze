@@ -768,4 +768,29 @@ class QuickJsToolHostTest {
       fail("shutdown is not idempotent: second call threw ${secondShutdown.exceptionOrNull()}")
     }
   }
+
+  @Test
+  fun `engineExtension install runs before the bundle so a handler can use what it binds`() = runBlocking {
+    // Pins the hook's contract: an engine extension installs globals/bindings BEFORE the author
+    // bundle evaluates, so a tool handler can reference whatever it binds (the property the
+    // OkHttp `fetch` extension in :trailblaze-scripting-fetch relies on). Uses a real lambda
+    // extension that defines a global the bundle's tool reads back — not a fake collaborator.
+    val extension = QuickJsEngineExtension { quickJs ->
+      quickJs.evaluate<Any?>("globalThis.__injectedByExtension = 'installed';", "test-extension.js", false)
+    }
+    val host = QuickJsToolHost.connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["readInjected"] = {
+        name: "readInjected",
+        spec: {},
+        handler: async () => ({ content: [{ type: "text", text: String(globalThis.__injectedByExtension) }] }),
+      };
+      """.trimIndent(),
+      engineExtension = extension,
+    )
+    hosts.add(host)
+    val result = host.callTool("readInjected", JsonObject(emptyMap()))
+    assertEquals("installed", textContent(result))
+  }
 }

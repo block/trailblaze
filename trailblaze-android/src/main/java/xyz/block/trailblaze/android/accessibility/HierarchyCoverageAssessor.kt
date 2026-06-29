@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.android.accessibility
 
+import xyz.block.trailblaze.api.CaptureCoverage
+
 /**
  * Detects the "truncated / partial accessibility tree" failure mode: the screenshot shows a full
  * screen of content, but the captured accessibility hierarchy only contains a thin slice of it
@@ -44,20 +46,9 @@ internal object HierarchyCoverageAssessor {
     val hasArea: Boolean get() = width > 0 && height > 0
   }
 
-  data class Assessment(
-    /** Content-bearing nodes considered (visible, positioned, on-screen). */
-    val contentNodes: Int,
-    /** Content-bearing nodes that reported a zero-area / `(0,0,0,0)` box. */
-    val zeroBoundsContentNodes: Int,
-    /** Fraction of screen width spanned by the union of content-node boxes, in `[0,1]`. */
-    val horizontalCoverage: Double,
-    /** Fraction of screen height spanned by the union of content-node boxes, in `[0,1]`. */
-    val verticalCoverage: Double,
-    /** True when the captured content looks like a partial slice rather than a full screen. */
-    val looksTruncated: Boolean,
-    /** Human-readable explanation, suitable for a `[capture-coverage]` log line. */
-    val reason: String,
-  )
+  // Detector output is the wire-shape [CaptureCoverage] in trailblaze-models directly — the
+  // detector and the serialized session-log field share one type so consumers (the report
+  // aggregator, dashboards, the gate's log line) read the same numbers the gate decided on.
 
   /**
    * Minimum content-bearing nodes before we'll judge a tree truncated. Splash/loading/empty screens
@@ -102,9 +93,9 @@ internal object HierarchyCoverageAssessor {
    */
   private const val ZERO_BOUNDS_RATIO_MAX = 0.6
 
-  fun assess(nodes: List<NodeBounds>, screenWidth: Int, screenHeight: Int): Assessment {
+  fun assess(nodes: List<NodeBounds>, screenWidth: Int, screenHeight: Int): CaptureCoverage {
     if (screenWidth <= 0 || screenHeight <= 0) {
-      return Assessment(0, 0, 0.0, 0.0, false, "unknown screen dimensions; skipping coverage check")
+      return CaptureCoverage(0, 0, 0.0, 0.0, false, "unknown screen dimensions; skipping coverage check")
     }
 
     val content = nodes.filter { it.isVisibleToUser && it.hasText }
@@ -112,7 +103,7 @@ internal object HierarchyCoverageAssessor {
     val zeroBounds = content.size - positioned.size
 
     if (content.size < MIN_CONTENT_NODES) {
-      return Assessment(
+      return CaptureCoverage(
         contentNodes = content.size,
         zeroBoundsContentNodes = zeroBounds,
         horizontalCoverage = 0.0,
@@ -125,7 +116,7 @@ internal object HierarchyCoverageAssessor {
     // High zero-bounds ratio is itself a "mid-commit" tell even if the positioned nodes spread out.
     val zeroRatio = zeroBounds.toDouble() / content.size
     if (zeroRatio >= ZERO_BOUNDS_RATIO_MAX) {
-      return Assessment(
+      return CaptureCoverage(
         contentNodes = content.size,
         zeroBoundsContentNodes = zeroBounds,
         horizontalCoverage = 0.0,
@@ -137,7 +128,7 @@ internal object HierarchyCoverageAssessor {
     }
 
     if (positioned.isEmpty()) {
-      return Assessment(content.size, zeroBounds, 0.0, 0.0, false, "no positioned content nodes")
+      return CaptureCoverage(content.size, zeroBounds, 0.0, 0.0, false, "no positioned content nodes")
     }
 
     // Union of positioned content boxes, clamped to the screen.
@@ -173,7 +164,7 @@ internal object HierarchyCoverageAssessor {
       "content spans ${pct(hCoverage)} of width / ${pct(vCoverage)} of height — looks complete"
     }
 
-    return Assessment(
+    return CaptureCoverage(
       contentNodes = content.size,
       zeroBoundsContentNodes = zeroBounds,
       horizontalCoverage = hCoverage,

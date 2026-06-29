@@ -363,10 +363,13 @@ open class TrailCommand : Callable<Int> {
     description = [
       "Auto-capture network requests/responses to <session-dir>/network.ndjson on " +
         "supported devices (web today; mobile devices added as engines land). " +
-        "Mirrors the desktop-app \"Capture Network Traffic\" toggle.",
+        "Mirrors the desktop-app \"Capture Network Traffic\" toggle. On by default; " +
+        "use --no-capture-network to disable. When neither flag is passed, inherits the " +
+        "desktop app's saved setting.",
     ],
+    negatable = true,
   )
-  var captureNetwork: Boolean = false
+  var captureNetwork: Boolean? = null
 
   @Option(
     names = ["--capture-all"],
@@ -813,7 +816,11 @@ open class TrailCommand : Callable<Int> {
             captureVideo = captureVideo || captureAll,
             captureLogcat = captureLogcat || captureAll,
             captureIosLogs = captureIosLogs || captureAll,
-            captureNetworkTraffic = captureNetwork || captureAll,
+            // Tri-state: forward the explicit flag value when the user passed
+            // --capture-network / --no-capture-network, else null so the daemon inherits its
+            // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
+            // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
+            captureNetworkTraffic = if (captureAll) true else captureNetwork,
             maxLlmCalls = resolveEffectiveMaxLlmCalls(),
             initialMemorySeeds = parsedMemorySeeds(),
             initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
@@ -1183,7 +1190,16 @@ open class TrailCommand : Callable<Int> {
         browserHeadless = !showBrowser && headless,
         selfHeal = resolveEffectiveSelfHeal(),
         overrideSessionId = pinnedSessionId,
-        captureNetworkTraffic = captureNetwork || captureAll,
+        // Tri-state: the explicit flag wins; when omitted, inherit the desktop app's saved
+        // "Capture Network Traffic" setting (this in-process path has no daemon to fall back
+        // to, so resolve appConfig here directly). --capture-all forces it on.
+        captureNetworkTraffic =
+          if (captureAll) {
+            true
+          } else {
+            captureNetwork
+              ?: config.trailblazeSettingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic
+          },
         // Honor the persisted desktop-app "agent execution location" setting (Settings →
         // preferHostAgent) so a CLI run replays the same way the desktop app and CI do.
         // Without this the CLI silently used the model default (true = host-driven via RPC),

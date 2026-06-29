@@ -7,11 +7,16 @@ mutating the device. It complements the action tools (`tapOnPoint`, `inputText`,
 ## What it returns
 
 ```ts
-import { trailblaze } from "@trailblaze/scripting";
+import { trailblaze, type EmptyInput } from "@trailblaze/scripting";
 
-export const submit_if_visible = trailblaze.tool<{}, { tapped: boolean }>({
-  handler: async (_input, { client }) => {
-    const matches = await client.tools.findMatches({
+export interface SubmitIfVisibleResult {
+  tapped: boolean;
+}
+
+export const submit_if_visible = trailblaze.tool<EmptyInput, SubmitIfVisibleResult>(
+  { supportedPlatforms: ["android"], requiresContext: true },
+  async (_input, ctx) => {
+    const matches = await ctx.tools.findMatches({
       selector: { androidAccessibility: { textRegex: "Submit" } },
     });
 
@@ -25,12 +30,12 @@ export const submit_if_visible = trailblaze.tool<{}, { tapped: boolean }>({
     // corner of the screen, so always null-check before reading coordinates.
     if (matches.length === 1 && matches[0].bounds) {
       const { centerX, centerY } = boundsCenter(matches[0].bounds);
-      await client.tools.tapOnPoint({ x: centerX, y: centerY });
+      await ctx.tools.tapOnPoint({ x: centerX, y: centerY });
       return { tapped: true };
     }
     return { tapped: false };
   },
-});
+);
 
 function boundsCenter(b: { left: number; top: number; right: number; bottom: number }) {
   return {
@@ -65,14 +70,15 @@ re-query after any action that could change the screen.
 
 ```ts
 // Good — descriptor consumed immediately.
-const matches = await client.tools.findMatches({ ... });
-if (matches.length === 1) {
-  await client.tools.tapOnPoint(boundsCenter(matches[0].bounds));
+const matches = await ctx.tools.findMatches({ ... });
+if (matches.length === 1 && matches[0].bounds) {
+  const { centerX, centerY } = boundsCenter(matches[0].bounds);
+  await ctx.tools.tapOnPoint({ x: centerX, y: centerY });
 }
 
 // Avoid — storing descriptors across actions.
-const earlier = await client.tools.findMatches({ ... });
-await client.tools.tapOnPoint({ x: 100, y: 200 });   // mutates the tree
+const earlier = await ctx.tools.findMatches({ ... });
+await ctx.tools.tapOnPoint({ x: 100, y: 200 });   // mutates the tree
 // `earlier[0].indexPath` no longer points where you think it does.
 ```
 
@@ -111,17 +117,17 @@ multi-second view-hierarchy fetch _at most once_:
 
 ```ts
 // Both queries reuse the same captured tree.
-const submitMatches = await client.tools.findMatches({ … });
-const cancelMatches = await client.tools.findMatches({ … });
+const submitMatches = await ctx.tools.findMatches({ … });
+const cancelMatches = await ctx.tools.findMatches({ … });
 ```
 
 When an action tool dispatches in the same batch, the cache is invalidated
 automatically so a follow-up query reads the post-action tree:
 
 ```ts
-const before = await client.tools.findMatches({ … });   // captures
-await client.tools.tapOnPoint({ x: 100, y: 200 });      // invalidates
-const after = await client.tools.findMatches({ … });    // re-captures
+const before = await ctx.tools.findMatches({ … });   // captures
+await ctx.tools.tapOnPoint({ x: 100, y: 200 });      // invalidates
+const after = await ctx.tools.findMatches({ … });    // re-captures
 ```
 
 Verification tools (`assertVisibleBySelector`, `assertVisibleWithText`, …) are

@@ -174,11 +174,13 @@ object InstrumentationUtil {
         )
         result
       } catch (retry: RuntimeException) {
+        // Phrases come from [UiAutomationHandleErrors] so the host harness's relaunch matcher
+        // (isNonRecoverableStaleHandleSignature) can't drift from this emitted text.
         throw IllegalStateException(
-          "UiAutomation reconnect retry also failed. The on-device server's instrumentation is " +
-            "in a non-recoverable state — kill the test APK process (`adb shell am force-stop " +
-            "<your test apk>`) and re-launch the Trailblaze on-device server to recover. " +
-            "Original error: ${retry.message}",
+          "${UiAutomationHandleErrors.NON_RECOVERABLE_RETRY_FAILED_PHRASE}. The on-device " +
+            "server's instrumentation is in a ${UiAutomationHandleErrors.NON_RECOVERABLE_STATE_PHRASE} " +
+            "— kill the test APK process (`adb shell am force-stop <your test apk>`) and re-launch " +
+            "the Trailblaze on-device server to recover. Original error: ${retry.message}",
           retry,
         )
       }

@@ -176,29 +176,13 @@ you can copy: typed `trailblaze.tool<Input, Output>()` tools auto-discovered fro
 See [`examples/README.md`](examples/README.md) for the full index, including sample target
 apps.
 
-## Active Prototypes
+## Active Prototype: Waypoints
 
-Trailblaze is moving fast. These are landing now and are worth knowing about even if
-they're not stable yet:
-
-- **Trailmaps** — reusable target-aware capability bundles (tools + waypoints + routes
-  + recorded trails) shipped per app, consumed by humans and agents alike. Designed to
-  distribute via npm so other teams (and eventually the broader community) can install
-  an agent-ready vocabulary for your app.
-  ([devlog](docs/devlog/2026-05-12-npm-distribution-for-trailmaps.md))
-- **Scripted Tools** — write custom tools with the `@trailblaze/scripting` SDK in a
-  typed language with type-safe bindings. Tools execute in a QuickJS sandbox on-device
-  or in a host subprocess. After clone, run
-  `./trailblaze check --workspace examples/playwright-native` once to materialize the
-  workspace SDK + per-trailmap typed bindings.
-  ([devlog](docs/devlog/2026-04-22-scripting-sdk-authoring-vision.md))
-- **Waypoints** — named, assertable app locations defined structurally (element
-  identity, stable labels), never by content. Agents can ask "am I on the Inbox?",
-  land on a waypoint after a step, or use waypoints as trail checkpoints.
-  ([devlog](docs/devlog/2026-03-11-waypoints-and-app-navigation-graphs.md))
-- **Trail-as-Tool** — expose a saved trail as a tool so other trails (and agents) can
-  call it. A `loginAsTestUser` trail becomes a one-line setup step inside any other
-  test. ([devlog](docs/devlog/2026-04-21-run-trail-tool-proposal.md))
+Trailblaze is moving fast. **Waypoints** are landing now and worth knowing about even
+though they're not yet stable: named, assertable app locations defined structurally
+(element identity, stable labels), never by content. Agents can ask "am I on the
+Inbox?", land on a waypoint after a step, or use waypoints as trail checkpoints.
+([devlog](docs/devlog/2026-03-11-waypoints-and-app-navigation-graphs.md))
 
 ## Desktop App & Reporting
 

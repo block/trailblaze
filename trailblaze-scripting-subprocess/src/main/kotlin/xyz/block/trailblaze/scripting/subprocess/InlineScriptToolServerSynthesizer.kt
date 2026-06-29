@@ -217,11 +217,23 @@ object InlineScriptToolServerSynthesizer {
           throw new Error(`Inline tool inputSchema property "${'$'}{key}" must be an object.`);
         }
         let base;
-        if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+        if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+          // A TS union (`A | B`) serializes to anyOf with no top-level `type`. Map it to a
+          // real z.union so each branch keeps its validation, instead of collapsing to z.any().
+          base = unionFromJsonSchemaBranches(key, schema.anyOf);
+        } else if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+          base = unionFromJsonSchemaBranches(key, schema.oneOf);
+        } else if (Array.isArray(schema.enum) && schema.enum.length > 0) {
           if (!schema.enum.every((value) => typeof value === "string")) {
             throw new Error(`Inline tool inputSchema property "${'$'}{key}" only supports string enums.`);
           }
           base = z.enum(schema.enum);
+        } else if (schema.type === undefined && Object.keys(schema).length === 0) {
+          // An empty `{}` schema is an unconstrained value (e.g. a union branch's
+          // `selector: {}`); z.any() is the faithful mapping. Kept deliberately narrow: a
+          // non-empty typeless schema (a bare ref, etc.) still hits the throw below so
+          // unsupported shapes stay loud.
+          base = z.any();
         } else {
           switch (schema.type) {
             case "string":
@@ -251,6 +263,13 @@ object InlineScriptToolServerSynthesizer {
           }
         }
         return isRequired ? base : base.optional();
+      }
+
+      function unionFromJsonSchemaBranches(key, branches) {
+        const variants = branches.map((branch, index) =>
+          jsonSchemaPropertyToZod(`${'$'}{key}|${'$'}{index}`, branch, true),
+        );
+        return variants.length === 1 ? variants[0] : z.union(variants);
       }
 
       function isPlainObject(value) {

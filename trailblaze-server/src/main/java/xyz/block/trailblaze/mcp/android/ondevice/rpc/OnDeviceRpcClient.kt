@@ -10,6 +10,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcP
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils.HttpRpcException
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import java.io.IOException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -20,7 +21,50 @@ import kotlin.time.ExperimentalTime
 class OnDeviceRpcClient(
   private val trailblazeDeviceId: TrailblazeDeviceId,
   private val sendProgressMessage: (String) -> Unit = {},
+  /**
+   * Circuit breaker fired whenever ANY RPC failure carries the non-recoverable UiAutomation
+   * stale-handle signature. Every synchronous on-device RPC flows through [rpcCall], so arming
+   * here — at the single chokepoint — lets the host relaunch the on-device server at the source,
+   * covering paths (e.g. `launchApp` pre-actions) that surface a wedge before the per-call-site
+   * arming the V3/host-agent runners do in their finally blocks could ever see it. `@PublishedApi
+   * internal` (not `private`) because [rpcCall] is a public `inline` fun and references it from
+   * inlined call sites. Defaulted to a no-op so callers that don't manage server recovery are
+   * unaffected.
+   */
+  @PublishedApi
+  internal val onNonRecoverableWedge: () -> Unit = {},
 ) : AutoCloseable {
+
+  /**
+   * Arms [onNonRecoverableWedge] when either the failure [message] or its [details] carries the
+   * terminal non-recoverable stale-handle signature. Both are checked because the signature can
+   * land in `message` (handler-caught path) or `details` (HTTP-error path). The matcher requires
+   * two distinct phrases, so an ordinary failure can't trip it. `@PublishedApi internal` for the
+   * same inline-visibility reason as [onNonRecoverableWedge].
+   */
+  @PublishedApi
+  internal fun noteIfNonRecoverableWedge(message: String?, details: String?) {
+    if (UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(message) ||
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(details)
+    ) {
+      onNonRecoverableWedge()
+    }
+  }
+
+  /**
+   * Arms the same circuit breaker [noteIfNonRecoverableWedge] fires, but from a STRUCTURED signal
+   * rather than a string match: the on-device server now tags an `awaitCompletion = true`
+   * [xyz.block.trailblaze.llm.RunYamlResponse] with `nonRecoverableWedge = true` at the source.
+   * That wedge arrives as an `RpcResult.Success` carrying `success = false` — the per-call
+   * `Failure`-arm string matches in [rpcCall] never see it (no typed body deserializes on a
+   * Failure), so `:trailblaze-host` reads the typed field and calls this to arm recovery.
+   *
+   * Public (not `@PublishedApi internal` like [onNonRecoverableWedge]) so `:trailblaze-host` can
+   * reach it across the module boundary — it is the bridge to the otherwise-inline-only breaker.
+   */
+  fun armNonRecoverableWedge() {
+    onNonRecoverableWedge()
+  }
 
   /**
    * Single source of truth for the on-device HTTP server's port. Computed once from
@@ -83,7 +127,7 @@ class OnDeviceRpcClient(
         details = e.responseBody,
         method = methodName,
         url = fullUrl
-      )
+      ).also { noteIfNonRecoverableWedge(it.message, it.details) }
     } catch (e: SerializationException) {
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.SERIALIZATION_ERROR,
@@ -91,7 +135,7 @@ class OnDeviceRpcClient(
         details = e.message,
         method = methodName,
         url = fullUrl
-      )
+      ).also { noteIfNonRecoverableWedge(it.message, it.details) }
     } catch (e: IOException) {
       // ADB forward can drop silently mid-session on Android — every RPC over this client
       // eats the same IOException when that happens. Diagnose-and-heal here so the next
@@ -105,7 +149,7 @@ class OnDeviceRpcClient(
         details = listOfNotNull(e.message, recoveryNote).joinToString(" | "),
         method = methodName,
         url = fullUrl
-      )
+      ).also { noteIfNonRecoverableWedge(it.message, it.details) }
     } catch (e: Exception) {
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.UNKNOWN_ERROR,
@@ -113,7 +157,7 @@ class OnDeviceRpcClient(
         details = e.stackTraceToString(),
         method = methodName,
         url = fullUrl
-      )
+      ).also { noteIfNonRecoverableWedge(it.message, it.details) }
     }
   }
 

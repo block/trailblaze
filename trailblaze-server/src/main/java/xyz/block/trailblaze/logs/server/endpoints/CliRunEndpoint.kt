@@ -63,12 +63,12 @@ data class CliRunRequest(
   /** Override capture iOS Simulator system logs setting (null = use app config default). */
   val captureIosLogs: Boolean? = null,
   /**
-   * When true, the daemon auto-starts framework network capture for the run.
-   * Mirrors the desktop-app "Capture Network Traffic" toggle. From the CLI,
-   * set via `--capture-network` or `--capture-all`. `false` (default) inherits
-   * whatever the daemon's saved app config says.
+   * Override the daemon's framework network capture setting for this run. Mirrors the
+   * desktop-app "Capture Network Traffic" toggle. From the CLI, set via
+   * `--capture-network` / `--no-capture-network` (or `--capture-all`). `null` = inherit
+   * whatever the daemon's saved app config says; `true`/`false` = explicit override.
    */
-  val captureNetworkTraffic: Boolean = false,
+  val captureNetworkTraffic: Boolean? = null,
   /**
    * Per-objective cap on LLM calls for the legacy TRAILBLAZE_RUNNER agent. Forwarded from
    * the CLI's `--max-llm-calls` flag into [RunYamlRequest.maxLlmCalls]. Null = use the

@@ -731,6 +731,7 @@ private fun loadShortcutsAndTrailheads(): Pair<List<ShortcutDisplayItem>, List<T
         id = toolName.toolName,
         description = config.description,
         to = meta.to,
+        dynamic = meta.dynamic,
       )
     }
   }

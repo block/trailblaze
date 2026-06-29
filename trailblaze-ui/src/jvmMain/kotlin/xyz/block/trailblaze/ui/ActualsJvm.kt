@@ -134,12 +134,46 @@ actual suspend fun loadDeviceLogs(sessionId: String): String? {
       // During live sessions, device.log is in a capture temp dir. Scan for it.
       ?: findDeviceLogInCaptureTempDirs()
       ?: return@withContext null
-    if (logFile.length() == 0L) return@withContext null
+    val length = logFile.length()
+    if (length == 0L) return@withContext null
     try {
-      logFile.readText()
+      if (length <= MAX_DEVICE_LOG_BYTES) {
+        logFile.readText()
+      } else {
+        // device.log can grow to gigabytes during a long live session. Reading it whole
+        // into a String exhausts the heap (a 1 GB file is ~2 GB of UTF-16), and once it
+        // crosses ~2 GB the array allocation itself fails ("Required array length … too
+        // large"), which previously crashed the app even on reopen. The panel only shows
+        // the most recent output, so read just the tail.
+        readFileTail(logFile, MAX_DEVICE_LOG_BYTES)
+      }
     } catch (_: Exception) {
       null
     }
+  }
+}
+
+/** Max bytes loaded into memory for the Device Logs panel. The panel renders recent lines. */
+private const val MAX_DEVICE_LOG_BYTES = 8L * 1024 * 1024
+
+/**
+ * Reads the last [maxBytes] of [file] as UTF-8, dropping the (likely partial) first line and
+ * prepending a truncation marker so the panel makes clear it isn't showing the whole file.
+ */
+private fun readFileTail(file: File, maxBytes: Long): String {
+  java.io.RandomAccessFile(file, "r").use { raf ->
+    val fileLength = raf.length()
+    val start = (fileLength - maxBytes).coerceAtLeast(0L)
+    raf.seek(start)
+    val bytes = ByteArray((fileLength - start).toInt())
+    raf.readFully(bytes)
+    var text = bytes.toString(Charsets.UTF_8)
+    if (start > 0L) {
+      val firstNewline = text.indexOf('\n')
+      if (firstNewline >= 0) text = text.substring(firstNewline + 1)
+      text = "… [device log truncated — showing last ${maxBytes / (1024 * 1024)} MB] …\n$text"
+    }
+    return text
   }
 }
 

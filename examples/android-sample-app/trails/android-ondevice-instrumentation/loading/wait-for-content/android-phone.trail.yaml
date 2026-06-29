@@ -20,17 +20,19 @@
       tools:
       - tapOnElementBySelector:
           reason: Open the Loading demo by tapping the Loading navigation item.
-          selector:
+          nodeSelector:
             containsChild:
-              textRegex: Loading
+              androidAccessibility:
+                textRegex: Loading
   - step: Tap "Start Loading" to begin loading the content
     recording:
       tools:
       - tapOnElementBySelector:
           reason: Start the (variable-delay) load.
-          selector:
+          nodeSelector:
             containsChild:
-              textRegex: Start Loading
+              androidAccessibility:
+                textRegex: Start Loading
   - step: Wait (event-driven) for the content to finish loading
     recording:
       tools:
@@ -45,5 +47,6 @@
       tools:
       - assertVisibleBySelector:
           reason: Confirm the content finished loading.
-          selector:
-            textRegex: Content Loaded
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Content Loaded

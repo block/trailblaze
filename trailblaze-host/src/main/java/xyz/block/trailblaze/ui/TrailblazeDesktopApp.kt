@@ -241,12 +241,14 @@ abstract class TrailblazeDesktopApp(
         browserHeadless = !request.showBrowser,
         selfHeal = effectiveSelfHeal,
         overrideSessionId = pinnedSessionId,
-        // Honor CLI --capture-network / --capture-all. When neither was set,
-        // fall back to the daemon's saved app config (the desktop "Capture
-        // Network Traffic" toggle), so a CLI invocation behaves the same as
-        // a desktop-app run started by the same user.
-        captureNetworkTraffic = request.captureNetworkTraffic ||
-          deviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic,
+        // Honor an explicit CLI --capture-network / --no-capture-network override
+        // (true/false). When the request leaves it unset (null), fall back to the
+        // daemon's saved app config (the desktop "Capture Network Traffic" toggle),
+        // so a CLI invocation behaves the same as a desktop-app run started by the
+        // same user. Using ?: (not ||) keeps an explicit --no-capture-network from
+        // being overridden by an app config that defaults capture on.
+        captureNetworkTraffic = request.captureNetworkTraffic
+          ?: deviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic,
         // Honor the desktop app's "agent execution location" toggle (Settings →
         // preferHostAgent) so a delegated CLI run replays the same way the desktop
         // app and CI do. Without this the model default (true = host-driven via RPC)
@@ -316,31 +318,33 @@ abstract class TrailblazeDesktopApp(
     // on-device, so we poll until the pinned session reaches Ended status. Looking at
     // sibling sessions in the repo would block forever when one of them hits
     // MaxCallsLimit / Timeout while ours has already cleanly Ended.
+    // Read disk-truth (getSessionInfoDirect), not the cached flow: this run's pinned session
+    // has no active per-session watcher, so the cache never sees the on-disk Ended log.
     delay(3000)
     val maxWaitMs = 600_000L
     val pollIntervalMs = 500L
     val waitStart = System.currentTimeMillis()
     while (System.currentTimeMillis() - waitStart < maxWaitMs) {
-      val sessionInfo = logsRepo.getSessionInfo(pinnedSessionId)
+      val sessionInfo = logsRepo.getSessionInfoDirect(pinnedSessionId)
       if (sessionInfo != null && sessionInfo.latestStatus is SessionStatus.Ended) break
       delay(pollIntervalMs)
     }
     // Short buffer after Ended for trailing files (screenshots, etc.)
     delay(3000)
 
-    // Cross-check session status from logs (source of truth for pass/fail). Inspect ONLY
-    // the pinned session — sibling sessions belong to parallel trail runs and have no
-    // bearing on this one's success.
-    val pinnedSessionInfo = logsRepo.getSessionInfo(pinnedSessionId)
-    if (success) {
-      val status = pinnedSessionInfo?.latestStatus
-      if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
-        status !is SessionStatus.Ended.SucceededWithSelfHeal
-      ) {
-        success = false
-        errorMessage = "Session $pinnedSessionId ended with status: ${status::class.simpleName}"
-      }
-    }
+    // Reconcile against the pinned session's on-disk status (source of truth for pass/fail).
+    // Inspect ONLY the pinned session — sibling sessions belong to parallel trail runs and have
+    // no bearing on this one's success. A session that ended Succeeded must not be demoted by a
+    // post-run connect/teardown ConnectionFailure (the V1 on-device-RPC dead-server case).
+    val pinnedSessionInfo = logsRepo.getSessionInfoDirect(pinnedSessionId)
+    val reconciled = reconcileRunOutcome(
+      latchSuccess = success,
+      latchError = errorMessage,
+      diskStatus = pinnedSessionInfo?.latestStatus,
+      sessionDescription = pinnedSessionId.toString(),
+    )
+    success = reconciled.success
+    errorMessage = reconciled.error
 
     // Recording generation for on-device runs is handled by the CLI after
     // receiving the response, to avoid blocking the HTTP server thread.
@@ -352,7 +356,7 @@ abstract class TrailblazeDesktopApp(
       ?: emptyList()
 
     CliRunResponse(
-      success = success && errorMessage == null,
+      success = success,
       sessionId = pinnedSessionId.value,
       error = errorMessage,
       deviceClassifiers = classifiers,

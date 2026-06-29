@@ -7,10 +7,10 @@ Trailblaze includes thorough logging capabilities in all phases of the test exec
 
 ### Start Trailblaze
 
-Run the following to start the trailblaze (including server):
+Run the following to start Trailblaze (including the local log server):
 
 ```bash
-./trailblaze
+trailblaze app
 ```
 
 ![launch-trailblaze.gif](images/launch-trailblaze.gif)
@@ -34,6 +34,5 @@ The individual steps are broken up and color coded into a few buckets:
 - Session status denotes the start and end of the test
 - LLM Request represent each request sent to the LLM
 - Trailblaze command denotes which tool call the LLM decided to use for the request
-- Maestro command denotes Maestro commands sent to the device or emulator. Each Trailblaze command maps to one or many
-  Maestro commands to execute.
-- Maestro driver denotes the action Maestro took based on the provided Maestro Command
+- Driver command denotes the platform-specific action sent to the device, emulator, or browser. Each Trailblaze command maps to one or many driver commands.
+- Driver result denotes what the platform driver actually did in response to the command.

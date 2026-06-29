@@ -24,6 +24,27 @@ package xyz.block.trailblaze.util
  */
 object UiAutomationHandleErrors {
 
+  // Distinctive phrases from the NON-recoverable message that `InstrumentationUtil`'s
+  // `runWithStaleUiAutomationRecovery` throws after its in-process retry also fails. They are the
+  // source of truth for both that throw site and [isNonRecoverableStaleHandleSignature], so the
+  // matcher can't drift from the emitted text. Neither phrase appears in a recoverable signature.
+  const val NON_RECOVERABLE_RETRY_FAILED_PHRASE = "UiAutomation reconnect retry also failed"
+  const val NON_RECOVERABLE_STATE_PHRASE = "non-recoverable state"
+
+  /**
+   * @return true if [message] is the terminal NON-recoverable signature that surfaces only after
+   *   the in-process [isStaleHandleSignature] retry has already failed (see
+   *   `InstrumentationUtil.runWithStaleUiAutomationRecovery`). This is what reaches the on-disk
+   *   `SessionStatus.Ended.Failed.exceptionMessage`, so the host harness keys its server-relaunch
+   *   decision on it. Both distinctive phrases must be present, so an ordinary recoverable
+   *   signature (already absorbed in-process) or an unrelated failure does not match.
+   */
+  fun isNonRecoverableStaleHandleSignature(message: String?): Boolean {
+    val msg = message.orEmpty().lowercase()
+    return msg.contains(NON_RECOVERABLE_RETRY_FAILED_PHRASE.lowercase()) &&
+      msg.contains(NON_RECOVERABLE_STATE_PHRASE.lowercase())
+  }
+
   /**
    * @return true if [message] matches one of the recoverable stale / half-connected
    *   UiAutomation-handle signatures. A null message is treated as non-matching.

@@ -51,6 +51,38 @@ subprojects {
   }
 }
 
+// The OSS release workflow on `block/trailblaze` runs
+// `./gradlew publishAllPublicationsToMavenCentralRepository` from this root. That command
+// finds matching tasks across all subprojects in this build, but composite-included builds
+// (registered via `settings.gradle.kts`'s `pluginManagement.includeBuild(...)`) are isolated
+// — their publish tasks must be delegated explicitly or external consumers never receive the
+// published artifact + plugin marker. Register a root-level aggregator per included plugin
+// build so the existing release command transitively picks them up.
+val trailblazeAndroidGradlePluginPublishMavenCentral =
+  tasks.register("trailblazeAndroidGradlePluginPublishMavenCentral") {
+    group = "publishing"
+    description =
+      "Publishes the included trailblaze-android-gradle build to Maven Central."
+    dependsOn(
+      gradle.includedBuild("trailblaze-android-gradle")
+        .task(":publishAllPublicationsToMavenCentralRepository"),
+    )
+  }
+val trailblazeTrailmapToolBundlesPluginPublishMavenCentral =
+  tasks.register("trailblazeTrailmapToolBundlesPluginPublishMavenCentral") {
+    group = "publishing"
+    description =
+      "Publishes the included trailblaze-trailmap-tool-bundles-plugin build to Maven Central."
+    dependsOn(
+      gradle.includedBuild("trailblaze-trailmap-tool-bundles-plugin")
+        .task(":publishAllPublicationsToMavenCentralRepository"),
+    )
+  }
+tasks.matching { it.name == "publishAllPublicationsToMavenCentralRepository" }.configureEach {
+  dependsOn(trailblazeAndroidGradlePluginPublishMavenCentral)
+  dependsOn(trailblazeTrailmapToolBundlesPluginPublishMavenCentral)
+}
+
 // Apply shared dependency-resolution forces (version pins) so every configuration resolves the
 // same versions and dependency-guard baselines stay consistent.
 apply(from = "gradle/dependency-resolution.gradle.kts")

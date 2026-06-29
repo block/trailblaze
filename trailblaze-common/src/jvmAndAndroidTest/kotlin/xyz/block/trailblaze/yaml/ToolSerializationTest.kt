@@ -31,7 +31,6 @@ import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeT
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.MaestroDeprecatedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
 
@@ -954,34 +953,6 @@ class ToolSerializationTest {
           assertThat(yaml).contains("extendedWaitUntil")
           assertThat(yaml).contains("Gift card added to cart")
           assertThat(yaml).contains("20000")
-        }
-      }
-    }
-  }
-
-  @Test
-  fun deserializeLegacyMaestroToolAlias() {
-    // Back-compat: trails authored before the `maestro` -> `mobile_maestro` rename still resolve,
-    // via the deprecated `maestro` alias that delegates to `mobile_maestro`.
-    val yaml = """
-- tools:
-    - maestro:
-        commands:
-          - extendedWaitUntil:
-              notVisible: Gift card added to cart
-              timeout: 20000
-    """.trimIndent()
-
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("maestro")
-        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroDeprecatedTrailblazeTool::class)
-        with(tools[0].trailblazeTool as MaestroDeprecatedTrailblazeTool) {
-          assertThat(yaml).contains("extendedWaitUntil")
-          assertThat(yaml).contains("Gift card added to cart")
         }
       }
     }

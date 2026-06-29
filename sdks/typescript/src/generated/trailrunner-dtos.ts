@@ -13,6 +13,11 @@ export interface AddTrailRootRequest {
   path: string;
 }
 
+export interface AgentOptionDto {
+  id: string;
+  display: string;
+}
+
 export interface AnalyticsEventDto {
   id: string;
   name: string;
@@ -172,6 +177,8 @@ export interface LlmSettingsDto {
   model: string;
   availableProviders?: LlmProviderOptionDto[];
   availableModels?: LlmModelOptionDto[];
+  agent?: string;
+  availableAgents?: AgentOptionDto[];
 }
 
 export interface NewComponentRequest {
@@ -317,8 +324,11 @@ export interface SettingsDto {
   showTrailsTab: boolean;
   showDevicesTab: boolean;
   showWaypointsTab: boolean;
+  autoLaunchGoose?: boolean;
+  preferHostAgent?: boolean;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
+  appDataDirectory?: string | null;
   llm: LlmSettingsDto;
   selfHealEnabled: boolean;
   requireSteps: boolean;
@@ -341,14 +351,19 @@ export interface SettingsPatchRequest {
   showTrailsTab?: boolean | null;
   showDevicesTab?: boolean | null;
   showWaypointsTab?: boolean | null;
+  autoLaunchGoose?: boolean | null;
+  preferHostAgent?: boolean | null;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
+  appDataDirectory?: string | null;
   selfHealEnabled?: boolean | null;
   requireSteps?: boolean | null;
   saveAnnotatedScreenshots?: boolean | null;
   maxLlmCalls?: number | null;
   llmProvider?: string | null;
   llmModel?: string | null;
+  agent?: string | null;
+  screenshotImageFormat?: string | null;
   screenshotMaxLongerSide?: number | null;
   screenshotMaxShorterSide?: number | null;
   screenshotCompressionQuality?: number | null;
@@ -444,6 +459,8 @@ export interface TrailOpenRequest {
 export interface TrailRootsResponse {
   primary: string;
   extras: string[];
+  primaryBranch?: string | null;
+  primaryIsWorktree?: boolean;
 }
 
 export interface TrailStepEntry {

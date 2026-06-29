@@ -93,6 +93,31 @@ object ResolvedTargetToolDetailRenderer {
   }
 
   /**
+   * The `Kind` + `Source` pair for a tool in the per-target **availability matrix** — distinct
+   * from the per-tool sidecar's `- Kind:` line (which names the backing *mechanism*:
+   * class-backed / YAML-defined / scripted). The matrix labels the authoring *language* instead:
+   *
+   *  - [ToolDetail.ClassBacked] → `Kotlin`; source is the backing class's simple name (the
+   *    fully-qualified name stays in the sidecar's `- Class:` line so the column doesn't blow out).
+   *  - [ToolDetail.YamlDefined] → `YAML`; source is the tool id (the descriptor at `<id>.tool.yaml`).
+   *  - [ToolDetail.Scripted] → `TypeScript`; source is the `.ts`/`.js` file's base name.
+   *  - `null` (no backing reachable — the same case that leaves the tool's name cell unlinked) →
+   *    `-` / `-`.
+   *
+   * Shared by the `trailblaze check` workspace report (`ResolvedTargetReportEmitter`) and the
+   * `:docs:generator` `TargetToolBaselineGenerator` so the two matrix surfaces can never disagree
+   * on a tool's kind or source. Each source is returned already wrapped in backticks for direct
+   * table-cell interpolation.
+   */
+  fun matrixKindAndSource(detail: ToolDetail?): Pair<String, String> = when (detail) {
+    is ToolDetail.ClassBacked ->
+      "Kotlin" to "`${detail.kclass.simpleName ?: detail.kclass.qualifiedName ?: "-"}`"
+    is ToolDetail.YamlDefined -> "YAML" to "`${detail.config.id}`"
+    is ToolDetail.Scripted -> "TypeScript" to "`${File(detail.config.script).name}`"
+    null -> "-" to "-"
+  }
+
+  /**
    * Header banner emitted at the top of every per-tool Markdown file. The first line is the
    * stable [GENERATED_BANNER] every orphan-cleanup pass recognizes; the surrounding comment
    * lines are caller-supplied (which workspace/target/generator owns this file, and how to

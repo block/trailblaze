@@ -725,9 +725,10 @@ data class ScriptedToolDefinition(
    * (`TrailblazeTypedToolSpec` in the TypeScript SDK).
    *
    * Captured by the analyzer's inline-literal extraction — keys are the
-   * `TrailblazeTypedToolSpec` field names (`supportedPlatforms`, `requiresContext`,
-   * `requiresHost`, `supportedDrivers`) and values are the JSON-compatible literals
-   * the author wrote at the call site (string arrays, booleans).
+   * `TrailblazeTypedToolSpec` field names (`description`, `supportedPlatforms`,
+   * `requiresContext`, `requiresHost`, `supportedDrivers`) and values are the
+   * JSON-compatible literals the author wrote at the call site (strings, string arrays,
+   * booleans).
    *
    * `null` when the author used the bare-handler overload OR when the spec's fields
    * were all unresolvable expressions (object spread, identifier reference, function
@@ -735,10 +736,12 @@ data class ScriptedToolDefinition(
    * for booleans, empty for the platform/driver gates which the runtime treats as
    * "unrestricted").
    *
-   * Downstream consumers translate this map into the namespaced `_meta` JSON
+   * Downstream consumers translate the gate fields into the namespaced `_meta` JSON
    * (`trailblaze/supportedPlatforms`, etc.) the runtime reads — see
    * [xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.mergeMeta] for the
-   * canonical projection.
+   * canonical projection. The `description` field is the exception: it's the tool's
+   * primary descriptor, so enrichment routes it into the resolved description (YAML >
+   * spec > TSDoc) rather than into `_meta`.
    */
   val spec: JsonObject? = null,
   /**

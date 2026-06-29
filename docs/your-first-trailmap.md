@@ -4,21 +4,22 @@ title: Your First Trailmap
 
 # Your First Trailmap
 
-This page walks one tool — `myapp_login` — from an empty workspace to a recorded trail
-that replays it. It uses the **typed scripted-tool surface** ([per-tool
-reference](scripted-tools-typed-authoring.md)) — TypeScript interfaces describe inputs,
-TSDoc on the exported `const` becomes the LLM-facing description, and a single `.ts`
-file is everything you write per tool. No per-tool YAML, no `package.json`, no
-`tsconfig.json` to hand-author.
+This page walks you from an empty workspace to a working custom tool — `myapp_login` —
+that your agent can call by name and your CI can replay deterministically.
 
-This is the **third step of the adoption ladder** outlined on the
-[Introduction](index.md): you've driven a device with the
-CLI, saved and replayed a session, and now you're giving your agent first-class
-commands like `login` or `addToCart` that record, replay, and type-check the same as
-`tap` or `inputText`.
+You'll write one TypeScript file. The TypeScript interface on its input becomes the
+JSON Schema the agent sees; the TSDoc above the export becomes the tool's
+LLM-facing description; the export name becomes the tool name. No per-tool YAML
+descriptor, no `package.json` to hand-author, no `tsconfig.json`. The full per-tool
+reference lives at
+[Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md); the
+[Trailmaps guide](trailmaps.md) covers the surrounding manifest, dependency graph, and
+discovery rules.
 
-For the trailmap-manifest schema, per-suffix file conventions, and dep-graph discovery
-rules, this page links out to [Trailmaps](trailmaps.md).
+This is the **third rung of the adoption ladder** from the
+[Introduction](index.md): you've driven a device with the CLI, saved and replayed a
+session, and now you're giving your agent first-class commands like `login` or
+`addToCart` that record, replay, and type-check the same as `tap` or `inputText`.
 
 ## Prerequisites
 
@@ -82,7 +83,7 @@ dependencies:
 target:
   display_name: MyApp
   tools:
-    - myapp_login                             # the name your .ts exports, see Step 3
+    - myapp_login                             # the name your .ts exports, see Step 4
   platforms:
     android:
       app_ids: [com.example.myapp]
@@ -97,13 +98,48 @@ Three things to notice:
   into scope. Without it you get a minimal target with no built-in interaction tools.
 - `target.tools:` lists tool **names** (not file paths). The loader auto-discovers every
   `tools/*.ts` that exports a `trailblaze.tool(...)` declaration and resolves the names
-  here into the runtime tool list.
+  here into the runtime tool list. When a trailmap ships both iOS and Android tools,
+  platform-specific tools go under `platforms.<p>.tools:` instead — see
+  [Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools).
 - `tool_sets:` names framework-shipped bundles of Kotlin tools to expose. `core_interaction`
   brings in primitives like `tapOnElement`, `inputText`, `swipe`; `verification` brings in
   `assertVisible` / `assertNotVisible`. See [Trailmaps → Discovery](trailmaps.md) for the
   full catalog and how `dependencies:` controls what's available.
 
-## Step 3 — Write the typed `.ts` source
+## Step 3 — Bootstrap the typed SDK
+
+Before opening any `.ts` file, run:
+
+```bash
+trailblaze check
+```
+
+This single command:
+
+1. Resolves the trailmap graph and emits `dist/targets/<id>.yaml`.
+2. Vendors the `@trailblaze/scripting` `.d.ts` into `<workspace>/.trailblaze/sdk/dist/`.
+3. Emits per-trailmap typed bindings at
+   `trailmaps/myapp/tools/trailblaze-client.d.ts`.
+4. Writes a framework-managed `trailmaps/myapp/tools/tsconfig.json` (plus a
+   `.gitignore` for derived files).
+
+After this, your IDE has full typing on `@trailblaze/scripting` imports and on the
+framework primitives (`tapOnElement`, `inputText`, etc.) that you'll compose against in
+the next step — so when you write `ctx.tools.` you get real autocomplete, not red
+squiggles.
+
+You don't have to re-run it by hand every time you edit: the daemon re-runs the pipeline
+automatically on every aware command, and the workspace `package.json` that `check`
+drops on first run re-runs it on `bun install` — so a teammate who clones the repo gets
+the same typings with a plain install. The output is idempotent.
+
+**What to commit:** `trailmap.yaml`, your `.ts` tools, the per-trailmap `.gitignore`,
+and the first-run `package.json`. Everything else (`.trailblaze/`, `dist/`,
+`trailblaze-client.d.ts`, `tsconfig.json`) is regenerated and auto-ignored. The full
+breakdown is in
+[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md).
+
+## Step 4 — Write the typed `.ts` source
 
 ```ts
 // trails/config/trailmaps/myapp/tools/myapp_login.ts
@@ -155,37 +191,9 @@ The export name (`myapp_login`) is the load-bearing identifier — the manifest'
 See [Scripted Tools (TypeScript) — The shape](scripted-tools-typed-authoring.md#the-shape)
 for the full reference.
 
-> **Editor showing red squiggles on the `@trailblaze/scripting` import and `ctx.tools.*`?
-> Expected — for now.** The types are *generated*, not shipped in your source tree, so a
-> brand-new file has nothing to resolve against yet. Step 4 fixes it: one `trailblaze check`
-> writes the bindings and the squiggles become full autocomplete. (After that first run the
-> daemon keeps them current as you edit.)
-
-## Step 4 — Materialize the workspace SDK
-
-```bash
-trailblaze check
-```
-
-This single command:
-
-1. Resolves the trailmap graph and emits `dist/targets/<id>.yaml`.
-2. Vendors the `@trailblaze/scripting` `.d.ts` into `<workspace>/.trailblaze/sdk/dist/`.
-3. Emits per-trailmap typed bindings at
-   `trailmaps/myapp/tools/trailblaze-client.d.ts`.
-4. Writes a framework-managed `trailmaps/myapp/tools/tsconfig.json` (plus a
-   `.gitignore` for derived files).
-
-After this, your IDE has full typing on `ctx.tools.<name>(args)` and on any
-`@trailblaze/scripting` imports. You don't have to run it by hand every time: the daemon
-re-runs the pipeline automatically on every aware command, and the workspace `package.json`
-that `check` drops on first run re-runs it on `bun install` — so a teammate who clones the
-repo gets the same typings with a plain install. The output is idempotent.
-
-Of the files this drops, you commit just one — the per-trailmap `.gitignore` (and the
-first-run `package.json`); the rest is regenerated and auto-ignored. See
-[Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md) for
-the full breakdown.
+Re-run `trailblaze check` whenever you add a new `.ts` tool so its sibling tools see it
+on `ctx.tools.<newName>`. The daemon does this automatically on every device-aware
+command, so most of the time you won't think about it.
 
 ## Step 5 — See the tool in the agent's toolbox
 

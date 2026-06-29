@@ -81,6 +81,9 @@ class TrailblazeLogger(
    */
   fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String? {
     val screenshotBytes = screenState.screenshotBytes ?: return null
+    // A degraded device can return non-null empty/sub-header bytes; reject them so no 0-byte
+    // image and no screenshot-less log is written.
+    if (screenshotBytes.size < MIN_IMAGE_HEADER_BYTES) return null
 
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
     val timestamp = Clock.System.now()
@@ -170,6 +173,7 @@ class TrailblazeLogger(
         trailblazeNodeTree = screenState.trailblazeNodeTree,
         driverMigrationTreeNode = driverMigrationTreeNode,
         viewHierarchyText = screenState.viewHierarchyTextRepresentation,
+        captureCoverage = screenState.captureCoverage,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         session = session.sessionId,
@@ -714,6 +718,13 @@ class TrailblazeLogger(
      * the actual file on disk).
      */
     private const val FILENAME_NAME_MAX = 255
+
+    /**
+     * Minimum bytes any real image carries — the magic-number header [ImageFormatDetector]
+     * keys on. A byte array shorter than this can't be a valid PNG/JPEG/WEBP, so we treat it
+     * as a failed capture rather than writing a 0-byte file.
+     */
+    private const val MIN_IMAGE_HEADER_BYTES = 4
 
     /**
      * Builds the screenshot filename for a session at a given timestamp.

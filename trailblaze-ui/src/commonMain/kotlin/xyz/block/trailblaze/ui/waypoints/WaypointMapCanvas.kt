@@ -107,7 +107,9 @@ internal fun WaypointMapCanvas(
     shortcuts.filter { it.from in itemsById && it.to in itemsById }
   }
   val resolvedTrailheads = remember(trailheads, itemsById) {
-    trailheads.filter { it.to in itemsById }
+    // Dynamic trailheads have no fixed destination (`to == null`), so there's no waypoint to draw an
+    // entry edge into — they're simply not rendered on the map.
+    trailheads.filter { it.to != null && it.to in itemsById }
   }
 
   if (waypoints.isEmpty()) {
@@ -172,7 +174,9 @@ internal fun WaypointMapCanvas(
         if (hasTrailheads) {
           val outsideAnchor = trailheadOutsideAnchorPx(totalWidthDp, density)
           resolvedTrailheads.forEach { trailhead ->
-            val toPos = layout.positions[trailhead.to] ?: return@forEach
+            // resolvedTrailheads already excludes null-`to` (dynamic) trailheads; the null-safe
+            // lookup keeps the type-checker happy without an unsafe assertion.
+            val toPos = trailhead.to?.let { layout.positions[it] } ?: return@forEach
             val toCenter = nodeTopCenterPx(toPos, density, hasTrailheads = true)
             drawEdge(
               start = outsideAnchor,

@@ -120,4 +120,12 @@ data class SessionResult(
    * during cell-write. Nullable for local runs / pre-resolution archives.
    */
   val logs_zip_url: String? = null,
+
+  /**
+   * Roll-up of the Android on-device accessibility-tree completeness signal across this
+   * session's captures. Null on non-Android sessions, on legacy log archives predating the
+   * field, and on Android sessions where every capture missed the gate's window. See
+   * [AccessibilityTruncationSummary] for what the field means and how to read it.
+   */
+  val accessibility_truncation: AccessibilityTruncationSummary? = null,
 )

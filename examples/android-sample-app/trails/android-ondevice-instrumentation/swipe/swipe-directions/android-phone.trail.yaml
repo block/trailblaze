@@ -13,13 +13,15 @@
       tools:
       - tapOnElementBySelector:
           reason: Navigate to the 'Swipe' tab as instructed.
-          selector:
+          nodeSelector:
             containsChild:
-              textRegex: Swipe
+              androidAccessibility:
+                textRegex: Swipe
       - assertVisibleBySelector:
           reason: To verify that 'Page 1 of 5' is visible as required by the objective.
-          selector:
-            textRegex: Page 1 of 5
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Page 1 of 5
   - step: Swipe forward to page 3, then swipe back to page 2
     recording:
       tools:
@@ -45,5 +47,6 @@
             instrumentation rule never fires (accessibility service stays unbound), the
             body TextView is also reachable. Matching either keeps the assertion robust
             across both execution shapes.
-          selector:
-            textRegex: Page 2( of 5)?
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Page 2( of 5)?

@@ -166,6 +166,13 @@ object QuickJsToolBundleLauncher {
      * preserves the bundle-sourced behavior for callers whose bundles populate their own `spec`.
      */
     advertisementOverrides: Map<ToolName, QuickJsToolAdvertisement> = emptyMap(),
+    /**
+     * Optional engine extension installed into each launched bundle's QuickJS engine BEFORE the
+     * bundle evaluates (e.g. an OkHttp-backed `fetch`; see [QuickJsEngineExtension]). Default
+     * `null` preserves the current on-device behavior — the on-device launchers don't bind
+     * `fetch`. A host (or an on-device caller that opts in) passes one to make it available.
+     */
+    engineExtension: QuickJsEngineExtension? = null,
   ): LaunchedQuickJsToolRuntime {
     val bundleable = bundles.filter { it.isBundleable }
     if (bundleable.isEmpty()) {
@@ -213,6 +220,7 @@ object QuickJsToolBundleLauncher {
           bundleJs = source.read(),
           bundleFilename = source.filename,
           hostBinding = binding,
+          engineExtension = engineExtension,
         )
         // Give the binding its own host so it can refuse a same-bundle compose (which would
         // deadlock the shared evalMutex) instead of hanging the session.

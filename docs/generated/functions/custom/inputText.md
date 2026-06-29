@@ -5,7 +5,8 @@
 # `inputText`
 
 Type characters into the currently focused text field.
-- NOTE: If the text field is not focused, tap on it first.
+- NOTE: This does nothing unless an editable text field is focused. If the field isn't focused, tap it first.
+- NOTE: A number pad, PIN pad, or button grid has no text field — inputText won't work there, so tap each digit button instead.
 - NOTE: If the field already contains text you want to replace, use eraseText first.
 - NOTE: After typing, consider closing the soft keyboard to avoid issues with the app.
 

@@ -404,6 +404,30 @@ class ToolYamlConfigShortcutTest {
   }
 
   @Test
+  fun `dynamic trailhead with no to passes validate`() {
+    // A deep-link launcher: it's a real trailhead (the block's presence makes it one), but its
+    // destination varies by input, so it sets `dynamic: true` and omits `to:`.
+    val config = ToolYamlConfig(
+      id = "myapp_launchDeepLink",
+      trailhead = TrailheadMetadata(dynamic = true),
+    )
+    config.validate() // does not throw
+    assertEquals(ToolYamlConfig.Mode.METADATA, config.mode)
+    assertTrue(config.trailhead!!.dynamic)
+    assertEquals(null, config.trailhead?.to)
+  }
+
+  @Test
+  fun `dynamic trailhead rejects also declaring a to`() {
+    val config = ToolYamlConfig(
+      id = "th_dynamic_and_to",
+      trailhead = TrailheadMetadata(to = "app/home", dynamic = true),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("dynamic"))
+  }
+
+  @Test
   fun `trailhead block rejects malformed to (single slash)`() {
     val config = ToolYamlConfig(
       id = "th_single_slash",

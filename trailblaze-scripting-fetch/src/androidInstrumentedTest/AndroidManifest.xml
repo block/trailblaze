@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+  <!-- Koog 1.0.0 raised minSdkVersion to 35 on its Android variants. This module pulls Koog only
+       transitively (via :trailblaze-quickjs-tools -> :trailblaze-common) and uses NONE of it — the
+       fetch binding is pure OkHttp + QuickJS. But the androidTest APK's manifest merge still sees
+       Koog on the classpath, so override the library minSdk to let the test APK target API 26 like
+       the rest of the module. Mirrors :trailblaze-quickjs-tools'
+       src/androidInstrumentedTest/AndroidManifest.xml.
+
+       NOTE: This file lives at `src/androidInstrumentedTest/AndroidManifest.xml`, NOT
+       `src/androidTest/`. In a KMP module with an android target, AGP looks for the androidTest
+       manifest under the `androidInstrumentedTest` source set; placing it at `src/androidTest/`
+       causes AGP to silently ignore it (no merge, no warning) and `processDebugAndroidTestManifest`
+       fails with "minSdkVersion 26 cannot be smaller than version 35 declared in library
+       [ai.koog:koog-agents-android]". -->
+  <uses-sdk tools:overrideLibrary="
+      ai.koog.agents.core,
+      ai.koog.koog.agents,
+      ai.koog.agents.features.memory,
+      ai.koog.agents.features.opentelemetry,
+      ai.koog.agents.features.snapshot,
+      ai.koog.agents.features.tokenizer,
+      ai.koog.agents.mcp.metadata,
+      ai.koog.embeddings.llm,
+      ai.koog.prompt.cache.files,
+      ai.koog.prompt.cache.model,
+      ai.koog.prompt.executor.cached,
+      ai.koog.prompt.xml,
+      ai.koog.agents.ext,
+      ai.koog.agents.features.event.handler,
+      ai.koog.agents.features.trace,
+      ai.koog.agents.tools,
+      ai.koog.agents.utils,
+      ai.koog.embeddings.base,
+      ai.koog.http.client.core,
+      ai.koog.http.client.ktor,
+      ai.koog.prompt.executor.anthropic.client,
+      ai.koog.prompt.executor.clients,
+      ai.koog.prompt.executor.google.client,
+      ai.koog.prompt.executor.model,
+      ai.koog.prompt.executor.ollama.client,
+      ai.koog.prompt.executor.openai.client,
+      ai.koog.prompt.executor.openai.client.base,
+      ai.koog.prompt.executor.openrouter.client,
+      ai.koog.prompt.llm,
+      ai.koog.prompt.markdown,
+      ai.koog.prompt.model,
+      ai.koog.prompt.processor,
+      ai.koog.prompt.structure,
+      ai.koog.prompt.tokenizer,
+      ai.koog.rag.base,
+      ai.koog.serialization.core,
+      ai.koog.utils
+  " />
+</manifest>

@@ -57,14 +57,18 @@ trailmap-myapp/
 ├── package.json                         # name, version — that's the npm contract
 ├── trailmap.yaml                        # the manifest (devlog: package root)
 ├── tools/
-│   ├── myapp_login.ts
-│   └── myapp_login.yaml
+│   └── myapp_login.ts                   # one typed scripted tool per .ts file
 ├── waypoints/
 │   └── myapp-home-screen.waypoint.yaml
 └── trails/
     └── smoke/
         └── android.trail.yaml           # smoke trail for downstream validation
 ```
+
+New scripted tools are `.ts`-only — schema, description, and metadata are derived from
+the typed source (`trailblaze.tool<I, O>(spec, handler)`). Trailmaps maintaining the
+legacy YAML-descriptor pair (`myapp_login.ts` + `myapp_login.yaml`) keep working
+unmodified; see [Scripted Tools — Legacy Reference](scripted_tools.md).
 
 The `package.json` is minimal:
 

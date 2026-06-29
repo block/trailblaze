@@ -140,7 +140,11 @@ class QuickJsTrailblazeTool(
     val ctx = QuickJsToolCtxEnvelope(
       sessionId = sessionId.value,
       device = QuickJsDeviceContext(
-        platform = deviceInfo.trailblazeDriverType.platform.name,
+        // Lowercase to match the `@trailblaze/scripting` SDK contract: `ToolContext.device.platform`
+        // is typed `"ios" | "android" | "web"` and `VALID_PLATFORMS` only accepts lowercase, so TS
+        // tools branch with `ctx.device.platform === "android"`. The enum `.name` is uppercase
+        // ("ANDROID"), which made every such comparison silently fail on-device.
+        platform = deviceInfo.trailblazeDriverType.platform.name.lowercase(),
         driverType = deviceInfo.trailblazeDriverType.yamlKey,
         driver = deviceInfo.trailblazeDriverType.yamlKey,
         instanceId = deviceInfo.trailblazeDeviceId.instanceId,

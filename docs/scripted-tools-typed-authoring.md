@@ -208,6 +208,13 @@ that DO export but aren't listed under `target.tools:` (e.g. typed-demo or
 work-in-progress drafts) live in the candidate pool but stay invisible to the agent
 until you add their name to the list.
 
+When a trailmap ships **both** iOS and Android tools (or otherwise has tools that only
+make sense for one platform), declare each platform-specific tool under
+`platforms.<p>.tools:` and keep genuinely cross-platform tools at the top level under
+`target.tools:`. See
+[Trailmaps → Per-platform scripted tools](trailmaps.md#per-platform-scripted-tools)
+for the example shape and the single-platform validation rule.
+
 See [Trailmaps](trailmaps.md) for the full manifest schema (dependencies, defaults,
 toolsets, waypoints).
 
@@ -281,15 +288,26 @@ in the legacy YAML descriptor. Every field is optional:
 
 | Field | Purpose |
 |---|---|
+| `description?: string` | Optional LLM-facing description. When set, takes precedence over the TSDoc above the `export const` (and a YAML sidecar's `description:`, if any, still takes precedence over both — see [Where the description comes from](#where-the-description-comes-from)). Use when you want a tighter agent-facing string than the TSDoc and don't want to maintain a sidecar YAML. |
 | `supportedPlatforms?: ("web" \| "android" \| "ios" \| "desktop")[]` | Registration gate. Tool is only registered for sessions whose platform matches. Empty/omitted = all platforms. |
 | `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
 | `requiresHost?: boolean` | Registration gate. Skip registering on-device QuickJS runs. Use when the tool needs Node-only APIs (`node:fs`, `node:child_process`, file locks) — the on-device runtime can't reach them. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
 
-There is **no `description` field on the spec.** The tool's description lives in the
-TSDoc above the `export const` binding — that's the single source of truth the analyzer
-reads, and forcing it into TSDoc keeps the IDE-hover text and the LLM-facing description
-identical by construction.
+### Where the description comes from
+
+Three places can supply the LLM-facing description for a scripted tool. The framework
+resolves them in this order, with the first one that's set winning:
+
+1. **A YAML sidecar's `description:` field** (legacy / per-tool YAML shape).
+2. **The spec's `description?:` field** (when set on the `trailblaze.tool(...)` spec).
+3. **The TSDoc above the `export const`** (the default, and what every typed example in
+   this page uses).
+
+The TSDoc default keeps the IDE-hover text and the LLM-facing description identical by
+construction, which is what you want for almost every tool. Reach for spec
+`description` when you specifically want to keep implementation notes in TSDoc and ship
+a different agent-facing string.
 
 A tool whose spec is `{ supportedPlatforms: ["web"], requiresContext: true }` is the
 canonical shape for a UI-driving web tool. Mobile UI tools use
@@ -485,8 +503,10 @@ Helpers take `ctx: ToolContext` directly (no `client` argument) and live in
 
 ## Tool descriptions: what the LLM actually sees
 
-The TSDoc on each exported `const` is the **only** way the LLM learns what your tool
-does. Two non-obvious rules:
+The TSDoc on each exported `const` is what the LLM reads to learn what your tool does
+(unless you've set a higher-precedence source — see
+[Where the description comes from](#where-the-description-comes-from)). Two non-obvious
+rules:
 
 - **Don't write "USE THIS TOOL FOR X."** The LLM picks tools by matching the prompt
   against the description's prose. Telling it to "use" the tool reduces the description

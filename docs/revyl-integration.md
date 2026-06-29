@@ -4,7 +4,7 @@ title: Revyl Cloud Device Integration
 
 # Revyl Cloud Device Integration
 
-Trailblaze can use [Revyl](https://revyl.ai) cloud devices instead of local ADB or Maestro. This lets you run the same AI-powered tests against managed Android and iOS devices without a local device or emulator.
+Trailblaze can use [Revyl](https://revyl.ai) cloud devices instead of a local connected device. This lets you run the same AI-powered tests against managed Android and iOS devices without a local emulator, simulator, or USB-attached phone.
 
 ## Overview
 

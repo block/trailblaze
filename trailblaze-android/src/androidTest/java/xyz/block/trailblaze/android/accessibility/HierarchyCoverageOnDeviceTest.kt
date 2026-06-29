@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
+import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -131,7 +132,7 @@ class HierarchyCoverageOnDeviceTest {
   }
 
   /** Polls raw (no-settle) captures until the tree reads as truncated, or [timeoutMs] elapses. */
-  private fun pollUntilTruncatedRaw(timeoutMs: Long): HierarchyCoverageAssessor.Assessment {
+  private fun pollUntilTruncatedRaw(timeoutMs: Long): CaptureCoverage {
     val deadline = System.currentTimeMillis() + timeoutMs
     var last =
       assessTree(TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = false).accessibilityNode)
@@ -147,7 +148,7 @@ class HierarchyCoverageOnDeviceTest {
    * Launches the fixture in [layout], captures the live tree through the real capture path (which
    * runs the gate), and returns the [HierarchyCoverageAssessor] verdict over the captured nodes.
    */
-  private fun assessFixture(layout: String): HierarchyCoverageAssessor.Assessment {
+  private fun assessFixture(layout: String): CaptureCoverage {
     // The fixture Activity is packaged in the instrumentation (androidTest) APK, so address it with
     // the instrumentation context, not targetContext. (This module is self-instrumenting, so the
     // two resolve to the same package today — but `.context` is the correct one by construction.)
@@ -233,7 +234,7 @@ class HierarchyCoverageOnDeviceTest {
     pkg: String,
     filled: Boolean,
     expectTruncated: Boolean,
-  ): HierarchyCoverageAssessor.Assessment {
+  ): CaptureCoverage {
     val context = InstrumentationRegistry.getInstrumentation().context
     context.startActivity(
       Intent()
@@ -261,7 +262,7 @@ class HierarchyCoverageOnDeviceTest {
     }
 
   /** Runs the [HierarchyCoverageAssessor] over a captured tree exactly as the gate does. */
-  private fun assessTree(node: AccessibilityNode?): HierarchyCoverageAssessor.Assessment {
+  private fun assessTree(node: AccessibilityNode?): CaptureCoverage {
     val (screenWidth, screenHeight) = TrailblazeAccessibilityService.getScreenDimensions()
     val bounds = ArrayList<HierarchyCoverageAssessor.NodeBounds>()
     collectBounds(node, bounds)
