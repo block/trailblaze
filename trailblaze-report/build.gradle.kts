@@ -2,6 +2,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 
 plugins {
@@ -66,7 +67,17 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
   description = "Generates a blank report template HTML with embedded WASM UI (requires -Ptrailblaze.wasm=true)"
   group = "report"
   if (reportWasmEnabled.get()) {
-    dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
+    // Register the webpack distribution (the embedded JS + WASM bundle) as an INPUT, not just a
+    // `dependsOn`. A bare `dependsOn` orders the tasks but does NOT tie this task's up-to-date
+    // state to the bundle's contents — so editing the Compose report UI would re-run the webpack
+    // build yet leave `generateReportTemplate` UP-TO-DATE, embedding a stale WASM bundle in the
+    // generated template. Declaring the output as an input makes Gradle re-run us whenever the
+    // bundle changes (and correctly stay UP-TO-DATE when it doesn't).
+    val webpackTask = project(":trailblaze-ui").tasks.named("wasmJsBrowserProductionWebpack")
+    dependsOn(webpackTask)
+    inputs.files(webpackTask)
+      .withPropertyName("wasmDist")
+      .withPathSensitivity(PathSensitivity.RELATIVE)
   }
   classpath = sourceSets["main"].runtimeClasspath
   mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
