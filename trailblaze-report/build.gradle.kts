@@ -73,9 +73,16 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
     // build yet leave `generateReportTemplate` UP-TO-DATE, embedding a stale WASM bundle in the
     // generated template. Declaring the output as an input makes Gradle re-run us whenever the
     // bundle changes (and correctly stay UP-TO-DATE when it doesn't).
+    //
+    // Register the webpack task's OUTPUT FILES (resolved lazily) rather than the task object: a
+    // `KotlinWebpack` task isn't serializable by the configuration cache, so passing the task
+    // provider straight to `inputs.files(...)` fails the build with `cannot serialize object of
+    // type 'org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpack'`. Mapping to
+    // `outputs.files` stores only the file collection in the cache and keeps the implicit task
+    // dependency, which `dependsOn` also pins explicitly.
     val webpackTask = project(":trailblaze-ui").tasks.named("wasmJsBrowserProductionWebpack")
     dependsOn(webpackTask)
-    inputs.files(webpackTask)
+    inputs.files(webpackTask.map { it.outputs.files })
       .withPropertyName("wasmDist")
       .withPathSensitivity(PathSensitivity.RELATIVE)
   }
