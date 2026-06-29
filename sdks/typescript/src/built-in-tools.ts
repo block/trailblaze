@@ -547,8 +547,9 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * List the app ids installed on the device. Android-only. The result is a JSON string of
-     * `{ "appIds": string[] }` (sorted) — `JSON.parse` it to read the array.
+     * List the app ids installed on the device. Works on Android (`pm list packages`) and iOS
+     * (`xcrun simctl listapps`). The result is a JSON string of `{ "appIds": string[] }` (sorted) —
+     * `JSON.parse` it to read the array.
      *
      * Source: `ListInstalledAppsTrailblazeTool.kt` (`mobile_listInstalledApps`).
      */

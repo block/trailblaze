@@ -45,4 +45,50 @@ object IosHostSimctlUtils {
       error("xcrun simctl pbcopy failed with exit code $exitCode for device $deviceId")
     }
   }
+
+  /**
+   * Lists the bundle identifiers of the apps installed on the given iOS simulator via
+   * `xcrun simctl listapps <deviceId>`. Backs the iOS branch of the cross-platform
+   * `mobile_listInstalledApps` tool.
+   *
+   * Returns an empty list on non-macOS hosts (iOS simulators only exist on a Mac) so callers
+   * on Linux/Windows get a benign empty inventory rather than a process-spawn failure — the
+   * same shape `IosHostUtils.getInstalledAppIds` has always returned off-Mac.
+   */
+  fun listInstalledAppIds(deviceId: String): List<String> {
+    if (!isMacOs()) return emptyList()
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "listapps", deviceId),
+    ).runProcess {}
+    return parseInstalledAppIdsFromListApps(output.outputLines)
+  }
+
+  /**
+   * Parses bundle identifiers from `xcrun simctl listapps` output lines.
+   *
+   * The output is a plist-style format where each app's block opens with a header line:
+   * ```
+   *     "com.example.app" =     {
+   * ```
+   *
+   * Extracts the quoted bundle identifiers from those header lines, filtering out app group
+   * identifiers (those starting with `group.`) and blank entries.
+   *
+   * The value must be the opening brace `{` — i.e. only a block-opening header counts, never an
+   * arbitrary `"key" = "value";` line. Without that anchor, nested `GroupContainers` entries (e.g.
+   * `"243LU875E5.groups.com.apple.podcasts" = "file://…";`) would be mis-parsed as installed apps.
+   * This matches the sibling [IosHostUtils.parseInstalledAppsWithDisplayNames] bundle-id regex.
+   *
+   * `internal` rather than public: the only legitimate caller is [listInstalledAppIds] in this
+   * same object; visibility is widened just enough for the same-module parser unit test.
+   */
+  internal fun parseInstalledAppIdsFromListApps(outputLines: List<String>): List<String> {
+    // Handles variable leading whitespace, a quoted bundle id, and variable spacing around the
+    // `=` before the opening brace that starts the app's dictionary block.
+    val regex = Regex("^\\s+\"([^\"]+)\"\\s*=\\s*\\{")
+    return outputLines
+      .mapNotNull { line -> regex.matchEntire(line)?.groupValues?.get(1) }
+      .filter { it.isNotBlank() && !it.startsWith("group.") }
+      .distinct()
+  }
 }

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 
 /**
  * Typed result payload for [ListInstalledAppsTrailblazeTool]. Declaring the shape as a
@@ -24,20 +25,25 @@ data class ListInstalledAppsResult(val appIds: List<String>)
 /**
  * Returns the list of installed app ids on the current device as a JSON object.
  *
- * Delegates to [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.listInstalledApps], which
- * has both a host-JVM actual (adb `pm list packages`) and an on-device Android actual
- * (`PackageManager`), so the same tool works whether the agent is running on a laptop driving an
- * emulator or inside the Android app itself.
+ * - **Android**: delegates to [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.listInstalledApps],
+ *   which has both a host-JVM actual (adb `pm list packages`) and an on-device Android actual
+ *   (`PackageManager`), so the same tool works whether the agent is running on a laptop driving an
+ *   emulator or inside the Android app itself.
+ * - **iOS**: uses `xcrun simctl listapps <udid>` via [IosHostSimctlUtils.listInstalledAppIds]
+ *   (host-only — iOS only runs from a Mac host). Like [SetClipboardTrailblazeTool], the iOS
+ *   path reaches the simulator through an [IosHostSimctlUtils] primitive in `trailblaze-common`;
+ *   note the two diverge off-Mac (clipboard errors, listapps returns an empty inventory — see
+ *   [IosHostSimctlUtils.listInstalledAppIds]).
  *
- * iOS is intentionally unsupported for now — there is no on-device iOS agent surface yet. Once
- * one exists, iOS should route through an analogous executor rather than a host-only call here.
+ * Surfaced to the LLM (and the `trailblaze toolbox` / `trailblaze tool` CLI) so an agent can
+ * discover which apps are installed before choosing one to `launchApp`, or assert that an app
+ * is / isn't present, without dropping out to platform-specific tooling.
  */
 @Serializable
 @TrailblazeToolClass(
   name = "mobile_listInstalledApps",
-  surfaceToLlm = false,
 )
-@LLMDescription("Returns a JSON object with the list of installed app ids on the current mobile device.")
+@LLMDescription("Returns a JSON object ({\"appIds\":[...]}) listing the app ids/bundle ids installed on the current mobile device. Works on Android and iOS.")
 data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
@@ -54,9 +60,13 @@ data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnly
           TrailblazeToolResult.Success(message = payload)
         }
 
-        TrailblazeDevicePlatform.IOS -> TrailblazeToolResult.Error.ExceptionThrown(
-          errorMessage = "mobile_listInstalledApps is not yet supported on iOS.",
-        )
+        TrailblazeDevicePlatform.IOS -> {
+          val ids = IosHostSimctlUtils.listInstalledAppIds(
+            deviceId = deviceInfo.trailblazeDeviceId.instanceId,
+          ).sorted()
+          val payload = TrailblazeJsonInstance.encodeToString(ListInstalledAppsResult(appIds = ids))
+          TrailblazeToolResult.Success(message = payload)
+        }
 
         TrailblazeDevicePlatform.WEB -> TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = "mobile_listInstalledApps is not supported for web devices.",

@@ -506,8 +506,9 @@ class TrailblazeTrailmapManifestLoaderTest {
         listOf("mobile_clearAppData", "mobile_listInstalledApps", "mobile_pasteClipboard", "mobile_setClipboard"),
         toolset.tools,
       )
-      // Always-enabled so callback dispatch can resolve these by name even though they're
-      // surfaceToLlm = false (the LLM never calls setActiveToolSets for them).
+      // Always-enabled so callback dispatch can resolve `mobile_clearAppData` by name — it's
+      // surfaceToLlm = false, so the LLM never calls setActiveToolSets for it. The LLM-facing
+      // entries (paste/setClipboard, listInstalledApps) piggy-back on the same flag.
       assertTrue(toolset.alwaysEnabled)
     } finally {
       tempDir.deleteRecursively()

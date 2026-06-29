@@ -25,48 +25,14 @@ object IosHostUtils {
     ).runProcess {}
   }
 
-  fun getInstalledAppIds(deviceId: String): Set<String> {
-    if (!isMacOs()) return emptySet()
-    val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf(
-        "xcrun",
-        "simctl",
-        "listapps",
-        deviceId,
-      ),
-    ).runProcess {}
-
-    return parseInstalledAppIdsFromListApps(output.outputLines)
-  }
-
   /**
-   * Parses bundle identifiers from `xcrun simctl listapps` output lines.
-   *
-   * The output is a plist-style format where each app is on a line like:
-   * ```
-   *     "com.example.app" =     {
-   * ```
-   *
-   * This function extracts the quoted bundle identifiers, filtering out:
-   * - App group identifiers (starting with "group.")
-   * - Blank entries
-   *
-   * @param outputLines The lines from `xcrun simctl listapps` output
-   * @return Set of bundle identifiers
+   * Bundle identifiers of the apps installed on the simulator. Delegates to the canonical
+   * `xcrun simctl listapps` primitive in [IosHostSimctlUtils] (shared with the cross-platform
+   * `mobile_listInstalledApps` tool) so there is a single source of truth for the listapps
+   * invocation and its parser.
    */
-  internal fun parseInstalledAppIdsFromListApps(outputLines: List<String>): Set<String> {
-    // Regex that handles:
-    // - Variable whitespace at the beginning (one or more spaces/tabs)
-    // - Quoted bundle identifier
-    // - Variable whitespace around the equals sign
-    // - Opening brace or other content after equals
-    val regex = Regex("^\\s+\"([^\"]+)\"\\s*=\\s*.*")
-
-    return outputLines
-      .mapNotNull { line -> regex.matchEntire(line)?.groupValues?.get(1) }
-      .filter { it.isNotBlank() && !it.startsWith("group.") }
-      .toSet()
-  }
+  fun getInstalledAppIds(deviceId: String): Set<String> =
+    IosHostSimctlUtils.listInstalledAppIds(deviceId).toSet()
 
   /**
    * Returns a map of bundle ID → display name for all installed apps on the given simulator.
