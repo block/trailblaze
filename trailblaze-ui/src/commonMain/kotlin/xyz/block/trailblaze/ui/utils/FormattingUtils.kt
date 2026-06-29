@@ -36,6 +36,27 @@ object FormattingUtils {
   }
 
   /**
+   * Coarse, human-readable duration for compact labels (e.g. the "» 37m later" badge the
+   * exported timeline shows over a collapsed idle gap). Rounds down to whole units:
+   * `"45s"`, `"37m"`, `"2h 5m"`, `"1h"` (minutes dropped on an exact hour). Unlike
+   * [formatDuration] (which renders seconds to 2dp and is meant for sub-minute step
+   * durations), this stays readable across minutes and hours.
+   */
+  fun formatCompactDuration(durationMs: Long): String {
+    val totalSeconds = kotlin.math.abs(durationMs) / 1000
+    val totalMinutes = totalSeconds / 60
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    val seconds = totalSeconds % 60
+    return when {
+      hours > 0 && minutes > 0 -> "${hours}h ${minutes}m"
+      hours > 0 -> "${hours}h"
+      totalMinutes > 0 -> "${minutes}m"
+      else -> "${seconds}s"
+    }
+  }
+
+  /**
    * Formats integers with comma separators (e.g., 1234 → "1,234").
    * Used for displaying large numbers in a readable format.
    */

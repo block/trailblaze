@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import com.microsoft.playwright.Page
+import com.microsoft.playwright.TimeoutError
 import com.microsoft.playwright.options.LoadState
 import java.io.File
 import java.util.UUID
@@ -36,9 +37,6 @@ import xyz.block.trailblaze.util.Console
  * or `LogsRepo`. The only artifact is the MP4 at [outputMp4].
  */
 object ReportVideoExporter {
-
-  /** Upper bound on how long we'll wait for the timeline's playback-ended signal. */
-  private const val MAX_PLAYBACK_WAIT_MS: Double = 10 * 60 * 1000.0
 
   /**
    * @param reportHtml The generated `trailblaze_report*.html` (single-session reports are
@@ -115,12 +113,25 @@ object ReportVideoExporter {
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
 
         Console.log("[ReportVideoExporter] waiting for timeline playback to finish...")
-        page.waitForFunction(
-          "() => globalThis.__tbPlaybackEnded === true",
-          null,
-          Page.WaitForFunctionOptions().setTimeout(MAX_PLAYBACK_WAIT_MS),
-        )
-        Console.log("[ReportVideoExporter] timeline reported playback complete")
+        // Honors the same MAX_PLAYBACK_WAIT_MS override as the GIF/WebP path (issue #173).
+        val waitMs = PlaywrightReportCapture.maxPlaybackWaitMs
+        try {
+          page.waitForFunction(
+            "() => globalThis.__tbPlaybackEnded === true",
+            null,
+            Page.WaitForFunctionOptions().setTimeout(waitMs.toDouble()),
+          )
+          Console.log("[ReportVideoExporter] timeline reported playback complete")
+        } catch (_: TimeoutError) {
+          // Fail soft: the WebM has been recording continuously, so let the finally block
+          // finalize a best-effort truncated MP4 rather than aborting with no output.
+          Console.log(
+            "[ReportVideoExporter] WARNING: timeline playback did not signal completion " +
+              "within ${waitMs / 1000}s — finalizing a truncated MP4. Set " +
+              "${PlaywrightReportCapture.MAX_PLAYBACK_WAIT_ENV} (ms) higher to capture the " +
+              "full timeline.",
+          )
+        }
       }
     } finally {
       // Order matters: close the browser first (flushes the in-progress `.webm`), then

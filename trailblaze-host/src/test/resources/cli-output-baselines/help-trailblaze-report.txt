@@ -15,7 +15,12 @@ Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open] [--
 Generate an HTML report for session recordings, plus a best-effort JSON
 summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only
 failures log a warning and still exit 0 — HTML is the primary artifact and is
-what gates the exit code.
+what gates the exit code. Animated exports collapse long idle gaps between
+steps so their length tracks the number of steps, not the session's real
+wall-clock. The capture window for all three (--gif/--webp/--video) is bounded
+by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default
+600000); if playback overruns it, a best-effort truncated artifact is still
+written with a warning.
       [<session-id>]         Session ID to narrow the report to (positional
                                form of --id). Prefix matching is supported.
                                Mutually exclusive with --id and --current.

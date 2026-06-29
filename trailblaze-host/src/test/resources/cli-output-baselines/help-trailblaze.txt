@@ -28,7 +28,13 @@ Trailblaze - AI-powered device automation
                  best-effort JSON summary, and optionally MP4/GIF/WebP exports
                  for a single session. JSON-only failures log a warning and
                  still exit 0 — HTML is the primary artifact and is what gates
-                 the exit code.
+                 the exit code. Animated exports collapse long idle gaps
+                 between steps so their length tracks the number of steps, not
+                 the session's real wall-clock. The capture window for all
+                 three (--gif/--webp/--video) is bounded by the
+                 MAX_PLAYBACK_WAIT_MS environment variable (milliseconds,
+                 default 600000); if playback overruns it, a best-effort
+                 truncated artifact is still written with a warning.
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
   results      Query the persisted test-result index for a test case. Passing a

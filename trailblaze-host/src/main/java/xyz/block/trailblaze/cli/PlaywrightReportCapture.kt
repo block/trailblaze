@@ -23,8 +23,30 @@ import xyz.block.trailblaze.util.Console
  */
 internal object PlaywrightReportCapture {
 
-  /** Upper bound on how long we'll wait for the timeline's playback-ended signal. */
-  internal const val MAX_PLAYBACK_WAIT_MS: Long = 10 * 60 * 1000L
+  /** Default upper bound on how long we'll wait for the timeline's playback-ended signal. */
+  internal const val DEFAULT_MAX_PLAYBACK_WAIT_MS: Long = 10 * 60 * 1000L
+
+  /** Environment variable that overrides the playback-wait ceiling (milliseconds). */
+  internal const val MAX_PLAYBACK_WAIT_ENV: String = "MAX_PLAYBACK_WAIT_MS"
+
+  /**
+   * Resolved playback-wait ceiling in ms. Overridable via the [MAX_PLAYBACK_WAIT_ENV]
+   * environment variable so all three exporters (`--gif`, `--webp`, `--video`) honor the
+   * same escape hatch the timeout message advertises — previously `--video` ignored it and
+   * hit a hardcoded Playwright timeout (issue #173). Non-numeric or non-positive values
+   * fall back to [DEFAULT_MAX_PLAYBACK_WAIT_MS]. With idle-gap compression in the autoplay
+   * timeline this ceiling is rarely reached, but it remains the documented manual override.
+   */
+  internal val maxPlaybackWaitMs: Long
+    get() = resolveMaxPlaybackWaitMs(System.getenv(MAX_PLAYBACK_WAIT_ENV))
+
+  /**
+   * Pure resolver for [maxPlaybackWaitMs] — split out from the `System.getenv` read so the
+   * parsing/fallback rules are unit-testable without mutating process environment. A
+   * non-numeric or non-positive [raw] override falls back to [DEFAULT_MAX_PLAYBACK_WAIT_MS].
+   */
+  internal fun resolveMaxPlaybackWaitMs(raw: String?): Long =
+    raw?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_PLAYBACK_WAIT_MS
 
   /**
    * Capture cadence — `page.screenshot()` synchronously costs roughly 50–150ms per frame
@@ -84,6 +106,8 @@ internal object PlaywrightReportCapture {
     tag: String,
   ): CaptureResult {
     val onInstallProgress = makeInstallProgressLogger(tag)
+    // Resolve the wait ceiling once so the deadline and the timeout warning can't disagree.
+    val waitMs = maxPlaybackWaitMs
     var manager: PlaywrightBrowserManager? = null
     var capturedFrames = 0
     var playbackEnded = false
@@ -108,7 +132,7 @@ internal object PlaywrightReportCapture {
           .setFullPage(false)
           .setAnimations(ScreenshotAnimations.DISABLED)
         captureStartMs = System.currentTimeMillis()
-        val deadline = captureStartMs + MAX_PLAYBACK_WAIT_MS
+        val deadline = captureStartMs + waitMs
         var nextFrameTime = captureStartMs
         while (System.currentTimeMillis() < deadline) {
           val now = System.currentTimeMillis()
@@ -132,14 +156,17 @@ internal object PlaywrightReportCapture {
       runCatching { manager?.close() }
     }
 
+    if (capturedFrames == 0) error("No frames were captured — Playwright produced zero screenshots.")
     if (!playbackEnded) {
-      error(
-        "Timeline playback did not signal completion within " +
-          "${MAX_PLAYBACK_WAIT_MS / 1000}s — the captured output would be truncated. " +
-          "Try increasing MAX_PLAYBACK_WAIT_MS or shortening the session.",
+      // Fail soft: emit the best-effort truncated artifact rather than aborting with no
+      // output (issue #173). With idle-gap compression a timeout here is unusual, so call
+      // it out loudly and point at the override.
+      Console.log(
+        "[$tag] WARNING: timeline playback did not signal completion within " +
+          "${waitMs / 1000}s — writing a truncated $capturedFrames-frame artifact. " +
+          "Set $MAX_PLAYBACK_WAIT_ENV (ms) higher to capture the full timeline.",
       )
     }
-    if (capturedFrames == 0) error("No frames were captured — Playwright produced zero screenshots.")
 
     val measuredFps = computeFps(capturedFrames, captureEndMs - captureStartMs)
     return CaptureResult(frameCount = capturedFrames, measuredFps = measuredFps)
@@ -174,12 +201,29 @@ internal object PlaywrightReportCapture {
     return "$base${separator}autoplay=1"
   }
 
+  /** Nominal capture rate from the fixed [FRAME_INTERVAL_MS] cadence (5fps at 200ms). */
+  private val NOMINAL_FPS: Int get() = (1000 / FRAME_INTERVAL_MS).toInt().coerceAtLeast(1)
+
   /**
    * Convert measured frame count + elapsed wall time into a whole-number fps for ffmpeg.
-   * `coerceAtLeast(1)` guards the degenerate "captured one frame in <1s" case.
+   * Encoding at the *measured* rate (rather than the nominal [NOMINAL_FPS]) makes the
+   * artifact play back at real-time speed even when `page.screenshot()` ran slower than the
+   * interval — common on a cold CI runner, where it honestly under-reports and the clip
+   * plays at the slower true rate rather than fast-forwarding.
+   *
+   * The bounds only catch values that aren't physically meaningful, so a legitimate
+   * measurement is never distorted:
+   *  - `coerceAtLeast(1)` floors the degenerate "one frame in <1s" case (ffmpeg needs a
+   *    positive integer fps).
+   *  - the upper bound catches a non-physical spike — e.g. a near-empty capture or clock
+   *    skew making `elapsedMs` ~0 — which would otherwise yield a hundreds-of-fps blur.
+   *    It sits at `4 * NOMINAL_FPS` (20fps at the 200ms cadence), comfortably above the
+   *    real ceiling: each screenshot costs ~50ms+, so a genuine capture can't sustain past
+   *    ~20fps, and a fast tail passes through unclamped. Independent of the truncated-capture
+   *    fail-soft path — `frames / elapsed` is the right rate either way.
    */
-  private fun computeFps(frameCount: Int, elapsedMs: Long): Int {
-    if (elapsedMs <= 0) return (1000 / FRAME_INTERVAL_MS).toInt().coerceAtLeast(1)
-    return (frameCount * 1000.0 / elapsedMs).toInt().coerceAtLeast(1)
+  internal fun computeFps(frameCount: Int, elapsedMs: Long): Int {
+    if (elapsedMs <= 0) return NOMINAL_FPS
+    return (frameCount * 1000.0 / elapsedMs).toInt().coerceIn(1, 4 * NOMINAL_FPS)
   }
 }

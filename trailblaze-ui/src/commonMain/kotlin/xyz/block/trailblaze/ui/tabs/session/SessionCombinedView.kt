@@ -12,6 +12,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -85,6 +86,7 @@ import xyz.block.trailblaze.ui.loadNetworkLogs
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
 import xyz.block.trailblaze.ui.resolveImageModel
 import xyz.block.trailblaze.ui.utils.FormattingUtils
+import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCompactDuration
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 
 /** Polling interval for refreshing device-log and network capture files during live sessions. */
@@ -319,6 +321,27 @@ internal fun SessionCombinedView(
   val eventMarkers =
     remember(logs, effectiveStartMs, effectiveEndMs) {
       buildEventMarkers(logs, effectiveStartMs, effectiveEndMs)
+    }
+
+  // Export-only: a dwell-capped mapping from compressed playback time to absolute session
+  // time, so `--gif/--webp/--video` autoplay scales with step count rather than the
+  // session's real wall-clock (issue #173). Null for interactive viewing — only the
+  // `?autoplay=1` export path collapses idle gaps. Anchored on every log timestamp plus
+  // the window bounds so meaningful intra-step activity still plays 1:1.
+  // isExportAutoplayRequested() reads the immutable report URL (constant for the page's
+  // lifetime), so it's a guard inside the block, not a remember key.
+  val exportPlaybackTimeline =
+    remember(logs, effectiveStartMs, effectiveEndMs) {
+      if (!isExportAutoplayRequested()) {
+        null
+      } else {
+        val anchors = exportPlaybackAnchors(
+          logTimestampsMs = logs.map { it.timestamp.toEpochMilliseconds() },
+          startMs = effectiveStartMs,
+          endMs = effectiveEndMs,
+        )
+        PlaybackTimeline.build(anchors, TimelineConstants.MAX_EXPORT_STEP_DWELL_MS)
+      }
     }
 
   // Flat navigation list built from visible child events — matches exactly what's on screen.
@@ -633,6 +656,7 @@ internal fun SessionCombinedView(
             currentTimestamp = currentTimestamp,
             effectiveStartMs = effectiveStartMs,
             effectiveEndMs = effectiveEndMs,
+            exportPlaybackTimeline = exportPlaybackTimeline,
             activeDriverLog = activeDriverLog,
             sessionId = sessionId,
             imageLoader = imageLoader,
@@ -650,6 +674,7 @@ internal fun SessionCombinedView(
             timelineState = timelineState,
             effectiveStartMs = effectiveStartMs,
             effectiveEndMs = effectiveEndMs,
+            exportPlaybackTimeline = exportPlaybackTimeline,
             onShowScreenshotModal = onShowScreenshotModal,
             onShowInspectUI = onShowInspectUI,
           )
@@ -876,6 +901,7 @@ private fun ColumnScope.VideoFramePanel(
   currentTimestamp: Long,
   effectiveStartMs: Long,
   effectiveEndMs: Long,
+  exportPlaybackTimeline: PlaybackTimeline?,
   activeDriverLog: TrailblazeLog.AgentDriverLog?,
   sessionId: String,
   imageLoader: ImageLoader,
@@ -931,13 +957,12 @@ private fun ColumnScope.VideoFramePanel(
 
     while (timelineState.isVideoPlaying) {
       val elapsed = (mark.elapsedNow().inWholeMilliseconds * speed).toLong()
-      val targetAbsMs = playStartAbsMs + elapsed
-      if (targetAbsMs >= videoEndAbsMs) {
-        timelineState.scrubTimestampMs = videoEndAbsMs
+      val tick = computePlaybackTick(elapsed, playStartAbsMs, videoEndAbsMs, exportPlaybackTimeline)
+      timelineState.scrubTimestampMs = tick.targetAbsMs
+      if (tick.reachedEnd) {
         timelineState.isVideoPlaying = false
         break
       }
-      timelineState.scrubTimestampMs = targetAbsMs
       delay(TimelineConstants.PLAYBACK_FRAME_INTERVAL_MS)
     }
   }
@@ -1006,6 +1031,11 @@ private fun ColumnScope.VideoFramePanel(
         )
       }
     }
+    // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
+    // silently imply two far-apart steps were adjacent (see issue #173 review).
+    exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
+      CompressedGapBadge(gapMs)
+    }
   }
 }
 
@@ -1024,6 +1054,7 @@ private fun ColumnScope.ScreenshotKeyframePanel(
   timelineState: SessionTimelineState,
   effectiveStartMs: Long,
   effectiveEndMs: Long,
+  exportPlaybackTimeline: PlaybackTimeline?,
   onShowScreenshotModal:
     ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: AgentDriverAction?) -> Unit)? =
     null,
@@ -1059,13 +1090,12 @@ private fun ColumnScope.ScreenshotKeyframePanel(
 
     while (timelineState.isVideoPlaying) {
       val elapsed = (mark.elapsedNow().inWholeMilliseconds * speed).toLong()
-      val targetAbsMs = playStartAbsMs + elapsed
-      if (targetAbsMs >= effectiveEndMs) {
-        timelineState.scrubTimestampMs = effectiveEndMs
+      val tick = computePlaybackTick(elapsed, playStartAbsMs, effectiveEndMs, exportPlaybackTimeline)
+      timelineState.scrubTimestampMs = tick.targetAbsMs
+      if (tick.reachedEnd) {
         timelineState.isVideoPlaying = false
         break
       }
-      timelineState.scrubTimestampMs = targetAbsMs
       delay(TimelineConstants.PLAYBACK_FRAME_INTERVAL_MS)
     }
   }
@@ -1155,6 +1185,38 @@ private fun ColumnScope.ScreenshotKeyframePanel(
         )
       }
     }
+    // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
+    // silently imply two far-apart steps were adjacent (see issue #173 review).
+    exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
+      CompressedGapBadge(gapMs)
+    }
+  }
+}
+
+/**
+ * Pill caption shown over the playback frame while export autoplay fast-forwards across a
+ * collapsed idle gap, e.g. "» 37m later". Keeps the standalone GIF/WebP/MP4 honest about the
+ * real time the compression skips — the duration that all three #173 reviewers said must not
+ * silently vanish — without spending it as playback. Export-only: in interactive viewing
+ * there's no [PlaybackTimeline], so this never renders there.
+ */
+@Composable
+private fun BoxScope.CompressedGapBadge(gapMs: Long) {
+  Box(
+    modifier = Modifier
+      .align(Alignment.TopCenter)
+      .padding(top = 8.dp)
+      .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+      .padding(horizontal = 10.dp, vertical = 4.dp),
+  ) {
+    Text(
+      // Prefix is ASCII ">>", not a ⏩ emoji or "»" — the bundled WASM Compose font renders
+      // neither (both came out as tofu in #173 end-to-end validation), but plain ASCII
+      // renders reliably and ">>" still reads as fast-forward/skip.
+      text = ">> ${formatCompactDuration(gapMs)} later",
+      style = MaterialTheme.typography.labelMedium,
+      color = Color.White,
+    )
   }
 }
 

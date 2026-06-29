@@ -39,6 +39,22 @@ internal object TimelineConstants {
   // Playback
   const val PLAYBACK_FRAME_INTERVAL_MS = 50L
   const val END_OF_VIDEO_THRESHOLD_MS = 500L
+
+  /**
+   * Maximum dwell, in absolute session ms, that export autoplay spends on any single gap
+   * between recorded events. Gaps longer than this (idle time while a session was recorded
+   * interactively) are collapsed by [PlaybackTimeline] so export duration scales with step
+   * count rather than wall-clock — see issue #173. A 25-step session lands at roughly
+   * `25 * 4s = 100s` of compressed timeline, ~25s at the default 4x export speed, instead
+   * of mirroring a 100-minute recording. Only applied on the `?autoplay=1` export path;
+   * interactive playback keeps real (speed-scaled) timing.
+   *
+   * Note this is in *session* ms: the autoplay loop still divides elapsed by
+   * `playbackSpeed`, so the per-step *visible* dwell is `MAX_EXPORT_STEP_DWELL_MS /
+   * playbackSpeed` (~1s at the 4x default). Retune alongside the default speed in
+   * [SessionTimelineState] if either changes.
+   */
+  const val MAX_EXPORT_STEP_DWELL_MS = 4_000L
   const val NEARBY_LOGS_WINDOW_MS = 2000L
   const val SLIDESHOW_MIN_DELAY_MS = 200L
   const val SLIDESHOW_MAX_DELAY_MS = 3000L

@@ -78,7 +78,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `toolbox` | Browse available tools by target app and platform |
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
-| `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. |
+| `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
 | `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
@@ -570,7 +570,7 @@ trailblaze session end [OPTIONS]
 
 ### `trailblaze report`
 
-Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code.
+Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning.
 
 **Synopsis:**
 
