@@ -20,22 +20,23 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.report.StoryboardHtmlBuilder
 import xyz.block.trailblaze.yaml.DirectionStep
 
 /**
- * Unit-level coverage for [ReportStoryboardExporter] — the pure functions that produce
+ * Unit-level coverage for [StoryboardHtmlBuilder] — the pure functions that produce
  * the storyboard HTML/sections without going through Playwright + ffmpeg.
  *
  * The integration shape (Playwright fullPage capture → libwebp encode → on-disk
  * artifact) is exercised by manual runs on real sessions; pinning every layout pixel
  * in a unit test would be expensive and brittle. What we DO pin here:
  *
- * - [ReportStoryboardExporter.buildSections] — the chronological-grouping +
+ * - [StoryboardHtmlBuilder.buildSections] — the chronological-grouping +
  *   AI/REC + YAML-join logic.
- * - [ReportStoryboardExporter.buildHtml] — section/cell markup invariants (chips
+ * - [StoryboardHtmlBuilder.buildHtml] — section/cell markup invariants (chips
  *   present, YAML strip replaces label, labels escape unsafe content).
- * - [ReportStoryboardExporter.autoPickColumns] — the aspect-ratio-driven column default.
- * - [ReportStoryboardExporter.autoFitCellWidth] — the shrink-to-fit ladder.
+ * - [StoryboardHtmlBuilder.autoPickColumns] — the aspect-ratio-driven column default.
+ * - [StoryboardHtmlBuilder.autoFitCellWidth] — the shrink-to-fit ladder.
  *
  * Each test constructs minimal `TrailblazeLog` fixtures via [makeAgentDriverLog] /
  * [makeObjectiveStart] / [makeToolLog]. The screenshot resolver is a lambda so we
@@ -63,7 +64,7 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLog(screenshot = "c.png", traceId = "t3"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     )
@@ -86,13 +87,13 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLog(screenshot = "b.png", traceId = "t2"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     )
 
     assertEquals(1, sections.size)
-    assertEquals(ReportStoryboardExporter.DEFAULT_SECTION_TITLE, sections[0].title)
+    assertEquals(StoryboardHtmlBuilder.DEFAULT_SECTION_TITLE, sections[0].title)
     assertEquals(2, sections[0].cells.size)
   }
 
@@ -102,7 +103,7 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLog(screenshot = "missing.png", traceId = "t1"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { null },
     )
@@ -122,7 +123,7 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLog(screenshot = url, traceId = "t1"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       // Resolver returns null for everything — would normally drop the cell. The URL
       // short-circuit means buildSections shouldn't even call this for a URL-form path.
@@ -142,7 +143,7 @@ class ReportStoryboardExporterTest {
       makeToolLog(toolName = "tapOn", traceId = "shared-trace"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
       includeYaml = true,
@@ -162,7 +163,7 @@ class ReportStoryboardExporterTest {
       makeToolLog(toolName = "tapOn", traceId = "t1"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
       includeYaml = false,
@@ -179,7 +180,7 @@ class ReportStoryboardExporterTest {
       makeToolLog(toolName = "tapOn", traceId = "t-different"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
       includeYaml = true,
@@ -198,11 +199,11 @@ class ReportStoryboardExporterTest {
   fun `buildHtml emits one section per StoryboardSection with title in header`() {
     val cell = makeCell(label = "Tap", sublabel = "(100, 200)")
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection("Open home", listOf(cell.copy(index = 1))),
-      ReportStoryboardExporter.StoryboardSection("Open settings", listOf(cell.copy(index = 2))),
+      StoryboardHtmlBuilder.StoryboardSection("Open home", listOf(cell.copy(index = 1))),
+      StoryboardHtmlBuilder.StoryboardSection("Open settings", listOf(cell.copy(index = 2))),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -221,10 +222,10 @@ class ReportStoryboardExporterTest {
   fun `buildHtml emits remote URL as img src directly without base64 inlining`() {
     val url = "https://example.lambda-url.us-east-2.on.aws/?bucket=b&key=k.webp"
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "URL cell",
         cells = listOf(
-          ReportStoryboardExporter.StoryboardCell(
+          StoryboardHtmlBuilder.StoryboardCell(
             index = 1,
             label = "Tap",
             sublabel = "",
@@ -237,7 +238,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -255,7 +256,7 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml renders 'AI' source-chip for aiGenerated cells and 'REC' for others`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "Mixed sources",
         cells = listOf(
           makeCell(index = 1, aiGenerated = true),
@@ -264,7 +265,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -281,7 +282,7 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml replaces the label strip with YAML pre when cell has a yamlSnippet`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "S",
         cells = listOf(
           makeCell(
@@ -294,7 +295,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -316,7 +317,7 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml falls back to verb+sublabel label when yamlSnippet is null even with includeYaml=true`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "S",
         cells = listOf(
           makeCell(index = 1, label = "Tap", sublabel = "(1, 2)", yamlSnippet = null),
@@ -324,7 +325,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -340,7 +341,7 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml HTML-escapes labels, sublabels, YAML, and section titles`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "<title> & \"quoted\"",
         cells = listOf(
           makeCell(
@@ -353,7 +354,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -380,7 +381,7 @@ class ReportStoryboardExporterTest {
     val cells = List(10) { i ->
       makeCell(index = i + 1, deviceWidth = 393, deviceHeight = 852)
     }
-    assertEquals(4, ReportStoryboardExporter.autoPickColumns(cells))
+    assertEquals(4, StoryboardHtmlBuilder.autoPickColumns(cells))
   }
 
   @Test
@@ -389,7 +390,7 @@ class ReportStoryboardExporterTest {
     val cells = List(10) { i ->
       makeCell(index = i + 1, deviceWidth = 1280, deviceHeight = 800)
     }
-    assertEquals(3, ReportStoryboardExporter.autoPickColumns(cells))
+    assertEquals(3, StoryboardHtmlBuilder.autoPickColumns(cells))
   }
 
   @Test
@@ -401,7 +402,7 @@ class ReportStoryboardExporterTest {
     val portrait = List(4) { i ->
       makeCell(index = i + 7, deviceWidth = 393, deviceHeight = 852)
     }
-    assertEquals(3, ReportStoryboardExporter.autoPickColumns(landscape + portrait))
+    assertEquals(3, StoryboardHtmlBuilder.autoPickColumns(landscape + portrait))
   }
 
   @Test
@@ -413,7 +414,7 @@ class ReportStoryboardExporterTest {
     val portrait = List(6) { i ->
       makeCell(index = i + 5, deviceWidth = 393, deviceHeight = 852)
     }
-    assertEquals(4, ReportStoryboardExporter.autoPickColumns(landscape + portrait))
+    assertEquals(4, StoryboardHtmlBuilder.autoPickColumns(landscape + portrait))
   }
 
   @Test
@@ -423,7 +424,7 @@ class ReportStoryboardExporterTest {
     val cells = List(10) { i ->
       makeCell(index = i + 1, deviceWidth = 1024, deviceHeight = 931)
     }
-    assertEquals(4, ReportStoryboardExporter.autoPickColumns(cells))
+    assertEquals(4, StoryboardHtmlBuilder.autoPickColumns(cells))
   }
 
   @Test
@@ -431,7 +432,7 @@ class ReportStoryboardExporterTest {
     // Empty input shouldn't crash — pick the portrait default. This isn't a real CLI
     // path (the exporter rejects 0-cell sessions upstream), but the helper is `internal`
     // and could be called from tests / other contexts with edge inputs.
-    assertEquals(4, ReportStoryboardExporter.autoPickColumns(emptyList()))
+    assertEquals(4, StoryboardHtmlBuilder.autoPickColumns(emptyList()))
   }
 
   @Test
@@ -443,7 +444,7 @@ class ReportStoryboardExporterTest {
     val portrait = List(3) { i ->
       makeCell(index = i + 2, deviceWidth = 393, deviceHeight = 852)
     }
-    assertEquals(4, ReportStoryboardExporter.autoPickColumns(listOf(malformed) + portrait))
+    assertEquals(4, StoryboardHtmlBuilder.autoPickColumns(listOf(malformed) + portrait))
   }
 
   // ---------------------------------------------------------------------------
@@ -453,9 +454,9 @@ class ReportStoryboardExporterTest {
   @Test
   fun `autoFitCellWidth returns requested width when the page already fits`() {
     val cell = makeCell()
-    val sections = listOf(ReportStoryboardExporter.StoryboardSection("S", listOf(cell)))
+    val sections = listOf(StoryboardHtmlBuilder.StoryboardSection("S", listOf(cell)))
 
-    val result = ReportStoryboardExporter.autoFitCellWidth(
+    val result = StoryboardHtmlBuilder.autoFitCellWidth(
       requested = 300,
       sections = sections,
       columns = 4,
@@ -474,10 +475,10 @@ class ReportStoryboardExporterTest {
     // 7800 cap); the auto-fit walk must shrink to fit.
     val cell = makeCell(deviceWidth = 402, deviceHeight = 874)
     val sections = List(60) { i ->
-      ReportStoryboardExporter.StoryboardSection("S$i", listOf(cell.copy(index = i + 1)))
+      StoryboardHtmlBuilder.StoryboardSection("S$i", listOf(cell.copy(index = i + 1)))
     }
 
-    val result = ReportStoryboardExporter.autoFitCellWidth(
+    val result = StoryboardHtmlBuilder.autoFitCellWidth(
       requested = 300,
       sections = sections,
       columns = 4,
@@ -487,7 +488,7 @@ class ReportStoryboardExporterTest {
 
     assertTrue(result < 300, "Tall many-section pages should trigger the shrink")
     assertTrue(
-      result >= ReportStoryboardExporter.MIN_CELL_WIDTH_PX,
+      result >= StoryboardHtmlBuilder.MIN_CELL_WIDTH_PX,
       "Shrink must not undercut the readability floor",
     )
   }
@@ -500,10 +501,10 @@ class ReportStoryboardExporterTest {
     // post-render PNG dimension check is what catches "still too big" cases.
     val cell = makeCell(deviceWidth = 402, deviceHeight = 874)
     val sections = List(300) { i ->
-      ReportStoryboardExporter.StoryboardSection("S$i", listOf(cell.copy(index = i + 1)))
+      StoryboardHtmlBuilder.StoryboardSection("S$i", listOf(cell.copy(index = i + 1)))
     }
 
-    val result = ReportStoryboardExporter.autoFitCellWidth(
+    val result = StoryboardHtmlBuilder.autoFitCellWidth(
       requested = 300,
       sections = sections,
       columns = 4,
@@ -512,7 +513,7 @@ class ReportStoryboardExporterTest {
     )
 
     assertEquals(
-      ReportStoryboardExporter.MIN_CELL_WIDTH_PX,
+      StoryboardHtmlBuilder.MIN_CELL_WIDTH_PX,
       result,
       "Floor-hit case must return MIN_CELL_WIDTH_PX, not throw or return less",
     )
@@ -530,7 +531,7 @@ class ReportStoryboardExporterTest {
     // involved — the check is extracted into its own internal helper precisely so it
     // can be exercised with bare cells.
     val cells = List(800) { i -> makeCell(index = i + 1) }
-    val ex = runCatching { ReportStoryboardExporter.checkInlinedHtmlSize(cells) }.exceptionOrNull()
+    val ex = runCatching { StoryboardHtmlBuilder.checkInlinedHtmlSize(cells) }.exceptionOrNull()
     assertTrue(ex is IllegalStateException, "Expected IllegalStateException, got $ex")
     assertTrue(
       ex.message!!.contains("256MB preflight cap"),
@@ -542,14 +543,14 @@ class ReportStoryboardExporterTest {
   fun `checkInlinedHtmlSize accepts typical session sizes without throwing`() {
     val cells = List(50) { i -> makeCell(index = i + 1) }
     // No assertion needed — the call returning normally IS the pass condition.
-    ReportStoryboardExporter.checkInlinedHtmlSize(cells)
+    StoryboardHtmlBuilder.checkInlinedHtmlSize(cells)
   }
 
   @Test
   fun `checkInlinedHtmlSize accepts the empty cell list (no-op)`() {
     // Empty case has no cells to inline, so the check should short-circuit cleanly
     // rather than dividing by zero in the error-message construction.
-    ReportStoryboardExporter.checkInlinedHtmlSize(emptyList())
+    StoryboardHtmlBuilder.checkInlinedHtmlSize(emptyList())
   }
 
   // ---------------------------------------------------------------------------
@@ -565,7 +566,7 @@ class ReportStoryboardExporterTest {
       makeLlmRequestLog(traceId = sharedTrace),
     )
 
-    val cell = ReportStoryboardExporter.buildSections(
+    val cell = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     ).single().cells.single()
@@ -581,7 +582,7 @@ class ReportStoryboardExporterTest {
       makeLlmRequestLog(traceId = "different-llm-trace"),
     )
 
-    val cell = ReportStoryboardExporter.buildSections(
+    val cell = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     ).single().cells.single()
@@ -607,7 +608,7 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLog(screenshot = "cell3.png", traceId = "t3"),
     )
 
-    val sections = ReportStoryboardExporter.buildSections(
+    val sections = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     )
@@ -627,7 +628,7 @@ class ReportStoryboardExporterTest {
       makeLlmRequestLog(traceId = "any-llm-trace"),
     )
 
-    val cell = ReportStoryboardExporter.buildSections(
+    val cell = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     ).single().cells.single()
@@ -667,7 +668,7 @@ class ReportStoryboardExporterTest {
       toolLog,
     )
 
-    val cell = ReportStoryboardExporter.buildSections(
+    val cell = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
       includeYaml = true,
@@ -702,7 +703,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val cells = ReportStoryboardExporter.buildSections(
+    val cells = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     ).single().cells
@@ -735,7 +736,7 @@ class ReportStoryboardExporterTest {
       makeAgentDriverLogWithAction("f.png", AgentDriverAction.LongPressPoint(x = 100, y = 200)),
     )
 
-    val cells = ReportStoryboardExporter.buildSections(
+    val cells = StoryboardHtmlBuilder.buildSections(
       logs = logs,
       resolveScreenshotFile = { png },
     ).single().cells
@@ -756,7 +757,7 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml renders both AI and REC chips when a section contains mixed-source cells`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "Mixed source section",
         cells = listOf(
           makeCell(index = 1, aiGenerated = true),
@@ -765,7 +766,7 @@ class ReportStoryboardExporterTest {
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -789,13 +790,13 @@ class ReportStoryboardExporterTest {
   @Test
   fun `buildHtml renders singular '1 step' for sections containing exactly one cell`() {
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "Single-cell section",
         cells = listOf(makeCell(index = 1)),
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -814,13 +815,13 @@ class ReportStoryboardExporterTest {
   fun `buildHtml pluralizes section step count for N greater than 1`() {
     val cell = makeCell()
     val sections = listOf(
-      ReportStoryboardExporter.StoryboardSection(
+      StoryboardHtmlBuilder.StoryboardSection(
         title = "Multi-step section",
         cells = listOf(cell.copy(index = 1), cell.copy(index = 2), cell.copy(index = 3)),
       ),
     )
 
-    val html = ReportStoryboardExporter.buildHtml(
+    val html = StoryboardHtmlBuilder.buildHtml(
       sections = sections,
       columns = 4,
       cellWidthPx = 300,
@@ -961,7 +962,7 @@ class ReportStoryboardExporterTest {
     )
 
   /**
-   * Build a [ReportStoryboardExporter.StoryboardCell] backed by a 1x1 PNG fixture.
+   * Build a [StoryboardHtmlBuilder.StoryboardCell] backed by a 1x1 PNG fixture.
    * Used by [buildHtml] tests that just need a working data:URI source for the
    * embedded `<img>` — no need to draw anything meaningful.
    */
@@ -973,9 +974,9 @@ class ReportStoryboardExporterTest {
     aiGenerated: Boolean = false,
     deviceWidth: Int = 402,
     deviceHeight: Int = 874,
-  ): ReportStoryboardExporter.StoryboardCell {
+  ): StoryboardHtmlBuilder.StoryboardCell {
     val png = if (!File(tmp.root, "fixture.png").exists()) writeTinyPng("fixture.png") else File(tmp.root, "fixture.png")
-    return ReportStoryboardExporter.StoryboardCell(
+    return StoryboardHtmlBuilder.StoryboardCell(
       index = index,
       label = label,
       sublabel = sublabel,

@@ -35,6 +35,7 @@ import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GenerateReportEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.StoryboardEndpoint
 import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.ResolvedProviderAuth
@@ -110,6 +111,7 @@ object ServerEndpoints {
       LogTracePostEndpoint.register(this, logsRepo)
       ReverseProxyEndpoint.register(this, logsRepo, auths)
       GenerateReportEndpoint.register(this, logsRepo)
+      StoryboardEndpoint.register(this, logsRepo)
       ScriptingCallbackEndpoint.register(this)
       staticFiles("/static", logsRepo.logsDir)
 
