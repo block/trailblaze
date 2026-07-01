@@ -163,7 +163,7 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `android_framework` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 3 |
 | `android_primitives` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation` | 7 |
 | `compose_core` | No | `compose` | 6 |
-| `compose_verification` | No | `compose` | 2 |
+| `compose_verification` | No | `compose` | 3 |
 | `core_interaction` | Yes | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 19 |
 | `memory` | No | `all drivers` | 8 |
 | `meta` | Yes | `all drivers` | 2 |
@@ -172,10 +172,10 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `observation` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 1 |
 | `revyl_core` | No | `revyl-android`, `revyl-ios` | 7 |
 | `revyl_verification` | No | `revyl-android`, `revyl-ios` | 1 |
-| `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 2 |
+| `verification` | No | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host` | 3 |
 | `web_core` | No | `playwright-electron`, `playwright-native` | 16 |
 | `web_framework` | Yes | `playwright-electron`, `playwright-native` | 1 |
-| `web_verification` | No | `playwright-electron`, `playwright-native` | 5 |
+| `web_verification` | No | `playwright-electron`, `playwright-native` | 6 |
 
 ## Authoring Tools
 

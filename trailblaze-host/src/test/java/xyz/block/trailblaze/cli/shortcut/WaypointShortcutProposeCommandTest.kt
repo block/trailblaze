@@ -86,10 +86,11 @@ class WaypointShortcutProposeCommandTest {
   @Test
   fun `writeSidecars surfaces emit failures as EMIT_FAILED entries and keeps earlier sidecars`() {
     // Load-bearing safety net: a single broken proposal must NOT abort the run.
-    // Construct a survivor list where the middle proposal carries an unsupported
-    // (iosMaestro) selector — ShortcutYamlEmitter.requireSelectorIsEmittable will
-    // throw on it. Assert: (a) the two sibling sidecars survive on disk, (b)
-    // rejected.json records the failure with kind=EMIT_FAILED.
+    // Construct a survivor list where the middle proposal carries a still-unemittable
+    // (web) selector — ShortcutYamlEmitter.requireSelectorIsEmittable throws on it.
+    // (androidAccessibility / iosMaestro / iosAxe now emit; web / compose /
+    // androidMaestro remain gated.) Assert: (a) the two sibling sidecars survive on
+    // disk, (b) rejected.json records the failure with kind=EMIT_FAILED.
     val outDir = File(tempDir, "proposals")
     val cmd = WaypointShortcutProposeCommand()
     cmd.outDir = outDir
@@ -101,11 +102,11 @@ class WaypointShortcutProposeCommandTest {
       to = "trailmap/to-b",
       key = "bad",
       toolBody = ShortcutProposer.ToolBody.TapOnElementBySelector(
-        // iosMaestro triggers requireSelectorIsEmittable inside the emitter.
+        // web still triggers requireSelectorIsEmittable inside the emitter (no emission ladder yet).
         selector = TrailblazeNodeSelector(
-          iosMaestro = DriverNodeMatch.IosMaestro(textRegex = "^Foo$"),
+          web = DriverNodeMatch.Web(ariaNameRegex = "^Foo$"),
         ),
-        selectorDescription = "iOS",
+        selectorDescription = "web",
       ),
     )
     val good2 = proposal("trailmap/from-c", "trailmap/to-c", "good-2")

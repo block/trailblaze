@@ -7,13 +7,10 @@ import xyz.block.trailblaze.agent.TrailExecutionMode
 import xyz.block.trailblaze.agent.TrailResult
 import xyz.block.trailblaze.agent.TrailState
 import xyz.block.trailblaze.agent.UiActionExecutor
-import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
-import xyz.block.trailblaze.waypoint.StepPostconditionAsserter
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -57,35 +54,23 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  * For self-heal on failures, use [TrailStepPlanner] with
  * [TrailExecutionMode.RECORDING_WITH_FALLBACK].
  *
- * ## Step Postconditions
+ * ## Asserting an intended end-state
  *
- * A step may declare an optional `postcondition: { waypoint: <id> }` that pins the step's
- * intended end-state. After all of the step's recorded tools complete successfully, the
- * executor polls [screenStateProvider] until [waypointResolver]-resolved waypoint matches
- * or the postcondition's timeout elapses. A mismatch hard-fails the step at the declaring
- * boundary — so a fault surfaces at the swipe-that-didn't-dismiss, not at the downstream
- * tap that hit the wrong layer.
- *
- * Postconditions are skipped when [screenStateProvider] or [waypointResolver] is `null`;
- * the executor logs a single diagnostic and proceeds. Constructors written before the
- * waypoint registry was wired through remain valid (existing trails behave identically).
+ * A step that needs to pin its intended end-state appends an `assertWaypoint` tool to its
+ * recording — a normal framework tool that polls the current screen until a named waypoint
+ * matches, failing the step at the declaring boundary on mismatch. It's just another recorded
+ * tool to this executor, so no postcondition-specific wiring lives here.
  *
  * @property executor The UI action executor for running tools
  * @property config Trail execution configuration (mode should be DETERMINISTIC)
  * @property logEmitter Optional log emitter for objective lifecycle events
  * @property sessionId Optional session ID for log correlation
- * @property screenStateProvider Optional source of the live screen state, used to evaluate
- *   step postconditions. When `null`, postconditions on steps are silently skipped.
- * @property waypointResolver Optional waypoint-id lookup against the loaded registry. When
- *   `null`, postconditions on steps are silently skipped.
  */
 class DeterministicTrailExecutor(
   private val executor: UiActionExecutor,
   private val config: TrailConfig = TrailConfig.DETERMINISTIC,
   private val logEmitter: LogEmitter? = null,
   private val sessionId: SessionId? = null,
-  private val screenStateProvider: (suspend () -> ScreenState?)? = null,
-  private val waypointResolver: ((String) -> WaypointDefinition?)? = null,
 ) {
 
   /**
@@ -182,63 +167,14 @@ class DeterministicTrailExecutor(
       }
     }
 
-    // After tools succeed, enforce the step's postcondition (if any). A postcondition is a
-    // structural assertion that the screen has actually reached the intended waypoint —
-    // distinct from "the swipe gesture dispatched", which is all the tool layer can vouch for.
-    val pc = step.postcondition
-    if (pc != null) {
-      val provider = screenStateProvider
-      val resolver = waypointResolver
-      if (provider == null || resolver == null) {
-        // Misconfigured runner: step asks for a postcondition but the executor wasn't given
-        // the deps to evaluate it. Skip rather than crash — surface the gap via the failure
-        // reason path is overkill since the step succeeded mechanically. A single warning is
-        // captured here so audits can flag trails whose postconditions are silently inert.
-        // (No structured warning channel exists at this layer yet; calling sites that wire
-        // the runner should ensure both deps are passed.)
-      } else {
-        val assertion = StepPostconditionAsserter.assert(
-          postcondition = pc,
-          screenStateProvider = provider,
-          waypointResolver = resolver,
-        )
-        val pcFailure = describePostconditionFailure(index, assertion)
-        if (pcFailure != null) {
-          return state.copy(failed = true, failureReason = pcFailure)
-        }
-      }
-    }
-
-    // All tools in recording succeeded and postcondition (if any) is satisfied
+    // All tools in the recording succeeded (an `assertWaypoint` tool, if present, is just one of
+    // them and fails the step like any other tool on mismatch).
     return state.copy(
       currentStepIndex = index + 1,
       completedSteps = state.completedSteps + index,
       usedRecordings = state.usedRecordings + (index to true),
       retryCount = 0,
     )
-  }
-
-  /**
-   * Maps a [StepPostconditionAsserter.Result] to a failure reason string. Returns null when
-   * the postcondition matched (the success path).
-   *
-   * Each non-match outcome gets a distinct message: trail authors debugging a mismatch want
-   * to know whether the screen drifted (NotMatched), whether the waypoint id is wrong
-   * (WaypointNotFound), or whether the driver is broken (NoScreenState).
-   */
-  private fun describePostconditionFailure(
-    stepIndex: Int,
-    result: StepPostconditionAsserter.Result,
-  ): String? = when (result) {
-    is StepPostconditionAsserter.Result.Matched -> null
-    is StepPostconditionAsserter.Result.NotMatched ->
-      "Step $stepIndex: ${StepPostconditionAsserter.describeMismatch(result)}"
-    is StepPostconditionAsserter.Result.WaypointNotFound ->
-      "Step $stepIndex: postcondition references unknown waypoint '${result.requestedId}'. " +
-        "Check the waypoint id against the loaded trailmaps."
-    is StepPostconditionAsserter.Result.NoScreenState ->
-      "Step $stepIndex: postcondition '${result.definitionId}' could not be evaluated — " +
-        "the screen state provider returned no state within ${result.timeoutMs}ms."
   }
 
   /**

@@ -82,8 +82,8 @@ object SessionSegmentExtractor {
    * the matcher fail-closes any templated waypoint with a `UNRESOLVED_TARGET_TEMPLATE`
    * skip (literal selectors keep working).
    */
-  // See [@JvmOverloads] rationale on `assert` in StepPostconditionAsserter — same
-  // published-artifact binary-compat concern.
+  // [@JvmOverloads] keeps the pre-`target` bytecode signature so binary-linked consumers of
+  // this published artifact (trailblaze-common) don't NoSuchMethodError when `target` is added.
   @JvmOverloads
   fun extract(
     sessionDir: File,

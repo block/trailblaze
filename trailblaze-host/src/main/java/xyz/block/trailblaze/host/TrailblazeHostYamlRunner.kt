@@ -14,10 +14,6 @@ import xyz.block.trailblaze.agent.MultiAgentV3Runner
 import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
-import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
-import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
-import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
@@ -94,6 +90,18 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 object TrailblazeHostYamlRunner {
+
+  init {
+    // Install the analyzer-backed scripted-tool enrichment so the host-side `assertWaypoint`
+    // tool can resolve the waypoint registry even in workspaces that carry meta-only
+    // scripted-tool descriptors (whose trailmap loading would otherwise throw without
+    // enrichment). The interface lives in trailblaze-common; the analyzer that builds it is
+    // host-only, so this is the host's one-time install point. Mirrors what the retired
+    // `resolveWaypointsForRun` did inline.
+    xyz.block.trailblaze.waypoint.WaypointRegistryResolver.scriptedToolEnrichmentProvider = {
+      xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+    }
+  }
 
   /**
    * How [runPlaywrightNativeYaml] should treat the cached Playwright-native test
@@ -1598,6 +1606,11 @@ object TrailblazeHostYamlRunner {
         resolved.target.getAppIdIfInstalled(resolved.platform, installed)
       }.getOrNull()
     }
+    // Forward-declared so the context provider's screen-state lambda can reach the executor's
+    // capture once it's constructed (the lambda only runs at tool-dispatch time, well after this
+    // assignment). Host-local verification tools like `assertWaypoint` poll the live screen
+    // through this provider.
+    var executorRef: HostAccessibilityRpcClient? = null
     val executor = HostAccessibilityRpcClient(
       rpcClient = onDeviceRpc,
       toolRepo = toolRepo,
@@ -1609,6 +1622,14 @@ object TrailblazeHostYamlRunner {
           traceId = traceId,
           trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
           sessionProvider = { loggingRule.session ?: error("Session not available") },
+          // Mirrors the `screenshotProvider` lambda below — the context's screenStateProvider is
+          // synchronous, so we bridge the suspend capture with runBlocking. Safe for the same
+          // reason: it runs on the dispatch thread, not the trail's coroutine, and the RPC capture
+          // completes on its own connection.
+          screenStateProvider = {
+            runBlocking { executorRef?.captureScreenState() }
+              ?: error("No screen state available")
+          },
           trailblazeLogger = loggingRule.logger,
           memory = sharedAgentMemory,
           resolvedTarget = resolvedTargetForSession,
@@ -1621,6 +1642,7 @@ object TrailblazeHostYamlRunner {
       },
       memory = sharedAgentMemory,
     )
+    executorRef = executor
 
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
@@ -1699,7 +1721,6 @@ object TrailblazeHostYamlRunner {
         progressReporter = progressReporter,
         deviceId = trailblazeDeviceId,
         availableToolsProvider = availableToolsProvider,
-        waypointResolver = resolveWaypointsForRun(),
       )
 
       onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
@@ -2085,12 +2106,6 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
       onAfterRecordedTool = onAfterRecordedTool,
-      // Pre-wired even though this constructor doesn't pass screenStateProvider/waypointResolver
-      // today (postcondition assertion is dormant on this path). Threading it now means turning
-      // the asserter on later doesn't have to hunt for every TrailblazeRunnerUtil call site.
-      target = resolvedTargetForSession?.let {
-        xyz.block.trailblaze.api.TargetTemplateContext(appId = appIdForSession, appIds = it.appIds)
-      },
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
@@ -2417,46 +2432,6 @@ object TrailblazeHostYamlRunner {
     } catch (e: Exception) {
       Console.log("Failed to generate recording: ${e.message}")
       return null
-    }
-  }
-
-  /**
-   * Loads the waypoint registry for the current trail run and returns a id->definition
-   * resolver, used by `DeterministicTrailExecutor` to evaluate step postconditions.
-   *
-   * Resolves classpath-bundled waypoint trailmaps only (workspace `trailmaps:` entries would need
-   * a configured `trailblaze.yaml` anchor that the daemon does not currently track).
-   * Bundled trailmaps are sufficient for the in-tree waypoint coverage shipped with the
-   * compiled CLI; user-authored workspace waypoints can land in a follow-up.
-   *
-   * Returns `null` (resolver disabled, postconditions silently no-op) when trailmap loading
-   * raises — so a malformed trailmap manifest cannot block trail execution. A failure here is
-   * logged via [Console.log] for the operator and otherwise swallowed.
-   */
-  private fun resolveWaypointsForRun(): ((String) -> WaypointDefinition?)? {
-    return try {
-      val resolved = TrailblazeProjectConfigLoader.resolveRuntime(
-        loaded = LoadedTrailblazeProjectConfig(
-          raw = TrailblazeProjectConfig(),
-          sourceFile = File(".").absoluteFile,
-        ),
-        includeClasspathTrailmaps = true,
-        // Even though this entry point only USES waypoints, trailmap loading itself fails
-        // when a workspace has meta-only scripted-tool descriptors and no enrichment is
-        // wired (the loader's enrichDeferredDescriptors throws). Wire the same shared
-        // resolver every other host call site uses so trail execution doesn't get
-        // blocked by a mode-3 descriptor that happens to live in a trailmap the workspace
-        // also uses for waypoint resolution.
-        scriptedToolEnrichment = xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
-      )
-      val byId: Map<String, WaypointDefinition> = resolved.waypoints.associateBy { it.id }
-      // Closure over the id->definition map. Returns null for unknown ids — the asserter
-      // surfaces those as `Result.WaypointNotFound` with a "check the waypoint id" hint.
-      val resolver: (String) -> WaypointDefinition? = { id -> byId[id] }
-      resolver
-    } catch (e: Exception) {
-      Console.log("Waypoint registry unavailable for this run; step postconditions will be skipped: ${e.message}")
-      null
     }
   }
 }

@@ -144,6 +144,8 @@ declare module "@trailblaze/scripting" {
         text: string;
         /** Optional rationale logged alongside the tool call. */
         reasoning?: string;
+        /** Hide the soft keyboard after typing (default true). */
+        hideKeyboardAfter?: boolean;
       };
       result: string;
     };
@@ -322,6 +324,60 @@ declare module "@trailblaze/scripting" {
         longPress?: boolean;
         /** Optional rationale logged alongside the tool call. */
         reason?: string;
+      };
+      result: string;
+    };
+
+    /**
+     * Assert that the element resolved by a [TrailblazeNodeSelector] is visible (optionally
+     * matching its text via `expectedText`/`textMatchMode`), waiting up to `timeoutMs` for it to
+     * appear. This is the selector-resolved verification the migration pipeline records in place of
+     * an NL `assertVisible` — the deterministic executor dispatches it BY NAME at replay, so it
+     * shows up in recordings even though the LLM never picks it (it isn't in any `tool_sets:`).
+     * Like the other selector tools, the descriptor codegen can't lower the self-referential
+     * selector type, so this hand-curated typing is the authoritative surface. Every field is
+     * optional, mirroring `AssertVisibleBySelectorTrailblazeTool.kt` (keep in sync per the Drift
+     * policy at the top of this file).
+     *
+     * Source: `AssertVisibleBySelectorTrailblazeTool.kt` (`assertVisibleBySelector`).
+     */
+    assertVisibleBySelector: {
+      args: {
+        /** The node selector identifying the element to assert visible. */
+        nodeSelector?: TrailblazeNodeSelector;
+        /** Optional rationale logged alongside the assertion. */
+        reason?: string;
+        /** Optional text the resolved element must contain/equal (compared per `textMatchMode`). */
+        expectedText?: string;
+        /** How `expectedText` is compared (e.g. "EXACT", "CONTAINS"). */
+        textMatchMode?: string;
+        /** Max wait (ms) for the element to appear before the assertion fails. */
+        timeoutMs?: number;
+        /** Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`. Untyped here. */
+        selector?: unknown;
+      };
+      result: string;
+    };
+
+    /**
+     * Tap the element resolved by a [TrailblazeNodeSelector] (the raw selector tap the runtime
+     * dispatches; `tapOnElementBySelector` is the preferred authoring entry point — prefer it). The
+     * migration pipeline can record this directly, so it appears in recordings; curated here with
+     * the authoritative selector typing the descriptor codegen can't lower. Keep in sync with
+     * `TapOnTrailblazeTool.kt`.
+     *
+     * Source: `TapOnTrailblazeTool.kt` (`tapOn`).
+     */
+    tapOn: {
+      args: {
+        /** The node selector identifying the element to tap. */
+        selector: TrailblazeNodeSelector;
+        /** Optional relative point within the element to tap (e.g. "50%,50%"). */
+        relativePoint?: string;
+        /** Set to true for a long press instead of a tap. Default false. */
+        longPress?: boolean;
+        /** Optional rationale logged alongside the tool call. */
+        reasoning?: string;
       };
       result: string;
     };
@@ -548,8 +604,9 @@ declare module "@trailblaze/scripting" {
 
     /**
      * List the app ids installed on the device. Works on Android (`pm list packages`) and iOS
-     * (`xcrun simctl listapps`). The result is a JSON string of `{ "appIds": string[] }` (sorted) —
-     * `JSON.parse` it to read the array.
+     * (`xcrun simctl listapps`). Returns the typed result directly (`{ appIds: string[] }`, sorted) —
+     * no `JSON.parse` needed. The Kotlin handler populates `structuredContent` with this shape; the
+     * SDK proxy unwraps it automatically.
      *
      * The lean, common-case utility. For each app's metadata (display name, system/user, version,
      * build number, install path) use `mobile_listInstalledAppsDetailed` instead.
@@ -558,14 +615,14 @@ declare module "@trailblaze/scripting" {
      */
     mobile_listInstalledApps: {
       args: Record<string, never>;
-      result: string;
+      result: { appIds: string[] };
     };
 
     /**
      * The deep counterpart to `mobile_listInstalledApps`: lists installed apps with full per-app
-     * metadata. The result is a JSON string of
-     * `{ "apps": { appId: string; isSystemApp: boolean; label?: string; version?: string; buildNumber?: string; installPath?: string }[] }`
-     * (sorted by `appId`) — `JSON.parse` it to read the array.
+     * metadata. Returns the typed result directly (sorted by `appId`) — no `JSON.parse` needed. The
+     * Kotlin handler populates `structuredContent` with this shape; the SDK proxy unwraps it
+     * automatically.
      *
      * Pass `{ includeSystemApps: false }` to return only user-installed apps (drops OS apps). On the
      * Android host/adb path only `label` is absent (it needs on-device resource resolution);
@@ -579,7 +636,16 @@ declare module "@trailblaze/scripting" {
      */
     mobile_listInstalledAppsDetailed: {
       args: { includeSystemApps?: boolean };
-      result: string;
+      result: {
+        apps: Array<{
+          appId: string;
+          isSystemApp: boolean;
+          label?: string;
+          version?: string;
+          buildNumber?: string;
+          installPath?: string;
+        }>;
+      };
     };
   }
 }

@@ -7,7 +7,6 @@ sealed interface PromptStep {
   val prompt: String
   val recordable: Boolean
   val recording: ToolRecording?
-  val postcondition: StepPostcondition?
 
   /**
    * Per-step override for the AI-execution retry budget.
@@ -29,7 +28,6 @@ fun PromptStep.toDetailedString() {
     appendLine("Prompt: $prompt")
     appendLine("Recordable: $recordable")
     appendLine("Recording: $recording")
-    appendLine("Postcondition: $postcondition")
     appendLine("MaxRetries: $maxRetries")
   }
 }
@@ -39,7 +37,6 @@ data class DirectionStep(
   val step: String,
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
-  override val postcondition: StepPostcondition? = null,
   override val maxRetries: Int? = null,
 ) : PromptStep {
   override val prompt: String = step
@@ -50,7 +47,6 @@ data class VerificationStep(
   val verify: String,
   override val recordable: Boolean = true,
   override val recording: ToolRecording? = null,
-  override val postcondition: StepPostcondition? = null,
   override val maxRetries: Int? = null,
 ) : PromptStep {
   override val prompt: String = verify

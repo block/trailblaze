@@ -8,3 +8,4 @@ drivers:
 tools:
   - assertVisible
   - assertNotVisibleWithText
+  - assertWaypoint

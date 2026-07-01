@@ -6,3 +6,6 @@ drivers:
 tools:
   - compose_verify_text_visible
   - compose_verify_element_visible
+  # Generic, driver-agnostic verification primitive (host-backed): assert the UI reached a named
+  # waypoint. Resolves against the same registry/matcher every driver uses.
+  - assertWaypoint

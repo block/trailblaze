@@ -545,14 +545,6 @@ open class AndroidTrailblazeRule(
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
-      // Pre-wired even though postcondition assertion is dormant on this code path today
-      // (screenStateProvider/waypointResolver are left null) — the moment the rule enables
-      // postconditions, templated waypoints (`{{target.appId}}`) need to expand correctly.
-      // Threading it now means turning the asserter on later is a one-line change, not a
-      // hunt for every TrailblazeRunnerUtil call site.
-      target = resolvedTargetForSession?.let {
-        xyz.block.trailblaze.api.TargetTemplateContext(appId = appIdForSession, appIds = it.appIds)
-      },
     )
   }
 

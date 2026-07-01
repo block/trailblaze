@@ -18,9 +18,25 @@ import xyz.block.trailblaze.util.IosHostSimctlUtils
  * translation under the hood, instead of the tool reaching into the JSON DSL element-by-element.
  * Lives at top-level of the file (not nested in the `data object`) because kotlinx.serialization
  * prefers its serializable types not be inner members of another serializable type.
+ *
+ * Returned via [TrailblazeToolResult.Success.structuredContent] — the TS SDK's
+ * `client.tools.mobile_listInstalledApps(...)` proxy unwraps it as the typed `result` per
+ * `TrailblazeToolMap.mobile_listInstalledApps.result` (declared in `built-in-tools.ts`), no
+ * `JSON.parse` required. The tool leaves [TrailblazeToolResult.Success.message] unset —
+ * `AgentMessages.toContentString` (the LLM/CLI/direct-YAML rendering path) falls back to
+ * rendering `structuredContent` as compact JSON when `message` is absent, so LLM/CLI callers see
+ * the same app-id data as TS callers without this tool duplicating it into a second field by hand.
  */
 @Serializable
 data class ListInstalledAppsResult(val appIds: List<String>)
+
+/** Builds the [TrailblazeToolResult.Success] for a resolved app-id list. */
+private fun List<String>.toSuccessResult(): TrailblazeToolResult.Success = TrailblazeToolResult.Success(
+  structuredContent = TrailblazeJsonInstance.encodeToJsonElement(
+    ListInstalledAppsResult.serializer(),
+    ListInstalledAppsResult(appIds = this),
+  ),
+)
 
 /**
  * Returns the list of installed app ids on the current device as a JSON object
@@ -58,16 +74,14 @@ data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnly
               errorMessage = "AndroidDeviceCommandExecutor is not provided",
             )
           val ids = executor.listInstalledApps().sorted()
-          val payload = TrailblazeJsonInstance.encodeToString(ListInstalledAppsResult(appIds = ids))
-          TrailblazeToolResult.Success(message = payload)
+          ids.toSuccessResult()
         }
 
         TrailblazeDevicePlatform.IOS -> {
           val ids = IosHostSimctlUtils.listInstalledAppIds(
             deviceId = deviceInfo.trailblazeDeviceId.instanceId,
           ).sorted()
-          val payload = TrailblazeJsonInstance.encodeToString(ListInstalledAppsResult(appIds = ids))
-          TrailblazeToolResult.Success(message = payload)
+          ids.toSuccessResult()
         }
 
         TrailblazeDevicePlatform.WEB -> TrailblazeToolResult.Error.ExceptionThrown(

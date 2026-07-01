@@ -10,3 +10,6 @@ tools:
   - web_verifyValue
   - web_verifyListVisible
   - web_assertNetworkEvent
+  # Generic, driver-agnostic verification primitive (host-backed): assert the page reached a named
+  # waypoint. Resolves against the same registry/matcher every driver uses.
+  - assertWaypoint

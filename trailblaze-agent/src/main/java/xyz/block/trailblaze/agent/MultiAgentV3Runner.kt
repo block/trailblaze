@@ -47,10 +47,6 @@ class MultiAgentV3Runner private constructor(
   private val recordingValidator: RecordingValidator? = null,
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
   private val logEmitter: LogEmitter? = null,
-  // Optional waypoint id -> definition resolver, used by step postconditions in the
-  // deterministic executor path. When null, postconditions declared on YAML steps are
-  // silently skipped — existing trails behave identically.
-  private val waypointResolver: ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? = null,
 ) {
 
   /**
@@ -383,39 +379,6 @@ class MultiAgentV3Runner private constructor(
             }
           }
 
-          // YAML-step postcondition: distinct from the EnhancedRecording.postconditions block
-          // above. This evaluates `step.postcondition: { waypoint: <id> }` declared on the trail
-          // YAML itself, against the live screen, using the same WaypointMatcher path the
-          // deterministic executor uses. Hard-fails the trail at the declaring step on mismatch
-          // so the failure surfaces where the goal actually drifted, not at a downstream tap
-          // five steps later. Skipped silently when the runner wasn't constructed with a
-          // waypointResolver (back-compat for callers that haven't been wired through yet).
-          val stepPostcondition = step.postcondition
-          val resolver = waypointResolver
-          if (stepSuccess && stepPostcondition != null && resolver != null) {
-            val assertion = xyz.block.trailblaze.waypoint.StepPostconditionAsserter.assert(
-              postcondition = stepPostcondition,
-              screenStateProvider = { executor.captureScreenState() },
-              waypointResolver = resolver,
-            )
-            val pcFailure: String? = when (assertion) {
-              is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.Matched -> null
-              is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.NotMatched ->
-                "Step $stepIndex: " +
-                  xyz.block.trailblaze.waypoint.StepPostconditionAsserter.describeMismatch(assertion)
-              is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.WaypointNotFound ->
-                "Step $stepIndex: postcondition references unknown waypoint " +
-                  "'${assertion.requestedId}'. Check the waypoint id against the loaded trailmaps."
-              is xyz.block.trailblaze.waypoint.StepPostconditionAsserter.Result.NoScreenState ->
-                "Step $stepIndex: postcondition '${assertion.definitionId}' could not be " +
-                  "evaluated — the screen state provider returned no state within " +
-                  "${assertion.timeoutMs}ms."
-            }
-            if (pcFailure != null) {
-              state = state.copy(failed = true, failureReason = pcFailure)
-              stepSuccess = false
-            }
-          }
         } else {
           state = state.copy(
             failed = true,
@@ -473,19 +436,14 @@ class MultiAgentV3Runner private constructor(
 
     return when (config.mode) {
       TrailExecutionMode.DETERMINISTIC -> {
-        // Fast path: zero LLM calls, recordings only. Wire step postconditions into this
-        // executor — the deterministic path is the one CI uses, so this is where waypoint
-        // assertions need to fire if a YAML step declares them. Screen state comes from
-        // the same executor that runs the recorded tools (one live source of truth,
-        // matches whichever driver the trail is using). When the waypointResolver was not
-        // wired by the caller (legacy entry points), postconditions silently no-op.
+        // Fast path: zero LLM calls, recordings only. Waypoint assertions, when a step needs
+        // one, ride along as an `assertWaypoint` tool in the step's recording — no executor
+        // wiring needed here.
         val deterministicExecutor = DeterministicTrailExecutor(
           executor = executor,
           config = config,
           logEmitter = logEmitter,
           sessionId = sessionId,
-          screenStateProvider = { executor.captureScreenState() },
-          waypointResolver = waypointResolver,
         )
         val result = deterministicExecutor.execute(steps)
         reportTrailSteps(sessionId, result)
@@ -693,7 +651,6 @@ class MultiAgentV3Runner private constructor(
       recordingValidator: RecordingValidator? = null,
       availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
       logEmitter: LogEmitter? = null,
-      waypointResolver: ((String) -> xyz.block.trailblaze.api.waypoint.WaypointDefinition?)? = null,
     ): MultiAgentV3Runner {
       return MultiAgentV3Runner(
         screenAnalyzer = screenAnalyzer,
@@ -703,7 +660,6 @@ class MultiAgentV3Runner private constructor(
         recordingValidator = recordingValidator,
         availableToolsProvider = availableToolsProvider,
         logEmitter = logEmitter,
-        waypointResolver = waypointResolver,
       )
     }
   }

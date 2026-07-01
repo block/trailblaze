@@ -1,0 +1,2 @@
+id: assertWaypoint
+class: xyz.block.trailblaze.toolcalls.commands.AssertWaypointTrailblazeTool

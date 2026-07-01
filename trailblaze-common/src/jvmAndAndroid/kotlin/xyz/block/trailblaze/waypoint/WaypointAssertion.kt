@@ -5,64 +5,67 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
-import xyz.block.trailblaze.yaml.StepPostcondition
 
 /**
- * Polls a [StepPostcondition]'s expected waypoint against the live screen state.
+ * Polls a named waypoint against the live screen state until it matches or a timeout elapses.
  *
- * Holds no state — callers wire it in from the trail runner with a [screenStateProvider]
- * for the device and a [waypointResolver] for the loaded waypoint registry. The asserter
- * loops every [StepPostcondition.pollIntervalMs] until either the waypoint matches or the
- * configured timeout expires, then returns a structured [Result] for the runner to act on
- * (hard-fail in deterministic mode, soft-log in LLM-self-heal modes).
+ * This is the reusable engine behind the `assertWaypoint` framework tool. It holds no state —
+ * callers wire in a [screenStateProvider] for the device and a [waypointResolver] for the loaded
+ * waypoint registry. The poll loops every [pollIntervalMs] until either the waypoint matches or
+ * [timeoutMs] expires, then returns a structured [Result] the caller renders into a tool result.
  *
- * Re-evaluating in a loop is deliberate: a step's recorded tools usually finish before
- * the UI has settled (animations, async server commits). A single post-tools snapshot
- * would race with that settling — the poll lets the screen catch up to its intended state
- * without forcing every step to bake in a hardcoded sleep.
+ * Re-evaluating in a loop is deliberate: a step's tools usually finish before the UI has settled
+ * (animations, async server commits). A single post-tools snapshot would race with that settling —
+ * the poll lets the screen catch up to its intended state without baking a hardcoded sleep into
+ * every assertion.
+ *
+ * Matching uses [WaypointMatcher] against the loaded waypoint registry — all `required` selectors
+ * must be present and no `forbidden` selector may be present, for the device's classifier block.
  */
-object StepPostconditionAsserter {
+object WaypointAssertion {
+
+  /** Default total wait for the screen to settle into the expected waypoint. */
+  const val DEFAULT_TIMEOUT_MS: Long = 5_000L
+
+  /** Default interval between waypoint re-evaluations during the wait window. */
+  const val DEFAULT_POLL_INTERVAL_MS: Long = 250L
 
   /**
-   * Runs the postcondition poll. Always exits within `postcondition.timeoutMs + one final
-   * evaluation`. The returned result type discriminates the four observable outcomes so the
-   * trail runner can render distinct failure messages instead of folding everything into a
-   * generic "step failed" string.
+   * Runs the waypoint poll. Always exits within `timeoutMs + one final evaluation`. The returned
+   * result type discriminates the observable outcomes so the caller can render distinct messages
+   * instead of folding everything into a generic "failed" string.
    *
-   * @param postcondition the assertion declared on the trail step's YAML
-   * @param screenStateProvider returns the current device screen state; may return `null`
-   *   when the driver hasn't produced one yet (e.g. mid-launch). The asserter tolerates
-   *   transient `null` returns within the wait window — only a persistent `null` at the
-   *   timeout boundary surfaces as [Result.NoScreenState].
+   * @param waypointId id of the expected waypoint (e.g. `square/ios/more-tab-no-sheet`). Resolved
+   *   against the loaded registry via [waypointResolver].
+   * @param timeoutMs total wait for the screen to settle into the expected waypoint.
+   * @param pollIntervalMs how often to re-evaluate the waypoint match during the wait window.
+   * @param screenStateProvider returns the current device screen state; may return `null` when the
+   *   driver hasn't produced one yet (e.g. mid-launch). Transient `null` returns are tolerated —
+   *   only a persistent `null` at the timeout boundary surfaces as [Result.NoScreenState].
    * @param waypointResolver looks up a [WaypointDefinition] by id from the loaded registry.
-   *   Resolution failures surface as [Result.WaypointNotFound] without polling, since they
-   *   indicate a misconfigured trail rather than a runtime mismatch.
-   * @param now timestamp source in epoch-ms. Defaults to [System.currentTimeMillis]; tests
-   *   inject a deterministic clock to verify timeout boundaries without sleeping.
-   * @param target optional [TargetTemplateContext] forwarded to the matcher so waypoint
-   *   selectors carrying `{{target.appId}}` placeholders expand against the current
-   *   session's resolved app id (or declared candidates). Null when the runner has no
-   *   target context — the matcher then short-circuits any templated waypoint to a
-   *   `UNRESOLVED_TARGET_TEMPLATE` skip (fail-closed; a `forbidden`-only placeholder
-   *   would otherwise silently let the waypoint pass).
+   *   Resolution failures surface as [Result.WaypointNotFound] without polling, since they indicate
+   *   a misconfigured trail rather than a runtime mismatch.
+   * @param now timestamp source in epoch-ms. Defaults to [System.currentTimeMillis]; tests inject a
+   *   deterministic clock to verify timeout boundaries without sleeping.
+   * @param target optional [TargetTemplateContext] forwarded to the matcher so waypoint selectors
+   *   carrying `{{target.appId}}` placeholders expand against the session's resolved app id. Null
+   *   when there is no target context — the matcher then short-circuits any templated waypoint to a
+   *   `UNRESOLVED_TARGET_TEMPLATE` skip (fail-closed; a `forbidden`-only placeholder would otherwise
+   *   silently let the waypoint pass).
    */
-  // [@JvmOverloads] generates the pre-`target` bytecode signatures so binary-linked
-  // consumers (and Java callers, who don't see Kotlin default-arg sugar) keep working
-  // unchanged. trailblaze-common is a published artifact (vanniktech.maven.publish), and
-  // adding the `target` param without overloads would NoSuchMethodError pre-compiled
-  // JARs that call the old 3- or 4-arg `assert`. Same trap PR #3036 hit at the resolver.
-  @JvmOverloads
-  suspend fun assert(
-    postcondition: StepPostcondition,
+  suspend fun poll(
+    waypointId: String,
+    timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS,
     screenStateProvider: suspend () -> ScreenState?,
     waypointResolver: (String) -> WaypointDefinition?,
     now: () -> Long = { System.currentTimeMillis() },
     target: TargetTemplateContext? = null,
   ): Result {
-    val definition = waypointResolver(postcondition.waypoint)
-      ?: return Result.WaypointNotFound(postcondition.waypoint)
+    val definition = waypointResolver(waypointId)
+      ?: return Result.WaypointNotFound(waypointId)
 
-    val deadline = now() + postcondition.timeoutMs
+    val deadline = now() + timeoutMs
     var lastResult: WaypointMatchResult? = null
     var lastScreenWasNull = true
 
@@ -78,16 +81,19 @@ object StepPostconditionAsserter {
       }
       val remaining = deadline - now()
       if (remaining <= 0) break
-      delay(minOf(postcondition.pollIntervalMs, remaining))
+      delay(minOf(pollIntervalMs, remaining))
     }
 
     if (lastScreenWasNull) {
-      return Result.NoScreenState(definition.id, postcondition.timeoutMs)
+      return Result.NoScreenState(definition.id, timeoutMs)
     }
+    // Invariant: lastScreenWasNull is false here, and the only place that clears it (the
+    // `screen != null` branch above) also always assigns lastResult — so lastResult is non-null.
+    // Guarded (rather than `!!`) so a future change to the loop fails with a clear message.
     return Result.NotMatched(
       definitionId = definition.id,
-      lastResult = lastResult!!,
-      timeoutMs = postcondition.timeoutMs,
+      lastResult = lastResult ?: error("lastResult must be set once a non-null screen was evaluated"),
+      timeoutMs = timeoutMs,
     )
   }
 
@@ -110,12 +116,12 @@ object StepPostconditionAsserter {
   }
 
   /**
-   * Human-readable summary of a [Result.NotMatched], formatted for runtime error messages
-   * and report templates. Lists every missing-required and every present-forbidden selector
-   * so a reader can tell at a glance which side of the waypoint contract drifted.
+   * Human-readable summary of a [Result.NotMatched], formatted for tool error messages and report
+   * templates. Lists every missing-required and every present-forbidden selector so a reader can
+   * tell at a glance which side of the waypoint contract drifted.
    */
   fun describeMismatch(result: Result.NotMatched): String = buildString {
-    append("Postcondition '").append(result.definitionId).append("' not matched after ")
+    append("Waypoint '").append(result.definitionId).append("' not matched after ")
     append(result.timeoutMs).append("ms.")
     // Skip cases carry an empty missing/forbidden diff (the matcher short-circuits before
     // evaluating entries), so the missing/forbidden joiners below would produce nothing.
@@ -127,8 +133,8 @@ object StepPostconditionAsserter {
         append(
           " Skipped (UNRESOLVED_TARGET_TEMPLATE): the waypoint's selectors contain " +
             "`{{target.appId}}` but no target context was supplied to the matcher. " +
-            "Wire the session's resolved target (`appId` + declared `appIds`) into the " +
-            "TrailblazeRunnerUtil / matcher caller chain.",
+            "Run the assertion on a path that resolves the session's target (`appId` + " +
+            "declared `appIds`).",
         )
         return@buildString
       }

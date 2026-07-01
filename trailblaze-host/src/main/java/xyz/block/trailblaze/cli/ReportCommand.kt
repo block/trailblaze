@@ -516,12 +516,12 @@ internal fun generateSessionReport(
   val gifFile = resolveExportPath(effectiveGifSpec, htmlFile, defaultNames.gif)
   val webpFile = resolveExportPath(effectiveWebpSpec, htmlFile, defaultNames.webp)
   if (gifFile != null || webpFile != null) {
-    // Preflight ffmpeg + libwebp_anim BEFORE capture if we're going to encode WebP.
-    // Same fail-fast rationale as the single-format path: avoid burning 30s on
-    // screenshotting only to discover the encoder isn't installed.
+    // Preflight the libwebp tools BEFORE capture if we're going to encode WebP. Same
+    // fail-fast rationale as the single-format path: avoid burning 30s on screenshotting
+    // only to discover the WebP tooling isn't installed.
     if (webpFile != null) {
       try {
-        ReportWebpExporter.requireLibwebpAnim()
+        ReportWebpExporter.requireWebpTools()
       } catch (e: IllegalStateException) {
         Console.error("Failed to export report WebP: ${e.message}")
         cleanupOutputsOnFailure(outputsToCleanupOnFailure)

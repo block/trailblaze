@@ -34,8 +34,9 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
  *    other nullable scalar follows the uniform "null = unconstrained, non-null =
  *    constraint" rule.
  *
- * Both callers are android-first; iOS / web emission is gated by
- * [requireSelectorIsEmittable] until the platform-aware versions land.
+ * Emits `androidAccessibility`, `iosMaestro`, and `iosAxe` driver matchers. The remaining
+ * drivers (`androidMaestro` / `web` / `compose`) are still gated by
+ * [requireSelectorIsEmittable] until their emission ladders + upstream synthesizers land.
  */
 object TrailblazeNodeSelectorYamlEmitter {
 
@@ -52,11 +53,10 @@ object TrailblazeNodeSelectorYamlEmitter {
    * Emit [selector] as YAML to [sink]. [indent] is the column the driver-match key
    * (`androidAccessibility:`) starts at; children indent by `+2` recursively.
    *
-   * Fails fast via [requireSelectorIsEmittable] on selectors that carry a non-android
-   * driver matcher — both callers ship android-first, and a silent skip on the
-   * `iosMaestro` / `iosAxe` / `web` / `compose` / `androidMaestro` branches would
-   * produce a YAML that looks fine to a human reader but matches a different element
-   * (or none) at runtime.
+   * Handles `androidAccessibility`, `iosMaestro`, and `iosAxe` matchers. Fails fast via
+   * [requireSelectorIsEmittable] on the still-unsupported `web` / `compose` / `androidMaestro`
+   * branches — a silent skip there would produce a YAML that looks fine to a human reader
+   * but matches a different element (or none) at runtime.
    */
   fun emit(selector: TrailblazeNodeSelector, indent: Int, sink: SelectorYamlSink) {
     requireSelectorIsEmittable(selector)
@@ -89,6 +89,28 @@ object TrailblazeNodeSelectorYamlEmitter {
       m.inputType?.takeIf { it != 0 }?.let { sink.line("$childPad" + "inputType: $it") }
       m.collectionItemRowIndex?.let { sink.line("$childPad" + "collectionItemRowIndex: $it") }
       m.collectionItemColumnIndex?.let { sink.line("$childPad" + "collectionItemColumnIndex: $it") }
+    }
+    selector.iosMaestro?.let { m ->
+      sink.line("${pad}iosMaestro:")
+      m.textRegex?.let { sink.line("$childPad" + "textRegex: ${yamlQuote(it)}") }
+      m.resourceIdRegex?.let { sink.line("$childPad" + "resourceIdRegex: ${yamlQuote(it)}") }
+      m.accessibilityTextRegex?.let { sink.line("$childPad" + "accessibilityTextRegex: ${yamlQuote(it)}") }
+      m.classNameRegex?.let { sink.line("$childPad" + "classNameRegex: ${yamlQuote(it)}") }
+      m.hintTextRegex?.let { sink.line("$childPad" + "hintTextRegex: ${yamlQuote(it)}") }
+      m.focused?.let { sink.line("$childPad" + "focused: $it") }
+      m.selected?.let { sink.line("$childPad" + "selected: $it") }
+    }
+    selector.iosAxe?.let { m ->
+      sink.line("${pad}iosAxe:")
+      m.roleRegex?.let { sink.line("$childPad" + "roleRegex: ${yamlQuote(it)}") }
+      m.subroleRegex?.let { sink.line("$childPad" + "subroleRegex: ${yamlQuote(it)}") }
+      m.labelRegex?.let { sink.line("$childPad" + "labelRegex: ${yamlQuote(it)}") }
+      m.valueRegex?.let { sink.line("$childPad" + "valueRegex: ${yamlQuote(it)}") }
+      m.uniqueId?.let { sink.line("$childPad" + "uniqueId: ${yamlQuote(it)}") }
+      m.typeRegex?.let { sink.line("$childPad" + "typeRegex: ${yamlQuote(it)}") }
+      m.titleRegex?.let { sink.line("$childPad" + "titleRegex: ${yamlQuote(it)}") }
+      m.customAction?.let { sink.line("$childPad" + "customAction: ${yamlQuote(it)}") }
+      m.enabled?.let { sink.line("$childPad" + "enabled: $it") }
     }
     selector.containsChild?.let {
       sink.line("${pad}containsChild:")
@@ -125,27 +147,24 @@ object TrailblazeNodeSelectorYamlEmitter {
   }
 
   /**
-   * Fail-fast guard for selector shapes the type system allows but neither caller
-   * currently synthesizes. Both callers ship `androidAccessibility`-only today; a future
-   * producer (including the existing `androidMaestro` or `compose` paths if they're
-   * ever piped through) that hands in a matcher this emitter doesn't know about must
-   * fail loudly rather than produce a YAML that silently drops the unsupported
-   * constraint. The error message names every unsupported driver — including the
-   * Android-but-non-accessibility ones — to keep the failure self-describing.
+   * Fail-fast guard for selector shapes this emitter doesn't have a field ladder for yet
+   * (`androidMaestro` / `web` / `compose`). `androidAccessibility`, `iosMaestro`, and
+   * `iosAxe` are emitted above; anything else must fail loudly rather than produce a YAML
+   * that silently drops the unsupported constraint (looks fine to a human, matches a
+   * different element — or none — at runtime). The error names each unsupported driver so
+   * the failure is self-describing.
    */
   private fun requireSelectorIsEmittable(selector: TrailblazeNodeSelector) {
     val unsupportedDrivers = listOfNotNull(
       selector.androidMaestro?.let { "androidMaestro" },
-      selector.iosMaestro?.let { "iosMaestro" },
-      selector.iosAxe?.let { "iosAxe" },
       selector.web?.let { "web" },
       selector.compose?.let { "compose" },
     )
     require(unsupportedDrivers.isEmpty()) {
-      "TrailblazeNodeSelectorYamlEmitter only supports androidAccessibility-driver " +
-        "matchers today; got unsupported driver(s): ${unsupportedDrivers.joinToString(", ")}. " +
-        "Support for other drivers arrives when the upstream synthesizers (ShortcutProposer, " +
-        "WaypointSuggestSelectorCommand) are platform-aware."
+      "TrailblazeNodeSelectorYamlEmitter supports androidAccessibility / iosMaestro / iosAxe " +
+        "driver matchers today; got unsupported driver(s): ${unsupportedDrivers.joinToString(", ")}. " +
+        "Support for the remaining drivers arrives when the upstream synthesizers (ShortcutProposer, " +
+        "WaypointSuggestSelectorCommand) are platform-aware for them."
     }
   }
 

@@ -12261,18 +12261,16 @@ public final class xyz/block/trailblaze/viewhierarchy/WebViewHierarchyFilter$Com
 
 public final class xyz/block/trailblaze/yaml/DirectionStep : xyz/block/trailblaze/yaml/PromptStep {
 	public static final field Companion Lxyz/block/trailblaze/yaml/DirectionStep$Companion;
-	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;)V
-	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Z
 	public final fun component3 ()Lxyz/block/trailblaze/yaml/ToolRecording;
-	public final fun component4 ()Lxyz/block/trailblaze/yaml/StepPostcondition;
-	public final fun component5 ()Ljava/lang/Integer;
-	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;)Lxyz/block/trailblaze/yaml/DirectionStep;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/DirectionStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/DirectionStep;
+	public final fun component4 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;)Lxyz/block/trailblaze/yaml/DirectionStep;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/DirectionStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/DirectionStep;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getMaxRetries ()Ljava/lang/Integer;
-	public fun getPostcondition ()Lxyz/block/trailblaze/yaml/StepPostcondition;
 	public fun getPrompt ()Ljava/lang/String;
 	public fun getRecordable ()Z
 	public fun getRecording ()Lxyz/block/trailblaze/yaml/ToolRecording;
@@ -12340,7 +12338,6 @@ public final class xyz/block/trailblaze/yaml/ElectronAppConfig$Companion {
 public abstract interface class xyz/block/trailblaze/yaml/PromptStep {
 	public static final field Companion Lxyz/block/trailblaze/yaml/PromptStep$Companion;
 	public abstract fun getMaxRetries ()Ljava/lang/Integer;
-	public abstract fun getPostcondition ()Lxyz/block/trailblaze/yaml/StepPostcondition;
 	public abstract fun getPrompt ()Ljava/lang/String;
 	public abstract fun getRecordable ()Z
 	public abstract fun getRecording ()Lxyz/block/trailblaze/yaml/ToolRecording;
@@ -12352,40 +12349,6 @@ public final class xyz/block/trailblaze/yaml/PromptStep$Companion {
 
 public final class xyz/block/trailblaze/yaml/PromptStepKt {
 	public static final fun toDetailedString (Lxyz/block/trailblaze/yaml/PromptStep;)V
-}
-
-public final class xyz/block/trailblaze/yaml/StepPostcondition {
-	public static final field Companion Lxyz/block/trailblaze/yaml/StepPostcondition$Companion;
-	public static final field DEFAULT_POLL_INTERVAL_MS J
-	public static final field DEFAULT_TIMEOUT_MS J
-	public fun <init> (Ljava/lang/String;JJ)V
-	public synthetic fun <init> (Ljava/lang/String;JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()J
-	public final fun component3 ()J
-	public final fun copy (Ljava/lang/String;JJ)Lxyz/block/trailblaze/yaml/StepPostcondition;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/String;JJILjava/lang/Object;)Lxyz/block/trailblaze/yaml/StepPostcondition;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getPollIntervalMs ()J
-	public final fun getTimeoutMs ()J
-	public final fun getWaypoint ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class xyz/block/trailblaze/yaml/StepPostcondition$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/yaml/StepPostcondition$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/yaml/StepPostcondition;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/yaml/StepPostcondition;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class xyz/block/trailblaze/yaml/StepPostcondition$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
 public final class xyz/block/trailblaze/yaml/ToolRecording {
@@ -12687,18 +12650,16 @@ public final class xyz/block/trailblaze/yaml/TrailblazeYamlJvmKt {
 
 public final class xyz/block/trailblaze/yaml/VerificationStep : xyz/block/trailblaze/yaml/PromptStep {
 	public static final field Companion Lxyz/block/trailblaze/yaml/VerificationStep$Companion;
-	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;)V
-	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Z
 	public final fun component3 ()Lxyz/block/trailblaze/yaml/ToolRecording;
-	public final fun component4 ()Lxyz/block/trailblaze/yaml/StepPostcondition;
-	public final fun component5 ()Ljava/lang/Integer;
-	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;)Lxyz/block/trailblaze/yaml/VerificationStep;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/VerificationStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Lxyz/block/trailblaze/yaml/StepPostcondition;Ljava/lang/Integer;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/VerificationStep;
+	public final fun component4 ()Ljava/lang/Integer;
+	public final fun copy (Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;)Lxyz/block/trailblaze/yaml/VerificationStep;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/VerificationStep;Ljava/lang/String;ZLxyz/block/trailblaze/yaml/ToolRecording;Ljava/lang/Integer;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/VerificationStep;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getMaxRetries ()Ljava/lang/Integer;
-	public fun getPostcondition ()Lxyz/block/trailblaze/yaml/StepPostcondition;
 	public fun getPrompt ()Ljava/lang/String;
 	public fun getRecordable ()Z
 	public fun getRecording ()Lxyz/block/trailblaze/yaml/ToolRecording;

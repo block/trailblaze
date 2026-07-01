@@ -126,9 +126,7 @@ internal object FfmpegRescaleSupport {
    *    formats that accept any pixel height — GIF, since GIF89a has no even-dimension
    *    constraint.
    *  - [EvenHeight.LANCZOS_EVEN] (`-2`): height auto-computed and rounded to the nearest
-   *    even value. Required for libx264 (which mandates even dimensions) and used for
-   *    libwebp_anim too so downstream WebP decoders that dislike odd dimensions don't
-   *    misbehave.
+   *    even value. Required for libx264 (which mandates even dimensions) on the video path.
    *
    * Returns just the filter expression text (`"scale=720:-1:flags=lanczos"`), without
    * trailing comma or `-vf` flag. Callers compose it into their format-specific
@@ -159,48 +157,10 @@ internal object FfmpegRescaleSupport {
     /** `-1`: auto-computed, no rounding. Use for codecs that accept odd dimensions (GIF). */
     LANCZOS_AUTO,
 
-    /** `-2`: auto-computed, rounded to even. Use for libx264 (required) and libwebp_anim
-     *  (decoders prefer even). */
+    /** `-2`: auto-computed, rounded to even. Use for libx264 (required) on the video path. */
     LANCZOS_EVEN,
   }
 
   /** Tag-character whitelist — see kdoc on [runFfmpegToTemp]. */
   private val TAG_PATTERN = Regex("^[A-Za-z0-9._-]+$")
-
-  /**
-   * Probe `ffmpeg -encoders` for [encoderName] and `check` it's available. The
-   * intermediate-string check is a simple `contains` — sufficient since encoder names
-   * are unique and prefix-free in ffmpeg's listing. Fails with [missingHint] appended to
-   * a standard "ffmpeg with the X encoder is required" message so each exporter can
-   * surface its own install advice (different brew/apt/apk recipes per platform, or
-   * "switch to --gif" workaround text). Run before launching the capture pipeline so a
-   * misconfigured environment fails in ~100ms rather than after 30s of headless
-   * screenshotting plus a generic non-zero ffmpeg exit.
-   *
-   * Replaces what was historically per-exporter copies of the same probe — see
-   * [ReportWebpExporter.requireLibwebpAnim]; consolidated here so an ffmpeg-side
-   * change (e.g. the `-encoders` flag spelling) only needs to be tracked in one place.
-   */
-  fun requireEncoder(encoderName: String, missingHint: String) {
-    // Empty `encoderName` would make `out.contains("")` vacuously true downstream, so
-    // a misconfigured caller would silently report any-encoder-available and then hit
-    // an opaque codec error at encode time. Reject at the boundary instead. Same for
-    // `missingHint` — an empty hint produces a useless error message ("ffmpeg with the
-    // `libwebp` encoder is required but was not found on PATH. ") that gives the user
-    // nothing to act on.
-    require(encoderName.isNotBlank()) { "encoderName must be non-blank" }
-    require(missingHint.isNotBlank()) { "missingHint must be non-blank — pass install advice for this encoder" }
-    val available = runCatching {
-      val proc = ProcessBuilder("ffmpeg", "-hide_banner", "-encoders")
-        .redirectErrorStream(true)
-        .start()
-      val out = proc.inputStream.bufferedReader().readText()
-      proc.waitFor()
-      out.contains(encoderName)
-    }.getOrDefault(false)
-    check(available) {
-      "ffmpeg with the `$encoderName` encoder is required but was not found on PATH. " +
-        missingHint
-    }
-  }
 }

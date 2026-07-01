@@ -16,34 +16,34 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.yaml.StepPostcondition
 
 /**
- * Pins the four observable outcomes of [StepPostconditionAsserter.assert] — Matched,
- * NotMatched, WaypointNotFound, NoScreenState — and the late-match polling case. Together
- * those cover every path that the deterministic-executor wiring depends on.
+ * Pins the four observable outcomes of [WaypointAssertion.poll] — Matched, NotMatched,
+ * WaypointNotFound, NoScreenState — and the late-match polling case. These are the contract the
+ * `assertWaypoint` tool renders into tool results.
  *
- * Time is advanced via the injected [now] lambda rather than a real clock so the test
- * exercises the timeout boundary precisely without `Thread.sleep`. The coroutine
- * `runTest { delay(...) }` skips wall-clock waits, so `pollIntervalMs` is set tiny and
- * the simulated clock advances inside the [screenStateProvider] callback.
+ * Time is advanced via the injected [now] lambda rather than a real clock so the test exercises the
+ * timeout boundary precisely without `Thread.sleep`. `pollIntervalMs` is set tiny and the simulated
+ * clock advances inside the [screenStateProvider] callback.
  */
-class StepPostconditionAsserterTest {
+class WaypointAssertionTest {
 
   @Test
   fun `matched waypoint returns Matched without exhausting timeout`() = runBlocking {
     val def = waypoint("test/more-tab-no-sheet", required = listOf("More", "Items"))
     val screen = fakeScreen(listOf("More", "Items"))
-    var clock = 0L
+    val clock = 0L
 
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 1_000L, pollIntervalMs = 50L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 1_000L,
+      pollIntervalMs = 50L,
       screenStateProvider = { screen },
       waypointResolver = { id -> if (id == def.id) def else null },
       now = { clock },
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.Matched, "expected Matched, got $result")
+    assertTrue(result is WaypointAssertion.Result.Matched, "expected Matched, got $result")
     assertEquals(def.id, result.definitionId)
     assertTrue(result.matchResult.matched)
   }
@@ -59,15 +59,17 @@ class StepPostconditionAsserterTest {
     val screen = fakeScreen(listOf("More", "Switch mode"))
     var clock = 0L
 
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 500L, pollIntervalMs = 100L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 500L,
+      pollIntervalMs = 100L,
       screenStateProvider = { screen },
       waypointResolver = { id -> if (id == def.id) def else null },
       // Advance the clock each evaluation so the loop terminates.
       now = { clock.also { clock += 150L } },
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.NotMatched, "expected NotMatched, got $result")
+    assertTrue(result is WaypointAssertion.Result.NotMatched, "expected NotMatched, got $result")
     assertEquals(def.id, result.definitionId)
     assertEquals(500L, result.timeoutMs)
     assertEquals(1, result.lastResult.missingRequired.size)
@@ -77,8 +79,9 @@ class StepPostconditionAsserterTest {
   @Test
   fun `unknown waypoint id short-circuits to WaypointNotFound without polling`() = runBlocking {
     var providerCallCount = 0
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = "test/does-not-exist", timeoutMs = 1_000L),
+    val result = WaypointAssertion.poll(
+      waypointId = "test/does-not-exist",
+      timeoutMs = 1_000L,
       screenStateProvider = {
         providerCallCount++
         fakeScreen(listOf("anything"))
@@ -86,7 +89,7 @@ class StepPostconditionAsserterTest {
       waypointResolver = { null }, // every lookup misses
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.WaypointNotFound)
+    assertTrue(result is WaypointAssertion.Result.WaypointNotFound)
     assertEquals("test/does-not-exist", result.requestedId)
     assertEquals(0, providerCallCount, "screen state must not be queried when waypoint is unresolved")
   }
@@ -95,14 +98,16 @@ class StepPostconditionAsserterTest {
   fun `persistent null screen state surfaces NoScreenState after timeout`() = runBlocking {
     val def = waypoint("test/some-screen", required = listOf("X"))
     var clock = 0L
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 200L, pollIntervalMs = 50L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 200L,
+      pollIntervalMs = 50L,
       screenStateProvider = { null },
       waypointResolver = { id -> if (id == def.id) def else null },
       now = { clock.also { clock += 75L } },
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.NoScreenState)
+    assertTrue(result is WaypointAssertion.Result.NoScreenState)
     assertEquals(def.id, result.definitionId)
     assertEquals(200L, result.timeoutMs)
   }
@@ -115,8 +120,10 @@ class StepPostconditionAsserterTest {
     var pollCount = 0
     var clock = 0L
 
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 1_000L, pollIntervalMs = 50L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 1_000L,
+      pollIntervalMs = 50L,
       screenStateProvider = {
         pollCount++
         if (pollCount < 3) initialScreen else settledScreen
@@ -125,48 +132,51 @@ class StepPostconditionAsserterTest {
       now = { clock.also { clock += 60L } },
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.Matched, "expected Matched, got $result")
-    assertEquals(3, pollCount, "asserter should have polled three times: 2 misses + 1 match")
+    assertTrue(result is WaypointAssertion.Result.Matched, "expected Matched, got $result")
+    assertEquals(3, pollCount, "poll should have run three times: 2 misses + 1 match")
   }
 
   // ---- TargetTemplateContext forwarding ----
   //
-  // The asserter forwards its `target` param to WaypointMatcher.match so postcondition
-  // waypoints whose selectors carry `{{target.appId}}` expand correctly. These two tests
-  // pin the forwarding end-to-end: same selector, same screen, only the target arg
-  // changes — Matched vs NotMatched is the proof that the placeholder was substituted.
+  // poll() forwards its `target` param to WaypointMatcher.match so waypoints whose selectors carry
+  // `{{target.appId}}` expand correctly. These two tests pin the forwarding end-to-end: same
+  // selector, same screen, only the target arg changes — Matched vs NotMatched is the proof that
+  // the placeholder was substituted.
 
   @Test
   fun `templated waypoint matches when target supplies the appId`() = runBlocking {
     val def = templatedWaypoint(id = "test/templated", resourceIdSuffix = "foo")
     val screen = screenWithResourceIds(listOf("com.example.test:id/foo"))
 
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 1_000L, pollIntervalMs = 50L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 1_000L,
+      pollIntervalMs = 50L,
       screenStateProvider = { screen },
       waypointResolver = { id -> if (id == def.id) def else null },
       now = { 0L },
       target = TargetTemplateContext(appId = "com.example.test"),
     )
 
-    assertTrue(result is StepPostconditionAsserter.Result.Matched, "expected Matched, got $result")
+    assertTrue(result is WaypointAssertion.Result.Matched, "expected Matched, got $result")
     assertEquals(def.id, result.definitionId)
   }
 
   @Test
   fun `templated waypoint short-circuits to NotMatched when target is null (fail-closed)`() = runBlocking {
-    // Even though the screen has the resourceId that would match if the placeholder
-    // expanded, a null target makes the matcher skip the whole definition with
-    // UNRESOLVED_TARGET_TEMPLATE — which the asserter surfaces as NotMatched (the
-    // postcondition wasn't satisfied within the timeout). Critical for forbidden-only
-    // placeholders: without fail-closed, a forbidden selector that doesn't expand would
-    // silently pass and let a templated waypoint be reported matched.
+    // Even though the screen has the resourceId that would match if the placeholder expanded, a
+    // null target makes the matcher skip the whole definition with UNRESOLVED_TARGET_TEMPLATE —
+    // which poll() surfaces as NotMatched (the waypoint wasn't satisfied within the timeout).
+    // Critical for forbidden-only placeholders: without fail-closed, a forbidden selector that
+    // doesn't expand would silently pass and let a templated waypoint be reported matched.
     val def = templatedWaypoint(id = "test/templated-null-target", resourceIdSuffix = "foo")
     val screen = screenWithResourceIds(listOf("com.example.test:id/foo"))
     var clock = 0L
 
-    val result = StepPostconditionAsserter.assert(
-      postcondition = StepPostcondition(waypoint = def.id, timeoutMs = 200L, pollIntervalMs = 100L),
+    val result = WaypointAssertion.poll(
+      waypointId = def.id,
+      timeoutMs = 200L,
+      pollIntervalMs = 100L,
       screenStateProvider = { screen },
       waypointResolver = { id -> if (id == def.id) def else null },
       now = { clock.also { clock += 150L } },
@@ -174,7 +184,7 @@ class StepPostconditionAsserterTest {
     )
 
     assertTrue(
-      result is StepPostconditionAsserter.Result.NotMatched,
+      result is WaypointAssertion.Result.NotMatched,
       "expected NotMatched (waypoint skipped via UNRESOLVED_TARGET_TEMPLATE), got $result",
     )
   }
@@ -186,14 +196,14 @@ class StepPostconditionAsserterTest {
       required = listOf("More", "Items"),
       forbidden = listOf("Switch mode"),
     )
-    // Build the same shape the asserter would produce, without re-running it.
+    // Build the same shape poll() would produce, without re-running it.
     val matchResult = WaypointMatcher.match(
       definition = def,
       classifier = TrailblazeDeviceClassifier("android"),
       root = nodeTreeWithTexts(listOf("More", "Switch mode")),
     )
-    val msg = StepPostconditionAsserter.describeMismatch(
-      StepPostconditionAsserter.Result.NotMatched(def.id, matchResult, timeoutMs = 5_000L),
+    val msg = WaypointAssertion.describeMismatch(
+      WaypointAssertion.Result.NotMatched(def.id, matchResult, timeoutMs = 5_000L),
     )
 
     assertTrue(msg.contains("test/screen"), "msg should name the waypoint: $msg")
@@ -213,13 +223,13 @@ class StepPostconditionAsserterTest {
       presentForbidden = emptyList(),
       skipped = xyz.block.trailblaze.api.waypoint.WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE,
     )
-    val msg = StepPostconditionAsserter.describeMismatch(
-      StepPostconditionAsserter.Result.NotMatched(skippedResult.definitionId, skippedResult, timeoutMs = 200L),
+    val msg = WaypointAssertion.describeMismatch(
+      WaypointAssertion.Result.NotMatched(skippedResult.definitionId, skippedResult, timeoutMs = 200L),
     )
 
-    // Without the skip-aware branch the message would be a bare "Postcondition X not
-    // matched after 200ms." with no diagnostic — operators wouldn't know it's a missing
-    // target context issue rather than a content miss. Pin the more useful message.
+    // Without the skip-aware branch the message would be a bare "Waypoint X not matched after
+    // 200ms." with no diagnostic — operators wouldn't know it's a missing target context issue
+    // rather than a content miss. Pin the more useful message.
     assertTrue(msg.contains("UNRESOLVED_TARGET_TEMPLATE"), "msg should name the skip reason: $msg")
     assertTrue(msg.contains("{{target.appId}}"), "msg should reference the placeholder syntax: $msg")
     assertTrue(msg.contains("target context"), "msg should hint at the missing target wiring: $msg")
@@ -255,8 +265,8 @@ class StepPostconditionAsserterTest {
 
   /**
    * Builds a waypoint whose only required selector is a templated resourceIdRegex —
-   * `^{{target.appId}}:id/<suffix>$`. The matcher expands the placeholder against the
-   * caller's [TargetTemplateContext] (or leaves it literal if no context is supplied).
+   * `^{{target.appId}}:id/<suffix>$`. The matcher expands the placeholder against the caller's
+   * [TargetTemplateContext] (or leaves it literal if no context is supplied).
    */
   private fun templatedWaypoint(id: String, resourceIdSuffix: String): WaypointDefinition =
     WaypointDefinition(

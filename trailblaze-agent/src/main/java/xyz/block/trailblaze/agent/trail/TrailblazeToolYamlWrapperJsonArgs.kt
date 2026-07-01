@@ -27,7 +27,7 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  * can decide how to handle the missing args rather than the agent crashing during RPC arg prep.
  */
 @OptIn(InternalSerializationApi::class)
-internal fun TrailblazeToolYamlWrapper.toJsonArgs(): JsonObject {
+fun TrailblazeToolYamlWrapper.toJsonArgs(): JsonObject {
   // OtherTrailblazeTool / RawArgumentTrailblazeTool already carry the flat args verbatim.
   // Use them directly — no class.serializer() reflection needed. Local-val capture so
   // smart-cast survives — `trailblazeTool` is a cross-module public property.

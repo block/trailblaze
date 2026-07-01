@@ -17,7 +17,7 @@ import org.junit.rules.TemporaryFolder
  *
  * Skipped via `assumeTrue` when `ffmpeg` isn't on PATH. (`palettegen`/`paletteuse` ship
  * with every modern ffmpeg build, so there's no separate encoder probe needed — unlike
- * the WebP test which has to check for `libwebp_anim`.)
+ * the WebP test, which probes for libwebp's `img2webp`.)
  */
 class ReportGifExporterTest {
 

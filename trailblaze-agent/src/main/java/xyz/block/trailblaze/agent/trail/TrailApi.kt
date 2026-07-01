@@ -5,8 +5,6 @@ import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailExecutionMode
 import xyz.block.trailblaze.agent.TrailResult
 import xyz.block.trailblaze.agent.UiActionExecutor
-import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -56,14 +54,6 @@ import xyz.block.trailblaze.yaml.ToolRecording
  * @param config Trail execution configuration
  * @param logEmitter Optional log emitter for objective lifecycle events
  * @param sessionId Optional session ID for log correlation
- * @param screenStateProvider Source of the live device screen state for evaluating step
- *   postconditions. When omitted, steps with `postcondition: { waypoint: ... }` declared
- *   in YAML are silently skipped — existing trails behave unchanged. Callers that want
- *   structural assertions to actually fire should wire this from the same provider that
- *   feeds the rest of the runner (Maestro driver, accessibility driver, etc.).
- * @param waypointResolver Lookup from waypoint id to [WaypointDefinition]. Typically backed
- *   by the loaded trailmap registry (see `TrailblazeProjectConfigLoader`). Like
- *   [screenStateProvider], omitting it makes postconditions a no-op.
  * @return Result containing success/failure status, final state, and timing
  */
 suspend fun trail(
@@ -73,8 +63,6 @@ suspend fun trail(
   config: TrailConfig = TrailConfig.DEFAULT,
   logEmitter: LogEmitter? = null,
   sessionId: SessionId? = null,
-  screenStateProvider: (suspend () -> ScreenState?)? = null,
-  waypointResolver: ((String) -> WaypointDefinition?)? = null,
 ): TrailResult {
   // Validate configuration
   if (config.mode != TrailExecutionMode.DETERMINISTIC && screenAnalyzer == null) {
@@ -99,8 +87,6 @@ suspend fun trail(
         config = config,
         logEmitter = logEmitter,
         sessionId = sessionId,
-        screenStateProvider = screenStateProvider,
-        waypointResolver = waypointResolver,
       )
       deterministicExecutor.execute(steps)
     }

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.api
 
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -7,7 +8,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 object AgentMessages {
 
   fun TrailblazeToolResult.toContentString(toolName: String, toolArgs: JsonObject): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolName, toolArgs, message)
+    is TrailblazeToolResult.Success -> successContentString(toolName, toolArgs, message, structuredContent)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolName,
       toolArgs,
@@ -36,7 +37,7 @@ object AgentMessages {
    * Overload for handling multiple tool names (used for delegating tools that execute multiple actual tools)
    */
   fun TrailblazeToolResult.toContentString(toolNames: List<String>, toolArgs: JsonObject): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolNames, toolArgs, message)
+    is TrailblazeToolResult.Success -> successContentString(toolNames, toolArgs, message, structuredContent)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolNames,
       toolArgs,
@@ -65,7 +66,7 @@ object AgentMessages {
    * Overload for handling multiple tools with their individual arguments (used for delegating tools)
    */
   fun TrailblazeToolResult.toContentString(toolsWithArgs: Map<String, JsonObject>): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolsWithArgs, message)
+    is TrailblazeToolResult.Success -> successContentString(toolsWithArgs, message, structuredContent)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolsWithArgs,
       errorMessage,
@@ -105,8 +106,13 @@ object AgentMessages {
     appendLine("Command: ${errorException.command}")
   }
 
-  private fun successContentString(toolName: String, toolArgs: JsonObject, message: String?) = buildString {
-    val resultMessage = message.asResultMessage()
+  private fun successContentString(
+    toolName: String,
+    toolArgs: JsonObject,
+    message: String?,
+    structuredContent: JsonElement? = null,
+  ) = buildString {
+    val resultMessage = message.asResultMessage() ?: structuredContent.asFallbackResultMessage()
     if (resultMessage != null) {
       appendLine("**Executed the `$toolName` tool.** $resultMessage")
     } else {
@@ -118,8 +124,13 @@ object AgentMessages {
   /**
    * Overload for handling multiple tool names (used for delegating tools)
    */
-  private fun successContentString(toolNames: List<String>, toolArgs: JsonObject, message: String?) = buildString {
-    val resultMessage = message.asResultMessage()
+  private fun successContentString(
+    toolNames: List<String>,
+    toolArgs: JsonObject,
+    message: String?,
+    structuredContent: JsonElement? = null,
+  ) = buildString {
+    val resultMessage = message.asResultMessage() ?: structuredContent.asFallbackResultMessage()
     if (resultMessage != null) {
       val toolNamesStr = toolNames.joinToString(", ") { "`$it`" }
       appendLine("**Executed $toolNamesStr.** $resultMessage")
@@ -136,8 +147,12 @@ object AgentMessages {
   /**
    * Overload for handling multiple tools with their individual arguments
    */
-  private fun successContentString(toolsWithArgs: Map<String, JsonObject>, message: String?) = buildString {
-    val resultMessage = message.asResultMessage()
+  private fun successContentString(
+    toolsWithArgs: Map<String, JsonObject>,
+    message: String?,
+    structuredContent: JsonElement? = null,
+  ) = buildString {
+    val resultMessage = message.asResultMessage() ?: structuredContent.asFallbackResultMessage()
     if (resultMessage != null) {
       val toolNamesStr = toolsWithArgs.keys.joinToString(", ") { "`$it`" }
       appendLine("**Executed $toolNamesStr.** $resultMessage")
@@ -167,6 +182,17 @@ object AgentMessages {
       // Ignore low-signal object dumps and fall back to structured tool + args context.
       message.contains("OtherTrailblazeTool(") || message.contains("TrailblazeTool(")
     }
+
+  /**
+   * Renders [TrailblazeToolResult.Success.structuredContent] as the LLM/CLI/direct-YAML-visible
+   * result text when a tool didn't bother writing its own [message] — e.g. `mobile_listInstalledApps`
+   * just returns the typed payload and this renders `{"appIds":[...]}` for free, with no tool-side
+   * duplication. [JsonElement.toString] is always compact (it has no reference back to whichever
+   * `Json` instance produced it, so it ignores that instance's `prettyPrint` setting) — intentionally
+   * so, since this text goes straight into the LLM's context and compact costs fewer tokens for the
+   * same information.
+   */
+  private fun JsonElement?.asFallbackResultMessage(): String? = this?.toString().asResultMessage()
 
   private fun validationErrorContentString(
     toolName: String,

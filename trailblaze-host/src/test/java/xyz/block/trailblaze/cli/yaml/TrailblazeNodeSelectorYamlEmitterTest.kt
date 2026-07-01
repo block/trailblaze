@@ -69,6 +69,54 @@ class TrailblazeNodeSelectorYamlEmitterTest {
   }
 
   @Test
+  fun `emit covers every DriverNodeMatch IosMaestro field`() {
+    val lines = emit(TrailblazeNodeSelector(iosMaestro = MAXIMAL_IOS_MAESTRO))
+    assertTrue(lines.linesContainKey("iosMaestro"), "missing iosMaestro: header. yaml=\n${lines.joinToString("\n")}")
+    for (name in MAXIMAL_IOS_MAESTRO_FIELD_NAMES) {
+      assertTrue(
+        lines.linesContainKey(name),
+        "emitter dropped DriverNodeMatch.IosMaestro.$name from output. yaml=\n${lines.joinToString("\n")}",
+      )
+    }
+  }
+
+  @Test
+  fun `MAXIMAL_IOS_MAESTRO_FIELD_NAMES tracks IosMaestro primary constructor`() {
+    val ctorParams = primaryCtorParameterNames(DriverNodeMatch.IosMaestro::class)
+    val missing = ctorParams - MAXIMAL_IOS_MAESTRO_FIELD_NAMES.toSet()
+    assertTrue(
+      missing.isEmpty(),
+      "IosMaestro gained primary-constructor parameter(s) ${missing.toList()} but " +
+        "MAXIMAL_IOS_MAESTRO + MAXIMAL_IOS_MAESTRO_FIELD_NAMES weren't updated. Add the field(s) " +
+        "to both, then wire them through TrailblazeNodeSelectorYamlEmitter.",
+    )
+  }
+
+  @Test
+  fun `emit covers every DriverNodeMatch IosAxe field`() {
+    val lines = emit(TrailblazeNodeSelector(iosAxe = MAXIMAL_IOS_AXE))
+    assertTrue(lines.linesContainKey("iosAxe"), "missing iosAxe: header. yaml=\n${lines.joinToString("\n")}")
+    for (name in MAXIMAL_IOS_AXE_FIELD_NAMES) {
+      assertTrue(
+        lines.linesContainKey(name),
+        "emitter dropped DriverNodeMatch.IosAxe.$name from output. yaml=\n${lines.joinToString("\n")}",
+      )
+    }
+  }
+
+  @Test
+  fun `MAXIMAL_IOS_AXE_FIELD_NAMES tracks IosAxe primary constructor`() {
+    val ctorParams = primaryCtorParameterNames(DriverNodeMatch.IosAxe::class)
+    val missing = ctorParams - MAXIMAL_IOS_AXE_FIELD_NAMES.toSet()
+    assertTrue(
+      missing.isEmpty(),
+      "IosAxe gained primary-constructor parameter(s) ${missing.toList()} but " +
+        "MAXIMAL_IOS_AXE + MAXIMAL_IOS_AXE_FIELD_NAMES weren't updated. Add the field(s) " +
+        "to both, then wire them through TrailblazeNodeSelectorYamlEmitter.",
+    )
+  }
+
+  @Test
   fun `EMITTED_TOP_LEVEL_SELECTOR_SLOTS covers every recursive TrailblazeNodeSelector slot`() {
     // Type-based reflection forcing function (not name-based). Walks the primary
     // constructor of `TrailblazeNodeSelector` and accepts any parameter whose type is
@@ -147,10 +195,6 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       "androidMaestro" to TrailblazeNodeSelector(
         androidMaestro = DriverNodeMatch.AndroidMaestro(textRegex = "^Foo$"),
       ),
-      "iosMaestro" to TrailblazeNodeSelector(
-        iosMaestro = DriverNodeMatch.IosMaestro(textRegex = "^Foo$"),
-      ),
-      "iosAxe" to TrailblazeNodeSelector(iosAxe = DriverNodeMatch.IosAxe(labelRegex = "^Foo$")),
       "web" to TrailblazeNodeSelector(web = DriverNodeMatch.Web(ariaNameRegex = "^Foo$")),
       "compose" to TrailblazeNodeSelector(
         compose = DriverNodeMatch.Compose(textRegex = "^Foo$"),
@@ -268,6 +312,52 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       "inputType",
       "collectionItemRowIndex",
       "collectionItemColumnIndex",
+    )
+
+    /** Maximal `IosMaestro` — every primary-constructor argument set non-default. */
+    private val MAXIMAL_IOS_MAESTRO = DriverNodeMatch.IosMaestro(
+      textRegex = "^txt$",
+      resourceIdRegex = "^rid$",
+      accessibilityTextRegex = "^a11y$",
+      classNameRegex = "^cls$",
+      hintTextRegex = "^hint$",
+      focused = true,
+      selected = false,
+    )
+
+    private val MAXIMAL_IOS_MAESTRO_FIELD_NAMES = listOf(
+      "textRegex",
+      "resourceIdRegex",
+      "accessibilityTextRegex",
+      "classNameRegex",
+      "hintTextRegex",
+      "focused",
+      "selected",
+    )
+
+    /** Maximal `IosAxe` — every primary-constructor argument set non-default. */
+    private val MAXIMAL_IOS_AXE = DriverNodeMatch.IosAxe(
+      roleRegex = "^AXButton$",
+      subroleRegex = "^AXSecureTextField$",
+      labelRegex = "^lbl$",
+      valueRegex = "^val$",
+      uniqueId = "uid-7",
+      typeRegex = "^Button$",
+      titleRegex = "^title$",
+      customAction = "activate",
+      enabled = true,
+    )
+
+    private val MAXIMAL_IOS_AXE_FIELD_NAMES = listOf(
+      "roleRegex",
+      "subroleRegex",
+      "labelRegex",
+      "valueRegex",
+      "uniqueId",
+      "typeRegex",
+      "titleRegex",
+      "customAction",
+      "enabled",
     )
 
     /**

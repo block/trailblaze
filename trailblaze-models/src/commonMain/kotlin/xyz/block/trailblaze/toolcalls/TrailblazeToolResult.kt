@@ -12,8 +12,9 @@ sealed interface TrailblazeToolResult {
    * The tool executed successfully.
    *
    * - [message] is the tool's primary string output, relayed back to the LLM as contextual
-   *   feedback (e.g., "Clicked on element. Page navigated to ..."). Null means the tool ran
-   *   without producing a user-readable message.
+   *   feedback (e.g., "Clicked on element. Page navigated to ..."). Null means the tool didn't
+   *   write a custom user-readable message — see the [structuredContent] fallback below before
+   *   assuming that means "no result text at all".
    * - [structuredContent] carries the tool's structured return value when the producer
    *   populated one. Today this is set by MCP scripted tools (subprocess or on-device QuickJS
    *   bundle) whose handler returns a non-string typed result, threaded onto the
@@ -21,6 +22,13 @@ sealed interface TrailblazeToolResult {
    *   caller (`client.tools.<name>(args)`) can unwrap it into the typed `result` declared in
    *   the SDK's `TrailblazeToolMap`. Null = "no structured payload" — the caller falls back to
    *   [message] for the legacy text-only wire shape.
+   *
+   * The fallback runs both directions: a scripted caller with no [structuredContent] falls back
+   * to [message]; conversely, a tool with no [message] gets one rendered automatically from
+   * [structuredContent] as compact JSON for the LLM/CLI/direct-YAML path — see
+   * `AgentMessages.toContentString`. A tool that only cares about the typed TS surface can
+   * therefore populate [structuredContent] alone and leave [message] unset, rather than
+   * hand-duplicating the same payload into both fields.
    */
   @Serializable
   data class Success(

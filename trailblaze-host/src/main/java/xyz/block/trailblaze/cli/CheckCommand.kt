@@ -14,6 +14,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
@@ -230,6 +231,13 @@ class CheckCommand : Callable<Int> {
     // exit code.
     if (showTypedTools) {
       emitScriptedToolDefinitionsDebug(trailmapsToValidate, workspaceRoot = resolved.workspaceRoot)
+    }
+
+    // Report-only: type-validate `.trail.yaml` recordings against each trailmap's typed surface.
+    // Runs by default (never influences the exit code — see [TrailTscValidator]); opt out with
+    // TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1. Strictly non-fatal.
+    if (!isTrailRecordingValidationDisabled()) {
+      runTrailRecordingValidationPhase(workspaceRoot = resolved.workspaceRoot, trailmaps = trailmapsToValidate)
     }
 
     // Worst-of-two wins. Exit codes are ordered OK(0) < FAILURE(1) < USAGE(2), so max()
@@ -619,9 +627,64 @@ class CheckCommand : Callable<Int> {
    * that has no `tools/tsconfig.json` to pin the phase's `"trailblaze check: ..."`
    * stderr prefix against accidental drift back to `"trailblaze typecheck:"`.
    */
+  /** True when `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION` is set to `1`/`true` (case-insensitive). */
+  private fun isTrailRecordingValidationDisabled(): Boolean {
+    val v = System.getenv(TrailTscValidator.DISABLE_ENV_VAR)?.trim()?.lowercase()
+    return v == "1" || v == "true"
+  }
+
+  /**
+   * Report-only trail-recording type-validation. Reuses the same workspace SDK + bundled tsc the
+   * typecheck phase set up, so this runs after [runTypecheckPhase]. Strictly non-fatal and never
+   * touches the exit code — it only prints a YAML-keyed findings report. See [TrailTscValidator].
+   */
+  private fun runTrailRecordingValidationPhase(workspaceRoot: File, trailmaps: List<Path>) {
+    try {
+      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
+      val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = trailsRoot)
+      val jsRuntime = resolveJsRuntime()
+      if (tscJs == null || jsRuntime == null) {
+        Console.error(
+          "trailblaze check: trail-recording validation skipped — " +
+            (if (jsRuntime == null) "bun not on PATH" else "bundled tsc payload missing") + ".",
+        )
+        return
+      }
+      val report = TrailTscValidator.validate(
+        trailsRoot = trailsRoot.toFile(),
+        trailmaps = trailmaps,
+        jsRuntime = jsRuntime,
+        tscJs = tscJs,
+      )
+      Console.log(TrailTscValidator.renderReport(report))
+    } catch (e: Exception) {
+      // Non-fatal: a problem in this report-only phase must never change `check`'s outcome. Catch
+      // Exception (not Throwable) so fatal VM errors — OOM, StackOverflow — still propagate.
+      Console.error(
+        "trailblaze check: trail-recording validation phase failed (ignored): " +
+          (e.message ?: e::class.simpleName),
+      )
+    }
+  }
+
   internal fun runTypecheckPhase(workspaceRoot: File, trailmaps: List<Path>): Int {
     if (trailmaps.isEmpty()) {
       Console.log("trailblaze check: no trailmaps to type-check.")
+      return EXIT_OK
+    }
+
+    // A trailmap may legitimately carry ANY mix of Kotlin (class-backed `.tool.yaml`),
+    // TypeScript, and YAML tools — including zero TypeScript. `tsc` fails with TS18003 ("No
+    // inputs were found") when pointed at a tools/ dir with no `.ts`/`.js` sources, so a
+    // Kotlin/YAML-only trailmap (e.g. a class-backed library trailmap) would otherwise fail the
+    // typecheck for having nothing to check. Partition those out and skip them — there is no
+    // TypeScript to validate. Only trailmaps with at least one typecheckable source reach `tsc`.
+    val (typecheckable, skipped) = trailmaps.partition { hasTypeScriptToolSources(it) }
+    skipped.forEach { trailmap ->
+      Console.log("── typecheck: ${trailmap.fileName} (no TypeScript tools — skipped) ────")
+    }
+    if (typecheckable.isEmpty()) {
+      Console.log("trailblaze check: no trailmaps with TypeScript tools to type-check.")
       return EXIT_OK
     }
 
@@ -686,7 +749,7 @@ class CheckCommand : Callable<Int> {
     var sawTypeError = false
     var sawMissingTsconfig = false
     val failedTrailmaps = mutableListOf<String>()
-    for (trailmap in trailmaps) {
+    for (trailmap in typecheckable) {
       val tsconfig = trailmap.resolve("tools").resolve("tsconfig.json")
       if (!Files.isRegularFile(tsconfig)) {
         Console.error(
@@ -707,7 +770,7 @@ class CheckCommand : Callable<Int> {
         failedTrailmaps += trailmap.fileName.toString()
       }
     }
-    if (failedTrailmaps.isNotEmpty() && trailmaps.size > 1) {
+    if (failedTrailmaps.isNotEmpty() && typecheckable.size > 1) {
       // One-line summary on multi-trailmap runs so a CI consumer can grep the tail of the
       // log and see exactly which trailmaps failed. Single-trailmap runs skip the summary —
       // the per-trailmap header already named the failing trailmap.
@@ -717,6 +780,29 @@ class CheckCommand : Callable<Int> {
       sawMissingTsconfig -> EXIT_USAGE
       sawTypeError -> EXIT_TYPE_ERROR
       else -> EXIT_OK
+    }
+  }
+
+  /**
+   * True if [trailmapDir]'s `tools/` subtree contains at least one source the per-trailmap `tsc`
+   * pass would actually type-check — a `.ts` or `.js` file that is not a `.test.ts`. This mirrors
+   * the emitted tsconfig's include globs (`.ts` + `.js`) and its `.test.ts` exclude, so it returns
+   * true exactly when `tsc` would find at least one input.
+   *
+   * A trailmap whose tools are entirely Kotlin (class-backed `.tool.yaml`) and/or YAML has no
+   * TypeScript to validate; [runTypecheckPhase] skips it rather than handing `tsc` an empty input
+   * set (which fails with TS18003, "No inputs were found in config file"). This is what lets a
+   * trailmap carry any mix — or zero — TypeScript tools.
+   */
+  internal fun hasTypeScriptToolSources(trailmapDir: Path): Boolean {
+    val toolsDir = trailmapDir.resolve("tools")
+    if (!Files.isDirectory(toolsDir)) return false
+    Files.walk(toolsDir).use { stream ->
+      return stream.anyMatch { p ->
+        if (!Files.isRegularFile(p)) return@anyMatch false
+        val name = p.fileName.toString()
+        (name.endsWith(".ts") || name.endsWith(".js")) && !name.endsWith(".test.ts")
+      }
     }
   }
 

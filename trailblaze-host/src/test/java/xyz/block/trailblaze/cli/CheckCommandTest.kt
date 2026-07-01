@@ -305,6 +305,11 @@ class CheckCommandTest {
     val workspaceRoot = File(workDir, "ws-phase").apply { mkdirs() }
     val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/alpha").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText("id: alpha\n")
+    // Give alpha a real TypeScript tool source (but no tsconfig) so the typecheck phase treats it
+    // as typecheckable and hits the missing-tsconfig branch. Without a `.ts`, the phase now skips
+    // Kotlin/YAML-only trailmaps (see `no TypeScript tools` skip test below).
+    File(trailmapDir, "tools").apply { mkdirs() }
+    File(trailmapDir, "tools/foo.ts").writeText("export const x = 1\n")
 
     val (exit, stderr) = captureStderr {
       CheckCommand().runTypecheckPhase(
@@ -323,6 +328,59 @@ class CheckCommandTest {
     assertTrue(
       !stderr.contains("trailblaze typecheck:"),
       "No `trailblaze typecheck:` prefix should survive after the fold. Got: $stderr",
+    )
+  }
+
+  @Test
+  fun `typecheck phase skips a Kotlin-or-YAML-only trailmap with no TypeScript sources`() {
+    // A trailmap may carry only class-backed `.tool.yaml` (Kotlin) and/or YAML tools — no
+    // TypeScript. Such a trailmap has nothing for `tsc` to check; the phase must skip it and
+    // succeed rather than fail with a missing-tsconfig error or `tsc`'s TS18003 ("No inputs
+    // were found"). This is what allows a trailmap to carry any mix — or zero — TypeScript tools.
+    val workspaceRoot = File(workDir, "ws-noTs").apply { mkdirs() }
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/kotlinTools").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText("id: kotlinTools\n")
+    File(trailmapDir, "tools").apply { mkdirs() }
+    // Class-backed tool descriptor only — no `.ts`/`.js` sources.
+    File(trailmapDir, "tools/doThing.tool.yaml")
+      .writeText("id: doThing\nclass: com.example.DoThingTool\n")
+
+    val (exit, _) = captureStderr {
+      CheckCommand().runTypecheckPhase(
+        workspaceRoot = workspaceRoot,
+        trailmaps = listOf(trailmapDir.toPath()),
+      )
+    }
+    assertEquals(
+      CheckCommand.EXIT_OK,
+      exit,
+      "A trailmap with no TypeScript tool sources should be skipped (EXIT_OK), not failed.",
+    )
+  }
+
+  @Test
+  fun `hasTypeScriptToolSources distinguishes TypeScript sources from Kotlin-or-YAML-only tools`() {
+    val base = File(workDir, "ws-detect").apply { mkdirs() }
+
+    val yamlOnly = File(base, "yamlOnly/tools").apply { mkdirs() }
+    File(yamlOnly, "a.tool.yaml").writeText("id: a\nclass: com.example.A\n")
+    assertTrue(
+      !CheckCommand().hasTypeScriptToolSources(yamlOnly.parentFile.toPath()),
+      "A tools/ dir with only .tool.yaml should not be typecheckable.",
+    )
+
+    val testOnly = File(base, "testOnly/tools").apply { mkdirs() }
+    File(testOnly, "a.test.ts").writeText("import { test } from \"bun:test\"\n")
+    assertTrue(
+      !CheckCommand().hasTypeScriptToolSources(testOnly.parentFile.toPath()),
+      "A tools/ dir with only *.test.ts (excluded from typecheck) should not be typecheckable.",
+    )
+
+    val withTs = File(base, "withTs/tools").apply { mkdirs() }
+    File(withTs, "a.ts").writeText("export const x = 1\n")
+    assertTrue(
+      CheckCommand().hasTypeScriptToolSources(withTs.parentFile.toPath()),
+      "A tools/ dir with a non-test .ts should be typecheckable.",
     )
   }
 

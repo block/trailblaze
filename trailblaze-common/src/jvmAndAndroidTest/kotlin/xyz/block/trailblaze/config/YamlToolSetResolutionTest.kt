@@ -28,6 +28,20 @@ class YamlToolSetResolutionTest {
   }
 
   @Test
+  fun `assertWaypoint is registered class-backed so recorded trails resolve it`() {
+    // Regression guard: a class-backed tool is only resolvable if it has a `*.tool.yaml`
+    // descriptor (the registry is built from those, not a classpath annotation scan). Without
+    // `assertWaypoint.tool.yaml`, the `verification` toolset would silently skip the name and a
+    // recorded `- assertWaypoint:` step would deserialize to an unknown tool and fail at run time.
+    assertTrue(resolver.isKnown("assertWaypoint"), "assertWaypoint must be registered via its .tool.yaml")
+    assertEquals(
+      xyz.block.trailblaze.toolcalls.commands.AssertWaypointTrailblazeTool::class,
+      resolver.resolveOrNull("assertWaypoint"),
+      "assertWaypoint must resolve to AssertWaypointTrailblazeTool",
+    )
+  }
+
+  @Test
   fun `resolver reports hideKeyboard as known via the class-backed backing`() {
     assertTrue(resolver.isKnown("hideKeyboard"))
     assertNotNull(resolver.resolveOrNull("hideKeyboard"))

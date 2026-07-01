@@ -71,14 +71,15 @@ class ShortcutYamlEmitterTest {
   }
 
   @Test
-  fun `emit throws on selectors with non-android driver matchers`() {
-    // Pin the new requireSelectorIsEmittable guard. v1 ships android-first; a future
-    // iOS/web synthesizer that accidentally hands a non-android matcher to the emitter
-    // must fail loudly here rather than silently dropping the constraint and shipping
-    // a wrong shortcut.
-    val iosSelector = TrailblazeNodeSelector(
-      iosMaestro = xyz.block.trailblaze.api.DriverNodeMatch.IosMaestro(
-        textRegex = "^Foo$",
+  fun `emit throws on selectors with still-unsupported driver matchers`() {
+    // Pin the requireSelectorIsEmittable guard for the drivers the emitter still can't
+    // serialize (androidAccessibility + iosMaestro + iosAxe ARE supported now; web /
+    // compose / androidMaestro are not). A future synthesizer that hands one of the
+    // unsupported matchers to the emitter must fail loudly here rather than silently
+    // dropping the constraint and shipping a wrong shortcut.
+    val webSelector = TrailblazeNodeSelector(
+      web = xyz.block.trailblaze.api.DriverNodeMatch.Web(
+        ariaNameRegex = "^Foo$",
       ),
     )
     val ex = kotlin.runCatching {
@@ -88,14 +89,14 @@ class ShortcutYamlEmitterTest {
         toWaypointId = "trailmap/y",
         description = "test",
         body = ShortcutProposer.ToolBody.TapOnElementBySelector(
-          selector = iosSelector,
-          selectorDescription = "iOS",
+          selector = webSelector,
+          selectorDescription = "web",
         ),
       )
     }.exceptionOrNull()
     assertTrue(ex is IllegalArgumentException, "expected IllegalArgumentException; got $ex")
     assertTrue(
-      ex!!.message?.contains("iosMaestro") == true,
+      ex!!.message?.contains("web") == true,
       "exception message must name the unsupported matcher; got: ${ex.message}",
     )
   }
