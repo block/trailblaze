@@ -7,8 +7,9 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver.ResolveResult
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 /**
@@ -96,10 +97,10 @@ object WaypointProposer {
     val matchingIds = cluster.exampleResourceIds
       .distinct()
       .map { resourceIdSelector(it, platform) }
-      .filter { entry -> selectorMatchesAtLeastOnce(rootNode, entry.selector) }
+      .filter { entry -> entry.selector?.let { selectorMatchesAtLeastOnce(rootNode, it) } == true }
       .take(2)
 
-    val required: List<WaypointSelectorEntry> = if (matchingIds.isNotEmpty()) {
+    val required: List<WaypointCondition> = if (matchingIds.isNotEmpty()) {
       matchingIds
     } else {
       // Fallback path: pick text-regex selectors from key_texts. iOS hierarchies often
@@ -107,7 +108,7 @@ object WaypointProposer {
       // Same dedupe guard: top key_texts can repeat across the cluster.
       cluster.keyTexts.distinct().take(2)
         .map { textSelector(it, platform) }
-        .filter { entry -> selectorMatchesAtLeastOnce(rootNode, entry.selector) }
+        .filter { entry -> entry.selector?.let { selectorMatchesAtLeastOnce(rootNode, it) } == true }
     }
 
     if (required.isEmpty()) {
@@ -123,8 +124,9 @@ object WaypointProposer {
       definition = WaypointDefinition(
         id = id,
         description = description,
-        required = required,
-        forbidden = emptyList(),
+        byClassifier = mapOf(
+          platform.asTrailblazeDeviceClassifier().classifier to WaypointVariant(required = required),
+        ),
       ),
       proposalKey = proposalKey(cluster),
       rationale = "Cluster of ${cluster.count} unmatched screen(s) sharing top-texts " +
@@ -194,9 +196,9 @@ object WaypointProposer {
   private fun resourceIdSelector(
     resourceId: String,
     @Suppress("UNUSED_PARAMETER") platform: TrailblazeDevicePlatform,
-  ): WaypointSelectorEntry {
+  ): WaypointCondition {
     val regex = "^${Regex.escape(resourceId)}$"
-    return WaypointSelectorEntry(
+    return WaypointCondition(
       selector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(resourceIdRegex = regex),
       ),
@@ -211,9 +213,9 @@ object WaypointProposer {
   private fun textSelector(
     text: String,
     @Suppress("UNUSED_PARAMETER") platform: TrailblazeDevicePlatform,
-  ): WaypointSelectorEntry {
+  ): WaypointCondition {
     val regex = "^${Regex.escape(text)}$"
-    return WaypointSelectorEntry(
+    return WaypointCondition(
       selector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = regex),
       ),

@@ -42,13 +42,15 @@ dev_source_hash() {
       '*.kt' '*.kts' '*.java' '*.properties' '*.toml' '*.xml' '*.pro' \
       '**/src/**/resources/**/*.yaml' '**/src/**/resources/**/*.yml' \
       '**/src/**/resources/**/*.json' '**/src/**/resources/**/*.html' \
+      '**/src/**/resources/**/*.ts' '**/src/**/resources/**/*.js' \
+      '**/src/**/resources/**/*.mjs' '**/src/**/resources/**/*.cjs' \
       ':!.trailblaze/**' ':!**/.trailblaze/**' 2>/dev/null
     # Untracked files: list names + sizes so new files are detected.
     # Same scope as the diff filter above so the tracked / untracked paths
     # give matching results. The `(^|/)src/` anchor mirrors git pathspec's
     # `**/src/` semantics (matches top-level `src/` too).
     git ls-files --others --exclude-standard \
-      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html)$' \
+      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|js|mjs|cjs)$' \
       | grep -vE '(^|/)\.trailblaze/' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
   } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1

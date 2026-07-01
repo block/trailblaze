@@ -50,7 +50,7 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  * ```
  */
 @Serializable
-@TrailblazeToolClass(name = "script", surfaceToLlm = false, surfaceToScriptedTools = false, isRecordable = false)
+@TrailblazeToolClass(name = "script", surfaceToLlm = false, isRecordable = false)
 @LLMDescription("Delegates to a JavaScript source string that returns a YAML block of tool calls.")
 data class ScriptTrailblazeTool(
   val source: String,

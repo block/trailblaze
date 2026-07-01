@@ -9,7 +9,9 @@ import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.maestro.MaestroPermissionTranslator
+import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -222,7 +224,23 @@ class AccessibilityTrailblazeAgent(
     nodeSelector: TrailblazeNodeSelector,
     timeoutMs: Long?,
     traceId: TraceId?,
-  ): TrailblazeToolResult {
+  ): TrailblazeToolResult? {
+    // A not-visible assertion treats "no match" as success. This agent resolves only
+    // AndroidAccessibility selectors against the live accessibility tree, so a selector
+    // carrying any other driver branch (e.g. androidMaestro) would never match — and would
+    // falsely "pass" as not-visible for the wrong reason. We check the WHOLE selector tree
+    // (not just the top-level driverMatch) so a non-accessibility branch nested under a
+    // hierarchy/spatial relation (e.g. `below:`) is caught too. Return null so the caller
+    // (AssertNotVisibleBySelectorTrailblazeTool) falls back to the driver-agnostic Maestro
+    // lowering, which matches against the live UI. The visible counterpart needs no such
+    // guard: there a no-match is a failure, not a pass, so it can't hide a regression.
+    if (nodeSelector.allDriverMatches().any { it !is DriverNodeMatch.AndroidAccessibility }) {
+      Console.log(
+        "AccessibilityTrailblazeAgent: assertNotVisible selector carries a non-accessibility " +
+          "driver branch it cannot resolve; returning null to fall back to Maestro lowering",
+      )
+      return null
+    }
     val action = AccessibilityAction.AssertNotVisible(
       nodeSelector = nodeSelector,
       timeoutMs = timeoutMs ?: DEFAULT_ACCESSIBILITY_TIMEOUT_MS,

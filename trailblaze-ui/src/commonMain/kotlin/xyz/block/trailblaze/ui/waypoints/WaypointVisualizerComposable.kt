@@ -48,8 +48,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.AppIconProvider
@@ -580,9 +580,9 @@ private fun WaypointListRow(
     }
     Spacer(Modifier.height(4.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-      WaypointCountChip(label = "required", count = def.required.size, accent = false)
+      WaypointCountChip(label = "required", count = def.displayRequired().size, accent = false)
       Spacer(Modifier.width(6.dp))
-      WaypointCountChip(label = "forbidden", count = def.forbidden.size, accent = true)
+      WaypointCountChip(label = "forbidden", count = def.displayForbidden().size, accent = true)
       if (matchedSteps.isNotEmpty()) {
         Spacer(Modifier.width(6.dp))
         MatchedStepsBadge(matchedSteps)
@@ -664,6 +664,19 @@ internal fun formatMatchedStepsLabel(steps: List<Int>): String {
   return if (overflow > 0) "matched @ $shown +$overflow more" else "matched @ $shown"
 }
 
+/**
+ * The conditions to show in the (platform-agnostic) visualizer. v2 waypoints are
+ * classifier-keyed; the desktop visualizer doesn't pin a device, so it shows the union of
+ * conditions across every classifier block. For the common single-block waypoint this is just
+ * that block's conditions; for a multi-platform waypoint it surfaces all of them (selectors from
+ * a non-matching platform simply render as NO MATCH against the example tree).
+ */
+internal fun WaypointDefinition.displayRequired(): List<WaypointCondition> =
+  byClassifier.values.flatMap { it.required }
+
+internal fun WaypointDefinition.displayForbidden(): List<WaypointCondition> =
+  byClassifier.values.flatMap { it.forbidden }
+
 @Composable
 private fun WaypointDetailPanel(
   item: WaypointDisplayItem,
@@ -673,7 +686,7 @@ private fun WaypointDetailPanel(
   val def = item.definition
   val example = item.example
   val overlays = remember(example, def) {
-    example?.let { resolveOverlays(it.tree, def.required, def.forbidden) } ?: emptyList()
+    example?.let { resolveOverlays(it.tree, def.displayRequired(), def.displayForbidden()) } ?: emptyList()
   }
   var highlighted by remember(item.definition.id) {
     mutableStateOf<WaypointSelectorOverlay?>(null)
@@ -745,7 +758,7 @@ private fun WaypointSelectorSections(
     title = "Required",
     icon = Icons.Filled.CheckCircle,
     iconTint = WAYPOINT_MATCH_COLOR_OK,
-    entries = def.required,
+    entries = def.displayRequired(),
     kind = SelectorEntryKind.REQUIRED,
     overlays = overlays,
     highlighted = highlighted,
@@ -755,7 +768,7 @@ private fun WaypointSelectorSections(
     title = "Forbidden",
     icon = Icons.Filled.Block,
     iconTint = MaterialTheme.colorScheme.error,
-    entries = def.forbidden,
+    entries = def.displayForbidden(),
     kind = SelectorEntryKind.FORBIDDEN,
     overlays = overlays,
     highlighted = highlighted,
@@ -805,7 +818,7 @@ private fun SelectorEntrySection(
   title: String,
   icon: ImageVector,
   iconTint: Color,
-  entries: List<WaypointSelectorEntry>,
+  entries: List<WaypointCondition>,
   kind: SelectorEntryKind,
   overlays: List<WaypointSelectorOverlay>,
   highlighted: WaypointSelectorOverlay?,
@@ -853,7 +866,7 @@ private fun SelectorEntrySection(
 @Composable
 private fun SelectorEntryCard(
   index: Int,
-  entry: WaypointSelectorEntry,
+  entry: WaypointCondition,
   kind: SelectorEntryKind,
   overlay: WaypointSelectorOverlay?,
   isHighlighted: Boolean,
@@ -895,7 +908,7 @@ private fun SelectorEntryCard(
             MatchStatusBadge(overlay = overlay)
             Spacer(Modifier.width(6.dp))
           }
-          DriverBadge(entry.selector)
+          entry.selector?.let { DriverBadge(it) }
           if (kind == SelectorEntryKind.REQUIRED && entry.minCount > 1) {
             Spacer(Modifier.width(6.dp))
             WaypointCountChip(label = "min", count = entry.minCount, accent = false)
@@ -903,13 +916,13 @@ private fun SelectorEntryCard(
         }
       }
       val description = entry.description?.takeIf { it.isNotBlank() }
-        ?: entry.selector.description().ifBlank { "(no description)" }
+        ?: entry.selector?.description()?.ifBlank { null } ?: "(no description)"
       SelectableText(
         text = description,
         style = MaterialTheme.typography.bodyMedium,
         fontWeight = FontWeight.Medium,
       )
-      SelectorBody(entry.selector)
+      entry.selector?.let { SelectorBody(it) }
     }
   }
 }

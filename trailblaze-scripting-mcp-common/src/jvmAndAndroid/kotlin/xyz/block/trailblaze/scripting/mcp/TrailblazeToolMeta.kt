@@ -29,7 +29,6 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
  */
 data class TrailblazeToolMeta(
   val surfaceToLlm: Boolean = true,
-  val surfaceToScriptedTools: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   /** Empty = unrestricted. Non-empty = registers only if session driver is in the list. */
@@ -82,7 +81,6 @@ data class TrailblazeToolMeta(
     private const val PREFIX: String = "trailblaze/"
 
     private const val KEY_SURFACE_TO_LLM = "${PREFIX}surfaceToLlm"
-    private const val KEY_SURFACE_TO_SCRIPTED_TOOLS = "${PREFIX}surfaceToScriptedTools"
     private const val KEY_IS_RECORDABLE = "${PREFIX}isRecordable"
     private const val KEY_REQUIRES_HOST = "${PREFIX}requiresHost"
     private const val KEY_SUPPORTED_DRIVERS = "${PREFIX}supportedDrivers"
@@ -104,7 +102,6 @@ data class TrailblazeToolMeta(
     /** Same as [fromTool] but directly on the raw [JsonObject] — exposed for tests. */
     fun fromJsonObject(meta: JsonObject): TrailblazeToolMeta = TrailblazeToolMeta(
       surfaceToLlm = meta.readBoolean(KEY_SURFACE_TO_LLM, default = true),
-      surfaceToScriptedTools = meta.readBoolean(KEY_SURFACE_TO_SCRIPTED_TOOLS, default = true),
       isRecordable = meta.readBoolean(KEY_IS_RECORDABLE, default = true),
       requiresHost = meta.readBoolean(KEY_REQUIRES_HOST, default = false),
       supportedDrivers = meta.readStringList(KEY_SUPPORTED_DRIVERS),

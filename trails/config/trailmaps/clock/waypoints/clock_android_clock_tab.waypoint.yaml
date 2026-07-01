@@ -8,18 +8,19 @@ description: >
   or the AOSP variant `com.android.deskclock`, whichever is installed); at
   log-replay time it falls back to an alternation over both app_ids declared in
   the clock target.
-required:
-  - description: "CLOCK tab in selected state"
-    selector:
-      androidAccessibility:
-        resourceIdRegex: "{{target.appId}}:id/tab_menu_clock"
-        isSelected: true
-  - description: "Cities RecyclerView"
-    selector:
-      androidAccessibility:
-        resourceIdRegex: "{{target.appId}}:id/cities"
-forbidden:
-  - description: "Time picker OK button (would mean a dialog is open over the tab)"
-    selector:
-      androidAccessibility:
-        resourceIdRegex: "{{target.appId}}:id/material_timepicker_ok_button"
+android:
+  required:
+    - description: "CLOCK tab in selected state"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "{{target.appId}}:id/tab_menu_clock"
+          isSelected: true
+    - description: "Cities RecyclerView"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "{{target.appId}}:id/cities"
+  forbidden:
+    - description: "Time picker OK button (would mean a dialog is open over the tab)"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "{{target.appId}}:id/material_timepicker_ok_button"

@@ -167,20 +167,21 @@ fun KClass<out TrailblazeTool>.toKoogToolDescriptor(): ToolDescriptor? {
 }
 
 /**
- * Returns the scripted-tool-facing [ToolDescriptor] for a [TrailblazeTool] class, or null
- * when the class is hidden from per-trailmap `client.d.ts` codegen via
- * `@TrailblazeToolClass(surfaceToScriptedTools = false)`, OR when the class's parameter
- * shape can't be lowered to a `ToolDescriptor` by [buildToolDescriptorIgnoringSurface]
- * (e.g. uses a `Map<...>` field that `asToolType` does not yet support, or other structural
- * lowering failures). In the latter case the failure is logged and skipped so codegen for
- * the rest of the trailmap succeeds — the affected tool simply doesn't get a typed binding.
- * Scripted-tool authors can still reach it via `client.callTool(name, args)`.
+ * Returns the scripted-tool-facing [ToolDescriptor] for a [TrailblazeTool] class, or null when
+ * [buildToolDescriptorIgnoringSurface] can't build a descriptor for it. That covers any
+ * descriptor-build failure the catch below absorbs — a parameter shape `asToolType` can't lower
+ * (e.g. a `Map<...>` field), a null `List`/`Array` item type, a missing `@LLMDescription`, or a
+ * null parameter name. In every such case the failure is logged and skipped so codegen for the
+ * rest of the trailmap succeeds — the affected tool simply doesn't get a typed binding, and
+ * scripted-tool authors can still reach it via `client.callTool(name, args)`.
  *
- * Counterpart to [toKoogToolDescriptor]. The two surfaces are independent: a tool can be
- * visible to scripted-tool authors and hidden from the LLM, or vice versa.
+ * Every class-backed tool a trailmap resolves is surfaced to scripted-tool authors — there is
+ * no scripted-surface visibility gate. A tool hidden from the LLM (`surfaceToLlm = false`) is
+ * still typed and callable here: hiding a tool from the model's autonomous picking does not
+ * hide it from an expert TS author who reaches for it explicitly. Counterpart to
+ * [toKoogToolDescriptor], which DOES gate on `surfaceToLlm`.
  */
 fun KClass<out TrailblazeTool>.toScriptedToolDescriptor(): ToolDescriptor? {
-  if (!trailblazeToolClassAnnotation().surfaceToScriptedTools) return null
   return try {
     buildToolDescriptorIgnoringSurface()
   } catch (e: Exception) {

@@ -8,9 +8,9 @@ data class WaypointMatchResult(
   val presentForbidden: List<PresentForbidden>,
   val skipped: SkipReason? = null,
 ) {
-  data class MatchedRequired(val entry: WaypointSelectorEntry, val matchCount: Int)
-  data class MissingRequired(val entry: WaypointSelectorEntry, val matchCount: Int)
-  data class PresentForbidden(val entry: WaypointSelectorEntry, val matchCount: Int)
+  data class MatchedRequired(val entry: WaypointCondition, val matchCount: Int)
+  data class MissingRequired(val entry: WaypointCondition, val matchCount: Int)
+  data class PresentForbidden(val entry: WaypointCondition, val matchCount: Int)
 
   enum class SkipReason {
     NO_NODE_TREE_IN_SCREEN_STATE,
@@ -29,5 +29,15 @@ data class WaypointMatchResult(
      * skip means a missing target context shows up loudly rather than as a false positive.
      */
     UNRESOLVED_TARGET_TEMPLATE,
+
+    /**
+     * The waypoint declares no classifier block for any classifier in the connected device's
+     * lineage — i.e. it doesn't describe a screen on this device at all (an iOS-only waypoint
+     * matched against an Android device, say). Distinct from a present-but-failing block:
+     * surfacing it as a skip rather than a bare `matched = false` tells a waypoint author
+     * "add a block for this platform" rather than "your selectors are wrong." A waypoint that
+     * *has* a block but declares no conditions still matches vacuously (it is not skipped).
+     */
+    NO_CLASSIFIER_BLOCK,
   }
 }

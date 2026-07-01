@@ -551,10 +551,34 @@ declare module "@trailblaze/scripting" {
      * (`xcrun simctl listapps`). The result is a JSON string of `{ "appIds": string[] }` (sorted) —
      * `JSON.parse` it to read the array.
      *
+     * The lean, common-case utility. For each app's metadata (display name, system/user, version,
+     * build number, install path) use `mobile_listInstalledAppsDetailed` instead.
+     *
      * Source: `ListInstalledAppsTrailblazeTool.kt` (`mobile_listInstalledApps`).
      */
     mobile_listInstalledApps: {
       args: Record<string, never>;
+      result: string;
+    };
+
+    /**
+     * The deep counterpart to `mobile_listInstalledApps`: lists installed apps with full per-app
+     * metadata. The result is a JSON string of
+     * `{ "apps": { appId: string; isSystemApp: boolean; label?: string; version?: string; buildNumber?: string; installPath?: string }[] }`
+     * (sorted by `appId`) — `JSON.parse` it to read the array.
+     *
+     * Pass `{ includeSystemApps: false }` to return only user-installed apps (drops OS apps). On the
+     * Android host/adb path only `label` is absent (it needs on-device resource resolution);
+     * `isSystemApp` / `version` / `buildNumber` / `installPath` are populated there too via a single
+     * `dumpsys package packages` read, and `label` is populated on the Android on-device driver and on iOS.
+     *
+     * Not surfaced to the LLM — reachable from scripted tools via `callTool`. Use
+     * `mobile_listInstalledApps` when you only need ids.
+     *
+     * Source: `ListInstalledAppsDetailedTrailblazeTool.kt` (`mobile_listInstalledAppsDetailed`).
+     */
+    mobile_listInstalledAppsDetailed: {
+      args: { includeSystemApps?: boolean };
       result: string;
     };
   }

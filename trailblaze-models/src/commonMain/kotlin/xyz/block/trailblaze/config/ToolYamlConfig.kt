@@ -23,8 +23,8 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  * Supports two authoring modes, selected by which field is present:
  *
  * - **`class:` mode** (existing) — Kotlin-backed tool. [toolClass] points to a fully qualified
- *   class name; [description], [parameters], [surfaceToLlm], [surfaceToScriptedTools],
- *   [isRecordable], [requiresHost] are all reflected from the class's `@TrailblazeToolClass` /
+ *   class name; [description], [parameters], [surfaceToLlm], [isRecordable], [requiresHost] are
+ *   all reflected from the class's `@TrailblazeToolClass` /
  *   `@LLMDescription` annotations.
  *
  *   ```yaml

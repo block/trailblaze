@@ -106,8 +106,8 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
      * resolver. Literal `trailmaps` rather than a constant from `:trailblaze-models` because
      * this plugin's classpath deliberately doesn't carry that module.
      */
-    fun assetPathFor(trailmapId: String, toolName: String): String =
-      "trails/config/trailmaps/$trailmapId/tools/$toolName.bundle.js"
+    fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String =
+      "trails/config/trailmaps/$trailmapId/tools/$toolsRelativeStem.bundle.js"
 
     /**
      * Returns the in-process scripted-tool entry `.ts` files in [toolsDir]. A `<name>.ts` qualifies
@@ -131,13 +131,19 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
       val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
       // Inline-spec counterpart to the `.yaml` `runtime: subprocess` gate.
       val subprocessRuntimeTs = Regex("""runtime\s*:\s*["']?subprocess""")
-      return (toolsDir.listFiles() ?: emptyArray())
+      if (!toolsDir.isDirectory) return emptyList()
+      // Recursive so tools organized into `tools/<subdir>/` (by platform/category) are bundled too.
+      // The on-device resolver (ScriptedToolNameDiscoverer.bundleResourcePathForScript) preserves the
+      // script's subpath, so the staged `.bundle.js` must live at the SAME subpath — see the loop in
+      // the apply block, which stages by each source's tools-relative path, not just its basename.
+      return toolsDir.walkTopDown()
         .filter { f ->
           f.isFile &&
             f.name.endsWith(".ts") &&
             !f.name.endsWith(".test.ts") &&
             !f.name.endsWith(".d.ts") &&
-            File(toolsDir, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
+            // Sibling descriptor lives in the SAME directory as the `.ts` (root or organizational subdir).
+            File(f.parentFile, f.name.removeSuffix(".ts") + ".yaml").let { yaml ->
               if (yaml.isFile) {
                 !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
               } else {
@@ -146,7 +152,8 @@ class TrailblazeTrailmapToolBundlesPlugin : Plugin<Project> {
               }
             }
         }
-        .sortedBy { it.name }
+        .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
+        .toList()
     }
   }
 }
@@ -228,24 +235,33 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
     }
 
     TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources(toolsDir).forEach { tsFile ->
+      // Tools-relative path (e.g. `client/launchClientRoute.ts`) — drives the esbuild entry
+      // point (resolved against [sourceDir] = toolsDir) and, sans `.ts`, the staged asset subpath so
+      // it matches the subpath-preserving runtime resolver. A flat basename would mis-stage a
+      // subfoldered tool and two same-basename tools in different subfolders would collide.
+      val relPath = tsFile.relativeTo(toolsDir).invariantSeparatorsPath
+      val relStem = relPath.removeSuffix(".ts")
       val toolName = tsFile.name.removeSuffix(".ts")
+      // File-system / task-name-safe unique key per source (subpath flattened) for task names +
+      // intermediate output paths, so subfoldered same-basename tools don't collide.
+      val key = relStem.replace(Regex("[^A-Za-z0-9]"), "_")
       val capId = id.replaceFirstChar { it.uppercase() }
-      val capTool = toolName.replaceFirstChar { it.uppercase() }
+      val capKey = key.replaceFirstChar { it.uppercase() }
 
       val bundleTask =
         project.tasks.register(
-          "bundleTrailmap$capId${capTool}ToolBundle",
+          "bundleTrailmap$capId${capKey}ToolBundle",
           BundleAuthorToolsTask::class.java,
         ) { task ->
           task.group = "trailblaze"
           task.description =
-            "Bundles the `$id` trailmap scripted tool `$toolName` (TypeScript → QuickJS bundle)."
+            "Bundles the `$id` trailmap scripted tool `$relStem` (TypeScript → QuickJS bundle)."
           task.bundleName.set("$id-$toolName")
           task.sourceDir.set(project.layout.projectDirectory.dir(toolsDir.absolutePath))
-          task.entryPoint.set(tsFile.name)
+          task.entryPoint.set(relPath)
           task.outputFile.set(
             project.layout.buildDirectory.file(
-              "intermediates/trailblaze/trailmap-tool-bundles/$id/$toolName.bundle.js",
+              "intermediates/trailblaze/trailmap-tool-bundles/$id/$key.bundle.js",
             ),
           )
           task.esbuildBinary.set(project.layout.projectDirectory.file(esbuild.absolutePath))
@@ -256,7 +272,7 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
           task.projectDir.set(project.layout.projectDirectory)
           task.logFile.set(
             project.layout.buildDirectory.file(
-              "tmp/bundle-trailmap-tool-$id-$toolName.log",
+              "tmp/bundle-trailmap-tool-$id-$key.log",
             ),
           )
           // Snapshot only the author-managed `.ts` sources for the up-to-date check (no
@@ -279,15 +295,15 @@ abstract class TrailblazeTrailmapToolBundlesExtension @Inject constructor(
       // through the Provider chain (no explicit dependsOn needed), then rewrite each file's relative
       // path to the asset path — the same flatten-via-relativePath pattern
       // [TrailblazeQuickjsBundleAssetsPlugin] uses.
-      val assetPath = TrailblazeTrailmapToolBundlesPlugin.assetPathFor(id, toolName)
+      val assetPath = TrailblazeTrailmapToolBundlesPlugin.assetPathFor(id, relStem)
       val stageTask =
         project.tasks.register(
-          "stageTrailmap$capId${capTool}ToolBundleAsset",
+          "stageTrailmap$capId${capKey}ToolBundleAsset",
           Copy::class.java,
         ) { task ->
           task.group = "trailblaze"
           task.description =
-            "Stages the `$id` trailmap `$toolName` QuickJS bundle into the test APK asset tree."
+            "Stages the `$id` trailmap `$relStem` QuickJS bundle into the test APK asset tree."
           task.from(bundleTask.map { it.outputs.files }) { copySpec ->
             copySpec.eachFile { fcd: FileCopyDetails -> fcd.relativePath = RelativePath.parse(true, assetPath) }
           }

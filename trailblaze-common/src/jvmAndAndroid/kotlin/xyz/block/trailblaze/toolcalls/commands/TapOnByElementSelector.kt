@@ -33,7 +33,6 @@ import xyz.block.trailblaze.util.Console
   // `tapOnElementWithText`) — those two audiences are orthogonal. The earlier blanket `false` was
   // a mechanical carry-over from the single-flag `isForLlm` split (#3272), not a scripted-specific
   // decision; surfacing it matches this tool's stated "delegated to, not LLM-registered" role.
-  surfaceToScriptedTools = true,
 )
 @LLMDescription("Taps on an element by its selector.")
 /**

@@ -1,26 +1,33 @@
 package xyz.block.trailblaze.cli.tune
 
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
 import java.io.File
 
 /**
  * Pure analysis core for `trailblaze waypoint tune`. Consumes a list of per-step match
  * outcomes (already produced by [xyz.block.trailblaze.waypoint.WaypointMatcher]) and emits
- * a list of [Proposal]s — one per (waypoint, entry, kind) the analyzer believes is a
+ * a list of [Proposal]s — one per (waypoint, condition, kind) the analyzer believes is a
  * single-line YAML edit worth surfacing to a human reviewer.
+ *
+ * v2 waypoints are classifier-keyed, so a definition's conditions live in
+ * [WaypointDefinition.byClassifier] blocks rather than a single top-level list. The detectors
+ * analyze against the **union** of conditions across all blocks (deduped by fingerprint), and a
+ * proposal's edit is applied by **fingerprint** to whichever block declares the affected
+ * condition — so a drop/lower lands in the right `android:` / `ios:` block without the tuner
+ * having to thread a classifier through every detector.
  *
  * Three detectors, all conservative:
  *
- * 1. **Drift** — a required entry with `matchCount = 0` in at least `minSupport`
- *    near-miss steps (a near-miss step = every other required entry matched and no
- *    forbidden entry fired). Proposal: drop the entry.
- * 2. **Off-by-one** — a required entry consistently matches `minCount - 1` (never 0,
+ * 1. **Drift** — a required condition with `matchCount = 0` in at least `minSupport`
+ *    near-miss steps (a near-miss step = every other required condition matched and no
+ *    forbidden condition fired). Proposal: drop the condition.
+ * 2. **Off-by-one** — a required condition consistently matches `minCount - 1` (never 0,
  *    never ≥ minCount) in at least `minSupport` near-miss steps. Proposal: lower
  *    `minCount` by 1.
- * 3. **False-positive forbidden** — a forbidden entry fires in at least `minSupport`
- *    steps where every required entry would otherwise match. Proposal: drop the entry.
+ * 3. **False-positive forbidden** — a forbidden condition fires in at least `minSupport`
+ *    steps where every required condition would otherwise match. Proposal: drop the condition.
  *
  * No I/O — callers do file enumeration and mutation. This object is invoked from
  * `WaypointTuneCommand` and exercised by `WaypointTunerTest` against synthetic match
@@ -55,7 +62,7 @@ object WaypointTuner {
     val sourceFile: File,
     val definitionBefore: WaypointDefinition,
     val definitionAfter: WaypointDefinition,
-    val affectedEntry: WaypointSelectorEntry,
+    val affectedEntry: WaypointCondition,
   ) {
     /**
      * Stable identifier used for cross-week dedupe. Two proposals with the same key
@@ -69,28 +76,13 @@ object WaypointTuner {
      * Replays this proposal's edit against an arbitrary [WaypointDefinition] (need not be
      * [definitionBefore]). Used to compose multiple proposals on the same waypoint when
      * checking idempotence and cross-proposal collisions — without this we'd lose all but
-     * one proposal per waypoid when `associateBy { waypointId }` collapses the list.
+     * one proposal per waypoint when `associateBy { waypointId }` collapses the list.
      *
-     * Idempotent: applying twice to a definition that already has the edit is a no-op
-     * (filterNot matches nothing the second time; LOWER_MIN_COUNT's `coerceAtLeast(1)`
-     * floors the second decrement).
+     * Idempotent: applying twice to a definition that already has the edit is a no-op (the
+     * fingerprint carries minCount, so a LOWER_MIN_COUNT proposal targeting `min=3` no longer
+     * matches the already-lowered `min=2` condition on the second pass).
      */
-    fun apply(def: WaypointDefinition): WaypointDefinition = when (kind) {
-      ProposalKind.DROP_REQUIRED ->
-        def.copy(required = def.required.filterNot { sameEntry(it, affectedEntry) })
-      ProposalKind.LOWER_MIN_COUNT ->
-        def.copy(
-          required = def.required.map {
-            if (sameEntry(it, affectedEntry)) {
-              it.copy(minCount = (it.minCount - 1).coerceAtLeast(1))
-            } else {
-              it
-            }
-          },
-        )
-      ProposalKind.DROP_FORBIDDEN ->
-        def.copy(forbidden = def.forbidden.filterNot { sameEntry(it, affectedEntry) })
-    }
+    fun apply(def: WaypointDefinition): WaypointDefinition = applyEdit(def, kind, affectedEntry)
   }
 
   enum class ProposalKind {
@@ -110,12 +102,47 @@ object WaypointTuner {
   )
 
   /**
+   * Apply an edit to the classifier block(s) that declare [entry] (matched by fingerprint).
+   * Blocks that don't carry the condition are untouched. Single source of mutation, shared by
+   * [Proposal.apply] and the detectors.
+   */
+  private fun applyEdit(
+    def: WaypointDefinition,
+    kind: ProposalKind,
+    entry: WaypointCondition,
+  ): WaypointDefinition {
+    val mutated = def.byClassifier.mapValues { (_, variant) ->
+      when (kind) {
+        ProposalKind.DROP_REQUIRED ->
+          variant.copy(required = variant.required.filterNot { sameEntry(it, entry) })
+        ProposalKind.LOWER_MIN_COUNT ->
+          variant.copy(
+            required = variant.required.map {
+              if (sameEntry(it, entry)) it.copy(minCount = (it.minCount - 1).coerceAtLeast(1)) else it
+            },
+          )
+        ProposalKind.DROP_FORBIDDEN ->
+          variant.copy(forbidden = variant.forbidden.filterNot { sameEntry(it, entry) })
+      }
+    }
+    return def.copy(byClassifier = mutated)
+  }
+
+  /** Union of required conditions across all classifier blocks, deduped by fingerprint. */
+  private fun WaypointDefinition.allRequired(): List<WaypointCondition> =
+    byClassifier.values.flatMap { it.required }.distinctBy { fingerprintEntry(it) }
+
+  /** Union of forbidden conditions across all classifier blocks, deduped by fingerprint. */
+  private fun WaypointDefinition.allForbidden(): List<WaypointCondition> =
+    byClassifier.values.flatMap { it.forbidden }.distinctBy { fingerprintEntry(it) }
+
+  /**
    * Run all three detectors against the session set. The returned list is in deterministic
-   * order (sorted by waypoint id, then proposal kind, then entry fingerprint) so
+   * order (sorted by waypoint id, then proposal kind, then condition fingerprint) so
    * idempotence and golden-test stability is easy to reason about.
    *
    * `minSupport` defaults to 5 (see devlog). `homogeneityThreshold` is the fraction of
-   * near-miss steps that must point at the *same* entry for the detector to fire — the
+   * near-miss steps that must point at the *same* condition for the detector to fire — the
    * "noise vs. signal" guard against waypoints that miss for many different reasons.
    */
   fun analyze(
@@ -143,16 +170,16 @@ object WaypointTuner {
   }
 
   /**
-   * Compose every proposal per waypoid onto a single mutated [WaypointDefinition], keyed
-   * by waypoid. Used by the CLI's idempotence check and its cross-proposal collision
-   * pass — both need the *joint* end-state of all proposals on a waypoid, not just the
+   * Compose every proposal per waypoint onto a single mutated [WaypointDefinition], keyed
+   * by waypoint id. Used by the CLI's idempotence check and its cross-proposal collision
+   * pass — both need the *joint* end-state of all proposals on a waypoint, not just the
    * last one (the former `associateBy { waypointId }` shape collapsed to one and
    * masked multi-proposal idempotence bugs).
    *
-   * Returns a map; waypoids absent from [proposals] aren't present. Proposals on a
-   * waypoid are folded in their original input order; that order doesn't matter for the
-   * three current detectors because each emits at most one proposal per (entry, kind)
-   * and `Proposal.apply` is fingerprint-keyed (so two proposals on different entries
+   * Returns a map; waypoints absent from [proposals] aren't present. Proposals on a
+   * waypoint are folded in their original input order; that order doesn't matter for the
+   * three current detectors because each emits at most one proposal per (condition, kind)
+   * and `Proposal.apply` is fingerprint-keyed (so two proposals on different conditions
    * commute). A defensive `require` flags the silent-assumption — every proposal in a
    * group must share the same [Proposal.definitionBefore], otherwise the fold's base
    * case is ambiguous.
@@ -168,12 +195,12 @@ object WaypointTuner {
     }
 
   /**
-   * Drift: a required entry with `matchCount = 0` in a homogeneous near-miss set.
+   * Drift: a required condition with `matchCount = 0` in a homogeneous near-miss set.
    *
-   * "Near-miss" = every other required entry matched, no forbidden present. That means
-   * THIS entry is the sole reason the waypoint missed. If the session set shows this same
+   * "Near-miss" = every other required condition matched, no forbidden present. That means
+   * THIS condition is the sole reason the waypoint missed. If the session set shows this same
    * shape ≥ `minSupport` distinct sessions, and ≥ `homogeneityThreshold` of the near-miss
-   * steps point at this same entry as the sole culprit, propose dropping it.
+   * steps point at this same condition as the sole culprit, propose dropping it.
    */
   private fun detectDrift(
     source: WaypointSource,
@@ -183,10 +210,10 @@ object WaypointTuner {
   ): List<Proposal> {
     val nearMissSteps = matches.filter { it.result.isSoleEntryNearMiss() }
     if (nearMissSteps.size < minSupport) return emptyList()
-    // For each required entry, count near-miss steps where this entry was the missing
+    // For each required condition, count near-miss steps where this condition was the missing
     // one with matchCount == 0.
     val out = mutableListOf<Proposal>()
-    for ((entryIdx, entry) in source.definition.required.withIndex()) {
+    for (entry in source.definition.allRequired()) {
       val supporting = nearMissSteps.filter { step ->
         val miss = step.result.missingRequired.singleOrNull() ?: return@filter false
         sameEntry(miss.entry, entry) && miss.matchCount == 0
@@ -196,14 +223,12 @@ object WaypointTuner {
       if (sessions < minSupport) continue
       val homogeneity = supporting.size.toDouble() / nearMissSteps.size.toDouble()
       if (homogeneity < homogeneityThreshold) continue
-      val mutated = source.definition.copy(
-        required = source.definition.required.toMutableList().also { it.removeAt(entryIdx) },
-      )
+      val mutated = applyEdit(source.definition, ProposalKind.DROP_REQUIRED, entry)
       out += Proposal(
         waypointId = source.definition.id,
         kind = ProposalKind.DROP_REQUIRED,
-        rationale = "Required entry produced 0 matches in ${supporting.size} of ${nearMissSteps.size} " +
-          "near-miss step(s) across $sessions session(s); the entry is the sole reason this " +
+        rationale = "Required condition produced 0 matches in ${supporting.size} of ${nearMissSteps.size} " +
+          "near-miss step(s) across $sessions session(s); the condition is the sole reason this " +
           "waypoint failed to match. Drop and let the reviewer decide whether to replace with " +
           "a looser selector.",
         supportSessions = sessions,
@@ -218,13 +243,13 @@ object WaypointTuner {
   }
 
   /**
-   * Off-by-one: a required entry consistently matches `minCount - 1` and never 0 in
+   * Off-by-one: a required condition consistently matches `minCount - 1` and never 0 in
    * near-miss steps. Lower `minCount` by 1.
    *
-   * The "never 0" guard is what separates this from drift: if the entry sometimes
+   * The "never 0" guard is what separates this from drift: if the condition sometimes
    * matches `minCount - 1` and sometimes matches 0, the session set is telling us the
    * selector itself is rotting (drift case), not just that minCount is too aggressive.
-   * Letting both detectors fire would emit conflicting proposals on the same entry.
+   * Letting both detectors fire would emit conflicting proposals on the same condition.
    */
   private fun detectOffByOne(
     source: WaypointSource,
@@ -235,7 +260,7 @@ object WaypointTuner {
     val nearMissSteps = matches.filter { it.result.isSoleEntryNearMiss() }
     if (nearMissSteps.size < minSupport) return emptyList()
     val out = mutableListOf<Proposal>()
-    for ((entryIdx, entry) in source.definition.required.withIndex()) {
+    for (entry in source.definition.allRequired()) {
       if (entry.minCount <= 1) continue // can't lower to 0; that's drift territory.
       val candidateSteps = nearMissSteps.filter { step ->
         val miss = step.result.missingRequired.singleOrNull() ?: return@filter false
@@ -254,14 +279,11 @@ object WaypointTuner {
       if (sessions < minSupport) continue
       val homogeneity = supporting.size.toDouble() / nearMissSteps.size.toDouble()
       if (homogeneity < homogeneityThreshold) continue
-      val newEntry = entry.copy(minCount = entry.minCount - 1)
-      val mutated = source.definition.copy(
-        required = source.definition.required.toMutableList().also { it[entryIdx] = newEntry },
-      )
+      val mutated = applyEdit(source.definition, ProposalKind.LOWER_MIN_COUNT, entry)
       out += Proposal(
         waypointId = source.definition.id,
         kind = ProposalKind.LOWER_MIN_COUNT,
-        rationale = "Required entry consistently matched ${entry.minCount - 1} (one short of " +
+        rationale = "Required condition consistently matched ${entry.minCount - 1} (one short of " +
           "minCount=${entry.minCount}) in ${supporting.size} of ${nearMissSteps.size} near-miss " +
           "step(s) across $sessions session(s), and never hit 0. Lower minCount by 1.",
         supportSessions = sessions,
@@ -276,8 +298,8 @@ object WaypointTuner {
   }
 
   /**
-   * False-positive forbidden: a forbidden entry fires on steps where every required
-   * entry matched. The waypoint *would* match if not for this forbidden — propose
+   * False-positive forbidden: a forbidden condition fires on steps where every required
+   * condition matched. The waypoint *would* match if not for this forbidden — propose
    * dropping it.
    *
    * The reviewer can re-add a narrower forbidden after looking at the screen state.
@@ -296,9 +318,9 @@ object WaypointTuner {
     }
     if (wouldMatchExceptForbiddenSteps.size < minSupport) return emptyList()
     val out = mutableListOf<Proposal>()
-    for ((entryIdx, entry) in source.definition.forbidden.withIndex()) {
+    for (entry in source.definition.allForbidden()) {
       val supporting = wouldMatchExceptForbiddenSteps.filter { step ->
-        // Sole forbidden firing is this entry. Multi-forbidden cases mean the screen has
+        // Sole forbidden firing is this condition. Multi-forbidden cases mean the screen has
         // more than one disqualifier — dropping any one of them won't enable the match,
         // so emitting a proposal there would be noise.
         val present = step.result.presentForbidden.singleOrNull() ?: return@filter false
@@ -309,15 +331,13 @@ object WaypointTuner {
       if (sessions < minSupport) continue
       val homogeneity = supporting.size.toDouble() / wouldMatchExceptForbiddenSteps.size.toDouble()
       if (homogeneity < homogeneityThreshold) continue
-      val mutated = source.definition.copy(
-        forbidden = source.definition.forbidden.toMutableList().also { it.removeAt(entryIdx) },
-      )
+      val mutated = applyEdit(source.definition, ProposalKind.DROP_FORBIDDEN, entry)
       out += Proposal(
         waypointId = source.definition.id,
         kind = ProposalKind.DROP_FORBIDDEN,
-        rationale = "Forbidden entry fired as the sole disqualifier on ${supporting.size} of " +
+        rationale = "Forbidden condition fired as the sole disqualifier on ${supporting.size} of " +
           "${wouldMatchExceptForbiddenSteps.size} step(s) across $sessions session(s) where " +
-          "every required entry matched. Drop and let the reviewer decide whether to add a " +
+          "every required condition matched. Drop and let the reviewer decide whether to add a " +
           "narrower forbidden.",
         supportSessions = sessions,
         supportSteps = supporting.size,
@@ -331,35 +351,36 @@ object WaypointTuner {
   }
 
   /**
-   * A step is a "sole-entry near miss" when exactly one required entry failed and no
-   * forbidden fired — i.e. there's one logical fix. Multi-entry misses are excluded
-   * because we'd be guessing which entry to tune.
+   * A step is a "sole-entry near miss" when exactly one required condition failed and no
+   * forbidden fired — i.e. there's one logical fix. Multi-condition misses are excluded
+   * because we'd be guessing which condition to tune.
    */
   private fun WaypointMatchResult.isSoleEntryNearMiss(): Boolean =
     !matched && skipped == null &&
       missingRequired.size == 1 && presentForbidden.isEmpty()
 
   /**
-   * Stable fingerprint for an entry, used both as the dedupe key and to identify the
-   * "same" entry across two parses of the same YAML.
+   * Stable fingerprint for a condition, used both as the dedupe key and to identify the
+   * "same" condition across two parses of the same YAML.
    *
    * Uses the selector's `description()` (which `TrailblazeNodeSelector` already exposes
-   * for human-readable rendering) plus the minCount as the discriminator. That's good
-   * enough for dedupe — if two authors write the same selector different ways the
+   * for human-readable rendering) plus the minCount as the discriminator. A condition with no
+   * selector (a future non-selector condition kind) falls back to its description text. That's
+   * good enough for dedupe — if two authors write the same selector different ways the
    * description text will differ, and the dedupe will emit one PR per variant, which is
    * the correct behavior since the YAML edits would also differ.
    */
-  private fun fingerprintEntry(entry: WaypointSelectorEntry): String =
-    "${entry.selector.description()}|min=${entry.minCount}"
+  private fun fingerprintEntry(entry: WaypointCondition): String =
+    "${entry.selector?.description() ?: "no-selector:${entry.description.orEmpty()}"}|min=${entry.minCount}"
 
   /**
-   * Two selector entries are "the same" when their fingerprints match. The matcher
-   * round-trips the entry into the match result, so the entry instance returned via
+   * Two conditions are "the same" when their fingerprints match. The matcher round-trips the
+   * condition into the match result, so the condition instance returned via
    * [WaypointMatchResult.MissingRequired.entry] should equal one of the definition's
-   * required entries — but we don't rely on object identity (target-template expansion
-   * may have re-copied the entry). Fingerprint compare is the stable join.
+   * required conditions — but we don't rely on object identity (target-template expansion
+   * may have re-copied the condition). Fingerprint compare is the stable join.
    */
-  private fun sameEntry(a: WaypointSelectorEntry, b: WaypointSelectorEntry): Boolean =
+  private fun sameEntry(a: WaypointCondition, b: WaypointCondition): Boolean =
     fingerprintEntry(a) == fingerprintEntry(b)
 
   internal const val DEFAULT_MIN_SUPPORT = 5

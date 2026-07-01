@@ -8,7 +8,7 @@ package xyz.block.trailblaze.ui.tabs.session
  * The autoplay loop in [SessionCombinedView] advances the scrubber by
  * `wallClockElapsed * playbackSpeed`. Without compression that makes export duration
  * proportional to `sessionEnd - sessionStart`, so a session recorded interactively over
- * a long period (a handful of actions spread across, say, 100 minutes — see issue #173)
+ * a long period (a handful of actions spread across, say, 100 minutes — see https://github.com/block/trailblaze/issues/173)
  * produces a 100+ minute animation that no fixed capture window can accommodate and that
  * would be an enormous artifact even if it could.
  *

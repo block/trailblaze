@@ -6,25 +6,26 @@ description: >
   carrying the verbose "Are you sure you want to delete the card for <Name>?" warning;
   this short popover is anchored to the footer button and dismisses by tap-outside (no
   explicit Cancel button shown).
-required:
-  - description: "Popover dismiss region"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "PopoverDismissRegion"
-  - description: "Delete Contact red button"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Delete Contact"
-forbidden:
-  - description: "Verbose 'Are you sure...' warning — that's the full delete confirm"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "^Are you sure you want to delete the card.*"
-  - description: "Block-Contact warning"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "^You will not receive phone calls.*"
-  - description: "Discard-Changes warning"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Are you sure you want to discard your changes\\?"
+ios:
+  required:
+    - description: "Popover dismiss region"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "PopoverDismissRegion"
+    - description: "Delete Contact red button"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Delete Contact"
+  forbidden:
+    - description: "Verbose 'Are you sure...' warning — that's the full delete confirm"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "^Are you sure you want to delete the card.*"
+    - description: "Block-Contact warning"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "^You will not receive phone calls.*"
+    - description: "Discard-Changes warning"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Are you sure you want to discard your changes\\?"

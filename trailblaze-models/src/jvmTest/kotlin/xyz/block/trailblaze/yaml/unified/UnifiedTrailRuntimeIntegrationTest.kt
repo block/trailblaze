@@ -54,12 +54,13 @@ class UnifiedTrailRuntimeIntegrationTest {
                 y: 2
     """.trimIndent()
 
-    // Run as an iPhone — classifier list `[ios-iphone, ios]`. Step 1: no
+    // Run as an iPhone — provider emits broad-first segments `[ios, iphone]`,
+    // which the lineage joins+expands to `[ios-iphone, ios]`. Step 1: no
     // `ios-iphone` key → fall through to `ios` → openApp-ios. Step 2: same
     // — `ios` matches before `android`.
     val iosItems = yaml.decodeTrail(
       unifiedYaml,
-      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios-iphone"), TrailblazeDeviceClassifier("ios")),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("iphone")),
     )
     val iosPrompts = iosItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps
     assertEquals(2, iosPrompts.size)
@@ -68,17 +69,52 @@ class UnifiedTrailRuntimeIntegrationTest {
     val iosStep2 = iosPrompts[1] as DirectionStep
     assertEquals("tap-ios", iosStep2.recording?.tools?.single()?.name)
 
-    // Run as Android phone — classifier list `[android-phone, android]`. Step 1
-    // matches `android-phone:` directly. Step 2 falls through to `android:`.
+    // Run as Android phone — provider emits `[android, phone]` → lineage
+    // `[android-phone, android]`. Step 1 matches `android-phone:` directly.
+    // Step 2 falls through to `android:`.
     val androidItems = yaml.decodeTrail(
       unifiedYaml,
-      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android-phone"), TrailblazeDeviceClassifier("android")),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
     )
     val androidPrompts = androidItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps
     val androidStep1 = androidPrompts[0] as DirectionStep
     assertEquals("openApp-android", androidStep1.recording?.tools?.single()?.name)
     val androidStep2 = androidPrompts[1] as DirectionStep
     assertEquals("tap-shared", androidStep2.recording?.tools?.single()?.name)
+  }
+
+  @Test
+  fun `a compound-keyed step resolves from a device's broad-first classifier segments`() {
+    // The headline lineage fix. A real iPhone's provider emits the broad-first
+    // segments [ios, iphone] (NOT the compound [ios-iphone]); the lineage joins
+    // them into `ios-iphone` and expands to [ios-iphone, ios] so a step keyed by
+    // the compound classifier `ios-iphone:` actually resolves on-device. This is
+    // exactly the shape of the committed ios-contacts/test-back-navigation
+    // trail.yaml, which keys every recording by `ios-iphone:`.
+    val unifiedYaml = """
+      config:
+        id: contacts/open
+        target: contacts
+        devices:
+          - ios-iphone
+      trail:
+        - step: Open the contact
+          ios-iphone:
+            - tapOnElementBySelector-ios:
+                x: 1
+                y: 1
+    """.trimIndent()
+    val items = yaml.decodeTrail(
+      unifiedYaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("iphone")),
+    )
+    val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single() as DirectionStep
+    assertEquals(
+      "tapOnElementBySelector-ios",
+      step.recording?.tools?.single()?.name,
+      "compound `ios-iphone:` key must resolve from broad-first segments [ios, iphone]",
+    )
   }
 
   @Test
@@ -149,7 +185,7 @@ class UnifiedTrailRuntimeIntegrationTest {
     """.trimIndent()
     val items = yaml.decodeTrail(
       unifiedYaml,
-      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android-phone"), TrailblazeDeviceClassifier("android")),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep

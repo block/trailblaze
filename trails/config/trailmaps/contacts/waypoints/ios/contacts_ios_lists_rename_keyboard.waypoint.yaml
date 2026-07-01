@@ -4,21 +4,22 @@ description: >
   Distinct from contacts/ios/lists-rename-active (which doesn't require keyboard) — here
   the user is actively typing into the rename field, so the AutoFill/Paste accessory
   toolbar is visible.
-required:
-  - description: "Done nav button (still in edit mode)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Done"
-  - description: "Active rename row 'Name: <something>'"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "^Name: .+$"
-  - description: "Keyboard accessory: AutoFill"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "AutoFill"
-forbidden:
-  - description: "Edit nav button — would mean we're not in edit mode"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Edit"
+ios:
+  required:
+    - description: "Done nav button (still in edit mode)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Done"
+    - description: "Active rename row 'Name: <something>'"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "^Name: .+$"
+    - description: "Keyboard accessory: AutoFill"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "AutoFill"
+  forbidden:
+    - description: "Edit nav button — would mean we're not in edit mode"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Edit"

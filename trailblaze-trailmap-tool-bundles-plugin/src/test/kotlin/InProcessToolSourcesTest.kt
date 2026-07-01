@@ -28,6 +28,10 @@ class InProcessToolSourcesTest {
   private fun discoveredNames(): List<String> =
     TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources(dir).map { it.name }
 
+  private fun discoveredRelPaths(): List<String> =
+    TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources(dir)
+      .map { it.relativeTo(dir).invariantSeparatorsPath }
+
   private val toolBody = "export const x = trailblaze.tool<Foo>({ supportedPlatforms: [\"android\"] }, async () => \"ok\")\n"
 
   @Test fun `includes a tool with a non-subprocess yaml sidecar`() {
@@ -67,5 +71,26 @@ class InProcessToolSourcesTest {
     write("bTool.ts", toolBody)
     write("aTool.ts", toolBody)
     assertEquals(listOf("aTool.ts", "bTool.ts"), discoveredNames())
+  }
+
+  @Test fun `discovers tools organized into subfolders, sorted by tools-relative path`() {
+    // Tools reorganized into `tools/<category>/` (an internal/client/ios/... platform layout) must
+    // still be found; the old flat `listFiles()` walk missed them. Sibling-yaml gate is checked in
+    // the file's OWN directory.
+    File(dir, "client").mkdirs()
+    File(dir, "ios").mkdirs()
+    write("client/launchClientRoute.ts", toolBody)
+    write("ios/signInViaUI.ts", toolBody)
+    write("rootTool.ts", toolBody)
+    File(dir, "ios/subprocessy.yaml").writeText("name: subprocessy\nruntime: subprocess\n")
+    write("ios/subprocessy.ts", toolBody) // gated out by its same-dir subprocess sidecar
+    assertEquals(listOf("client/launchClientRoute.ts", "ios/signInViaUI.ts", "rootTool.ts"), discoveredRelPaths())
+  }
+
+  @Test fun `assetPathFor preserves the tools-relative subpath so it matches the runtime resolver`() {
+    assertEquals(
+      "trails/config/trailmaps/myapp/tools/client/launchClientRoute.bundle.js",
+      TrailblazeTrailmapToolBundlesPlugin.assetPathFor("myapp", "client/launchClientRoute"),
+    )
   }
 }

@@ -37,10 +37,10 @@ import coil3.compose.AsyncImage
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver.ResolveResult
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 
 /**
- * Resolved overlay record for a single selector entry. Mirrors a `WaypointSelectorEntry`
+ * Resolved overlay record for a single selector entry. Mirrors a `WaypointCondition`
  * after running it through [TrailblazeNodeSelectorResolver] against the example tree.
  *
  * - [REQUIRED] entries draw green when at least [minCount] nodes match **and** at least
@@ -77,8 +77,8 @@ internal fun WaypointSelectorOverlay.isSatisfied(): Boolean = when (kind) {
 
 internal fun resolveOverlays(
   tree: TrailblazeNode,
-  required: List<WaypointSelectorEntry>,
-  forbidden: List<WaypointSelectorEntry>,
+  required: List<WaypointCondition>,
+  forbidden: List<WaypointCondition>,
 ): List<WaypointSelectorOverlay> = buildList {
   required.forEachIndexed { index, entry ->
     add(buildOverlay(tree, entry, WaypointSelectorKind.REQUIRED, index))
@@ -90,21 +90,26 @@ internal fun resolveOverlays(
 
 private fun buildOverlay(
   tree: TrailblazeNode,
-  entry: WaypointSelectorEntry,
+  entry: WaypointCondition,
   kind: WaypointSelectorKind,
   entryIndex: Int,
 ): WaypointSelectorOverlay {
-  val matched = when (val r = TrailblazeNodeSelectorResolver.resolve(tree, entry.selector)) {
-    is ResolveResult.SingleMatch -> listOf(r.node)
-    is ResolveResult.MultipleMatches -> r.nodes
-    is ResolveResult.NoMatch -> emptyList()
+  val selector = entry.selector
+  val matched = if (selector == null) {
+    emptyList()
+  } else {
+    when (val r = TrailblazeNodeSelectorResolver.resolve(tree, selector)) {
+      is ResolveResult.SingleMatch -> listOf(r.node)
+      is ResolveResult.MultipleMatches -> r.nodes
+      is ResolveResult.NoMatch -> emptyList()
+    }
   }
   val bounds = matched.mapNotNull { it.bounds }
   return WaypointSelectorOverlay(
     kind = kind,
     entryIndex = entryIndex,
     description = entry.description?.takeIf { it.isNotBlank() }
-      ?: entry.selector.description().ifBlank { "(selector ${entryIndex + 1})" },
+      ?: selector?.description()?.ifBlank { null } ?: "(selector ${entryIndex + 1})",
     minCount = entry.minCount,
     matchedBounds = bounds,
     matchedCount = matched.size,

@@ -55,7 +55,7 @@ class PlaybackTimelineTest {
 
   @Test
   fun `compressed duration scales with step count not wall-clock`() {
-    // 25 steps, each separated by an hour of idle time — the issue #173 shape.
+    // 25 steps, each separated by an hour of idle time — the shape from https://github.com/block/trailblaze/issues/173.
     val hour = 60 * 60 * 1000L
     val anchors = (0 until 25).map { it * hour }
     val cap = 4_000L

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.util
 
 import java.io.File
+import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 object IosHostSimctlUtils {
@@ -90,5 +91,119 @@ object IosHostSimctlUtils {
       .mapNotNull { line -> regex.matchEntire(line)?.groupValues?.get(1) }
       .filter { it.isNotBlank() && !it.startsWith("group.") }
       .distinct()
+  }
+
+  /**
+   * Lists the installed apps on the given iOS simulator with structured per-app metadata
+   * ([InstalledApp.appId], [InstalledApp.label], [InstalledApp.type], [InstalledApp.version]) via
+   * `xcrun simctl listapps <deviceId>`. Backs the iOS branch of `mobile_listInstalledApps` when
+   * called with `detailed = true`.
+   *
+   * iOS gets every field for free: a single `listapps` invocation already reports
+   * `ApplicationType`, the display name, and the version, so unlike the Android adb path there's no
+   * label/version gap here.
+   *
+   * Returns an empty list on non-macOS hosts (iOS simulators only exist on a Mac), matching
+   * [listInstalledAppIds].
+   */
+  fun listInstalledAppsDetailed(deviceId: String): List<InstalledApp> {
+    if (!isMacOs()) return emptyList()
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "listapps", deviceId),
+    ).runProcess {}
+    return parseInstalledAppsFromListApps(output.outputLines)
+  }
+
+  /**
+   * Parses structured [InstalledApp] metadata from `xcrun simctl listapps` output lines.
+   *
+   * Each app's block opens with a header line — `"<bundleId>" = {` — under which the relevant
+   * fields appear:
+   * ```
+   *     "com.apple.Preferences" =     {
+   *         ApplicationType = System;
+   *         CFBundleDisplayName = Settings;
+   *         CFBundleName = Settings;
+   *         CFBundleShortVersionString = "1.0";
+   *         CFBundleVersion = 1;
+   *         ...
+   *     };
+   * ```
+   *
+   * Mapping:
+   * - [InstalledApp.appId] ← the quoted bundle id in the header line
+   * - [InstalledApp.isSystemApp] ← `ApplicationType` (`System` → `true`; `User` and anything else /
+   *   absent → `false`, so an unrecognized type is never guessed into the system bucket)
+   * - [InstalledApp.label] ← `CFBundleDisplayName`, falling back to `CFBundleName`
+   * - [InstalledApp.version] ← `CFBundleShortVersionString` (the user-visible version), falling
+   *   back to `CFBundleVersion`
+   * - [InstalledApp.buildNumber] ← `CFBundleVersion` (the machine build number)
+   * - [InstalledApp.installPath] ← `Path` (the `.app` bundle path)
+   *
+   * Like [parseInstalledAppIdsFromListApps], only the block-opening header (`= {`) is treated as an
+   * app, so nested `GroupContainers` entries (`"<id>" = "file://…";`) and `group.*` ids are never
+   * mistaken for installed apps. Field lines are only attributed to the most recent app header, and
+   * fields are read with last-write-wins (the rare repeated key keeps the latest value).
+   *
+   * `internal` (widened just enough for the same-module parser unit test): the only production
+   * caller is [listInstalledAppsDetailed].
+   */
+  internal fun parseInstalledAppsFromListApps(outputLines: List<String>): List<InstalledApp> {
+    val headerRegex = Regex("^\\s+\"([^\"]+)\"\\s*=\\s*\\{")
+    // Field lines look like `    Key = Value;` or `    Key = "Value";` — capture the unquoted body.
+    // Stops at the first `"` or `;`, so a value containing an escaped quote (`= "a \"b\" c";`) would
+    // truncate — not seen in real `simctl listapps` output (display names aren't quote-escaped there),
+    // so this is an accepted limitation rather than full plist-string parsing.
+    fun fieldRegex(key: String) = Regex("^\\s+$key\\s*=\\s*\"?([^;\"]*)\"?\\s*;")
+    val applicationTypeRegex = fieldRegex("ApplicationType")
+    val displayNameRegex = fieldRegex("CFBundleDisplayName")
+    val bundleNameRegex = fieldRegex("CFBundleName")
+    val shortVersionRegex = fieldRegex("CFBundleShortVersionString")
+    val bundleVersionRegex = fieldRegex("CFBundleVersion")
+    val pathRegex = fieldRegex("Path")
+
+    // Preserve first-seen header order; ignore `group.*` headers like the id-only parser.
+    val ordered = LinkedHashMap<String, MutableMap<String, String>>()
+    var current: MutableMap<String, String>? = null
+
+    for (line in outputLines) {
+      val header = headerRegex.matchEntire(line)?.groupValues?.get(1)
+      if (header != null) {
+        if (header.isNotBlank() && !header.startsWith("group.")) {
+          current = ordered.getOrPut(header) { mutableMapOf() }
+        } else {
+          current = null
+        }
+        continue
+      }
+      val fields = current ?: continue
+      applicationTypeRegex.matchEntire(line)?.let { fields["type"] = it.groupValues[1].trim() }
+      displayNameRegex.matchEntire(line)?.let { fields["displayName"] = it.groupValues[1].trim() }
+      bundleNameRegex.matchEntire(line)?.let { fields["bundleName"] = it.groupValues[1].trim() }
+      shortVersionRegex.matchEntire(line)?.let { fields["shortVersion"] = it.groupValues[1].trim() }
+      bundleVersionRegex.matchEntire(line)?.let { fields["bundleVersion"] = it.groupValues[1].trim() }
+      pathRegex.matchEntire(line)?.let { fields["path"] = it.groupValues[1].trim() }
+    }
+
+    return ordered.map { (appId, fields) ->
+      val isSystemApp = when (fields["type"]) {
+        "System" -> true
+        // `User` and the essentially-never non-standard ApplicationType both map to false — we
+        // don't guess an unrecognized type into the system bucket.
+        else -> false
+      }
+      val label = (fields["displayName"] ?: fields["bundleName"])?.takeIf { it.isNotBlank() }
+      val version = (fields["shortVersion"] ?: fields["bundleVersion"])?.takeIf { it.isNotBlank() }
+      val buildNumber = fields["bundleVersion"]?.takeIf { it.isNotBlank() }
+      val installPath = fields["path"]?.takeIf { it.isNotBlank() }
+      InstalledApp(
+        appId = appId,
+        isSystemApp = isSystemApp,
+        label = label,
+        version = version,
+        buildNumber = buildNumber,
+        installPath = installPath,
+      )
+    }
   }
 }

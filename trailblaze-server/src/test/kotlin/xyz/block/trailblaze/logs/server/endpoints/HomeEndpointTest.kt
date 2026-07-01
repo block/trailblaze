@@ -66,7 +66,8 @@ class HomeEndpointTest {
       "expected a working per-session storyboard link",
     )
     // The old behavior rendered a permanently grayed-out `Storyboard —` span with no
-    // href when no pre-generated file existed. Regression guard for issue #172.
+    // href when no pre-generated file existed. Regression guard for
+    // https://github.com/block/trailblaze/issues/172.
     assertTrue("Storyboard —" !in body, "storyboard should never render as a dead label")
   }
 

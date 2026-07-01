@@ -44,7 +44,7 @@ internal object TimelineConstants {
    * Maximum dwell, in absolute session ms, that export autoplay spends on any single gap
    * between recorded events. Gaps longer than this (idle time while a session was recorded
    * interactively) are collapsed by [PlaybackTimeline] so export duration scales with step
-   * count rather than wall-clock — see issue #173. A 25-step session lands at roughly
+   * count rather than wall-clock — see https://github.com/block/trailblaze/issues/173. A 25-step session lands at roughly
    * `25 * 4s = 100s` of compressed timeline, ~25s at the default 4x export speed, instead
    * of mirroring a 100-minute recording. Only applied on the `?autoplay=1` export path;
    * interactive playback keeps real (speed-scaled) timing.

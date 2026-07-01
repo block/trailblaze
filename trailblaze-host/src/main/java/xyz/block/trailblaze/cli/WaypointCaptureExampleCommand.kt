@@ -17,12 +17,20 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointLoader
 import xyz.block.trailblaze.waypoint.WaypointMatcher
 import java.io.File
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 import java.util.concurrent.Callable
 
 /**
@@ -111,7 +119,30 @@ class WaypointCaptureExampleCommand : Callable<Int> {
   )
   var force: Boolean = false
 
+  @Option(
+    names = ["--device-classifier"],
+    paramLabel = "<classifier>",
+    description = [
+      "Device classifier (e.g. android-phone, android-tablet, ios-iphone, ios-ipad) to label " +
+        "this example, so one waypoint can keep a per-form-factor example SET. Written into the " +
+        "filename (`<base>.example.<classifier>.json` + screenshot) and the example's " +
+        "`deviceClassifier` field. Selectors stay per-platform (one waypoint file) — only the " +
+        "snapshot is classifier-keyed, since a phone and tablet share accessibility identity but " +
+        "render differently. If omitted, falls back to the source log's classifier if it records " +
+        "one, else writes the unlabeled default example (`<base>.example.json`).",
+    ],
+  )
+  var deviceClassifier: String? = null
+
   override fun call(): Int {
+    // Validate an explicit classifier up front: it must round-trip through the
+    // `<base>.example.<classifier>.json` filename without colliding with `.` / path separators.
+    deviceClassifier?.let {
+      if (!isValidClassifier(it)) {
+        Console.error("--device-classifier must match [A-Za-z0-9_-]+ (got '$it'). Use e.g. android-phone, ios-ipad.")
+        return TrailblazeExitCode.MISUSE.code
+      }
+    }
     // Resolve --target / --root to the effective waypoint root. See [resolveWaypointRoot] for
     // the precedence rules; in short, --root wins, then --target → workspace trailmap convention,
     // then a default with a "no target specified" warning.
@@ -162,8 +193,24 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     val sourceBytes = rawScreenshot.readBytes()
     val screenshotExt = ImageFormatDetector.detectFormat(sourceBytes).fileExtension
       .ifEmpty { rawScreenshot.extension.ifEmpty { "webp" } }
-    val exampleJsonFile = File(defFile.parentFile, "$baseName$EXAMPLE_JSON_SUFFIX")
-    val screenshotFile = File(defFile.parentFile, "$baseName.example.$screenshotExt")
+    // Session device context (resolution, OS/API, model, classifiers) read from the SessionStarted
+    // log in the source session dir. Drives both the classifier label and the embedded provenance.
+    val sessionDeviceInfo = sessionDeviceInfo(logFile)
+    // Per-device-classifier example set: explicit --device-classifier (validated above) wins, else a
+    // classifier the source step itself records, else the session's device classifiers (joined into
+    // the compound identity, e.g. `android-tablet`) so a normal/CI capture auto-labels instead of
+    // silently overwriting the unlabeled default. Falls through to null (unlabeled default) only when
+    // no classifier is discoverable at all.
+    val classifier = deviceClassifier
+      ?: stringField(sourceJson, "deviceClassifier")?.takeIf { isValidClassifier(it) }
+      ?: stringField(sourceJson, "device_classifier")?.takeIf { isValidClassifier(it) }
+      ?: sessionDeviceInfo?.classifiers
+        ?.takeIf { it.isNotEmpty() }
+        ?.joinToString("-") { it.classifier }
+        ?.takeIf { isValidClassifier(it) }
+    val infix = exampleInfix(classifier)
+    val exampleJsonFile = File(defFile.parentFile, "$baseName.$infix.json")
+    val screenshotFile = File(defFile.parentFile, "$baseName.$infix.$screenshotExt")
 
     if ((exampleJsonFile.exists() || screenshotFile.exists()) && !force) {
       Console.error("Example files already exist. Use --force to overwrite:")
@@ -180,6 +227,8 @@ class WaypointCaptureExampleCommand : Callable<Int> {
       sourceJson = sourceJson,
       sourceLogFile = logFile,
       screenshotFileName = screenshotFile.name,
+      deviceClassifier = classifier,
+      sessionDeviceInfo = sessionDeviceInfo,
     )
     exampleJsonFile.writeText(JSON_OUT.encodeToString(JsonElement.serializer(), exampleJson))
 
@@ -448,6 +497,13 @@ class WaypointCaptureExampleCommand : Callable<Int> {
    */
   private fun findRawScreenshot(logFile: File, sourceJson: JsonObject): File? {
     val referencedName = (sourceJson["screenshotFile"] as? JsonPrimitive)?.content ?: return null
+    // CI / device-farm logs reference the screenshot as a remote URL — the image bytes aren't in
+    // the downloaded log zip (only the view hierarchy is). Fetch the URL to a local temp file so
+    // the rest of the flow (format sniffing + copyTo) works unchanged. A remote screenshot has no
+    // annotated/raw-twin concept, so return it directly.
+    if (referencedName.startsWith("http://") || referencedName.startsWith("https://")) {
+      return downloadRemoteScreenshot(referencedName)
+    }
     val dir = logFile.parentFile ?: return null
     val referencedFile = File(dir, referencedName)
     if (!referencedFile.exists()) return null
@@ -485,6 +541,66 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     }
   }
 
+  /**
+   * Fetches a remote `screenshotFile` URL (CI / device-farm logs reference screenshots by URL
+   * rather than bundling the bytes) into a local temp file. Follows redirects (farm URLs 302 to a
+   * presigned object URL). Returns the temp file on a 2xx with non-empty body, else null after a
+   * `Console.error`. The caller sniffs the bytes for the real image format, so the temp file's
+   * extension is irrelevant.
+   */
+  private fun downloadRemoteScreenshot(url: String): File? {
+    return try {
+      val client = HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NORMAL)
+        .connectTimeout(Duration.ofSeconds(15))
+        .build()
+      val request = HttpRequest.newBuilder(URI.create(url))
+        .timeout(Duration.ofSeconds(30))
+        .GET()
+        .build()
+      // Stream the body with a hard size cap so a huge or hostile response can't OOM the process —
+      // screenshots are KBs; we read at most MAX_REMOTE_SCREENSHOT_BYTES+1 and reject anything larger.
+      // Then validate the bytes are actually an image (magic number) BEFORE committing a file: a 2xx
+      // that returns HTML (auth-redirect landing page, error page) would otherwise be written as a
+      // "screenshot", and the self-validation only checks the view tree, not the image bytes.
+      // ImageFormatDetector returns an empty fileExtension for anything that isn't png/jpeg/webp.
+      val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+      if (response.statusCode() !in 200..299) {
+        Console.error("Capture example: remote screenshot fetch returned HTTP ${response.statusCode()} ($url)")
+        return null
+      }
+      val bytes = response.body().use { it.readNBytes(MAX_REMOTE_SCREENSHOT_BYTES + 1) }
+      when {
+        bytes.isEmpty() -> {
+          Console.error("Capture example: remote screenshot fetch returned an empty body ($url)")
+          null
+        }
+        bytes.size > MAX_REMOTE_SCREENSHOT_BYTES -> {
+          Console.error(
+            "Capture example: remote screenshot exceeds the ${MAX_REMOTE_SCREENSHOT_BYTES / 1_000_000}MB cap " +
+              "— refusing it ($url)",
+          )
+          null
+        }
+        ImageFormatDetector.detectFormat(bytes).fileExtension.isEmpty() -> {
+          Console.error(
+            "Capture example: remote URL did not return a recognized image (${bytes.size} bytes, not " +
+              "png/jpeg/webp — likely an HTML error or auth-redirect page); refusing it ($url)",
+          )
+          null
+        }
+        else -> File.createTempFile("waypoint-example-", ".img").apply {
+          deleteOnExit()
+          writeBytes(bytes)
+        }
+      }
+    } catch (e: Exception) {
+      // Log the exception class too — distinguishes a timeout vs TLS vs DNS vs malformed URL.
+      Console.error("Capture example: failed to fetch remote screenshot ($url): ${e::class.simpleName}: ${e.message}")
+      null
+    }
+  }
+
   /** Extracts the trailing `_<ms>.<ext>` timestamp from a session screenshot filename. */
   private fun extractTimestampMs(name: String): Long? {
     val withoutExt = name.substringBeforeLast('.')
@@ -497,18 +613,54 @@ class WaypointCaptureExampleCommand : Callable<Int> {
     sourceJson: JsonObject,
     sourceLogFile: File,
     screenshotFileName: String,
+    deviceClassifier: String?,
+    sessionDeviceInfo: TrailblazeDeviceInfo?,
   ): JsonObject {
     return buildJsonObject {
       put("waypointId", def.id)
       put("capturedAt", Clock.System.now().toString())
       put("capturedFrom", sourceLogFile.toRelativePathString())
+      deviceClassifier?.let { put("deviceClassifier", it) }
       put("screenshotFile", screenshotFileName)
       sourceJson["deviceWidth"]?.let { put("deviceWidth", it) }
       sourceJson["deviceHeight"]?.let { put("deviceHeight", it) }
       sourceJson["trailblazeDevicePlatform"]?.let { put("trailblazeDevicePlatform", it) }
+      // Project the session's TrailblazeDeviceInfo (resolution, OS/API, model, density, locale,
+      // orientation, classifier lineage) verbatim from the session's SessionStarted log. This is a
+      // pure projection of what the logs already record — never queried from a device, never a new
+      // schema — so the example carries the full device context a WaypointExampleRef surfaces as
+      // provenance, and SessionLogScreenState reads its classifiers back when validating. Best-effort
+      // + non-load-bearing: omitted when the session dir has no readable device info.
+      sessionDeviceInfo?.let {
+        put(
+          "trailblazeDeviceInfo",
+          TrailblazeJson.defaultWithoutToolsInstance.encodeToJsonElement(TrailblazeDeviceInfo.serializer(), it),
+        )
+      }
       sourceJson["viewHierarchy"]?.let { put("viewHierarchy", it) }
       sourceJson["trailblazeNodeTree"]?.let { put("trailblazeNodeTree", it) }
     }
+  }
+
+  /**
+   * Reads the session's `TrailblazeDeviceInfo` from the SessionStarted log in [sourceLogFile]'s
+   * session directory. Returns null (best-effort) when the dir carries no readable session-started
+   * device info — it's used for provenance + classifier labelling, never load-bearing, so a missing
+   * value never fails the capture.
+   */
+  private fun sessionDeviceInfo(sourceLogFile: File): TrailblazeDeviceInfo? {
+    val dir = sourceLogFile.parentFile ?: return null
+    val statusLogs = dir.listFiles { f ->
+      f.isFile && f.name.endsWith("_TrailblazeSessionStatusChangeLog.json")
+    }?.sortedBy { it.name } ?: return null
+    val logs = statusLogs.mapNotNull { f ->
+      try {
+        TrailblazeJson.defaultWithoutToolsInstance.decodeFromString(TrailblazeLog.serializer(), f.readText())
+      } catch (_: Exception) {
+        null
+      }
+    }
+    return logs.getSessionStartedInfo()?.trailblazeDeviceInfo
   }
 
   /** Path relative to the JVM's cwd if possible, else absolute. */
@@ -523,9 +675,32 @@ class WaypointCaptureExampleCommand : Callable<Int> {
   }
 
   companion object {
+    /** Hard cap on a fetched remote screenshot — screenshots are KBs; anything larger is rejected. */
+    private const val MAX_REMOTE_SCREENSHOT_BYTES = 25_000_000
+
     private const val WAYPOINT_SUFFIX = ".waypoint.yaml"
-    private const val EXAMPLE_JSON_SUFFIX = ".example.json"
     private val IMAGE_EXTENSIONS = listOf(".webp", ".png", ".jpg", ".jpeg")
     private val JSON_OUT = TrailblazeJson.defaultWithoutToolsInstance
+
+    /**
+     * Filename infix for an example pair: `example` (unlabeled default) or `example.<classifier>`
+     * when keyed to a device classifier. Drives both `<base>.<infix>.json` and the screenshot
+     * sibling. Pure (no I/O) so it's directly unit-testable.
+     */
+    internal fun exampleInfix(classifier: String?): String =
+      if (classifier.isNullOrBlank()) "example" else "example.$classifier"
+
+    /**
+     * A device classifier may contain only `[A-Za-z0-9_-]` so it round-trips through the
+     * `<base>.example.<classifier>.json` filename without colliding with the `.` separators or a
+     * path separator. Pure; unit-testable.
+     */
+    internal fun isValidClassifier(classifier: String): Boolean =
+      classifier.isNotEmpty() && classifier.all {
+        it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
+      }
+
+    private fun stringField(obj: JsonObject, key: String): String? =
+      (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
   }
 }

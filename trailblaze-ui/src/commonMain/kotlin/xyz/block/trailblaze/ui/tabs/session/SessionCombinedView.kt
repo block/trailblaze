@@ -325,7 +325,7 @@ internal fun SessionCombinedView(
 
   // Export-only: a dwell-capped mapping from compressed playback time to absolute session
   // time, so `--gif/--webp/--video` autoplay scales with step count rather than the
-  // session's real wall-clock (issue #173). Null for interactive viewing — only the
+  // session's real wall-clock (https://github.com/block/trailblaze/issues/173). Null for interactive viewing — only the
   // `?autoplay=1` export path collapses idle gaps. Anchored on every log timestamp plus
   // the window bounds so meaningful intra-step activity still plays 1:1.
   // isExportAutoplayRequested() reads the immutable report URL (constant for the page's
@@ -1032,7 +1032,7 @@ private fun ColumnScope.VideoFramePanel(
       }
     }
     // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
-    // silently imply two far-apart steps were adjacent (see issue #173 review).
+    // silently imply two far-apart steps were adjacent (see the review on https://github.com/block/trailblaze/issues/173).
     exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
       CompressedGapBadge(gapMs)
     }
@@ -1186,7 +1186,7 @@ private fun ColumnScope.ScreenshotKeyframePanel(
       }
     }
     // Export only: caption a fast-forwarded idle gap so the compressed animation doesn't
-    // silently imply two far-apart steps were adjacent (see issue #173 review).
+    // silently imply two far-apart steps were adjacent (see the review on https://github.com/block/trailblaze/issues/173).
     exportPlaybackTimeline?.collapsedGapMsAt(currentTimestamp)?.let { gapMs ->
       CompressedGapBadge(gapMs)
     }

@@ -65,8 +65,6 @@ class WaypointTrailmapLoaderTest {
         "ok.waypoint.yaml",
         """
         id: "trailmap/ok"
-        required: []
-        forbidden: []
         """.trimIndent(),
       )
       // No example.json — that's a legitimate "no captured proof" state, not an error.
@@ -87,8 +85,6 @@ class WaypointTrailmapLoaderTest {
         "ok.waypoint.yaml",
         """
         id: "trailmap/ok"
-        required: []
-        forbidden: []
         """.trimIndent(),
       )
       writeFile("waypoints/ok.example.json", "{ this is not json }")
@@ -117,8 +113,6 @@ class WaypointTrailmapLoaderTest {
         "ok.waypoint.yaml",
         """
         id: "trailmap/ok"
-        required: []
-        forbidden: []
         """.trimIndent(),
       )
       // Valid JSON but missing the trailblazeNodeTree field.

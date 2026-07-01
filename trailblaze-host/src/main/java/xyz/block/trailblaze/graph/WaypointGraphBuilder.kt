@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.graph
 
 import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.waypoint.resolveFor
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
@@ -96,6 +98,12 @@ object WaypointGraphBuilder {
           else -> null
         }
       }
+      // v2 waypoints are classifier-keyed; resolve for the platform this node was discovered
+      // under (derived from the on-disk path) so the detail panel shows the selectors the
+      // matcher actually checks on that platform. Fall back to the first declared classifier
+      // block when the path carries no platform hint.
+      val resolveClassifier = platform ?: def.byClassifier.keys.firstOrNull()
+      val resolved = resolveClassifier?.let { def.resolveFor(TrailblazeDeviceClassifier(it)) }
       WaypointGraphNode(
         id = def.id,
         description = def.description,
@@ -103,11 +111,9 @@ object WaypointGraphBuilder {
         sourceLabel = item.sourceLabel,
         platform = platform,
         // Selector entries surface in the detail panel — they answer "how
-        // does the matcher know this screen is <id>?". Pulled straight from
-        // the WaypointDefinition so what the panel shows is exactly what the
-        // matcher checks.
-        required = def.required,
-        forbidden = def.forbidden,
+        // does the matcher know this screen is <id>?".
+        required = resolved?.required ?: emptyList(),
+        forbidden = resolved?.forbidden ?: emptyList(),
       )
     }
 

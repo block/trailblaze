@@ -6,7 +6,7 @@ import org.junit.Test
 /**
  * Covers the `MAX_PLAYBACK_WAIT_MS` override resolution shared by all three exporters
  * (`--gif`, `--webp`, `--video`) — the escape hatch the timeout warnings advertise.
- * `--video` previously ignored it and hit a hardcoded Playwright timeout (issue #173).
+ * `--video` previously ignored it and hit a hardcoded Playwright timeout (https://github.com/block/trailblaze/issues/173).
  */
 class PlaywrightReportCaptureTest {
 

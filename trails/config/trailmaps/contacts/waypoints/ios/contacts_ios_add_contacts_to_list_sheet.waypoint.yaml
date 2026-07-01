@@ -5,25 +5,26 @@ description: >
   shows "Add contacts to "<List Name>"" header (curly quotes), a "Done" button,
   selectable circles next to each contact name, a "Select Contacts" footer button, and
   the same alphabet sectioned roster as the top-level list.
-required:
-  - description: "Sheet Grabber affordance (modal sheet)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Sheet Grabber: Expanded"
-  - description: "Add-contacts-to-list header (regex matches any list name in curly quotes)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "^Add contacts to .+"
-  - description: "Select Contacts footer button"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Select Contacts"
-forbidden:
-  - description: "New Contact title — would mean we're on the new-contact draft sheet"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "New Contact"
-  - description: "InlineActionsHStack — only on contact-detail (no contact-detail in sheet)"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "InlineActionsHStack"
+ios:
+  required:
+    - description: "Sheet Grabber affordance (modal sheet)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Sheet Grabber: Expanded"
+    - description: "Add-contacts-to-list header (regex matches any list name in curly quotes)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "^Add contacts to .+"
+    - description: "Select Contacts footer button"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Select Contacts"
+  forbidden:
+    - description: "New Contact title — would mean we're on the new-contact draft sheet"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "New Contact"
+    - description: "InlineActionsHStack — only on contact-detail (no contact-detail in sheet)"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "InlineActionsHStack"

@@ -7,14 +7,13 @@ package xyz.block.trailblaze.toolcalls
  * @property surfaceToLlm Whether the LLM agent toolbox advertises this tool at session start.
  *   Set to false for implementation-detail tools that use unstable identifiers (e.g., node IDs)
  *   or that we don't want the LLM picking spontaneously (e.g., text-based selectors that are
- *   brittle when authored by the LLM but fine when authored explicitly by a scripted-tool
- *   author). Independent of [surfaceToScriptedTools] — a tool can be hidden from the LLM agent
- *   yet still emitted into per-trailmap `client.d.ts` for typed scripted-tool authoring.
- * @property surfaceToScriptedTools Whether per-trailmap `client.d.ts` codegen emits a typed binding
- *   for this tool (i.e. whether scripted-tool TS authors can call `client.tools.<name>(...)`).
- *   Set to false for tools that should remain invisible to scripted-tool authoring — typically
- *   internal dispatcher implementation details. Independent of [surfaceToLlm]: hiding a tool
- *   from the LLM agent does NOT imply hiding it from the scripted-tool surface.
+ *   brittle when authored by the LLM but fine when authored explicitly). Gating the LLM toolbox
+ *   does NOT gate the scripted-tool surface: a tool hidden from the LLM is still emitted into
+ *   per-trailmap `client.d.ts` so a TS scripted-tool author can call it. There is deliberately
+ *   no separate scripted-surface gate — every class-backed tool a trailmap resolves is typed and
+ *   callable (an expert author who reaches for an internal tool is allowed to, just as a
+ *   hand-edited trail may use any tool). The only flag that keeps a tool out of a trail recording
+ *   is [isRecordable].
  * @property isRecordable Whether this tool can appear in trail recordings. Set to false for
  *   wrapper tools that delegate to more precise tools.
  * @property requiresHost Whether this tool requires host-side execution (e.g., ADB commands,
@@ -40,7 +39,6 @@ package xyz.block.trailblaze.toolcalls
 annotation class TrailblazeToolClass(
   val name: String,
   val surfaceToLlm: Boolean = true,
-  val surfaceToScriptedTools: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,

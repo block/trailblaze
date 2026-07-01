@@ -4352,37 +4352,139 @@ public final class xyz/block/trailblaze/api/ViewHierarchyTreeNode$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class xyz/block/trailblaze/api/waypoint/WaypointDefinition {
-	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointDefinition$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+public final class xyz/block/trailblaze/api/waypoint/ResolvedWaypoint {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/util/List;
-	public final fun component4 ()Ljava/util/List;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
+	public final fun component2-jiR9cYw ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public final fun copy-b4j1lR8 (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
+	public static synthetic fun copy-b4j1lR8$default (Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClassifier-jiR9cYw ()Ljava/lang/String;
 	public final fun getDescription ()Ljava/lang/String;
+	public final fun getExample ()Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
 	public final fun getForbidden ()Ljava/util/List;
 	public final fun getId ()Ljava/lang/String;
 	public final fun getRequired ()Ljava/util/List;
+	public final fun getRoute ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public final synthetic class xyz/block/trailblaze/api/waypoint/WaypointDefinition$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/api/waypoint/WaypointDefinition$$serializer;
+public final class xyz/block/trailblaze/api/waypoint/ResolvedWaypointKt {
+	public static final fun resolveFor-MyJWTFs (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/util/List;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
+	public static synthetic fun resolveFor-MyJWTFs$default (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
+	public static final fun resolveForDevice (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/util/List;)Lxyz/block/trailblaze/api/waypoint/ResolvedWaypoint;
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointCondition {
+	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointCondition$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;ILxyz/block/trailblaze/api/TrailblazeNodeSelector;)V
+	public synthetic fun <init> (Ljava/lang/String;ILxyz/block/trailblaze/api/TrailblazeNodeSelector;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3 ()Lxyz/block/trailblaze/api/TrailblazeNodeSelector;
+	public final fun copy (Ljava/lang/String;ILxyz/block/trailblaze/api/TrailblazeNodeSelector;)Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;Ljava/lang/String;ILxyz/block/trailblaze/api/TrailblazeNodeSelector;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDescription ()Ljava/lang/String;
+	public final fun getMinCount ()I
+	public final fun getSelector ()Lxyz/block/trailblaze/api/TrailblazeNodeSelector;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/api/waypoint/WaypointCondition$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/api/waypoint/WaypointCondition$$serializer;
 	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
 	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointCondition;)V
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/api/waypoint/WaypointCondition$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointDefinition {
+	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointDefinition$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getByClassifier ()Ljava/util/Map;
+	public final fun getDescription ()Ljava/lang/String;
+	public final fun getId ()Ljava/lang/String;
+	public final fun getRoute ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class xyz/block/trailblaze/api/waypoint/WaypointDefinition$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointDefinitionSerializer : kotlinx/serialization/KSerializer {
+	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointDefinitionSerializer$Companion;
+	public static final field KEY_DESCRIPTION Ljava/lang/String;
+	public static final field KEY_ID Ljava/lang/String;
+	public static final field KEY_ROUTE Ljava/lang/String;
+	public fun <init> ()V
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;
+	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointDefinition;)V
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointDefinitionSerializer$Companion {
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointExampleRef {
+	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;)Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapturedAt ()Ljava/lang/String;
+	public final fun getDevice ()Lxyz/block/trailblaze/devices/TrailblazeDeviceInfo;
+	public final fun getFile ()Ljava/lang/String;
+	public final fun getSource ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class xyz/block/trailblaze/api/waypoint/WaypointExampleRef$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class xyz/block/trailblaze/api/waypoint/WaypointExampleRef$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -4409,45 +4511,46 @@ public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult {
 }
 
 public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired {
-	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)V
-	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)V
+	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun component2 ()I
-	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;
+	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;Lxyz/block/trailblaze/api/waypoint/WaypointCondition;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MatchedRequired;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun getMatchCount ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired {
-	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)V
-	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)V
+	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun component2 ()I
-	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;
+	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;Lxyz/block/trailblaze/api/waypoint/WaypointCondition;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$MissingRequired;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun getMatchCount ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden {
-	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)V
-	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public fun <init> (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)V
+	public final fun component1 ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun component2 ()I
-	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;
+	public final fun copy (Lxyz/block/trailblaze/api/waypoint/WaypointCondition;I)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;Lxyz/block/trailblaze/api/waypoint/WaypointCondition;IILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$PresentForbidden;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public final fun getEntry ()Lxyz/block/trailblaze/api/waypoint/WaypointCondition;
 	public final fun getMatchCount ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipReason : java/lang/Enum {
+	public static final field NO_CLASSIFIER_BLOCK Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipReason;
 	public static final field NO_NODE_TREE_IN_SCREEN_STATE Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipReason;
 	public static final field UNRESOLVED_TARGET_TEMPLATE Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
@@ -4455,35 +4558,38 @@ public final class xyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipRea
 	public static fun values ()[Lxyz/block/trailblaze/api/waypoint/WaypointMatchResult$SkipReason;
 }
 
-public final class xyz/block/trailblaze/api/waypoint/WaypointSelectorEntry {
-	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry$Companion;
-	public fun <init> (Lxyz/block/trailblaze/api/TrailblazeNodeSelector;ILjava/lang/String;)V
-	public synthetic fun <init> (Lxyz/block/trailblaze/api/TrailblazeNodeSelector;ILjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lxyz/block/trailblaze/api/TrailblazeNodeSelector;
-	public final fun component2 ()I
-	public final fun component3 ()Ljava/lang/String;
-	public final fun copy (Lxyz/block/trailblaze/api/TrailblazeNodeSelector;ILjava/lang/String;)Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;Lxyz/block/trailblaze/api/TrailblazeNodeSelector;ILjava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+public final class xyz/block/trailblaze/api/waypoint/WaypointVariant {
+	public static final field Companion Lxyz/block/trailblaze/api/waypoint/WaypointVariant$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;)Lxyz/block/trailblaze/api/waypoint/WaypointVariant;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/waypoint/WaypointVariant;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;ILjava/lang/Object;)Lxyz/block/trailblaze/api/waypoint/WaypointVariant;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDescription ()Ljava/lang/String;
-	public final fun getMinCount ()I
-	public final fun getSelector ()Lxyz/block/trailblaze/api/TrailblazeNodeSelector;
+	public final fun getExample ()Lxyz/block/trailblaze/api/waypoint/WaypointExampleRef;
+	public final fun getForbidden ()Ljava/util/List;
+	public final fun getRequired ()Ljava/util/List;
+	public final fun getRoute ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public final synthetic class xyz/block/trailblaze/api/waypoint/WaypointSelectorEntry$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry$$serializer;
+public final synthetic class xyz/block/trailblaze/api/waypoint/WaypointVariant$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lxyz/block/trailblaze/api/waypoint/WaypointVariant$$serializer;
 	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/api/waypoint/WaypointVariant;
 	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
 	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointSelectorEntry;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lxyz/block/trailblaze/api/waypoint/WaypointVariant;)V
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
-public final class xyz/block/trailblaze/api/waypoint/WaypointSelectorEntry$Companion {
+public final class xyz/block/trailblaze/api/waypoint/WaypointVariant$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -5528,6 +5634,16 @@ public final class xyz/block/trailblaze/devices/TrailblazeAndroidDeviceCategory 
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/devices/TrailblazeAndroidDeviceCategory;
 	public static fun values ()[Lxyz/block/trailblaze/devices/TrailblazeAndroidDeviceCategory;
+}
+
+public final class xyz/block/trailblaze/devices/TrailblazeClassifierLineage {
+	public static final field INSTANCE Lxyz/block/trailblaze/devices/TrailblazeClassifierLineage;
+	public final fun chainFor-rGW_nls (Ljava/lang/String;Ljava/util/Map;)Ljava/util/List;
+	public static synthetic fun chainFor-rGW_nls$default (Lxyz/block/trailblaze/devices/TrailblazeClassifierLineage;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Ljava/util/List;
+	public final fun getParentOverrides ()Ljava/util/Map;
+	public final fun registerParentOverride (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun resolutionChain (Ljava/util/List;Ljava/util/Map;)Ljava/util/List;
+	public static synthetic fun resolutionChain$default (Lxyz/block/trailblaze/devices/TrailblazeClassifierLineage;Ljava/util/List;Ljava/util/Map;ILjava/lang/Object;)Ljava/util/List;
 }
 
 public final class xyz/block/trailblaze/devices/TrailblazeConnectedDeviceSummary {
@@ -11409,7 +11525,6 @@ public abstract interface annotation class xyz/block/trailblaze/toolcalls/Trailb
 	public abstract fun name ()Ljava/lang/String;
 	public abstract fun requiresHost ()Z
 	public abstract fun surfaceToLlm ()Z
-	public abstract fun surfaceToScriptedTools ()Z
 	public abstract fun trailheadTo ()Ljava/lang/String;
 }
 

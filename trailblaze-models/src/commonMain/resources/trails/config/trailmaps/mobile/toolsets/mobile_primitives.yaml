@@ -28,7 +28,7 @@
 # `android_framework` (listInstalledApps) assignments are intentionally untouched in this
 # PR — future PRs can migrate consumers once the downstream migration is ready. See PR #3435.
 id: mobile_primitives
-description: "Cross-platform mobile composition primitives (clearAppData, listInstalledApps, paste/setClipboard). LLM-facing entries (paste/setClipboard, listInstalledApps) appear in the agent catalog; the surfaceToLlm=false entry (clearAppData) is dispatch-only via `client.callTool(...)`."
+description: "Cross-platform mobile composition primitives (clearAppData, listInstalledApps[Detailed], paste/setClipboard). LLM-facing entries (paste/setClipboard, listInstalledApps) appear in the agent catalog; the surfaceToLlm=false entries (clearAppData, listInstalledAppsDetailed) are dispatch-only via `client.callTool(...)`."
 always_enabled: true
 drivers:
   - android-ondevice-instrumentation
@@ -37,5 +37,6 @@ drivers:
 tools:
   - mobile_clearAppData
   - mobile_listInstalledApps
+  - mobile_listInstalledAppsDetailed
   - mobile_pasteClipboard
   - mobile_setClipboard

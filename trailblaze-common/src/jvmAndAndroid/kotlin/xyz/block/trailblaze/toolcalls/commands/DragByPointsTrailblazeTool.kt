@@ -26,7 +26,6 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass(
   name = "dragByPoints",
   surfaceToLlm = false,
-  surfaceToScriptedTools = false,
 )
 @LLMDescription("Drags between absolute device coordinates. Internal tool only.")
 data class DragByPointsTrailblazeTool(

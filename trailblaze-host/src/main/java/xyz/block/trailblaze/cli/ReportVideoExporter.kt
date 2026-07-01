@@ -113,7 +113,7 @@ object ReportVideoExporter {
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
 
         Console.log("[ReportVideoExporter] waiting for timeline playback to finish...")
-        // Honors the same MAX_PLAYBACK_WAIT_MS override as the GIF/WebP path (issue #173).
+        // Honors the same MAX_PLAYBACK_WAIT_MS override as the GIF/WebP path (https://github.com/block/trailblaze/issues/173).
         val waitMs = PlaywrightReportCapture.maxPlaybackWaitMs
         try {
           page.waitForFunction(

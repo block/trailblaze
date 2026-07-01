@@ -207,7 +207,7 @@ class WaypointLocateCommand : Callable<Int> {
       for (r in nearMisses) {
         Console.log("  ~ ${r.definitionId}")
         for (miss in r.missingRequired) {
-          val descr = miss.entry.description ?: miss.entry.selector.description()
+          val descr = miss.entry.description ?: miss.entry.selector?.description() ?: "(condition)"
           Console.log("      missing: $descr (got ${miss.matchCount} matches, need ${miss.entry.minCount})")
         }
       }

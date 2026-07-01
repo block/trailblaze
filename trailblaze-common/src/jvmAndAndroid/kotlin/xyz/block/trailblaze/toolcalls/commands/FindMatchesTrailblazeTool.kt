@@ -58,7 +58,6 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass(
   name = "findMatches",
   surfaceToLlm = false,
-  surfaceToScriptedTools = true,
   isRecordable = false,
   isVerification = false,
 )

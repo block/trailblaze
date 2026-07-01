@@ -233,9 +233,15 @@ class DaemonScriptedToolBundler(
     // happily decode escape symlinks the runtime loader would refuse to read, surfacing as
     // load-vs-daemon drift at session start.
     val canonicalTrailmapDir = baseDir.canonicalFile.toPath()
-    val candidateFiles = toolsDir.listFiles()
-      .orEmpty()
-      .filter { it.isFile && it.name.endsWith(".yaml") }
+    // Recursive so descriptors organized into `tools/<subdir>/` are discovered (matching the
+    // analyzer + the sister impls). `Files.walk` does not follow symlinks by default, so it can't
+    // wedge on a cycle; the per-file canonical-containment check below still rejects escapes.
+    // SISTER-IMPL-TAG: trailmap-scripted-tool-discovery.
+    val candidateFiles = java.nio.file.Files.walk(toolsDir.toPath()).use { stream ->
+      stream.filter { java.nio.file.Files.isRegularFile(it) }.map { it.toFile() }
+        .collect(java.util.stream.Collectors.toList())
+    }
+      .filter { it.name.endsWith(".yaml") }
       .filter { file -> OPERATIONAL_TOOL_YAML_SUFFIXES.none { file.name.endsWith(it) } }
       .filter { file ->
         // Translate IOException from canonicalize (symlink loop, FS quirk) into a typed

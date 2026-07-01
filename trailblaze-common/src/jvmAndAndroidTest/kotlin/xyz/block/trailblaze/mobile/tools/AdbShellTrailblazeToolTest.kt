@@ -378,6 +378,55 @@ class AdbShellTrailblazeToolTest {
     assertThat(wrapped).isEqualTo("'am' 'force-stop' 'com.example'; echo __TBZ_ADBSHELL_EXIT__\$?")
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // joinCommandRawArgv: the no-shell (on-device) render. Raw space-join, NO escaping.
+  // This is the path taken when AndroidDeviceCommandExecutor.usesShellInterpreter is
+  // false (UiAutomation → Runtime.exec). These tests pin the exact regression: shell-
+  // escaping `su` made the program name the literal `'su'`, which the device could not
+  // exec — so the raw render must NOT quote.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `joinCommandRawArgv joins tokens with spaces and does not quote`() {
+    assertThat(AdbShellTrailblazeTool.joinCommandRawArgv(listOf("pm", "list", "packages")))
+      .isEqualTo("pm list packages")
+  }
+
+  @Test
+  fun `joinCommandRawArgv keeps su as the bare program name for a privileged package-disable`() {
+    // Regression anchor. On the shell-less on-device transport, Runtime.exec execs the first
+    // whitespace-delimited token as the program. The raw render must leave `su` unquoted; the
+    // shell-escaped render (used only on the host transport) would produce `'su'`, which the
+    // device tried to exec literally → "Cannot run program \"'su'\"" → the launch hung.
+    // (Generic placeholder package id — the real authenticator is named in the app-specific tool.)
+    val command = listOf("su", "root", "pm", "disable", "com.vendor.deviceauth")
+
+    assertThat(AdbShellTrailblazeTool.joinCommandRawArgv(command))
+      .isEqualTo("su root pm disable com.vendor.deviceauth")
+    // Contrast: the shell render quotes every token — correct for `sh -c`, fatal for Runtime.exec.
+    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(command))
+      .isEqualTo("'su' 'root' 'pm' 'disable' 'com.vendor.deviceauth'")
+  }
+
+  @Test
+  fun `whitespaceBearingTokens flags only the tokens that cannot survive the no-shell transport`() {
+    // Clean argv → empty (every element is one token Runtime.exec won't re-split).
+    assertThat(AdbShellTrailblazeTool.whitespaceBearingTokens(listOf("pm", "disable", "com.x")))
+      .isEqualTo(emptyList())
+    // An element with an embedded space (or tab) is the failure mode: Runtime.exec would re-split
+    // it into two tokens with no shell. The on-device guard rejects these for both the runAs and
+    // non-runAs branches so they fail loud identically instead of silently mis-executing.
+    assertThat(AdbShellTrailblazeTool.whitespaceBearingTokens(listOf("pm", "list packages", "x\ty")))
+      .isEqualTo(listOf("list packages", "x\ty"))
+  }
+
+  @Test
+  fun `on-device shell timeout is a positive bound well under the session inactivity watchdog`() {
+    // The watchdog abandons a silent session at ~13 min; the bound must fail fast before that so a
+    // wedged exec surfaces as an error instead of a multi-minute hang.
+    assertThat(AdbShellTrailblazeTool.ON_DEVICE_SHELL_TIMEOUT_MS).isEqualTo(60_000L)
+  }
+
   @Test
   fun `round-trips command through YAML encode-then-decode`() {
     // Pins that building the tool in code, encoding to YAML, and decoding back yields

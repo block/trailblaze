@@ -10,11 +10,6 @@ package xyz.block.trailblaze.bundle
  * Only the deviating field(s) produce a tag line; the codegen never emits affirmative
  * `@trailblazeSurfacedToLlm` / `@trailblazeRecordable` noise.
  *
- * **`surfaceToScriptedTools` deliberately omitted.** Anything that reaches the codegen has
- * `surfaceToScriptedTools = true` by definition (the surface gate runs before the descriptor
- * enters `WorkspaceClientDtsGenerator`), so a field for it would always be `true` and carry
- * no informational value.
- *
  * **`isVerification` deliberately omitted.** The annotation field exists for three
  * framework-internal consumers — the verify-mode dispatch gate in `StepToolSet`, the
  * recording-dedup walk in `TrailblazeRecordingGenerator`, and the mirrored field on

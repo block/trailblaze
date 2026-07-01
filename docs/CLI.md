@@ -742,6 +742,7 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 | `--root` | Explicit root directory to scan for *.waypoint.yaml files. Overrides --target. (Convention: ./trails) | - |
 | `--logs-dir` | Override the directory containing per-session log dirs. Defaults to the running daemon's resolved logsDir. | - |
 | `--force` | Overwrite an existing example pair without prompting. | - |
+| `--device-classifier` | Device classifier (e.g. android-phone, android-tablet, ios-iphone, ios-ipad) to label this example, so one waypoint can keep a per-form-factor example SET. Written into the filename (`<base>.example.<classifier>.json` + screenshot) and the example's `deviceClassifier` field. Selectors stay per-platform (one waypoint file) — only the snapshot is classifier-keyed, since a phone and tablet share accessibility identity but render differently. If omitted, falls back to the source log's classifier if it records one, else writes the unlabeled default example (`<base>.example.json`). | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

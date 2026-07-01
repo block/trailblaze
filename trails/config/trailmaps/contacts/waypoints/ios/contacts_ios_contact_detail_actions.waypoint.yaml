@@ -8,29 +8,30 @@ description: >
   these specific action affordances are the substantively new available actions —
   even though they live on the same screen, they are below the fold on first load and
   only become reachable after the user scrolls down.
-required:
-  - description: "Send Message action row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Send Message"
-        resourceIdRegex: "ContactCardActionsAfterProperties"
-  - description: "Share Contact action row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Share Contact"
-        resourceIdRegex: "ContactCardActionsAfterProperties"
-  - description: "Add to Favorites action row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Add to Favorites"
-        resourceIdRegex: "ContactCardActionsAfterProperties"
-  - description: "Block Contact footer row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Block Contact"
-        resourceIdRegex: "ContactCardActionsFooter"
-forbidden:
-  - description: "close button — would mean we're in the edit form, not detail"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "close"
+ios:
+  required:
+    - description: "Send Message action row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Send Message"
+          resourceIdRegex: "ContactCardActionsAfterProperties"
+    - description: "Share Contact action row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Share Contact"
+          resourceIdRegex: "ContactCardActionsAfterProperties"
+    - description: "Add to Favorites action row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Add to Favorites"
+          resourceIdRegex: "ContactCardActionsAfterProperties"
+    - description: "Block Contact footer row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Block Contact"
+          resourceIdRegex: "ContactCardActionsFooter"
+  forbidden:
+    - description: "close button — would mean we're in the edit form, not detail"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "close"

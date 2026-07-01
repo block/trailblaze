@@ -5,21 +5,22 @@ description: >
   toolbar (Paste / AutoFill / Back) sits above the keys, and the existing Lists view
   is visible above the dimmed scrim. Distinct from contacts/ios/add-list-modal (no
   keyboard up / no input toolbar).
-required:
-  - description: "List Name input field"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "List Name"
-  - description: "Lists header (the editor overlays Lists)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Lists"
-  - description: "Keyboard accessory: AutoFill"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "AutoFill"
-forbidden:
-  - description: "Sheet Grabber — would mean we're on a different sheet"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Sheet Grabber: Expanded"
+ios:
+  required:
+    - description: "List Name input field"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "List Name"
+    - description: "Lists header (the editor overlays Lists)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Lists"
+    - description: "Keyboard accessory: AutoFill"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "AutoFill"
+  forbidden:
+    - description: "Sheet Grabber — would mean we're on a different sheet"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Sheet Grabber: Expanded"

@@ -4,13 +4,14 @@ description: >
   Contact Photo & Poster row's "Forward" affordance to expand the avatar to full-screen
   poster preview. Distinct from contacts/ios/avatar-onboarding (no Choose-an-Avatar
   picker; this is a preview, not a picker).
-required:
-  - description: "SharedProfileChevronImage row resourceId on detail"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "SharedProfileAvatarView-SharedProfileTitleText-SharedProfileChevronImage"
-forbidden:
-  - description: "OnboardingMainVStack — would mean we're on avatar-onboarding"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "OnboardingMainVStack"
+ios:
+  required:
+    - description: "SharedProfileChevronImage row resourceId on detail"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "SharedProfileAvatarView-SharedProfileTitleText-SharedProfileChevronImage"
+  forbidden:
+    - description: "OnboardingMainVStack — would mean we're on avatar-onboarding"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "OnboardingMainVStack"

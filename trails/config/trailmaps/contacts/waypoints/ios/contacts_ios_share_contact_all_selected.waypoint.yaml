@@ -5,17 +5,18 @@ description: >
   contacts/ios/share-contact-fields (default selective state) because the bulk-selection
   toggle now reads "Deselect All Fields" (different action label, different available
   action: deselect-all).
-required:
-  - description: "Share Contact header"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Share Contact"
-  - description: "Deselect All Fields toggle (only present when everything is selected)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Deselect All Fields"
-forbidden:
-  - description: "Select All Fields — would mean not all are selected"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Select All Fields"
+ios:
+  required:
+    - description: "Share Contact header"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Share Contact"
+    - description: "Deselect All Fields toggle (only present when everything is selected)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Deselect All Fields"
+  forbidden:
+    - description: "Select All Fields — would mean not all are selected"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Select All Fields"

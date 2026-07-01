@@ -119,10 +119,111 @@ internal fun handleGrantRuntimePermissionOutcome(
   }
 }
 
+/**
+ * Pure parser behind the host-JVM `listInstalledAppsDetailed`: turns the output of a single
+ * `adb shell dumpsys package packages` into a sorted [InstalledApp] list.
+ *
+ * One call yields almost the whole record — `isSystemApp` (the `SYSTEM` token in the package
+ * `flags`/`pkgFlags` line), [InstalledApp.version] (`versionName`), [InstalledApp.buildNumber]
+ * (`versionCode`), and [InstalledApp.installPath] (`codePath`). [InstalledApp.label] stays `null`:
+ * dumpsys doesn't carry the human display name (that needs resource resolution, i.e. the on-device
+ * `PackageManager` path or `aapt`).
+ *
+ * This is the same `dumpsys package` format [AndroidHostAdbUtils.getAppVersionInfo] already parses
+ * for a single package's version — this just scans every `Package [<id>] (...)` block in one pass.
+ * Each field is captured at first occurrence within a block (the package-level values precede the
+ * per-user sub-block), matching `getAppVersionInfo`'s codePath-anchored read. Result is sorted by
+ * id for a deterministic, diffable inventory.
+ *
+ * Lives at file scope (not inside an `actual`) so the host parsing is unit-testable without a
+ * device, mirroring [validateRunAsArgs].
+ */
+internal fun parseInstalledAppsFromDumpsys(dumpsysOutput: String): List<InstalledApp> {
+  val headerRegex = Regex("""^\s*Package \[([^]]+)]""")
+  val codePathRegex = Regex("""^\s*codePath=(.+)$""")
+  val versionCodeRegex = Regex("""versionCode=(\d+)""")
+  val versionNameRegex = Regex("""^\s*versionName=(.+)$""")
+  val flagsRegex = Regex("""^\s*(?:pkgFlags|flags)=\[(.*)]""")
+  // Standalone SYSTEM token. `\b` won't match inside UPDATED_SYSTEM_APP (the underscore is a word
+  // char, so there's no boundary), so this is FLAG_SYSTEM specifically, not any *_SYSTEM_* flag.
+  val systemTokenRegex = Regex("""\bSYSTEM\b""")
+
+  val apps = mutableListOf<InstalledApp>()
+  var appId: String? = null
+  var codePath: String? = null
+  var versionName: String? = null
+  var versionCode: String? = null
+  var isSystem = false
+
+  fun flush() {
+    val id = appId ?: return
+    apps += InstalledApp(
+      appId = id,
+      isSystemApp = isSystem,
+      // dumpsys carries no human display name — that's the on-device PackageManager path's job.
+      label = null,
+      version = versionName,
+      buildNumber = versionCode,
+      installPath = codePath,
+    )
+  }
+
+  for (line in dumpsysOutput.lines()) {
+    val header = headerRegex.find(line)
+    if (header != null) {
+      flush()
+      appId = header.groupValues[1]
+      codePath = null
+      versionName = null
+      versionCode = null
+      isSystem = false
+      continue
+    }
+    if (appId == null) continue
+    // dumpsys prints absent values as the literal `null` (e.g. `versionName=null` for an app with
+    // no version) — normalize that to an actual null so we omit the field rather than emit "null".
+    fun String.orNullLiteral(): String? = trim().takeIf { it.isNotEmpty() && it != "null" }
+    if (codePath == null) codePathRegex.find(line)?.let { codePath = it.groupValues[1].orNullLiteral() }
+    if (versionCode == null) versionCodeRegex.find(line)?.let { versionCode = it.groupValues[1] }
+    if (versionName == null) versionNameRegex.find(line)?.let { versionName = it.groupValues[1].orNullLiteral() }
+    if (!isSystem) {
+      flagsRegex.find(line)?.let { isSystem = systemTokenRegex.containsMatchIn(it.groupValues[1]) }
+    }
+  }
+  flush()
+  return apps.sortedBy { it.appId }
+}
+
 expect class AndroidDeviceCommandExecutor(
   deviceId: TrailblazeDeviceId,
 ) {
   val deviceId: TrailblazeDeviceId
+
+  /**
+   * Whether [executeShellCommand] runs its argument through a POSIX shell interpreter
+   * (`sh -c`) on the device side.
+   *
+   * This differs by transport, and it is the property a caller must consult before deciding
+   * whether to shell-quote/escape a command or wrap it with shell syntax (pipes, `;`, `$?`,
+   * globbing):
+   *
+   *  - **Host (JVM actual): `true`.** Commands travel over the dadb wire to `adbd`, which runs
+   *    them via `sh -c`. Shell metacharacters and quoting are honored, so escaping is required
+   *    for safety and an appended `$?` exit sentinel can recover the exit code.
+   *  - **On-device (Android actual): `false`.** [executeShellCommand] routes through
+   *    [android.app.UiAutomationConnection.executeShellCommand], which hands the string to
+   *    [Runtime.exec] — it splits on whitespace and execs the tokens **directly, with no shell
+   *    interpreter**. Shell-quoting a token (e.g. `'su'`) embeds the quotes as literal characters
+   *    in the program name (→ `Cannot run program "'su'"`), and a `$?` exit sentinel is exec'd
+   *    as literal arguments rather than evaluated. On this transport, callers must pass argv
+   *    tokens unescaped via [executeShellCommandArgs] and cannot rely on a shell for exit codes.
+   *
+   * Surfacing this as a property (rather than baking the assumption into each caller) keeps the
+   * transport contract explicit: [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] reads
+   * it to pick the shell-string path vs. the raw-argv path so the same tool works correctly on
+   * both the daemon JVM and the on-device QuickJS dispatch.
+   */
+  val usesShellInterpreter: Boolean
 
   /**
    * Sends a broadcast intent to the Android device.
@@ -358,6 +459,31 @@ expect class AndroidDeviceCommandExecutor(
    * Return the installed apps on a device
    */
   fun listInstalledApps(): List<String>
+
+  /**
+   * Returns the installed apps on a device with structured per-app metadata, the richer
+   * counterpart to [listInstalledApps] (which returns ids only).
+   *
+   * Field coverage by actual:
+   * - **Host JVM** (adb): a single `dumpsys package packages` call yields `isSystemApp`, version
+   *   ([InstalledApp.version]), build number ([InstalledApp.buildNumber]), and install path
+   *   ([InstalledApp.installPath]) — see [parseInstalledAppsFromDumpsys]. Only [InstalledApp.label]
+   *   is `null` here: adb has no cheap label lookup (it would require `aapt dump badging` on a
+   *   pulled APK). [includeLabelsAndVersions] has no effect on host — dumpsys returns the versions
+   *   regardless, and the label is unavailable either way.
+   * - **On-device** (`PackageManager`): a single `getInstalledPackages(0)` call carries the version
+   *   and build number plus each app's `applicationInfo` (`FLAG_SYSTEM` and `sourceDir`), so
+   *   `isSystemApp` / `installPath` are always populated and there's no per-app Binder fan-out. When
+   *   [includeLabelsAndVersions] is `true` it additionally resolves the display name via
+   *   `getApplicationLabel` (a local resource read, the one genuinely per-app cost).
+   *
+   * @param includeLabelsAndVersions when `true`, the on-device actual additionally resolves
+   *   [InstalledApp.label] / [InstalledApp.version] / [InstalledApp.buildNumber] (the per-app
+   *   lookups). When `false`, on-device returns only [InstalledApp.appId] / [InstalledApp.isSystemApp]
+   *   / [InstalledApp.installPath] (the free fields). The host actual ignores it (dumpsys is one
+   *   all-in-one call).
+   */
+  fun listInstalledAppsDetailed(includeLabelsAndVersions: Boolean): List<InstalledApp>
 
   /**
    * Disables a package for the current user via `pm disable-user`.

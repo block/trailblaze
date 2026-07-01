@@ -7,8 +7,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.util.Console
@@ -318,6 +320,36 @@ object SessionSegmentExtractor {
     val stepsWithAmbiguousMatch: Int,
   )
 
+  /**
+   * Resolve [waypoint] for the session's [classifierChain] and match against [tree]. When the
+   * session reports no device classifiers (e.g. an ad-hoc corpus zip with no SessionStarted device
+   * info), fall back to trying each classifier block the waypoint declares — wrong-platform
+   * selectors harmlessly don't match a tree from another driver, so the first block that matches is
+   * the right one.
+   */
+  private fun matchAgainstSession(
+    waypoint: WaypointDefinition,
+    classifierChain: List<xyz.block.trailblaze.devices.TrailblazeDeviceClassifier>,
+    tree: xyz.block.trailblaze.api.TrailblazeNode,
+    target: xyz.block.trailblaze.api.TargetTemplateContext?,
+  ): xyz.block.trailblaze.api.waypoint.WaypointMatchResult {
+    if (classifierChain.isNotEmpty()) {
+      return WaypointMatcher.match(waypoint, classifierChain, tree, target)
+    }
+    var last = WaypointMatcher.match(waypoint, classifierChain, tree, target)
+    for (key in waypoint.byClassifier.keys) {
+      val r = WaypointMatcher.match(
+        waypoint,
+        xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(key),
+        tree,
+        target,
+      )
+      if (r.matched) return r
+      last = r
+    }
+    return last
+  }
+
   private fun collectMatchedSteps(
     logs: List<TrailblazeLog>,
     waypoints: List<WaypointDefinition>,
@@ -327,6 +359,12 @@ object SessionSegmentExtractor {
     var requestStepIndex = 0
     var stepsWithNodeTree = 0
     var stepsWithAmbiguousMatch = 0
+    // v2 waypoints are classifier-keyed, so resolve each against the session's device classifier
+    // chain (derived once from the SessionStarted device info). The LlmRequestLog itself carries
+    // no device classifier, but the session does.
+    val classifierChain = TrailblazeClassifierLineage.resolutionChain(
+      logs.getSessionStartedInfo()?.trailblazeDeviceInfo?.classifiers.orEmpty(),
+    )
     for ((logIndex, log) in logs.withIndex()) {
       if (log !is TrailblazeLog.TrailblazeLlmRequestLog) continue
       requestStepIndex += 1
@@ -344,7 +382,7 @@ object SessionSegmentExtractor {
       var firstMatchedId: String? = null
       var ambiguous = false
       for (waypoint in waypoints) {
-        val result = WaypointMatcher.match(waypoint, tree, target)
+        val result = matchAgainstSession(waypoint, classifierChain, tree, target)
         if (!result.matched) continue
         if (firstMatchedId != null) {
           ambiguous = true

@@ -4,6 +4,8 @@ import dadb.AdbShellPacket
 import dadb.Dadb
 import dadb.adbserver.AdbServer
 import xyz.block.trailblaze.android.tools.shellEscape
+import xyz.block.trailblaze.device.InstalledApp
+import xyz.block.trailblaze.device.parseInstalledAppsFromDumpsys
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
@@ -936,6 +938,29 @@ object AndroidHostAdbUtils {
       .filter { it.isNotBlank() && it.startsWith("package:") }
       .map { it.substringAfter("package:") }
   } catch (e: Exception) {
+    emptyList()
+  }
+
+  /**
+   * Host-JVM (adb) backing for [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.listInstalledAppsDetailed].
+   *
+   * One `dumpsys package packages` call yields almost the whole record — `isSystemApp`, version,
+   * build number (`versionCode`), and install path (`codePath`) — which the pure
+   * [xyz.block.trailblaze.device.parseInstalledAppsFromDumpsys] extracts. A single round-trip, no
+   * per-app fan-out, and faster than the two `pm list packages -s`/`-3` calls it replaced. (We
+   * already trust this `dumpsys package` format: [getAppVersionInfo] parses it per-app for version.)
+   *
+   * Only the human display name is left `null`: dumpsys doesn't carry it (resolving a label needs
+   * `aapt dump badging` on a pulled APK, or the on-device `PackageManager` path). Returns an empty
+   * list on adb failure, matching [listInstalledPackages].
+   */
+  fun listInstalledAppsDetailed(deviceId: TrailblazeDeviceId): List<InstalledApp> = try {
+    val output = execAdbShellCommand(deviceId, listOf("dumpsys", "package", "packages"))
+    parseInstalledAppsFromDumpsys(output)
+  } catch (e: Exception) {
+    // Log the full stack trace, not just the message: this path swallows the failure and returns an
+    // empty list (parity with listInstalledPackages), so the trace is the only prod breadcrumb.
+    Console.log("Failed to list installed apps with detail: ${e.message}\n${e.stackTraceToString()}")
     emptyList()
   }
 

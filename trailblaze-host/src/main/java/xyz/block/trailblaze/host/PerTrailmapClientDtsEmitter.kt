@@ -68,9 +68,8 @@ object PerTrailmapClientDtsEmitter {
    *
    * [catalog] defaults to the classpath-scanned [TrailblazeToolSetCatalog.defaultEntries]
    * — production callers should rely on the default. Test seam: tests pass a synthetic
-   * catalog so they can pin tool-class-level filter behavior (e.g.
-   * `surfaceToScriptedTools = false` exclusion) without having to add real tools to the
-   * default catalog or rebuild it from disk.
+   * catalog so they can pin tool-class-level resolution behavior without having to add real
+   * tools to the default catalog or rebuild it from disk.
    *
    * **Blocking semantics.** Internally drives [ScriptedToolDefinitionAnalyzer.analyze]
    * via `runBlocking` on the calling thread (the analyzer is `suspend` for symmetry with
@@ -303,9 +302,9 @@ object PerTrailmapClientDtsEmitter {
    * Walks [trailmap]'s OWN per-platform `tool_sets:` declarations (top-level [platforms] on
    * library trailmaps; [target].platforms on target trailmaps) and resolves each toolset name
    * through [TrailblazeToolSetCatalog.resolve]. Returns one [ToolDescriptor] per class-backed
-   * tool reachable from the union whose `@TrailblazeToolClass(surfaceToScriptedTools = true)`
-   * — the scripted-tool surface gate is independent of the LLM agent toolbox gate (see
-   * [TrailblazeToolClass.surfaceToLlm] vs [TrailblazeToolClass.surfaceToScriptedTools]).
+   * tool reachable from the union. Every class-backed tool is surfaced to scripted-tool authors
+   * — there is no scripted-surface visibility gate; the LLM agent toolbox gate
+   * ([TrailblazeToolClass.surfaceToLlm]) is separate and does not affect this codegen.
    *
    * Trailmap-local — never reads dependencies'. The runtime registry (transitive union) is a
    * separate layer; the typed surface deliberately reflects ONLY what an author wrote into

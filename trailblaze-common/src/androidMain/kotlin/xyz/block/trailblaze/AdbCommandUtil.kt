@@ -1,10 +1,12 @@
 package xyz.block.trailblaze
 
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
+import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
 
@@ -58,6 +60,62 @@ object AdbCommandUtil {
     val installedPackages = packageManager.getInstalledApplications(0)
     installedPackages.map { it.packageName }
   }
+
+  /**
+   * On-device backing for
+   * [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.listInstalledAppsDetailed].
+   *
+   * Uses a **single** `getInstalledPackages(0)` call: each `PackageInfo` already carries the
+   * version (`versionName`), build number (`versionCode`), and its `applicationInfo` (for
+   * `FLAG_SYSTEM` → [InstalledApp.isSystemApp] and `sourceDir` → [InstalledApp.installPath]). That
+   * avoids an O(N) `getPackageInfo` Binder fan-out (one call for the whole inventory). The display
+   * name still resolves per app via `getApplicationLabel`, but that reads resources locally rather
+   * than crossing the Binder, and it's only done when [includeLabelsAndVersions] is `true`. All
+   * reads are defensive — a single app whose resources fail to resolve leaves that field `null`
+   * instead of aborting the whole inventory.
+   *
+   * `isSystemApp` also covers `FLAG_UPDATED_SYSTEM_APP`, so a system app that received a Play-Store
+   * update still classifies as system.
+   */
+  fun listInstalledAppsDetailed(includeLabelsAndVersions: Boolean): List<InstalledApp> = withInstrumentation {
+    val packageManager = context.packageManager
+    packageManager.getInstalledPackages(0).map { packageInfo ->
+      val appInfo = packageInfo.applicationInfo
+      val isSystem = appInfo != null && (
+        (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+          (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        )
+      val installPath = appInfo?.sourceDir?.takeIf { it.isNotBlank() }
+      val label = if (includeLabelsAndVersions && appInfo != null) {
+        runCatching { packageManager.getApplicationLabel(appInfo).toString() }
+          .getOrNull()
+          ?.takeIf { it.isNotBlank() }
+      } else {
+        null
+      }
+      InstalledApp(
+        appId = packageInfo.packageName,
+        isSystemApp = isSystem,
+        label = label,
+        version = if (includeLabelsAndVersions) packageInfo.versionName else null,
+        buildNumber = if (includeLabelsAndVersions) longVersionCode(packageInfo).toString() else null,
+        installPath = installPath,
+      )
+    }
+  }
+
+  /**
+   * Reads the package's version code as a [Long], using the API 28+ `longVersionCode` accessor where
+   * available and falling back to the deprecated `versionCode` on older devices. (Backs
+   * [InstalledApp.buildNumber] on the on-device path.)
+   */
+  @Suppress("DEPRECATION")
+  private fun longVersionCode(packageInfo: android.content.pm.PackageInfo): Long =
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+      packageInfo.longVersionCode
+    } else {
+      packageInfo.versionCode.toLong()
+    }
 
   fun isAppRunning(appId: String): Boolean {
     val output = execShellCommand("pidof $appId")

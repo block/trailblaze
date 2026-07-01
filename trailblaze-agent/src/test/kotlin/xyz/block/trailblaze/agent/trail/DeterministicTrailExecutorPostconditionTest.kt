@@ -16,8 +16,9 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.TraceId
@@ -176,20 +177,24 @@ class DeterministicTrailExecutorPostconditionTest {
     forbidden: List<String> = emptyList(),
   ): WaypointDefinition = WaypointDefinition(
     id = id,
-    required = required.map { text ->
-      WaypointSelectorEntry(
-        selector = TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
-        ),
-      )
-    },
-    forbidden = forbidden.map { text ->
-      WaypointSelectorEntry(
-        selector = TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
-        ),
-      )
-    },
+    byClassifier = mapOf(
+      "android" to WaypointVariant(
+        required = required.map { text ->
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(
+              androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+            ),
+          )
+        },
+        forbidden = forbidden.map { text ->
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(
+              androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+            ),
+          )
+        },
+      ),
+    ),
   )
 
   private fun nodeTreeWithTexts(texts: List<String>): TrailblazeNode = TrailblazeNode(

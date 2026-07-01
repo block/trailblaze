@@ -5,8 +5,8 @@ import { trailblaze } from "@trailblaze/scripting";
  *
  * Hands Maestro the same `openLink` command the former Kotlin `OpenUrlTrailblazeTool`
  * emitted, via the framework `maestro` tool reachable from scripted tools through
- * `ctx.tools.mobile_maestro(...)` (maestro is `surfaceToScriptedTools = true` and resolves through
- * the unfiltered framework-tool dispatch even though it isn't in any toolset). Maestro
+ * `ctx.tools.mobile_maestro(...)` (maestro resolves through the unfiltered framework-tool
+ * dispatch even though it isn't in any toolset). Maestro
  * implements `openLink` per platform, so a single call covers Android and iOS with no
  * per-platform branch.
  *

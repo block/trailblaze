@@ -3,17 +3,18 @@ description: >
   iOS Contacts app, Lists Edit mode with a row tapped revealing a red "Remove" button
   on the left edge — the iOS standard table-row removal affordance. Sibling to
   contacts/ios/lists-edit-mode (no Remove button shown yet).
-required:
-  - description: "Done nav button"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Done"
-  - description: "Remove (red row-removal) button"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Remove"
-forbidden:
-  - description: "Edit button — would mean we're not in edit mode"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Edit"
+ios:
+  required:
+    - description: "Done nav button"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Done"
+    - description: "Remove (red row-removal) button"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Remove"
+  forbidden:
+    - description: "Edit button — would mean we're not in edit mode"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Edit"

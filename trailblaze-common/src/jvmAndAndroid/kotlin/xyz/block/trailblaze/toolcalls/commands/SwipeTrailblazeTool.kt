@@ -80,7 +80,6 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
 @TrailblazeToolClass(
   name = "swipeWithRelativeCoordinates",
   surfaceToLlm = false,
-  surfaceToScriptedTools = false,
 )
 @LLMDescription("Swipes using relative coordinates. Internal tool only.")
 data class SwipeWithRelativeCoordinatesTool(

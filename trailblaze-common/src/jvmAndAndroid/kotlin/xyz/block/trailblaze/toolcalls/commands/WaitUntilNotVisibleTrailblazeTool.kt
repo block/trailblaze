@@ -63,7 +63,6 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @TrailblazeToolClass(
   name = "waitUntilNotVisible",
   surfaceToLlm = false,
-  surfaceToScriptedTools = true,
   isRecordable = false,
   isVerification = false,
 )
@@ -103,9 +102,10 @@ data class WaitUntilNotVisibleTrailblazeTool(
     val agent = toolExecutionContext.maestroTrailblazeAgent
     // Mirror SquareVisibilityUtils.isTextNotVisibleAndroid: accessibility driver → native
     // event-driven not-visible wait; otherwise → Maestro AssertConditionCommand fallback
-    // (super.execute lowers `toMaestroCommands` through the agent). The accessibility agent always
-    // returns non-null; the `?: super.execute(...)` is a defensive fallback for any future agent
-    // that advertises usesAccessibilityDriver but doesn't resolve the selector natively.
+    // (super.execute lowers `toMaestroCommands` through the agent). The accessibility agent
+    // returns null when the selector carries a non-accessibility driver branch it can't resolve
+    // natively (see AccessibilityTrailblazeAgent.executeNodeSelectorAssertNotVisible); the
+    // `?: super.execute(...)` then falls back to the Maestro lowering.
     val verdict: TrailblazeToolResult =
       if (agent != null && agent.usesAccessibilityDriver) {
         agent.executeNodeSelectorAssertNotVisible(

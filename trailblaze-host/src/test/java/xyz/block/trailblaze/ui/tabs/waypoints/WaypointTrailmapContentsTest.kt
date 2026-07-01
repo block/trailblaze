@@ -176,8 +176,6 @@ class WaypointTrailmapContentsTest {
         relativePath,
         """
         id: "$id"
-        required: []
-        forbidden: []
         """.trimIndent(),
       )
     }

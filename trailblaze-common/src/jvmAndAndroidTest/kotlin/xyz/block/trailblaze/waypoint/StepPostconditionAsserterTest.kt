@@ -11,8 +11,9 @@ import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.yaml.StepPostcondition
@@ -188,6 +189,7 @@ class StepPostconditionAsserterTest {
     // Build the same shape the asserter would produce, without re-running it.
     val matchResult = WaypointMatcher.match(
       definition = def,
+      classifier = TrailblazeDeviceClassifier("android"),
       root = nodeTreeWithTexts(listOf("More", "Switch mode")),
     )
     val msg = StepPostconditionAsserter.describeMismatch(
@@ -231,20 +233,24 @@ class StepPostconditionAsserterTest {
     forbidden: List<String> = emptyList(),
   ): WaypointDefinition = WaypointDefinition(
     id = id,
-    required = required.map { text ->
-      WaypointSelectorEntry(
-        selector = TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
-        ),
-      )
-    },
-    forbidden = forbidden.map { text ->
-      WaypointSelectorEntry(
-        selector = TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
-        ),
-      )
-    },
+    byClassifier = mapOf(
+      "android" to WaypointVariant(
+        required = required.map { text ->
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(
+              androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+            ),
+          )
+        },
+        forbidden = forbidden.map { text ->
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(
+              androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+            ),
+          )
+        },
+      ),
+    ),
   )
 
   /**
@@ -255,11 +261,15 @@ class StepPostconditionAsserterTest {
   private fun templatedWaypoint(id: String, resourceIdSuffix: String): WaypointDefinition =
     WaypointDefinition(
       id = id,
-      required = listOf(
-        WaypointSelectorEntry(
-          selector = TrailblazeNodeSelector(
-            androidAccessibility = DriverNodeMatch.AndroidAccessibility(
-              resourceIdRegex = "^{{target.appId}}:id/$resourceIdSuffix$",
+      byClassifier = mapOf(
+        "android" to WaypointVariant(
+          required = listOf(
+            WaypointCondition(
+              selector = TrailblazeNodeSelector(
+                androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+                  resourceIdRegex = "^{{target.appId}}:id/$resourceIdSuffix$",
+                ),
+              ),
             ),
           ),
         ),

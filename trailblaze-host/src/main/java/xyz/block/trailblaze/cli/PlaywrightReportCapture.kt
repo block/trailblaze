@@ -33,7 +33,7 @@ internal object PlaywrightReportCapture {
    * Resolved playback-wait ceiling in ms. Overridable via the [MAX_PLAYBACK_WAIT_ENV]
    * environment variable so all three exporters (`--gif`, `--webp`, `--video`) honor the
    * same escape hatch the timeout message advertises — previously `--video` ignored it and
-   * hit a hardcoded Playwright timeout (issue #173). Non-numeric or non-positive values
+   * hit a hardcoded Playwright timeout (https://github.com/block/trailblaze/issues/173). Non-numeric or non-positive values
    * fall back to [DEFAULT_MAX_PLAYBACK_WAIT_MS]. With idle-gap compression in the autoplay
    * timeline this ceiling is rarely reached, but it remains the documented manual override.
    */
@@ -159,7 +159,7 @@ internal object PlaywrightReportCapture {
     if (capturedFrames == 0) error("No frames were captured — Playwright produced zero screenshots.")
     if (!playbackEnded) {
       // Fail soft: emit the best-effort truncated artifact rather than aborting with no
-      // output (issue #173). With idle-gap compression a timeout here is unusual, so call
+      // output (https://github.com/block/trailblaze/issues/173). With idle-gap compression a timeout here is unusual, so call
       // it out loudly and point at the override.
       Console.log(
         "[$tag] WARNING: timeline playback did not signal completion within " +

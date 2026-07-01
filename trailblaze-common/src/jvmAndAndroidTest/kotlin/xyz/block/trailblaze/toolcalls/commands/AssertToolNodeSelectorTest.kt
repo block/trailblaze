@@ -7,6 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
@@ -167,6 +168,137 @@ class AssertToolNodeSelectorTest {
 
     assertNotNull(agent.capturedAssertVisible, "Agent assertion should have been tried")
     assertTrue(agent.maestroCommandsExecuted, "Should have fallen back to Maestro after null")
+  }
+
+  // endregion
+
+  // region AssertNotVisibleBySelectorTrailblazeTool
+
+  @Test
+  fun `AssertNotVisibleBySelector dispatches nodeSelector (with spatial scoping) to agent`() = runBlocking {
+    val agent = CapturingAgent()
+    val context = createContext(agent)
+    // Mirrors a spatially-scoped "X not visible BELOW Y" assertion — the structural `below:`
+    // scope is exactly what the text-only AssertNotVisibleWithText tool can't express, so
+    // verify it survives dispatch to the agent.
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Email Marketing"),
+      below = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(textRegex = "Reach more customers"),
+      ),
+    )
+
+    val tool = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
+    tool.execute(context)
+
+    val captured = agent.capturedAssertNotVisible
+    assertNotNull(captured, "Agent.executeNodeSelectorAssertNotVisible should have been called")
+    val match = assertIs<DriverNodeMatch.AndroidAccessibility>(captured.driverMatch)
+    assertEquals("Email Marketing", match.textRegex)
+    assertEquals(
+      "Reach more customers",
+      captured.below?.androidAccessibility?.textRegex,
+      "the below: spatial scope must be preserved through dispatch",
+    )
+  }
+
+  @Test
+  fun `AssertNotVisibleBySelector without nodeSelector falls back to Maestro`() = runBlocking {
+    val agent = CapturingAgent()
+    val context = createContext(agent)
+
+    val tool = AssertNotVisibleBySelectorTrailblazeTool(
+      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Email Marketing"),
+      nodeSelector = null,
+    )
+    tool.execute(context)
+
+    assertNull(agent.capturedAssertNotVisible, "Should not call agent assertion path")
+    assertTrue(agent.maestroCommandsExecuted, "Should have fallen back to Maestro path")
+  }
+
+  @Test
+  fun `AssertNotVisibleBySelector falls back to Maestro when agent returns null`() = runBlocking {
+    val agent = CapturingAgent(assertNotVisibleResult = null)
+    val context = createContext(agent)
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Email Marketing"),
+    )
+
+    val tool = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
+    tool.execute(context)
+
+    assertNotNull(agent.capturedAssertNotVisible, "Agent assertion should have been tried")
+    assertTrue(agent.maestroCommandsExecuted, "Should have fallen back to Maestro after null")
+  }
+
+  @Test
+  fun `AssertNotVisibleBySelector Maestro path asserts notVisible`() = runBlocking {
+    val agent = CapturingAgent()
+    val context = createContext(agent)
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Email Marketing"),
+    )
+    val tool = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
+
+    val command = assertIs<AssertConditionCommand>(tool.toMaestroCommands(context.memory).single())
+    assertNotNull(command.condition.notVisible, "Maestro path must assert notVisible")
+    assertNull(command.condition.visible, "Maestro path must NOT assert visible")
+  }
+
+  // endregion
+
+  // region allDriverMatches (drives the AccessibilityTrailblazeAgent not-visible driver guard)
+
+  @Test
+  fun `allDriverMatches collects the top-level driver match`() {
+    val sel = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "X"))
+    val matches = sel.allDriverMatches()
+    assertEquals(1, matches.size)
+    assertIs<DriverNodeMatch.AndroidAccessibility>(matches.single())
+    assertTrue(matches.none { it !is DriverNodeMatch.AndroidAccessibility }, "all accessibility → guard must NOT fire")
+  }
+
+  @Test
+  fun `allDriverMatches flags a non-accessibility top-level match`() {
+    val sel = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidMaestro(textRegex = "X"))
+    assertTrue(
+      sel.allDriverMatches().any { it !is DriverNodeMatch.AndroidAccessibility },
+      "androidMaestro top-level → guard must fire",
+    )
+  }
+
+  @Test
+  fun `allDriverMatches traverses nested hierarchy branches (the top-level-only blind spot)`() {
+    // Top-level is accessibility, but a non-accessibility branch is nested under containsChild.
+    // A top-level-only check would miss this; the full traversal must catch it.
+    val sel = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Parent"),
+      containsChild = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidMaestro(textRegex = "Child"),
+      ),
+    )
+    val matches = sel.allDriverMatches()
+    assertEquals(2, matches.size, "should collect both the top-level and the nested driver match")
+    assertTrue(
+      matches.any { it !is DriverNodeMatch.AndroidAccessibility },
+      "nested androidMaestro under containsChild → guard must fire",
+    )
+  }
+
+  @Test
+  fun `allDriverMatches traverses spatial branches and stays empty when there is no driver match`() {
+    // below: branch carries the only (accessibility) match; nothing non-accessibility → no fire.
+    val spatial = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Anchor"),
+      below = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Target")),
+    )
+    assertEquals(2, spatial.allDriverMatches().size)
+    assertTrue(spatial.allDriverMatches().none { it !is DriverNodeMatch.AndroidAccessibility })
+
+    // A structural-only selector with no driver leaf anywhere → empty, so the guard never fires.
+    val structuralOnly = TrailblazeNodeSelector(index = 0)
+    assertTrue(structuralOnly.allDriverMatches().isEmpty())
   }
 
   // endregion

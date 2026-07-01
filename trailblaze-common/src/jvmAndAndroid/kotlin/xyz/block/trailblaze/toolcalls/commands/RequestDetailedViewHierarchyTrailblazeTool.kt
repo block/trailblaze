@@ -38,11 +38,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
   // its view of the screen. It is NOT a user-facing action — like `objectiveStatus` it's injected
   // into the agent's tool registry (via koogInspectionTools), not the user catalog, so it never
   // appears in `toolbox` and can't be invoked as a standalone `trailblaze tool …` command.
-  // isRecordable = false keeps it out of trail recordings; surfaceToScriptedTools = false keeps it
-  // out of scripted-tool `client.d.ts` authoring (it's an internal dispatcher detail, not a
-  // building block a `.ts` tool author should call).
+  // isRecordable = false keeps it out of trail recordings (it's an internal dispatcher detail).
   isRecordable = false,
-  surfaceToScriptedTools = false,
 )
 @LLMDescription(
   "List the FULL view hierarchy: every element, including non-interactable ones (static labels, " +

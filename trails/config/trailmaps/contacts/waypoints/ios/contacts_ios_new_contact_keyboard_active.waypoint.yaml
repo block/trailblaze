@@ -7,25 +7,26 @@ description: >
   toolbar visible above the keyboard). Distinct from contacts/ios/new-contact (no
   keyboard) because the available actions now include text input plus the AutoFill
   shortcut.
-required:
-  - description: "New Contact title (sheet still active)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "New Contact"
-  - description: "Sheet Grabber"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Sheet Grabber: Expanded"
-  - description: "Keyboard accessory: AutoFill shortcut (only present when keyboard up)"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "AutoFill"
-  - description: "Keyboard accessory: Paste action"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Paste"
-forbidden:
-  - description: "Edit button — only on the read-only contact-detail"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Edit"
+ios:
+  required:
+    - description: "New Contact title (sheet still active)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "New Contact"
+    - description: "Sheet Grabber"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Sheet Grabber: Expanded"
+    - description: "Keyboard accessory: AutoFill shortcut (only present when keyboard up)"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "AutoFill"
+    - description: "Keyboard accessory: Paste action"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Paste"
+  forbidden:
+    - description: "Edit button — only on the read-only contact-detail"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Edit"

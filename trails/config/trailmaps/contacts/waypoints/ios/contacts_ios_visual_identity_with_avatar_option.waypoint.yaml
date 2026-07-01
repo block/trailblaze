@@ -5,22 +5,23 @@ description: >
   Choose + Cancel) but the suggestion list above the editor carries "Avatar Option"
   rows (machine-suggested avatars derived from a picked photo). Distinct from the
   monogram editor (font-name suggestions) and the emoji editor (emoji glyphs).
-required:
-  - description: "Visual identity Choose button"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityChooseButton"
-  - description: "'Avatar Option' suggestion row — only after a photo is picked"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Avatar Option"
-        resourceIdRegex: "SuggestionListItemButton"
-  - description: "Crop editor tab"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Crop"
-forbidden:
-  - description: "Done button — would mean we're on the post-Choose composition picker"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityDoneButton"
+ios:
+  required:
+    - description: "Visual identity Choose button"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityChooseButton"
+    - description: "'Avatar Option' suggestion row — only after a photo is picked"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Avatar Option"
+          resourceIdRegex: "SuggestionListItemButton"
+    - description: "Crop editor tab"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Crop"
+  forbidden:
+    - description: "Done button — would mean we're on the post-Choose composition picker"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityDoneButton"

@@ -9,8 +9,9 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.cli.androidWaypoint
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -522,10 +523,10 @@ class ShortcutProposerTest {
   // ---------------- fixtures ----------------
 
   private fun waypointById(id: String, resourceId: String): WaypointDefinition {
-    return WaypointDefinition(
+    return androidWaypoint(
       id = id,
       required = listOf(
-        WaypointSelectorEntry(
+        WaypointCondition(
           selector = TrailblazeNodeSelector(
             androidAccessibility = xyz.block.trailblaze.api.DriverNodeMatch.AndroidAccessibility(
               resourceIdRegex = "^${Regex.escape(resourceId)}$",

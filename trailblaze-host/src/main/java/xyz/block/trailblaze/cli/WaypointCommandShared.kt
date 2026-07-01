@@ -7,7 +7,9 @@ import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointLoader
@@ -245,10 +247,31 @@ internal fun resolveTargetTemplateContext(
     )
   }
   val targetCfg = resolved?.targets?.firstOrNull { it.id == targetId }
-    ?: return TargetContextResolution.Error(
+  if (targetCfg == null) {
+    // The target isn't in the resolved runtime config. The most common cause is that its
+    // trailmap was dropped during sibling/scripted-tool resolution — e.g. a classpath-bundled
+    // trailmap whose scripted-tool descriptors require analyzer enrichment the classpath path
+    // can't perform (TrailblazeProjectConfigLoader.resolveTrailmapArtifacts step 4). Template
+    // expansion only needs the declared `app_ids:`, which live on the manifest and DON'T depend
+    // on tool resolution — so read them straight from the manifest rather than failing. This
+    // keeps the manifest as the source of truth (no CLI app-id override flag) while still
+    // unblocking offline corpus scoring against a trailmap that can't fully load.
+    val manifestAppIds = trailmapManifestAppIds(targetId, fromPath)
+    if (manifestAppIds.isNotEmpty()) {
+      Console.log(
+        "[waypoint] --target $targetId is not in the resolved config (its trailmap likely dropped " +
+          "during scripted-tool enrichment); using app_ids from the trailmap manifest for " +
+          "{{target.appId}} expansion.",
+      )
+      return TargetContextResolution.Resolved(
+        TargetTemplateContext(appId = null, appIds = manifestAppIds),
+      )
+    }
+    return TargetContextResolution.Error(
       "--target $targetId: no such target in the resolved workspace + classpath trailmaps. " +
         "Check the spelling, or that the trailmap is on the workspace's `trailmaps:` list / framework classpath.",
     )
+  }
   val trailmapAppIds = targetCfg.platforms?.values
     ?.flatMap { it.appIds.orEmpty() }
     ?.distinct()
@@ -264,6 +287,44 @@ internal fun resolveTargetTemplateContext(
   return TargetContextResolution.Resolved(
     TargetTemplateContext(appId = null, appIds = trailmapAppIds),
   )
+}
+
+/**
+ * Reads a trailmap's declared `app_ids:` straight from its manifest, bypassing the full runtime
+ * resolution that can drop a trailmap when its scripted tools can't be analyzer-enriched. Scans
+ * workspace trailmaps (`<workspace>/trailmaps/<id>/trailmap.yaml`) and classpath-bundled trailmaps
+ * — manifest-only, no sibling/tool resolution — and returns the distinct app_ids declared across
+ * the target block's platforms, or empty if no manifest with [targetId] is found. The fallback for
+ * [resolveTargetTemplateContext] when a target's tools fail enrichment but its (tool-independent)
+ * app_ids are all template expansion needs.
+ */
+private fun trailmapManifestAppIds(
+  targetId: String,
+  fromPath: java.nio.file.Path,
+): List<String> {
+  val manifests = buildList {
+    val workspaceConfigDir = TrailblazeWorkspaceConfigResolver.resolve(fromPath).configDir
+    if (workspaceConfigDir != null) {
+      File(workspaceConfigDir, TrailblazeConfigPaths.TRAILMAPS_SUBDIR).listFiles()
+        ?.filter { it.isDirectory }
+        ?.forEach { dir ->
+          val manifestFile = File(dir, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)
+          if (manifestFile.isFile) {
+            try {
+              add(TrailblazeTrailmapManifestLoader.load(manifestFile))
+            } catch (e: TrailblazeProjectConfigException) {
+              // Malformed manifest — skip; a sibling trailmap may still carry the target.
+            }
+          }
+        }
+    }
+    addAll(TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath())
+  }
+  val manifest = manifests.firstOrNull { it.manifest.id == targetId } ?: return emptyList()
+  return manifest.manifest.target?.platforms?.values
+    ?.flatMap { it.appIds.orEmpty() }
+    ?.distinct()
+    .orEmpty()
 }
 
 private fun loadResolvedConfig(fromPath: java.nio.file.Path) =
@@ -290,21 +351,21 @@ internal fun formatResult(r: WaypointMatchResult): String = buildString {
   if (r.matchedRequired.isNotEmpty()) {
     appendLine("  matched required (${r.matchedRequired.size}):")
     for (m in r.matchedRequired) {
-      val d = m.entry.description ?: m.entry.selector.description()
+      val d = m.entry.description ?: m.entry.selector?.description() ?: "(condition)"
       appendLine("    ✓ $d  (matches=${m.matchCount}, minCount=${m.entry.minCount})")
     }
   }
   if (r.missingRequired.isNotEmpty()) {
     appendLine("  missing required (${r.missingRequired.size}):")
     for (m in r.missingRequired) {
-      val d = m.entry.description ?: m.entry.selector.description()
+      val d = m.entry.description ?: m.entry.selector?.description() ?: "(condition)"
       appendLine("    ✗ $d  (matches=${m.matchCount}, minCount=${m.entry.minCount})")
     }
   }
   if (r.presentForbidden.isNotEmpty()) {
     appendLine("  forbidden present (${r.presentForbidden.size}):")
     for (m in r.presentForbidden) {
-      val d = m.entry.description ?: m.entry.selector.description()
+      val d = m.entry.description ?: m.entry.selector?.description() ?: "(condition)"
       appendLine("    ✗ $d  (matches=${m.matchCount})")
     }
   }

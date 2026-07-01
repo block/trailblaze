@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "25.6.0",
+    "@vtsls/language-server": "0.3.0",
     "dts-bundle-generator": "9.5.1",
     "esbuild": "0.27.2",
     "ts-json-schema-generator": "2.9.0",

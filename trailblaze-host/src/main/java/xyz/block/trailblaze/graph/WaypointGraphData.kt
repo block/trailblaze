@@ -2,7 +2,7 @@ package xyz.block.trailblaze.graph
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 
 /**
  * Pure data shape of the waypoint navigation graph — the JSON contract between Kotlin
@@ -71,14 +71,14 @@ data class WaypointGraphNode(
    * accept this screen. The detail panel renders these as the "how does the matcher know
    * this is `<id>`?" answer — the selectors *are* the waypoint's identity.
    */
-  val required: List<WaypointSelectorEntry> = emptyList(),
+  val required: List<WaypointCondition> = emptyList(),
   /**
    * Selector entries that must NOT match. Even one match here disqualifies the waypoint —
    * useful for distinguishing siblings that share most identity signals (e.g. "this is
    * the Money tab specifically — the Withdraw button must NOT be present, otherwise we'd
    * be on the Withdraw composer").
    */
-  val forbidden: List<WaypointSelectorEntry> = emptyList(),
+  val forbidden: List<WaypointCondition> = emptyList(),
 )
 
 @Serializable

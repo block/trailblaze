@@ -140,6 +140,14 @@ object StepPostconditionAsserter {
         )
         return@buildString
       }
+      WaypointMatchResult.SkipReason.NO_CLASSIFIER_BLOCK -> {
+        append(
+          " Skipped (NO_CLASSIFIER_BLOCK): the waypoint declares no block for this device's " +
+            "classifier, so it doesn't describe a screen on this device. Add a block for this " +
+            "platform/form-factor to the waypoint, or assert a waypoint that targets this device.",
+        )
+        return@buildString
+      }
       null -> {} // fall through to the missing/forbidden diff below
     }
     val missing = result.lastResult.missingRequired

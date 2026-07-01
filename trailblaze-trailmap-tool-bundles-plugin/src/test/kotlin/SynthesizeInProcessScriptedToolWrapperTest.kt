@@ -34,7 +34,7 @@ class SynthesizeInProcessScriptedToolWrapperTest {
     }
   }
 
-  private val wrapper = synthesizeInProcessScriptedToolWrapper("typed.ts", templateFile)
+  private val wrapper = synthesizeInProcessScriptedToolWrapper("./typed.ts", "typed.ts", templateFile)
 
   @Test
   fun `imports the user source as a namespace under the given filename`() {

@@ -8,6 +8,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 
 /**
  * Tests for [SessionLogScreenState]'s pre-filter helpers and the timestamp-based
@@ -206,6 +212,48 @@ class SessionLogScreenStateTest {
       logs.map { it.name },
       "non-screen-state log types like McpToolCallRequestLog must be excluded",
     )
+  }
+
+  // ==========================================================================
+  // loadStep — device classifier cascade (label > session device info > none)
+  // ==========================================================================
+
+  @Test
+  fun `loadStep reads deviceClassifiers from trailblazeDeviceInfo when no explicit label`() {
+    // Middle tier of the cascade: a capture-example output carries the projected session
+    // `trailblazeDeviceInfo` but no top-level `deviceClassifier` label. loadStep must surface those
+    // classifiers on the ScreenState so WaypointMatcher resolves the right per-classifier block.
+    val deviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID),
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      widthPixels = 1080,
+      heightPixels = 1920,
+      classifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+    )
+    val deviceInfoJson = TrailblazeJson.defaultWithoutToolsInstance
+      .encodeToString(TrailblazeDeviceInfo.serializer(), deviceInfo)
+    val log = newTempDir().let {
+      writeLog(it, "001_TrailblazeLlmRequestLog.json", """{"deviceWidth":1080,"deviceHeight":1920,"trailblazeDeviceInfo":$deviceInfoJson}""")
+    }
+
+    val screen = SessionLogScreenState.loadStep(log)
+
+    assertEquals(
+      listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+      screen.deviceClassifiers,
+      "loadStep should surface the session's device classifiers when no explicit label is present",
+    )
+  }
+
+  @Test
+  fun `loadStep prefers the explicit deviceClassifier label over session device info`() {
+    val log = newTempDir().let {
+      writeLog(it, "001_TrailblazeLlmRequestLog.json", """{"deviceWidth":1080,"deviceHeight":1920,"deviceClassifier":"android-tablet"}""")
+    }
+
+    val screen = SessionLogScreenState.loadStep(log)
+
+    assertEquals(listOf(TrailblazeDeviceClassifier("android-tablet")), screen.deviceClassifiers)
   }
 
   // ==========================================================================

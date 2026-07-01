@@ -137,9 +137,13 @@ object BundledScriptedToolAnalyzeMain {
           val toolsDir = File(trailmapDir, "tools")
           if (!toolsDir.isDirectory) return@forEach
 
-          val descriptorlessTs = toolsDir.listFiles().orEmpty()
-            .filter { it.isFile && it.isDescriptorlessTypedToolFile(toolsDir) }
-            .sortedBy { it.name }
+          // Recursive so descriptor-less `.ts` tools organized into `tools/<subdir>/` (by
+          // platform/category) are analyzed — otherwise a `target.tools:` entry for a subfoldered
+          // bare `.ts` resolves to nothing downstream. Mirrors the recursive trailmap walk above.
+          val descriptorlessTs = toolsDir.walkTopDown()
+            .filter { it.isFile && it.isDescriptorlessTypedToolFile() }
+            .sortedBy { it.relativeTo(toolsDir).invariantSeparatorsPath }
+            .toList()
           if (descriptorlessTs.isEmpty()) return@forEach
 
           val trailmapId = readTrailmapId(manifest)
@@ -147,7 +151,7 @@ object BundledScriptedToolAnalyzeMain {
 
           val deferred = descriptorlessTs.map { ts ->
             ScriptedToolEnrichment.DeferredDescriptor(
-              relativePath = "tools/${ts.name}",
+              relativePath = "tools/${ts.relativeTo(toolsDir).invariantSeparatorsPath}",
               descriptor = TrailmapScriptedToolFile(script = "./${ts.name}"),
             )
           }
@@ -211,13 +215,20 @@ object BundledScriptedToolAnalyzeMain {
    * are never tool sources. The sibling check is the opt-in boundary: a tool keeps its build-logic
    * kaml path until its descriptor YAML is deleted.
    */
-  private fun File.isDescriptorlessTypedToolFile(toolsDir: File): Boolean {
+  private fun File.isDescriptorlessTypedToolFile(): Boolean {
     val n = name
     if (!n.endsWith(".ts") || n.endsWith(".d.ts") || n.endsWith(".test.ts")) return false
-    val sibling = File(toolsDir, n.removeSuffix(".ts") + ".yaml")
+    // Sibling descriptor lives in the SAME directory as the `.ts` (works whether the tool is at
+    // `tools/` root or under a `tools/<subdir>/` organizational folder).
+    val sibling = File(parentFile, n.removeSuffix(".ts") + ".yaml")
     if (sibling.exists()) return false
-    // Skip shared helper modules — only a `.ts` that exports a typed tool is a tool source.
-    return TYPED_TOOL_BINDING_PATTERN.containsMatchIn(readText())
+    // A descriptor-less `.ts` is a meta-only tool source only when it declares EXACTLY ONE typed
+    // export: zero = a shared helper module; two-or-more = a multi-export file the meta-only path
+    // can't disambiguate (it needs a YAML `tools:` descriptor), so it's not a descriptor-less source.
+    // Keeps recursive discovery from feeding multi-export subdir reference examples (e.g. the
+    // android-sample-app `host-tools/`/`quickjs-tools/` files) into enrichment, which would throw.
+    // SISTER-IMPL-TAG: typed-tool-binding-pattern.
+    return TYPED_TOOL_BINDING_PATTERN.findAll(readText()).count() == 1
   }
 
   private fun readTrailmapId(manifest: File): String? =

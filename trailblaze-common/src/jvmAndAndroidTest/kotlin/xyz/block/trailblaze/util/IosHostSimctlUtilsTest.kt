@@ -3,6 +3,7 @@ package xyz.block.trailblaze.util
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -149,5 +150,141 @@ class IosHostSimctlUtilsTest {
 
     val appIds = IosHostSimctlUtils.parseInstalledAppIdsFromListApps(outputLines)
     assertTrue(appIds.isEmpty())
+  }
+
+  // --- Structured parser (parseInstalledAppsFromListApps) backing mobile_listInstalledApps detailed mode ---
+
+  @Test
+  fun `parseInstalledAppsFromListApps extracts isSystemApp, label, version, buildNumber and path`() {
+    val outputLines = """
+      {
+          "com.apple.Preferences" =     {
+              ApplicationType = System;
+              CFBundleDisplayName = Settings;
+              CFBundleName = Settings;
+              CFBundleShortVersionString = "1.0";
+              CFBundleVersion = 1;
+              Path = "/Applications/Preferences.app";
+          };
+          "com.example.app" =     {
+              ApplicationType = User;
+              CFBundleDisplayName = ExampleApp;
+              CFBundleShortVersionString = "6.94";
+              CFBundleVersion = 6940515;
+              Path = "/Users/test/ExampleApp.app";
+          };
+      }
+    """.trimIndent().lines()
+
+    val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
+
+    assertEquals(2, apps.size)
+    val prefs = apps.first { it.appId == "com.apple.Preferences" }
+    assertEquals(true, prefs.isSystemApp)
+    assertEquals("Settings", prefs.label)
+    assertEquals("1.0", prefs.version) // user-visible CFBundleShortVersionString preferred
+    assertEquals("1", prefs.buildNumber) // CFBundleVersion is the machine build number
+    assertEquals("/Applications/Preferences.app", prefs.installPath)
+
+    val example = apps.first { it.appId == "com.example.app" }
+    assertEquals(false, example.isSystemApp)
+    assertEquals("ExampleApp", example.label)
+    assertEquals("6.94", example.version)
+    assertEquals("6940515", example.buildNumber)
+    assertEquals("/Users/test/ExampleApp.app", example.installPath)
+  }
+
+  @Test
+  fun `parseInstalledAppsFromListApps falls back to CFBundleName and CFBundleVersion`() {
+    // No CFBundleDisplayName and no CFBundleShortVersionString — must fall back to CFBundleName
+    // (label) and CFBundleVersion (version).
+    val outputLines = """
+      {
+          "com.apple.mobilesafari" =     {
+              ApplicationType = System;
+              CFBundleName = Safari;
+              CFBundleVersion = 8617;
+              Path = "/Applications/MobileSafari.app";
+          };
+      }
+    """.trimIndent().lines()
+
+    val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
+
+    val safari = apps.single()
+    assertEquals("Safari", safari.label)
+    assertEquals("8617", safari.version)
+    assertEquals(true, safari.isSystemApp)
+  }
+
+  @Test
+  fun `parseInstalledAppsFromListApps ignores nested GroupContainers entries`() {
+    // The GroupContainers dictionary nests `"<id>" = "file://…";` entries whose keys look like
+    // bundle ids (including team-prefixed ones that don't start with `group.`). Only the
+    // block-opening header is a real app — the nested key-value lines must NOT become apps, nor
+    // should their values leak into the enclosing app's fields.
+    val outputLines = """
+      {
+          "com.apple.Bridge" =     {
+              ApplicationType = System;
+              CFBundleDisplayName = Watch;
+              GroupContainers =         {
+                  "243LU875E5.groups.com.apple.podcasts" = "file:///path/A/";
+                  "group.com.apple.bridge" = "file:///path/B/";
+              };
+              Path = "/Applications/Bridge.app";
+          };
+          "com.example.app" =     {
+              ApplicationType = User;
+              CFBundleDisplayName = ExampleApp;
+              Path = "/Applications/Example.app";
+          };
+      }
+    """.trimIndent().lines()
+
+    val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
+
+    assertEquals(listOf("com.apple.Bridge", "com.example.app"), apps.map { it.appId })
+    assertEquals("Watch", apps.first { it.appId == "com.apple.Bridge" }.label)
+  }
+
+  @Test
+  fun `parseInstalledAppsFromListApps treats a non-standard ApplicationType as non-system`() {
+    val outputLines = """
+      {
+          "com.example.weird" =     {
+              ApplicationType = Internal;
+              Path = "/Applications/Weird.app";
+          };
+      }
+    """.trimIndent().lines()
+
+    val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
+
+    val weird = apps.single()
+    assertEquals(false, weird.isSystemApp, "an ApplicationType that's neither System nor User is not guessed into the system bucket")
+    assertNull(weird.label)
+    assertNull(weird.version)
+  }
+
+  @Test
+  fun `parseInstalledAppsFromListApps filters group identifiers and empty input`() {
+    assertTrue(IosHostSimctlUtils.parseInstalledAppsFromListApps(emptyList()).isEmpty())
+
+    val outputLines = """
+      {
+          "group.com.example.shared" =     {
+              ApplicationType = User;
+              Path = "/some/group/path";
+          };
+          "com.example.app" =     {
+              ApplicationType = User;
+              Path = "/Applications/Example.app";
+          };
+      }
+    """.trimIndent().lines()
+
+    val apps = IosHostSimctlUtils.parseInstalledAppsFromListApps(outputLines)
+    assertEquals(listOf("com.example.app"), apps.map { it.appId })
   }
 }

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import java.io.File
@@ -25,6 +26,16 @@ object SessionLogScreenState {
     val screenshotBytes = screenshotPath?.takeIf { it.exists() }?.readBytes()
     val platform = parsed.trailblazeDevicePlatform
       ?: TrailblazeDevicePlatform.ANDROID
+    // Surface the example's device classifier so the waypoint matcher resolves the right
+    // classifier block (e.g. an `android-tablet`-labelled example, or an iOS example, validates
+    // against its own block rather than the broad platform default). Prefer the explicit
+    // `deviceClassifier` label capture-example stamps; else the session's projected
+    // TrailblazeDeviceInfo classifiers; else none (matcher falls back to the platform).
+    val deviceClassifiers: List<TrailblazeDeviceClassifier> = when {
+      !parsed.deviceClassifier.isNullOrBlank() -> listOf(TrailblazeDeviceClassifier(parsed.deviceClassifier))
+      !parsed.trailblazeDeviceInfo?.classifiers.isNullOrEmpty() -> parsed.trailblazeDeviceInfo!!.classifiers
+      else -> emptyList()
+    }
     val base = SessionLogScreenStateImpl(
       screenshotBytes = screenshotBytes,
       deviceWidth = parsed.deviceWidth,
@@ -33,6 +44,7 @@ object SessionLogScreenState {
         ?: ViewHierarchyTreeNode(),
       trailblazeNodeTree = parsed.trailblazeNodeTree,
       trailblazeDevicePlatform = platform,
+      deviceClassifiers = deviceClassifiers,
     )
     // Replay migration captures: when the snapshot log was written with
     // `trailblaze.captureSecondaryTree=true`, it carries the accessibility-shape side
@@ -77,16 +89,19 @@ object SessionLogScreenState {
   }
 
   /**
-   * Cheap pre-filter: returns whether [jsonFile] declares a non-null top-level `screenshotFile`
-   * field AND the referenced image file actually exists on disk (and is non-empty). Used by
-   * `waypoint capture-example`'s auto-search to skip over per-step logs that have no usable
-   * screenshot before paying the full [loadStep] cost.
+   * Cheap pre-filter: returns whether [jsonFile] declares a usable top-level `screenshotFile` —
+   * either a **remote URL** (CI / device-farm logs reference the image by URL; the bytes aren't in
+   * the downloaded zip, and existence is validated when the example is captured) OR a **local
+   * sibling file** that actually exists on disk and is non-empty. Used by `waypoint
+   * capture-example`'s auto-search to skip per-step logs that have no usable screenshot before
+   * paying the full [loadStep] cost.
    *
-   * Existence check matters: a log can carry `screenshotFile: "...png"` while the binary
+   * Local existence check matters: a log can carry `screenshotFile: "...png"` while the binary
    * write failed or was pruned — without this check, auto-search picks that step, the matcher
    * accepts it, and capture-example then errors with `Could not locate any screenshot` after
    * the work is wasted. Tightening here means the candidate set is exactly the steps we
-   * could actually commit.
+   * could actually commit. Remote URLs are exempt from the local check — they're resolved by an
+   * HTTP fetch at capture time, not a sibling-file lookup.
    *
    * Implemented via [Json.parseToJsonElement] + a single field lookup so the heavy
    * `viewHierarchy` / `trailblazeNodeTree` subtrees are NOT walked into typed objects — that's
@@ -101,8 +116,12 @@ object SessionLogScreenState {
       false
     } else {
       val name = ssf.contentOrNull
-      val sibling = name?.let { File(jsonFile.parentFile, it) }
-      sibling != null && sibling.isFile && sibling.length() > 0
+      if (name != null && (name.startsWith("http://") || name.startsWith("https://"))) {
+        true
+      } else {
+        val sibling = name?.let { File(jsonFile.parentFile, it) }
+        sibling != null && sibling.isFile && sibling.length() > 0
+      }
     }
   } catch (_: Exception) {
     false
@@ -142,6 +161,10 @@ object SessionLogScreenState {
     val driverMigrationTreeNode: TrailblazeNode? = null,
     val screenshotFile: String? = null,
     val trailblazeDevicePlatform: TrailblazeDevicePlatform? = null,
+    /** Per-classifier example label stamped by `capture-example --device-classifier`. */
+    val deviceClassifier: String? = null,
+    /** Session device context projected into the example by `capture-example`. */
+    val trailblazeDeviceInfo: TrailblazeDeviceInfo? = null,
   )
 
   private class SessionLogScreenStateImpl(
@@ -151,7 +174,7 @@ object SessionLogScreenState {
     override val viewHierarchy: ViewHierarchyTreeNode,
     override val trailblazeNodeTree: TrailblazeNode?,
     override val trailblazeDevicePlatform: TrailblazeDevicePlatform,
-  ) : ScreenState {
-    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
-  }
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ) : ScreenState
+
 }

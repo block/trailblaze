@@ -14,6 +14,10 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   actual val deviceId: TrailblazeDeviceId,
 ) {
 
+  // Host transport: commands travel over dadb to `adbd`, which runs them via `sh -c`. Shell
+  // quoting and `$?` exit sentinels are honored — see the expect-class KDoc.
+  actual val usesShellInterpreter: Boolean = true
+
   actual fun executeShellCommand(command: String): String {
     return AndroidHostAdbUtils.execAdbShellCommand(
       deviceId = deviceId,
@@ -194,6 +198,13 @@ actual class AndroidDeviceCommandExecutor actual constructor(
 
   actual fun listInstalledApps(): List<String> {
     return AndroidHostAdbUtils.listInstalledPackages(deviceId)
+  }
+
+  actual fun listInstalledAppsDetailed(includeLabelsAndVersions: Boolean): List<InstalledApp> {
+    // The host/adb path reads everything from one `dumpsys package packages` call (isSystemApp,
+    // version, buildNumber, installPath); only the human label is unavailable. So the
+    // includeLabelsAndVersions flag has no effect here — see AndroidHostAdbUtils.
+    return AndroidHostAdbUtils.listInstalledAppsDetailed(deviceId)
   }
 
   actual fun disablePackageForUser(packageId: String) {

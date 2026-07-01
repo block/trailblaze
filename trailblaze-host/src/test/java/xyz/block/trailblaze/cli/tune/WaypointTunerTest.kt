@@ -6,9 +6,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.cli.androidForbidden
+import xyz.block.trailblaze.cli.androidRequired
+import xyz.block.trailblaze.cli.androidWaypoint
 import java.io.File
 
 /**
@@ -16,6 +19,9 @@ import java.io.File
  * objects directly rather than running the matcher — the analyzer's job is to count
  * patterns across step results, and that contract is exercised most cleanly without a
  * real screen state.
+ *
+ * v2 waypoints are classifier-keyed; these single-platform fixtures use an `android` block
+ * (via the shared `androidWaypoint` / `androidRequired` / `androidForbidden` helpers).
  *
  * The sibling-collision guard isn't covered here (it's a thin shim over the matcher and
  * is tested via the matcher's own tests + a future end-to-end CLI smoke test). The three
@@ -47,8 +53,11 @@ class WaypointTunerTest {
     assertEquals(WaypointTuner.ProposalKind.DROP_REQUIRED, p.kind)
     assertEquals("myapp/home", p.waypointId)
     assertEquals(6, p.supportSessions)
-    assertEquals(1, p.definitionAfter.required.size, "the drifted entry must be removed")
-    assertEquals("Home", p.definitionAfter.required.single().selector.androidAccessibility?.textRegex?.removePrefix("^")?.removeSuffix("$"))
+    assertEquals(1, p.definitionAfter.androidRequired.size, "the drifted entry must be removed")
+    assertEquals(
+      "Home",
+      p.definitionAfter.androidRequired.single().selector?.androidAccessibility?.textRegex?.removePrefix("^")?.removeSuffix("$"),
+    )
   }
 
   @Test
@@ -105,7 +114,7 @@ class WaypointTunerTest {
     assertEquals(1, proposals.size)
     val p = proposals.single()
     assertEquals(WaypointTuner.ProposalKind.LOWER_MIN_COUNT, p.kind)
-    assertEquals(2, p.definitionAfter.required.single().minCount, "minCount should be decremented by 1")
+    assertEquals(2, p.definitionAfter.androidRequired.single().minCount, "minCount should be decremented by 1")
   }
 
   @Test
@@ -170,7 +179,7 @@ class WaypointTunerTest {
     assertEquals(1, proposals.size)
     val p = proposals.single()
     assertEquals(WaypointTuner.ProposalKind.DROP_FORBIDDEN, p.kind)
-    assertTrue(p.definitionAfter.forbidden.isEmpty())
+    assertTrue(p.definitionAfter.androidForbidden.isEmpty())
   }
 
   @Test
@@ -189,12 +198,12 @@ class WaypointTunerTest {
           definitionId = def.id,
           matched = false,
           matchedRequired = listOf(
-            WaypointMatchResult.MatchedRequired(def.required[0], matchCount = 1),
+            WaypointMatchResult.MatchedRequired(def.androidRequired[0], matchCount = 1),
           ),
           missingRequired = emptyList(),
           presentForbidden = listOf(
-            WaypointMatchResult.PresentForbidden(def.forbidden[0], matchCount = 1),
-            WaypointMatchResult.PresentForbidden(def.forbidden[1], matchCount = 1),
+            WaypointMatchResult.PresentForbidden(def.androidForbidden[0], matchCount = 1),
+            WaypointMatchResult.PresentForbidden(def.androidForbidden[1], matchCount = 1),
           ),
         ),
       )
@@ -225,8 +234,8 @@ class WaypointTunerTest {
   // ---------------- composeMutatedTrailmap ----------------
 
   @Test
-  fun `composeMutatedTrailmap folds multiple proposals on the same waypoid in order`() {
-    // Two synthetic proposals on the same waypoid, different entries. composeMutatedTrailmap
+  fun `composeMutatedTrailmap folds multiple proposals on the same waypoint in order`() {
+    // Two synthetic proposals on the same waypoint, different entries. composeMutatedTrailmap
     // must apply both — the previous `associateBy { waypointId }` path silently kept
     // only one, the bug that round-1 finding #1 and Codex P1 flagged.
     val def = waypoint(
@@ -236,26 +245,27 @@ class WaypointTunerTest {
     val p1 = syntheticProposal(
       def = def,
       kind = WaypointTuner.ProposalKind.DROP_REQUIRED,
-      affected = def.required[1],
-      mutated = def.copy(required = listOf(def.required[0])),
+      affected = def.androidRequired[1],
+      mutated = androidWaypoint(def.id, required = listOf(def.androidRequired[0])),
     )
     val p2 = syntheticProposal(
       def = def,
       kind = WaypointTuner.ProposalKind.LOWER_MIN_COUNT,
-      affected = def.required[0],
-      mutated = def.copy(
-        required = listOf(def.required[0].copy(minCount = 1), def.required[1]),
+      affected = def.androidRequired[0],
+      mutated = androidWaypoint(
+        def.id,
+        required = listOf(def.androidRequired[0].copy(minCount = 1), def.androidRequired[1]),
       ),
     )
     val joint = WaypointTuner.composeMutatedTrailmap(listOf(p1, p2))
     val mutated = joint["myapp/home"] ?: error("expected joint mutation for myapp/home")
-    assertEquals(1, mutated.required.size, "StaleLabel dropped")
-    assertEquals(1, mutated.required.single().minCount, "Home's minCount lowered")
+    assertEquals(1, mutated.androidRequired.size, "StaleLabel dropped")
+    assertEquals(1, mutated.androidRequired.single().minCount, "Home's minCount lowered")
   }
 
   @Test
-  fun `composeMutatedTrailmap rejects mixed definitionBefore in the same waypoid group`() {
-    // Two proposals on the same waypoid whose definitionBefores diverge. Shouldn't
+  fun `composeMutatedTrailmap rejects mixed definitionBefore in the same waypoint group`() {
+    // Two proposals on the same waypoint whose definitionBefores diverge. Shouldn't
     // happen in practice (all proposals from one analyzer run share the unmutated
     // source) but the `require` is the assertion guarding that invariant.
     val defV1 = waypoint(id = "myapp/home", required = listOf(literalText("A")))
@@ -263,14 +273,14 @@ class WaypointTunerTest {
     val p1 = syntheticProposal(
       def = defV1,
       kind = WaypointTuner.ProposalKind.DROP_REQUIRED,
-      affected = defV1.required.single(),
-      mutated = defV1.copy(required = emptyList()),
+      affected = defV1.androidRequired.single(),
+      mutated = androidWaypoint(defV1.id),
     )
     val p2 = syntheticProposal(
       def = defV2,
       kind = WaypointTuner.ProposalKind.DROP_REQUIRED,
-      affected = defV2.required.single(),
-      mutated = defV2.copy(required = emptyList()),
+      affected = defV2.androidRequired.single(),
+      mutated = androidWaypoint(defV2.id),
     )
     assertFailsWith<IllegalArgumentException> {
       WaypointTuner.composeMutatedTrailmap(listOf(p1, p2))
@@ -278,25 +288,25 @@ class WaypointTunerTest {
   }
 
   @Test
-  fun `composeMutatedTrailmap on disjoint waypoids preserves both edits`() {
+  fun `composeMutatedTrailmap on disjoint waypoints preserves both edits`() {
     val home = waypoint(id = "myapp/home", required = listOf(literalText("Home")))
     val settings = waypoint(id = "myapp/settings", required = listOf(literalText("Settings")))
     val pHome = syntheticProposal(
       def = home,
       kind = WaypointTuner.ProposalKind.DROP_REQUIRED,
-      affected = home.required.single(),
-      mutated = home.copy(required = emptyList()),
+      affected = home.androidRequired.single(),
+      mutated = androidWaypoint(home.id),
     )
     val pSettings = syntheticProposal(
       def = settings,
       kind = WaypointTuner.ProposalKind.DROP_REQUIRED,
-      affected = settings.required.single(),
-      mutated = settings.copy(required = emptyList()),
+      affected = settings.androidRequired.single(),
+      mutated = androidWaypoint(settings.id),
     )
     val joint = WaypointTuner.composeMutatedTrailmap(listOf(pHome, pSettings))
-    assertEquals(2, joint.size, "both waypoids should appear in the joint mutation")
-    assertTrue(joint["myapp/home"]?.required?.isEmpty() == true)
-    assertTrue(joint["myapp/settings"]?.required?.isEmpty() == true)
+    assertEquals(2, joint.size, "both waypoints should appear in the joint mutation")
+    assertTrue(joint["myapp/home"]?.androidRequired?.isEmpty() == true)
+    assertTrue(joint["myapp/settings"]?.androidRequired?.isEmpty() == true)
   }
 
   @Test
@@ -353,20 +363,20 @@ class WaypointTunerTest {
     val composedA = proposals.fold(def) { acc, p -> p.apply(acc) }
     val composedB = proposals.reversed().fold(def) { acc, p -> p.apply(acc) }
     assertEquals(composedA, composedB, "Proposal.apply must commute for proposals on different entries")
-    assertEquals(1, composedA.required.size, "StaleLabel dropped")
-    assertEquals(1, composedA.required.single().minCount, "Home's minCount lowered from 2 to 1")
+    assertEquals(1, composedA.androidRequired.size, "StaleLabel dropped")
+    assertEquals(1, composedA.androidRequired.single().minCount, "Home's minCount lowered from 2 to 1")
   }
 
   // ---------------- fixtures ----------------
 
   private fun waypoint(
     id: String,
-    required: List<WaypointSelectorEntry> = emptyList(),
-    forbidden: List<WaypointSelectorEntry> = emptyList(),
-  ): WaypointDefinition = WaypointDefinition(id = id, required = required, forbidden = forbidden)
+    required: List<WaypointCondition> = emptyList(),
+    forbidden: List<WaypointCondition> = emptyList(),
+  ): WaypointDefinition = androidWaypoint(id = id, required = required, forbidden = forbidden)
 
-  private fun literalText(text: String, minCount: Int = 1): WaypointSelectorEntry =
-    WaypointSelectorEntry(
+  private fun literalText(text: String, minCount: Int = 1): WaypointCondition =
+    WaypointCondition(
       selector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "^$text$"),
       ),
@@ -383,12 +393,13 @@ class WaypointTunerTest {
   /**
    * Build a synthetic [WaypointTuner.Proposal] directly from a definition + mutated
    * definition pair, bypassing the analyzer. Used by the `composeMutatedTrailmap` tests
-   * where the analyzer's gating semantics aren't under test — just the fold.
+   * where the analyzer's gating semantics aren't under test — just the fold (which recomputes
+   * the end state via `Proposal.apply`, so `mutated` here is only the stored `definitionAfter`).
    */
   private fun syntheticProposal(
     def: WaypointDefinition,
     kind: WaypointTuner.ProposalKind,
-    affected: WaypointSelectorEntry,
+    affected: WaypointCondition,
     mutated: WaypointDefinition,
   ): WaypointTuner.Proposal = WaypointTuner.Proposal(
     waypointId = def.id,
@@ -412,10 +423,11 @@ class WaypointTunerTest {
     missingEntryIndex: Int,
     matchCount: Int,
   ): WaypointMatchResult {
-    val matched = def.required.filterIndexed { i, _ -> i != missingEntryIndex }
+    val required = def.androidRequired
+    val matched = required.filterIndexed { i, _ -> i != missingEntryIndex }
       .map { WaypointMatchResult.MatchedRequired(it, matchCount = it.minCount) }
     val missing = listOf(
-      WaypointMatchResult.MissingRequired(def.required[missingEntryIndex], matchCount),
+      WaypointMatchResult.MissingRequired(required[missingEntryIndex], matchCount),
     )
     return WaypointMatchResult(
       definitionId = def.id,
@@ -437,9 +449,9 @@ class WaypointTunerTest {
     count: Int,
   ): WaypointMatchResult {
     require(requiredMatched) { "fixture only models the would-match-except-forbidden case" }
-    val matched = def.required.map { WaypointMatchResult.MatchedRequired(it, matchCount = it.minCount) }
+    val matched = def.androidRequired.map { WaypointMatchResult.MatchedRequired(it, matchCount = it.minCount) }
     val forbidden = listOf(
-      WaypointMatchResult.PresentForbidden(def.forbidden[presentForbiddenIdx], matchCount = count),
+      WaypointMatchResult.PresentForbidden(def.androidForbidden[presentForbiddenIdx], matchCount = count),
     )
     return WaypointMatchResult(
       definitionId = def.id,

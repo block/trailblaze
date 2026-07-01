@@ -224,8 +224,10 @@ class TrailblazeYaml(
    * LLM mode without the caller realizing. Errors point at three valid
    * alternatives:
    *
-   *  - Pass real classifiers for execution (the device's classifier
-   *    hierarchy, e.g. `[ios-iphone, ios]`)
+   *  - Pass real classifiers for execution (the device's broad-first
+   *    classifier segments as a provider emits them, e.g. `[ios, iphone]`;
+   *    the adapter expands them through the lineage to a most-specific-first
+   *    chain via [xyz.block.trailblaze.devices.TrailblazeClassifierLineage])
    *  - Use [extractTrailConfig] if you only need static config — works for
    *    both formats without needing classifiers
    *  - Use [decodeTrailDocument] if you need format-native access to the
@@ -249,7 +251,7 @@ class TrailblazeYaml(
           "decodeTrail was called on a unified trail with recordings, but no device " +
             "classifiers were provided. Lowering with no classifiers would drop every " +
             "recording (closest-wins finds nothing) and silently execute every step in " +
-            "LLM mode. Pass the device's classifier hierarchy (e.g. [ios-iphone, ios]) " +
+            "LLM mode. Pass the device's classifier segments (e.g. [ios, iphone]) " +
             "for execution; or call extractTrailConfig(yaml) if you only need static " +
             "config; or call decodeTrailDocument(yaml) for format-native access."
         }

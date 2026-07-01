@@ -24,6 +24,11 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   actual val deviceId: TrailblazeDeviceId,
 ) {
 
+  // On-device transport: executeShellCommand routes through UiAutomationConnection.executeShellCommand
+  // → Runtime.exec, which whitespace-splits and execs tokens directly with NO shell interpreter.
+  // Shell quoting and `$?` exit sentinels do not work here — see the expect-class KDoc.
+  actual val usesShellInterpreter: Boolean = false
+
   actual fun executeShellCommand(command: String): String {
     return AdbCommandUtil.execShellCommand(command)
   }
@@ -144,6 +149,10 @@ actual class AndroidDeviceCommandExecutor actual constructor(
 
   actual fun listInstalledApps(): List<String> {
     return AdbCommandUtil.listInstalledApps()
+  }
+
+  actual fun listInstalledAppsDetailed(includeLabelsAndVersions: Boolean): List<InstalledApp> {
+    return AdbCommandUtil.listInstalledAppsDetailed(includeLabelsAndVersions)
   }
 
   actual fun disablePackageForUser(packageId: String) {

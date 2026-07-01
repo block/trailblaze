@@ -10,9 +10,11 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 
 /**
  * Pins the fail-closed behavior for templated waypoints when the matcher is invoked
@@ -28,6 +30,8 @@ import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
  */
 class WaypointMatcherTest {
 
+  private val android = TrailblazeDeviceClassifier("android")
+
   @Test
   fun `templated required selector with null target skips with UNRESOLVED_TARGET_TEMPLATE`() {
     val def = waypoint(
@@ -36,7 +40,7 @@ class WaypointMatcherTest {
     )
     val tree = treeWithResourceIds(listOf("com.example.test:id/required-thing"))
 
-    val result = WaypointMatcher.match(def, tree, target = null)
+    val result = WaypointMatcher.match(def, android, tree, target = null)
 
     assertFalse(result.matched)
     assertEquals(WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE, result.skipped)
@@ -77,7 +81,7 @@ class WaypointMatcherTest {
       driverDetail = DriverNodeDetail.AndroidAccessibility(),
     )
 
-    val result = WaypointMatcher.match(def, tree, target = null)
+    val result = WaypointMatcher.match(def, android, tree, target = null)
 
     assertFalse(result.matched, "must not match — the forbidden side is untestable without target context")
     assertEquals(WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE, result.skipped)
@@ -94,6 +98,7 @@ class WaypointMatcherTest {
 
     val result = WaypointMatcher.match(
       def,
+      android,
       tree,
       target = TargetTemplateContext(appId = "com.example.test"),
     )
@@ -110,10 +115,10 @@ class WaypointMatcherTest {
     // inside a `below` spatial anchor. `containsUnresolvedPlaceholder` has to recurse
     // through every spatial/hierarchy field to catch this; if a future refactor drops the
     // `below`/`above`/`leftOf`/`rightOf`/`childOf` recursion, this test fails loud.
-    val def = WaypointDefinition(
+    val def = waypoint(
       id = "spatial-template",
       required = listOf(
-        WaypointSelectorEntry(
+        WaypointCondition(
           selector = TrailblazeNodeSelector(
             androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "^Anchor$"),
             below = TrailblazeNodeSelector(
@@ -136,7 +141,7 @@ class WaypointMatcherTest {
       driverDetail = DriverNodeDetail.AndroidAccessibility(),
     )
 
-    val result = WaypointMatcher.match(def, tree, target = null)
+    val result = WaypointMatcher.match(def, android, tree, target = null)
 
     assertFalse(result.matched)
     assertEquals(WaypointMatchResult.SkipReason.UNRESOLVED_TARGET_TEMPLATE, result.skipped)
@@ -156,21 +161,68 @@ class WaypointMatcherTest {
       driverDetail = DriverNodeDetail.AndroidAccessibility(),
     )
 
-    val result = WaypointMatcher.match(def, tree, target = null)
+    val result = WaypointMatcher.match(def, android, tree, target = null)
 
     assertTrue(result.matched)
     assertNull(result.skipped, "literal selectors must NOT be fail-closed by the template check")
+  }
+
+  @Test
+  fun `a waypoint with no block for the device classifier does not match`() {
+    // v2: resolving against a classifier with no block yields zero conditions; the
+    // `required.isNotEmpty()` guard means it can't vacuously match every screen.
+    val def = waypoint(id = "android-only", required = listOf(literalText("Welcome")))
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      children = listOf(
+        TrailblazeNode(nodeId = 2, driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Welcome")),
+      ),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+
+    val result = WaypointMatcher.match(def, TrailblazeDeviceClassifier("ios"), tree, target = null)
+
+    assertFalse(result.matched)
+    assertEquals(
+      WaypointMatchResult.SkipReason.NO_CLASSIFIER_BLOCK,
+      result.skipped,
+      "a waypoint with no block for the device's classifier is a skip, not a content miss",
+    )
+  }
+
+  @Test
+  fun `a block with empty required vacuously matches (v1 behavior preserved)`() {
+    // The waypoint declares an `android` block, but it carries no conditions. This is distinct
+    // from "no android block at all" (NO_CLASSIFIER_BLOCK above): an empty block still matches,
+    // mirroring a v1 waypoint with empty required/forbidden — which the sibling-collision guard
+    // relies on when it tests a fully-loosened proposal.
+    val def = WaypointDefinition(id = "vacuous", byClassifier = mapOf("android" to WaypointVariant()))
+    val tree = TrailblazeNode(
+      nodeId = 1,
+      children = listOf(
+        TrailblazeNode(nodeId = 2, driverDetail = DriverNodeDetail.AndroidAccessibility(text = "anything")),
+      ),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+
+    val result = WaypointMatcher.match(def, android, tree, target = null)
+
+    assertTrue(result.matched)
+    assertNull(result.skipped)
   }
 
   // --- fixtures ---
 
   private fun waypoint(
     id: String,
-    required: List<WaypointSelectorEntry> = emptyList(),
-    forbidden: List<WaypointSelectorEntry> = emptyList(),
-  ): WaypointDefinition = WaypointDefinition(id = id, required = required, forbidden = forbidden)
+    required: List<WaypointCondition> = emptyList(),
+    forbidden: List<WaypointCondition> = emptyList(),
+  ): WaypointDefinition = WaypointDefinition(
+    id = id,
+    byClassifier = mapOf("android" to WaypointVariant(required = required, forbidden = forbidden)),
+  )
 
-  private fun templated(suffix: String): WaypointSelectorEntry = WaypointSelectorEntry(
+  private fun templated(suffix: String): WaypointCondition = WaypointCondition(
     selector = TrailblazeNodeSelector(
       androidAccessibility = DriverNodeMatch.AndroidAccessibility(
         resourceIdRegex = "^{{target.appId}}:id/$suffix$",
@@ -178,7 +230,7 @@ class WaypointMatcherTest {
     ),
   )
 
-  private fun literalText(text: String): WaypointSelectorEntry = WaypointSelectorEntry(
+  private fun literalText(text: String): WaypointCondition = WaypointCondition(
     selector = TrailblazeNodeSelector(
       androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "^$text$"),
     ),

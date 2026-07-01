@@ -1372,6 +1372,159 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `classpath trailmap with an enrichment-shape scripted tool keeps its waypoints (skip-not-throw)`() {
+    // Regression for the iOS-factory waypoint drop: a classpath-bundled trailmap (the daemon
+    // running from the compose uber JAR) that ships an enrichment-shape scripted tool — a bare
+    // typed `.ts` with no resolvable inputSchema — and lists it in `target.tools:` must NOT take
+    // the trailmap's waypoints down with it. The analyzer can't walk classpath `.ts` sources, so
+    // the scripted tool can't be enriched; `target.tools:` then throws `UnknownScriptedToolName`
+    // (the framework target legitimately fails to resolve — runtime dispatch is served by the
+    // build-time-baked targets/<id>.yaml). The waypoint must still be recovered and pooled.
+    // Before the waypoint-discovery decouple this throw dropped the whole trailmap, taking the
+    // waypoint with it (a bundled target trailmap can ship dozens of waypoints).
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        tools:
+          - framework_signin
+      """.trimIndent(),
+    )
+    // Bare typed `.ts` with no sibling YAML → discovered as an enrichment-shape (deferred) descriptor.
+    // Listing it in `target.tools:` above forces the downstream `UnknownScriptedToolName` throw.
+    File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "framework_signin.ts").writeText(
+      "export const framework_signin = trailblaze.tool({}, async () => {})",
+    )
+    // The waypoint that must survive the failed target resolution.
+    File(File(classpathTrailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml").writeText(
+      """
+      id: "framework/home"
+      description: "Framework home screen."
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    // Did NOT throw, and the waypoint survived the failed `target.tools:` resolution (recovered
+    // best-effort and pooled). We do NOT assert the framework target is present — it legitimately
+    // drops because the enrichment-shape tool in `target.tools:` can't resolve.
+    assertNotNull(resolved)
+    val waypointIds = resolved.waypoints.map(WaypointDefinition::id).toSet()
+    assertContains(waypointIds, "framework/home")
+  }
+
+  @Test
+  fun `classpath trailmap that fails for an unrelated reason drops its waypoints (recovery is narrowed)`() {
+    // Narrowing guard: waypoint recovery is reserved for the classpath scripted-tool skip ONLY.
+    // A classpath trailmap that fails for an UNRELATED reason — here a missing system_prompt_file —
+    // must keep the atomic-per-trailmap contract and drop whole, waypoints included. Recovering its
+    // waypoints would silently surface artifacts from a trailmap the author got wrong in a way that
+    // has nothing to do with the uber-JAR enrichment limitation.
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        system_prompt_file: does-not-exist.md
+      """.trimIndent(),
+    )
+    // A waypoint that must NOT be recovered — the failure is unrelated to the classpath scripted-tool skip.
+    File(File(classpathTrailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml").writeText(
+      """
+      id: "framework/home"
+      description: "Framework home screen."
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    val waypointIds = resolved.waypoints.map(WaypointDefinition::id).toSet()
+    assertTrue(
+      "framework/home" !in waypointIds,
+      "Waypoint from a trailmap that failed for an unrelated reason (missing system_prompt_file) " +
+        "must NOT be recovered; recovery is narrowed to the classpath scripted-tool skip. Got: $waypointIds",
+    )
+  }
+
+  @Test
+  fun `classpath partial descriptor in target tools does not leak a half-registered tool and recovers its waypoint`() {
+    // A PARTIAL descriptor (top-level `name:` + `.ts` `script:`, no `inputSchema:`) is registered
+    // eagerly during discovery. On a classpath-loaded trailmap the analyzer can't enrich it, so the
+    // eager entry must be REMOVED — otherwise `target.tools:` would resolve it via the empty-schema
+    // partial config and emit a half-baked target that could override the baked targets/<id>.yaml.
+    // After removal: `target.tools:` misses the registry, throws the recoverable exception, the
+    // trailmap drops its target, and its waypoint is recovered.
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        tools:
+          - framework_signin
+      """.trimIndent(),
+    )
+    // Partial single-tool descriptor: `name:` + `.ts` `script:`, no `description:` / `inputSchema:`.
+    File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "framework_signin.yaml").writeText(
+      """
+      script: ./framework_signin.ts
+      name: framework_signin
+      """.trimIndent(),
+    )
+    File(File(classpathTrailmapDir, "tools"), "framework_signin.ts").writeText(
+      "export const framework_signin = trailblaze.tool({}, async () => {})",
+    )
+    // The waypoint that must survive the failed target resolution.
+    File(File(classpathTrailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml").writeText(
+      """
+      id: "framework/home"
+      description: "Framework home screen."
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    // No half-baked target leaked: the framework target drops because its partial scripted tool
+    // can't be enriched on the classpath and its eager registry entry was removed.
+    assertTrue(
+      resolved.targets.none { it.id == "framework" },
+      "A classpath partial-descriptor target must NOT surface a half-registered target; got: ${resolved.targets.map { it.id }}",
+    )
+    // The waypoint is recovered despite the dropped target.
+    val waypointIds = resolved.waypoints.map(WaypointDefinition::id).toSet()
+    assertContains(waypointIds, "framework/home")
+  }
+
+  @Test
   fun `trailmap target system_prompt_file resolves into config systemPrompt`() {
     val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
     File(trailmapDir, "trailmap.yaml").writeText(

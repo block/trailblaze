@@ -3,80 +3,77 @@ package xyz.block.trailblaze.api.waypoint
 import kotlinx.serialization.Serializable
 
 /**
- * A named, assertable app location identified by structural properties of the view
- * hierarchy. Composed of a list of [required] selector entries (all must match) and a
- * list of [forbidden] selector entries (none may match).
+ * A named, assertable app location, expressed once across every platform/form-factor it
+ * supports. A waypoint is **a single definition with classifier-keyed, sparse blocks** — the same
+ * model the unified trail format uses for trail steps. Shared identity fields ([id],
+ * [description], [route]) sit at the top; each device-classifier block ([byClassifier]) carries
+ * only what is specific to that classifier (its selectors, its example, an optional route
+ * override). Every field is resolved closest-wins up the device's classifier lineage — see
+ * [resolveFor].
+ *
+ * ## Why classifier-keyed (v2)
+ *
+ * v1 expressed "one waypoint across platforms" as N separate files that merely shared an [id]
+ * string, distinguished only by their `waypoints/<platform>/` directory — implicitly linked and
+ * drift-prone (a rename on one side and not the other left a trailhead pointing at a waypoint id
+ * that no longer existed). v2 makes the linkage *structural*: one definition, one source of truth
+ * per place, with the genuinely platform-specific parts (selectors — different drivers) nested
+ * under their classifier key.
+ *
+ * ```yaml
+ * id: myapp/items
+ * description: "Items home (All items / Categories / Modifiers …)."
+ * route: myapp-scheme://items          # shared default address (covers android + ios)
+ * android:                             # family block: selectors shared by phone + tablet
+ *   required: [ { selector: { androidAccessibility: { textRegex: "All items" } } } ]
+ *   example: { file: items.android.example.json, capturedAt: 2026-06-27T08:45:09Z }
+ * ios:
+ *   required: [ { selector: { iosAxe: { uniqueId: "ItemsHeader" } } } ]
+ * web:
+ *   route: https://app.example.com/items   # per-classifier route OVERRIDE
+ *   required: [ { selector: { web: { ariaRole: heading, ariaNameRegex: "Items" } } } ]
+ * ```
  *
  * ## Trailmap-scoped id convention (URL-style)
  *
- * Waypoint [id]s follow URL conventions: `<trailmap-id>/<segment>[/<segment>...]`. The slash
- * is both the trailmap-namespace separator and the IA hierarchy separator within the trailmap.
- * Use `-` for multi-word atoms within a single segment.
+ * Waypoint [id]s follow URL conventions: `<trailmap-id>/<segment>[/<segment>...]`. The slash is
+ * both the trailmap-namespace separator and the IA hierarchy separator within the trailmap. Use
+ * `-` for multi-word atoms within a single segment (`myapp/inbox/inventory-upsell`). The id is
+ * **logical, not platform-tagged** — a waypoint named `myapp/home` is the conceptual "MyApp home"
+ * regardless of platform; the per-platform recognition signals live in [byClassifier].
  *
- * Examples:
- *  - `myapp/home` — flat, atomic
- *  - `myapp/withdraw/compose` — composer step within a Withdraw flow
- *  - `myapp/settings/notifications` — Notifications sub-tab within a Settings tab
- *  - `myapp/inbox/inventory-upsell` — multi-word atom under an Inbox hub
+ * ## Route binding and provenance ([route])
  *
- * **The id is logical, not platform-tagged.** A waypoint named `myapp/home` represents
- * the conceptual "MyApp home screen" regardless of platform. Today each waypoint YAML
- * is platform-specific (its selectors are tagged with `androidAccessibility:` or
- * `iosAccessibility:`), and the file lives under
- * `trailmaps/<trailmap-id>/waypoints/<platform>/...` for disk-level organization. When iOS adds
- * its own home, both files share `id: myapp/home` and the matcher dispatches by
- * current device platform — a `platforms:` field on this schema is the planned dispatch
- * mechanism, not yet implemented (no platform-collision exists in the current dataset).
- *
- * On disk, waypoint descriptors live under `trails/config/trailmaps/<trailmap-id>/waypoints/`
- * with `<platform>/...` subdirectories for platform-specific variants. Filenames mirror
- * the id's post-trailmap-segment portion (e.g. id `myapp/withdraw/compose` →
- * `trailmaps/myapp/waypoints/android/withdraw/compose.waypoint.yaml`).
- *
- * This intentionally diverges from the older underscore tool-naming convention
- * (`2026-01-14-tool-naming-convention.md`), which was driven by serialization needing to
- * look up backing Kotlin classes from the tool name — a constraint that no longer holds
- * now that YAML descriptors carry fully-qualified class names directly. New trailmap-scoped
- * artifacts (routes, trails, waypoints) should follow the slash convention; legacy flat
- * runtime tool ids stay on underscore for back-compat with the existing namespace.
+ * [route] is the canonical address this waypoint binds to — the deep link (mobile) / client route
+ * / web path that navigates here. Its presence is a *provenance stamp*: a route-bound waypoint is
+ * **declared** (its identity comes from the app's authoritative route catalog and is verified by
+ * arriving there), versus a legacy auto-discovered guess. By convention a route-bound waypoint's
+ * [id] mirrors the route path, but `id != route` is allowed and a route-less waypoint is
+ * legitimate. Route is the one field that *may* appear at the top level (the same address usually
+ * works across platforms); a [WaypointVariant.route] overrides it only where the address genuinely
+ * differs. **Selectors never appear at the top** — they're driver-specific.
  *
  * ## Description as LLM hint
  *
- * Think of [description] like Claude / agent skill frontmatter: a **short**, one-line
- * hint an LLM (or a human author picking a waypoint to assert against) can scan to
- * decide whether this waypoint is the right one. It is the surface the runtime shows
- * in `trailblaze waypoint list` and that agents will rank against, so its job is
- * "what is this and when should I pick it" — not "how is it implemented".
- *
- * **Keep out of [description]:**
- *  - Selector implementation details (regex patterns, resource id conventions). Put
- *    those on the individual [WaypointSelectorEntry.description] fields, or as YAML
- *    comments next to the selector — that's where someone debugging matches looks.
- *  - Multi-paragraph rationale, history, or design notes. Those belong in commit
- *    messages, devlog entries, or a sibling README.
- *
- * **Do include:**
- *  - One sentence on what is on screen.
- *  - Disambiguation against same-trailmap siblings when relevant ("Distinct from X").
- *
- * Bad (mixes hint with implementation):
- * ```
- * description: >
- *   Google Clock app, Clock tab is selected at the bottom nav, showing the cities
- *   list. Resource IDs use a regex alternation to match both the Google variant
- *   (com.google.android.deskclock) and the AOSP variant (com.android.deskclock).
- * ```
- *
- * Good (one-line LLM hint):
- * ```
- * description: "Clock tab selected; cities list visible. Distinct from clock/android/alarm_tab."
- * ```
- *
+ * Think of [description] like agent-skill frontmatter: a **short**, one-line hint an LLM (or a
+ * human picking a waypoint to assert against) can scan to decide whether this is the right one.
+ * Keep selector implementation details out of it (those go on [WaypointCondition.description] or
+ * as YAML comments); include one sentence on what's on screen plus disambiguation against
+ * same-trailmap siblings ("Distinct from X").
  */
-@Serializable
+@Serializable(with = WaypointDefinitionSerializer::class)
 data class WaypointDefinition(
   val id: String,
   val description: String? = null,
-  val required: List<WaypointSelectorEntry> = emptyList(),
-  val forbidden: List<WaypointSelectorEntry> = emptyList(),
+  /**
+   * Shared default route (see "Route binding and provenance" above). `null` for legacy /
+   * route-less waypoints. A [WaypointVariant.route] overrides this per classifier.
+   */
+  val route: String? = null,
+  /**
+   * Per-device-classifier blocks, keyed by classifier name (`android`, `ios`, `web`,
+   * `android-tablet`, …). Each block is sparse; [resolveFor] fills each field from the closest
+   * classifier in the device's lineage that declares it.
+   */
+  val byClassifier: Map<String, WaypointVariant> = emptyMap(),
 )

@@ -10,8 +10,10 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.cli.androidRequired
+import xyz.block.trailblaze.cli.androidWaypoint
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import java.io.File
@@ -42,7 +44,7 @@ class WaypointSiblingCollisionGuardTest {
   fun `proposal newly matches step that no sibling matches - safe`() {
     val def = waypoint("myapp/home", required = listOf(textEntry("StaleHeading")))
     val mutated = waypoint("myapp/home", required = emptyList())
-    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.required.single())
+    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.androidRequired.single())
     val sibling = waypoint("myapp/settings", required = listOf(textEntry("Settings")))
     val step = sessionStep("s1", "s1/a", screenStateOf("Home Header"))
 
@@ -61,7 +63,7 @@ class WaypointSiblingCollisionGuardTest {
   fun `proposal newly matches step that sibling already matches - collision`() {
     val def = waypoint("myapp/home", required = listOf(textEntry("StaleHeading")))
     val mutated = waypoint("myapp/home", required = emptyList())
-    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.required.single())
+    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.androidRequired.single())
     // Sibling matches any screen with the heading "Home Header" — and our test screen
     // does carry that heading.
     val sibling = waypoint("myapp/home-also", required = listOf(textEntry("Home Header")))
@@ -113,7 +115,7 @@ class WaypointSiblingCollisionGuardTest {
   fun `guard internally filters siblings matching the proposals own waypoint`() {
     val def = waypoint("myapp/home", required = listOf(textEntry("StaleHeading")))
     val mutated = waypoint("myapp/home", required = emptyList())
-    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.required.single())
+    val proposal = dropProposal(File("home.waypoint.yaml"), def, mutated, def.androidRequired.single())
     val step = sessionStep("s1", "s1/a", screenStateOf("Home Header"))
 
     // Pass the proposal's own definitionAfter as a "sibling" — same id. Without the
@@ -198,12 +200,12 @@ class WaypointSiblingCollisionGuardTest {
 
   private fun waypoint(
     id: String,
-    required: List<WaypointSelectorEntry> = emptyList(),
-    forbidden: List<WaypointSelectorEntry> = emptyList(),
-  ): WaypointDefinition = WaypointDefinition(id = id, required = required, forbidden = forbidden)
+    required: List<WaypointCondition> = emptyList(),
+    forbidden: List<WaypointCondition> = emptyList(),
+  ): WaypointDefinition = androidWaypoint(id = id, required = required, forbidden = forbidden)
 
-  private fun textEntry(text: String, minCount: Int = 1): WaypointSelectorEntry =
-    WaypointSelectorEntry(
+  private fun textEntry(text: String, minCount: Int = 1): WaypointCondition =
+    WaypointCondition(
       selector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "^$text$"),
       ),
@@ -214,7 +216,7 @@ class WaypointSiblingCollisionGuardTest {
     file: File,
     before: WaypointDefinition,
     after: WaypointDefinition,
-    affected: WaypointSelectorEntry,
+    affected: WaypointCondition,
   ): WaypointTuner.Proposal = WaypointTuner.Proposal(
     waypointId = before.id,
     kind = WaypointTuner.ProposalKind.DROP_REQUIRED,

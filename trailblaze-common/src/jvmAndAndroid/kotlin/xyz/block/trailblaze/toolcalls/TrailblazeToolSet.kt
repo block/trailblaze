@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls
 import xyz.block.trailblaze.android.tools.AndroidSystemUiDemoModeTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ClearAppDataTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
@@ -49,6 +50,7 @@ abstract class TrailblazeToolSet(
 
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,
+      AssertNotVisibleBySelectorTrailblazeTool::class,
       TapOnByElementSelector::class,
       SwipeWithRelativeCoordinatesTool::class,
       AndroidSystemUiDemoModeTrailblazeTool::class,

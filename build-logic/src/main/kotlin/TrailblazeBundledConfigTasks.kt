@@ -1006,9 +1006,15 @@ internal class TrailmapTargetGenerator(
     // decode escape symlinks the runtime loader would refuse to read, producing inline-tool
     // configs in the generated `dist/targets/*.yaml` that the loader then rejects at start time.
     val canonicalTrailmapDir = trailmapDir.canonicalFile.toPath()
-    val candidates = toolsDir.listFiles()
-      .orEmpty()
-      .filter { it.isFile && it.name.endsWith(".yaml") }
+    // Recursive so descriptors organized into `tools/<subdir>/` (e.g. by platform/category) are
+    // discovered. `Files.walk` does NOT follow symlinks by default, so it can't wedge on a cycle;
+    // the per-file canonical-containment check below still rejects any symlinked escape. SISTER-IMPL-TAG:
+    // trailmap-scripted-tool-discovery (keep recursion consistent across all four sister impls).
+    val candidates = java.nio.file.Files.walk(toolsDir.toPath()).use { stream ->
+      stream.filter { java.nio.file.Files.isRegularFile(it) }.map { it.toFile() }
+        .collect(java.util.stream.Collectors.toList())
+    }
+      .filter { it.name.endsWith(".yaml") }
       .filter { file -> OPERATIONAL_TOOL_YAML_SUFFIXES.none { file.name.endsWith(it) } }
       .filter { file ->
         // Translate IOException from canonicalize (symlink loop, FS quirk) into a typed

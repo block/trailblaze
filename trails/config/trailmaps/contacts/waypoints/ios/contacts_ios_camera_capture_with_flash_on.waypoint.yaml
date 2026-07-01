@@ -4,18 +4,19 @@ description: >
   contacts/ios/camera-capture (FlashButton "Flash: Automatic") — the FlashButton's
   accessibility label here reads "Flash: On". Available actions differ: the same Take
   Picture / Flip / Dismiss but flash mode toggles cycle differently.
-required:
-  - description: "Take Picture"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "PhotoCapture"
-  - description: "Flash button labeled 'Flash: On'"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Flash: On"
-        resourceIdRegex: "FlashButton"
-forbidden:
-  - description: "Flash: Automatic — would mean we're on the default state"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Flash: Automatic"
+ios:
+  required:
+    - description: "Take Picture"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "PhotoCapture"
+    - description: "Flash button labeled 'Flash: On'"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Flash: On"
+          resourceIdRegex: "FlashButton"
+  forbidden:
+    - description: "Flash: Automatic — would mean we're on the default state"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Flash: Automatic"

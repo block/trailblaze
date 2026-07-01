@@ -2,6 +2,7 @@ package xyz.block.trailblaze.util
 
 import org.junit.Test
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.mobile.tools.ListInstalledAppsDetailedTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import kotlin.test.assertEquals
@@ -35,6 +36,18 @@ class TrailblazeToolPolymorphicSerializerTest {
       actual = discovered[ToolName("mobile_listInstalledApps")],
       message = "mobile_listInstalledApps.tool.yaml did not resolve to ListInstalledAppsTrailblazeTool. " +
         "Check `trailblaze-common/src/commonMain/resources/trails/config/trailmaps/mobile/tools/mobile_listInstalledApps.tool.yaml` " +
+        "for a typo'd or stale `class:` FQCN.",
+    )
+  }
+
+  @Test
+  fun mobileListInstalledAppsDetailedYamlResolvesToClass() {
+    val discovered = ToolYamlLoader.discoverAndLoadAll()
+    assertEquals(
+      expected = ListInstalledAppsDetailedTrailblazeTool::class,
+      actual = discovered[ToolName("mobile_listInstalledAppsDetailed")],
+      message = "mobile_listInstalledAppsDetailed.tool.yaml did not resolve to ListInstalledAppsDetailedTrailblazeTool. " +
+        "Check `trailblaze-common/src/commonMain/resources/trails/config/trailmaps/mobile/tools/mobile_listInstalledAppsDetailed.tool.yaml` " +
         "for a typo'd or stale `class:` FQCN.",
     )
   }

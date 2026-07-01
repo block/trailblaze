@@ -6,26 +6,27 @@ description: >
   source category — "Photos" / "Memoji" / "Monogram" sticky-header sections each with a
   "New <X>" CreateSuggestionButton and a "Customize" affordance. Distinct from
   contacts/ios/visual-identity-monogram (no Done button — that editor only has Choose).
-required:
-  - description: "Visual identity Done button (commits the picked avatar)"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityDoneButton"
-  - description: "Visual identity Cancel button"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityCancelButton"
-  - description: "Customize affordance — opens the editor for the selected suggestion"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Customize"
-        resourceIdRegex: "VisualIdentityEditorContainerVStack"
-  - description: "Create-Suggestion button (e.g. New Memoji / New Monogram)"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "CreateSuggestionButton"
-forbidden:
-  - description: "Choose button — only on the per-type editor, not the composition picker"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityChooseButton"
+ios:
+  required:
+    - description: "Visual identity Done button (commits the picked avatar)"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityDoneButton"
+    - description: "Visual identity Cancel button"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityCancelButton"
+    - description: "Customize affordance — opens the editor for the selected suggestion"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Customize"
+          resourceIdRegex: "VisualIdentityEditorContainerVStack"
+    - description: "Create-Suggestion button (e.g. New Memoji / New Monogram)"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "CreateSuggestionButton"
+  forbidden:
+    - description: "Choose button — only on the per-type editor, not the composition picker"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityChooseButton"

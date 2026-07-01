@@ -510,7 +510,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
   }
 
   private fun printSelectorYaml(selector: TrailblazeNodeSelector) {
-    // Emit a pasteable WaypointSelectorEntry — `- description: ""\n  selector:\n    ...`.
+    // Emit a pasteable WaypointCondition — `- description: ""\n  selector:\n    ...`.
     //
     // Hand-format rather than using the kaml `TrailblazeYaml` instance because:
     //  1. We want to control indent precisely (4-space child indent, matching the existing

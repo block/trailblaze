@@ -45,7 +45,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 @TrailblazeToolClass(
   name = "tapOnAccessibilityNode",
   surfaceToLlm = false,
-  surfaceToScriptedTools = true,
 )
 @LLMDescription(
   "Tap an Android accessibility node identified by its content description. " +

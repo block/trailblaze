@@ -5,9 +5,10 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint capture-example [-hV] [--force] --id=<waypointId>
-       [--logs-dir=<path>] [--root=<path>] [--session=<sessionId>]
-       [--step=<step>] [--target=<id>] [<positionalLogFile>]
+Usage: trailblaze waypoint capture-example [-hV] [--force]
+       [--device-classifier=<classifier>] --id=<waypointId> [--logs-dir=<path>]
+       [--root=<path>] [--session=<sessionId>] [--step=<step>] [--target=<id>]
+       [<positionalLogFile>]
 Capture a sibling <id>.example.json + screenshot next to the waypoint YAML.
 With no --session/--step/positional-log, walks every session under logs/ and
 picks
@@ -15,6 +16,19 @@ the most recent step that the waypoint matches AND that has a real screenshot.
       [<positionalLogFile>]
                           Direct path to a screen-state log (alternative to
                             auto-search / --session)
+      --device-classifier=<classifier>
+                          Device classifier (e.g. android-phone,
+                            android-tablet, ios-iphone, ios-ipad) to label this
+                            example, so one waypoint can keep a per-form-factor
+                            example SET. Written into the filename (`<base>.
+                            example.<classifier>.json` + screenshot) and the
+                            example's `deviceClassifier` field. Selectors stay
+                            per-platform (one waypoint file) — only the
+                            snapshot is classifier-keyed, since a phone and
+                            tablet share accessibility identity but render
+                            differently. If omitted, falls back to the source
+                            log's classifier if it records one, else writes the
+                            unlabeled default example (`<base>.example.json`).
       --force             Overwrite an existing example pair without prompting.
   -h, --help              Show this help message and exit.
       --id=<waypointId>   Waypoint id to capture an example for (matches the

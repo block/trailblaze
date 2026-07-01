@@ -506,31 +506,6 @@ class PerTrailmapClientDtsEmitterTest {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // surfaceToScriptedTools=false exclusion
-  //
-  // The unit-level filter is pinned by SurfaceFlagFilteringTest. This test pins the
-  // integration: a Kotlin tool annotated `surfaceToScriptedTools = false` that lives in a
-  // toolset the trailmap requests must NOT appear in the rendered `trailblaze-client.d.ts`. Without this,
-  // a future change that reverts the call site back to `toKoogToolDescriptor()` (which
-  // gates on `surfaceToLlm` instead) would silently re-include hidden tools in the typed
-  // surface.
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  @Serializable
-  @TrailblazeToolClass(name = "test_visible_to_scripted")
-  @LLMDescription("Test tool that should appear in trailblaze-client.d.ts.")
-  private class VisibleToScriptedTool(
-    @Suppress("unused") val text: String,
-  ) : TrailblazeTool
-
-  @Serializable
-  @TrailblazeToolClass(name = "test_hidden_from_scripted", surfaceToScriptedTools = false)
-  @LLMDescription("Test tool with surfaceToScriptedTools=false; must NOT appear in trailblaze-client.d.ts.")
-  private class HiddenFromScriptedTool(
-    @Suppress("unused") val text: String,
-  ) : TrailblazeTool
-
-  // ─────────────────────────────────────────────────────────────────────────────
   // Framework-metadata JSDoc tag emission (PR #3506)
   //
   // The emitter projects each Kotlin tool's `@TrailblazeToolClass` annotation values into
@@ -549,6 +524,60 @@ class PerTrailmapClientDtsEmitterTest {
   private class TestHostOnlyTool(
     @Suppress("unused") val command: String,
   ) : TrailblazeTool
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // No scripted-surface visibility gate (surfaceToScriptedTools removed)
+  //
+  // The scripted-tool typed surface is ungated: a tool hidden from the LLM
+  // (`surfaceToLlm = false`) MUST still be emitted into the trailmap's rendered
+  // `trailblaze-client.d.ts`. `SurfaceFlagFilteringTest` pins this at the converter
+  // (`toScriptedToolDescriptor`); THIS integration test pins it at the emitter call site, so a
+  // future re-introduction of a scripted-surface gate (here or in the converter) regresses
+  // obviously rather than silently dropping LLM-hidden tools from the typed surface.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_llm_hidden_surfacing", surfaceToLlm = false)
+  @LLMDescription("Hidden from the LLM, but must still appear in the scripted-tool typed surface.")
+  private class LlmHiddenSurfacingTool(
+    @Suppress("unused") val text: String,
+  ) : TrailblazeTool
+
+  @Test
+  fun `LLM-hidden Kotlin tool still surfaces in rendered client_d_ts (no scripted-surface gate)`() {
+    val trailmapDir = newTrailmapDir("llm_hidden_pack")
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.llm_hidden"),
+        toolSets = listOf("llm_hidden_test_set"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "llm_hidden_pack",
+        target = TrailmapTargetConfig(displayName = "LLM Hidden", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(id = "llm_hidden_pack", displayName = "LLM Hidden", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "llm_hidden_test_set",
+        description = "Synthetic toolset holding an LLM-hidden tool.",
+        toolClasses = setOf(LlmHiddenSurfacingTool::class),
+      ),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("LLM-hidden tool must still be emitted to the scripted surface: $rendered") {
+      rendered.contains("test_llm_hidden_surfacing:")
+    }
+  }
 
   @Serializable
   @TrailblazeToolClass(name = "test_no_flags")
@@ -608,49 +637,6 @@ class PerTrailmapClientDtsEmitterTest {
     val noFlagsJsdocBlock = rendered.substring(noFlagsJsdocStart, noFlagsBlockStart)
     assertFalse("test_no_flags JSDoc must not contain a @trailblaze tag line: $noFlagsJsdocBlock") {
       noFlagsJsdocBlock.lineSequence().any { it.startsWith("     * @trailblaze") }
-    }
-  }
-
-  @Test
-  fun `surfaceToScriptedTools false excludes Kotlin tool from rendered client_d_ts`() {
-    val trailmapDir = newTrailmapDir("surface_filter_pack")
-    val platforms = mapOf(
-      "android" to PlatformConfig(
-        appIds = listOf("com.example.surface_filter"),
-        toolSets = listOf("surface_filter_test_set"),
-      ),
-    )
-    val trailmap = ResolvedTrailmap(
-      manifest = TrailblazeTrailmapManifest(
-        id = "surface_filter_pack",
-        target = TrailmapTargetConfig(displayName = "Surface Filter", platforms = platforms),
-      ),
-      source = TrailmapSource.Filesystem(trailmapDir),
-      target = AppTargetYamlConfig(id = "surface_filter_pack", displayName = "Surface Filter", platforms = platforms),
-      toolsets = emptyList(),
-      tools = emptyList(),
-      waypoints = emptyList(),
-    )
-
-    // Inject a synthetic catalog so the test doesn't depend on the classpath-discovered
-    // toolset set, and so it can pair the two flag values in one toolset for an apples-
-    // to-apples comparison.
-    val catalog = listOf(
-      ToolSetCatalogEntry(
-        id = "surface_filter_test_set",
-        description = "Synthetic toolset for surface-flag exclusion testing.",
-        toolClasses = setOf(VisibleToScriptedTool::class, HiddenFromScriptedTool::class),
-      ),
-    )
-
-    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
-
-    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
-    assertTrue("expected visible tool in binding: $rendered") {
-      rendered.contains("test_visible_to_scripted")
-    }
-    assertFalse("expected hidden tool to be excluded from binding: $rendered") {
-      rendered.contains("test_hidden_from_scripted")
     }
   }
 

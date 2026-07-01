@@ -241,19 +241,21 @@ class WaypointLocateBatchTest {
     File(waypointRoot, "welcome.waypoint.yaml").writeText(
       """
       id: "testpack/welcome"
-      required:
-        - selector:
-            androidAccessibility:
-              textRegex: "Welcome.*"
+      android:
+        required:
+          - selector:
+              androidAccessibility:
+                textRegex: "Welcome.*"
       """.trimIndent(),
     )
     File(waypointRoot, "screen.waypoint.yaml").writeText(
       """
       id: "testpack/any-screen"
-      required:
-        - selector:
-            androidAccessibility:
-              textRegex: ".+"
+      android:
+        required:
+          - selector:
+              androidAccessibility:
+                textRegex: ".+"
       """.trimIndent(),
     )
     val sessionDir = stageSession(
@@ -733,6 +735,35 @@ class WaypointLocateBatchTest {
         statuses.filter { it != "NONE" && it != "ERROR" }.toSet()
       }
 
+  @Test
+  fun `a legacy v1 waypoint is rejected by the loader with an actionable failure`() {
+    // Hard cut: the v1 top-level shape (required:/forbidden: with no classifier block) no longer
+    // loads. WaypointLoader surfaces it as a per-file failure — not a silent drop and not a silent
+    // fold — so a stray un-migrated file is caught loudly rather than quietly mis-keyed.
+    val workspace = newTempDir()
+    val root = File(workspace, "trails").apply { mkdirs() }
+    File(root, "welcome-v1.waypoint.yaml").writeText(
+      """
+      id: "testpack/welcome-v1"
+      required:
+        - selector:
+            androidAccessibility:
+              textRegex: "Welcome.*"
+      """.trimIndent(),
+    )
+
+    val result = WaypointLoader.loadAllResilient(root)
+    assertTrue(
+      result.definitions.isEmpty(),
+      "a v1 file must not load; got: ${result.definitions.map { it.id }}",
+    )
+    assertEquals(1, result.failures.size, "the v1 file must surface as a load failure")
+    assertTrue(
+      result.failures.single().cause.message!!.contains("legacy v1"),
+      "the failure should explain the v1 rejection: ${result.failures.single().cause.message}",
+    )
+  }
+
   private fun newTempDir(): File =
     createTempDirectory(prefix = "waypoint-locate-batch-").toFile().also { tempDirs += it }
 
@@ -748,10 +779,11 @@ class WaypointLocateBatchTest {
       """
       id: "testpack/welcome"
       description: "Synthetic waypoint that matches any screen containing 'Welcome' text"
-      required:
-        - selector:
-            androidAccessibility:
-              textRegex: "Welcome.*"
+      android:
+        required:
+          - selector:
+              androidAccessibility:
+                textRegex: "Welcome.*"
       """.trimIndent(),
     )
     return root

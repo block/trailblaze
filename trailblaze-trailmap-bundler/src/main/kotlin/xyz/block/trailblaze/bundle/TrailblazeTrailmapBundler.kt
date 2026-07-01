@@ -477,9 +477,14 @@ class TrailblazeTrailmapBundler(
     // surface and the runtime agree on what counts as a valid descriptor and don't drift on
     // symlinked escapes.
     val canonicalTrailmapDir = trailmapDir.canonicalFile.toPath()
-    val candidateFiles = toolsDir.listFiles()
-      .orEmpty()
-      .filter { it.isFile && it.name.endsWith(".yaml") }
+    // Recursive so descriptors organized into `tools/<subdir>/` are discovered (matching the
+    // analyzer + the sister impls). `Files.walk` does not follow symlinks (same rationale as
+    // discoverTrailmapFiles), so it can't wedge on a cycle; the per-file canonical-containment
+    // check below still rejects escapes. SISTER-IMPL-TAG: trailmap-scripted-tool-discovery.
+    val candidateFiles = Files.walk(toolsDir.toPath()).use { stream ->
+      stream.filter { Files.isRegularFile(it) }.map { it.toFile() }.toList()
+    }
+      .filter { it.name.endsWith(".yaml") }
       .filter { file -> OPERATIONAL_TOOL_YAML_SUFFIXES.none { file.name.endsWith(it) } }
       .filter { file ->
         // `canonicalFile` raises IOException on symlink loops and on some filesystem quirks

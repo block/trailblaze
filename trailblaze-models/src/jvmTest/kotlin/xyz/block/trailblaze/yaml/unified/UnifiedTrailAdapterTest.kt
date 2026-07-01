@@ -41,7 +41,9 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("ios-iphone"), classifier("ios")),
+      // iPhone device: provider emits broad-first segments `[ios, iphone]`,
+      // which the lineage joins+expands to `[ios-iphone, ios]`.
+      classifiers = listOf(classifier("ios"), classifier("iphone")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
@@ -52,8 +54,8 @@ class UnifiedTrailAdapterTest {
 
   @Test
   fun `closest-wins falls through to family classifier when specific not present`() {
-    // An iPad device: classifier list `[ios-ipad, ios]`. The step has only
-    // `ios:` recordings → we walk ipad → ios → match the family.
+    // An iPad device: provider emits `[ios, ipad]` → lineage `[ios-ipad, ios]`.
+    // The step has only `ios:` recordings → we walk ios-ipad → ios → family.
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
       trail = listOf(
@@ -65,7 +67,7 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("ios-ipad"), classifier("ios")),
+      classifiers = listOf(classifier("ios"), classifier("ipad")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
@@ -87,7 +89,7 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("ios-iphone"), classifier("ios")),
+      classifiers = listOf(classifier("ios"), classifier("iphone")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
@@ -111,7 +113,7 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("android-tablet"), classifier("android")),
+      classifiers = listOf(classifier("android"), classifier("tablet")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
@@ -132,7 +134,7 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("android-phone"), classifier("android")),
+      classifiers = listOf(classifier("android"), classifier("phone")),
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
@@ -182,7 +184,7 @@ class UnifiedTrailAdapterTest {
     )
     val items = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
-      classifiers = listOf(classifier("android-phone"), classifier("android")),
+      classifiers = listOf(classifier("android"), classifier("phone")),
     )
     assertEquals(2, items.size)
     assertTrue(items[0] is TrailYamlItem.ConfigTrailItem)

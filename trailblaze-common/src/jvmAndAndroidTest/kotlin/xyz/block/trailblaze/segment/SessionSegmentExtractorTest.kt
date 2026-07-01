@@ -17,8 +17,9 @@ import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
+import xyz.block.trailblaze.api.waypoint.WaypointVariant
 import xyz.block.trailblaze.llm.TrailblazeLlmModels
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -653,11 +654,15 @@ class SessionSegmentExtractorTest {
   private fun templatedResourceIdWaypoint(id: String, suffix: String): WaypointDefinition =
     WaypointDefinition(
       id = id,
-      required = listOf(
-        WaypointSelectorEntry(
-          selector = TrailblazeNodeSelector(
-            androidAccessibility = DriverNodeMatch.AndroidAccessibility(
-              resourceIdRegex = "^{{target.appId}}:id/$suffix$",
+      byClassifier = mapOf(
+        "android" to WaypointVariant(
+          required = listOf(
+            WaypointCondition(
+              selector = TrailblazeNodeSelector(
+                androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+                  resourceIdRegex = "^{{target.appId}}:id/$suffix$",
+                ),
+              ),
             ),
           ),
         ),
@@ -708,10 +713,14 @@ class SessionSegmentExtractorTest {
   /** Convenience: build a single-required-textRegex waypoint definition. */
   private fun waypoint(id: String, text: String): WaypointDefinition = WaypointDefinition(
     id = id,
-    required = listOf(
-      WaypointSelectorEntry(
-        selector = TrailblazeNodeSelector(
-          androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+    byClassifier = mapOf(
+      "android" to WaypointVariant(
+        required = listOf(
+          WaypointCondition(
+            selector = TrailblazeNodeSelector(
+              androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = text),
+            ),
+          ),
         ),
       ),
     ),

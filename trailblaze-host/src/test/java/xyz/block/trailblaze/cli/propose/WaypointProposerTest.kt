@@ -8,6 +8,8 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.cli.androidForbidden
+import xyz.block.trailblaze.cli.androidRequired
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
@@ -47,10 +49,10 @@ class WaypointProposerTest {
     val result = WaypointProposer.synthesize(cluster, screen, targetId = "myapp")
     val ok = assertIsOk(result)
 
-    assertEquals(2, ok.definition.required.size, "expected top two matching resource IDs as required")
+    assertEquals(2, ok.definition.androidRequired.size, "expected top two matching resource IDs as required")
     assertEquals("myapp/auto-checkout-subtotal-total", ok.definition.id, "id slug is sorted-keytexts joined")
     assertTrue(ok.definition.id.contains("/auto-"), "machine proposals carry the auto- prefix")
-    assertTrue(ok.definition.forbidden.isEmpty(), "v1 emits no forbidden entries")
+    assertTrue(ok.definition.androidForbidden.isEmpty(), "v1 emits no forbidden entries")
   }
 
   @Test
@@ -71,8 +73,8 @@ class WaypointProposerTest {
     val result = WaypointProposer.synthesize(cluster, screen, targetId = "myapp")
     val ok = assertIsOk(result)
 
-    assertEquals(2, ok.definition.required.size, "fallback should take both key_texts that match")
-    val descriptions = ok.definition.required.mapNotNull { it.description }
+    assertEquals(2, ok.definition.androidRequired.size, "fallback should take both key_texts that match")
+    val descriptions = ok.definition.androidRequired.mapNotNull { it.description }
     assertTrue(descriptions.all { it.startsWith("auto: text") }, "fallback uses text selectors: $descriptions")
   }
 
@@ -113,8 +115,8 @@ class WaypointProposerTest {
     assertEquals(a.definition.id, b.definition.id, "id stable")
     assertEquals(a.proposalKey, b.proposalKey, "proposalKey stable")
     assertEquals(
-      a.definition.required.size,
-      b.definition.required.size,
+      a.definition.androidRequired.size,
+      b.definition.androidRequired.size,
       "required count stable",
     )
   }
@@ -204,8 +206,8 @@ class WaypointProposerTest {
       texts = emptyList(),
     )
     val ok = assertIsOk(WaypointProposer.synthesize(cluster, screen, "myapp"))
-    assertEquals(2, ok.definition.required.size)
-    val descriptions = ok.definition.required.mapNotNull { it.description }.toSet()
+    assertEquals(2, ok.definition.androidRequired.size)
+    val descriptions = ok.definition.androidRequired.mapNotNull { it.description }.toSet()
     assertEquals(
       setOf("auto: resource id com.example:id/x", "auto: resource id com.example:id/y"),
       descriptions,

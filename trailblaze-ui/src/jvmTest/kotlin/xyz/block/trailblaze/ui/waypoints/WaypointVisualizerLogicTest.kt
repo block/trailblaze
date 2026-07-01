@@ -9,8 +9,8 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.api.waypoint.WaypointCondition
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
-import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
 
 /**
  * Locks down the pure logic that backs the waypoint visualizer:
@@ -516,7 +516,7 @@ class WaypointVisualizerLogicTest {
     driverDetail = DriverNodeDetail.Compose(testTag = tag),
   )
 
-  private fun composeRequired(testTag: String, minCount: Int = 1) = WaypointSelectorEntry(
+  private fun composeRequired(testTag: String, minCount: Int = 1) = WaypointCondition(
     selector = TrailblazeNodeSelector(
       compose = DriverNodeMatch.Compose(testTag = testTag),
     ),

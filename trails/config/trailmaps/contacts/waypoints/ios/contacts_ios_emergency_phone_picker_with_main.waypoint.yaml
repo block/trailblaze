@@ -4,18 +4,19 @@ description: >
   contacts/ios/emergency-phone-picker but specifically for a contact whose phones include
   a "main" number along with mobile. A genuine sibling because the row count differs
   (selectable rows are part of available actions: more rows = more actions).
-required:
-  - description: "main row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "main"
-  - description: "mobile row"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "mobile"
-forbidden:
-  - description: "Add to Favorites action picker would not have main+mobile rows directly"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Mail"
-        resourceIdRegex: "envelope"
+ios:
+  required:
+    - description: "main row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "main"
+    - description: "mobile row"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "mobile"
+  forbidden:
+    - description: "Add to Favorites action picker would not have main+mobile rows directly"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Mail"
+          resourceIdRegex: "envelope"

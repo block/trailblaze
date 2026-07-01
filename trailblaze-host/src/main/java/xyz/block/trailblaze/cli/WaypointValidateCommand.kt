@@ -89,8 +89,7 @@ class WaypointValidateCommand : Callable<Int> {
       maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
       return TrailblazeExitCode.MISUSE.code
     }
-    val logFile = resolveScreenStateFile(root) ?: return TrailblazeExitCode.MISUSE.code
-    val screen = SessionLogScreenState.loadStep(logFile)
+    val logFiles = resolveScreenStateFiles(root) ?: return TrailblazeExitCode.MISUSE.code
     val target = when (val res = resolveTargetTemplateContext(targetId = targetId)) {
       is TargetContextResolution.Error -> {
         Console.error(res.message)
@@ -99,13 +98,29 @@ class WaypointValidateCommand : Callable<Int> {
       is TargetContextResolution.Resolved -> res.context
       is TargetContextResolution.NoTarget -> null
     }
-    val r = WaypointMatcher.match(def, screen, target)
     Console.log("Definition: ${def.id}")
     def.description?.let { Console.log("  $it") }
-    Console.log("Screen state: ${logFile.name}")
-    Console.log("")
-    Console.log(formatResult(r))
-    return if (r.matched) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
+    // Validate against every supplied screen state. The zero-arg path expands to the waypoint's
+    // full example SET (`<base>.example.json` + each `<base>.example.<classifier>.json`), so one
+    // run cross-checks that the per-platform selectors still match on every captured form factor.
+    var allMatched = true
+    for (logFile in logFiles) {
+      Console.log("")
+      Console.log("Screen state: ${logFile.name}")
+      val r = try {
+        val screen = SessionLogScreenState.loadStep(logFile)
+        WaypointMatcher.match(def, screen, target)
+      } catch (e: Exception) {
+        // A malformed/unreadable example must not abort validation of the rest of the set —
+        // count it as a failure for this screen and keep going so every example's status shows.
+        Console.error("  ERROR loading ${logFile.name}: ${e.message}")
+        allMatched = false
+        continue
+      }
+      Console.log(formatResult(r))
+      if (!r.matched) allMatched = false
+    }
+    return if (allMatched) TrailblazeExitCode.SUCCESS.code else TrailblazeExitCode.ASSERTION_FAILED.code
   }
 
   /**
@@ -116,8 +131,8 @@ class WaypointValidateCommand : Callable<Int> {
    *    if neither of the above is given. This is the "zero-arg" case: `waypoint
    *    validate --id X` checks the waypoint against its committed example pair.
    */
-  private fun resolveScreenStateFile(root: File): File? {
-    positionalLogFile?.let { return validateLogFile(it, label = "Log file") }
+  private fun resolveScreenStateFiles(root: File): List<File>? {
+    positionalLogFile?.let { f -> return validateLogFile(f, label = "Log file")?.let { listOf(it) } }
     // --step is meaningful only with --session — silently dropping it would mask the user's
     // pinned-step intent (they ask for step 5 and get the sibling example or auto-resolve).
     // Fail fast.
@@ -125,8 +140,8 @@ class WaypointValidateCommand : Callable<Int> {
       Console.error("--step requires --session. Pass --session <id> [--step <n>], or drop --step.")
       return null
     }
-    sessionId?.let { return resolveFromSession(it) }
-    return resolveSiblingExample(root)
+    sessionId?.let { id -> return resolveFromSession(id)?.let { listOf(it) } }
+    return resolveSiblingExamples(root)
   }
 
   /**
@@ -174,7 +189,7 @@ class WaypointValidateCommand : Callable<Int> {
    * waypoints live in source-controlled `src/commonMain/resources/trails/config/trailmaps/`
    * trees under `trailblaze-models/`; their example sidecars sit next to the YAML.
    */
-  private fun resolveSiblingExample(root: File): File? {
+  private fun resolveSiblingExamples(root: File): List<File>? {
     val candidateRoots = (
       sequenceOf(root) + SIBLING_EXAMPLE_TRAILMAP_ROOTS.asSequence().map(::File)
     ).distinct()
@@ -187,9 +202,28 @@ class WaypointValidateCommand : Callable<Int> {
         }
         if (def.id != waypointId) continue
         val baseName = yamlFile.name.removeSuffix(".waypoint.yaml")
-        val example = File(yamlFile.parentFile, "$baseName.example.json")
-        if (example.exists()) return example
-        Console.error("No screen state given and no sibling example file at: ${example.absolutePath}")
+        // The waypoint's full example SET, from two sources unioned:
+        //  1. the authoritative `example.file` refs declared in each v2 classifier block, and
+        //  2. the on-disk `<base>.example*.json` siblings (the unlabeled default + any
+        //     `<base>.example.<classifier>.json`).
+        // Honoring the refs means a v2 example whose filename doesn't follow the `<base>.example*`
+        // convention is still validated; the pattern scan keeps legacy/unreferenced examples working.
+        val refExamples = def.byClassifier.values
+          .mapNotNull { it.example?.file }
+          .map { File(yamlFile.parentFile, it) }
+          .filter { it.isFile }
+        val patternExamples = (
+          yamlFile.parentFile?.listFiles { f ->
+            f.isFile && f.name.startsWith("$baseName.example") && f.name.endsWith(".json")
+          } ?: emptyArray()
+        ).toList()
+        val examples = (refExamples + patternExamples).distinctBy { it.absolutePath }.sortedBy { it.name }
+        if (examples.isNotEmpty()) return examples
+        val bare = File(yamlFile.parentFile, "$baseName.example.json")
+        Console.error(
+          "No screen state given and no sibling example file at: ${bare.absolutePath} " +
+            "(or $baseName.example.<classifier>.json)",
+        )
         Console.error("Hint: capture one with `trailblaze waypoint capture-example --id $waypointId ...`")
         return null
       }

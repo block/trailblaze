@@ -4,18 +4,19 @@ description: >
   contacts/ios/camera-capture (Camera Chooser: Back Facing) — the FlipButton accessibility
   label now reads "Camera Chooser: Front Facing". Available actions: same UI but the
   preview pipe is mirrored selfie.
-required:
-  - description: "Take Picture"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "PhotoCapture"
-  - description: "Front-facing camera flip indicator"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Camera Chooser: Front Facing"
-        resourceIdRegex: "FlipButton"
-forbidden:
-  - description: "Camera Chooser: Back Facing — sibling waypoint"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Camera Chooser: Back Facing"
+ios:
+  required:
+    - description: "Take Picture"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "PhotoCapture"
+    - description: "Front-facing camera flip indicator"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Camera Chooser: Front Facing"
+          resourceIdRegex: "FlipButton"
+  forbidden:
+    - description: "Camera Chooser: Back Facing — sibling waypoint"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Camera Chooser: Back Facing"

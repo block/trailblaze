@@ -456,7 +456,7 @@ class TrailblazeTrailmapManifestLoaderTest {
   }
 
   @Test
-  fun `bundled mobile library trailmap loads and owns the four mobile primitive tools`() {
+  fun `bundled mobile library trailmap loads and owns the mobile primitive tools`() {
     // Pins the `mobile` library trailmap (PR #3435) as a target-less manifest that owns the
     // cross-platform `mobile_*` primitives via the `mobile_primitives` toolset. The trailmap
     // itself is purely declarative — the toolset lives in the global toolsets pool — but the
@@ -503,7 +503,13 @@ class TrailblazeTrailmapManifestLoaderTest {
       )
       assertEquals("mobile_primitives", toolset.id)
       assertEquals(
-        listOf("mobile_clearAppData", "mobile_listInstalledApps", "mobile_pasteClipboard", "mobile_setClipboard"),
+        listOf(
+          "mobile_clearAppData",
+          "mobile_listInstalledApps",
+          "mobile_listInstalledAppsDetailed",
+          "mobile_pasteClipboard",
+          "mobile_setClipboard",
+        ),
         toolset.tools,
       )
       // Always-enabled so callback dispatch can resolve `mobile_clearAppData` by name — it's

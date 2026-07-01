@@ -31,7 +31,6 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @TrailblazeToolClass(
   name = "assertVisibleBySelector",
   surfaceToLlm = false,
-  surfaceToScriptedTools = false,
   isVerification = true,
 )
 @LLMDescription("Asserts that an element with the provided selector is visible on the screen. Also matches state (checked/enabled/selected/stateDescription).")

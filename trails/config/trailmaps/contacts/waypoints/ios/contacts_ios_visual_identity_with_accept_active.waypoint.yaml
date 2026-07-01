@@ -4,18 +4,19 @@ description: >
   link visible — clicking Customize re-opens the editor for the chosen suggestion.
   Sibling to contacts/ios/visual-identity-composition (when Customize isn't yet
   scrolled into view).
-required:
-  - description: "Visual identity Done button"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityDoneButton"
-  - description: "Customize link"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Customize"
-        resourceIdRegex: "VisualIdentityEditorContainerVStack"
-forbidden:
-  - description: "Choose button — only on the editor, not composition"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityChooseButton"
+ios:
+  required:
+    - description: "Visual identity Done button"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityDoneButton"
+    - description: "Customize link"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Customize"
+          resourceIdRegex: "VisualIdentityEditorContainerVStack"
+  forbidden:
+    - description: "Choose button — only on the editor, not composition"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityChooseButton"

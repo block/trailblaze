@@ -9,69 +9,51 @@ import org.junit.Test
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 
 /**
- * Pins the independence of [TrailblazeToolClass.surfaceToLlm] and
- * [TrailblazeToolClass.surfaceToScriptedTools]:
+ * Pins the gating contract of the two tool-descriptor converters:
  *
- *  - `toKoogToolDescriptor()` gates on `surfaceToLlm` only.
- *  - `toScriptedToolDescriptor()` gates on `surfaceToScriptedTools` only.
+ *  - `toKoogToolDescriptor()` gates on `surfaceToLlm` — the LLM agent toolbox only advertises
+ *    `surfaceToLlm = true` tools.
+ *  - `toScriptedToolDescriptor()` does NOT gate on any visibility flag. Every class-backed tool
+ *    is surfaced to scripted-tool (`.ts`) authors; it returns null only when the descriptor build
+ *    itself fails — an unsupported parameter shape, OR a missing `@LLMDescription` / null parameter
+ *    name (both exercised below) — and that failure is absorbed, not propagated.
  *
- * Both default to true. Three non-default combinations are exercised here so a future
- * change that re-conflates the two flags (a single `if` over the wrong field, an
- * accidental copy-paste in the gating block) regresses obviously rather than only
- * showing up downstream in `PerTrailmapClientDtsEmitter` or the agent toolbox composition.
+ * The two surfaces are deliberately decoupled: hiding a tool from the LLM (where a brittle
+ * text-selector tool bites when picked autonomously) must NOT hide it from an expert TS author
+ * who reaches for it explicitly — the same way a hand-edited trail may use any tool. A future
+ * change that re-introduces a scripted-surface visibility gate (so a `surfaceToLlm = false` tool
+ * stops surfacing to scripted authoring) must regress here obviously.
  */
 class SurfaceFlagFilteringTest {
 
   @Serializable
-  @TrailblazeToolClass(name = "test_both_surfaces")
-  @LLMDescription("Test tool visible to both the LLM and scripted-tool typed bindings.")
-  private class BothSurfacesTool : TrailblazeTool
+  @TrailblazeToolClass(name = "test_llm_visible")
+  @LLMDescription("Test tool visible to the LLM and to scripted-tool typed bindings.")
+  private class LlmVisibleTool : TrailblazeTool
 
   @Serializable
-  @TrailblazeToolClass(name = "test_llm_only", surfaceToScriptedTools = false)
-  @LLMDescription("Test tool the LLM sees but scripted-tool authors don't.")
-  private class LlmOnlyTool : TrailblazeTool
-
-  @Serializable
-  @TrailblazeToolClass(name = "test_scripted_only", surfaceToLlm = false)
-  @LLMDescription("Test tool hidden from the LLM but typed for scripted-tool authors.")
-  private class ScriptedOnlyTool : TrailblazeTool
-
-  @Serializable
-  @TrailblazeToolClass(name = "test_neither", surfaceToLlm = false, surfaceToScriptedTools = false)
-  @LLMDescription("Test tool hidden from both surfaces — internal dispatcher only.")
-  private class NeitherSurfaceTool : TrailblazeTool
+  @TrailblazeToolClass(name = "test_llm_hidden", surfaceToLlm = false)
+  @LLMDescription("Test tool hidden from the LLM but still typed for scripted-tool authors.")
+  private class LlmHiddenTool : TrailblazeTool
 
   @Test
-  fun `both true - surfaces in both LLM toolbox and scripted-tool bindings`() {
-    assertNotNull(BothSurfacesTool::class.toKoogToolDescriptor())
-    assertNotNull(BothSurfacesTool::class.toScriptedToolDescriptor())
+  fun `surfaceToLlm true - surfaces in both the LLM toolbox and scripted-tool bindings`() {
+    assertNotNull(LlmVisibleTool::class.toKoogToolDescriptor())
+    assertNotNull(LlmVisibleTool::class.toScriptedToolDescriptor())
   }
 
   @Test
-  fun `surfaceToLlm only - surfaces in LLM toolbox but NOT scripted-tool bindings`() {
-    assertNotNull(LlmOnlyTool::class.toKoogToolDescriptor())
-    assertNull(LlmOnlyTool::class.toScriptedToolDescriptor())
-  }
-
-  @Test
-  fun `surfaceToScriptedTools only - surfaces in scripted-tool bindings but NOT LLM toolbox`() {
-    assertNull(ScriptedOnlyTool::class.toKoogToolDescriptor())
-    assertNotNull(ScriptedOnlyTool::class.toScriptedToolDescriptor())
-  }
-
-  @Test
-  fun `both false - hidden from both LLM toolbox and scripted-tool bindings`() {
-    assertNull(NeitherSurfaceTool::class.toKoogToolDescriptor())
-    assertNull(NeitherSurfaceTool::class.toScriptedToolDescriptor())
+  fun `surfaceToLlm false - hidden from the LLM toolbox but STILL surfaces to scripted-tool bindings`() {
+    assertNull(LlmHiddenTool::class.toKoogToolDescriptor())
+    assertNotNull(LlmHiddenTool::class.toScriptedToolDescriptor())
   }
 
   @Test
   fun `tapOnElementBySelector is surfaced to scripted tools but hidden from the LLM`() {
-    // Regression for the real production flip in PR #3853: `tapOnElementBySelector` moved from
-    // surfaceToScriptedTools=false to true so scripted authors can compose the selector-resolved
-    // tap, while staying hidden from the LLM (which uses the friendlier `tap`). A future blanket
-    // re-default that re-conflates the flags must not silently un-surface it.
+    // Real production tool: `surfaceToLlm = false` so the LLM uses the friendlier `tap`, while
+    // scripted authors can compose the selector-resolved tap explicitly. Pins that the
+    // LLM-hidden tool still surfaces to scripted authoring after the scripted-surface gate's
+    // removal.
     assertNotNull(TapOnByElementSelector::class.toScriptedToolDescriptor())
     assertNull(TapOnByElementSelector::class.toKoogToolDescriptor())
   }
@@ -79,14 +61,12 @@ class SurfaceFlagFilteringTest {
   // ─────────────────────────────────────────────────────────────────────────────
   // Lowering-failure absorption in toScriptedToolDescriptor
   //
-  // Real-world `surfaceToLlm=false, surfaceToScriptedTools=true` tools like
-  // `AndroidSendBroadcastTrailblazeTool` have parameter shapes (`Map<String, ...>`) that
-  // `asToolType` does not know how to lower. The LLM path historically hid this by
-  // returning null at the `surfaceToLlm = false` gate before reaching the lowering; the
-  // scripted-tool path cannot, so `toScriptedToolDescriptor` swallows the failure rather
-  // than crashing all-trailmap codegen. These tests pin both halves of that contract: the
-  // swallow happens for lowering failures, AND a tool with `surfaceToScriptedTools = true`
-  // but no other issues still produces a descriptor.
+  // Real-world `surfaceToLlm = false` tools like `AndroidSendBroadcastTrailblazeTool` have
+  // parameter shapes (`Map<String, ...>`) that `asToolType` does not know how to lower. The LLM
+  // path historically hid this by returning null at the `surfaceToLlm = false` gate before
+  // reaching the lowering; the scripted-tool path has no visibility gate at all, so
+  // `toScriptedToolDescriptor` swallows the lowering failure rather than crashing all-trailmap
+  // codegen. These tests pin that absorption.
   // ─────────────────────────────────────────────────────────────────────────────
 
   @Serializable

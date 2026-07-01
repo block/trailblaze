@@ -5,18 +5,19 @@ description: >
   Memoji / Emoji) are in OnboardingMainVStack — same shape as
   contacts/ios/avatar-onboarding but a different row is the focused starting point for
   the user.
-required:
-  - description: "Choose an Avatar header"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "Choose an Avatar"
-  - description: "New Emoji affordance"
-    selector:
-      iosMaestro:
-        accessibilityTextRegex: "New Emoji"
-        resourceIdRegex: "OnboardingMainVStack"
-forbidden:
-  - description: "Visual identity Choose — would mean we're in the editor"
-    selector:
-      iosMaestro:
-        resourceIdRegex: "VisualIdentityChooseButton"
+ios:
+  required:
+    - description: "Choose an Avatar header"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "Choose an Avatar"
+    - description: "New Emoji affordance"
+      selector:
+        iosMaestro:
+          accessibilityTextRegex: "New Emoji"
+          resourceIdRegex: "OnboardingMainVStack"
+  forbidden:
+    - description: "Visual identity Choose — would mean we're in the editor"
+      selector:
+        iosMaestro:
+          resourceIdRegex: "VisualIdentityChooseButton"
