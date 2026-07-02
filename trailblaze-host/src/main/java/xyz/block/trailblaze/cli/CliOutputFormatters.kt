@@ -58,30 +58,31 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
     text.substring(screenshotIdx + screenshotMarker.length, screenshotEnd).trim()
   } else null
 
-  // Extract the daemon's status header — `**✓ Executed** — Tapped Checkout`,
-  // `**→ Analyzed** — …`, `**✅ Done** — …`, etc. (StepResult.toMarkdown). Without
-  // surfacing this, `trailblaze step "Tap Checkout"` ran silently — the user saw
-  // only the post-action screen summary and had to infer "what did the agent
-  // do?" from the diff between snapshots. Now the status verb + message land
-  // as a "→ Executed — Tapped Checkout" breadcrumb above the ### Screen block.
+  // Surface the daemon's status header (`**✓ Executed** — Tapped Checkout`, `**✅ Done** — …`,
+  // StepResult.toMarkdown) as a `→ Executed — Tapped Checkout` breadcrumb above the ### Screen
+  // block, so a step isn't silent about what it did.
   val screenMarker = "**Screen:** "
   val screenIdx = text.indexOf(screenMarker)
   val headerMatch = matchStatusHeader(if (screenIdx >= 0) text.substring(0, screenIdx) else text)
-  if (headerMatch != null) {
-    Console.info(headerMatch.formatted)
-  }
 
-  // Print the "middle slice" between the status header and the screen/screenshot
-  // markers. `StepResult.toMarkdown` puts `**Suggestion:** …` / `**Hint:** retry
-  // with hint=…` lines here on low-confidence and error-recovery steps. Without
-  // surfacing them, the user sees the breadcrumb and the post-state screen but
-  // never the actionable retry hint. Same logic covers the no-Screen case (a
-  // response that's only header + suggestion/hint) so that body isn't silently
-  // dropped either. Trims so a sole `\n\n` separator doesn't print as an empty
-  // blank line.
   val bodyStart = headerMatch?.endIdx ?: 0
   val bodyEnd = listOf(screenIdx, screenshotIdx).filter { it >= 0 }.minOrNull() ?: text.length
-  if (bodyStart < bodyEnd) {
+  val bodyAfterHeader =
+    if (headerMatch != null && bodyStart <= bodyEnd) text.substring(bodyStart, bodyEnd) else ""
+
+  // A multi-line message (e.g. the JSON a read tool returns via `trailblaze tool`) detaches
+  // onto its own lines under a bare verb breadcrumb so its shape survives; a single-line
+  // message stays inline and `**Suggestion:**` / `**Hint:**` bodies fall to the middle slice.
+  val layout = headerMatch?.let { layoutStatusBody(it, bodyAfterHeader) }
+  if (layout != null) {
+    Console.info(layout.breadcrumb)
+  }
+
+  if (layout?.detachedBody != null) {
+    Console.info(layout.detachedBody)
+  } else if (bodyStart < bodyEnd) {
+    // `**Suggestion:** …` / `**Hint:** …` recovery lines between the header and the screen —
+    // trimmed so a lone `\n\n` separator doesn't print as a blank line.
     val middle = text.substring(bodyStart, bodyEnd).trim()
     if (middle.isNotEmpty() && (headerMatch != null || screenIdx < 0)) {
       Console.info(middle)
@@ -107,9 +108,46 @@ internal fun formatBlazeResultAgent(result: CliMcpClient.ToolResult) {
  * (`→ Verb — message`); [endIdx] is the offset in the *original* input
  * (before the leading-whitespace trim) one past the last consumed character,
  * so callers can resume from there to surface any `**Suggestion:**` /
- * `**Hint:**` lines that follow.
+ * `**Hint:**` lines that follow. [verb] is the cleaned verb alone ("Done",
+ * "Executed", …) and [message] the inline first-line message (null when the
+ * header carried none) — [layoutStatusBody] uses both to decide whether a
+ * multi-line message should detach onto its own lines.
  */
-internal data class StatusHeaderMatch(val formatted: String, val endIdx: Int)
+internal data class StatusHeaderMatch(
+  val formatted: String,
+  val endIdx: Int,
+  val verb: String,
+  val message: String?,
+)
+
+/**
+ * How a status header + its trailing body render. A single-line message rides inline on
+ * [breadcrumb] (`→ Verb — msg`); a multi-line message — e.g. the JSON a read tool returns
+ * via `trailblaze tool` — yields a bare `→ Verb` [breadcrumb] plus [detachedBody] printed
+ * beneath, so the payload keeps its indentation instead of the first line colliding with
+ * the breadcrumb.
+ */
+internal data class StatusBodyLayout(val breadcrumb: String, val detachedBody: String?)
+
+/**
+ * Decides the [StatusBodyLayout] for [match] given [bodyAfterHeader] — the text between the
+ * header and the `**Screen:**` / `**Screenshot:**` markers. The message detaches onto its
+ * own lines only when it continues past the first line with non-marker content (a JSON/text
+ * payload); `**Suggestion:**` / `**Hint:**` bodies stay for the caller's middle slice.
+ */
+internal fun layoutStatusBody(match: StatusHeaderMatch, bodyAfterHeader: String): StatusBodyLayout {
+  val continuesAsMessage = match.message != null &&
+    bodyAfterHeader.isNotBlank() &&
+    !bodyAfterHeader.trimStart().startsWith("**")
+  return if (continuesAsMessage) {
+    StatusBodyLayout(
+      breadcrumb = "→ ${match.verb}",
+      detachedBody = (match.message + bodyAfterHeader).trimEnd(),
+    )
+  } else {
+    StatusBodyLayout(breadcrumb = match.formatted, detachedBody = null)
+  }
+}
 
 /**
  * Convenience wrapper for callers that only need the formatted breadcrumb.
@@ -150,9 +188,14 @@ internal fun matchStatusHeader(prefix: String): StatusHeaderMatch? {
       c.category in DECORATION_CATEGORIES ||
       c.code == VARIATION_SELECTOR_16
   }.trim()
-  val message = match.groupValues[2].trim()
-  val formatted = if (message.isNotEmpty()) "→ $verb — $message" else "→ $verb"
-  return StatusHeaderMatch(formatted = formatted, endIdx = leadingWs + match.range.last + 1)
+  val message = match.groupValues[2].trim().ifEmpty { null }
+  val formatted = if (message != null) "→ $verb — $message" else "→ $verb"
+  return StatusHeaderMatch(
+    formatted = formatted,
+    endIdx = leadingWs + match.range.last + 1,
+    verb = verb,
+    message = message,
+  )
 }
 
 private val DECORATION_CATEGORIES = setOf(
@@ -392,6 +435,21 @@ internal fun extractJsonError(content: String): String? {
 internal val MISUSE_MARKERS = listOf("Unknown tool", "not valid for the current device/target")
 
 /**
+ * True when a daemon result is a *user-input misuse* — an **error** whose message carries a
+ * [MISUSE_MARKERS] phrase (`Unknown tool`, `not valid for the current device/target`).
+ *
+ * The error gate matters now that a successful `trailblaze tool <read-tool>` returns the tool's
+ * own payload: a marker phrase appearing inside a SUCCESS payload (e.g. shell output that happens
+ * to mention "Unknown tool") must not be misreported as EXIT=3. Daemon rejections always render as
+ * `**❌ Error** — …` (StepResult error) or a JSON `{"error": …}`, so we only treat the markers as
+ * misuse when one of those error signals is present.
+ */
+internal fun isMisuseResult(content: String): Boolean {
+  val isError = "❌ Error" in content || "❌ FAILED" in content || extractJsonError(content) != null
+  return isError && MISUSE_MARKERS.any { it in content }
+}
+
+/**
  * Determine exit code from a `step` MCP tool result.
  *
  * Name kept as `blazeExitCode` for lineage — shared by every verb that
@@ -405,17 +463,12 @@ internal fun blazeExitCode(result: CliMcpClient.ToolResult): Int {
     val error = json["error"]?.jsonPrimitive?.content
     if (!error.isNullOrBlank()) TrailblazeExitCode.INFRA_FAILED.code else TrailblazeExitCode.SUCCESS.code
   } catch (_: Exception) {
-    // Not JSON — check markdown for error markers
+    // Not JSON — check markdown for error markers. [isMisuseResult] gates the MISUSE
+    // markers on an error status so a SUCCESS payload that merely contains a marker
+    // phrase (a read/shell tool now returns its real output here) isn't misreported as
+    // a typo. A generic error with no marker is INFRA; anything else is SUCCESS.
     val text = result.content
-    // The daemon's `StepResult.toMarkdown()` always prefixes these with
-    // `**❌ Error**`, but `ToolCommand` intercepts the rejection path before
-    // this fallback — checking the substring here is defense in depth for any
-    // future caller of `blazeExitCode` (or a daemon-side format drift) so we
-    // don't silently return SUCCESS on a typo. Order matters: check the
-    // [MISUSE_MARKERS] BEFORE the generic error markers, otherwise the broad
-    // "❌ Error" / "❌ FAILED" catch would mask the more-specific
-    // input-mistake verdict.
-    if (MISUSE_MARKERS.any { it in text }) {
+    if (isMisuseResult(text)) {
       TrailblazeExitCode.MISUSE.code
     } else if ("❌ Error" in text || "❌ FAILED" in text) {
       TrailblazeExitCode.INFRA_FAILED.code

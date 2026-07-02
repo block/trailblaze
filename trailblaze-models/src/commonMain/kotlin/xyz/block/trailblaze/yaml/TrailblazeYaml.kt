@@ -246,7 +246,7 @@ class TrailblazeYaml(
       if (deviceClassifiers.isEmpty()) {
         val hasRecordings = doc.trail.trail.any { step ->
           step.recordings.values.any { it.isNotEmpty() }
-        }
+        } || doc.trail.trailhead?.recordings?.values?.any { it.isNotEmpty() } == true
         check(!hasRecordings) {
           "decodeTrail was called on a unified trail with recordings, but no device " +
             "classifiers were provided. Lowering with no classifiers would drop every " +
@@ -279,6 +279,24 @@ class TrailblazeYaml(
     require(configItems.isEmpty() || (configItems.size == 1 && configItems[0] == trailItemList[0])) {
       "Only one config item is allowed, and it must be the first item in the trail."
     }
+    val trailheadItems = trailItemList.filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+    require(trailheadItems.size <= 1) {
+      "Only one trailhead item is allowed in a trail."
+    }
+    if (trailheadItems.size == 1) {
+      val trailheadIndex = trailItemList.indexOf(trailheadItems[0])
+      val firstStepIndex = trailItemList.indexOfFirst {
+        it is TrailYamlItem.PromptsTrailItem || it is TrailYamlItem.ToolTrailItem
+      }
+      // The trailhead is the deterministic step 0: it must sit after the config (if any) and before
+      // any prompts/tools steps, so it always runs first.
+      require(configItems.isEmpty() || trailheadIndex > trailItemList.indexOf(configItems[0])) {
+        "The trailhead item must come after the config item."
+      }
+      require(firstStepIndex == -1 || trailheadIndex < firstStepIndex) {
+        "The trailhead item must come before any prompts/tools steps — it is the trail's step 0."
+      }
+    }
     return trailItemList
   }
 
@@ -303,7 +321,32 @@ class TrailblazeYaml(
   fun extractTrailConfig(yaml: String): TrailConfig? = when (val doc = decodeTrailDocument(yaml)) {
     is TrailDocument.V1 -> doc.items.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
       .firstOrNull()?.config
-    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(doc.trail.config)
+    // No device here (static config extraction), so no per-classifier driver to resolve —
+    // pass resolvedDriver = null explicitly. The device-aware driver resolution happens in
+    // lowerToTrailItems, not here (or via the device-aware overload below).
+    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(doc.trail.config, resolvedDriver = null)
+  }
+
+  /**
+   * Device-aware config extraction: same as [extractTrailConfig] but resolves the unified
+   * format's per-classifier `devices:` driver pin for [deviceClassifiers] (closest-wins), so
+   * the returned [TrailConfig.driver] reflects the driver the trail pins for THIS device.
+   * Needed by the CLI, which resolves the driver before device selection and must see a
+   * unified trail's `devices: {android: ANDROID_ONDEVICE_ACCESSIBILITY}` pin rather than the
+   * device's default driver. Still routes through [decodeTrailDocument] (never the recordings
+   * guard), so it is safe for any classifier list including empty (empty → null driver, same
+   * as the no-classifier overload). v1 configs carry their scalar `driver:` unchanged.
+   */
+  fun extractTrailConfig(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): TrailConfig? = when (val doc = decodeTrailDocument(yaml)) {
+    is TrailDocument.V1 -> doc.items.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+      .firstOrNull()?.config
+    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
+      doc.trail.config,
+      resolvedDriver = UnifiedTrailAdapter.resolveDriver(doc.trail.config, deviceClassifiers),
+    )
   }
 
   @OptIn(ExperimentalSerializationApi::class)
@@ -336,6 +379,8 @@ class TrailblazeYaml(
       when (item) {
         is TrailYamlItem.PromptsTrailItem -> item.promptSteps.isNotEmpty()
         is TrailYamlItem.ToolTrailItem -> item.tools.isNotEmpty()
+        // A trailhead is always actionable — its `init` guarantees a step and/or tools to run.
+        is TrailYamlItem.TrailheadTrailItem -> true
         is TrailYamlItem.ConfigTrailItem -> false
       }
     }
@@ -345,6 +390,7 @@ class TrailblazeYaml(
       is TrailYamlItem.PromptsTrailItem -> {
         item.promptSteps.any { promptStep -> promptStep.recording != null }
       }
+      is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.isNotEmpty()
       is TrailYamlItem.ConfigTrailItem,
       is TrailYamlItem.ToolTrailItem -> false
     }
@@ -362,16 +408,18 @@ class TrailblazeYaml(
       is TrailDocument.V1 -> hasRecordedSteps(doc.items)
       is TrailDocument.Unified -> doc.trail.trail.any { step ->
         step.recordings.values.any { it.isNotEmpty() }
-      }
+      } || doc.trail.trailhead?.recordings?.values?.any { it.isNotEmpty() } == true
     }
   } catch (_: Throwable) {
     false
   }
 
   /**
-   * Decode a unified Trail YAML document. The unified format has exactly two
-   * top-level keys — `config:` (singleton mapping) and `trail:` (ordered list
-   * of steps). See [docs/devlog/2026-05-22-trail-yaml-unified-syntax.md].
+   * Decode a unified Trail YAML document. Top-level keys: `config:` (optional —
+   * defaults to an empty config when absent), `trailhead:` (optional — the
+   * deterministic step 0), and `trail:` (required and non-empty — the ordered
+   * list of steps, the one key that makes the file a test).
+   * See [docs/devlog/2026-05-22-trail-yaml-unified-syntax.md].
    *
    * Throws on malformed input — callers that need version-agnostic parsing
    * should use [decodeTrailDocument] instead.
@@ -379,10 +427,11 @@ class TrailblazeYaml(
   fun decodeUnifiedTrail(yaml: String): UnifiedTrail {
     val rootNode = yamlInstance.parseToYamlNode(yaml)
     require(rootNode is YamlMap) {
-      "Unified Trail YAML root must be a mapping with `config:` and `trail:` keys; " +
-        "got a ${rootNode::class.simpleName} at the root."
+      "Unified Trail YAML root must be a mapping with a `trail:` key (and optional `config:` / " +
+        "`trailhead:`); got a ${rootNode::class.simpleName} at the root."
     }
     var config: UnifiedTrailConfig? = null
+    var trailhead: UnifiedTrailStep? = null
     var trail: List<UnifiedTrailStep>? = null
     for ((keyNode, valueNode) in rootNode.entries) {
       when (val key = keyNode.content) {
@@ -390,18 +439,28 @@ class TrailblazeYaml(
           UnifiedTrailConfig.serializer(),
           valueNode,
         )
+        "trailhead" -> trailhead = yamlInstance.decodeFromYamlNode(
+          unifiedTrailStepSerializer,
+          valueNode,
+        )
         "trail" -> trail = yamlInstance.decodeFromYamlNode(
           ListSerializer(unifiedTrailStepSerializer),
           valueNode,
         )
         else -> throw IllegalArgumentException(
-          "Unexpected top-level key `$key` in unified trail (expected `config` or `trail`).",
+          "Unexpected top-level key `$key` in unified trail (expected `config`, `trailhead`, or `trail`).",
         )
       }
     }
-    requireNotNull(config) { "unified trail is missing required top-level `config:` key" }
-    requireNotNull(trail) { "unified trail is missing required top-level `trail:` key" }
-    return UnifiedTrail(config = config, trail = trail)
+    // `config:` is optional — every UnifiedTrailConfig field defaults (no target → generic tools;
+    // no devices → inherit from the trailmap manifest; no id → still runs), so an absent config is
+    // an empty config. `trail:` is the one required key AND must be non-empty: it is what makes the
+    // file a test. A trailhead-only / empty trail would run its bootstrap and then pass with no real
+    // test steps (a vacuous always-pass), so reject an empty list here, not just a missing key.
+    require(!trail.isNullOrEmpty()) {
+      "unified trail is missing a non-empty top-level `trail:` — every trail needs at least one step."
+    }
+    return UnifiedTrail(config = config ?: UnifiedTrailConfig(), trailhead = trailhead, trail = trail)
   }
 
   /**

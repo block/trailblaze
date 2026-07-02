@@ -1,9 +1,9 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Force-stops the Google Clock app and re-launches it via the package's default
+ * Force-stops the AOSP Desk Clock app and re-launches it via the package's default
  * launcher activity, so the next step starts from a clean app state. Equivalent to a
- * Maestro `launchApp({ launchMode: FORCE_RESTART })` against `com.google.android.deskclock`,
+ * Maestro `launchApp({ launchMode: FORCE_RESTART })` against `com.android.deskclock`,
  * but composed entirely from the dual-mode `android_adbShell` primitive so the same tool
  * works on host- and on-device-dispatched scripted-tool sessions.
  *
@@ -49,9 +49,16 @@ import { trailblaze } from "@trailblaze/scripting";
 // checks exit-code-zero for success — it would otherwise surface the launch as a failure
 // even when the app opened correctly.
 export const clock_android_launchApp = trailblaze.tool(
-  { supportedPlatforms: ["android"], requiresContext: true },
+  {
+    supportedPlatforms: ["android"],
+    requiresContext: true,
+    // Declares this tool a trailhead landing on the Clock tab — the inline equivalent of a
+    // `*.trailhead.yaml` sidecar (#4404). `to` is the waypoint launching the app lands on, so this
+    // tool shows up under `toolbox trailheads` / the "Use as Trailhead" picker with no sidecar file.
+    trailhead: { to: "clock/android/clock_tab" },
+  },
   async (_input, ctx) => {
-    const appId = ctx.target?.resolveAppId({ defaultAppId: "com.google.android.deskclock" });
+    const appId = ctx.target?.resolveAppId({ defaultAppId: "com.android.deskclock" });
     if (!appId) {
       throw new Error("clock_android_launchApp could not resolve an Android app id from ctx.target.");
     }

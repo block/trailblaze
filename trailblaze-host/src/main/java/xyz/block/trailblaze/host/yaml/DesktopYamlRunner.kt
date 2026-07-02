@@ -473,6 +473,10 @@ class DesktopYamlRunner(
         executionResult = TrailExecutionResult.Cancelled
       } catch (e: Exception) {
         Console.log("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${e::class.simpleName} - ${e.message}")
+        // Full stack trace to the daemon log so the throw site is diagnosable — the one-line
+        // message alone hid which internal call actually failed (e.g. a decodeTrail deep in the
+        // dispatch path vs. a device-connect IOException).
+        Console.log(e.stackTraceToString())
         prefixedProgressMessage("Error: ${e.message}")
         executionResult = TrailExecutionResult.Failed(e.message)
         try {

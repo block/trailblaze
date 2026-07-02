@@ -276,3 +276,89 @@ export function createMemory(snapshot: Record<string, string> | undefined): Trai
   };
   return memory;
 }
+
+/**
+ * Stamp the memory diff captured by [memory] onto a tool result's `_meta.trailblaze` envelope
+ * (`memoryDelta` for sets, `memoryDeletions` for removed keys). The Kotlin host reads these after
+ * a successful dispatch and merges them into the shared `AgentMemory`.
+ *
+ * **Shared by BOTH dispatch paths, which is the point.** Previously only the subprocess/MCP path
+ * flushed writes — it wrapped this exact logic inline in `tool.ts`'s `attachMemoryDelta`, draining
+ * `ctx.memory`. The in-process / on-device QuickJS path (`defineTypedTool` in `tool-core.ts`)
+ * reconstructs a fresh `TrailblazeMemory` from the raw snapshot the Kotlin `QuickJsToolCtxEnvelope`
+ * hands it, and had no equivalent flush — so a handler's `ctx.memory.set(...)` was silently dropped
+ * and never reached the next tool's `ctx.memory.get(...)`. Both paths now call this so the write is
+ * visible regardless of host/device dispatch (Kotlin side: `SubprocessTrailblazeTool` /
+ * `QuickJsTrailblazeTool` both apply the resulting `memoryDelta`).
+ *
+ * No-op when [memory] is undefined, isn't drainable, or the handler made no memory changes —
+ * returns [result] untouched so a tool that writes nothing keeps its exact original return shape.
+ * When there IS a diff: preserves any `_meta` the handler set explicitly (merging under
+ * `trailblaze`), and wraps anything that isn't already an MCP-shaped `{content: [...]}` envelope
+ * in one first so the `_meta` has an object to live on.
+ *
+ * **Why the wrap condition is "has a `content` array", not "is an object".** A typed
+ * `trailblaze.tool<I, O>(handler)` on the in-process path can return ANY author-declared `O` —
+ * including a plain structured object like `{ ok: true }` with no `content` field. The synthesized
+ * in-process wrapper's `__normalizeResult` (and the subprocess inline-tool wrapper's
+ * `normalizeInlineToolResult`) only pass an object through untouched when it already carries
+ * `Array.isArray(result.content)`; anything else gets `JSON.stringify`'d into a fresh text-only
+ * envelope, which would silently swallow a `_meta` bolted onto the raw object here. Wrapping a bare
+ * object ourselves — before the downstream normalizer sees it — means it hits the "already has
+ * `content`" branch there and passes through with `_meta` intact. The wrap also sets
+ * `structuredContent` for object returns so a caller composing this tool via
+ * `client.tools.<name>(...)` still unwraps the typed value (mirrors the subprocess synthesizer's
+ * `normalizeInlineToolResult`).
+ */
+export function attachMemoryDeltaToResult(
+  result: unknown,
+  memory: TrailblazeMemory | undefined,
+): unknown {
+  if (memory === undefined) return result;
+  const drainable = memory as DrainableMemory;
+  if (typeof drainable[DRAIN_DELTA] !== "function") return result;
+  const delta = drainable[DRAIN_DELTA]();
+  const setKeys = Object.keys(delta.sets);
+  if (setKeys.length === 0 && delta.deletions.length === 0) return result;
+  const trailblaze: Record<string, unknown> = {};
+  if (setKeys.length > 0) trailblaze[META_KEY_MEMORY_DELTA] = delta.sets;
+  if (delta.deletions.length > 0) trailblaze[META_KEY_MEMORY_DELETIONS] = delta.deletions;
+
+  const hasContentArray =
+    typeof result === "object" && result !== null && Array.isArray((result as Record<string, unknown>).content);
+
+  if (!hasContentArray) {
+    const wrapped: Record<string, unknown> = {
+      content:
+        result === undefined || result === null
+          ? []
+          : [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
+      _meta: { [META_KEY_TRAILBLAZE]: trailblaze },
+    };
+    // Bare structured object (not a string/number/etc.) — also carry it as structuredContent so a
+    // typed caller unwraps the real value instead of the JSON-stringified text.
+    if (typeof result === "object" && result !== null) {
+      wrapped.structuredContent = result;
+    }
+    return wrapped;
+  }
+
+  const resultRecord = result as Record<string, unknown>;
+  // A handler that set `_meta` to something other than an object (e.g. a string) is authoring a
+  // non-standard MCP result — there's no sane merge target, so that value is treated the same as
+  // "no `_meta` at all" and replaced outright, rather than preserved-but-ignored. By design, not
+  // an oversight: no known author pattern relies on a non-object `_meta`.
+  const existingMeta =
+    typeof resultRecord["_meta"] === "object" && resultRecord["_meta"] !== null
+      ? (resultRecord["_meta"] as Record<string, unknown>)
+      : {};
+  const existingTrailblaze =
+    typeof existingMeta[META_KEY_TRAILBLAZE] === "object" && existingMeta[META_KEY_TRAILBLAZE] !== null
+      ? (existingMeta[META_KEY_TRAILBLAZE] as Record<string, unknown>)
+      : {};
+  const merged: Record<string, unknown> = { ...existingTrailblaze, ...trailblaze };
+  return {
+    ...resultRecord,
+    _meta: { ...existingMeta, [META_KEY_TRAILBLAZE]: merged },
+  };
+}

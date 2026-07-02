@@ -147,7 +147,8 @@ class UnifiedTrailEmitterTest {
       config = UnifiedTrailConfig(
         id = "myapp/checkout",
         target = "myapp",
-        devices = listOf("android-phone", "android-tablet", "ios"),
+        description = "Open the checkout flow and complete a payment.",
+        devices = mapOf("android" to "ANDROID_ONDEVICE_ACCESSIBILITY", "ios" to "IOS_HOST"),
         context = "Test context — one line",
         memory = mapOf("email" to "tb+test@example.com"),
         metadata = mapOf("jira" to "PROJ-123"),

@@ -750,7 +750,7 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 
 ### `trailblaze waypoint suggest-selector`
 
-Suggest waypoint-ready selector YAML for a specific element ref in a captured screen. Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching session log to translate ref → selector. Returns up to --max named candidates (the TrailblazeNodeSelectorGenerator strategies that uniquely resolve to the target), plus one structural-only candidate at the bottom for forbidden-clause use.
+Suggest selector YAML for a specific element ref in a captured screen — the whole menu. Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching session log to translate ref → selector. Prints EVERY strategy that computes a selector resolving to the target (resource id, text, structural, childOf, containsChild, spatial, index-qualified variants, plus a run-variable-wildcarded text variant), each with its strategy name + live match count, ranked most-stable first. Nothing computable is hidden.
 
 **Synopsis:**
 
@@ -773,7 +773,7 @@ trailblaze waypoint suggest-selector [OPTIONS] [<<positionalLogFile>>]
 | `--maestro-selector` | Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like `textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the shape used by the older Maestro-driver tap recordings. The selector is resolved against the captured `viewHierarchy` (Maestro tree) using the same matcher the runtime taps use; the resulting node's CENTER coordinate is then hit-tested against the captured `trailblazeNodeTree` (accessibility tree) to find the accessibility node that covers the same on-screen element. The output is the same selector cascade as `--ref` / `--at`, but starting from a Maestro selector. This is the deterministic Maestro→accessibility migration primitive. Mutually exclusive with --ref / --at. | - |
 | `--session` | Session log directory (containing *_TrailblazeLlmRequestLog.json files) | - |
 | `--step` | 1-based step within --session (default: last step) | - |
-| `--max` | Maximum candidate selectors to return (default: 5) | - |
+| `--max` | Maximum candidate selectors to print (default: 25 — enough to show them all) | - |
 | `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |

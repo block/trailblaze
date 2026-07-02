@@ -30,7 +30,7 @@ ios:
 
 android:
   slug: clock
-  recording: trails/clock/set-alarm-730am/android.trail.yaml
+  recording: trails/clock/set-alarm-730am/trail.yaml
 
 web:
   slug: wikipedia

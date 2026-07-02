@@ -19,7 +19,7 @@ import type { ErrorObject, ValidateFunction } from "ajv/dist/2020.js";
 
 import type { TrailblazeClient, TrailblazeToolMethods } from "./client.js";
 import type { TrailblazeContext, TrailblazeDevice, TrailblazeTarget } from "./context.js";
-import { createMemory, type TrailblazeMemory } from "./memory.js";
+import { attachMemoryDeltaToResult, createMemory, type TrailblazeMemory } from "./memory.js";
 
 /**
  * Minimal handler context for the typed `trailblaze.tool<I, O>(handler)` authoring surface.
@@ -122,6 +122,39 @@ export interface TrailblazeTypedToolSpec {
    * MCP advertisement either way. Plain JSON Schema literal, not a zod schema.
    */
   inputSchema?: Record<string, unknown>;
+  /**
+   * Marks this tool as a **trailhead**: a deterministic bootstrap that takes a device from a
+   * blank slate to a known app state (clear data, launch, sign in, land on a screen) — step 0 of
+   * a trail. Presence of this field is what makes the tool a trailhead; `to`/`dynamic` mirror
+   * the YAML `*.trailhead.yaml` sidecar's `trailhead:` block (`TrailheadMetadata` in
+   * `ToolYamlConfig.kt`) field-for-field, so a TS-authored tool no longer needs a companion
+   * `.trailhead.yaml` just to register its navigation metadata.
+   *
+   * Like [description] this is a primary-descriptor field, NOT a `_meta` gate: it doesn't affect
+   * registration or dispatch, so it's read directly off the analyzer-captured spec by discovery
+   * surfaces (`toolbox trailheads`, the Trail Runner "Use as Trailhead" picker) rather than
+   * projected into the namespaced `trailblaze/...` `_meta` keys the runtime reads to gate
+   * execution.
+   */
+  trailhead?: TrailheadSpec;
+}
+
+/**
+ * `trailhead` field shape for [TrailblazeTypedToolSpec]. 1:1 with the Kotlin
+ * `TrailheadMetadata` data class (`ToolYamlConfig.kt`) that backs `*.trailhead.yaml`'s
+ * `trailhead:` block — same two fields, same mutual-exclusion contract.
+ */
+export interface TrailheadSpec {
+  /**
+   * The single waypoint this trailhead lands on. Required unless [dynamic] is true — a trailhead
+   * with neither is dropped with a warning (not a real bootstrap destination).
+   */
+  to?: string;
+  /**
+   * Marks a trailhead whose destination varies by input (e.g. a deep-link launcher), so no
+   * single `to:` waypoint applies. Mutually exclusive with [to]. Defaults to `false`.
+   */
+  dynamic?: boolean;
 }
 
 /**
@@ -234,10 +267,15 @@ export function defineTypedTool<TInput, TResult>(
     // discriminator is the presence of a function-valued `interpolate` — a raw record has only
     // string values, a `TrailblazeMemory` has methods.
     const rawMemory = legacyCtx?.memory;
-    const memory: TrailblazeMemory =
-      rawMemory != null && typeof (rawMemory as TrailblazeMemory).interpolate === "function"
-        ? (rawMemory as TrailblazeMemory)
-        : createMemory(rawMemory as Record<string, string> | undefined);
+    // `memoryIsWrapped` = the memory arrived already as a `TrailblazeMemory` (subprocess / MCP path,
+    // where `fromMeta` wrapped it). When it did NOT, we reconstruct one from the raw snapshot — that
+    // reconstruction is the on-device / in-process QuickJS path, and it's the memory the host has no
+    // other handle on, so we own flushing its diff back (see the post-handler block below).
+    const memoryIsWrapped =
+      rawMemory != null && typeof (rawMemory as TrailblazeMemory).interpolate === "function";
+    const memory: TrailblazeMemory = memoryIsWrapped
+      ? (rawMemory as TrailblazeMemory)
+      : createMemory(rawMemory as Record<string, string> | undefined);
     // `device` and `target` ride through from the legacy ctx. Normalize the device block so typed
     // handlers can consistently branch on `ctx.device.driverType`, even when invoked by an older
     // on-device QuickJS host that only emitted the deprecated `driver` alias.
@@ -247,7 +285,19 @@ export function defineTypedTool<TInput, TResult>(
       device: normalizeDevice(legacyCtx?.device),
       target: legacyCtx?.target,
     };
-    return handler(validatedArgs as TInput, toolContext);
+    const out = await handler(validatedArgs as TInput, toolContext);
+    // On the subprocess / MCP path, the surrounding `attachMemoryDelta` (tool.ts) drains
+    // `ctx.memory` after the handler returns, so leave the raw result alone here. On the in-process
+    // / on-device QuickJS path there is no such wrapper AND `ctx.memory` is a raw snapshot the host
+    // can't drain — the writes went into the `memory` we reconstructed above, so flush its diff onto
+    // the result's `_meta.trailblaze.memoryDelta` here. Without this, an on-device
+    // `ctx.memory.set(...)` was silently dropped and never reached the next tool's `.get(...)` (the
+    // write-then-read hand-off between two scripted tools). The Kotlin `QuickJsTrailblazeTool` applies
+    // the delta back into the shared `AgentMemory`, mirroring `SubprocessTrailblazeTool`.
+    // Cast: the analyzer treats `<TResult>` as a compile-time signal; at runtime the synthesized
+    // wrapper's `__normalizeResult` consumes whatever shape we return (bare value or envelope).
+    if (memoryIsWrapped) return out;
+    return attachMemoryDeltaToResult(out, memory) as TResult;
   };
 }
 

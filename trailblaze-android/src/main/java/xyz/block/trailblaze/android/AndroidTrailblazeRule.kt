@@ -672,6 +672,14 @@ open class AndroidTrailblazeRule(
               useRecordedSteps = useRecordedSteps,
               selfHeal = config.selfHeal,
             )
+          is TrailYamlItem.TrailheadTrailItem ->
+            // The trailhead is step 0: run its single lowered step through the same path as any
+            // prompt step (deterministic tool replay, or blaze the NL step if it has no tools).
+            trailblazeRunnerUtil.runPrompt(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
         }

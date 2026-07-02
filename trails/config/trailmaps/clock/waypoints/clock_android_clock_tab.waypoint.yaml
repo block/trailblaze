@@ -1,13 +1,11 @@
 id: "clock/android/clock_tab"
 description: >
-  Google Clock app, Clock tab is selected at the bottom nav, showing the
+  AOSP Desk Clock app, Clock tab is selected at the bottom nav, showing the
   cities list (RecyclerView). Distinct from clock/android/alarm_tab (no add-alarm FAB).
 
-  Resource IDs use the `{{target.appId}}` template variable. In-session it expands
-  to the single resolved app id (the Google variant `com.google.android.deskclock`
-  or the AOSP variant `com.android.deskclock`, whichever is installed); at
-  log-replay time it falls back to an alternation over both app_ids declared in
-  the clock target.
+  Resource IDs use the `{{target.appId}}` template variable. In-session and at
+  log-replay time it expands to the clock target's single app id
+  `com.android.deskclock` (the AOSP Desk Clock).
 android:
   required:
     - description: "CLOCK tab in selected state"

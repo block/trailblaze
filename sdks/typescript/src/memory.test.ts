@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createMemory, DRAIN_DELTA, type DrainableMemory } from "./memory.js";
+import { attachMemoryDeltaToResult, createMemory, DRAIN_DELTA, type DrainableMemory } from "./memory.js";
 
 describe("createMemory: snapshot reads", () => {
   test("get returns snapshot values for unmodified keys", () => {
@@ -250,6 +250,102 @@ describe("createMemory: drain delta (wire shape)", () => {
     const d = drain(m);
     expect(d.sets["toString"]).toBe("t");
     expect(d.sets["hasOwnProperty"]).toBe("h");
+  });
+});
+
+describe("attachMemoryDeltaToResult", () => {
+  test("no-op when memory is undefined", () => {
+    expect(attachMemoryDeltaToResult("ok", undefined)).toBe("ok");
+  });
+
+  test("no-op (returns the exact result) when the handler made no writes", () => {
+    const m = createMemory({ a: "1" });
+    const result = { content: [{ type: "text", text: "hi" }] };
+    // Same reference back — a write-free tool keeps its original return shape untouched.
+    expect(attachMemoryDeltaToResult(result, m)).toBe(result);
+  });
+
+  test("wraps a bare-string return in a content envelope and stamps memoryDelta", () => {
+    const m = createMemory({});
+    m.set("session_token", "tok-123");
+    const out = attachMemoryDeltaToResult("done", m) as {
+      content: unknown[];
+      _meta: { trailblaze: { memoryDelta: Record<string, string> } };
+    };
+    expect(out.content).toEqual([{ type: "text", text: "done" }]);
+    expect(out._meta.trailblaze.memoryDelta).toEqual({ session_token: "tok-123" });
+  });
+
+  test("merges memoryDelta into an object result while preserving existing _meta", () => {
+    const m = createMemory({ old: "v" });
+    m.set("k", "v2");
+    m.delete("old");
+    const out = attachMemoryDeltaToResult(
+      { content: [{ type: "text", text: "hi" }], _meta: { trailblaze: { existing: "keep" } } },
+      m,
+    ) as { _meta: { trailblaze: Record<string, unknown> } };
+    expect(out._meta.trailblaze.existing).toBe("keep");
+    expect(out._meta.trailblaze.memoryDelta).toEqual({ k: "v2" });
+    expect(out._meta.trailblaze.memoryDeletions).toEqual(["old"]);
+  });
+
+  test("wraps a bare structured object (no content array) instead of bolting _meta directly onto it", () => {
+    // Regression: a typed tool's declared TResult can be any plain object, e.g. `{ ok: true }`,
+    // with no `content` field. Bolting `_meta` directly onto that object produces a shape the
+    // downstream `__normalizeResult` (in-process wrapper) / `normalizeInlineToolResult` (subprocess
+    // inline-tool wrapper) do NOT recognize as "already MCP-shaped" — both only pass an object
+    // through untouched when it has `Array.isArray(result.content)` — so they'd JSON.stringify the
+    // whole thing (including _meta) into a fresh text-only envelope, losing the memoryDelta.
+    const m = createMemory({});
+    m.set("session_token", "tok-9");
+    const out = attachMemoryDeltaToResult({ ok: true }, m) as {
+      content: Array<{ type: string; text: string }>;
+      structuredContent: unknown;
+      _meta: { trailblaze: { memoryDelta: Record<string, string> } };
+    };
+    // Must have a `content` array so a downstream normalizer's `Array.isArray(content)` check
+    // passes it through unchanged.
+    expect(Array.isArray(out.content)).toBe(true);
+    expect(out._meta.trailblaze.memoryDelta).toEqual({ session_token: "tok-9" });
+    // The typed value survives via structuredContent for a composing caller.
+    expect(out.structuredContent).toEqual({ ok: true });
+  });
+
+  test("does not add structuredContent when wrapping a primitive (only bare objects get it)", () => {
+    const m = createMemory({});
+    m.set("k", "v");
+    const out = attachMemoryDeltaToResult(42, m) as { structuredContent?: unknown };
+    expect(out.structuredContent).toBeUndefined();
+  });
+
+  test("stamps only memoryDeletions when the delta has no sets", () => {
+    // Sibling test to "merges memoryDelta..." above, which exercises sets+deletions together —
+    // this pins the deletions-only combination through the full function on its own (the
+    // underlying drainDelta shape is covered separately in the "drain delta" describe block, but
+    // not previously threaded through attachMemoryDeltaToResult by itself).
+    const m = createMemory({ old: "v" });
+    m.delete("old");
+    const out = attachMemoryDeltaToResult({ content: [{ type: "text", text: "hi" }] }, m) as {
+      _meta: { trailblaze: { memoryDelta?: Record<string, string>; memoryDeletions: string[] } };
+    };
+    expect(out._meta.trailblaze.memoryDeletions).toEqual(["old"]);
+    expect(out._meta.trailblaze.memoryDelta).toBeUndefined();
+  });
+
+  test("wraps a result whose content key is present but not an array", () => {
+    // The wrap condition is `Array.isArray(result.content)`, not merely `"content" in result` —
+    // a result shaped like `{ content: "oops" }` must be wrapped (not merged into), since a
+    // downstream normalizer's own `Array.isArray(content)` check would also reject it.
+    const m = createMemory({});
+    m.set("k", "v");
+    const out = attachMemoryDeltaToResult({ content: "oops" }, m) as {
+      content: Array<{ type: string; text: string }>;
+      structuredContent: unknown;
+      _meta: { trailblaze: { memoryDelta: Record<string, string> } };
+    };
+    expect(Array.isArray(out.content)).toBe(true);
+    expect(out._meta.trailblaze.memoryDelta).toEqual({ k: "v" });
+    expect(out.structuredContent).toEqual({ content: "oops" });
   });
 });
 

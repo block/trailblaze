@@ -32,26 +32,25 @@ class UnifiedTrailRuntimeIntegrationTest {
       config:
         id: myapp/checkout
         target: myapp
-        devices:
-          - android-phone
-          - ios
       trail:
         - step: Open the app
-          android-phone:
-            - openApp-android:
-                appId: com.example
-          ios:
-            - openApp-ios:
-                appId: com.example.ios
+          recording:
+            android-phone:
+              - openApp-android:
+                  appId: com.example
+            ios:
+              - openApp-ios:
+                  appId: com.example.ios
         - step: Tap continue
-          android:
-            - tap-shared:
-                x: 1
-                y: 1
-          ios:
-            - tap-ios:
-                x: 2
-                y: 2
+          recording:
+            android:
+              - tap-shared:
+                  x: 1
+                  y: 1
+            ios:
+              - tap-ios:
+                  x: 2
+                  y: 2
     """.trimIndent()
 
     // Run as an iPhone — provider emits broad-first segments `[ios, iphone]`,
@@ -95,14 +94,13 @@ class UnifiedTrailRuntimeIntegrationTest {
       config:
         id: contacts/open
         target: contacts
-        devices:
-          - ios-iphone
       trail:
         - step: Open the contact
-          ios-iphone:
-            - tapOnElementBySelector-ios:
-                x: 1
-                y: 1
+          recording:
+            ios-iphone:
+              - tapOnElementBySelector-ios:
+                  x: 1
+                  y: 1
     """.trimIndent()
     val items = yaml.decodeTrail(
       unifiedYaml,
@@ -152,7 +150,8 @@ class UnifiedTrailRuntimeIntegrationTest {
         context: this is context
       trail:
         - step: anything
-          android-phone: []
+          recording:
+            android-phone: []
       """.trimIndent(),
     )
     assertNotNull(unified)
@@ -171,6 +170,43 @@ class UnifiedTrailRuntimeIntegrationTest {
     )
     assertNotNull(v1)
     assertEquals("v1-trail", v1.id)
+  }
+
+  @Test
+  fun `device-aware extractTrailConfig resolves the unified per-classifier driver pin`() {
+    // Regression guard for the CLI driver-resolution path: a unified trail that pins a driver
+    // via `config.devices:` must surface that driver through extractTrailConfig so the CLI
+    // selects the pinned driver (ANDROID_ONDEVICE_ACCESSIBILITY) rather than the device's
+    // default. The device-less overload can't (and shouldn't) resolve it — assert both.
+    val unifiedYaml = """
+      config:
+        id: clock/set-alarm
+        target: clock
+        devices:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Launch the app
+          recording:
+            android:
+              - openApp-android:
+                  appId: com.example
+    """.trimIndent()
+
+    // Device-aware: android device resolves the `android` pin.
+    val withDevice = yaml.extractTrailConfig(
+      unifiedYaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+    )
+    assertNotNull(withDevice)
+    assertEquals("ANDROID_ONDEVICE_ACCESSIBILITY", withDevice.driver)
+
+    // Device-less overload can't resolve a per-classifier pin → null driver (documents why the
+    // CLI must use the device-aware overload).
+    assertNull(yaml.extractTrailConfig(unifiedYaml)?.driver)
+
+    // Recordings present + empty classifiers must NOT trip the decodeTrail guard here — the
+    // overload routes through decodeTrailDocument, not the guarded decodeTrail.
+    assertNull(yaml.extractTrailConfig(unifiedYaml, deviceClassifiers = emptyList())?.driver)
   }
 
   @Test
@@ -201,10 +237,11 @@ class UnifiedTrailRuntimeIntegrationTest {
         target: y
       trail:
         - step: hi
-          android-phone:
-            - tap:
-                x: 1
-                y: 1
+          recording:
+            android-phone:
+              - tap:
+                  x: 1
+                  y: 1
     """.trimIndent()
     assertTrue(
       yaml.hasRecordedSteps(unifiedYaml),
@@ -254,6 +291,51 @@ class UnifiedTrailRuntimeIntegrationTest {
     assertFalse(TrailRecordings.isRecordingFile("blaze.yaml"))
   }
 
+  @Test
+  fun `isTrailFile recognizes the unified trail-yaml so migrated trails stay discoverable`() {
+    // The unified `trail.yaml` must be recognized as a trail file — CLI argument validation
+    // and directory expansion gate on isTrailFile, so after the legacy `*.trail.yaml` siblings
+    // are deleted a migrated unified trail would otherwise be skipped/rejected when run by
+    // path or directory.
+    assertTrue(
+      TrailRecordings.isTrailFile("trail.yaml"),
+      "unified trail.yaml must be discoverable as a trail file",
+    )
+    // Still recognizes the legacy/NL shapes.
+    assertTrue(TrailRecordings.isTrailFile("android-phone.trail.yaml"))
+    assertTrue(TrailRecordings.isTrailFile("blaze.yaml"))
+    assertFalse(TrailRecordings.isTrailFile("settings.yaml"))
+  }
+
+  @Test
+  fun `findBestTrailResourcePath returns a unified trail-yaml path unchanged`() {
+    // A direct `.../trail.yaml` path must resolve to itself — recognized as a trail FILE, not
+    // treated as a directory to search inside. This is the resolution behavior the isTrailFile
+    // fix enables for migrated unified trails.
+    val path = "trails/clock/open-and-verify-clock-tab/trail.yaml"
+    val resolved = TrailRecordings.findBestTrailResourcePath(
+      path = path,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+      doesResourceExist = { true },
+    )
+    assertEquals(path, resolved, "a unified trail.yaml path must resolve to itself")
+  }
+
+  @Test
+  fun `shortTrailName uses the enclosing directory for a unified trail-yaml`() {
+    // The unified file's identity is its directory, so the display name drops `/trail.yaml`
+    // rather than leaving the bare filename in reports / the Sessions list.
+    assertEquals(
+      "clock/open-and-verify-clock-tab",
+      TrailRecordings.shortTrailName("trails/clock/open-and-verify-clock-tab/trail.yaml"),
+    )
+    // Legacy per-platform recordings still strip the `.trail.yaml` suffix as before.
+    assertEquals(
+      "clock/open-and-verify-clock-tab/android-phone",
+      TrailRecordings.shortTrailName("trails/clock/open-and-verify-clock-tab/android-phone.trail.yaml"),
+    )
+  }
+
   // ── Guard against silent LLM-mode fallback ─────────────────────────────
   //
   // decodeTrail throws when a the unified format trail with recordings is lowered without
@@ -270,10 +352,11 @@ class UnifiedTrailRuntimeIntegrationTest {
         target: y
       trail:
         - step: Tap
-          android-phone:
-            - tap:
-                x: 1
-                y: 1
+          recording:
+            android-phone:
+              - tap:
+                  x: 1
+                  y: 1
     """.trimIndent()
     val ex = kotlin.test.assertFailsWith<IllegalStateException> {
       yaml.decodeTrail(unifiedWithRecordings)
@@ -317,8 +400,9 @@ class UnifiedTrailRuntimeIntegrationTest {
         target: y
       trail:
         - step: Skip everywhere
-          android-phone: []
-          ios-iphone: []
+          recording:
+            android-phone: []
+            ios-iphone: []
     """.trimIndent()
     val items = yaml.decodeTrail(unifiedOnlyEmptyClassifiers)
     assertNotNull(items)
@@ -354,10 +438,11 @@ class UnifiedTrailRuntimeIntegrationTest {
         target: myapp
       trail:
         - step: Tap
-          android-phone:
-            - tap:
-                x: 1
-                y: 1
+          recording:
+            android-phone:
+              - tap:
+                  x: 1
+                  y: 1
     """.trimIndent()
     val config = yaml.extractTrailConfig(unifiedWithRecordings)
     assertEquals("needs-extracting", config?.id)
@@ -372,10 +457,11 @@ class UnifiedTrailRuntimeIntegrationTest {
         target: y
       trail:
         - step: Tap
-          android-phone:
-            - tap:
-                x: 1
-                y: 1
+          recording:
+            android-phone:
+              - tap:
+                  x: 1
+                  y: 1
     """.trimIndent()
     val doc = yaml.decodeTrailDocument(unifiedWithRecordings)
     assertTrue(doc is TrailDocument.Unified, "decodeTrailDocument should return format-native shape")

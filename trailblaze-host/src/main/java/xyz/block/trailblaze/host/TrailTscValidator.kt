@@ -64,6 +64,38 @@ object TrailTscValidator {
   /** Env var that opts a `check` run OUT of the (report-only) trail-recording validation phase. */
   const val DISABLE_ENV_VAR: String = "TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION"
 
+  /**
+   * Subdirectory under the workspace's `<trails>/.trailblaze/` where per-classpath-trailmap
+   * validation surfaces are materialized (`<base>/<trailmapId>/tools/{tsconfig.json,
+   * trailblaze-client.d.ts}`). Written by the compile phase (see
+   * [PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces] +
+   * [PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs]) and discovered by the check
+   * phase, which appends each surface dir to the trailmap list handed to [validate] — so a trail
+   * whose `target:` is a JAR-bundled trailmap (e.g. `square`) type-checks against a real surface
+   * instead of reading as skipped-no-surface. Lives under `.trailblaze/` so it's already
+   * gitignored alongside the extracted SDK bundle.
+   */
+  const val CLASSPATH_VALIDATION_SURFACES_SUBDIR: String = "trail-validation"
+
+  /**
+   * Resolve the base directory holding classpath validation surfaces for a workspace, given its
+   * `trails/` root. Single source of truth shared by the compile-side writer and the check-side
+   * reader so the two never drift on where the surfaces live.
+   */
+  fun classpathValidationSurfacesBaseDir(trailsRoot: Path): Path =
+    trailsRoot
+      .resolve(WorkspaceTypeScriptSetup.GENERATED_DIR_NAME)
+      .resolve(CLASSPATH_VALIDATION_SURFACES_SUBDIR)
+
+  /**
+   * The trailmap id owning a classpath validation-surface file emitted under the layout
+   * `<base>/<id>/tools/<file>`, or null if [surfaceFile] doesn't sit at that depth. Single source
+   * of truth for that layout so callers (e.g. the compile-side derivation of which ids got a
+   * surface) don't re-encode the `parent.parent` path shape and silently drift if it changes.
+   */
+  fun trailmapIdForSurfaceFile(surfaceFile: Path): String? =
+    surfaceFile.parent?.parent?.fileName?.toString()
+
   /** A single recorded tool call, flattened to the shape codegen needs. */
   data class RecordedCall(
     val toolName: String,
@@ -353,6 +385,10 @@ object TrailTscValidator {
         is TrailYamlItem.ToolTrailItem -> item.tools.forEach { wrapper ->
           // Top-level `tools:` blocks have no prompt step; key them to step 0 with a generic label.
           calls.add(wrapper.toRecordedCall(stepIndex = 0, label = "tools block"))
+        }
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { wrapper ->
+          // The trailhead is the deterministic step 0; type-check its bootstrap tool calls too.
+          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = item.trailhead.step ?: "trailhead"))
         }
         is TrailYamlItem.ConfigTrailItem -> Unit
       }

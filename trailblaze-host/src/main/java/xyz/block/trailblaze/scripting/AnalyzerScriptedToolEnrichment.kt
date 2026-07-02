@@ -9,6 +9,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.TrailheadMetadata
 import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.config.project.ScriptedToolProperty
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
@@ -409,6 +410,7 @@ class AnalyzerScriptedToolEnrichment(
             // downstream subprocess synthesizer + in-process descriptor see a self-contained
             // schema — see [ScriptedToolSchemaRefFlattener].
             inputSchema = ScriptedToolSchemaRefFlattener.flatten(def.inputSchemaObject),
+            trailhead = trailheadOf(def.name, def.spec),
           ),
         )
       }
@@ -532,6 +534,7 @@ class AnalyzerScriptedToolEnrichment(
       runtime = descriptor.runtime,
       meta = merged,
       inputSchema = inputSchema,
+      trailhead = trailheadOf(entryName, def.spec),
     )
   }
 
@@ -711,6 +714,46 @@ class AnalyzerScriptedToolEnrichment(
       ?.takeIf { it.isNotBlank() }
 
   /**
+   * Extract the typed spec's `trailhead` field into a [TrailheadMetadata] — the same shape a
+   * `*.trailhead.yaml` sidecar's `trailhead:` block produces (see [ToolYamlConfig.trailhead]).
+   * Like [specDescriptionOf], this is a primary-descriptor field: it routes straight into
+   * [InlineScriptToolConfig.trailhead] at both resolution sites rather than through
+   * [projectAnalyzerSpec]'s `_meta` projection, since trailhead-ness isn't a dispatch gate.
+   *
+   * Mirrors [xyz.block.trailblaze.config.ToolYamlConfig.validate]'s trailhead invariant (`to`
+   * required unless `dynamic: true`) leniently: a malformed shape (neither `to` nor `dynamic`,
+   * or both at once) logs a warning and is treated as "not a trailhead" / "dynamic wins" rather
+   * than failing the whole tool — consistent with the analyzer's general "skip the unresolvable
+   * bit, keep going" posture (RECOGNIZED_SPEC_FIELDS' typo policy) rather than the YAML loader's
+   * hard-fail `require()`, since TypeScript's own type checker already guards authors against
+   * most of this at the call site.
+   */
+  private fun trailheadOf(toolName: String, spec: JsonObject?): TrailheadMetadata? {
+    val raw = spec?.get("trailhead") as? JsonObject ?: return null
+    val to = (raw["to"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+    val dynamic = (raw["dynamic"] as? JsonPrimitive)?.booleanOrNull ?: false
+    return when {
+      to != null && dynamic -> {
+        Console.log(
+          "[AnalyzerScriptedToolEnrichment] tool '$toolName': spec's 'trailhead' block sets both " +
+            "'to' and 'dynamic: true' — mutually exclusive (see TrailheadMetadata). Dropping 'to' " +
+            "and treating as dynamic. Raw value: $raw",
+        )
+        TrailheadMetadata(dynamic = true)
+      }
+      to == null && !dynamic -> {
+        Console.log(
+          "[AnalyzerScriptedToolEnrichment] tool '$toolName': spec declares a 'trailhead' block " +
+            "with neither a non-blank 'to' nor 'dynamic: true' — not a real bootstrap " +
+            "destination, dropping trailhead role for this tool. Raw value: $raw",
+        )
+        null
+      }
+      else -> TrailheadMetadata(to = to, dynamic = dynamic)
+    }
+  }
+
+  /**
    * Project the analyzer's bare-field-name spec object (`supportedPlatforms`,
    * `requiresContext`, ...) into the namespaced `_meta:` shape the runtime
    * (`TrailblazeToolMeta.fromJsonObject`) reads (`trailblaze/supportedPlatforms`,
@@ -739,10 +782,11 @@ class AnalyzerScriptedToolEnrichment(
     // agree — adding a parity test (or extracting a shared constant in a model module)
     // is tracked as a follow-up.
     //
-    // `description` is deliberately ABSENT below: it's a primary-descriptor field, not a
-    // `_meta` gate, so it routes into `InlineScriptToolConfig.description` via
-    // [specDescriptionOf] (called at the description-resolution sites) instead of being
-    // projected here. The two runtime `_meta` parsers above correctly never read it.
+    // `description` and `trailhead` are deliberately ABSENT below: both are primary-descriptor
+    // fields, not `_meta` gates, so they route into `InlineScriptToolConfig.description` /
+    // `InlineScriptToolConfig.trailhead` via [specDescriptionOf] / [trailheadOf] (called at the
+    // resolution sites) instead of being projected here. The two runtime `_meta` parsers above
+    // correctly never read either.
     analyzerSpec["supportedPlatforms"]?.let { projected["trailblaze/supportedPlatforms"] = it }
     analyzerSpec["requiresContext"]?.let { projected["trailblaze/requiresContext"] = it }
     analyzerSpec["requiresHost"]?.let { projected["trailblaze/requiresHost"] = it }

@@ -14,6 +14,7 @@ import type {
   TrailblazeToolHandler,
   TrailblazeToolSpec,
   TrailblazeTypedToolSpec,
+  TrailheadSpec,
 } from "./tool.js";
 export { z } from "zod";
 
@@ -65,7 +66,13 @@ export {
 // etc.) the moment they import anything from `@trailblaze/scripting`. The imported file is
 // pure declaration merging on `TrailblazeToolMap`; no runtime values are added.
 import "./built-in-tools.js";
-export type { RunOptions, TrailblazeToolHandler, TrailblazeToolSpec, TrailblazeTypedToolSpec };
+export type {
+  RunOptions,
+  TrailblazeToolHandler,
+  TrailblazeToolSpec,
+  TrailblazeTypedToolSpec,
+  TrailheadSpec,
+};
 
 /**
  * Namespace bundle authors import as `trailblaze`, plus the flat `tool` / `run` entry points.

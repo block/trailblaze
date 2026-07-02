@@ -112,28 +112,48 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             null
           }
 
-          val newStep = when (promptStep) {
-            is DirectionStep -> DirectionStep(
-              step = promptStep.prompt,
-              recordable = promptStep.recordable,
-              recording = recording,
-            )
-
-            is VerificationStep -> VerificationStep(
-              verify = promptStep.prompt,
-              recordable = promptStep.recordable,
-              recording = recording,
-            )
-          }
-
-          // Merge into existing PromptsTrailItem or create new one
-          val lastItem = items.lastOrNull()
-          if (lastItem is TrailYamlItem.PromptsTrailItem) {
-            items[items.lastIndex] = lastItem.copy(
-              promptSteps = lastItem.promptSteps + newStep,
-            )
+          if (promptStep is DirectionStep && promptStep.isTrailhead) {
+            // This objective is the lowered form of the trail's `trailhead:` (step 0). Re-emit it as a
+            // first-class `- trailhead:` root element instead of a prompt step so the recorded trail
+            // keeps its trailhead. A bare-string-shorthand trailhead carries no authored step text
+            // (DEFAULT_STEP stands in), so drop it back to null to round-trip cleanly.
+            val trailheadStep = promptStep.prompt.takeIf { it != TrailheadDefinition.DEFAULT_STEP }
+            val trailheadTools = recording?.tools ?: emptyList()
+            if (trailheadStep != null || trailheadTools.isNotEmpty()) {
+              items.add(
+                TrailYamlItem.TrailheadTrailItem(
+                  TrailheadDefinition(
+                    step = trailheadStep,
+                    tools = trailheadTools,
+                    maxRetries = promptStep.maxRetries,
+                  ),
+                ),
+              )
+            }
           } else {
-            items.add(TrailYamlItem.PromptsTrailItem(listOf(newStep)))
+            val newStep = when (promptStep) {
+              is DirectionStep -> DirectionStep(
+                step = promptStep.prompt,
+                recordable = promptStep.recordable,
+                recording = recording,
+              )
+
+              is VerificationStep -> VerificationStep(
+                verify = promptStep.prompt,
+                recordable = promptStep.recordable,
+                recording = recording,
+              )
+            }
+
+            // Merge into existing PromptsTrailItem or create new one
+            val lastItem = items.lastOrNull()
+            if (lastItem is TrailYamlItem.PromptsTrailItem) {
+              items[items.lastIndex] = lastItem.copy(
+                promptSteps = lastItem.promptSteps + newStep,
+              )
+            } else {
+              items.add(TrailYamlItem.PromptsTrailItem(listOf(newStep)))
+            }
           }
 
           // Advance past the ObjectiveComplete log

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -1414,7 +1415,11 @@ class TrailblazeMcpBridgeImpl(
     val result = agent.runTool(tool, ctx)
     return when (result) {
       is TrailblazeToolResult.Success ->
-        "Executed ${tool::class.simpleName} via IOS_AXE on ${persistentDevice.udid}"
+        renderToolResultOutput(
+          message = result.message,
+          structuredContent = result.structuredContent,
+          fallback = "Executed ${tool::class.simpleName} via IOS_AXE on ${persistentDevice.udid}",
+        )
       is TrailblazeToolResult.Error -> error("IOS_AXE tool execution failed: ${result.errorMessage}")
     }
   }
@@ -1501,7 +1506,11 @@ class TrailblazeMcpBridgeImpl(
     }
     return when (result) {
       is TrailblazeToolResult.Success ->
-        "Executed ${tool.advertisedToolName} on device ${deviceId.instanceId}"
+        renderToolResultOutput(
+          message = result.message,
+          structuredContent = result.structuredContent,
+          fallback = "Executed ${tool.advertisedToolName} on device ${deviceId.instanceId}",
+        )
       is TrailblazeToolResult.Error ->
         error("Host-local tool execution failed: ${result.errorMessage}")
     }
@@ -1566,6 +1575,31 @@ class TrailblazeMcpBridgeImpl(
     return lastResult
   }
 
+
+  /**
+   * Renders a tool's own result payload for callers that surface tool output to a
+   * human (the `trailblaze tool` CLI) — 1:1 with what the agent sees over MCP.
+   *
+   * Priority mirrors the [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success]
+   * contract and the `RunYamlResponse.toolStructuredContent`/`toolMessage` wire fields:
+   *  1. [structuredContent] serialized to JSON when present (the typed return value a
+   *     scripted tool rides over the MCP `structured_content` field);
+   *  2. else the text [message];
+   *  3. else the generic [fallback] acknowledgement — so an action tool (tap/swipe)
+   *     that produces no payload still reads sensibly and the pre-existing UX for
+   *     `executeTrailblazeTool` callers doesn't regress.
+   */
+  private fun renderToolResultOutput(
+    message: String?,
+    structuredContent: JsonElement?,
+    fallback: String,
+  ): String {
+    structuredContent?.let {
+      return TrailblazeJsonInstance.encodeToString(JsonElement.serializer(), it)
+    }
+    message?.takeUnless { it.isBlank() }?.let { return it }
+    return fallback
+  }
 
   /**
    * Executes a tool on the on-device agent via direct RPC, waiting for completion.
@@ -1682,7 +1716,14 @@ class TrailblazeMcpBridgeImpl(
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
-              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
+              // Surface the tool's own result (structured content, else message) so a
+              // read-oriented tool run via `trailblaze tool` shows its payload; fall back
+              // to the generic acknowledgement for action tools that emit no message.
+              renderToolResultOutput(
+                message = response.toolMessage,
+                structuredContent = response.toolStructuredContent,
+                fallback = "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})",
+              )
             }
             false -> {
               val message = response.errorMessage?.takeUnless { it.isBlank() }

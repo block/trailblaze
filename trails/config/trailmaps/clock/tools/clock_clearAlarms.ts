@@ -1,7 +1,7 @@
 import { trailblaze } from "@trailblaze/scripting";
 
 /**
- * Wipes all alarms, timers, and stopwatch state from the Google Clock app via
+ * Wipes all alarms, timers, and stopwatch state from the AOSP Desk Clock app via
  * `pm clear` followed by `am force-stop`, so the next launch starts from a fresh
  * data directory. Useful as a setup primitive for trails that need a known-clean
  * Clock state without the side effect of leaving the app open.
@@ -26,7 +26,7 @@ import { trailblaze } from "@trailblaze/scripting";
 export const clock_clearAlarms = trailblaze.tool(
   { supportedPlatforms: ["android"], requiresContext: true },
   async (_input, ctx) => {
-    const appId = ctx.target?.resolveAppId({ defaultAppId: "com.google.android.deskclock" });
+    const appId = ctx.target?.resolveAppId({ defaultAppId: "com.android.deskclock" });
     if (!appId) {
       throw new Error("clock_clearAlarms could not resolve an Android app id from ctx.target.");
     }

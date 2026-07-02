@@ -59,6 +59,46 @@ class WaypointGraphBuilderTest {
     assertEquals(listOf("alpha/home"), kept.map { it.id })
   }
 
+  @Test
+  fun platformFilter_keepsCrossPlatformNodeThatDeclaresTheClassifier() {
+    // Regression: a v2 waypoint at a platform-neutral path (`waypoints/<name>.waypoint.yaml`)
+    // has path-derived platform=null but declares android+ios classifier blocks. It must survive
+    // BOTH the android and ios scope (and be dropped from web) — previously platform=null filtered
+    // it out of every platform-scoped view even though it declares matching classifier blocks.
+    val fused = node("alpha/home", platform = null, platforms = listOf("android", "ios"))
+    val webOnly = node("alpha/marketing", platform = "web", platforms = listOf("web"))
+    fun scopeTo(p: String) = WaypointGraphBuilder.applyScope(
+      waypoints = listOf(fused, webOnly),
+      shortcuts = emptyList(),
+      trailheads = emptyList(),
+      targetFilter = null,
+      platformFilter = p,
+    ).first.map { it.id }
+
+    assertEquals(listOf("alpha/home"), scopeTo("android"))
+    assertEquals(listOf("alpha/home"), scopeTo("ios"))
+    assertEquals(listOf("alpha/marketing"), scopeTo("web"))
+  }
+
+  @Test
+  fun platformFilter_fallsBackToPathDerivedPlatformWhenNoClassifiersDeclared() {
+    // The else branch of applyScope: a node with NO declared classifier blocks (platforms empty)
+    // falls back to the path-derived single `platform`. A legacy path-scoped node matches only its
+    // own platform; an id-only node (platforms empty AND platform null) matches no platform scope.
+    val legacy = node("alpha/legacy", platform = "android", platforms = emptyList())
+    val idOnly = node("alpha/id-only", platform = null, platforms = emptyList())
+    fun scopeTo(p: String) = WaypointGraphBuilder.applyScope(
+      waypoints = listOf(legacy, idOnly),
+      shortcuts = emptyList(),
+      trailheads = emptyList(),
+      targetFilter = null,
+      platformFilter = p,
+    ).first.map { it.id }
+
+    assertEquals(listOf("alpha/legacy"), scopeTo("android"))
+    assertEquals(emptyList<String>(), scopeTo("ios"))
+  }
+
   // ---------- both filters ----------
 
   @Test
@@ -187,13 +227,15 @@ class WaypointGraphBuilderTest {
 
   // ---------- helpers ----------
 
-  private fun node(id: String, platform: String?): WaypointGraphNode = WaypointGraphNode(
-    id = id,
-    description = null,
-    screenshotDataUri = null,
-    sourceLabel = null,
-    platform = platform,
-  )
+  private fun node(id: String, platform: String?, platforms: List<String> = emptyList()): WaypointGraphNode =
+    WaypointGraphNode(
+      id = id,
+      description = null,
+      screenshotDataUri = null,
+      sourceLabel = null,
+      platform = platform,
+      platforms = platforms,
+    )
 
   private fun shortcut(id: String, from: String, to: String): WaypointGraphShortcut =
     WaypointGraphShortcut(

@@ -8,9 +8,10 @@ import kotlin.test.assertTrue
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
- * Parser-shape tests for Trail YAML (unified format). These pin the singleton-mapping root,
- * the `step:` + dynamic-classifier-key step shape, and the parse-time validations
- * documented in `docs/devlog/2026-05-22-trail-yaml-unified-syntax.md`.
+ * Parser-shape tests for Trail YAML (unified format). These pin the singleton-mapping root, the
+ * `step:` + `recording:`-grouped step shape (device classifiers nest under `recording:`, never at the
+ * step level), and the parse-time validations documented in
+ * `docs/devlog/2026-05-22-trail-yaml-unified-syntax.md`.
  */
 class UnifiedTrailParserTest {
 
@@ -24,18 +25,19 @@ class UnifiedTrailParserTest {
         id: myapp/login
         target: myapp
         devices:
-          - android-phone
+          android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
       trail:
         - step: Open the app
-          android-phone:
-            - launchApp:
-                appId: com.example.myapp
+          recording:
+            android-phone:
+              - launchApp:
+                  appId: com.example.myapp
       """.trimIndent(),
     )
 
     assertEquals("myapp/login", parsed.config.id)
     assertEquals("myapp", parsed.config.target)
-    assertEquals(listOf("android-phone"), parsed.config.devices)
+    assertEquals(mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"), parsed.config.devices)
     assertEquals(1, parsed.trail.size)
     assertEquals("Open the app", parsed.trail[0].step)
     assertTrue(parsed.trail[0].recordable)
@@ -51,9 +53,9 @@ class UnifiedTrailParserTest {
         id: myapp/checkout
         target: myapp
         devices:
-          - android-phone
-          - android-tablet
-          - ios
+          android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+          android-tablet: ANDROID_ONDEVICE_INSTRUMENTATION
+          ios: IOS_HOST
         context: |-
           Test context goes here.
         memory:
@@ -62,31 +64,40 @@ class UnifiedTrailParserTest {
           jira: PROJ-123
       trail:
         - step: Sign in to myapp
-          android:
-            - launchApp:
-                appId: com.example.myapp
-          ios:
-            - launchApp:
-                appId: com.example.myapp.ios
+          recording:
+            android:
+              - launchApp:
+                  appId: com.example.myapp
+            ios:
+              - launchApp:
+                  appId: com.example.myapp.ios
 
         - step: LLM always handles this
           recordable: false
 
         - step: Skip on tablet
-          android-phone:
-            - tap:
-                x: 100
-                y: 100
-          android-tablet: []
-          ios:
-            - tap:
-                x: 200
-                y: 200
+          recording:
+            android-phone:
+              - tap:
+                  x: 100
+                  y: 100
+            android-tablet: []
+            ios:
+              - tap:
+                  x: 200
+                  y: 200
       """.trimIndent(),
     )
 
     assertEquals("myapp/checkout", parsed.config.id)
-    assertEquals(listOf("android-phone", "android-tablet", "ios"), parsed.config.devices)
+    assertEquals(
+      mapOf(
+        "android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION",
+        "android-tablet" to "ANDROID_ONDEVICE_INSTRUMENTATION",
+        "ios" to "IOS_HOST",
+      ),
+      parsed.config.devices,
+    )
     assertEquals(mapOf("email" to "tb+test@example.com"), parsed.config.memory)
     assertEquals(mapOf("jira" to "PROJ-123"), parsed.config.metadata)
     assertEquals(3, parsed.trail.size)
@@ -105,7 +116,9 @@ class UnifiedTrailParserTest {
   }
 
   @Test
-  fun `unknown reserved key at step level is a parse error`() {
+  fun `a device classifier at the step level (not under recording) is a parse error`() {
+    // Device classifiers must nest under `recording:`; a bare classifier key at the step level — or
+    // any other unexpected key like the retired `verify:` — is rejected.
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
@@ -119,13 +132,14 @@ class UnifiedTrailParserTest {
       )
     }
     assertTrue(
-      ex.message?.contains("reserved by the schema") == true,
-      "expected reserved-key error, got: ${ex.message}",
+      ex.message?.contains("Unexpected step-level key") == true,
+      "expected unexpected-step-key error, got: ${ex.message}",
     )
   }
 
   @Test
-  fun `missing step key on a step entry fails clearly`() {
+  fun `a step missing its NL step is rejected — NL is required`() {
+    // `step` (natural language) is required on every step; `recording` is optional.
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
@@ -133,18 +147,18 @@ class UnifiedTrailParserTest {
           id: x
           target: x
         trail:
-          - android-phone: []
+          - recordable: true
         """.trimIndent(),
       )
     }
     assertTrue(
-      ex.message?.contains("missing required `step:`") == true,
+      ex.message?.contains("required `step:`") == true,
       "expected missing-step error, got: ${ex.message}",
     )
   }
 
   @Test
-  fun `recordable false combined with non-empty classifier recordings is rejected`() {
+  fun `recordable false combined with non-empty recordings is rejected`() {
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
@@ -154,10 +168,11 @@ class UnifiedTrailParserTest {
         trail:
           - step: hi
             recordable: false
-            android-phone:
-              - tap:
-                  x: 1
-                  y: 2
+            recording:
+              android-phone:
+                - tap:
+                    x: 1
+                    y: 2
         """.trimIndent(),
       )
     }
@@ -168,20 +183,52 @@ class UnifiedTrailParserTest {
   }
 
   @Test
-  fun `unified missing top-level config key is a parse error`() {
+  fun `a recording-only step (no NL) is rejected — NL is required`() {
+    // We force NL: a step may not be recording-only. Every step must carry its intent.
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
+        config:
+          id: x
+          target: x
         trail:
-          - step: hi
-            android-phone: []
+          - recording:
+              android-phone:
+                - tap:
+                    x: 1
+                    y: 2
         """.trimIndent(),
       )
     }
     assertTrue(
-      ex.message?.contains("missing required top-level `config:` key") == true,
-      "expected missing-config error, got: ${ex.message}",
+      ex.message?.contains("required `step:`") == true,
+      "expected missing-step error, got: ${ex.message}",
     )
+  }
+
+  @Test
+  fun `unified with no config key decodes to an empty config`() {
+    // `config:` is optional — every UnifiedTrailConfig field defaults, so an absent config decodes
+    // to an empty config. `trail:` is the only required top-level key.
+    val decoded = yaml.decodeUnifiedTrail(
+      """
+      trail:
+        - step: hi
+      """.trimIndent(),
+    )
+    assertEquals(UnifiedTrailConfig(), decoded.config)
+    assertEquals(1, decoded.trail.size)
+  }
+
+  @Test
+  fun `empty config is omitted on emit and round-trips`() {
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(UnifiedTrailStep(step = "hi", recordings = mapOf("android-phone" to emptyList()))),
+    )
+    val emitted = yaml.encodeUnifiedTrailToString(trail)
+    assertTrue(!emitted.contains("config:"), "empty config should be omitted, got:\n$emitted")
+    assertEquals(trail, yaml.decodeUnifiedTrail(emitted))
   }
 
   @Test
@@ -196,8 +243,28 @@ class UnifiedTrailParserTest {
       )
     }
     assertTrue(
-      ex.message?.contains("missing required top-level `trail:` key") == true,
+      ex.message?.contains("non-empty top-level `trail:`") == true,
       "expected missing-trail error, got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `an empty trail list is rejected — trail must be non-empty`() {
+    // `trail:` is required AND non-empty: a trailhead-only / empty trail would run its bootstrap
+    // and then pass with no real test steps (a vacuous always-pass).
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          id: x
+          target: y
+        trail: []
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      ex.message?.contains("non-empty top-level `trail:`") == true,
+      "expected non-empty-trail error, got: ${ex.message}",
     )
   }
 
@@ -214,7 +281,6 @@ class UnifiedTrailParserTest {
           target: y
         trail:
           - step: hi
-            android-phone: []
         somethingExtra: nope
         """.trimIndent(),
       )
@@ -234,7 +300,6 @@ class UnifiedTrailParserTest {
         target: y
       trail:
         - step: hi
-          android-phone: []
       """.trimIndent(),
     )
     assertNull(parsed.config.devices)
@@ -261,7 +326,6 @@ class UnifiedTrailParserTest {
           quotedNum: "10"
       trail:
         - step: hi
-          android-phone: []
       """.trimIndent(),
     )
     assertEquals(

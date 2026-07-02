@@ -1,0 +1,105 @@
+config:
+  id: clock/set-alarm-730am
+  target: clock
+  devices:
+    android: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: "Launch the AOSP Desk Clock app (com.android.deskclock) fresh, landing on the Clock tab."
+  recording:
+    android:
+      - clock_android_launchApp: {}
+
+trail:
+  - step: "Navigate to the ALARM tab"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Switch to the ALARM tab before adding a new alarm.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/text1
+                textRegex: ALARM
+
+  - step: "Tap the add-alarm FAB"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Open the time-picker dialog by tapping the floating add-alarm button.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/fab
+                contentDescriptionRegex: Add alarm
+                isClickable: true
+
+  - step: "Pick 7 as the hour, 30 as the minutes, force AM, and confirm"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Select 7 as the hour on the radial picker.
+            nodeSelector:
+              androidAccessibility:
+                contentDescriptionRegex: "7"
+        - tapOnElementBySelector:
+            reason: Force the picker into minute view (no-op if already switched).
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/minutes
+                isClickable: true
+        - tapOnElementBySelector:
+            reason: Select 30 as the minutes on the radial picker.
+            nodeSelector:
+              androidAccessibility:
+                contentDescriptionRegex: "30"
+        - tapOnElementBySelector:
+            reason: |
+              Force the AM/PM toggle to AM. The picker's default tracks the device clock —
+              CI emulators commonly boot in a PM-side time slot, so without this step the
+              alarm gets created as 7:30 PM and the 7:30 AM verification fails. Idempotent
+              when AM is already selected.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/am_label
+                textRegex: AM
+                isClickable: true
+        - tapOnElementBySelector:
+            reason: Confirm the alarm time.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/button1
+                textRegex: OK
+                isClickable: true
+
+  - step: "The new 7:30 alarm is visible in the alarm list"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The newly created alarm should show 7:30 AM in the alarm list.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/digital_clock
+                textRegex: 7:30.AM
+
+  - step: "Expand the alarm and delete it"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Expand the alarm to access the delete action.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/arrow
+                contentDescriptionRegex: Expand alarm
+                isClickable: true
+        - tapOnElementBySelector:
+            reason: Delete the alarm.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/delete
+                textRegex: Delete
+                isClickable: true
+
+  - step: "The 7:30 alarm is no longer visible"
+    recording:
+      android:
+        - assertNotVisibleWithText:
+            text: 7:30

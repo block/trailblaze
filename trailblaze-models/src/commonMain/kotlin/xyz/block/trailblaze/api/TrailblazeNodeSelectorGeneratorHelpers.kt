@@ -74,6 +74,27 @@ internal fun isUniqueMatch(
 }
 
 /**
+ * Checks that a selector still *selects* the target — the target is among its
+ * matches — without requiring the match to be unique.
+ *
+ * This is the presence predicate for waypoint selectors: a waypoint asserts a
+ * screen signal is present (`minCount >= 1`), so a selector that matches the
+ * target plus a few of its on-screen twins ("Add money" appearing twice) is
+ * exactly right, where [isUniqueMatch] would reject it and push the cascade
+ * toward a positional `index`.
+ */
+internal fun selectorMatchesTarget(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  selector: TrailblazeNodeSelector,
+): Boolean = when (val result = TrailblazeNodeSelectorResolver.resolve(root, selector)) {
+  is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node.nodeId == target.nodeId
+  is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
+    result.nodes.any { it.nodeId == target.nodeId }
+  is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> false
+}
+
+/**
  * Builds the most precise [DriverNodeMatch] for the target, using the specific text field
  * (contentDescription, hintText, text) rather than the lossy [resolveText] fallback.
  *

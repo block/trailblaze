@@ -59,7 +59,7 @@ validate against. We had four realistic options:
   Runner editor's live JSON-Schema completion only has to be *good enough for autocomplete*, not
   authoritative — the batch gate catches whatever the editor schema misses.
 - **It's cheap.** ~0.35s of `tsc` per trailmap-that-has-trails on top of the typecheck phase's pass;
-  the YAML parse + codegen is negligible. ~1.7s added to `check --all` over the full 1088-trail corpus.
+  the YAML parse + codegen is negligible. ~1.7s added to `check --all` over the full trail corpus.
 
 ### What the YAML-native options would have bought (and cost)
 
@@ -88,9 +88,9 @@ already exists as `.d.ts`. Every other option meant *building and maintaining a 
 ## What we learned
 
 - **Every "failure" so far was the typed surface being incomplete, never a broken trail.** Running it
-  over one target's trail corpus surfaced 119 findings; on inspection all 119 were the surface not modeling a
-  recordable tool, and 0 were actual trail defects. Fixing the surface (curating the missing tools in
-  `built-in-tools.ts`) dropped it to **0 findings across 343 recorded tool calls**. The validator's
+  over one target's trail corpus surfaced a number of findings; on inspection all were the surface not modeling a
+  recordable tool, and none were actual trail defects. Fixing the surface (curating the missing tools in
+  `built-in-tools.ts`) **eliminated the findings entirely**. The validator's
   accuracy is bounded entirely by surface *fidelity*, so the useful output today is "where is the
   typed surface lying about what trails can record."
 - **The typed surface (`tool_sets:`) ≠ the recordable surface.** The selector-migration pipeline
@@ -110,15 +110,51 @@ already exists as `.d.ts`. Every other option meant *building and maintaining a 
 - `TrailTscValidator` (`:trailblaze-host`), wired into `CheckCommand` as a phase after typecheck.
 - **On by default, strictly report-only** — it prints a YAML-keyed findings report and never changes
   the exit code. Opt out with `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1`.
-- Covers only trails whose `target:` resolves to a **filesystem** trailmap with a generated surface
-  (the workspace's filesystem trailmaps here). Classpath-bundled targets — the bulk of the corpus —
-  have no writable `tools/` surface and are reported as skipped-no-surface.
+- Covers trails whose `target:` resolves to a **filesystem** trailmap (the workspace's own
+  trailmaps) **and now classpath-bundled targets too** — see the update below. Previously only
+  filesystem trailmaps had a writable `tools/` surface; classpath-bundled targets (the bulk of the
+  corpus) were reported as skipped-no-surface.
+
+## Update (2026-07-01): classpath-bundled targets now covered
+
+The single biggest coverage gap above — classpath-bundled targets (app-bundled trailmaps that live
+inside a JAR, e.g. `square` / `dashboardapp`, the bulk of the corpus) — is
+closed. They have no writable `tools/` dir of their own, so the per-trailmap emitters skipped them
+and the validator saw no surface.
+
+**What changed.** The compile phase now materializes a **validation-only** typed surface for every
+classpath-bundled trailmap into a gitignored scratch dir under the workspace,
+`<trails>/.trailblaze/trail-validation/<id>/tools/{tsconfig.json,trailblaze-client.d.ts}`. The check
+phase discovers those dirs and appends them to the trailmap list handed to the validator, which keys
+them by dir name = trailmap id exactly like a workspace trailmap. Concretely:
+
+- `PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces(...)` generates the `.d.ts` for each
+  bundled target. **Class-backed tools are fully typed** — they resolve through
+  `TrailblazeToolSetCatalog` via classpath reflection, needing no on-disk sources, and they're the
+  bulk of what recorded trails call. **Scripted (`.ts`) tools carry their build-time-baked schema**
+  (the analyzer that would upgrade them further needs the trailmap's `.ts` on disk, which a JAR
+  doesn't expose) — acceptable for a report-only gate.
+- **Sourced from the build-time-baked `targets/<id>.yaml`** (`AppTargetYamlLoader.discoverConfigs`),
+  NOT the runtime-resolved trailmap pool. This was the load-bearing discovery: a bundled target
+  whose scripted `target.tools:` need analyzer enrichment (exactly `square`) is *dropped* from the
+  resolved pool at CLI runtime — the analyzer can't walk `.ts` inside a JAR, so sibling-resolution
+  throws `ClasspathScriptedToolUnavailableException` and the loader drops the target (runtime
+  dispatch is served by the baked YAML instead). Keying off the resolved pool therefore missed the
+  single biggest target. The baked configs exist for every bundled target and carry the fully
+  hoisted tool list, so they're the correct source. Workspace filesystem trailmaps are excluded
+  (they already got a real, analyzer-upgraded surface from `emit`).
+- `PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs(...)` writes the companion tsconfig,
+  its `paths` mapping pointing at the workspace SDK bundle from the scratch `tools/` dir.
+- Chosen the **side-location** approach over resolving the classpath resource's on-disk `file:` URL:
+  it works whether the CLI runs from the uber JAR or from exploded classes (`BLAZE_JAR=0`), and never
+  writes into the source tree. (The "point at the source resources dir" variant only works in a
+  source build and would hardcode an internal path that must not appear in the public tree.)
+
+This lifts the validator from a small fraction of the corpus to essentially all of it. It remains **report-only**;
+the fidelity gaps below still gate the flip to hard-fail.
 
 ## Open questions / future work
 
-- **Cover classpath-bundled targets** — the majority of real trails. Needs the
-  emitter to produce a surface for bundled trailmaps (to a side location, or by treating the source
-  resources dir as filesystem during a source build).
 - **Derive the validation surface from `isRecordable`** rather than the `tool_sets:`/scripted-author
   set, so a new recordable tool the migration pipeline emits is auto-covered instead of silently
   becoming a false positive. This is the durable fix for the curation-gap class.

@@ -71,6 +71,23 @@ class SessionScopedHostBindingTest {
   }
 
   /**
+   * Mirrors `PlaywrightExecutableTool` (and any other driver-specific tool): its own
+   * `execute()` unconditionally throws because it can only run through the owning driver
+   * agent's dispatch (e.g. to obtain a live Playwright `Page`). Used to pin that
+   * [SessionScopedHostBinding] consults [TrailblazeToolExecutionContext.nestedToolExecutor]
+   * before falling back to a direct `execute(context)` call.
+   */
+  @Serializable
+  @TrailblazeToolClass("test_driver_specific")
+  private data class DriverSpecificTool(val payload: String) : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      error("DriverSpecificTool must be executed via its owning driver agent")
+    }
+  }
+
+  /**
    * Tool whose `execute` always throws [CancellationException]. Used by the cancellation-
    * propagation test below to pin the contract that the binding rethrows rather than
    * converting cancellation into an error envelope.
@@ -97,7 +114,9 @@ class SessionScopedHostBindingTest {
     )
   }
 
-  private fun buildContext(): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+  private fun buildContext(
+    nestedToolExecutor: (suspend (TrailblazeTool) -> TrailblazeToolResult)? = null,
+  ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
     screenState = null,
     traceId = TraceId.generate(TraceOrigin.TOOL),
     trailblazeDeviceInfo = TrailblazeDeviceInfo(
@@ -115,6 +134,7 @@ class SessionScopedHostBindingTest {
     },
     trailblazeLogger = TrailblazeLogger.createNoOp(),
     memory = AgentMemory(),
+    nestedToolExecutor = nestedToolExecutor,
   )
 
   @AfterTest
@@ -404,6 +424,69 @@ class SessionScopedHostBindingTest {
       assertTrue(
         errorMessage.contains("client.tools.test_ping"),
         "expected the canonical-shape pointer in the error; got '$errorMessage'",
+      )
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  // ---- Test 6c: driver-specific tools route through nestedToolExecutor, not direct execute() ----
+
+  @Test
+  fun `callFromBundle routes an ExecutableTrailblazeTool through nestedToolExecutor when the context provides one`() = runBlocking {
+    // Pins the fix for a real bug: a scripted tool composing a driver-specific tool (e.g.
+    // `ctx.tools.web_navigate(...)` from inside a TS tool, which resolves to a
+    // `PlaywrightExecutableTool`) failed every time on this binding because `executeResolved`
+    // called `tool.execute(context)` unconditionally — hitting `PlaywrightExecutableTool`'s
+    // throwing default `execute()` — instead of consulting `nestedToolExecutor` first, the
+    // same indirection `JsScriptingCallbackDispatcher`'s subprocess transport already applies
+    // (see its `dispatchCallTool`). Without the fix, this test fails with
+    // "DriverSpecificTool must be executed via its owning driver agent" instead of routing
+    // through the executor.
+    val repo = newRepoWith(DriverSpecificTool::class)
+    val binding = SessionScopedHostBinding(repo, sessionId)
+    var invokedWith: TrailblazeTool? = null
+    val ctx = buildContext(
+      nestedToolExecutor = { tool ->
+        invokedWith = tool
+        TrailblazeToolResult.Success(message = "routed via nestedToolExecutor")
+      },
+    )
+    SessionScopedHostBinding.installContext(ctx)
+    try {
+      val resultJson = binding.callFromBundle("test_driver_specific", """{"payload":"hi"}""")
+      val parsed = Json.parseToJsonElement(resultJson) as JsonObject
+      assertEquals(
+        "routed via nestedToolExecutor",
+        (parsed["message"] as JsonPrimitive).content,
+        "expected dispatch to route through nestedToolExecutor instead of calling execute() " +
+          "directly; got $resultJson",
+      )
+      assertTrue(
+        invokedWith is DriverSpecificTool,
+        "expected the resolved DriverSpecificTool instance to be passed to nestedToolExecutor",
+      )
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  @Test
+  fun `callFromBundle falls back to direct execute() when the context has no nestedToolExecutor`() = runBlocking {
+    // Complements the test above — an ordinary tool with no driver-specific requirement still
+    // works when no `nestedToolExecutor` is wired (e.g. the host daemon path), preserving the
+    // pre-fix behavior for tools that don't need it.
+    val repo = newRepoWith(PingTool::class)
+    val binding = SessionScopedHostBinding(repo, sessionId)
+    val ctx = buildContext()
+    SessionScopedHostBinding.installContext(ctx)
+    try {
+      val resultJson = binding.callFromBundle("test_ping", """{"text":"direct"}""")
+      val parsed = Json.parseToJsonElement(resultJson) as JsonObject
+      assertEquals(
+        "ping:direct",
+        (parsed["message"] as JsonPrimitive).content,
+        "expected direct execute() fallback when no nestedToolExecutor is installed; got $resultJson",
       )
     } finally {
       SessionScopedHostBinding.clearContext()

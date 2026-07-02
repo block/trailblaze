@@ -42,6 +42,13 @@ package xyz.block.trailblaze.api
  * The caller provides the full tree and the target node. The generator returns the
  * simplest [TrailblazeNodeSelector] that resolves to exactly one match (the target).
  *
+ * ## Full enumeration (for hand-authoring)
+ * [enumerateSelectorCandidates] lists *every* selector the cascade can compute for an element,
+ * each with its strategy name, ranked stable-first — the menu a human picks from when writing a
+ * selector by hand (e.g. a `*.waypoint.yaml`). It is not gated on uniqueness (so a repeated
+ * label is kept, with its match count surfaced by callers), omits the positional `index` and
+ * `containsChild` families, and adds a run-variable-wildcarded text option. See its kdoc.
+ *
  * ## Post-generation minimization
  * Every selector returned by [findBestSelector], [findBestStructuralSelector], and
  * [findAllValidSelectors] is run through [TrailblazeNodeSelectorMinimizer] before it
@@ -112,6 +119,95 @@ object TrailblazeNodeSelectorGenerator {
     }
 
     return results
+  }
+
+  /**
+   * Enumerates **every** selector the strategy cascade can compute for [target] — the full menu
+   * a human picks from when authoring a selector by hand, rather than the single "best" one
+   * [findAllValidSelectors] returns for a tap recording.
+   *
+   * It differs from [findAllValidSelectors] in three deliberate ways:
+   *
+   *  1. **Not gated on uniqueness** — a strategy's selector is kept even when it matches several
+   *     nodes (a repeated label like "Add money"). Every candidate is minimized and labeled with
+   *     its live match count, so the human sees at a glance whether it's unique or a presence
+   *     signal — a waypoint wants `>= 1`, a tap wants exactly `1`. Nothing is hidden: when a
+   *     label repeats, the plain selector shows up alongside an index- or hierarchy-qualified
+   *     variant that *does* disambiguate it — the presence of that qualified variant in the menu
+   *     is itself the signal that the plain one wasn't unique.
+   *  2. **One extra option the cascade never emits** — a semantic-text selector with its
+   *     run-variable tail wildcarded (`"Balance: $0.00"` -> `"Balance:.*"`), added via
+   *     [runVariableWildcardedTextCandidate] alongside the literal.
+   *  3. **Ranked stable-first** — identity, then semantic text, then structural type, then
+   *     `childOf`, then `containsChild`/`containsDescendants`, then spatial, with any
+   *     index-qualified variant sorting after its non-indexed sibling (see
+   *     [selectorStabilityRank]). Distinct selectors are all kept (e.g. `text` and
+   *     `text + class` are separate options); exact duplicates are merged.
+   *
+   * Every candidate is run through [TrailblazeNodeSelectorMinimizer] before being kept — a
+   * no-op for a non-unique selector (the minimizer only prunes fields once uniqueness is
+   * established), but it collapses a same-shaped duplicate produced by a different strategy
+   * (e.g. the index-fallback strategy's kitchen-sink match, once minimized, is often identical
+   * to a simpler strategy's selector already in the menu) down to one entry.
+   *
+   * Every returned selector is verified to still select [target] ([selectorMatchesTarget]).
+   * Even a node with no matchable properties at all still gets one candidate — a bare global
+   * `index`, the last-resort signal that always resolves — so an empty list is only possible
+   * in the genuine edge case where the target can't be positionally located either.
+   *
+   * @param root The root of the [TrailblazeNode] tree
+   * @param target The node to enumerate selectors for
+   * @param maxResults Safety cap on the number of selectors returned (default generous — the
+   *   cascade produces at most ~20 distinct options)
+   * @return Ranked named selectors (most-stable first), or empty if none are paste-worthy
+   */
+  fun enumerateSelectorCandidates(
+    root: TrailblazeNode,
+    target: TrailblazeNode,
+    maxResults: Int = 25,
+  ): List<NamedSelector> {
+    val parentMap = buildParentMap(root)
+    // Insertion order preserves the cascade's own most-to-least-precise ordering within a
+    // stability tier; the final sort only reorders across tiers. First strategy name wins on
+    // a duplicate selector.
+    val bySelector = LinkedHashMap<TrailblazeNodeSelector, String>()
+
+    fun consider(name: String, raw: TrailblazeNodeSelector?) {
+      if (raw == null) return
+      // Must still select the target (>= 1 match including it) — not required to be unique.
+      if (!selectorMatchesTarget(root, target, raw)) return
+      val selector = TrailblazeNodeSelectorMinimizer.minimize(root, target, raw)
+      // The index-fallback strategy's kitchen-sink match is sometimes already unique without
+      // needing an index (SingleMatch short-circuit in computeIndexSelectorForMatch) — after
+      // minimization that's typically identical to an already-listed simpler selector (deduped
+      // below), but on the rare occasion it isn't, "Index fallback" would mislabel a selector
+      // that doesn't actually carry an index. Give that specific case an honest generic name.
+      val displayName = if (name.contains("index", ignoreCase = true) && selector.index == null) {
+        "Combined fields"
+      } else {
+        name
+      }
+      // putIfAbsent is JVM-only on MutableMap (backed by java.util.Map's default method) and
+      // unavailable on this module's wasmJs target — containsKey/set is the common-compatible
+      // equivalent.
+      if (!bySelector.containsKey(selector)) {
+        bySelector[selector] = displayName
+      }
+    }
+
+    for ((name, strategy) in strategiesForDetail(root, target, target.driverDetail, parentMap)) {
+      consider(name, strategy())
+    }
+    // The one option the raw cascade never produces: the run-variable-wildcarded text variant.
+    runVariableWildcardedTextCandidate(target.driverDetail)?.let { (name, match) ->
+      consider(name, TrailblazeNodeSelector.withMatch(match))
+    }
+
+    val ranked = bySelector.entries
+      .map { NamedSelector(it.key, it.value) }
+      .sortedBy { selectorStabilityRank(it.selector) }
+      .take(maxResults)
+    return ranked.mapIndexed { i, named -> named.copy(isBest = i == 0) }
   }
 
   /**

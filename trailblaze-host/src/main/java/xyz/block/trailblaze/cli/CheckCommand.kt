@@ -14,6 +14,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -237,7 +238,14 @@ class CheckCommand : Callable<Int> {
     // Runs by default (never influences the exit code — see [TrailTscValidator]); opt out with
     // TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1. Strictly non-fatal.
     if (!isTrailRecordingValidationDisabled()) {
-      runTrailRecordingValidationPhase(workspaceRoot = resolved.workspaceRoot, trailmaps = trailmapsToValidate)
+      runTrailRecordingValidationPhase(
+        workspaceRoot = resolved.workspaceRoot,
+        trailmaps = trailmapsToValidate,
+        // Only fold in the (large) classpath-bundled surfaces on an all-workspace run. A scoped
+        // run (`check <id>`, or from inside a trailmap dir) shouldn't pull the whole square /
+        // dashboardapp corpus into its report — that scale is what `--all` opts into.
+        allWorkspaceScope = dispatch.typecheckAll,
+      )
     }
 
     // Worst-of-two wins. Exit codes are ordered OK(0) < FAILURE(1) < USAGE(2), so max()
@@ -638,7 +646,11 @@ class CheckCommand : Callable<Int> {
    * typecheck phase set up, so this runs after [runTypecheckPhase]. Strictly non-fatal and never
    * touches the exit code — it only prints a YAML-keyed findings report. See [TrailTscValidator].
    */
-  private fun runTrailRecordingValidationPhase(workspaceRoot: File, trailmaps: List<Path>) {
+  private fun runTrailRecordingValidationPhase(
+    workspaceRoot: File,
+    trailmaps: List<Path>,
+    allWorkspaceScope: Boolean,
+  ) {
     try {
       val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
       val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = trailsRoot)
@@ -650,9 +662,25 @@ class CheckCommand : Callable<Int> {
         )
         return
       }
+      // Fold in the validation surfaces the compile phase materialized for classpath-bundled
+      // trailmaps (app-bundled targets like `square` that have no workspace `tools/` dir of their
+      // own) — but only on an all-workspace run (see the call site). Each surface dir is named by
+      // trailmap id and carries `tools/{tsconfig.json, trailblaze-client.d.ts}`, so the validator
+      // keys them the same way it keys workspace trailmap dirs. Without this, those targets read as
+      // skipped-no-surface — the bulk of the corpus.
+      //
+      // Only touch disk to discover surfaces on an all-workspace run; the selection rule
+      // (scope gating + workspace-id collision drop) is factored into the pure
+      // [selectClasspathSurfacesForValidation] so it's unit-testable without a filesystem.
+      val discovered = if (allWorkspaceScope) discoverClasspathValidationSurfaces(trailsRoot) else emptyList()
+      val classpathSurfaces = selectClasspathSurfacesForValidation(
+        workspaceTrailmaps = trailmaps,
+        discoveredSurfaces = discovered,
+        allWorkspaceScope = allWorkspaceScope,
+      )
       val report = TrailTscValidator.validate(
         trailsRoot = trailsRoot.toFile(),
-        trailmaps = trailmaps,
+        trailmaps = trailmaps + classpathSurfaces,
         jsRuntime = jsRuntime,
         tscJs = tscJs,
       )
@@ -664,6 +692,56 @@ class CheckCommand : Callable<Int> {
         "trailblaze check: trail-recording validation phase failed (ignored): " +
           (e.message ?: e::class.simpleName),
       )
+    }
+  }
+
+  /**
+   * Discover the classpath-trailmap validation surfaces the compile phase materialized under
+   * `<trailsRoot>/.trailblaze/<CLASSPATH_VALIDATION_SURFACES_SUBDIR>/<id>/`. Returns each surface
+   * dir (named by trailmap id) that carries a **complete** surface — BOTH `tools/tsconfig.json`
+   * AND `tools/trailblaze-client.d.ts`. Requiring both means a half-written dir (e.g. surface
+   * emission skipped a target on error but a tsconfig lingered) is not handed to the validator,
+   * which would otherwise run `tsc` against the un-augmented SDK and report bogus missing-tool
+   * findings. Returns an empty list when the base dir doesn't exist (no classpath trailmaps in
+   * scope, or an older compile that predates this feature).
+   */
+  /**
+   * PURE. Choose which discovered classpath validation-surface dirs to fold into the validator's
+   * trailmap list. Two rules, both correctness-sensitive:
+   *
+   *  - **Scope gating**: returns empty unless [allWorkspaceScope]. A scoped `check <id>` (or a run
+   *    from inside a trailmap dir) must not pull the large bundled corpora (square / dashboardapp)
+   *    into its report — that scale is what `--all` opts into.
+   *  - **Collision drop**: a surface whose id (dir name) matches a workspace trailmap id is
+   *    dropped. [TrailTscValidator.validate] keys trailmaps by dir name (last-wins), so a workspace
+   *    trailmap must always win over a (possibly stale) scratch surface of the same id — the
+   *    workspace one carries the real, analyzer-upgraded typing.
+   *
+   * Visible for testing so the two rules are pinned without staging a filesystem.
+   */
+  internal fun selectClasspathSurfacesForValidation(
+    workspaceTrailmaps: List<Path>,
+    discoveredSurfaces: List<Path>,
+    allWorkspaceScope: Boolean,
+  ): List<Path> {
+    if (!allWorkspaceScope) return emptyList()
+    val workspaceIds = workspaceTrailmaps.mapNotNull { it.fileName?.toString() }.toSet()
+    return discoveredSurfaces.filter { it.fileName?.toString() !in workspaceIds }
+  }
+
+  internal fun discoverClasspathValidationSurfaces(trailsRoot: Path): List<Path> {
+    val base = TrailTscValidator.classpathValidationSurfacesBaseDir(trailsRoot)
+    if (!Files.isDirectory(base)) return emptyList()
+    return Files.list(base).use { stream ->
+      stream
+        .filter { Files.isDirectory(it) }
+        .filter { dir ->
+          val tools = dir.resolve("tools")
+          Files.isRegularFile(tools.resolve("tsconfig.json")) &&
+            Files.isRegularFile(tools.resolve(WorkspaceClientDtsGenerator.GENERATED_FILE_NAME))
+        }
+        .sorted()
+        .toList()
     }
   }
 

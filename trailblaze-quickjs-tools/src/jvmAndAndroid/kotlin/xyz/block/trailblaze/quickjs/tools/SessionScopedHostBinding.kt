@@ -247,18 +247,29 @@ class SessionScopedHostBinding(
    * ([DelegatingTrailblazeTool]). For delegating tools, each expanded executable runs in
    * order; the first error short-circuits and is returned; otherwise the last success
    * (or default `Success`) is returned.
+   *
+   * Consults [TrailblazeToolExecutionContext.nestedToolExecutor] before falling back to a
+   * direct `execute(context)` call — the same indirection
+   * [xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatcher]'s subprocess/HTTP
+   * transport already applies. Without it, a driver-specific tool (e.g. a
+   * `PlaywrightExecutableTool`, whose `execute()` unconditionally throws — see its kdoc) would
+   * fail every time a scripted tool composes it via `ctx.tools.<name>(...)` on this in-process
+   * QuickJS transport, even though the identical composition works over the subprocess
+   * transport. [nestedToolExecutor] routes the call back through the owning driver agent
+   * (`PlaywrightTrailblazeAgent.executeTool`, `MaestroTrailblazeAgent`, etc.), which knows how
+   * to supply whatever live driver handle (e.g. the Playwright `Page`) the tool needs.
    */
   private suspend fun executeResolved(
     tool: TrailblazeTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     return when (tool) {
-      is ExecutableTrailblazeTool -> tool.execute(context)
+      is ExecutableTrailblazeTool -> context.nestedToolExecutor?.invoke(tool) ?: tool.execute(context)
       is DelegatingTrailblazeTool -> {
         val expanded = tool.toExecutableTrailblazeTools(context)
         var last: TrailblazeToolResult = TrailblazeToolResult.Success()
         for (sub in expanded) {
-          val r = sub.execute(context)
+          val r = context.nestedToolExecutor?.invoke(sub) ?: sub.execute(context)
           if (r is TrailblazeToolResult.Error) return r
           last = r
         }

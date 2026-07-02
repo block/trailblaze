@@ -42,6 +42,7 @@
     "dts-bundle-generator": "9.5.1",
     "esbuild": "0.27.2",
     "ts-json-schema-generator": "2.9.0",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "yaml-language-server": "1.23.0"
   }
 }

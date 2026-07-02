@@ -1231,4 +1231,62 @@ class TrailblazeRecordingGeneratorTest {
     val reencoded = trailblazeYaml.encodeToString(decoded)
     assertThat(reencoded).isEqualTo(yaml)
   }
+
+  @Test
+  fun recordedTrailheadObjectiveEmitsTrailheadElement() {
+    // A trailhead-marked objective (lowered from `trailhead:`) must come back out as a `- trailhead:`
+    // root element, not a plain prompt step.
+    val trailheadStep = TrailheadDefinition(
+      step = "Sign in fresh",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+    assertThat(yaml).contains("trailhead:")
+    assertThat(yaml).contains("Sign in fresh")
+    assertThat(yaml).doesNotContain("- prompts:")
+
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo("Sign in fresh")
+    assertThat(th.tools.single().name).isEqualTo("launchApp")
+  }
+
+  @Test
+  fun shorthandTrailheadObjectiveDropsTheDefaultStepText() {
+    // A bare-string-shorthand trailhead carries no authored step (DEFAULT_STEP stands in at runtime);
+    // the recorded `- trailhead:` should NOT resurrect that sentinel as an authored step.
+    val trailheadStep = TrailheadDefinition(
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+    assertThat(yaml).contains("trailhead:")
+    assertThat(yaml).doesNotContain(TrailheadDefinition.DEFAULT_STEP)
+
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo(null)
+    assertThat(th.tools.single().name).isEqualTo("launchApp")
+  }
 }

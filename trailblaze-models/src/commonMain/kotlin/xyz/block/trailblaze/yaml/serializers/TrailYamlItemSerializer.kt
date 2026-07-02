@@ -4,6 +4,7 @@ import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlInput
 import com.charleskorn.kaml.YamlMap
 import com.charleskorn.kaml.YamlNode
+import com.charleskorn.kaml.YamlScalar
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
@@ -14,8 +15,11 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
+import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
 class TrailYamlItemSerializer(
@@ -54,6 +58,16 @@ class TrailYamlItemSerializer(
             TrailConfig.serializer(),
           ),
           mapOf(TrailYamlItem.KEYWORD_CONFIG to value.config),
+        )
+      }
+
+      is TrailYamlItem.TrailheadTrailItem -> {
+        encoder.encodeSerializableValue(
+          MapSerializer(
+            String.serializer(),
+            TrailheadDefinition.serializer(),
+          ),
+          mapOf(TrailYamlItem.KEYWORD_TRAILHEAD to value.trailhead),
         )
       }
     }
@@ -100,6 +114,26 @@ class TrailYamlItemSerializer(
           valueNode,
         )
         TrailYamlItem.ConfigTrailItem(config)
+      }
+
+      TrailYamlItem.KEYWORD_TRAILHEAD -> {
+        val trailhead = if (valueNode is YamlScalar) {
+          // Bare-string shorthand: `trailhead: myapp_freshInstall` → one bootstrap tool with
+          // no args. The tool resolves from the session's tool repo at run time, so it's wrapped as
+          // an OtherTrailblazeTool (name + empty raw) rather than a typed serializer here.
+          val toolId = valueNode.content
+          TrailheadDefinition(
+            tools = listOf(
+              TrailblazeToolYamlWrapper(
+                name = toolId,
+                trailblazeTool = OtherTrailblazeTool(toolName = toolId, raw = JsonObject(emptyMap())),
+              ),
+            ),
+          )
+        } else {
+          yaml.decodeFromYamlNode(TrailheadDefinition.serializer(), valueNode)
+        }
+        TrailYamlItem.TrailheadTrailItem(trailhead)
       }
 
       else -> error("Unknown key in TrailItem: $key")

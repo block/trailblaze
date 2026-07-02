@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.cli.yaml.TrailblazeNodeSelectorYamlEmitter
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
@@ -21,12 +22,14 @@ import java.io.File
 import java.util.concurrent.Callable
 
 /**
- * Suggest waypoint-ready selectors for a specific element ref captured in a session log.
+ * Suggest selectors for a specific element ref captured in a session log.
  *
- * The hard part of authoring a `*.waypoint.yaml` is translating "this thing on the screen"
- * into "the right selector YAML." `./trailblaze snapshot --all` shows every element with a
- * short ref like `[a812]` next to its label, but the ref-to-selector translation has historically
- * been done by hand, with two failure modes that have actually shipped:
+ * The hard part of authoring any selector by hand — for a `*.waypoint.yaml`, a shortcut, an
+ * ad-hoc `tool tap --selector`, wherever a [TrailblazeNodeSelector] is accepted — is translating
+ * "this thing on the screen" into "the right selector YAML." `./trailblaze snapshot --all` shows
+ * every element with a short ref like `[a812]` next to its label, but the ref-to-selector
+ * translation has historically been done by hand, with two failure modes that have actually
+ * shipped:
  *
  *  1. Picking a selector that uniquely resolves on the recorded screen but is fragile across
  *     runs — e.g. matching by `text=` when the field that's actually populated for the node
@@ -37,52 +40,69 @@ import java.util.concurrent.Callable
  *     accessibility-driver tree the matcher actually reads (Pitfall 5 in the waypoints skill).
  *
  * This command short-circuits both. It loads the captured `trailblazeNodeTree` from a session
- * log, finds the node by ref, and runs the same `TrailblazeNodeSelectorGenerator` cascade the
- * runtime uses to pick a selector for a tap. The generator returns up to N **named** candidates
- * (text, content-description, resource id, hierarchy-anchored, etc.) — each verified against
- * the resolver to produce exactly one match. The author picks the candidate that best
- * communicates *why* this signal identifies the screen, then pastes its YAML into a
- * `required:` / `forbidden:` entry.
+ * log, finds the node by ref, and runs the same `TrailblazeNodeSelectorGenerator` strategies
+ * the runtime uses to identify an element. Rather than pick one "best" selector, it prints the
+ * **whole menu**: every strategy that computes a selector resolving to the target, each with
+ * its strategy name and how many nodes it currently matches. The author reads the menu and
+ * uses whichever candidate fits — pasted into a waypoint's `required:`/`forbidden:` list, a
+ * shortcut, or any other selector-accepting spot.
  *
- * ## Why a list, not just "the best"
+ * ## Why the whole menu, not just "the best"
  *
- * `findBestSelector` returns whichever simplest strategy uniquely resolves — usually the
- * resource id when one exists. That's the right call for tap recordings (machine consumes
- * it, stability matters) but the wrong call for waypoint authoring, where the human consumer
- * cares about semantic meaning. A bottom-nav tab might have an opaque resource id like
- * `com.example.app:id/nav_tab_0` and a content description like "Banking" — both
- * resolve uniquely, but only the latter carries meaning when a future agent reads the YAML.
- * The author should see both options and choose. (Per the same logic, the structural-only
- * candidate at the bottom of the output is the right pick for `forbidden:` clauses on sibling
- * waypoints — it doesn't depend on locale-bound text.)
+ * `findBestSelector` / `findAllValidSelectors` are tuned to pin down exactly **one** element —
+ * the right call for a tap recording (the machine consumes it), but the wrong framing for a
+ * human authoring a selector. Which selector is "best" depends on the author's intent, and
+ * only they know it:
+ *
+ *  - A tap wants a **unique** match (`matches 1`).
+ *  - A waypoint asserts a signal is **present** (`matches >= 1`) — so a semantic label
+ *    that repeats on screen ("Add money" twice) is a perfectly good waypoint signal, where the
+ *    tap cascade would have discarded it in favor of a positional `index`.
+ *
+ * So the command enumerates *everything computable* — resource id, each text field, text+class,
+ * structural class, `childOf` a labeled parent, `containsChild` a labeled descendant, spatial,
+ * index-qualified variants — labels each with its strategy and live match count, and ranks them
+ * stable-first (identity → text → structural → childOf → containsChild → spatial, with any
+ * index-qualified selector sorting after its non-indexed sibling). It also adds one option the
+ * raw cascade never produces: the semantic text with its run-variable tail wildcarded
+ * (`Balance: $0.00` -> `Balance:.*`), so a text signal survives the next run.
+ *
+ * Nothing computable is hidden — when a semantic label repeats on screen, the plain selector
+ * (`matches 2`) shows up right next to an index- or hierarchy-qualified variant that resolves it
+ * uniquely (`matches 1`); the mere presence of that qualified variant in the menu is the signal
+ * that the plain one wasn't unique. The author picks whichever fits their intent — presence for
+ * a waypoint, uniqueness for a tap. See
+ * [TrailblazeNodeSelectorGenerator.enumerateSelectorCandidates].
  *
  * ## Inputs
  *
  *  - `--ref <X>` — the short ref shown by `snapshot` / the LLM context (`a812`, `n220b`, …).
- *    Required.
+ *    Required (or `--at` / `--maestro-selector`).
  *  - Either a positional log file argument or `--session DIR --step N`, mirroring the input
  *    surface of `waypoint validate`. Same loader — `SessionLogScreenState.loadStep` — so any
  *    file that command accepts works here too. The default `--step` is "last step in the
  *    session," matching `waypoint validate`.
- *  - `--max <N>` — cap the candidate count (default 5). Useful when the generator finds
- *    many valid candidates and the author only wants the top few.
+ *  - `--max <N>` — cap the number printed (default 25 — enough to show them all).
  *
  * ## Output
  *
- * One pasteable `required:` block per candidate, with a comment line explaining the strategy
- * the generator used to produce it. The author trims to the entries they want and edits the
- * surrounding context (description, minCount). The structural-only candidate prints last so
- * authors who skim the bottom land on it for forbidden-clause use.
+ * One bare [TrailblazeNodeSelector] YAML block per computed candidate, most-stable first, each
+ * with a comment naming the strategy and the live match count — just the selector body
+ * (`iosMaestro:`, `androidAccessibility:`, `index:`, …), no `WaypointCondition` wrapper
+ * (`description:` / `selector:` keys). The author drops the block in wherever a selector goes;
+ * a waypoint's `required:`/`forbidden:` entry additionally wants a `description:` and optional
+ * `minCount:` around it, which the author adds by hand for whichever candidate they picked.
  */
 @Command(
   name = "suggest-selector",
   mixinStandardHelpOptions = true,
   description = [
-    "Suggest waypoint-ready selector YAML for a specific element ref in a captured screen.",
+    "Suggest selector YAML for a specific element ref in a captured screen — the whole menu.",
     "Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching",
-    "session log to translate ref → selector. Returns up to --max named candidates (the",
-    "TrailblazeNodeSelectorGenerator strategies that uniquely resolve to the target),",
-    "plus one structural-only candidate at the bottom for forbidden-clause use.",
+    "session log to translate ref → selector. Prints EVERY strategy that computes a selector",
+    "resolving to the target (resource id, text, structural, childOf, containsChild, spatial,",
+    "index-qualified variants, plus a run-variable-wildcarded text variant), each with its",
+    "strategy name + live match count, ranked most-stable first. Nothing computable is hidden.",
   ],
 )
 class WaypointSuggestSelectorCommand : Callable<Int> {
@@ -149,9 +169,9 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
 
   @Option(
     names = ["--max"],
-    description = ["Maximum candidate selectors to return (default: 5)"],
+    description = ["Maximum candidate selectors to print (default: 25 — enough to show them all)"],
   )
-  var max: Int = 5
+  var max: Int = 25
 
   @Option(
     names = ["--anchor"],
@@ -194,44 +214,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
     target.ref?.let { Console.log("# Resolved ref: $it") }
     Console.log("")
 
-    val candidates = TrailblazeNodeSelectorGenerator.findAllValidSelectors(
-      root = tree,
-      target = target,
-      maxResults = max,
-    )
-
-    if (candidates.isEmpty()) {
-      // findAllValidSelectors guarantees at least the index fallback, so this
-      // path is mostly defensive — but we want the failure mode to be loud rather
-      // than emitting silently-empty output.
-      reportCliError(
-        verb = "Suggest selector",
-        reason = "no selectors generated for target — this shouldn't happen",
-      )
-      return TrailblazeExitCode.INFRA_FAILED.code
-    }
-
-    Console.log("# ${candidates.size} candidate selector(s), best-first.")
-    Console.log("# Pick the one that best expresses *why* this signal identifies the screen.")
-    Console.log("# Resource ids are most stable; text / contentDescription are most readable.")
-    Console.log("")
-
-    candidates.forEachIndexed { idx, named ->
-      val marker = if (named.isBest) " (best)" else ""
-      Console.log("# [${idx + 1}] Strategy: ${named.strategy}$marker")
-      printSelectorYaml(named.selector)
-      Console.log("")
-    }
-
-    // Structural-only candidate as a separate section. It's not in `candidates` because
-    // findAllValidSelectors uses the full strategy cascade (which prefers text), while
-    // findBestStructuralSelector deliberately excludes text/content. Different question,
-    // different answer; both worth showing.
-    val structural = TrailblazeNodeSelectorGenerator.findBestStructuralSelector(tree, target)
-    Console.log("# Structural-only (text-independent — useful for `forbidden:` clauses on sibling")
-    Console.log("# waypoints, or when locale changes the visible text):")
-    Console.log("# Strategy: ${structural.strategy}")
-    printSelectorYaml(structural.selector)
+    emitSelectorCandidates(tree, target)
 
     // Anchor composition. The default cascade returns selectors that uniquely identify
     // the *leaf* (e.g. the View with `contentDescription="Money"`). For bottom-nav tab
@@ -249,6 +232,57 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
 
     return TrailblazeExitCode.SUCCESS.code
   }
+
+  /**
+   * Prints the full menu of selectors the generator can compute for the target — every
+   * strategy that resolves to it, ranked most-stable first, each with its strategy name and
+   * how many nodes it currently matches. Nothing computable is hidden: the positional `index`
+   * fallback and the `containsChild` / `containsDescendants` family both appear when the
+   * cascade produces them — they just rank last, and a repeated label's ambiguity is visible
+   * as `matches 2` right next to the index-qualified variant that resolves it to `matches 1`.
+   * See [TrailblazeNodeSelectorGenerator.enumerateSelectorCandidates].
+   *
+   * A truly empty result is a rare edge case (even an attribute-less node still gets a bare
+   * global-index candidate) — handled with guidance rather than erroring, defensively.
+   */
+  private fun emitSelectorCandidates(tree: TrailblazeNode, target: TrailblazeNode) {
+    val candidates = TrailblazeNodeSelectorGenerator.enumerateSelectorCandidates(
+      root = tree,
+      target = target,
+      maxResults = max,
+    )
+
+    if (candidates.isEmpty()) {
+      Console.log("# No paste-worthy selector could be computed for this element.")
+      Console.log("# It has no stable identity (resource id), no usable semantic label")
+      Console.log("# (blank, editable, or a run-variable amount/count with no stable head),")
+      Console.log("# and no matchable type. Pick a different ref: a labeled or id-bearing element.")
+      return
+    }
+
+    Console.log("# ${candidates.size} selector(s) computed for this element, most-stable first.")
+    Console.log("# Each line shows the strategy that produced it and how many nodes it matches now.")
+    Console.log("# A waypoint wants presence (matches >= 1); a tap wants a unique match (matches 1).")
+    Console.log("# If a selector matches >1 node, an index- or hierarchy-qualified variant that")
+    Console.log("# resolves it uniquely usually appears further down — that's not a separate bug,")
+    Console.log("# it's this list telling you disambiguation was needed.")
+    Console.log("")
+
+    candidates.forEachIndexed { idx, named ->
+      val marker = if (named.isBest) " (best)" else ""
+      Console.log("# [${idx + 1}] Strategy: ${named.strategy} · ${matchCountLabel(tree, named.selector)}$marker")
+      printSelectorYaml(named.selector)
+      Console.log("")
+    }
+  }
+
+  /** Human label for how many nodes a selector currently resolves to. */
+  private fun matchCountLabel(tree: TrailblazeNode, selector: TrailblazeNodeSelector): String =
+    when (val result = TrailblazeNodeSelectorResolver.resolve(tree, selector)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> "matches 1 (unique)"
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> "matches ${result.nodes.size}"
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> "matches 0"
+    }
 
   private fun emitAnchorSelector(tree: TrailblazeNode, target: TrailblazeNode) {
     when (anchor) {
@@ -290,9 +324,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
         )
         Console.log("# Anchored: parent isSelected + this as containsChild")
         Console.log("# This is the canonical bottom-nav-tab pattern — only matches when this tab is the active one.")
-        Console.log("- description: \"\"")
-        Console.log("  selector:")
-        TrailblazeNodeSelectorYamlEmitter.emit(anchorSelector, indent = 4) { Console.log(it) }
+        printSelectorYaml(anchorSelector)
       }
       else -> Console.log("# Unknown --anchor mode: '$anchor'. Supported: parent-selected.")
     }
@@ -509,24 +541,24 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
     return if (parts.isEmpty()) "(no identifying properties)" else parts.joinToString(" ")
   }
 
+  /**
+   * Prints just the [TrailblazeNodeSelector] body — no `WaypointCondition` wrapper
+   * (`description:` / `selector:` keys). The command's output is a menu of selectors for the
+   * author to use however they need — pasted into a waypoint's `required:`/`forbidden:` list,
+   * a shortcut, an ad-hoc CLI `tool tap --selector`, or anywhere else a
+   * [TrailblazeNodeSelector] is accepted — so it prints the reusable core, not a shape tied to
+   * one specific consumer.
+   *
+   * Hand-format rather than using the kaml `TrailblazeYaml` instance because:
+   *  1. We want to control indent precisely (4-space, matching hand-authored waypoint files).
+   *  2. We want `\Qfoo\E` literal blocks emitted verbatim (`\Q` / `\E` escape chars are valid
+   *     YAML scalars but kaml's default scalar style escapes them in a way that makes the
+   *     regex hard to read).
+   *  3. The selector shape is shallow — driver match + optional spatial / hierarchy children —
+   *     so the formatting recursion stays tiny and reads cleanly.
+   */
   private fun printSelectorYaml(selector: TrailblazeNodeSelector) {
-    // Emit a pasteable WaypointCondition — `- description: ""\n  selector:\n    ...`.
-    //
-    // Hand-format rather than using the kaml `TrailblazeYaml` instance because:
-    //  1. We want to control indent precisely (4-space child indent, matching the existing
-    //     hand-authored waypoint files in the repo).
-    //  2. We want `\Qfoo\E` literal blocks emitted verbatim (`\Q` / `\E` escape chars
-    //     are valid YAML scalars but kaml's default scalar style escapes them in a way
-    //     that makes the regex hard to read).
-    //  3. The selector shape is shallow — driver match + optional spatial / hierarchy
-    //     children — so the formatting recursion stays tiny and reads cleanly.
-    Console.log("- description: \"\"")
-    Console.log("  selector:")
-    emitSelectorBody(selector, indent = 4)
-  }
-
-  private fun emitSelectorBody(selector: TrailblazeNodeSelector, indent: Int) {
-    TrailblazeNodeSelectorYamlEmitter.emit(selector, indent) { Console.log(it) }
+    TrailblazeNodeSelectorYamlEmitter.emit(selector, indent = 4) { Console.log(it) }
   }
 }
 

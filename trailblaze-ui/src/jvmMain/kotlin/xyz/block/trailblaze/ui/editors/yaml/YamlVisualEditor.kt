@@ -298,8 +298,11 @@ private fun TrailYamlItemCard(
 ) {
   var showDeleteDialog by remember { mutableStateOf(false) }
 
-  // Only show reorder controls for non-config items
-  val showReorderControls = item !is TrailYamlItem.ConfigTrailItem
+  // Only show reorder controls for items whose position is not fixed. Config and the trailhead
+  // (step 0) are position-locked — reordering either produces YAML that `decodeV1TrailStrict`
+  // rejects (config must be first; the trailhead must precede any prompts/tools steps).
+  val showReorderControls = item !is TrailYamlItem.ConfigTrailItem &&
+    item !is TrailYamlItem.TrailheadTrailItem
 
   OutlinedCard(
     modifier = modifier
@@ -370,6 +373,16 @@ private fun TrailYamlItemCard(
             onDelete = { showDeleteDialog = true }
           )
 
+          // Read-only summary for now — the trailhead (step 0) shows its NL step and/or its tool ids
+          // (whichever are present). A dedicated editor card is a follow-up.
+          is TrailYamlItem.TrailheadTrailItem -> androidx.compose.material3.Text(
+            text = "Trailhead (step 0): " +
+              listOfNotNull(
+                item.trailhead.step,
+                item.trailhead.tools.takeIf { it.isNotEmpty() }?.joinToString(prefix = "[", postfix = "]") { it.name },
+              ).joinToString(" "),
+            style = MaterialTheme.typography.bodyMedium,
+          )
         }
       }
     }

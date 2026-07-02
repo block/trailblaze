@@ -137,7 +137,11 @@ class StepToolSetDirectToolsTest {
     assertEquals(300, tap2.x)
     assertEquals(400, tap2.y)
     assertContains(result, "Done")
-    assertContains(result, "Executed 2 tools")
+    // Each tool's own output is surfaced, labeled with a 1-based ordinal + name so repeated
+    // tools stay individually attributable, rather than a generic count.
+    assertContains(result, "OK")
+    assertContains(result, "[1] tapOnPoint:")
+    assertContains(result, "[2] tapOnPoint:")
   }
 
   // -- 2. YAML parsing: unwrapped format --------------------------------------
@@ -164,7 +168,7 @@ class StepToolSetDirectToolsTest {
 
     assertEquals(1, executedTools.size)
     assertTrue(executedTools[0] is TapOnPointTrailblazeTool)
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
   }
 
   // -- 3. YAML parsing: already-wrapped format --------------------------------
@@ -200,7 +204,113 @@ class StepToolSetDirectToolsTest {
     val tap = executedTools[0] as TapOnPointTrailblazeTool
     assertEquals(150, tap.x)
     assertEquals(250, tap.y)
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
+  }
+
+  // -- 3b. Tool output surfacing ----------------------------------------------
+  // The observable contract this change adds: `trailblaze tool <name>` returns the
+  // tool's OWN output (an installed-app list, a profile JSON, …) instead of a generic
+  // "Executed N tools" count — 1:1 with what the agent sees. Driven through the real
+  // rawToolExecutor seam with a fake that returns a known string; the tool identity is
+  // irrelevant because the seam stands in for the device round-trip.
+
+  @Test
+  fun `direct tools - single tool output is surfaced in the result`() = runTest {
+    val appListJson = """{"appIds":["com.example.one","com.example.two"]}"""
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ -> appListJson },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "List installed apps",
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
+      )
+
+    assertContains(result, "Done")
+    assertContains(result, appListJson)
+  }
+
+  @Test
+  fun `direct tools - structured JSON output is surfaced verbatim`() = runTest {
+    // A scripted tool's structured content arrives at this layer already serialized to
+    // JSON; the direct-tool path must pass it through untouched.
+    val structured = """{"merchantName":"Example Co","currency":"USD"}"""
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ -> structured },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Read profile",
+        tools = "- tapOnPoint:\n    x: 5\n    y: 6",
+      )
+
+    assertContains(result, structured)
+  }
+
+  @Test
+  fun `direct tools - each tool's output is labeled and surfaced for a multi-tool batch`() =
+    runTest {
+      val outputs = ArrayDeque(listOf("first-output", "second-output"))
+      val toolSet =
+        StepToolSet(
+          screenAnalyzer = throwingScreenAnalyzer,
+          executor = throwingExecutor,
+          screenStateProvider = { _, _, _ -> dummyScreenState },
+          rawToolExecutor = { _, _ -> outputs.removeFirst() },
+        )
+
+      val result =
+        toolSet.step(
+          objective = "Run two tools",
+          tools =
+            """
+            - tools:
+                - tapOnPoint:
+                    x: 1
+                    y: 2
+                - tapOnPoint:
+                    x: 3
+                    y: 4
+            """
+              .trimIndent(),
+        )
+
+      assertContains(result, "first-output")
+      assertContains(result, "second-output")
+      // 1-based ordinals keep repeated tools individually attributable.
+      assertContains(result, "[1] tapOnPoint:")
+      assertContains(result, "[2] tapOnPoint:")
+    }
+
+  @Test
+  fun `direct tools - blank output falls back to a concise executed line`() = runTest {
+    // Action tools (tap/swipe) produce no payload; the result must still read sensibly.
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ -> "   " },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Tap a point",
+        tools = "- tapOnPoint:\n    x: 1\n    y: 2",
+      )
+
+    assertContains(result, "Done")
+    assertContains(result, "Executed tapOnPoint")
   }
 
   @Test
@@ -227,7 +337,7 @@ class StepToolSetDirectToolsTest {
     assertEquals("tapOnPoint", toolLogs.single().toolName)
     assertTrue(toolLogs.single().isTopLevelToolCall)
     assertTrue(toolLogs.single().isRecordable)
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
   }
 
   @Test
@@ -256,7 +366,7 @@ class StepToolSetDirectToolsTest {
     val toolLog = emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
     assertEquals(toolLog.traceId, executorTraceId)
     assertTrue(toolLog.traceId?.traceId?.startsWith("mcp-") == true)
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
   }
 
   // -- 4. Invalid YAML --------------------------------------------------------
@@ -792,7 +902,8 @@ class StepToolSetDirectToolsTest {
       assertEquals(RecordedStepType.STEP, step.type)
       assertEquals("Tap the login button", step.input)
       assertTrue(step.success)
-      assertContains(step.result, "Executed 1 tools")
+      // The recorded step captures the tool's real output, not a generic count.
+      assertContains(step.result, "tap executed")
 
       assertEquals(1, step.toolCalls.size)
       assertEquals("tapOnPoint", step.toolCalls[0].toolName)
@@ -969,7 +1080,7 @@ class StepToolSetDirectToolsTest {
       )
 
     assertEquals(1, executedTools.size)
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
   }
 
   // -- 12d. No LLM configured: ask returns raw screen state --------------------
@@ -1139,7 +1250,7 @@ class StepToolSetDirectToolsTest {
 
     assertTrue(callCount >= 3, "screenStateProvider should have been called multiple times")
     assertEquals(1, executedTools.size, "Tool should execute after screen state becomes available")
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
   }
 
   // -- 14. Screen summary included after direct tool execution -----------------
@@ -1162,7 +1273,7 @@ class StepToolSetDirectToolsTest {
       )
 
     assertContains(result, "Done")
-    assertContains(result, "Executed 1 tools")
+    assertContains(result, "OK")
     assertContains(result, "**Screen:**")
     assertContains(result, "Login screen")
     assertContains(result, "[button] Sign in")

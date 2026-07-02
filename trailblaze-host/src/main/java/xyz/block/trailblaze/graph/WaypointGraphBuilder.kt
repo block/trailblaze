@@ -110,6 +110,10 @@ object WaypointGraphBuilder {
         screenshotDataUri = dataUri,
         sourceLabel = item.sourceLabel,
         platform = platform,
+        // The classifier blocks this waypoint declares — the authoritative platform-scope
+        // source. A cross-platform v2 waypoint at a platform-neutral path has platform=null
+        // but platforms=[android, ios], so it stays visible in both platform-scoped views.
+        platforms = def.byClassifier.keys.toList(),
         // Selector entries surface in the detail panel — they answer "how
         // does the matcher know this screen is <id>?".
         required = resolved?.required ?: emptyList(),
@@ -200,7 +204,12 @@ object WaypointGraphBuilder {
     }
     val keptWaypoints = waypoints.filter { wp ->
       val targetOk = targetFilter == null || wp.id.substringBefore('/') == targetFilter
-      val platformOk = platformFilter == null || wp.platform == platformFilter
+      // Match the declared classifier blocks (platforms) first — a cross-platform v2 waypoint
+      // at a platform-neutral path has platform=null but declares android/ios, and must stay in
+      // both scoped views. Fall back to the path-derived single platform for id-only nodes that
+      // declare no classifier blocks.
+      val platformOk = platformFilter == null ||
+        (if (wp.platforms.isNotEmpty()) platformFilter in wp.platforms else wp.platform == platformFilter)
       targetOk && platformOk
     }
     val keptIds = keptWaypoints.mapTo(mutableSetOf()) { it.id }

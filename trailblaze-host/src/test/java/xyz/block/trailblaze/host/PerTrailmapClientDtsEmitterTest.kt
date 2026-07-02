@@ -448,6 +448,100 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue(emitted.isEmpty())
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Classpath validation surfaces (trail-recording type-validation coverage for
+  // JAR-bundled targets like `square` / `dashboardapp`).
+  //
+  // `emit` deliberately skips classpath-backed trailmaps (can't write into a JAR).
+  // `emitClasspathValidationSurfaces` is the companion that writes a validation-only
+  // surface into a caller-supplied scratch dir so `TrailTscValidator` can type-check
+  // those targets' recorded trails. These tests pin the contract at the emitter
+  // boundary; the end-to-end wiring is covered by the CompileCommand/CheckCommand path.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Serializable
+  @TrailblazeToolClass(name = "classpath_surface_tool")
+  @LLMDescription("Class-backed tool that must land in a classpath trailmap's validation surface.")
+  private class ClasspathSurfaceTool(
+    @Suppress("unused") val text: String,
+  ) : TrailblazeTool
+
+  @Test
+  fun `emitClasspathValidationSurfaces writes a surface from a baked target config`() {
+    // A classpath-backed target (lives in a JAR) has no writable tools/ dir of its own, so it
+    // gets its validation surface in a caller-supplied scratch dir keyed by id, built from the
+    // build-time-baked AppTargetYamlConfig. The surface must carry BOTH the class-backed tool
+    // (resolved via the catalog from platforms.tool_sets) AND the baked scripted tool.
+    val outputBase = createTempDirectory("classpath-surface-out").toFile().also { tempDirs += it }
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.bundled"),
+        toolSets = listOf("classpath_surface_set"),
+      ),
+    )
+    val bakedConfig = AppTargetYamlConfig(
+      id = "bundled_app",
+      displayName = "Bundled App",
+      platforms = platforms,
+      tools = listOf(
+        InlineScriptToolConfig(
+          script = "./tools/bundled_login.ts",
+          name = "bundled_login",
+          description = "Sign into the bundled app.",
+          inputSchema = buildJsonObject {
+            put("type", JsonPrimitive("object"))
+            put("properties", buildJsonObject { /* no params */ })
+          },
+        ),
+      ),
+    )
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "classpath_surface_set",
+        description = "Synthetic toolset for the classpath validation-surface test.",
+        toolClasses = setOf(ClasspathSurfaceTool::class),
+      ),
+    )
+
+    val emitted = PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces(
+      targetConfigs = listOf(bakedConfig),
+      excludeIds = emptySet(),
+      outputBaseDir = outputBase.toPath(),
+      catalog = catalog,
+    )
+
+    assertEquals(1, emitted.size, "expected one surface for the classpath target, got: $emitted")
+    val surfacePath = File(outputBase, "bundled_app/tools/trailblaze-client.d.ts")
+    assertTrue(surfacePath.isFile, "expected surface at $surfacePath")
+    val rendered = Files.readString(surfacePath.toPath())
+    assertTrue("surface should carry the baked scripted tool: $rendered") {
+      rendered.contains("bundled_login:")
+    }
+    assertTrue("surface should carry the class-backed tool from the toolset: $rendered") {
+      rendered.contains("classpath_surface_tool:")
+    }
+  }
+
+  @Test
+  fun `emitClasspathValidationSurfaces excludes workspace filesystem trailmap ids`() {
+    // A bundled target whose id matches a workspace filesystem trailmap already got a real
+    // (analyzer-upgraded) surface from `emit`; re-emitting a bundled copy here would shadow it,
+    // so ids in excludeIds must be skipped and never leak a file into the scratch dir.
+    val outputBase = createTempDirectory("classpath-surface-skip-out").toFile().also { tempDirs += it }
+    val bakedConfig = AppTargetYamlConfig(id = "sample_app", displayName = "Sample App")
+
+    val emitted = PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces(
+      targetConfigs = listOf(bakedConfig),
+      excludeIds = setOf("sample_app"),
+      outputBaseDir = outputBase.toPath(),
+    )
+
+    assertTrue(emitted.isEmpty(), "expected no surfaces when the only target id is excluded: $emitted")
+    assertFalse("scratch dir must stay empty for an excluded id") {
+      File(outputBase, "sample_app").exists()
+    }
+  }
+
   @Test
   fun `trailmap-local platforms_tool_sets surface Kotlin tools in typed binding`() {
     // Validates the resolver wire-through end-to-end: a trailmap that declares

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml
 
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -10,6 +11,36 @@ class TrailYamlValidatorTest {
 
   @get:Rule
   val tempFolder = TemporaryFolder()
+
+  @Test
+  fun `validateTrailFile accepts a unified trail with recordings without device classifiers`() {
+    // Regression guard: a unified `trail.yaml` WITH recordings must validate even though the
+    // validator has no device classifiers. `decodeTrail()` would throw its no-classifiers guard
+    // here (it lowers for a specific device); validation must use the format-native
+    // `decodeTrailDocument()`. This is the exact case that failed the trail-YAML validation gate
+    // once `isTrailFile` started discovering unified files.
+    val trailFile = tempFolder.newFile("trail.yaml")
+    trailFile.writeText(
+      """
+      config:
+        id: x/y
+        target: x
+        devices:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Tap something
+          recording:
+            android:
+              - tapOnPoint:
+                  x: 1
+                  y: 2
+      """.trimIndent(),
+    )
+
+    val issue = TrailYamlValidator.validateTrailFile(trailFile)
+
+    assertNull(issue, "unified trail with recordings must validate; got: ${issue?.errorMessage}")
+  }
 
   @Test
   fun `findAllTrailYamlFiles ignores comment-only trailblaze_yaml workspace anchor`() {

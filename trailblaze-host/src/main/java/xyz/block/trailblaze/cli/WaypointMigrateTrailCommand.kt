@@ -329,6 +329,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
           step.recording?.tools?.forEach { visit(it) }
         }
         is TrailYamlItem.ToolTrailItem -> item.tools.forEach { visit(it) }
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { visit(it) }
         is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
       }
     }
@@ -346,6 +347,12 @@ class WaypointMigrateTrailCommand : Callable<Int> {
       item.copy(promptSteps = item.promptSteps.map { migrateStep(it, migrations, cursor) })
     is TrailYamlItem.ToolTrailItem ->
       item.copy(tools = item.tools.map { migrateWrapper(it, migrations, cursor) })
+    is TrailYamlItem.TrailheadTrailItem ->
+      item.copy(
+        trailhead = item.trailhead.copy(
+          tools = item.trailhead.tools.map { migrateWrapper(it, migrations, cursor) },
+        ),
+      )
     is TrailYamlItem.ConfigTrailItem -> item
   }
 

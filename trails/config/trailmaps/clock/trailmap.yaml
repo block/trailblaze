@@ -1,7 +1,14 @@
-# Demo trailmap for the Google Clock target. Loaded as a workspace trailmap from the opensource
-# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
-# adopters running outside this repo do not see this target unless they declare a workspace
-# trailmap with the same id.
+# Demo trailmap for the AOSP Desk Clock target (`com.android.deskclock`). Loaded as a workspace
+# trailmap from the opensource repo's `trails/config/trailblaze.yaml` — not bundled into the
+# Trailblaze JAR. Binary-only adopters running outside this repo do not see this target unless
+# they declare a workspace trailmap with the same id.
+#
+# Pinned to the AOSP Desk Clock (`com.android.deskclock`), NOT Google's `com.google.android.deskclock`.
+# The two are genuinely different apps — different resource-id namespaces and accessibility trees —
+# so a trail recorded against one silently mismatches the other. This target's recorded trails use
+# AOSP `com.android.deskclock:id/*` selectors, so the target declares that single app id. Run these
+# trails on an AOSP system image (a `default`-tag emulator, e.g. `android-34/default`) that ships
+# the AOSP Desk Clock; Google-APIs / Play images ship the Google clock instead and won't match.
 #
 # Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
 # framework trailmap via `dependencies: [trailblaze]`. Platforms that only need defaults are
@@ -11,11 +18,10 @@ id: clock
 dependencies:
   - trailblaze
 target:
-  display_name: Google Clock
+  display_name: AOSP Desk Clock
   platforms:
     android:
       app_ids:
-        - com.google.android.deskclock
         - com.android.deskclock
       # Scripted tools declared under their platform (rather than at `target.tools:`) so the
       # platform↔tool association is explicit in the YAML; the trailmap loader hoists them

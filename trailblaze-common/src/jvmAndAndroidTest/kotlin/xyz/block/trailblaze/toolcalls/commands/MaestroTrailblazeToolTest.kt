@@ -145,6 +145,44 @@ class MaestroTrailblazeToolTest {
   }
 
   @Test
+  fun `clean numeric-looking inputText survives the RPC-forwarding round trip and executes`() {
+    // Regression for a real login-flow CI failure: a verification code like "123123" is a
+    // clean, zero-padding-free numeric string, so it wasn't caught by the #4282 leading-zero fix
+    // (YamlJsonBridge's round-trip check treats it as a "genuine canonical number" by design).
+    // `HostOnDeviceRpcTrailblazeAgent.executeMaestroCommands` rebuilds a MaestroTrailblazeTool from
+    // parsed commands and forwards it to the device by re-serializing via this tool's custom
+    // serializer — which used to round-trip every scalar through YamlJsonBridge's number-guessing
+    // and silently turn "123123" into an unquoted YAML integer, which Maestro's own parser then
+    // rejects for the object-form `text` field. Simulate that exact forwarding round trip.
+    runBlocking {
+      val decoded = kotlinx.serialization.json.Json.decodeFromString(
+        MaestroTrailblazeToolSerializer,
+        """{"commands":[{"inputText":"123123"}]}""",
+      )
+      val commands = MaestroYamlParser.parseYaml(decoded.yaml)
+      val forwarded = MaestroTrailblazeTool(
+        yaml = MaestroYamlSerializer.toYaml(commands, includeConfiguration = false),
+      )
+      // The forwarding hop: re-serialize (as executeToolViaRpc's YAML encoder would) and decode
+      // back into the tool that would actually run on the device.
+      val reserialized = kotlinx.serialization.json.Json.encodeToString(
+        MaestroTrailblazeToolSerializer,
+        forwarded,
+      )
+      val redecoded = kotlinx.serialization.json.Json.decodeFromString(
+        MaestroTrailblazeToolSerializer,
+        reserialized,
+      )
+
+      val result = redecoded.execute(createContext())
+
+      assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+      assertThat((MaestroYamlParser.parseYaml(redecoded.yaml)[0] as InputTextCommand).text)
+        .isEqualTo("123123")
+    }
+  }
+
+  @Test
   fun `empty yaml returns success`() {
     runBlocking {
       val tool = MaestroTrailblazeTool(yaml = "")

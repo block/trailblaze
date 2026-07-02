@@ -71,6 +71,24 @@ class TrailRecordingsShortNameTest {
     )
   }
 
+  @Test
+  fun `uses the enclosing directory as identity for a unified trail-yaml`() {
+    // The unified file is named `trail.yaml` (not `<name>.trail.yaml`), so its identity is the
+    // enclosing directory rather than the bare filename.
+    assertEquals(
+      "clock/open-and-verify-clock-tab",
+      TrailRecordings.shortTrailName(
+        "/ci/workspace/checkout/trails/clock/open-and-verify-clock-tab/trail.yaml",
+      ),
+    )
+  }
+
+  @Test
+  fun `leaves a bare unified trail-yaml as-is when it has no enclosing directory`() {
+    // Degenerate: a `trail.yaml` directly under `trails/` has no directory name to adopt.
+    assertEquals("trail.yaml", TrailRecordings.shortTrailName("/ci/trails/trail.yaml"))
+  }
+
   // --- deriveTestIdentityFromTrailPath -------------------------------------------------
 
   @Test
@@ -124,6 +142,18 @@ class TrailRecordingsShortNameTest {
     )
     assertEquals("ExperimentalIosTests", identity.className)
     assertEquals("set_feature_flag", identity.methodName)
+  }
+
+  @Test
+  fun `derives identity from a unified trail-yaml using its enclosing directory`() {
+    // For the unified `trail.yaml`, the enclosing directory is the method and its parent the
+    // suite — NOT method="trail" (which is what a naive suffix-strip would yield).
+    val identity = TrailRecordings.deriveTestIdentityFromTrailPath(
+      "/ci/trails/clock/open-and-verify-clock-tab/trail.yaml",
+      fallbackClassName = "Trailblaze",
+    )
+    assertEquals("clock", identity.className)
+    assertEquals("open-and-verify-clock-tab", identity.methodName)
   }
 
   @Test

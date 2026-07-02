@@ -29,9 +29,19 @@ trailblazeAuthorToolBundles {
     entryPoint.set("typed.ts")
     autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
   }
+  // Reproduction-seed fixture for `QuickJsOnDeviceMemorySmokeTest` — a real `trailblaze.tool()`
+  // that exercises the `ctx.memory` surface (interpolate/get/has/keys), bundled the production
+  // on-device way (slim `@trailblaze/scripting` alias + wrapper template). See the fixture header
+  // and the test for why the crash it guards against slipped past `bun test` + `tsc`.
+  register("onDeviceMemoryProbe") {
+    sourceDir.set(layout.projectDirectory.dir("src/jvmTest/fixtures/on-device-memory-probe"))
+    entryPoint.set("probe.ts")
+    autoInstall.set(false) // No package.json in that dir; the SDK's esbuild is what we need.
+  }
 }
 
 tasks.named("bundleSampleAppTypedAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
+tasks.named("bundleOnDeviceMemoryProbeAuthorTool") { dependsOn(installTrailblazeScriptingSdkTaskPath) }
 
 // Wire the produced bundle into jvmTest as a system property and a task dependency. The
 // `SampleAppToolsDemoTest.on-device TS bundles via esbuild and runs in QuickJS` test reads
@@ -40,10 +50,17 @@ tasks.named("bundleSampleAppTypedAuthorTool") { dependsOn(installTrailblazeScrip
 val sampleAppTypedBundle = tasks.named("bundleSampleAppTypedAuthorTool").map { task ->
   (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
 }
+// Same wiring for the on-device memory-probe fixture the smoke test dispatches through the real
+// QuickJS engine (see `QuickJsOnDeviceMemorySmokeTest`).
+val onDeviceMemoryProbeBundle = tasks.named("bundleOnDeviceMemoryProbeAuthorTool").map { task ->
+  (task as BundleAuthorToolsTask).outputFile.get().asFile.absolutePath
+}
 tasks.withType<Test>().configureEach {
   if (name == "jvmTest") {
     dependsOn("bundleSampleAppTypedAuthorTool")
+    dependsOn("bundleOnDeviceMemoryProbeAuthorTool")
     systemProperty("trailblaze.test.sampleAppTypedBundle", sampleAppTypedBundle.get())
+    systemProperty("trailblaze.test.onDeviceMemoryProbeBundle", onDeviceMemoryProbeBundle.get())
   }
 }
 

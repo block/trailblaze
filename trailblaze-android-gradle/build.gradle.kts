@@ -20,7 +20,9 @@ gradlePlugin {
       displayName = "Trailblaze Android Gradle plugin"
       description =
         "Generates Android JUnit @Test shells from .trail.yaml files under " +
-          "src/androidTest/assets/trails/<ClassName>/, retiring the pure-boilerplate hand-written shells."
+          "src/androidTest/assets/trails/<ClassName>/, retiring the pure-boilerplate hand-written " +
+          "shells, and (via the optional trailmap { } block) pre-compiles a trailmap's TypeScript " +
+          "scripted tools into QuickJS bundles staged as androidTest assets."
     }
   }
 }
@@ -30,6 +32,15 @@ dependencies {
   // (provided by `kotlin.jvm`). The shell renderer is plain `buildString`-style text emission;
   // no KotlinPoet, no kaml, no serialization — the trail YAML files are scanned by filename
   // only, never opened.
+
+  // No AGP dependency, not even `compileOnly` — this plugin's whole reason for existing is AGP
+  // integration (auto-wiring the JUnit-shell codegen output and the trailmap scripted-tool
+  // bundles into AGP's `androidTest` source set), but it reaches AGP's `sourceSets` by reflection
+  // (see `wireAgpSourceSets` in `TrailblazeAndroidGradlePlugin.kt`) rather than a typed
+  // `com.android.build.gradle.BaseExtension` reference — the same pattern `gradle/merged-trails
+  // .gradle.kts` already uses for the identical reason: stay version-agnostic across whatever AGP
+  // a consumer happens to be on, and side-step the Gradle TestKit classloader isolation a
+  // `compileOnly` AGP dependency runs into when a fixture ALSO resolves a real AGP separately.
 
   testImplementation(kotlin("test"))
   testImplementation(kotlin("test-junit"))
@@ -62,7 +73,9 @@ mavenPublishing {
     url.set("https://www.github.com/block/trailblaze")
     name.set("trailblaze-android-gradle")
     description.set(
-      "Trailblaze's Android Gradle plugin — auto-generates Android JUnit shells from Trailblaze .trail.yaml files for AndroidJUnitRunner discovery.",
+      "Trailblaze's Android Gradle plugin — auto-generates Android JUnit shells from Trailblaze " +
+        ".trail.yaml files for AndroidJUnitRunner discovery, and (optionally) pre-compiles a " +
+        "trailmap's TypeScript scripted tools into QuickJS bundles staged as androidTest assets.",
     )
     licenses {
       license {
@@ -87,4 +100,20 @@ mavenPublishing {
 
 tasks.named<Test>("test") {
   useJUnit()
+  // Expose the real TS SDK dir to the functional/unit test JVM — the trailmap-bundling tests
+  // (ported from the retired `xyz.block.trailblaze.trailmap-tool-bundles` plugin) read this
+  // property (via `System.getProperty`) to locate the wrapper template and (when present) the
+  // SDK's node_modules/.bin/esbuild — re-bundling against the real SDK is the only way the
+  // end-to-end behavior can be exercised without shipping a separate fixture esbuild + SDK in
+  // this repo.
+  systemProperty("trailblaze.sdkDir", file("../sdks/typescript").absolutePath)
+}
+
+// Match the parent build's bytecode level so consumers on JDK 17 can load the plugin jar. Carried
+// over from the retired `trailblaze-trailmap-tool-bundles-plugin` module, whose scripted-tool
+// bundling logic now lives here.
+tasks.withType<JavaCompile>().configureEach { options.release.set(17) }
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
+  compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
 }

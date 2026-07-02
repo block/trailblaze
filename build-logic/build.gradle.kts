@@ -36,13 +36,10 @@ gradlePlugin {
       id = "trailblaze.quickjs-bundle-assets"
       implementationClass = "TrailblazeQuickjsBundleAssetsPlugin"
     }
-    // `trailblaze.trailmap-tool-bundles` was promoted to its own publishable OSS module
-    // (`trailblaze-trailmap-tool-bundles-plugin/`, a sibling of this directory) so external
-    // Android teams can consume it. The plugin id is now
-    // `xyz.block.trailblaze.trailmap-tool-bundles`; the implementation source still lives
-    // there as the single source of truth and is composed back into this build via the
-    // `srcDir(...)` below so the legacy `trailblaze.author-tool-bundle` plugin (still declared
-    // above) keeps compiling against the same `BundleAuthorToolsTask`.
+    // The shared scripted-tool bundler primitives now live at `trailblaze-android-gradle/src/
+    // main/kotlin/bundler/` (folded in from the retired `xyz.block.trailblaze.trailmap-tool-
+    // bundles` plugin) and are composed back into this build via the `srcDir(...)` below — see
+    // that srcDir line for why.
     //
     // Owns the `bundleTrailblazeSdk` task that generates the slim on-device SDK bundle
     // (`trailblaze-sdk-bundle.js`) via esbuild. Lives in a plugin (rather than inline in
@@ -87,12 +84,11 @@ gradlePlugin {
 // files are shared but the dependency declarations aren't.
 sourceSets["main"].kotlin {
   srcDir(file("../trailblaze-trailmap-bundler/src/main/kotlin"))
-  // Compose the canonical sources of the publishable `xyz.block.trailblaze.trailmap-tool-bundles`
-  // plugin back into this build so the legacy `trailblaze.author-tool-bundle` plugin (still
-  // registered above) keeps compiling against the same `BundleAuthorToolsTask` + wrapper helpers.
-  // The `trailblaze-trailmap-tool-bundles-plugin` module is the single source of truth; this
-  // build just composes its source set in.
-  srcDir(file("../trailblaze-trailmap-tool-bundles-plugin/src/main/kotlin"))
+  // Compose the shared scripted-tool bundler primitives back in so the legacy `trailblaze.author-
+  // tool-bundle` plugin keeps compiling against `BundleAuthorToolsTask` + wrapper helpers.
+  // Scoped to just the `bundler/` subdirectory, not the whole `trailblaze-android-gradle` module,
+  // since the rest of that module (its own plugin/extension classes) is unrelated to this bundler.
+  srcDir(file("../trailblaze-android-gradle/src/main/kotlin/bundler"))
   // Exclude the daemon-only `WorkspaceClientDtsGenerator` from build-logic's source set.
   // That class imports koog (`ToolDescriptor`) and trailblaze-models (`TrailmapScriptedToolFile`)
   // — neither of which build-logic has on its lean Gradle-plugin classpath, and pulling them

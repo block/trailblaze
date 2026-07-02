@@ -220,4 +220,26 @@ class TrailSerializerTest {
     )
     Console.log(deserialized.toString())
   }
+
+  @Test
+  fun trailheadBuilderRoundTrips() {
+    val built = TrailblazeYamlBuilder()
+      .config(target = "example")
+      .trailhead(
+        step = "Launch the app signed in",
+        tools = listOf(LaunchAppTrailblazeTool("com.example", launchMode = LaunchMode.FORCE_RESTART)),
+      )
+      .prompt(text = "Do the thing")
+      .build()
+
+    val itemSerializer = trailblazeYamlInstance.serializersModule.getContextual(TrailYamlItem::class)
+      ?: error("Missing contextual serializer for TrailYamlItem")
+    val yaml = trailblazeYamlInstance.encodeToString(ListSerializer(itemSerializer), built)
+    assertEquals(true, yaml.contains("trailhead:"))
+
+    val decoded = trailblazeYamlInstance.decodeFromString(ListSerializer(itemSerializer), yaml)
+    val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertEquals("Launch the app signed in", th.step)
+    assertEquals(1, th.tools.size)
+  }
 }

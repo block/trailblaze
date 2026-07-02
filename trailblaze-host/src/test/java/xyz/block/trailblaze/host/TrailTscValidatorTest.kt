@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -13,6 +14,15 @@ import org.junit.Test
  * compiler, following the repo's "extract the pure logic and test it directly" guidance.
  */
 class TrailTscValidatorTest {
+
+  @Test
+  fun `trailmapIdForSurfaceFile extracts the id from the base-id-tools-file layout and null otherwise`() {
+    val base = TrailTscValidator.classpathValidationSurfacesBaseDir(File("/ws/trails").toPath())
+    val surfaceFile = base.resolve("widgets").resolve("tools").resolve("trailblaze-client.d.ts")
+    assertEquals("widgets", TrailTscValidator.trailmapIdForSurfaceFile(surfaceFile))
+    // A path too shallow to carry an <id>/tools/<file> shape yields null rather than a wrong id.
+    assertNull(TrailTscValidator.trailmapIdForSurfaceFile(File("only-a-name").toPath()))
+  }
 
   @Test
   fun `generateGenFile emits one tool-call statement per line and maps each line back to its call`() {

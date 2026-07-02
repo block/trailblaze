@@ -194,7 +194,10 @@ class ToolCommand : Callable<Int> {
       // here would be observed by callers piping the tool output into another command, and
       // we don't want a friendly tip to pollute their stream — they already get the loud
       // structured error and the exit code carries the verdict.
-      if (MISUSE_MARKERS.any { result.content.contains(it) }) {
+      // [isMisuseResult] gates the marker match on an error status: a SUCCESSFUL read/shell
+      // tool now returns its real payload here, and a payload that merely contains a marker
+      // phrase (e.g. command output mentioning "Unknown tool") must print normally, not exit 3.
+      if (isMisuseResult(result.content)) {
         Console.error(result.content.replace(Regex("\\*\\*.*?\\*\\*\\s*—\\s*"), ""))
         emitToolboxTip()
         return@cliReusableWithDevice TrailblazeExitCode.MISUSE.code

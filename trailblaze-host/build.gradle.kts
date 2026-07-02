@@ -90,6 +90,11 @@ dependencies {
   api(libs.slf4j.api)
 
   implementation(project(":trailblaze-common"))
+  // RecordingTabComposable reads TrailblazeToolMeta (trailhead-picker scoping) directly. This
+  // resolved transitively via :trailblaze-scripting-subprocess's `api` dependency before, which
+  // would silently break if that module ever narrowed its own dependency scope — declare it
+  // explicitly since this module has its own real usage of the type.
+  implementation(project(":trailblaze-scripting-mcp-common"))
   // Goose-config writer in TrailblazeDesktopUtil reuses the bundler module's shared
   // YAML emit/quote utilities (`xyz.block.trailblaze.bundle.yaml.YamlEmitter`). The
   // bundler is otherwise build-time-only — this is the only runtime consumer today;

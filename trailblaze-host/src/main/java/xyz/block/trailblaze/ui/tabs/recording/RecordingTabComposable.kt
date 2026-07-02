@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
@@ -41,6 +42,8 @@ import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.TrailheadMetadata
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.toolName
@@ -171,51 +174,26 @@ fun RecordingTabComposable(
     }
   }
 
-  // Trailheads can be declared two ways:
+  // Trailheads can be declared three ways:
   //   1. *.trailhead.yaml file with a `trailhead:` block. Walked from the classpath via
   //      `ToolYamlLoader.discoverShortcutsAndTrailheads()`.
   //   2. `@TrailblazeToolClass(trailheadTo = "...")` annotation on a class-backed tool. The
   //      annotation form lets a tool class self-declare without a sidecar YAML — preferred for
   //      class-backed implementations because the metadata stays attached to the code.
-  // We merge both sources so trailheads show up in the picker regardless of which form they use.
-  // Falls back to all discovered trailheads when the target isn't decided yet, since "no target →
-  // no filter" is friendlier than "no target → empty list, looks broken."
+  //   3. `trailhead: {...}` inline in a scripted (.ts) tool's `TrailblazeTypedToolSpec` — the
+  //      TS-authoring equivalent of #2, captured by the analyzer into
+  //      `InlineScriptToolConfig.trailhead` (see AnalyzerScriptedToolEnrichment.trailheadOf).
+  // We merge all three sources so trailheads show up in the picker regardless of which form they
+  // use. Falls back to all discovered trailheads when the target isn't decided yet, since "no
+  // target → no filter" is friendlier than "no target → empty list, looks broken."
   val driverType = selectedDevice?.trailblazeDriverType
   val targetScopedTrailheads = remember(selectedTargetApp, driverType) {
-    val yamlTrailheads = ToolYamlLoader.discoverShortcutsAndTrailheads().values
-      .filter { it.trailhead != null }
-    val target = selectedTargetApp ?: return@remember yamlTrailheads
-    val driver = driverType ?: return@remember yamlTrailheads
-
-    // Combine yaml-only and class-backed tool names registered with this target so we can
-    // filter both sources of trailheads against a single membership check.
-    val classBackedTools = target.getCustomToolsForDriver(driver)
-    val classBackedToolNames: Set<ToolName> = classBackedTools.map { it.toolName() }.toSet()
-    val targetToolNames: Set<ToolName> =
-      target.getCustomYamlToolNamesForDriver(driver) + classBackedToolNames
-
-    // Synthesize a `ToolYamlConfig` for any class-backed tool whose annotation declares a
-    // non-empty `trailheadTo`. Picker UI keeps speaking the same `ToolYamlConfig` shape, so a
-    // class-only trailhead displays identically to a YAML-defined one (id + destination).
-    val annotationTrailheads = classBackedTools.mapNotNull { kclass ->
-      val annotation = kclass.annotations.firstOrNull { it is TrailblazeToolClass } as? TrailblazeToolClass
-        ?: return@mapNotNull null
-      val destination = annotation.trailheadTo.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-      ToolYamlConfig(
-        id = annotation.name,
-        toolClass = kclass.qualifiedName,
-        trailhead = TrailheadMetadata(to = destination),
-      )
-    }
-
-    // Dedupe by id — a class with both an annotation and a sidecar YAML should appear once.
-    // Prefer the YAML entry (it carries description + parameter overrides); the annotation
-    // entry is the fallback for classes without a YAML companion.
-    val byId = LinkedHashMap<String, ToolYamlConfig>()
-    yamlTrailheads.forEach { byId[it.id] = it }
-    annotationTrailheads.forEach { byId.putIfAbsent(it.id, it) }
-
-    byId.values.filter { ToolName(it.id) in targetToolNames }
+    computeTargetScopedTrailheads(
+      yamlTrailheads = ToolYamlLoader.discoverShortcutsAndTrailheads().values
+        .filter { it.trailhead != null },
+      target = selectedTargetApp,
+      driverType = driverType,
+    )
   }
   var selectedTrailhead by state.selectedTrailhead
   var selectedTrailheadParams by state.selectedTrailheadParams
@@ -477,5 +455,81 @@ fun RecordingTabComposable(
       }
     }
   }
+}
+
+/**
+ * Pure (non-Composable) core of the trailhead picker's scoping logic — pulled out of
+ * [RecordingTabComposable]'s `remember` block so it's unit-testable without a Compose test
+ * harness (this file has no other test infrastructure). See the call site's kdoc for the three
+ * ways a tool can declare itself a trailhead; this function merges all three sources and scopes
+ * the result to [target] + [driverType].
+ *
+ * [yamlTrailheads] is injected (rather than read from [ToolYamlLoader] here) so a test can supply
+ * a fixed list without touching the real classpath scan.
+ *
+ * Falls back to [yamlTrailheads] unfiltered when [target] or [driverType] is `null`, since "no
+ * target → no filter" is friendlier than "no target → empty list, looks broken."
+ */
+internal fun computeTargetScopedTrailheads(
+  yamlTrailheads: List<ToolYamlConfig>,
+  target: TrailblazeHostAppTarget?,
+  driverType: TrailblazeDriverType?,
+): List<ToolYamlConfig> {
+  val driver = driverType ?: return yamlTrailheads
+  val resolvedTarget = target ?: return yamlTrailheads
+
+  // Combine yaml-only, class-backed, and scripted tool names registered with this target so we
+  // can filter all sources of trailheads against a single membership check.
+  val classBackedTools = resolvedTarget.getCustomToolsForDriver(driver)
+  val classBackedToolNames: Set<ToolName> = classBackedTools.map { it.toolName() }.toSet()
+  // `getCustomScriptedToolNamesForDriver` only covers scripted names resolved from
+  // `platforms.<p>.tools:` / toolsets — a cross-platform tool declared at target-root
+  // `target.tools:` (`getInlineScriptTools()`) never appears there (see
+  // `YamlBackedHostAppTarget.resolvedCustomToolsByDriver`'s kdoc). Without this, a root-declared
+  // cross-platform trailhead would synthesize into `scriptedTrailheads` below and then get
+  // dropped by the membership filter — invisible in the picker even though it's a
+  // real, registered trailhead. Filter root inline tools by the same `shouldRegister` gate
+  // `ToolDiscoveryToolSet.buildInlineScriptToolsetsForDriver` uses so driver-incompatible root
+  // tools don't leak into scope.
+  val scriptedToolNames: Set<ToolName> = resolvedTarget.getCustomScriptedToolNamesForDriver(driver)
+  val rootInlineScriptToolNames: Set<ToolName> = resolvedTarget.getInlineScriptTools()
+    .filter { TrailblazeToolMeta.fromJsonObject(it.meta ?: JsonObject(emptyMap())).shouldRegister(driver, preferHostAgent = true) }
+    .map { ToolName(it.name) }
+    .toSet()
+  val targetToolNames: Set<ToolName> =
+    resolvedTarget.getCustomYamlToolNamesForDriver(driver) + classBackedToolNames + scriptedToolNames +
+      rootInlineScriptToolNames
+
+  // Synthesize a `ToolYamlConfig` for any class-backed tool whose annotation declares a
+  // non-empty `trailheadTo`. Picker UI keeps speaking the same `ToolYamlConfig` shape, so a
+  // class-only trailhead displays identically to a YAML-defined one (id + destination).
+  val annotationTrailheads = classBackedTools.mapNotNull { kclass ->
+    val annotation = kclass.annotations.firstOrNull { it is TrailblazeToolClass } as? TrailblazeToolClass
+      ?: return@mapNotNull null
+    val destination = annotation.trailheadTo.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    ToolYamlConfig(
+      id = annotation.name,
+      toolClass = kclass.qualifiedName,
+      trailhead = TrailheadMetadata(to = destination),
+    )
+  }
+
+  // Synthesize a `ToolYamlConfig` for any scripted tool whose spec declared `trailhead:` inline
+  // — same picker-display treatment as `annotationTrailheads`, just sourced from
+  // `InlineScriptToolConfig.trailhead` instead of a Kotlin annotation.
+  val scriptedTrailheads = resolvedTarget.getInlineScriptTools().mapNotNull { config ->
+    val trailhead = config.trailhead ?: return@mapNotNull null
+    ToolYamlConfig(id = config.name, trailhead = trailhead)
+  }
+
+  // Dedupe by id — a tool declaring its trailhead more than one way should appear once.
+  // Prefer the YAML entry (it carries description + parameter overrides); annotation- and
+  // spec-declared entries are the fallback for tools without a YAML companion.
+  val byId = LinkedHashMap<String, ToolYamlConfig>()
+  yamlTrailheads.forEach { byId[it.id] = it }
+  annotationTrailheads.forEach { byId.putIfAbsent(it.id, it) }
+  scriptedTrailheads.forEach { byId.putIfAbsent(it.id, it) }
+
+  return byId.values.filter { ToolName(it.id) in targetToolNames }
 }
 
