@@ -140,6 +140,60 @@ object PerTrailmapTsconfigEmitter {
   }
 
   /**
+   * Emit a `tools/tsconfig.json` under [outputBaseDir] for each trailmap id in [trailmapIds]
+   * (`<outputBaseDir>/<id>/tools/tsconfig.json`). Companion to
+   * [PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces] — that method writes the
+   * `trailblaze-client.d.ts` into the same scratch `tools/` dir; this one writes the tsconfig
+   * next to it so [TrailTscValidator] can run the bundled `tsc` against the target's typed
+   * surface. Pass the exact set of ids the surface emitter produced. Returns the absolute paths
+   * of every tsconfig written.
+   *
+   * Unlike [emit], this writes into a framework-owned scratch location (a gitignored
+   * `<trails>/.trailblaze/…` subtree), so there is **no hand-authored-tsconfig preservation and
+   * no `.gitignore` emission** — the tsconfig is always (over)written, and the surrounding
+   * `.trailblaze/` dir is already ignored.
+   *
+   * @param workspaceRoot the workspace's `trails/` directory — same anchor [emit] uses to locate
+   *   the SDK declaration bundle the generated `paths` entry points at.
+   * @throws IllegalStateException if the workspace SDK bundle isn't on disk yet (same fail-loud
+   *   contract as [emit]; callers run [WorkspaceTypeScriptSetup.setUp] first).
+   */
+  fun emitClasspathValidationTsconfigs(
+    workspaceRoot: Path,
+    trailmapIds: Collection<String>,
+    outputBaseDir: Path,
+  ): List<Path> {
+    if (trailmapIds.isEmpty()) return emptyList()
+    val absoluteWorkspaceRoot = workspaceRoot.toAbsolutePath().normalize()
+    val sdkDtsBundleAbsolute = absoluteWorkspaceRoot
+      .resolve(WorkspaceTypeScriptSetup.GENERATED_DIR_NAME)
+      .resolve(WorkspaceTypeScriptSetup.SDK_DIR_NAME)
+      .resolve(WorkspaceTypeScriptSetup.SDK_DTS_BUNDLE_RELATIVE_PATH)
+      .normalize()
+    check(Files.isRegularFile(sdkDtsBundleAbsolute)) {
+      "PerTrailmapTsconfigEmitter: workspace SDK declaration bundle not found at " +
+        "$sdkDtsBundleAbsolute. Run `trailblaze check` (or restart the daemon) so " +
+        "WorkspaceTypeScriptSetup.setUp can extract the SDK before validation-surface tsconfigs " +
+        "are emitted."
+    }
+
+    val written = mutableListOf<Path>()
+    trailmapIds.forEach { id ->
+      val toolsDir = outputBaseDir.resolve(id)
+        .resolve(TOOLS_SUBDIR)
+        .toAbsolutePath()
+        .normalize()
+      Files.createDirectories(toolsDir)
+      val relativeSdkBundle = computeRelativePath(toolsDir, sdkDtsBundleAbsolute)
+      val tsconfigPath = toolsDir.resolve(TSCONFIG_FILENAME)
+      // Framework-owned scratch file — always overwrite (no banner-gated preservation).
+      Files.writeString(tsconfigPath, renderTsconfig(relativeSdkBundle))
+      written.add(tsconfigPath)
+    }
+    return written
+  }
+
+  /**
    * Compute the POSIX-style relative path from [toolsDir] to [target]. The result is
    * what the generated tsconfig's `paths` entry carries — and deliberately uses `/`
    * separators even on Windows, because tsconfig path resolution is platform-neutral

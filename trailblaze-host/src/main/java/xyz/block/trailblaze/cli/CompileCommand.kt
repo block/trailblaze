@@ -10,6 +10,7 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
 import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
 import xyz.block.trailblaze.host.ResolvedTargetReportEmitter
+import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
@@ -289,6 +290,63 @@ class CompileCommand : Callable<Int> {
       )
       val displayBase = generatorRoot.parent ?: generatorRoot
       tsconfigEmitted.forEach { Console.log("  - ${displayBase.relativize(it)}") }
+    }
+
+    // Emit validation-only typed surfaces for classpath-bundled targets (app-bundled trailmaps
+    // that live inside a JAR, e.g. `square` / `dashboardapp`) into a gitignored scratch dir under
+    // `<trails>/.trailblaze/`. These have no writable `tools/` dir of their own, so the normal
+    // per-trailmap emit skips them — which is why `trailblaze check`'s trail-recording validator
+    // previously reported the bulk of the corpus as skipped-no-surface. Writing a surface here
+    // lets that validator type-check their recorded tool calls too.
+    //
+    // Sourced from the build-time-baked `targets/<id>.yaml` (via AppTargetYamlLoader), NOT from
+    // `resolvedTrailmaps`: a bundled target whose scripted `target.tools:` need analyzer
+    // enrichment (e.g. `square`) is dropped from the resolved pool at runtime (the analyzer can't
+    // walk `.ts` inside a JAR), so keying off resolvedTrailmaps would miss exactly the biggest
+    // target. The baked configs exist for every bundled target and carry the hoisted tool list.
+    // Workspace filesystem trailmaps are excluded — they already got a real surface just above.
+    // Report-only feature, so a failure here is logged and never fails the compile.
+    try {
+      val surfacesBase = TrailTscValidator.classpathValidationSurfacesBaseDir(generatorRoot)
+      val filesystemTrailmapIds = resolvedTrailmaps
+        .filter { it.source is xyz.block.trailblaze.config.project.TrailmapSource.Filesystem }
+        .map { it.manifest.id }
+        .toSet()
+      val bundledTargetConfigs = xyz.block.trailblaze.config.AppTargetYamlLoader.discoverConfigs(
+        resourceSource = ClasspathConfigResourceSource,
+      )
+      val surfacesEmitted = PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces(
+        targetConfigs = bundledTargetConfigs,
+        excludeIds = filesystemTrailmapIds,
+        outputBaseDir = surfacesBase,
+      )
+      // Derive the tsconfig id set from the surfaces that were ACTUALLY written, NOT from the full
+      // bundled-config list. A target whose `.d.ts` generation failed is skipped by the emitter
+      // above and returns no path — writing a tsconfig for it anyway would leave a
+      // `tools/tsconfig.json` with no sibling `.d.ts`, which the validator would run against the
+      // un-augmented SDK and report as bogus missing-tool findings. `trailmapIdForSurfaceFile`
+      // owns the `<base>/<id>/tools/<file>` layout knowledge so it lives in exactly one place.
+      val surfaceIds = surfacesEmitted.mapNotNull { TrailTscValidator.trailmapIdForSurfaceFile(it) }
+      PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs(
+        workspaceRoot = generatorRoot,
+        trailmapIds = surfaceIds,
+        outputBaseDir = surfacesBase,
+      )
+      val candidateCount = bundledTargetConfigs.count { it.id !in filesystemTrailmapIds }
+      if (candidateCount > 0) {
+        val skipped = candidateCount - surfacesEmitted.size
+        Console.log(
+          "trailblaze $commandLabel: emitted ${surfacesEmitted.size} of $candidateCount " +
+            "classpath-target validation surface(s) for trail type-checking" +
+            (if (skipped > 0) " ($skipped skipped — see [PerTrailmapClientDtsEmitter] errors above)" else "") +
+            ".",
+        )
+      }
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze $commandLabel: classpath-target validation surface emission failed " +
+          "(ignored — trail validation is report-only): ${e.message ?: e.javaClass.simpleName}",
+      )
     }
     return EXIT_OK
   }

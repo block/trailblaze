@@ -94,14 +94,26 @@ class BlazeExitCodeTest {
   }
 
   @Test
-  fun `unknown-tool substring alone without error marker still returns MISUSE`() {
-    // Defense in depth: if a future daemon-side format change drops the
-    // ❌-Error marker but keeps the body text, we still recognize the misuse
-    // shape. (This is what the regression guards: blazeExitCode previously
-    // returned SUCCESS when neither marker pattern matched, even though the
-    // body text clearly described a user-input mistake.)
+  fun `marker phrase without an error status is NOT misuse`() {
+    // Reversed from the earlier "defense in depth" verdict (PR #4403): now that a
+    // successful read/shell tool returns its real payload through this path, a marker
+    // phrase only counts as misuse when it rides an actual error status (`❌ Error` /
+    // `❌ FAILED` / JSON error) — see [isMisuseResult]. A bare string carrying the phrase
+    // but no error status is normal output, not a typo, and the daemon always prefixes a
+    // real rejection with `**❌ Error** —`, so this loses no genuine rejection signal.
     val result = CliMcpClient.ToolResult(content = "Unknown tool: foo. Use toolbox().")
-    assertEquals(TrailblazeExitCode.MISUSE.code, blazeExitCode(result))
+    assertEquals(TrailblazeExitCode.SUCCESS.code, blazeExitCode(result))
+  }
+
+  @Test
+  fun `SUCCESS payload containing a marker phrase returns SUCCESS not MISUSE`() {
+    // The exact codex regression this guards: a read/shell tool that succeeds and whose
+    // payload happens to mention "Unknown tool" must print normally and exit 0, not be
+    // misreported as a typo. The `**✅ Done**` status (no error marker) is the signal.
+    val result = CliMcpClient.ToolResult(
+      content = "**✅ Done** — {\n    \"note\": \"the Unknown tool code path is documented\"\n}",
+    )
+    assertEquals(TrailblazeExitCode.SUCCESS.code, blazeExitCode(result))
   }
 
   @Test

@@ -963,6 +963,173 @@ class AnalyzerScriptedToolEnrichmentTest {
   }
 
   @Test
+  fun `trailhead is populated on InlineScriptToolConfig from the spec on a meta-only descriptor`() {
+    // The TS-inline equivalent of a `*.trailhead.yaml` sidecar: `trailhead: { to: "..." }` in the
+    // typed spec must land on `InlineScriptToolConfig.trailhead`, not `_meta` — same
+    // primary-descriptor routing as `description`.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "launchApp.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "launchApp",
+          sourcePath = script.absolutePath,
+          spec = buildJsonObject {
+            put("trailhead", buildJsonObject { put("to", "myapp/android/home_signed_in") })
+          },
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/launchApp.yaml", script = "./launchApp.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("myapp/android/home_signed_in", config.trailhead?.to)
+    assertEquals(false, config.trailhead?.dynamic)
+    // Not a dispatch gate — must never leak into the namespaced `_meta`.
+    assertNull(config.meta?.get("trailblaze/trailhead"))
+  }
+
+  @Test
+  fun `trailhead dynamic true is populated when to is omitted`() {
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "launchDeepLink.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "launchDeepLink",
+          sourcePath = script.absolutePath,
+          spec = buildJsonObject {
+            put("trailhead", buildJsonObject { put("dynamic", true) })
+          },
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/launchDeepLink.yaml", script = "./launchDeepLink.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertNull(config.trailhead?.to)
+    assertEquals(true, config.trailhead?.dynamic)
+  }
+
+  @Test
+  fun `malformed trailhead with neither to nor dynamic is dropped, not surfaced as a trailhead`() {
+    // Lenient policy (mirrors the analyzer's general "skip the unresolvable bit" posture rather
+    // than the YAML loader's hard `require()`): a `trailhead: {}` with no destination and no
+    // `dynamic: true` isn't a real bootstrap, so it's dropped rather than failing the whole tool.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "emptyTrailhead.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "emptyTrailhead",
+          sourcePath = script.absolutePath,
+          spec = buildJsonObject { put("trailhead", buildJsonObject { }) },
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/emptyTrailhead.yaml", script = "./emptyTrailhead.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertNull(config.trailhead, "expected a trailhead block with neither to nor dynamic to be dropped")
+  }
+
+  @Test
+  fun `malformed trailhead with both to and dynamic keeps dynamic and drops to`() {
+    // Mutual-exclusion mirrors TrailheadMetadata's YAML contract, resolved leniently in favor of
+    // `dynamic` (the more permissive interpretation) rather than hard-failing.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "conflictingTrailhead.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "conflictingTrailhead",
+          sourcePath = script.absolutePath,
+          spec = buildJsonObject {
+            put(
+              "trailhead",
+              buildJsonObject {
+                put("to", "myapp/android/home")
+                put("dynamic", true)
+              },
+            )
+          },
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/conflictingTrailhead.yaml", script = "./conflictingTrailhead.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertNull(config.trailhead?.to, "expected 'to' dropped when both 'to' and 'dynamic: true' are set")
+    assertEquals(true, config.trailhead?.dynamic)
+  }
+
+  @Test
+  fun `trailhead is populated on a partial single-tool descriptor too`() {
+    // buildPartialConfig is a separate InlineScriptToolConfig construction site from the
+    // meta-only branch above — pin that trailheadOf is wired into both.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "multi.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "namedTool",
+          sourcePath = script.absolutePath,
+          spec = buildJsonObject {
+            put("trailhead", buildJsonObject { put("to", "myapp/ios/home") })
+          },
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        ScriptedToolEnrichment.DeferredDescriptor(
+          relativePath = "tools/multi.yaml",
+          descriptor = TrailmapScriptedToolFile(script = "./multi.ts", name = "namedTool"),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    assertEquals("myapp/ios/home", config.trailhead?.to)
+  }
+
+  @Test
   fun `spec description is the middle tier on a partial single-tool descriptor without a YAML description`() {
     // Partial single-tool (buildPartialConfig) branch: the YAML names the export but supplies no
     // `description:`, so the typed spec's `description` wins over the analyzer's TSDoc.

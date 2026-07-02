@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -9,6 +10,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.host.TrailTscValidator
 
 /**
  * Tests for [CheckCommand] — the unified compile-+-typecheck-+-test CLI entry point that
@@ -605,6 +608,71 @@ class CheckCommandTest {
     assertEquals(callerCwd, dispatch.cwd)
     assertEquals(null, dispatch.trailmapId)
     assertEquals(false, dispatch.typecheckAll)
+  }
+
+  // -- Classpath validation-surface selection & discovery (PR #4348 review fixes) ------
+
+  @Test
+  fun `selectClasspathSurfacesForValidation folds in nothing on a scoped run`() {
+    // A scoped `check <id>` (allWorkspaceScope=false) must not pull the large bundled corpora
+    // (square / dashboardapp) into its report — that scale is what `--all` opts into.
+    val surfaces = listOf(File(workDir, "widgets").toPath(), File(workDir, "gadgets").toPath())
+    val selected = CheckCommand().selectClasspathSurfacesForValidation(
+      workspaceTrailmaps = emptyList(),
+      discoveredSurfaces = surfaces,
+      allWorkspaceScope = false,
+    )
+    assertTrue(selected.isEmpty(), "scoped runs must not fold in classpath surfaces: $selected")
+  }
+
+  @Test
+  fun `selectClasspathSurfacesForValidation drops surfaces colliding with a workspace trailmap id`() {
+    // The validator keys trailmaps by dir name (last-wins), so a workspace trailmap must win over
+    // a (possibly stale) scratch surface of the same id — the workspace one has the real typing.
+    val workspace = listOf(File(workDir, "trailmaps/alpha").toPath())
+    val surfaces = listOf(
+      File(workDir, "surfaces/alpha").toPath(), // collides with workspace `alpha` — must be dropped
+      File(workDir, "surfaces/widgets").toPath(), // no collision — must be kept
+    )
+    val selected = CheckCommand().selectClasspathSurfacesForValidation(
+      workspaceTrailmaps = workspace,
+      discoveredSurfaces = surfaces,
+      allWorkspaceScope = true,
+    ).map { it.fileName.toString() }
+    assertEquals(listOf("widgets"), selected)
+  }
+
+  @Test
+  fun `discoverClasspathValidationSurfaces returns only dirs carrying BOTH tsconfig and client d ts`() {
+    val trailsRoot = File(workDir, "trails").apply { mkdirs() }.toPath()
+    val base = TrailTscValidator.classpathValidationSurfacesBaseDir(trailsRoot)
+
+    fun stage(id: String, tsconfig: Boolean, dts: Boolean) {
+      val tools = base.resolve(id).resolve("tools")
+      Files.createDirectories(tools)
+      if (tsconfig) Files.writeString(tools.resolve("tsconfig.json"), "{}\n")
+      if (dts) {
+        Files.writeString(tools.resolve(WorkspaceClientDtsGenerator.GENERATED_FILE_NAME), "export {};\n")
+      }
+    }
+    stage("complete", tsconfig = true, dts = true)
+    stage("tsconfig_only", tsconfig = true, dts = false)
+    stage("dts_only", tsconfig = false, dts = true)
+    stage("empty", tsconfig = false, dts = false)
+
+    val discovered = CheckCommand().discoverClasspathValidationSurfaces(trailsRoot)
+      .map { it.fileName.toString() }
+    assertEquals(
+      listOf("complete"),
+      discovered,
+      "only a complete surface (both tsconfig.json AND trailblaze-client.d.ts) is usable",
+    )
+  }
+
+  @Test
+  fun `discoverClasspathValidationSurfaces returns empty when the base dir is absent`() {
+    val trailsRoot = File(workDir, "no-surfaces").apply { mkdirs() }.toPath()
+    assertTrue(CheckCommand().discoverClasspathValidationSurfaces(trailsRoot).isEmpty())
   }
 
   // -- Typecheck-phase helpers migrated from the deleted TypecheckCommandTest ---------

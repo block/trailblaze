@@ -15,13 +15,7 @@ import { z } from "zod";
 import { createClient, type TrailblazeClient } from "./client.js";
 import { fromMeta, type TrailblazeContext } from "./context.js";
 import { createLogger } from "./logger.js";
-import {
-  DRAIN_DELTA,
-  META_KEY_MEMORY_DELETIONS,
-  META_KEY_MEMORY_DELTA,
-  META_KEY_TRAILBLAZE,
-  type DrainableMemory,
-} from "./memory.js";
+import { attachMemoryDeltaToResult } from "./memory.js";
 import {
   defineTypedTool,
   formatAjvErrors,
@@ -29,6 +23,7 @@ import {
   type EmptyInput,
   type ToolContext,
   type TrailblazeTypedToolSpec,
+  type TrailheadSpec,
   type TypedToolDefinition,
 } from "./tool-core.js";
 
@@ -40,6 +35,7 @@ export type {
   EmptyInput,
   TypedToolDefinition,
   TrailblazeTypedToolSpec,
+  TrailheadSpec,
 } from "./tool-core.js";
 
 /**
@@ -680,46 +676,12 @@ export function registerPendingTools(server: McpServer): void {
  * existing `_meta` keys the handler set explicitly on its return value.
  */
 function attachMemoryDelta(result: unknown, ctx: TrailblazeContext | undefined): unknown {
+  // The subprocess/MCP path's `ctx.memory` is the drainable memory `fromMeta` built and handed to
+  // the handler, so draining it here flushes the handler's writes. Delegates to the shared
+  // implementation in `memory.ts` — the in-process / on-device QuickJS path (`defineTypedTool`)
+  // calls the same helper on the memory IT reconstructed, so both dispatch paths flush identically.
   if (ctx === undefined) return result;
-  const drainable = ctx.memory as DrainableMemory;
-  if (typeof drainable[DRAIN_DELTA] !== "function") return result;
-  const delta = drainable[DRAIN_DELTA]();
-  const setKeys = Object.keys(delta.sets);
-  if (setKeys.length === 0 && delta.deletions.length === 0) return result;
-  const trailblaze: Record<string, unknown> = {};
-  if (setKeys.length > 0) trailblaze[META_KEY_MEMORY_DELTA] = delta.sets;
-  if (delta.deletions.length > 0) trailblaze[META_KEY_MEMORY_DELETIONS] = delta.deletions;
-
-  // Primitive / null / undefined return: the typed `trailblaze.tool<I, O>(handler)` surface
-  // lets handlers return a bare string ("ok") or number — `__normalizeResult` in the bundle
-  // wrapper handles those, and `registerTool`'s SDK auto-wraps under MCP semantics. We can't
-  // mutate a primitive to attach `_meta`, so wrap it in a content envelope first and stamp
-  // `_meta` onto the envelope. Without this, a handler that writes memory AND returns a
-  // primitive silently loses the writes — the bug `attachMemoryDelta` exists to prevent.
-  if (typeof result !== "object" || result === null) {
-    const wrapped: Record<string, unknown> = {
-      content: result === undefined || result === null
-        ? []
-        : [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }],
-      _meta: { [META_KEY_TRAILBLAZE]: trailblaze },
-    };
-    return wrapped;
-  }
-
-  const resultRecord = result as Record<string, unknown>;
-  const existingMeta =
-    typeof resultRecord["_meta"] === "object" && resultRecord["_meta"] !== null
-      ? (resultRecord["_meta"] as Record<string, unknown>)
-      : {};
-  const existingTrailblaze =
-    typeof existingMeta[META_KEY_TRAILBLAZE] === "object" && existingMeta[META_KEY_TRAILBLAZE] !== null
-      ? (existingMeta[META_KEY_TRAILBLAZE] as Record<string, unknown>)
-      : {};
-  const merged: Record<string, unknown> = { ...existingTrailblaze, ...trailblaze };
-  return {
-    ...resultRecord,
-    _meta: { ...existingMeta, [META_KEY_TRAILBLAZE]: merged },
-  };
+  return attachMemoryDeltaToResult(result, ctx.memory);
 }
 
 /** Drill into the MCP SDK's per-call `extra` object for `request.params._meta`. */

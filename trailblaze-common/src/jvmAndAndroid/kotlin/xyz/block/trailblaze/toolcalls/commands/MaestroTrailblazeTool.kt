@@ -110,7 +110,17 @@ object MaestroTrailblazeToolSerializer : KSerializer<MaestroTrailblazeTool> {
           // A command can appear as either a YAML map (e.g. `eraseText: {charactersToErase: 3}`)
           // or a bare YAML scalar (e.g. `back`). Maestro's YAML deserializer accepts both;
           // normalise to the map shape with an empty body for downstream consumers.
-          val jsonObject = when (val element = YamlJsonBridge.yamlNodeToJsonElement(item)) {
+          //
+          // coerceNumbers = false: every Maestro command field arrives here as free-form text
+          // (kaml's YamlScalar has already discarded whether the original was quoted), and
+          // Maestro's own YAML parser happily coerces a quoted numeric string into whatever
+          // numeric type a field (e.g. `timeout`, `charactersToErase`) actually needs. Guessing
+          // "number" here instead would silently corrupt a text field that merely looks numeric —
+          // e.g. `inputText: "123123"` (a verification code) — into an unquoted YAML integer that
+          // Maestro's parser then rejects outright for object-form fields like `text`.
+          val jsonObject = when (
+            val element = YamlJsonBridge.yamlNodeToJsonElement(item, coerceNumbers = false)
+          ) {
             is JsonObject -> element
             else -> {
               val commandName = element.toString().trim('"')
@@ -140,8 +150,14 @@ object MaestroTrailblazeToolSerializer : KSerializer<MaestroTrailblazeTool> {
         // Render each YAML command back to JSON text — JSON is valid YAML flow style, so the
         // combined list parses identically through Maestro's YAML reader, and we avoid having
         // to re-emit block-style YAML text with correct indentation ourselves.
+        //
+        // coerceNumbers = false — same rationale as the serialize() path above: an authored
+        // trail YAML's `- inputText: "123123"` must not have its verification-code-shaped text
+        // reinterpreted as a number just because kaml's YamlScalar discarded the quote style.
         val yamlText = commandsNode.items.joinToString("\n") { item ->
-          val jsonObject = when (val element = YamlJsonBridge.yamlNodeToJsonElement(item)) {
+          val jsonObject = when (
+            val element = YamlJsonBridge.yamlNodeToJsonElement(item, coerceNumbers = false)
+          ) {
             is JsonObject -> element
             else -> {
               val commandName = element.toString().trim('"')

@@ -68,19 +68,8 @@ val trailblazeAndroidGradlePluginPublishMavenCentral =
         .task(":publishAllPublicationsToMavenCentralRepository"),
     )
   }
-val trailblazeTrailmapToolBundlesPluginPublishMavenCentral =
-  tasks.register("trailblazeTrailmapToolBundlesPluginPublishMavenCentral") {
-    group = "publishing"
-    description =
-      "Publishes the included trailblaze-trailmap-tool-bundles-plugin build to Maven Central."
-    dependsOn(
-      gradle.includedBuild("trailblaze-trailmap-tool-bundles-plugin")
-        .task(":publishAllPublicationsToMavenCentralRepository"),
-    )
-  }
 tasks.matching { it.name == "publishAllPublicationsToMavenCentralRepository" }.configureEach {
   dependsOn(trailblazeAndroidGradlePluginPublishMavenCentral)
-  dependsOn(trailblazeTrailmapToolBundlesPluginPublishMavenCentral)
 }
 
 // Apply shared dependency-resolution forces (version pins) so every configuration resolves the

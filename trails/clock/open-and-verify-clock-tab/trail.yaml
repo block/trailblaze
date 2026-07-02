@@ -1,0 +1,10 @@
+config:
+  id: clock/open-and-verify-clock-tab
+  description: Open the Clock app and verify the Clock tab is visible.
+  devices:
+    android: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trail:
+  - step: "Launch the AOSP Desk Clock app (com.android.deskclock) with a clean state."
+
+  - step: "Verify the Clock tab is selected and visible. The screen should show the current time prominently. Do not tap anything else."

@@ -1,13 +1,20 @@
 import javax.inject.Inject
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.file.Directory
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.IgnoreEmptyDirectories
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
@@ -16,15 +23,21 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.TaskProvider
 
 /**
- * Generates Android JUnit shell classes from `.trail.yaml` files staged under the consumer's
- * `androidTest` assets tree. The shell is the pure-boilerplate Kotlin class whose only job is to
- * make a trail YAML discoverable by `AndroidJUnitRunner` — for every `<methodName>.trail.yaml` under
- * `src/androidTest/assets/trails/<ClassName>/`, the generator emits a `class <ClassName> :
- * <BaseClass>() { @Test fun <methodName>() = runFromAsset() }` Kotlin source file. The runtime
- * resolver (`TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace`) finds the YAML by
- * stack-trace-derived simple-class + method name, so the directory name must equal the desired
- * generated class's simple name — same convention humans already follow when authoring shells by
- * hand.
+ * Trailblaze's Android Gradle plugin. Two things, both driven by AGP integration:
+ *
+ * 1. **JUnit shell codegen** — generates Android JUnit shell classes from `.trail.yaml` files
+ *    staged under the consumer's `androidTest` assets tree. The shell is the pure-boilerplate
+ *    Kotlin class whose only job is to make a trail YAML discoverable by `AndroidJUnitRunner` —
+ *    for every `<methodName>.trail.yaml` under `src/androidTest/assets/trails/<ClassName>/`, the
+ *    generator emits a `class <ClassName> : <BaseClass>() { @Test fun <methodName>() =
+ *    runFromAsset() }` Kotlin source file. The runtime resolver
+ *    (`TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace`) finds the YAML by
+ *    stack-trace-derived simple-class + method name, so the directory name must equal the desired
+ *    generated class's simple name — same convention humans already follow when authoring shells
+ *    by hand.
+ * 2. **Scripted-tool bundling** (opt-in, via the nested [TrailblazeAndroidGradleExtension.trailmap]
+ *    block) — pre-compiles a trailmap's TypeScript scripted tools into QuickJS bundles staged as
+ *    `androidTest` assets, so an on-device test APK can dispatch them by name.
  *
  * ### Why this exists
  *
@@ -40,9 +53,13 @@ import org.gradle.api.tasks.TaskProvider
  *
  * ### Usage
  *
- * The plugin stays AGP-unaware (this module deliberately does not carry AGP on its classpath);
- * the consumer wires the generated source dir into AGP's `androidTest` source set and the compile
- * task `dependsOn(...)` from its own build script:
+ * This plugin requires `com.android.library` or `com.android.application` to be applied — enforced
+ * by an `afterEvaluate` fail-fast that checks for the `android` extension those plugins register.
+ * It reaches AGP's `sourceSets` by reflection (see `wireAgpSourceSets`), not a hard dependency, so
+ * it stays version-agnostic. In return, the consumer writes no manual `android { sourceSets... }`
+ * wiring: the generated shells and (when [TrailblazeAndroidGradleExtension.trailmap] is configured)
+ * the staged bundle assets are auto-wired into AGP's `androidTest` source set, along with the
+ * matching `dependsOn(...)` for the compile/lint/asset tasks.
  *
  * ```kotlin
  * plugins {
@@ -51,22 +68,19 @@ import org.gradle.api.tasks.TaskProvider
  *   id("xyz.block.trailblaze.android-gradle")
  * }
  *
- * trailblazeAndroidGradle {
- *   packageName.set("xyz.block.trailblaze.evaluation")
+ * trailblazeAndroid {
+ *   packageName = "xyz.block.trailblaze.evaluation"
  *   // baseClassFqn defaults to xyz.block.trailblaze.rules.SquareTrailblazeTest; override for
  *   // any other test base that exposes a `runFromAsset()` helper.
  *   // onlyClassNames is empty by default (= generate for every <ClassName>/ subdir);
  *   // restrict to specific shells during incremental rollout.
- * }
  *
- * android {
- *   sourceSets.getByName("androidTest").java.srcDir(
- *     trailblazeAndroidGradle.generatedSourceDir,
- *   )
+ *   // Optional — absent by default (no bun/esbuild task registration at all).
+ *   trailmap {
+ *     id = "square"
+ *     toolsDir = rootProject.file("path/to/trailmaps/square/tools")
+ *   }
  * }
- * tasks
- *   .matching { it.name.startsWith("compile") && it.name.contains("AndroidTest") }
- *   .configureEach { dependsOn(trailblazeAndroidGradle.generateTask) }
  * ```
  *
  * The generated output lands under
@@ -88,13 +102,27 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
             "source set by the consumer; emits to build/generated/source/trailblazeTrails/androidTest."
       }
 
+    // Staging root every trailmap bundle lands under, at the on-device launcher's asset path
+    // (`trails/config/trailmaps/<id>/tools/<name>.bundle.js`). Cheap to create unconditionally.
+    val trailmapStagingRoot: Provider<Directory> =
+      project.layout.buildDirectory.dir("intermediates/trailblaze/trailmap-tool-bundle-assets")
+
     val extension =
       project.extensions.create(
-        "trailblazeAndroidGradle",
+        "trailblazeAndroid",
         TrailblazeAndroidGradleExtension::class.java,
-        project,
         generate,
+        project,
+        trailmapStagingRoot,
       )
+
+    // Framework-source-tree convenience: default `sdkInstallTaskPath` to the sibling SDK-install
+    // task when present, so trailmap bundle tasks chain to it with no extra config. External
+    // consumers without that sibling project manage the install themselves.
+    val candidateInstallPath = ":trailblaze-scripting-subprocess:installTrailblazeScriptingSdk"
+    if (project.rootProject.findProject(":trailblaze-scripting-subprocess") != null) {
+      extension.sdkInstallTaskPath.convention(candidateInstallPath)
+    }
 
     // Conventions chosen to match the repo's existing on-disk convention
     // (assets/trails/<ClassName>/<methodName>.trail.yaml). Consumers override on the extension.
@@ -125,45 +153,209 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
         .gradleProperty("trailblaze.shellGenerator.ruleClassFqn")
         .orElse("xyz.block.trailblaze.android.AndroidTrailblazeRule")
     )
-    // SetProperty.get() throws when never assigned, so the documented "leave it empty = generate
-    // for every <ClassName>/ subdir" path was broken — pin an empty-set convention so a consumer
-    // that omits onlyClassNames hits the all-subdirs branch instead of a NoSuchElementException at
+    // SetProperty.get() / MapProperty.get() throw when never assigned, so the documented "leave it
+    // empty = generate for every <ClassName>/ subdir" path was broken — pin empty conventions so a
+    // consumer that omits the filter hits the no-op branch instead of a NoSuchElementException at
     // generate time.
     extension.onlyClassNames.convention(emptySet())
+    extension.onlyMethodNames.convention(emptyMap())
 
     // Wire task inputs from the extension after defaults are in place. (Conventions on the
     // extension flow to the task only if we plumb them — the task is registered before the
     // extension so both can coexist on the extension's public surface.)
     generate.configure { task ->
-      // Gate trailsAssetsDir through `filter { exists }` so the task's @Optional input is genuinely
-      // absent when the conventional `src/androidTest/assets/trails` directory doesn't exist on
-      // disk. Without this gate, Gradle's @InputDirectory validation fails BEFORE the TaskAction
-      // can run its no-op log path — defeating the @Optional annotation. The conventional value
-      // is still ergonomic (most consumers don't have to set trailsAssetsDir at all); a consumer
-      // that DOES set trailsAssetsDir explicitly to a missing path still gets a hard error, since
-      // their override flows through this same filter and Gradle catches misconfigured overrides
-      // via the directed log message rather than an opaque input-validation failure.
-      task.trailsAssetsDir.set(extension.trailsAssetsDir.filter { it.asFile.isDirectory })
+      // `trailsAssetsDir` is `@Internal` on the task (see [GenerateAndroidTrailJUnitShellsTask]
+      // for why); pass the extension's value straight through and let the task action handle the
+      // missing-dir case at execution time. The matching `@InputFiles` `trailsAssetFiles` property
+      // — derived from the same dir — is what Gradle tracks for change detection / cache key.
+      task.trailsAssetsDir.set(extension.trailsAssetsDir)
       task.generatedSourceDir.set(extension.generatedSourceDir)
       task.packageName.set(extension.packageName)
       task.baseClassFqn.set(extension.baseClassFqn)
       task.ruleClassFqn.set(extension.ruleClassFqn)
       task.onlyClassNames.set(extension.onlyClassNames)
+      task.onlyMethodNames.set(extension.onlyMethodNames)
+    }
+
+    // Auto-wire AGP's `androidTest`-shaped Kotlin compile + lint tasks to depend on [generate], so
+    // a clean build can't race them against an empty generated source dir. Doing this here (instead
+    // of asking each consumer to call a helper) follows from the plugin's whole reason for
+    // existing — if a consumer applied this plugin and DIDN'T want the codegen to run before their
+    // androidTest compile, they'd just not apply it. So the default-on shape is the right one.
+    //
+    // Matches four task-name families:
+    //   - compile*AndroidTest*           (Kotlin/Java sources)
+    //   - generate*AndroidTestLintModel  (AGP lint model)
+    //   - lintAnalyze*AndroidTest        (AGP lint analyze)
+    //   - lintReport*AndroidTest         (AGP lint report)
+    //
+    // Matched on task NAMES, not types — works regardless of AGP's own configuration timing.
+    project.tasks
+      .matching { task ->
+        val n = task.name
+        (n.startsWith("compile") && n.contains("AndroidTest")) ||
+          (n.startsWith("generate") && n.endsWith("AndroidTestLintModel")) ||
+          (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
+          (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
+      }
+      .configureEach { it.dependsOn(generate) }
+
+    // AGP-aware auto-wiring, deferred to `afterEvaluate` so it runs after AGP's own `android { }`
+    // configuration settles, regardless of `plugins { }` block ordering — the same timing
+    // `gradle/merged-trails.gradle.kts` uses for the identical reason.
+    project.afterEvaluate {
+      val android = project.extensions.findByName("android")
+      if (android == null) {
+        throw GradleException(
+          "xyz.block.trailblaze.android-gradle requires `com.android.library` or " +
+            "`com.android.application` to be applied to this project — this plugin exists to wire " +
+            "JUnit-shell codegen (and, when configured, scripted-tool bundling) into AGP's " +
+            "`androidTest` source set, and has nothing to wire without one of those. Apply " +
+            "`alias(libs.plugins.android.library)` (or `.application`), or remove this plugin if " +
+            "this project doesn't build an Android test APK."
+        )
+      }
+      wireAgpSourceSets(project, android, extension)
     }
   }
 }
 
 /**
- * DSL container for [TrailblazeAndroidGradlePlugin]. Configures the generator's inputs;
- * exposes [generatedSourceDir] and [generateTask] for the consumer's AGP wiring.
+ * The AGP-specific half of `apply()`'s wiring, split out for readability. Auto-wires:
+ *  - [TrailblazeAndroidGradleExtension.generatedSourceDir] into the `androidTest` Java source set.
+ *  - The trailmap staging root into the `androidTest` assets source set, but ONLY when
+ *    [TrailblazeAndroidGradleExtension.trailmap] was actually called. Gated (rather than always
+ *    wiring an empty dir) so a module that later removes its last `trailmap { }` block doesn't
+ *    keep shipping whatever stale `.bundle.js` files happen to still be sitting in that build
+ *    directory from a prior build — an empty `dependsOn` wouldn't stop AGP from picking up
+ *    leftover files already on disk.
+ *  - The AGP asset-merge / lint task families to `dependsOn` the trailmap staging tasks.
+ *
+ * [android] is accessed entirely by REFLECTION, not a typed `com.android.build.gradle.
+ * BaseExtension` — matches `gradle/merged-trails.gradle.kts`'s pattern for the same problem: many
+ * AGP versions across many consumers, no reason to pin one just for four stable methods.
+ */
+private fun wireAgpSourceSets(
+  project: Project,
+  android: Any,
+  extension: TrailblazeAndroidGradleExtension,
+) {
+  @Suppress("UNCHECKED_CAST")
+  val sourceSets =
+    try {
+      reflectAgpCall(android, "getSourceSets") as NamedDomainObjectContainer<Any>
+    } catch (e: ClassCastException) {
+      throw agpReflectionError(android, "getSourceSets", e)
+    }
+  sourceSets.named("androidTest").configure { androidTest ->
+    reflectSrcDir(androidTest, "getJava", extension.generatedSourceDir)
+    if (extension.allStagingTasks.isNotEmpty()) {
+      reflectSrcDir(androidTest, "getAssets", extension.stagingRoot)
+    }
+  }
+
+  if (extension.allStagingTasks.isNotEmpty()) {
+    project.tasks
+      .matching { task ->
+        val n = task.name
+        (n.startsWith("merge") && n.endsWith("AndroidTestAssets")) ||
+          (n.startsWith("package") && n.endsWith("AndroidTestAssets")) ||
+          (n.startsWith("generate") && n.endsWith("AndroidTestLintModel")) ||
+          (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
+          (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
+      }
+      .configureEach { it.dependsOn(extension.allStagingTasks) }
+  }
+}
+
+/** `sourceSet.<getterName>().srcDir(value)`, reflected — see [wireAgpSourceSets]'s kdoc for why. */
+private fun reflectSrcDir(sourceSet: Any, getterName: String, value: Any) {
+  val dirSet = reflectAgpCall(sourceSet, getterName)
+  try {
+    dirSet.javaClass.getMethod("srcDir", Any::class.java).invoke(dirSet, value)
+  } catch (e: ReflectiveOperationException) {
+    throw agpReflectionError(dirSet, "srcDir", e)
+  }
+}
+
+/**
+ * `target.<methodName>()`, reflected. A raw [NoSuchMethodException] / [ClassCastException] from
+ * deep inside reflection code isn't actionable, so every reflective AGP call is funneled through
+ * here (or the `srcDir` try/catch above) to surface [agpReflectionError] instead.
+ */
+private fun reflectAgpCall(target: Any, methodName: String): Any =
+  try {
+    target.javaClass.getMethod(methodName).invoke(target)
+  } catch (e: ReflectiveOperationException) {
+    throw agpReflectionError(target, methodName, e)
+  }
+
+private fun agpReflectionError(target: Any, methodName: String, cause: Throwable): GradleException =
+  GradleException(
+    "xyz.block.trailblaze.android-gradle: AGP's `${target.javaClass.name}` doesn't expose " +
+      "`$methodName(...)` the way this plugin expects it to (via reflection — see " +
+      "`wireAgpSourceSets`'s kdoc) — this plugin may be incompatible with your AGP version.",
+    cause,
+  )
+
+/**
+ * DSL container for [TrailblazeAndroidGradlePlugin] — configures codegen inputs and the optional
+ * [trailmap] scripted-tool bundling. `apply()` auto-wires both into AGP's `androidTest` source set
+ * (see `wireAgpSourceSets`); consumers don't write source-set or `dependsOn` wiring by hand.
  */
 abstract class TrailblazeAndroidGradleExtension
 @Inject
 constructor(
-  @Suppress("unused") private val project: Project,
-  /** Task provider for the consumer's `compileXxxAndroidTestKotlin.dependsOn(...)` wiring. */
+  /**
+   * Task provider for the codegen — `apply()` already auto-wires AGP's androidTest compile/lint
+   * tasks and source set against it, so consumers rarely need this directly.
+   */
   val generateTask: TaskProvider<GenerateAndroidTrailJUnitShellsTask>,
+  private val project: Project,
+  /**
+   * Staging root every [trailmap] bundle lands under — auto-wired into AGP's `androidTest` assets
+   * source set. Empty when [trailmap] is never called.
+   */
+  val stagingRoot: Provider<Directory>,
 ) {
+  /**
+   * Staging `Copy` tasks registered by [trailmap], one per tool — auto-wired into the AGP
+   * asset-task `dependsOn(...)`. Empty (a no-op dependency) when [trailmap] is never called.
+   */
+  val allStagingTasks: MutableList<TaskProvider<Copy>> = mutableListOf()
+
+  /**
+   * Optional TypeScript SDK directory [trailmap] bundles against (`node_modules/.bin/esbuild`,
+   * `src/in-process.ts`, `tools/in-process-wrapper-template.mjs`). Unset walks up from
+   * `rootProject.projectDir` for `sdks/typescript/package.json` (the in-monorepo default).
+   */
+  abstract val sdkDir: DirectoryProperty
+
+  /**
+   * Optional task path each [trailmap] bundle task should `dependsOn` (e.g. a `bun install`
+   * step). Defaults to `:trailblaze-scripting-subprocess:installTrailblazeScriptingSdk` when that
+   * project is present; external consumers leave it unset and manage the install themselves.
+   */
+  abstract val sdkInstallTaskPath: Property<String>
+
+  /**
+   * Bundle + stage every in-process scripted tool in a trailmap's `tools/` directory. Absent by
+   * default (no bun/esbuild task registration at all). Call more than once to bundle more than one
+   * trailmap — each call lands in the shared [stagingRoot].
+   *
+   * ```kotlin
+   * trailmap {
+   *   id = "square"
+   *   toolsDir = rootProject.file("path/to/trailmaps/square/tools")
+   * }
+   * ```
+   */
+  fun trailmap(configure: TrailmapToolBundleSpec.() -> Unit) {
+    val spec = project.objects.newInstance(TrailmapToolBundleSpec::class.java)
+    spec.configure()
+    registerTrailmapToolBundle(project, this, spec)
+  }
+
   /**
    * Root assets directory the generator scans. Each direct subdirectory becomes one generated
    * Kotlin class with the subdir's name as the simple class name.
@@ -181,8 +373,9 @@ constructor(
   abstract val generatedSourceDir: DirectoryProperty
 
   /**
-   * Package for the generated classes. Required — no default, because picking one for the consumer
-   * silently could place classes outside the test APK's runner-scanned packages.
+   * Package for the generated classes. No default, because picking one for the consumer silently
+   * could place classes outside the test APK's runner-scanned packages — required only when there
+   * are trails to generate shells for; a [trailmap]-only consumer can leave it unset.
    *
    * The package does not have to match the physical asset directory layout: the runtime resolver
    * (`TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace`) tries three candidate
@@ -204,9 +397,15 @@ constructor(
    * ```
    *
    * Defaults to UNSET, which makes [ruleClassFqn] active (the OSS-standard inline-rule pattern).
-   * downstream modules that have their own base class set this explicitly — e.g.
-   * `baseClassFqn.set("xyz.block.trailblaze.rules.SquareTrailblazeTest")`. CI/command-line override
+   * Downstream modules that have their own base class set this explicitly — e.g.
+   * `baseClassFqn = "com.example.app.uitests.MyAuthedTrailblazeTest"`. CI/command-line override
    * is also available via the Gradle property `trailblaze.shellGenerator.baseClassFqn`.
+   *
+   * **This is the right knob for rules that require constructor arguments** (an `appId`, a target,
+   * an account, a custom tool surface, …). [ruleClassFqn] emits `<RuleClass>()`, which only fits
+   * no-arg rules; an arg-bearing rule goes inside a JUnit base class that owns the `@Rule` field
+   * with the args set, and `baseClassFqn` points at that base. See the README's
+   * "Using a rule that needs constructor args" section for the worked example.
    */
   abstract val baseClassFqn: Property<String>
 
@@ -230,8 +429,10 @@ constructor(
    * `examples/android-sample-app-uitests/.../GeneratedSampleAppTests.kt`). CI/command-line override
    * is available via the Gradle property `trailblaze.shellGenerator.ruleClassFqn`.
    *
-   * Rules that need constructor arguments (e.g. a custom rule with `target = ...`) can't use this
-   * generator — write the shells by hand for now, or open an issue to extend the DSL.
+   * **Rules that need constructor arguments don't fit this mode** — the emit shape is `<RuleClass>()`,
+   * which has no syntax for passing them. Use [baseClassFqn] instead: write a thin JUnit base class
+   * that owns the `@Rule` field with the arguments set, and point `baseClassFqn` at the base. The
+   * README's "Using a rule that needs constructor args" section walks through the worked example.
    */
   abstract val ruleClassFqn: Property<String>
 
@@ -245,6 +446,29 @@ constructor(
    * hand-written (b)/(c)-bucket shells co-located under the same assets tree.
    */
   abstract val onlyClassNames: org.gradle.api.provider.SetProperty<String>
+
+  /**
+   * Optional **per-class** allow-list of trail-method names to generate. When a class name appears
+   * here with a non-empty value, the generator emits a `@Test` for only those methods in that
+   * class — every other `<methodName>.trail.yaml` in the same class directory is silently skipped.
+   * Classes NOT in the map keep their default behavior (every trail becomes a `@Test`).
+   *
+   * Composes with [onlyClassNames]: a class still has to clear that filter (when set) before its
+   * per-method allow-list is consulted.
+   *
+   * Example — drop a CI shard to a fast-PR-check subset without removing trails from disk:
+   * ```
+   * trailblazeAndroid {
+   *   onlyClassNames = setOf("LoginFlowTest")
+   *   onlyMethodNames.put("LoginFlowTest", setOf("happyPath", "invalidCredentials"))
+   * }
+   * ```
+   *
+   * A method name in this map that does NOT match an existing `<methodName>.trail.yaml` is a hard
+   * error at generate time (typo guard — same shape as the existing `onlyClassNames` typo guard;
+   * silently emitting zero methods would mean "method not found" at test runtime, not build time).
+   */
+  abstract val onlyMethodNames: MapProperty<String, Set<String>>
 }
 
 /**
@@ -261,17 +485,52 @@ constructor(
  */
 @org.gradle.api.tasks.CacheableTask
 abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
-  // @Optional so a module can apply the plugin BEFORE it has any trail YAMLs (early rollout)
-  // without Gradle's input-validation tripping on a missing `src/androidTest/assets/trails`.
-  // The TaskAction below detects the absent-dir case and no-ops with a lifecycle log — without
-  // @Optional, Gradle would fail the task before that check could run.
-  @get:InputDirectory
-  @get:Optional
+  // @Internal — the path itself is NOT a tracked input. Two reasons:
+  //   1. @InputDirectory + @Optional rejects a non-null property whose path doesn't exist on disk,
+  //      so it can't accommodate "the upstream Copy will create the dir before this task runs"
+  //      (real failure mode when a consumer points `trailsAssetsDir` at a build-output directory).
+  //      The earlier `.filter { it.asFile.isDirectory }` workaround broke this — the filter
+  //      evaluates the first time the property is queried (at config time, before the Copy ran),
+  //      returns absent, and the result is cached on the Provider chain so subsequent queries
+  //      after the Copy runs still see absent. Observed as the "no assets directory at <unset>"
+  //      failure mode observed when a consumer's staging Copy hadn't produced its dir yet.
+  //   2. The early-rollout case (plugin applied before any trail YAMLs exist) also needs the task
+  //      to gracefully no-op, not fail validation.
+  //
+  // Tracking the file CONTENTS via [trailsAssetFiles] below gives Gradle proper change-detection
+  // (cache key + up-to-date) while letting the path itself live in a non-validated Property the
+  // task action can query at execution time.
+  @get:Internal abstract val trailsAssetsDir: DirectoryProperty
+
+  /**
+   * Injected so [trailsAssetFiles] can build an empty FileTree fallback without calling
+   * `Task.project` at execution time (illegal under the configuration cache).
+   */
+  @get:Inject
+  internal abstract val objectFactoryForTrails: org.gradle.api.model.ObjectFactory
+
+  /**
+   * Gradle-tracked input: the `*.trail.yaml` files under [trailsAssetsDir]. Empty when the
+   * directory doesn't exist (early rollout) or contains no trails — the task action handles that
+   * case with a "no shells generated" lifecycle log instead of failing validation.
+   *
+   * Path-sensitivity is `RELATIVE` because the renderer reads only filenames, not absolute paths
+   * — same as the original `@InputDirectory` had. `@IgnoreEmptyDirectories` matches the original
+   * behavior of skipping intermediate empty dirs.
+   */
+  @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
   @get:IgnoreEmptyDirectories
-  abstract val trailsAssetsDir: DirectoryProperty
+  val trailsAssetFiles: org.gradle.api.file.FileTree
+    get() =
+      trailsAssetsDir
+        .map { dir -> dir.asFileTree.matching { it.include("**/*.trail.yaml") } }
+        .getOrElse(objectFactoryForTrails.fileCollection().asFileTree)
 
-  @get:Input abstract val packageName: Property<String>
+  // @Optional at the TASK level too — Gradle's input-validation rejects an unset non-optional
+  // @Input before the TaskAction runs at all, regardless of the action's own check order below.
+  // The TaskAction still throws its own directed error when there's real codegen work to do.
+  @get:Input @get:Optional abstract val packageName: Property<String>
 
   // Both modes are @Optional individually; the TaskAction enforces "exactly one of the two" at
   // runtime with a directed error. Both annotated @Input so the cache key reflects whichever is
@@ -284,16 +543,61 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
   @get:Optional
   abstract val onlyClassNames: org.gradle.api.provider.SetProperty<String>
 
+  @get:Input @get:Optional abstract val onlyMethodNames: MapProperty<String, Set<String>>
+
   @get:OutputDirectory abstract val generatedSourceDir: DirectoryProperty
 
   @TaskAction
   fun generate() {
+    val outRoot = generatedSourceDir.get().asFile
+    // Clean previous output so removed/renamed trails don't leave stale shells behind. Output is
+    // entirely build-tree-owned and gitignored, so a recursive delete is safe. Done unconditionally
+    // (even in the no-op branches below) so stale output from a prior config doesn't linger.
+    outRoot.deleteRecursively()
+
+    // trailsAssetsDir is @Optional — `.orNull` so an absent/non-existent dir falls through to the
+    // no-op log instead of throwing. Covers early-rollout AND trailmap-only consumers alike;
+    // checked BEFORE `packageName` below so the latter isn't required when there's nothing to do.
+    val assetsDir = trailsAssetsDir.orNull?.asFile
+    if (assetsDir == null || !assetsDir.isDirectory) {
+      logger.lifecycle(
+        "xyz.block.trailblaze.android-gradle: no assets directory at " +
+          "${assetsDir ?: "<unset>"} — no shells generated."
+      )
+      // generatedSourceDir is a declared @OutputDirectory — Gradle expects it to exist after a
+      // successful execution (a missing declared output means the task can never be UP-TO-DATE).
+      outRoot.mkdirs()
+      return
+    }
+
+    val classDirs =
+      (assetsDir.listFiles() ?: emptyArray())
+        .asSequence()
+        .filter { it.isDirectory }
+        .sortedBy { it.name }
+        .toList()
+    // A subdirectory alone doesn't mean there's a shell to generate — e.g. a trailmap-only
+    // consumer's `assets/trails/config/**` (trailmap/target YAML, unrelated to codegen) would
+    // otherwise count as "work to do" and wrongly demand `packageName`. Require at least one
+    // `<ClassName>/*.trail.yaml` before treating this as real codegen work.
+    val hasAnyTrailYaml =
+      classDirs.any { dir -> dir.listFiles()?.any { it.isFile && it.name.endsWith(".trail.yaml") } == true }
+    if (classDirs.isEmpty() || !hasAnyTrailYaml) {
+      logger.lifecycle(
+        "xyz.block.trailblaze.android-gradle: $assetsDir has no <ClassName>/*.trail.yaml files " +
+          "— no shells generated."
+      )
+      outRoot.mkdirs()
+      return
+    }
+
+    // From here on there IS at least one shell to generate, so packageName is load-bearing.
     val pkg =
       packageName.orNull?.takeIf { it.isNotBlank() }
         ?: throw GradleException(
-          "xyz.block.trailblaze.android-gradle: trailblazeAndroidGradle " +
+          "xyz.block.trailblaze.android-gradle: trailblazeAndroid " +
             ".packageName is not set. Set it to the package the generated classes should live in, " +
-            "e.g. `packageName.set(\"xyz.block.trailblaze.evaluation\")`."
+            "e.g. `packageName = \"xyz.block.trailblaze.evaluation\"`."
         )
     validatePackageName(pkg)
 
@@ -314,7 +618,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           if (explicitRule == DEFAULT_RULE_FQN) TestHostMode.BaseClass(explicitBase)
           else
             throw GradleException(
-              "trailblazeAndroidGradle: set exactly ONE of `baseClassFqn` (extending-base " +
+              "trailblazeAndroid: set exactly ONE of `baseClassFqn` (extending-base " +
                 "pattern) or `ruleClassFqn` (inline-rule pattern), not both. Got " +
                 "`baseClassFqn=$explicitBase`, `ruleClassFqn=$explicitRule`."
             )
@@ -323,7 +627,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         explicitRule != null -> TestHostMode.InlineRule(explicitRule)
         else ->
           throw GradleException(
-            "trailblazeAndroidGradle: set either `baseClassFqn` (extending-base) or " +
+            "trailblazeAndroid: set either `baseClassFqn` (extending-base) or " +
               "`ruleClassFqn` (inline-rule). The latter defaults to " +
               "`$DEFAULT_RULE_FQN`, so this should not be reachable unless the default was " +
               "cleared deliberately."
@@ -331,38 +635,8 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       }
     validateTestHostFqn(mode)
 
-    val outRoot = generatedSourceDir.get().asFile
-    // Clean previous output so removed/renamed trails don't leave stale shells behind. Output is
-    // entirely build-tree-owned and gitignored, so a recursive delete is safe.
-    outRoot.deleteRecursively()
     val pkgDir = outRoot.resolve(pkg.replace('.', '/'))
     pkgDir.mkdirs()
-
-    // trailsAssetsDir is @Optional — `.orNull` rather than `.get()` so an absent or non-existent
-    // dir falls through to the no-op log instead of throwing. Covers the "plugin applied before
-    // the consumer authored any trails" case the @Optional annotation was added for.
-    val assetsDir = trailsAssetsDir.orNull?.asFile
-    if (assetsDir == null || !assetsDir.isDirectory) {
-      logger.lifecycle(
-        "xyz.block.trailblaze.android-gradle: no assets directory at " +
-          "${assetsDir ?: "<unset>"} — no shells generated."
-      )
-      return
-    }
-
-    val classDirs =
-      (assetsDir.listFiles() ?: emptyArray())
-        .asSequence()
-        .filter { it.isDirectory }
-        .sortedBy { it.name }
-        .toList()
-    if (classDirs.isEmpty()) {
-      logger.lifecycle(
-        "xyz.block.trailblaze.android-gradle: $assetsDir has no subdirectories — " +
-          "no shells generated."
-      )
-      return
-    }
 
     val allowList = onlyClassNames.get()
     val candidates = if (allowList.isEmpty()) classDirs else classDirs.filter { it.name in allowList }
@@ -373,31 +647,54 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         // Hard error rather than warning — a typo in `onlyClassNames` would silently produce no
         // output and the developer would see "method not found" at test runtime, not at build time.
         throw GradleException(
-          "trailblazeAndroidGradle.onlyClassNames references directories that do not " +
+          "trailblazeAndroid.onlyClassNames references directories that do not " +
             "exist under $assetsDir: $unknown. Available directories: ${classDirs.map { it.name }}."
         )
       }
     }
 
+    val methodAllowLists = onlyMethodNames.get()
     var generatedCount = 0
     val generatedClassNames = mutableListOf<String>()
     candidates.forEach { classDir ->
       val className = classDir.name
       validateSimpleName(className, source = "directory name under $assetsDir")
-      val methodNames =
+      val allMethodNames =
         (classDir.listFiles() ?: emptyArray())
           .filter { it.isFile && it.name.endsWith(".trail.yaml") }
           .map { it.name.removeSuffix(".trail.yaml") }
           .sorted()
-      if (methodNames.isEmpty()) {
+      if (allMethodNames.isEmpty()) {
         logger.lifecycle(
           "xyz.block.trailblaze.android-gradle: $className has no .trail.yaml files " +
             "— skipping."
         )
         return@forEach
       }
+      // Per-class method allow-list: class not in the map → keep all trails (default). Class with
+      // a non-empty allow-list → keep only the named methods, hard-error on names that don't match
+      // an actual <method>.trail.yaml (typo guard, same shape as the onlyClassNames typo guard
+      // above — silently emitting zero methods would mean "method not found" at test runtime,
+      // not build time).
+      val perClassAllow = methodAllowLists[className]
+      val methodNames =
+        if (perClassAllow.isNullOrEmpty()) {
+          allMethodNames
+        } else {
+          val unknown = perClassAllow - allMethodNames.toSet()
+          if (unknown.isNotEmpty()) {
+            throw GradleException(
+              "trailblazeAndroid.onlyMethodNames[\"$className\"] references trails that do not " +
+                "exist under $classDir: $unknown. Available trails: $allMethodNames."
+            )
+          }
+          allMethodNames.filter { it in perClassAllow }
+        }
       methodNames.forEach { validateMethodName(it, className = className) }
-      val duplicates = methodNames.groupingBy { it }.eachCount().filter { it.value > 1 }.keys
+      // Duplicate + case-insensitive collision checks run against the on-disk truth
+      // (`allMethodNames`), not the filtered subset, so a class-dir invariant violation can't be
+      // masked by an `onlyMethodNames` filter that happens to drop one side of the collision.
+      val duplicates = allMethodNames.groupingBy { it }.eachCount().filter { it.value > 1 }.keys
       require(duplicates.isEmpty()) {
         "Duplicate trail names under $classDir: $duplicates. Every <methodName>.trail.yaml must " +
           "be unique within its class directory."
@@ -407,7 +704,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       // collides on those filesystems so one method would silently disappear from the emitted
       // class. Fail loudly with both original names so the developer can pick which to keep.
       val caseInsensitiveDups =
-        methodNames.groupBy { it.lowercase() }.values.filter { it.size > 1 }
+        allMethodNames.groupBy { it.lowercase() }.values.filter { it.size > 1 }
       require(caseInsensitiveDups.isEmpty()) {
         "Case-insensitive trail-name collision under $classDir: $caseInsensitiveDups. " +
           "On case-insensitive filesystems (APFS / HFS+ / NTFS) these would write to the same " +
@@ -544,7 +841,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
 
     internal fun validatePackageName(pkg: String) {
       require(PACKAGE_NAME_REGEX.matches(pkg)) {
-        "trailblazeAndroidGradle.packageName `$pkg` is not a valid Kotlin package " +
+        "trailblazeAndroid.packageName `$pkg` is not a valid Kotlin package " +
           "(dot-separated identifiers, each starting with a letter or underscore). " +
           "Example: `xyz.block.trailblaze.evaluation`."
       }
@@ -552,7 +849,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
 
     internal fun validateBaseClassFqn(fqn: String) {
       require(FQN_REGEX.matches(fqn)) {
-        "trailblazeAndroidGradle.baseClassFqn must be a fully qualified class name " +
+        "trailblazeAndroid.baseClassFqn must be a fully qualified class name " +
           "with at least one package segment (e.g. `xyz.block.trailblaze.rules.SquareTrailblazeTest`); " +
           "got `$fqn`."
       }
@@ -560,7 +857,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
 
     internal fun validateRuleClassFqn(fqn: String) {
       require(FQN_REGEX.matches(fqn)) {
-        "trailblazeAndroidGradle.ruleClassFqn must be a fully qualified class name " +
+        "trailblazeAndroid.ruleClassFqn must be a fully qualified class name " +
           "with at least one package segment (e.g. `xyz.block.trailblaze.android.AndroidTrailblazeRule`); " +
           "got `$fqn`."
       }

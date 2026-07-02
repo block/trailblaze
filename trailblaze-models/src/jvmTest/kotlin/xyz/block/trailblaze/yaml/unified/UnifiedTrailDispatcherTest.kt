@@ -49,7 +49,8 @@ class UnifiedTrailDispatcherTest {
         target: y
       trail:
         - step: hi
-          android-phone: []
+          recording:
+            android-phone: []
       """.trimIndent(),
     )
     assertTrue(doc is TrailDocument.Unified)

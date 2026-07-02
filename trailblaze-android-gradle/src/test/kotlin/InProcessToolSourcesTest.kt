@@ -5,9 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Unit tests for [TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources] — the configuration-time
- * discovery that decides which `<name>.ts` in a trailmap's `tools/` dir get pre-compiled into an
- * on-device QuickJS bundle.
+ * Unit tests for [inProcessToolSources] — the configuration-time discovery that decides which
+ * `<name>.ts` in a trailmap's `tools/` dir get pre-compiled into an on-device QuickJS bundle.
  *
  * The descriptor-less branch is the one that regressed in PR #3981: that change moved several
  * launch-step tools to TypeScript-only descriptors (deleting their `.yaml` sidecars) but did not
@@ -25,12 +24,10 @@ class InProcessToolSourcesTest {
 
   private fun write(name: String, content: String) = File(dir, name).writeText(content)
 
-  private fun discoveredNames(): List<String> =
-    TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources(dir).map { it.name }
+  private fun discoveredNames(): List<String> = inProcessToolSources(dir).map { it.name }
 
   private fun discoveredRelPaths(): List<String> =
-    TrailblazeTrailmapToolBundlesPlugin.inProcessToolSources(dir)
-      .map { it.relativeTo(dir).invariantSeparatorsPath }
+    inProcessToolSources(dir).map { it.relativeTo(dir).invariantSeparatorsPath }
 
   private val toolBody = "export const x = trailblaze.tool<Foo>({ supportedPlatforms: [\"android\"] }, async () => \"ok\")\n"
 
@@ -90,7 +87,7 @@ class InProcessToolSourcesTest {
   @Test fun `assetPathFor preserves the tools-relative subpath so it matches the runtime resolver`() {
     assertEquals(
       "trails/config/trailmaps/myapp/tools/client/launchClientRoute.bundle.js",
-      TrailblazeTrailmapToolBundlesPlugin.assetPathFor("myapp", "client/launchClientRoute"),
+      assetPathFor("myapp", "client/launchClientRoute"),
     )
   }
 }

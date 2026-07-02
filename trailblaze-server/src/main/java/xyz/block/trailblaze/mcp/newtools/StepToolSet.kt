@@ -738,12 +738,18 @@ class StepToolSet(
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
     Console.log("│ [blaze${if (fast) " --no-screenshots" else ""}] Objective: $objective (${resolvedToolWrappers.size} tools)")
 
-    // Execute each tool sequentially
+    // Execute each tool sequentially, capturing each tool's own output so the
+    // result surfaces what the tool actually returned (an installed-app list, a
+    // profile JSON, …) instead of a generic "Executed N tools" count. This closes
+    // the asymmetry with the agent path: a read-oriented tool run via
+    // `trailblaze tool <name>` now prints its result, 1:1 with what the agent sees.
     val recordedToolCalls = mutableListOf<RecordedToolCall>()
+    val toolOutputs = mutableListOf<Pair<String, String>>()
     for (wrapper in resolvedToolWrappers) {
       val toolStartTime = Clock.System.now()
       try {
-        toolExecutor(wrapper.trailblazeTool, traceId)
+        val output = toolExecutor(wrapper.trailblazeTool, traceId)
+        toolOutputs.add(wrapper.name to output)
         emitDirectToolLog(
           tool = wrapper.trailblazeTool,
           toolName = wrapper.name,
@@ -791,21 +797,47 @@ class StepToolSet(
 
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
+    val combinedOutput = renderDirectToolOutputs(toolOutputs)
+
     emitObjectiveComplete(promptStep, stepStartTime, success = true)
     sessionContext?.recordStep(RecordedStep(
       type = RecordedStepType.STEP,
       input = objective,
       toolCalls = recordedToolCalls,
-      result = "Executed ${resolvedToolWrappers.size} tools",
+      result = combinedOutput,
       success = true,
     ))
 
     return StepResult(
       executed = true,
       done = true,
-      result = "Executed ${resolvedToolWrappers.size} tools for: $objective",
+      result = combinedOutput,
       screenSummary = screenSummary,
     ).toMarkdown()
+  }
+
+  /**
+   * Combines each executed tool's own output into the [StepResult.result] body so
+   * `trailblaze tool` surfaces what the tool actually returned — 1:1 with what the
+   * agent sees — instead of a generic "Executed N tools" acknowledgement.
+   *
+   * - **Single tool:** just its output; a blank output (action tools like tap/swipe
+   *   produce none) falls back to `Executed <name>` so a no-output action still reads
+   *   sensibly and the pre-existing UX doesn't regress.
+   * - **Multiple tools:** one block per tool, each prefixed with a 1-based ordinal and the
+   *   tool name (`[1] tapOnPoint:`) so repeated tools stay individually attributable rather
+   *   than collapsing into indistinguishable `tapOnPoint:` blocks. A blank output uses the
+   *   same `Executed <name>` fallback under its label.
+   */
+  private fun renderDirectToolOutputs(outputs: List<Pair<String, String>>): String {
+    if (outputs.isEmpty()) return "Executed 0 tools"
+    if (outputs.size == 1) {
+      val (name, output) = outputs.single()
+      return output.trim().ifBlank { "Executed $name" }
+    }
+    return outputs.mapIndexed { index, (name, output) ->
+      "[${index + 1}] $name:\n${output.trim().ifBlank { "Executed $name" }}"
+    }.joinToString("\n\n")
   }
 
   @LLMDescription(

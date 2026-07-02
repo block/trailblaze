@@ -1,13 +1,17 @@
 package xyz.block.trailblaze.host
 
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
+import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
@@ -131,6 +135,100 @@ object PerTrailmapClientDtsEmitter {
         typedToolOverrides = typedOverrides,
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
       )
+    }
+  }
+
+  /**
+   * Emit a **validation-only** typed surface (`<outputBaseDir>/<id>/tools/trailblaze-client.d.ts`)
+   * for each classpath-bundled target in [targetConfigs] whose id is NOT in [excludeIds]. This is
+   * the companion to [emit] for targets that live inside a JAR (e.g. app-bundled `square` /
+   * `dashboardapp`) and therefore have no writable `<trailmapDir>/tools/` to receive a normal
+   * per-trailmap surface. Returns the absolute paths of every file written.
+   *
+   * The surface produced here is intentionally NOT the IDE-autocomplete surface [emit] writes
+   * (authors of a JAR-bundled trailmap edit its `.ts` in the *source* tree, not the JAR). It
+   * exists so [TrailTscValidator] can type-check `.trail.yaml` recordings whose `target:` resolves
+   * to a classpath-bundled trailmap — previously the single biggest coverage gap in that gate,
+   * where the bulk of the trail corpus read as *skipped-no-surface*. The caller writes these into a
+   * gitignored scratch dir (`<trails>/.trailblaze/…`) and points the validator at it.
+   *
+   * ## Why the input is baked [AppTargetYamlConfig]s, not [ResolvedTrailmap]s
+   *
+   * A classpath trailmap whose `target.tools:` names scripted tools that need analyzer
+   * enrichment (e.g. `square`) is DROPPED from the runtime-resolved trailmap pool — the analyzer
+   * can't walk `.ts` sources inside a JAR, so sibling-resolution throws and the loader drops the
+   * target (runtime dispatch is instead served by the build-time-baked `targets/<id>.yaml`). That
+   * drop is exactly what removed `square` — the whole point of this gate — from the
+   * resolved pool. So we source from the **baked target configs** instead
+   * ([AppTargetYamlLoader.discoverConfigs]): they carry the fully-resolved, hoisted scripted
+   * `tools:` (with schemas) AND the `platforms.<p>.tool_sets:` for class-backed resolution, and
+   * they exist for every bundled target regardless of whether analyzer enrichment can run.
+   *
+   * [excludeIds] are the workspace's own filesystem trailmap ids — those already get a real
+   * (analyzer-upgraded) surface from [emit], so re-emitting a bundled copy here would shadow it.
+   *
+   * ## Fidelity vs [emit]
+   *
+   * **Class-backed tools are fully typed** — [resolveKotlinToolDescriptorsForTrailmap] resolves
+   * them through [TrailblazeToolSetCatalog] via classpath reflection. These are the bulk of what
+   * recorded trails actually call (`tapOnElementWithText`, …). **Scripted (`.ts`) tools carry the
+   * baked target's schema** but are NOT re-run through the analyzer here (no on-disk `.ts` in a
+   * JAR), so any residual gap between the baked schema and a precise typed shape reads as a
+   * finding to curate rather than a silent gap — acceptable for a report-only gate.
+   *
+   * **Strictly non-fatal per target** — a generation failure for one target is logged under the
+   * `[PerTrailmapClientDtsEmitter]` prefix and skipped, so one broken bundled target can't abort
+   * the surface for the rest.
+   */
+  fun emitClasspathValidationSurfaces(
+    targetConfigs: List<AppTargetYamlConfig>,
+    excludeIds: Set<String>,
+    outputBaseDir: Path,
+    catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
+  ): List<Path> {
+    if (targetConfigs.isEmpty()) return emptyList()
+    val generator = WorkspaceClientDtsGenerator()
+
+    return targetConfigs.mapNotNull { config ->
+      if (config.id in excludeIds) return@mapNotNull null
+      try {
+        val hostDir = outputBaseDir.resolve(config.id).toAbsolutePath().normalize()
+        Files.createDirectories(hostDir)
+        // Wrap the baked target config in a synthetic ResolvedTrailmap so the same private
+        // resolution helpers [emit] uses apply unchanged: the manifest carries the target's
+        // `platforms.<p>.tool_sets:` (→ class-backed tools via the catalog) and the `target`
+        // carries the baked, hoisted scripted `tools:`. No `dependencies:` — the baked target
+        // already hoisted every inherited tool, so there's no closure to walk.
+        val synthetic = ResolvedTrailmap(
+          manifest = TrailblazeTrailmapManifest(
+            id = config.id,
+            target = TrailmapTargetConfig(
+              displayName = config.displayName,
+              platforms = config.platforms,
+            ),
+          ),
+          source = TrailmapSource.Classpath(resourceDir = "trails/config/trailmaps/${config.id}"),
+          target = config,
+          toolsets = emptyList(),
+          tools = emptyList(),
+          waypoints = emptyList(),
+        )
+        val kotlinTools = resolveKotlinToolDescriptorsForTrailmap(synthetic, catalog)
+        val scriptedTools = collectTrailmapTypedScriptedTools(synthetic, mapOf(config.id to synthetic))
+        generator.generateForTrailmapFromResolved(
+          trailmapDir = hostDir,
+          toolDescriptors = kotlinTools.descriptors,
+          scriptedTools = scriptedTools,
+          typedToolOverrides = emptyMap(),
+          frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
+        )
+      } catch (e: Exception) {
+        Console.error(
+          "[PerTrailmapClientDtsEmitter] failed to emit validation surface for classpath " +
+            "target '${config.id}' (skipped): ${e.message ?: e::class.simpleName}",
+        )
+        null
+      }
     }
   }
 

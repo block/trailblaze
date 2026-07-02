@@ -63,6 +63,12 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  *   delivered via a target's `target.tools:`. The referenced tool supplies description / parameters
  *   / flags; this config contributes only the edge metadata.
  *
+ *   For a [trailhead] specifically, a scripted (`.ts`) tool has a second, sidecar-free option:
+ *   declaring `trailhead: { to, dynamic }` directly in its `TrailblazeTypedToolSpec` (mirrors this
+ *   [TrailheadMetadata] shape field-for-field). The build-time analyzer captures it into
+ *   `InlineScriptToolConfig.trailhead`, so `toolbox trailheads` and the Trail Runner picker see it
+ *   without a `*.trailhead.yaml` at all — prefer this for any TS-authored trailhead.
+ *
  *   ```yaml
  *   # *.trailhead.yaml — marks the already-registered scripted tool `myapp_launchAppSignedIn`
  *   # as a bootstrap trailhead landing at the given waypoint.

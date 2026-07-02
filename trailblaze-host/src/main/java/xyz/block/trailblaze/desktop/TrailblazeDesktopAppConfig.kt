@@ -15,6 +15,8 @@ import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.trailrunner.DefaultTrailRunnerExtension
+import xyz.block.trailblaze.trailrunner.TrailRunnerExtension
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import kotlinx.coroutines.flow.StateFlow
@@ -150,6 +152,15 @@ abstract class TrailblazeDesktopAppConfig(
    */
   open val deviceClassifierIconProvider: DeviceClassifierIconProvider =
     DefaultDeviceClassifierIconProvider
+
+  /**
+   * The Trail Runner web-UI extension seam. Downstream builds override this to layer their own
+   * behavior (integrations, analytics, LLM authoring assists, pluggable capture) onto the
+   * open-source Trail Runner backend. Defaults to [DefaultTrailRunnerExtension] (a no-op), so an
+   * open-source build gets a working-but-unadorned Trail Runner. Consumed by
+   * `TrailRunnerEndpoint.register(...)`.
+   */
+  open val trailRunnerExtension: TrailRunnerExtension = DefaultTrailRunnerExtension
 
   abstract val defaultAppTarget: TrailblazeHostAppTarget
 

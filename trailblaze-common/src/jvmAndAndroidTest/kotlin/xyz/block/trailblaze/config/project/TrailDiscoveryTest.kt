@@ -288,6 +288,8 @@ class TrailDiscoveryTest {
     assertTrue(TrailDiscovery.isTrailFile("blaze.yaml"))
     assertTrue(TrailDiscovery.isTrailFile("trailblaze.yaml"))
     assertTrue(TrailDiscovery.isTrailFile("ios-iphone.trail.yaml"))
+    // The unified per-test file must be discoverable too (it doesn't end in `.trail.yaml`).
+    assertTrue(TrailDiscovery.isTrailFile("trail.yaml"))
     assertTrue(!TrailDiscovery.isTrailFile("settings.yaml"))
     assertTrue(!TrailDiscovery.isTrailFile("blaze.yaml.bak"))
   }

@@ -150,6 +150,11 @@ export interface IntegrationActionDto {
   label: string;
 }
 
+export interface IntegrationActionRequest {
+  id: string;
+  action: string;
+}
+
 export interface IntegrationDto {
   id: string;
   name: string;
@@ -199,9 +204,6 @@ export interface OkResponse {
   error?: string | null;
 }
 
-export interface OpenGooseRequest {
-}
-
 export interface OpenSessionFileRequest {
   id: string;
   name: string;
@@ -244,7 +246,7 @@ export interface RunRequest {
   captureNetworkTraffic?: boolean | null;
   captureIosLogs?: boolean | null;
   captureAnalytics?: boolean | null;
-  captureEchoPluginData?: boolean | null;
+  captureEvents?: boolean | null;
   trailId?: string | null;
   draftId?: string | null;
   variant?: string | null;
@@ -302,6 +304,7 @@ export interface SessionSummary {
   hasRecordedSteps?: boolean;
   error?: string | null;
   trailId?: string | null;
+  imported?: boolean;
 }
 
 export interface SessionsResponse {
@@ -321,10 +324,11 @@ export interface SettingsDto {
   captureNetworkTraffic: boolean;
   captureAnalytics: boolean;
   showWebBrowser: boolean;
+  serverPort: number;
+  serverHttpsPort: number;
   showTrailsTab: boolean;
   showDevicesTab: boolean;
   showWaypointsTab: boolean;
-  autoLaunchGoose?: boolean;
   preferHostAgent?: boolean;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
@@ -348,10 +352,11 @@ export interface SettingsPatchRequest {
   captureNetworkTraffic?: boolean | null;
   captureAnalytics?: boolean | null;
   showWebBrowser?: boolean | null;
+  serverPort?: number | null;
+  serverHttpsPort?: number | null;
   showTrailsTab?: boolean | null;
   showDevicesTab?: boolean | null;
   showWaypointsTab?: boolean | null;
-  autoLaunchGoose?: boolean | null;
   preferHostAgent?: boolean | null;
   trailsDirectory?: string | null;
   logsDirectory?: string | null;
@@ -569,10 +574,10 @@ export function createTrailRunnerRpcClient(options: RpcCallOptions = {}) {
       rpcCall<GetTrailmapsRequest, TrailmapsResponse>("GetTrailmapsRequest", request, options),
     getTrails: (request: GetTrailsRequest = {}): Promise<RpcResult<TrailIndexResponse>> =>
       rpcCall<GetTrailsRequest, TrailIndexResponse>("GetTrailsRequest", request, options),
+    integrationAction: (request: IntegrationActionRequest): Promise<RpcResult<OkResponse>> =>
+      rpcCall<IntegrationActionRequest, OkResponse>("IntegrationActionRequest", request, options),
     newComponent: (request: NewComponentRequest): Promise<RpcResult<NewComponentResponse>> =>
       rpcCall<NewComponentRequest, NewComponentResponse>("NewComponentRequest", request, options),
-    openGoose: (request: OpenGooseRequest = {}): Promise<RpcResult<OkResponse>> =>
-      rpcCall<OpenGooseRequest, OkResponse>("OpenGooseRequest", request, options),
     openSessionFile: (request: OpenSessionFileRequest): Promise<RpcResult<OkResponse>> =>
       rpcCall<OpenSessionFileRequest, OkResponse>("OpenSessionFileRequest", request, options),
     rebuildDaemon: (request: RebuildDaemonRequest = {}): Promise<RpcResult<RebuildDaemonResponse>> =>

@@ -110,6 +110,108 @@ class TrailblazeAiRunnerMessagesTest {
     assertThat(message).doesNotContain("CONDITIONAL")
   }
 
+  // Regression for the on-demand failure on case_5582734 ios-ipad: the prompt opens with
+  // `If "<dialog>"` — the quote after `if` caused the narrower allow-list (`if the`, `if a`,
+  // etc.) to miss it, the LLM never got conditional guidance, and it called
+  // `objectiveStatus(FAILED)` the moment the dialog wasn't visible. Any `^if\s+\S` prompt is
+  // conditional.
+  @Test
+  fun `conditional objective with quoted entity after if is detected`() {
+    val message = getReminderForStep(
+      "If \"Your Square Plus trial ends in 1 day\" dialog is visible, tap on \"Close\" button.",
+    )
+    assertThat(message).contains("CONDITIONAL")
+    assertThat(message).doesNotContain("required element or target cannot be found")
+  }
+
+  @Test
+  fun `conditional objective starting with if you is detected`() {
+    val message = getReminderForStep("If you see a notification prompt, tap Skip")
+    assertThat(message).contains("CONDITIONAL")
+  }
+
+  @Test
+  fun `conditional objective starting with if your is detected`() {
+    val message = getReminderForStep("If your trial banner is visible, dismiss it")
+    assertThat(message).contains("CONDITIONAL")
+  }
+
+  @Test
+  fun `case-insensitive If prefix is detected as conditional`() {
+    val message = getReminderForStep("IF the dialog is visible, tap Close")
+    assertThat(message).contains("CONDITIONAL")
+  }
+
+  // -- Branching (if/otherwise) objective detection --
+  //
+  // Regressions flagged by automated review against the broadened CONDITIONAL_PREFIX_REGEX:
+  // a branching prompt ("if X, do A, otherwise do B") must NOT get the plain "absence means
+  // COMPLETED" no-op guidance, since exactly one branch's action always has to run. Real
+  // phrasings pulled from the flagged trails.
+
+  @Test
+  fun `branching objective with but-if is detected as BRANCHING not plain CONDITIONAL`() {
+    val message = getReminderForStep(
+      "If it is Android tap on \"Save\" button, but if it is iOS tap on \"Close\" (X) button.",
+    )
+    assertThat(message).contains("BRANCHING")
+    assertThat(message).doesNotContain("CONDITIONAL objective")
+  }
+
+  @Test
+  fun `branching objective with Otherwise is detected as BRANCHING not plain CONDITIONAL`() {
+    val message = getReminderForStep(
+      "If device is Android Tablet: Skip this step.\nOtherwise: Tap on 'Charge $5.00' button",
+    )
+    assertThat(message).contains("BRANCHING")
+    assertThat(message).doesNotContain("CONDITIONAL objective")
+  }
+
+  @Test
+  fun `branching objective does not get the no-op-if-absent guidance`() {
+    val message = getReminderForStep(
+      "If device is Android Tablet: Skip this step.\nOtherwise: Tap on 'Charge $5.00' button",
+    )
+    assertThat(message).doesNotContain("the absence means the condition was correctly evaluated")
+  }
+
+  @Test
+  fun `branching objective keeps the strict required-element failure guidance`() {
+    // A branching objective must still fail loudly if neither branch's target can be found —
+    // it should NOT get the permissive "only fail on clear error indicators" conditional text.
+    val message = getReminderForStep(
+      "If it is Android tap on \"Save\" button, but if it is iOS tap on \"Close\" (X) button.",
+    )
+    assertThat(message).contains("required element or target cannot be found")
+  }
+
+  @Test
+  fun `simple conditional without a branch is unaffected by the branching check`() {
+    val message = getReminderForStep(
+      "If \"Your Square Plus trial ends in 1 day\" dialog is visible, tap on \"Close\" button.",
+    )
+    assertThat(message).contains("CONDITIONAL")
+    assertThat(message).doesNotContain("BRANCHING")
+  }
+
+  @Test
+  fun `branching objective with else-if is detected as BRANCHING`() {
+    val message = getReminderForStep(
+      "If device is a phone, tap \"Compact\", else if device is a tablet, tap \"Expanded\".",
+    )
+    assertThat(message).contains("BRANCHING")
+    assertThat(message).doesNotContain("CONDITIONAL objective")
+  }
+
+  @Test
+  fun `branching objective with bare else is detected as BRANCHING`() {
+    val message = getReminderForStep(
+      "If the banner is visible, tap \"Dismiss\", else tap \"Continue\".",
+    )
+    assertThat(message).contains("BRANCHING")
+    assertThat(message).doesNotContain("CONDITIONAL objective")
+  }
+
   // -- Multi-step objective detection --
 
   @Test

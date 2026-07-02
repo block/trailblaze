@@ -6,7 +6,20 @@ import xyz.block.trailblaze.yaml.VerificationStep
 
 object TrailblazeAiRunnerMessages {
 
-  private val CONDITIONAL_PATTERNS = listOf("if there is", "if there's", "if the", "if a ", "if an ")
+  // Matches any prompt opening with `if <something>` — must be permissive enough to cover phrasings
+  // like `If "<dialog>" is visible, ...`, `If you see ...`, `If your X ...`. A narrower allow-list
+  // silently flips the LLM into the standard `mark FAILED if the required element cannot be found`
+  // branch the moment the conditional precondition is absent, producing a false objective failure.
+  private val CONDITIONAL_PREFIX_REGEX = Regex("""^if\s+\S""", RegexOption.IGNORE_CASE)
+
+  // Matches an explicit else-branch inside a conditional prompt: `..., but if it is iOS tap X`,
+  // `If device is Android Tablet: ... Otherwise: tap X`. These are BRANCHING objectives, not
+  // no-op-if-absent ones — exactly one branch's action must still run. Flagged by automated
+  // review against the broadened CONDITIONAL_PREFIX_REGEX: without this check,
+  // `isConditionalObjective` would also match these, and the "absence means COMPLETED"
+  // guidance would tell the model it's fine to do nothing when the first branch's condition
+  // isn't met — silently skipping the required alternate-branch action.
+  private val BRANCHING_ELSE_REGEX = Regex("""\b(otherwise|but if|else if|else)\b""", RegexOption.IGNORE_CASE)
 
   private val MULTI_STEP_PATTERNS = listOf(" and then ", " then ", " followed by ", " after that ")
 
@@ -33,8 +46,22 @@ object TrailblazeAiRunnerMessages {
       .replace("\r", "\\r")
   }
 
-  private fun isConditionalObjective(prompt: String): Boolean =
-    CONDITIONAL_PATTERNS.any { prompt.lowercase().startsWith(it) }
+  // Bundles the two independent regex checks so callers compute each exactly once instead of
+  // re-running CONDITIONAL_PREFIX_REGEX per boolean.
+  private class ConditionalShape(prompt: String) {
+    val startsWithIf = CONDITIONAL_PREFIX_REGEX.containsMatchIn(prompt.trimStart())
+    val hasElseBranch = BRANCHING_ELSE_REGEX.containsMatchIn(prompt)
+
+    // True only for a no-op-safe conditional: "If X, do Y" with no else-branch, where absence
+    // of X means there's nothing to do. Mutually exclusive with [isBranching].
+    val isConditional get() = startsWithIf && !hasElseBranch
+
+    // True for a conditional prompt that also has an explicit else-branch ("but if it is iOS
+    // tap X", "If device is Android Tablet: ... Otherwise: tap Y"). Exactly one branch's action
+    // must still run regardless of which condition holds — the model must not treat this like a
+    // no-op-if-absent conditional. Mutually exclusive with [isConditional].
+    val isBranching get() = startsWithIf && hasElseBranch
+  }
 
   private fun isMultiStepObjective(prompt: String): Boolean =
     MULTI_STEP_PATTERNS.any { prompt.lowercase().contains(it) }
@@ -49,7 +76,9 @@ object TrailblazeAiRunnerMessages {
   ): String {
     val prompt = promptStep.prompt
     val isVerification = promptStep is VerificationStep
-    val isConditional = isConditionalObjective(prompt)
+    val conditionalShape = ConditionalShape(prompt)
+    val isConditional = conditionalShape.isConditional
+    val isBranching = conditionalShape.isBranching
     val isMultiStep = isMultiStepObjective(prompt)
 
     val prefix = when (promptStep) {
@@ -135,7 +164,9 @@ object TrailblazeAiRunnerMessages {
       // Dynamic completion guidance — only include what's relevant
       appendLine()
       appendLine("COMPLETION GUIDANCE:")
-      if (isConditional) {
+      if (isBranching) {
+        appendLine("- This is a BRANCHING objective (if/otherwise). Exactly one branch's action must still be performed based on the current context — determine which condition applies and complete that branch's action. Do NOT mark COMPLETED without performing one of the branches.")
+      } else if (isConditional) {
         appendLine("- This is a CONDITIONAL objective. If the condition is not met (e.g., the element is not present), mark COMPLETED — the absence means the condition was correctly evaluated, not a failure.")
       }
       if (isMultiStep) {
@@ -145,7 +176,10 @@ object TrailblazeAiRunnerMessages {
         appendLine("- For single-action objectives, mark COMPLETED after the action succeeds — do NOT require the tapped element to still be visible (screens naturally change after taps).")
       }
       appendLine("- If a tool returned SUCCESS, be permissive — a changed screen usually means the action worked.")
-      if (isConditional) {
+      // isConditional and isBranching are mutually exclusive (ConditionalShape), but checked
+      // explicitly here so a branching objective always keeps the strict failure guidance even
+      // if that invariant is ever loosened.
+      if (isConditional && !isBranching) {
         appendLine("- Only mark FAILED if there are clear error indicators (error dialogs, crash screens) or you have tried multiple different approaches and none succeeded.")
       } else {
         appendLine("- Mark FAILED if the required element or target cannot be found on the current screen, if there are clear error indicators (error dialogs, crash screens), or if you have tried multiple different approaches and none succeeded.")

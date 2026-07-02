@@ -23,16 +23,23 @@ import java.io.File
  * 1. Load every `<classifier>.trail.yaml` in the directory; filename minus
  *    `.trail.yaml` is the classifier.
  * 2. Canonicalize config from the first file: keep `id` / `target` / `context`
- *    / `memory` / `metadata` verbatim, drop `driver:` / `platform:` / `title:`,
- *    compute `devices:` as the union of the classifiers present. `memory:`
- *    (the AgentMemory pre-seed block) round-trips through the migration
- *    intact — added to v1 `TrailConfig` in the same change that surfaced it
- *    on the unified format.
+ *    / `memory` / `metadata` verbatim, drop `platform:` / `title:`. Each v1
+ *    file's `driver:` (which is per-platform-file) is carried onto the unified
+ *    `devices:` map, keyed by that file's classifier — so a multi-platform
+ *    trail keeps each platform's driver. `devices:` is emitted only when at
+ *    least one file pinned a driver; otherwise it is omitted entirely (the
+ *    device set is derived from the recorded classifiers at run time).
+ *    `memory:` (the AgentMemory pre-seed block) round-trips through the
+ *    migration intact — added to v1 `TrailConfig` in the same change that
+ *    surfaced it on the unified format.
  * 3. For each step index, gather per-classifier NL and tool recordings.
  *    Disagreeing NL becomes a drift warning surfaced in the output's leading
  *    comments; canonical NL is the first platform's.
- * 4. Auto-emit `recordable: false` for step indices where no classifier had a
- *    recording.
+ * 4. Steps with no recording on any classifier are left at the default
+ *    `recordable = true` — "not recorded yet" (runs via the agent, can be
+ *    recorded later), not "never record". The migrator never auto-emits
+ *    `recordable: false`; that flag is reserved for authors who deliberately
+ *    want an LLM-only step.
  * 5. Collapse equivalent sub-classifiers into their family classifier. Sub-
  *    classifiers are inferred from the filename prefixes present in the
  *    directory — any two-or-more classifiers sharing a `<family>-` prefix form
@@ -66,15 +73,21 @@ class TrailMigrator(
     // Load every platform file as v1.
     val perClassifier = linkedMapOf<String, List<PromptStep>>()
     val memoryByClassifier = linkedMapOf<String, Map<String, String>?>()
+    // Per-classifier driver pins. v1's `driver:` is per-platform-file, so each file contributes
+    // one entry keyed by its classifier — a multi-platform trail keeps each platform's driver
+    // (android accessibility, ios host, …) rather than collapsing to one.
+    val driversByClassifier = linkedMapOf<String, String>()
     var canonicalConfig: UnifiedTrailConfig? = null
     for (file in platformFiles) {
       val classifier = file.name.removeSuffix(TRAIL_YAML_SUFFIX)
       val items = trailblazeYaml.decodeTrail(file.readText())
       assertNoTopLevelTools(items, file.name)
+      assertNoTrailhead(items, file.name)
       val v1Config = trailblazeYaml.extractTrailConfig(items)
       if (canonicalConfig == null && v1Config != null) {
         canonicalConfig = v1ConfigToUnified(v1Config)
       }
+      v1Config?.driver?.let { driversByClassifier[classifier] = it }
       // Track each platform's memory block so divergence across files surfaces as a drift
       // warning instead of silently using the first file's values. Mirrors the NL drift
       // pass below — same migrator philosophy: when platforms disagree, the user sees it.
@@ -93,6 +106,7 @@ class TrailMigrator(
     val blazePrompts: List<PromptStep> = if (blazeFile.isFile) {
       val items = trailblazeYaml.decodeTrail(blazeFile.readText())
       assertNoTopLevelTools(items, blazeFile.name)
+      assertNoTrailhead(items, blazeFile.name)
       val cfg = trailblazeYaml.extractTrailConfig(items)
       if (canonicalConfig == null && cfg != null) {
         canonicalConfig = v1ConfigToUnified(cfg)
@@ -100,10 +114,13 @@ class TrailMigrator(
       items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().flatMap { it.promptSteps }
     } else emptyList()
 
-    // Populate `devices:` as the union of present classifiers (sorted for
-    // stable diffs).
-    val devices = perClassifier.keys.toList().sorted()
-    val configWithDevices = (canonicalConfig ?: UnifiedTrailConfig()).copy(devices = devices)
+    // Classifiers present across the per-platform files — used for the family-collapse pass.
+    val presentClassifiers = perClassifier.keys.toList().sorted()
+    // `devices:` is the per-classifier device → driver map. Emit it only when at least one
+    // classifier pins a driver; otherwise omit it entirely — the supported classifiers are
+    // derivable from the steps' recordings, and driverless trails resolve the driver at run time.
+    val configWithDevices = (canonicalConfig ?: UnifiedTrailConfig())
+      .copy(devices = driversByClassifier.ifEmpty { null })
 
     // Per-step reconciliation across platforms; step count is the max of
     // (any platform's prompts length, blaze.yaml's prompts length).
@@ -141,18 +158,19 @@ class TrailMigrator(
         driftReports.add(DriftEntry(stepIndex = i, nlByClassifier = nlsForDrift))
       }
 
-      val recordable = toolsByClassifier.isNotEmpty()
+      // recordable stays at its default (true): a step with no recording just runs via the
+      // agent and can be recorded later. We deliberately do NOT emit `recordable: false` for
+      // no-recording steps — that would mean "never record", which isn't the intent and is noise.
       steps.add(
         UnifiedTrailStep(
           step = canonicalNl,
           recordings = toolsByClassifier,
-          recordable = recordable,
         ),
       )
     }
 
     // Family-collapse pass.
-    val families = inferFamilies(devices)
+    val families = inferFamilies(presentClassifiers)
     val collapseReports = mutableListOf<FamilyCollapseEntry>()
     val collapsedSteps = steps.map { step ->
       var current = step
@@ -220,10 +238,30 @@ class TrailMigrator(
     }
   }
 
+  /**
+   * Fail fast when a v1 input contains a `- trailhead:` block. Mapping the per-classifier trailhead
+   * into [UnifiedTrail.trailhead] (with NL-drift + family-collapse reconciliation, mirroring the
+   * per-step pass) is a follow-up; until then, refuse migration rather than silently drop the
+   * deterministic step 0 — the same policy [assertNoTopLevelTools] applies to top-level tools.
+   */
+  private fun assertNoTrailhead(items: List<TrailYamlItem>, filename: String) {
+    require(items.none { it is TrailYamlItem.TrailheadTrailItem }) {
+      "Refusing to migrate $filename: it contains a `- trailhead:` block, which this migrator does " +
+        "not lower into the unified format's per-classifier `trailhead:`. Silently dropping it " +
+        "would lose the trail's deterministic step 0. Author the unified `trailhead:` directly, or " +
+        "skip this directory."
+    }
+  }
+
   private fun v1ConfigToUnified(v1: xyz.block.trailblaze.yaml.TrailConfig): UnifiedTrailConfig =
     UnifiedTrailConfig(
       id = v1.id,
       target = v1.target,
+      // Preserve the human description — it's runtime-surfaced (a display label), so dropping
+      // it would be silent information loss.
+      description = v1.description,
+      // `drivers` (the per-classifier driver map) is populated by the caller from every
+      // platform file's `driver:`, not from this single first-file config.
       devices = null,
       context = v1.context,
       memory = v1.memory,

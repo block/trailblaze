@@ -726,9 +726,9 @@ data class ScriptedToolDefinition(
    *
    * Captured by the analyzer's inline-literal extraction — keys are the
    * `TrailblazeTypedToolSpec` field names (`description`, `supportedPlatforms`,
-   * `requiresContext`, `requiresHost`, `supportedDrivers`) and values are the
+   * `requiresContext`, `requiresHost`, `supportedDrivers`, `trailhead`) and values are the
    * JSON-compatible literals the author wrote at the call site (strings, string arrays,
-   * booleans).
+   * booleans, and — for `trailhead` — a nested `{to, dynamic}` object).
    *
    * `null` when the author used the bare-handler overload OR when the spec's fields
    * were all unresolvable expressions (object spread, identifier reference, function

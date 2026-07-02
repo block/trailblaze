@@ -65,24 +65,33 @@ class UnifiedTrailStepSerializer(
           }
           maxRetries = valueNode.toInt()
         }
-        in RESERVED_KEYS -> throw IllegalArgumentException(
-          "UnifiedTrailStep key `$key` is reserved by the schema but not valid at the step level. " +
-            "Valid reserved keys here: `step`, `recordable`, `maxRetries`. Anything else is a " +
-            "device-classifier name.",
-        )
-        else -> {
-          require(valueNode is YamlList) {
-            "UnifiedTrailStep classifier `$key:` must map to a list of tool calls, " +
-              "got ${valueNode::class.simpleName}. Use `$key: []` for an explicit no-op."
+        KEY_RECORDING -> {
+          require(valueNode is YamlMap) {
+            "UnifiedTrailStep `recording:` must be a map of device-classifier -> tool list, " +
+              "got ${valueNode::class.simpleName}"
           }
-          recordings[key] = yaml.decodeFromYamlNode(toolListSerializer, valueNode)
+          for ((classifierNode, classifierValue) in valueNode.entries) {
+            val classifier = classifierNode.content
+            require(classifierValue is YamlList) {
+              "`recording:` classifier `$classifier:` must map to a list of tool calls, " +
+                "got ${classifierValue::class.simpleName}. Use `$classifier: []` for an explicit no-op."
+            }
+            recordings[classifier] = yaml.decodeFromYamlNode(toolListSerializer, classifierValue)
+          }
         }
+        else -> throw IllegalArgumentException(
+          "Unexpected step-level key `$key`. Valid keys are `step`, `recording`, `recordable`, " +
+            "`maxRetries`. Device classifiers now nest under `recording:`, not at the step level.",
+        )
       }
     }
 
-    requireNotNull(step) { "UnifiedTrailStep is missing required `step:` key" }
+    requireNotNull(step) {
+      "A unified step is missing its required `step:` (natural language). Every step must carry its " +
+        "intent — recording-only steps are not allowed."
+    }
     require(recordable || recordings.values.all { it.isEmpty() }) {
-      "UnifiedTrailStep has both `recordable: false` and non-empty classifier recordings; " +
+      "UnifiedTrailStep has both `recordable: false` and non-empty recordings; " +
         "these are mutually exclusive."
     }
 
@@ -105,23 +114,6 @@ class UnifiedTrailStepSerializer(
     const val KEY_STEP = "step"
     const val KEY_RECORDABLE = "recordable"
     const val KEY_MAX_RETRIES = "maxRetries"
-
-    /**
-     * Keys that are part of the unified-format vocabulary but not valid at
-     * the step level. If one of these shows up as a step-level key, the
-     * parser raises a clean error rather than mis-treating it as a device
-     * classifier name.
-     */
-    private val RESERVED_KEYS = setOf(
-      "config",
-      "trail",
-      "tools",
-      "recording",
-      "on",
-      "setup",
-      "teardown",
-      "trailhead",
-      "verify",
-    )
+    const val KEY_RECORDING = "recording"
   }
 }

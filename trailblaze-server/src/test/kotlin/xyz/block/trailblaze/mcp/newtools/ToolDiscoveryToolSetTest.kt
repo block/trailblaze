@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.TrailheadMetadata
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -1846,6 +1847,81 @@ class ToolDiscoveryToolSetTest {
     assertContains(
       trailheadTools, "web_inline_script_tool",
       "TARGET mode must now populate trailheadTools so `toolbox trailheads --target <non-default>` returns a non-empty list when role tools exist. Got: $trailheadTools",
+    )
+  }
+
+  /**
+   * Target whose scripted tool self-declares `trailhead:` inline via
+   * `InlineScriptToolConfig.trailhead` (the TS-spec-authored path this test file otherwise never
+   * exercises — every other role-grouping test above sources trailhead metadata from a stub
+   * `*.trailhead.yaml`). No YAML sidecar exists for `scripted_signed_in_launch` at all.
+   */
+  private val scriptedTrailheadTarget = object : TrailblazeHostAppTarget(
+    id = "scriptedtrailheadapp",
+    displayName = "Scripted Trailhead App",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.WEB) listOf("scripted-trailhead-web") else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getInlineScriptTools(): List<InlineScriptToolConfig> = listOf(
+      InlineScriptToolConfig(
+        script = "./tools/scripted_signed_in_launch.ts",
+        name = "scripted_signed_in_launch",
+        description = "Launch and sign in (trailhead declared inline in the .ts spec).",
+        trailhead = TrailheadMetadata(to = "scriptedtrailheadapp/web/home"),
+        meta = buildJsonObject {
+          put("trailblaze/supportedPlatforms", buildJsonArray { add(JsonPrimitive("WEB")) })
+          put("trailblaze/toolset", "web_core")
+        },
+      ),
+    )
+  }
+
+  @Test
+  fun `TARGET mode surfaces a trailhead declared inline in a scripted tool's spec, no yaml sidecar`() = runTest {
+    // No stub *.trailhead.yaml exists for this tool anywhere — trailhead-ness comes entirely from
+    // InlineScriptToolConfig.trailhead, the TS-spec-authored path AnalyzerScriptedToolEnrichment
+    // populates from `TrailblazeTypedToolSpec.trailhead`. Pins that computeRoleNames' scripted-tool
+    // union works even when the YAML-side index (discoverShortcutsAndTrailheads) is empty.
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(scriptedTrailheadTarget) },
+      currentTargetProvider = { scriptedTrailheadTarget },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+      resourceSourceProvider = { stubRoleYamlSource(emptyMap()) },
+    )
+
+    val result = toolSet.toolbox(target = "scriptedtrailheadapp")
+    val obj = json.parseToJsonElement(result).jsonObject
+    val trailheadTools = obj["trailheadTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+
+    assertContains(
+      trailheadTools, "scripted_signed_in_launch",
+      "expected the scripted tool's inline trailhead to surface with no .trailhead.yaml sidecar. Got: $trailheadTools",
+    )
+  }
+
+  @Test
+  fun `INDEX mode surfaces a scripted tool's inline trailhead for the current target`() = runTest {
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(scriptedTrailheadTarget) },
+      currentTargetProvider = { scriptedTrailheadTarget },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+      resourceSourceProvider = { stubRoleYamlSource(emptyMap()) },
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+    val trailheadTools = obj["trailheadTools"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+
+    assertContains(
+      trailheadTools, "scripted_signed_in_launch",
+      "expected INDEX mode to surface the current target's scripted inline trailhead too. Got: $trailheadTools",
     )
   }
 

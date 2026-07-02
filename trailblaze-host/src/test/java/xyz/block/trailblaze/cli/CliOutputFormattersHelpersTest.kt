@@ -84,6 +84,91 @@ class CliOutputFormattersHelpersTest {
     assertEquals("\n\n**Suggestion:** retry", tail)
   }
 
+  @Test
+  fun `matchStatusHeader exposes the cleaned verb and inline message`() {
+    val match = matchStatusHeader("**✅ Done** — Executed tapOnPoint")
+    assertEquals("Done", match?.verb)
+    assertEquals("Executed tapOnPoint", match?.message)
+  }
+
+  @Test
+  fun `matchStatusHeader reports a null message for a verb-only header`() {
+    val match = matchStatusHeader("**✅ Done**")
+    assertEquals("Done", match?.verb)
+    assertNull(match?.message)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // layoutStatusBody — inline vs. detached rendering of the result body
+  // ─────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `single-line message stays inline on the breadcrumb`() {
+    val match = StatusHeaderMatch("→ Executed — Tapped Checkout", 0, "Executed", "Tapped Checkout")
+    // No continuation before the screen marker.
+    val layout = layoutStatusBody(match, bodyAfterHeader = "\n\n")
+    assertEquals("→ Executed — Tapped Checkout", layout.breadcrumb)
+    assertNull(layout.detachedBody)
+  }
+
+  @Test
+  fun `multi-line message detaches under a bare verb breadcrumb, preserving its shape`() {
+    // The regression this fixes: a JSON payload from `trailblaze tool <read-tool>` used to
+    // jam its first line (`{`) into the breadcrumb (`→ Done — {`). It now detaches whole.
+    val json = "{\n    \"appIds\": [\n        \"android\",\n        \"com.example.app\"\n    ]\n}"
+    val text = "**✅ Done** — $json\n\n**Screen:** Home | [button] Settings"
+    val screenIdx = text.indexOf("**Screen:** ")
+    val match = matchStatusHeader(text.substring(0, screenIdx))!!
+    val bodyAfterHeader = text.substring(match.endIdx, screenIdx)
+
+    val layout = layoutStatusBody(match, bodyAfterHeader)
+
+    assertEquals("→ Done", layout.breadcrumb)
+    assertEquals(json, layout.detachedBody)
+  }
+
+  @Test
+  fun `suggestion or hint body stays inline for the caller's middle slice`() {
+    // A `**Suggestion:**` marker after the message is NOT part of the message, so the
+    // breadcrumb keeps its inline single-line message and the marker falls to the middle slice.
+    val match = StatusHeaderMatch("→ Needs input — provide a step", 0, "Needs input", "provide a step")
+    val layout = layoutStatusBody(match, bodyAfterHeader = "\n\n**Suggestion:** retry")
+    assertEquals("→ Needs input — provide a step", layout.breadcrumb)
+    assertNull(layout.detachedBody)
+  }
+
+  @Test
+  fun `verb-only header has no detached body`() {
+    val match = StatusHeaderMatch("→ Done", 0, "Done", null)
+    val layout = layoutStatusBody(match, bodyAfterHeader = "")
+    assertEquals("→ Done", layout.breadcrumb)
+    assertNull(layout.detachedBody)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // isMisuseResult — MISUSE markers only count inside an error result
+  // ─────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `misuse fires on a daemon error whose message carries a marker`() {
+    assertTrue(isMisuseResult("**❌ Error** — Unknown tool: tap_on_text. Use toolbox() to see available tools."))
+    assertTrue(isMisuseResult("**❌ Error** — Tool not valid for the current device/target: openUrl."))
+    assertTrue(isMisuseResult("""{"error":"Unknown tool: foo"}"""))
+  }
+
+  @Test
+  fun `misuse does NOT fire when a SUCCESS payload merely contains a marker phrase`() {
+    // Regression guard for the read-tool payload path: a successful tool's output that happens
+    // to mention a marker phrase must not be misreported as EXIT=3.
+    assertFalse(isMisuseResult("**✅ Done** — {\n    \"note\": \"Unknown tool handling is documented\"\n}"))
+    assertFalse(isMisuseResult("**✓ Executed** — output mentioning not valid for the current device/target"))
+  }
+
+  @Test
+  fun `misuse does NOT fire on a generic error without a marker`() {
+    assertFalse(isMisuseResult("**❌ Error** — Action failed: device disconnected"))
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // screenSummaryDuplicatesAnswer
   // ─────────────────────────────────────────────────────────────────────────

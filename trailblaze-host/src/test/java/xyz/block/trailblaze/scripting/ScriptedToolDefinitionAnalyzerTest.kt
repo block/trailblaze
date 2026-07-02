@@ -1680,6 +1680,110 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — trailhead nested object is extracted when authored`() = runBlocking {
+    // `trailhead` is the one recognized `TrailblazeTypedToolSpec` field shaped as a nested
+    // object (`{ to, dynamic }`) rather than a primitive/array — pins that `literalValueOf`'s
+    // new object-literal branch round-trips it into `ScriptedToolDefinition.spec["trailhead"]`
+    // as a plain JSON object, same as the YAML `*.trailhead.yaml` sidecar's `trailhead:` block.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-trailhead-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "trailheadTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const trailheadTool = trailblaze.tool<I, O>(
+        |  { trailhead: { to: "myapp/android/home_signed_in" } },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    val trailhead = spec["trailhead"]?.jsonObject
+      ?: fail("expected `trailhead` object in spec; got: $spec")
+    assertEquals(
+      JsonPrimitive("myapp/android/home_signed_in"),
+      trailhead["to"],
+    )
+    assertNull(trailhead["dynamic"], "expected dynamic absent when not authored")
+  }
+
+  @Test
+  fun `with-spec overload — trailhead dynamic flag is extracted when authored`() = runBlocking {
+    // Parallel coverage for the `dynamic: true` shape (a trailhead whose destination varies by
+    // input, e.g. a deep-link launcher) — the other half of the TrailheadSpec/TrailheadMetadata
+    // mutual-exclusion contract.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-trailhead-dynamic-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "dynamicTrailheadTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const dynamicTrailheadTool = trailblaze.tool<I, O>(
+        |  { trailhead: { dynamic: true } },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    val trailhead = spec["trailhead"]?.jsonObject
+      ?: fail("expected `trailhead` object in spec; got: $spec")
+    assertEquals(JsonPrimitive(true), trailhead["dynamic"])
+    assertNull(trailhead["to"], "expected to absent when not authored")
+  }
+
+  @Test
+  fun `with-spec overload — a __proto__ key in a nested object is captured as a plain property`() = runBlocking {
+    // Regression test for the prototype-pollution hardening in `objectLiteralValueOf`
+    // (`Object.create(null)` instead of `{}`). Before that fix, assigning
+    // `result["__proto__"] = value` on a plain `{}` accumulator mutated the object's
+    // prototype instead of setting an own property, so `__proto__` silently vanished from
+    // `Object.keys` and never reached the JSON envelope — an author-authored `__proto__`
+    // field inside `trailhead: {...}` (or any future nested-object spec field) would be
+    // dropped without a trace. Pins that it now round-trips as an ordinary string key.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-proto-key-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "protoKeyTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |interface O { y: string; }
+        |
+        |export const protoKeyTool = trailblaze.tool<I, O>(
+        |  { trailhead: { to: "app/home", "__proto__": { polluted: true } } },
+        |  async () => ({ y: "" }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    val trailhead = spec["trailhead"]?.jsonObject
+      ?: fail("expected `trailhead` object in spec; got: $spec")
+    assertEquals(JsonPrimitive("app/home"), trailhead["to"])
+    val proto = trailhead["__proto__"]?.jsonObject
+      ?: fail(
+        "expected '__proto__' captured as a plain own key on the trailhead object; got: $trailhead " +
+          "(if this is null, __proto__ assignment silently mutated the accumulator's prototype " +
+          "instead of setting an own property — the exact regression this test guards against)",
+      )
+    assertEquals(JsonPrimitive(true), proto["polluted"])
+  }
+
+  @Test
   fun `bare-handler overload — spec is null when no spec object is passed`() = runBlocking {
     // The bare-handler form (arg 0 is an arrow/function) carries no spec, so
     // `ScriptedToolDefinition.spec` must be null — never an empty object. The

@@ -71,7 +71,7 @@ A unified trail file is a YAML mapping with exactly two top-level keys:
 
 | Key | Purpose | Cardinality |
 | :--- | :--- | :--- |
-| `config` | Identity, target, device list, context, memory, metadata | Singleton |
+| `config` | Identity, target, optional per-classifier driver map, context, memory, metadata | Singleton |
 | `trail` | The test — ordered list of steps | List |
 
 There is no separate `trailhead:`, `setup:`, or `teardown:` section. Trailhead
@@ -114,8 +114,6 @@ Each entry in `trail:` is a map with this shape:
 config:
   id: myapp/login
   target: myapp
-  devices:
-    - android-phone
   memory:
     email: "test@example.com"
 
@@ -133,8 +131,11 @@ trail:
               contentDescriptionRegex: Money|navigationMoney
 ```
 
-No `on:` wrapper, no `tools:` wrapper, no platform field at the file level —
-just the `devices:` declaration in config and per-step classifier keys.
+No `on:` wrapper, no `tools:` wrapper, no platform field at the file level, and
+— because this trail doesn't need a driver pin — no `devices:` block at all.
+The supported device set is derived from the per-step classifier keys
+(`android-phone` here). Add a `devices:` map (see below) only when a classifier
+needs a specific driver.
 
 ### Example — multi-platform with classifier hierarchy
 
@@ -142,10 +143,9 @@ just the `devices:` declaration in config and per-step classifier keys.
 config:
   id: myapp/checkout
   target: myapp
-  devices:
-    - android-phone
-    - android-tablet
-    - ios
+  devices:                            # Only classifiers that need a driver pin
+    android: ANDROID_ONDEVICE_ACCESSIBILITY
+    ios: IOS_HOST
   memory:
     email: "test@example.com"
 
@@ -201,10 +201,13 @@ few concrete examples against the trail above:
 
 When no match is found at any level, the step is a **no-op at runtime** and
 `trailblaze check` raises a **coverage warning** (because `android-tablet`
-was declared in `config.devices:` but the step provides no recording reachable
-via the hierarchy). The runtime never errors on missing recordings — execution
-continues to the next step, and any real test breakage shows up downstream
-(e.g., a subsequent assertion fails because the screen state never advanced).
+appears among the trail's recorded classifiers on other steps but this step
+provides no recording reachable via the hierarchy). The supported device set is
+derived from the classifiers that appear across the trail's recordings — not
+from a declared list. The runtime never errors on missing recordings —
+execution continues to the next step, and any real test breakage shows up
+downstream (e.g., a subsequent assertion fails because the screen state never
+advanced).
 
 ### Classifier hierarchy resolution
 
@@ -213,11 +216,9 @@ Resolution per step, given a device classifier `X`:
 1. If the step has `X:` declared (exact match), use that.
 2. Otherwise, walk up the classifier hierarchy looking for a broader match
    (`android-phone` → `android`).
-3. If no match is found, the step is a no-op for this device. If the device
-   was declared in `config.devices:`, `trailblaze check` surfaces it as a
-   coverage warning. If the device was *not* declared in `config.devices:`,
-   that's also a coverage warning (a recording exists for an undeclared
-   device class).
+3. If no match is found, the step is a no-op for this device. If that device
+   class appears among the trail's recorded classifiers on other steps,
+   `trailblaze check` surfaces this step as a coverage gap for it.
 
 ### `config:` fields
 
@@ -225,20 +226,83 @@ Resolution per step, given a device classifier `X`:
 | :--- | :--- | :--- | :--- |
 | `id` | string | yes | Stable identifier; convention is the source-system path (e.g. `testsystem/suite_NNNN/section_NNNN/case_NNNN`). |
 | `target` | string | yes | Target name from the trailmap manifest. |
-| `devices` | list of classifier names | recommended | What the test claims to support. Inherited from the trailmap manifest's `platforms:` if omitted. Soft-validated by `trailblaze check`. |
+| `description` | string | optional | Human-readable summary of the test. Round-trips losslessly to/from the v1 `TrailConfig.description` and is surfaced at runtime (e.g. as a display label). |
+| `devices` | map of classifier → driver | optional | Per-classifier driver pins (e.g. `{android: ANDROID_ONDEVICE_ACCESSIBILITY, ios: IOS_HOST}`) for trails whose recordings are driver-specific. Resolved closest-wins for the device under test (like recordings), then lowered to the single v1 `TrailConfig.driver` for that run. **Omit the whole block** when no classifier needs a driver pin — the supported device set is derived from the recorded classifier keys, and the driver resolves at run time (`--driver` flag > app setting > device). The `--driver` flag still overrides a pin. |
 | `context` | string | optional | Free-form context injected into the LLM system prompt. |
 | `memory` | map of name → value | optional | Pre-seeded variables for `{{name}}` interpolation in NL and tool params. |
 | `metadata` | map | optional | Informational only — never read at runtime. Used for traceability (case IDs, URLs, etc.). |
 
 Retired from the legacy v1/v2 per-platform files:
 
-- **`platform:`** (singular) — replaced by `devices:` (plural, granular).
-- **`driver:`** — driver selection is now a runtime property derived from
-  the device under test plus the trailmap's driver preferences. Storing it
-  per-file forces unnecessary duplication and creates a sync problem.
+- **`platform:`** (singular) — gone. The set of device classes a trail supports
+  is derived from the per-step classifier keys, not from a declared list.
 - **`title:`** — was useful when each platform file had its own identity;
   with a single file per test, the `id` field covers identification and
   the human-readable title can live in `metadata.title` if needed.
+- **A standalone `devices:` *list*** — an earlier draft of this format carried
+  a `devices: [android-phone, ios, …]` coverage-declaration list. It was
+  dropped: the supported device set is fully derivable from the classifiers
+  that appear in the recordings, so a hand-maintained list is a second source
+  of truth that only drifts. The `devices:` **key still exists**, but it is now
+  a *map* (classifier → driver, below), not a list — and it's optional.
+
+> **`driver:` — folded into an optional per-classifier `devices:` map (revised).**
+> Driver was originally retired on the theory that it's fully derivable at run
+> time from the device plus the trailmap's driver preferences. In practice
+> there is **no trailmap-level per-platform driver preference for Android**, and
+> trails legitimately mix drivers within one trailmap+device (e.g. some Clock
+> trails record against `ANDROID_ONDEVICE_ACCESSIBILITY`, one against
+> `ANDROID_ONDEVICE_INSTRUMENTATION`). A trail whose recordings are
+> driver-specific (an `androidAccessibility` selector only replays on the
+> accessibility driver) would silently lose that pin. It is **per-classifier**,
+> not a single scalar — a multi-platform trail needs a different driver for
+> `android:` than for `ios:`, which one scalar can't express.
+>
+> Rather than add a *second* classifier-keyed map (`drivers:`) alongside a
+> `devices:` coverage list, we collapsed both into a single `devices:` **map**
+> keyed by classifier whose value is that classifier's driver
+> (`devices: { android: ANDROID_ONDEVICE_ACCESSIBILITY, ios: IOS_HOST }`). The
+> keys call out the device classes that need a specific driver (`android` vs
+> `android-tablet` vs `ios-iphone`, …); the value is the driver. It's resolved
+> closest-wins for the device under test with the same
+> [`TrailblazeClassifierLineage`](#classifier-hierarchy-resolution) the
+> recordings use, then lowered to the single v1 `TrailConfig.driver` for that
+> run (the `--driver` flag still overrides). Omit the block entirely and the
+> driver resolves at run time as above.
+
+### Per-platform config in a trail — classifier-keyed maps, not a platform root
+
+The driver pin raised a general question: when a trail config field is
+platform-specific, should we nest it under a platform root
+(`platforms: { android: { driver: … } }`) the way the *trailmap* manifest's
+`PlatformConfig` does? The decision: **no — express each platform-specific
+trail-config field as its own classifier-keyed map** (`devices: { android: … }`),
+resolved closest-wins by the same lineage the recordings use.
+
+Rationale:
+
+- **The trail config is deliberately the platform-agnostic layer.** Identity,
+  intent, `memory`, `metadata`, `context` are one value shared across every
+  platform the trail runs on. The rich per-platform config — `app_ids`,
+  `tool_sets`, the available driver list, `base_url`, `min_build_version` —
+  already lives platform-rooted in the trailmap's `PlatformConfig`, which is
+  where it belongs. The per-classifier driver pin is the lone per-trail,
+  per-platform field today.
+- **Recordings are classifier-keyed, not platform-rooted.** Each step is
+  `{ android: [...], ios: [...] }` — the classifier is a map key, not a grouping
+  node with config underneath. The classifier-keyed `devices:` map mirrors that
+  exactly; a `platforms:` root block would *diverge* from it.
+- **A platform root is over-structuring for one field.** Nesting a single scalar
+  under a nested object earns nothing.
+
+**When to revisit:** if a *second* per-platform trail-config field lands, the
+map value stops being a bare driver string and becomes an object
+(`devices: { android: { driver: …, <field>: … } }`) — at which point it has
+effectively become a per-classifier `PlatformConfig`, and grouping under a
+classifier root is the right call (that's exactly what made the trailmap's
+`PlatformConfig` platform-rooted — many fields). The likeliest second field is
+per-platform `memory` (a different test account per platform — a drift pain
+called out in the Background above). Until then, one field, one scalar value.
 
 ### Trailhead semantics — tool tag, not section
 
@@ -365,9 +429,12 @@ For each test folder containing one or more `*.trail.yaml` files:
 1. **Load every platform file.** The filename minus `.trail.yaml` is the
    device classifier (e.g. `android-phone.trail.yaml` → `android-phone`).
 2. **Canonicalize config.** Take the first file's `config:` block. Drop
-   `driver:`, `platform:`, and `title:` (per the unified schema changes).
-   Promote `id`, `target`, `context`, `memory`, `metadata` verbatim.
-   Compute `devices:` from the union of present-file classifiers.
+   `platform:` and `title:` (per the unified schema changes). Promote `id`,
+   `target`, `description`, `context`, `memory`, `metadata` verbatim. Build the
+   `devices:` map by keying each per-platform file's `driver:` under that file's
+   classifier (so a multi-platform trail keeps each platform's driver). If no
+   file pinned a driver, omit `devices:` entirely — the supported device set is
+   derived from the recorded classifier keys.
 3. **Reconcile NL.** For each step index, gather the NL strings from every
    platform file. If they agree, that's the canonical NL. If they disagree
    (drift), emit a warning comment block at the top of the merged file
@@ -377,9 +444,11 @@ For each test folder containing one or more `*.trail.yaml` files:
    classifier `<C>`, take its recording at that step index and place it
    under `<C>:` in the merged step. If a platform file had `# No recordings
    generated...` style absence, that classifier is omitted at this step.
-5. **Auto-emit `recordable: false`** for steps where *no* platform produced
-   a recording. (These are typically steps where no stable selector exists
-   and the agent is expected to handle the step every run.)
+5. **Leave `recordable` at its default (`true`)** for steps where no platform
+   produced a recording. A step with no recording just runs via the agent and
+   can be recorded later — that's "not recorded yet," not "never record." The
+   migrator never auto-emits `recordable: false`; authors set it by hand for a
+   deliberately LLM-only step.
 6. **Collapse equivalent sub-classifiers.** For each family
    (`android` = `android-phone` + `android-tablet`, `ios` = `ios-iphone`
    + `ios-ipad`, etc. — driven by the classifier hierarchy registered in
@@ -410,8 +479,8 @@ that the migration tool will execute against every workspace.
 | `step:` + `recording: tools: […]` | `step:` + `<classifier>: [tool, tool, …]` |
 | `verify:` keyword | `step:` (verify intent is expressed in NL + assertion tools) |
 | `recording:` wrapper | removed |
-| `platform: android` (singular) | `devices: [android-phone, android-tablet, …]` (plural, granular) |
-| `driver:` field | removed (determined at runtime) |
+| `platform: android` (singular) | removed — supported device set is derived from the per-step classifier keys |
+| `driver:` field | folded into an optional per-classifier `config.devices:` map (keyed by the file's classifier; omit the whole block to resolve at runtime; pins survive for driver-specific recordings) |
 | `title:` field | removed (or moved into `metadata.title` if needed) |
 | One file per platform | One file per test |
 | `blaze.yaml` (NL-only sibling) | absorbed into the unified file |
@@ -451,7 +520,7 @@ After migration, `trailblaze check` produces a per-test coverage matrix:
 
 ```
 trail: myapp/checkout
-devices: [android-phone, android-tablet, ios]
+device classes (from recordings): android-phone, android-tablet, ios
 
                                      android-phone   android-tablet   ios
 Step 1: Launch myapp                  ⚠               ✓                ✓
@@ -462,7 +531,8 @@ Step 4: Skip on tablet                ✓               — (explicit [])  ✓
 
 - ✓ = recording present (direct or via classifier hierarchy)
 - — = explicit `[]` or `recordable: false`
-- ⚠ = declared in `config.devices:` but no recording — possible gap
+- ⚠ = this device class appears in the trail's recordings elsewhere but not on
+  this step — possible gap
 
 Soft warnings by default. Teams that want hard-fail can opt in with
 `--strict`.
@@ -476,8 +546,9 @@ Soft warnings by default. Teams that want hard-fail can opt in with
 - Per-step classifier keys (`ios:`, `android-phone:`) read like CSS / Tailwind
   responsive overrides — base case at family level, specific overrides
   where reality diverges.
-- `devices:` field in `config:` makes per-test platform coverage declarative
-  and verifiable. Coverage matrix is a real artifact, not a heuristic.
+- Per-test platform coverage is derived from the recorded classifier keys —
+  no hand-maintained list to drift. The coverage matrix is a real artifact
+  computed from the recordings, not a heuristic.
 - Classifier hierarchy does real work — sub-classifiers fold into broader
   classifiers when recordings agree, surface separately when they don't.
 - `reason:` field stays for human readability without being load-bearing
@@ -542,7 +613,119 @@ Soft warnings by default. Teams that want hard-fail can opt in with
    *none* of them? Today the answer is "no-op + check warning." Worth
    revisiting once the format has been in use long enough to see whether
    that produces actionable signal or just noise.
-5. **Trailmap-level `devices:` inheritance.** A test that omits `config.devices:`
-   inherits the full set from its trailmap manifest. The interaction between
-   trailmap-level platform support and per-test override needs a clear spec
-   and validator behavior (warn on undeclared overlap, etc.).
+5. **Trailmap-level default drivers.** A trail's `config.devices:` map pins a
+   driver per classifier only when it needs to override the default. Whether
+   the trailmap manifest should carry a per-classifier default driver that a
+   trail inherits (and a per-test `devices:` entry overrides) needs a clear
+   spec and validator behavior. Today there is no trailmap-level per-platform
+   Android driver preference — which is exactly why the per-trail pin exists.
+
+## Revision — 2026-07-01: recordings grouped under `recording:`, trailhead as one tool, `config` optional
+
+Working the contract against real multi-platform authoring surfaced a structural problem: a step put
+`step:` (a fixed schema key) beside dynamic device-classifier keys (`android-phone:`) in one map —
+known and dynamic keys sharing a level, which reads wrong and is awkward to model. This revision fixes
+that and pins the trailhead contract. It **supersedes** the "File structure", "Step structure", and
+"Trailhead semantics — tool tag, not section" sections above.
+
+### File structure — three top-level keys (`config` and `trailhead` optional)
+
+| Key | Purpose | Required |
+| :-- | :-- | :-- |
+| `config` | Identity, target, devices, memory, metadata | **Optional** — every field defaults; absent = empty config (restores v1) |
+| `trailhead` | The deterministic step 0 — one bootstrap tool per platform | Optional |
+| `trail` | The test — ordered list of steps | **Required, non-empty** |
+
+`config` is no longer required — all its fields already default (no `target` → generic tools; no
+`devices` → inherit from the trailmap manifest; no `id` → still runs), so the minimal valid file is
+just `trail:`. `config` and `trailhead` stay **separate siblings** (not `config` folded into
+`trailhead`): `config` is passive metadata, `trailhead` is an executable action. `trail:` is required
+because it is the one key that makes the file a *test* — a trailhead-only file would run its bootstrap
+and assert nothing (a vacuous always-pass).
+
+### Step structure — device classifiers nest under `recording:`
+
+A step's only top-level keys are **reserved schema** (`step`, `recording`, `recordable`). Every device
+classifier lives **under `recording:`** — the two vocabularies never share a level.
+
+```yaml
+trail:
+  # NL + per-device recordings (broad `android` and specific `android-phone`)
+  - step: Add a latte to the cart and open checkout
+    recording:
+      android:                       # broad family
+        - tapOn: { text: Latte }
+        - tapOn: { text: Add to cart }
+      android-phone:                 # most-specific wins at run time
+        - tapOn: { id: menu_latte }
+        - swipeUp: {}
+        - tapOn: { id: cart_fab }
+      ios:
+        - tapOn: { label: Latte }
+        - tapOn: { label: Cart }
+
+  - step: Confirm the order summary shows exactly one item   # NL-only (agent solves live)
+
+  - step: Verify the order total is shown                    # NL + assertion recording
+    recording:
+      android:
+        - assertVisible: { text: Order total }
+      ios:
+        - assertVisible: { text: Order total }
+```
+
+- **`recording:` is singular** — the common case is a single device type, and it matches the
+  pre-existing `recording:` key. Each classifier maps to an ordered **list** of tool calls.
+- **`step:` (NL) is required; `recording:` is optional.** Two shapes: NL-only (blazed live) or
+  NL + per-device recording. **There is no recording-only step** — natural language is forced so
+  every step carries its intent (the trail stays legible and self-healing). This is the v2
+  "no bare tool blocks — every entry has intent" principle, kept.
+- **No default / inline recording.** Every recording is explicitly device-keyed — a cross-platform
+  test spans many device types, and an implicit default would let an author record one platform and
+  never realize the others are unhandled.
+- **Resolution unchanged** — most-specific-first closest-wins (`android-phone` → `android`); a miss
+  degrades to solving the NL live. The runtime/LLM only sees the NL plus the recording for the device
+  under test.
+- **One entry type: `step`.** There is no `verify:` entry and no per-step assertion-only flag. "Does
+  not modify state" ≠ "verify" (a read-only tool like `listInstalledApps` is not a verification), so
+  read-only-ness is a property of the *tool*, not the step. Verification is a step whose NL says
+  "verify X" and whose recording holds assertion tools; the LLM picks non-modifying tools from intent.
+
+### Trailhead — a first-class section: one tool per platform
+
+This **supersedes** "Trailhead semantics — tool tag, not section". The trailhead is an explicit,
+optional top-level element — the single "get to the start" call (step 0). Same outer shape as a step,
+but its per-device recording is **exactly one tool** (a single function call), not a list:
+
+```yaml
+config:
+  target: myapp
+  memory:
+    account_email: qe-sender@example.com
+
+trailhead:
+  step: Sign in as the QE sender          # NL (required) — intent + what the LLM matches to pick the tool
+  recording:
+    android-phone: { myapp_signInViaUI: { email: "{{memory.account_email}}" } }
+    ios-iphone:    { myapp_ios_signInViaUI: { email: "{{memory.account_email}}" } }
+    web:           { myapp_web_signIn: { email: "{{memory.account_email}}" } }
+```
+
+- **Optional**, at most one, positioned after `config:` and before the first `trail:` step. Runs first
+  and replays deterministically.
+- **One tool per platform** (a map, not a list). The bare-string shorthand
+  (`trailhead: myapp_freshInstall`) is **removed** — a trailhead is always a tool call with its params.
+- **NL required** — it is the signal the LLM uses to pick the trailhead tool, and NL is forced
+  everywhere (no NL-less trailhead, no recording-only step).
+- **A trailhead is a tool wearing a role.** The same trailhead-tagged tool is a normal tool that can
+  also be called later in a regular `trail:` step (e.g. relaunch the app mid-flow). Multi-primitive
+  bootstraps compose *inside* the trailhead tool's own definition (`*.trailhead.yaml` / `.trailhead.ts`
+  / `@TrailblazeToolClass(trailheadTo=…)`), so the trail always sees a single call. The role governs
+  where it can bootstrap from (any state, step 0); it never restricts the tool elsewhere.
+
+### Migration
+
+This changes the step shape that shipped with the unified format (classifier keys beside `step:` →
+grouped under `recording:`; `step` now optional; `config` optional; trailhead reworked to a single tool
+per platform). Only a handful of files use the unified format and there are no external users, so this
+is a **hard cut** — migrate the few files, delete the old shape, no shim.

@@ -87,10 +87,15 @@ object TrailRecordings {
    * drops the [DOT_TRAIL_DOT_YAML_FILE_SUFFIX]. A path with no `trails/` segment is
    * returned with only the suffix removed (best-effort — rare for authored trails).
    *
+   * The unified per-test file ([UNIFIED_TRAIL_FILENAME]) takes its identity from its
+   * enclosing directory, so its filename segment is dropped rather than a `.trail.yaml`
+   * suffix — otherwise it would render as `.../trail.yaml` in reports and the Sessions list.
+   *
    * ```
    * "/Volumes/ci/…/trails/ExperimentalIosTests/set_feature_flag.trail.yaml"
    *     -> "ExperimentalIosTests/set_feature_flag"
    * "trails/EvaluationLongTest/tenKey.trail.yaml" -> "EvaluationLongTest/tenKey"
+   * "trails/clock/open-and-verify-clock-tab/trail.yaml" -> "clock/open-and-verify-clock-tab"
    * ```
    *
    * Why this exists: callers used to strip only a *literal leading* `trails/` prefix
@@ -105,12 +110,19 @@ object TrailRecordings {
    * `.replace('\\', '/')` convention the rest of the codebase uses for string-based
    * path handling.
    */
-  fun shortTrailName(trailFilePath: String): String =
-    trailFilePath
+  fun shortTrailName(trailFilePath: String): String {
+    val relative = trailFilePath
       .replace('\\', '/')
       .substringAfterLast("/trails/")
       .removePrefix("trails/")
-      .removeSuffix(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    return when {
+      // Unified file: identity is the enclosing directory. Drop the `/trail.yaml` segment.
+      relative.endsWith("/$UNIFIED_TRAIL_FILENAME") -> relative.removeSuffix("/$UNIFIED_TRAIL_FILENAME")
+      // A bare `trail.yaml` with no enclosing dir has no better name; leave it as-is.
+      relative == UNIFIED_TRAIL_FILENAME -> relative
+      else -> relative.removeSuffix(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    }
+  }
 
   /**
    * Derives a readable `Suite::test` identity from a trail file path, for sessions that don't
@@ -161,7 +173,9 @@ object TrailRecordings {
    * platform-specific legacy recording (`*.trail.yaml`).
    */
   fun isTrailFile(fileName: String): Boolean =
-    isNlDefinitionFile(fileName) || fileName.endsWith(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    isNlDefinitionFile(fileName) ||
+      isUnifiedTrailFile(fileName) ||
+      fileName.endsWith(DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
 
   /** Returns `true` if [fileName] is the unified per-test trail file. */
   fun isUnifiedTrailFile(fileName: String): Boolean = fileName == UNIFIED_TRAIL_FILENAME

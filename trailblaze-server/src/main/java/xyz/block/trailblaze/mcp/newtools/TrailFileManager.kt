@@ -501,7 +501,16 @@ class TrailFileManager(
   ): EditResult {
     return try {
       val file = validateWithinTrailsDir(File(filePath), filePath)
-      val items = reconstructTrailItems(config, steps)
+      // Preserve a pre-existing `trailhead:` (the deterministic step 0). The edit API operates on
+      // steps only and never exposes the trailhead, so recover it from the file on disk and re-emit
+      // it rather than dropping it when the file is rewritten.
+      // Let a decode failure propagate to the catch below: overwriting a file we couldn't parse
+      // would silently drop a possibly-present trailhead — the exact data loss this recovery exists
+      // to prevent — so we abort the save instead of rewriting without the original trailhead.
+      val existingTrailhead = trailblazeYaml.decodeTrail(file.readText())
+        .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+        .firstOrNull()
+      val items = reconstructTrailItems(config, steps, existingTrailhead)
       val yamlContent = trailblazeYaml.encodeToString(items)
       file.writeText(yamlContent)
 
@@ -571,6 +580,11 @@ class TrailFileManager(
           // Standalone tools (not preceded by prompts) — skip or represent as synthetic step
           // These are rare; typically tools follow prompts.
         }
+        is TrailYamlItem.TrailheadTrailItem -> {
+          // The trailhead (step 0) is NOT an editable step — surfacing it here would let an edit
+          // move/delete it or flatten it into a prompt on save. It's preserved verbatim across
+          // save by reconstructTrailItems (which re-reads it from disk). Skip it here.
+        }
         is TrailYamlItem.ConfigTrailItem -> {
           // Config handled separately, skip here
         }
@@ -589,11 +603,17 @@ class TrailFileManager(
   private fun reconstructTrailItems(
     config: TrailConfig?,
     steps: List<EditableStep>,
+    trailhead: TrailYamlItem.TrailheadTrailItem? = null,
   ): List<TrailYamlItem> {
     val items = mutableListOf<TrailYamlItem>()
 
     if (config != null) {
       items.add(TrailYamlItem.ConfigTrailItem(config))
+    }
+
+    // The trailhead is step 0 — it sits after config and before any prompt steps.
+    if (trailhead != null) {
+      items.add(trailhead)
     }
 
     if (steps.isNotEmpty()) {

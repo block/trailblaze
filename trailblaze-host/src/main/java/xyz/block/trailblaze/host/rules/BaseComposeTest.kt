@@ -206,6 +206,12 @@ class BaseComposeTest(
               useRecordedSteps = useRecordedSteps,
               selfHeal = config.selfHeal,
             )
+          is TrailYamlItem.TrailheadTrailItem ->
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem ->
             trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem ->

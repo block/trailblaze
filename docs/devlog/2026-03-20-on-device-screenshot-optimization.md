@@ -38,7 +38,7 @@ OpenAI's tile grid, and is exactly 2 Google tiles.
 
 ### Image Format Comparison
 
-Theoretical estimates vs **measured CI data** (accessibility test suite, phone screenshot capture):
+Theoretical estimates vs **measured CI data** (phone screenshot capture):
 
 | Format | Estimated | Measured (768x1365 phone screenshot) |
 | :--- | :--- | :--- |
@@ -64,7 +64,7 @@ WebP is universally supported across all platforms in the Trailblaze stack:
 We initially tried 1024x512 to further reduce memory, but CI data showed:
 - The format change (PNG → WebP) was the dominant win (~4x)
 - Resolution reduction added ~2x more savings but degraded LLM quality
-- Accessibility tests at 1024x512 had worse pass rates than main
+- 1024x512 degraded LLM vision quality enough to reduce reliability versus the baseline resolution
 
 Since the format fix alone provides sufficient memory savings, we kept full 1536x768
 resolution to preserve LLM vision quality.
@@ -140,4 +140,4 @@ extensions regardless of which encoding path produced the bytes.
 ## Also Fixed
 
 - `List.removeFirst()` → `removeAt(0)` in `PromptStepStatus.kt`. Java 21+ API not available
-  on Android runtime. Caused ~31 test failures across 3 CI steps.
+  on Android runtime. Caused test failures across multiple CI steps.

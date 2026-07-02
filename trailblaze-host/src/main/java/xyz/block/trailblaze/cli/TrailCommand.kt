@@ -992,8 +992,16 @@ open class TrailCommand : Callable<Int> {
         } else {
           allDevices
         }
-        return candidates.find { it.trailblazeDeviceId.instanceId == specInstanceId }
-          ?: candidates.find { it.trailblazeDeviceId.instanceId.contains(specInstanceId) }
+        // The same physical instanceId is listed once per driver variant (Android exposes
+        // ANDROID_ONDEVICE_INSTRUMENTATION and ANDROID_ONDEVICE_ACCESSIBILITY for one emulator).
+        // Match the instanceId first (exact, then substring), then — among those — prefer the
+        // variant whose driver matches the resolved [trailDriverType] (the trail's `devices:`
+        // pin / --driver / app-setting). Without the driver preference we'd return the first
+        // listed variant and silently ignore the pin.
+        val instanceMatches = candidates.filter { it.trailblazeDeviceId.instanceId == specInstanceId }
+          .ifEmpty { candidates.filter { it.trailblazeDeviceId.instanceId.contains(specInstanceId) } }
+        return (trailDriverType?.let { dt -> instanceMatches.find { it.trailblazeDriverType == dt } }
+          ?: instanceMatches.firstOrNull())
           ?: run {
             Console.error("Error: Device '${deviceSpec}' not found.")
             printAvailableDevices(allDevices)
@@ -1104,21 +1112,32 @@ open class TrailCommand : Callable<Int> {
       Console.log("YAML content (${yamlContent.length} bytes)")
     }
 
+    // Resolve the device's classifiers from the `--device` spec (cached; the plan step already
+    // warmed this) so a unified trail's per-classifier `devices:` driver pin resolves
+    // closest-wins BEFORE device selection. Without this, `extractTrailConfig` has no device to
+    // resolve the map against, returns a null driver, and the trail silently runs on the
+    // device's default driver instead of the one it pins (e.g. ANDROID_ONDEVICE_ACCESSIBILITY).
+    val deviceClassifiersForDriver = DeviceClassifierResolver.resolveFromSpec(device)
+
     // Parse trail config to extract driver and platform hints (before device loading so we can
     // short-circuit for web/compose trails that don't need Android/iOS device discovery).
     val trailConfig = try {
-      createTrailblazeYaml().extractTrailConfig(yamlContent)
+      createTrailblazeYaml().extractTrailConfig(yamlContent, deviceClassifiersForDriver)
     } catch (_: Exception) {
       null
     }
 
     // Resolve driver type: CLI --driver flag > trail config driver field > app setting.
-    val appSettingDriverType = trailConfig?.platform
-      ?.let { TrailblazeDevicePlatform.fromString(it) }
-      ?.let { platform ->
-        app.deviceManager.settingsRepo.serverStateFlow.value
-          .appConfig.selectedTrailblazeDriverTypes[platform]
-      }
+    // The app-setting lookup keys on platform. v1 configs carry `platform:` directly; unified
+    // configs never do (it's derived), so fall back to the platform implied by the resolved
+    // device classifiers — otherwise the saved per-platform driver (e.g. the user's
+    // `selectedTrailblazeDriverTypes[ANDROID]`) is silently ignored for every unified trail.
+    val resolvedPlatform = trailConfig?.platform?.let { TrailblazeDevicePlatform.fromString(it) }
+      ?: deviceClassifiersForDriver.firstNotNullOfOrNull { TrailblazeDevicePlatform.fromString(it.classifier) }
+    val appSettingDriverType = resolvedPlatform?.let { platform ->
+      app.deviceManager.settingsRepo.serverStateFlow.value
+        .appConfig.selectedTrailblazeDriverTypes[platform]
+    }
     val driverString = driverType ?: trailConfig?.driver ?: appSettingDriverType?.name
     val trailDriverType = driverString?.let { ds ->
       TrailblazeDriverType.fromString(ds)
@@ -1665,6 +1684,13 @@ open class TrailCommand : Callable<Int> {
    */
   internal fun shouldSaveRecording(trailFile: File, deviceClassifiers: List<String>): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
+    // Never write a legacy `<classifier>.trail.yaml` next to a unified `trail.yaml`. The unified
+    // file carries its recordings inline and is the source of truth; the v1-style save-back here
+    // can't update it, so it would only drop a divergent legacy sibling into a (freshly-migrated)
+    // directory. Skip regardless of --self-heal. A unified-aware save-back is separate future work.
+    val sourceDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile
+    if (trailFile.isFile && TrailRecordings.isUnifiedTrailFile(trailFile.name)) return false
+    if (sourceDir != null && File(sourceDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return false
     if (resolveEffectiveSelfHeal()) return true
     val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
     return !targetFile.exists()

@@ -30,6 +30,7 @@ export type {
   TrailblazeToolResult,
   TrailblazeToolSpec,
   TrailblazeTypedToolSpec,
+  TrailheadSpec,
   ToolContext,
   EmptyInput,
   TypedToolDefinition,

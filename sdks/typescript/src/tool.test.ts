@@ -18,7 +18,7 @@ import {
   _clearPendingTools,
   type TrailblazeTypedToolSpec,
 } from "./tool.js";
-import { createMemory, type TrailblazeMemory } from "./memory.js";
+import { createMemory, DRAIN_DELTA, type DrainableMemory, type TrailblazeMemory } from "./memory.js";
 
 // Minimal McpServer test double. We only assert on the handler the SDK was registered with,
 // so we capture `(name, spec, handler)` from `registerTool` and call the handler directly
@@ -514,6 +514,95 @@ describe("tool() overload — typed authoring surface", () => {
     await definition({ x: "hi" }, {} as never, fakeClient);
     expect(observedMemory?.get("anything")).toBeUndefined();
     expect(observedMemory?.interpolate("{{missingToken}}")).toBe("");
+  });
+
+  test("typed handler flushes ctx.memory writes to _meta.trailblaze.memoryDelta on the in-process (raw snapshot) path", async () => {
+    // The on-device / in-process QuickJS path hands the adapter a raw `Record<string,string>`
+    // snapshot and has NO external `attachMemoryDelta` wrapper. So the adapter itself must stamp the
+    // handler's `ctx.memory.set(...)` writes onto the result's `_meta.trailblaze.memoryDelta` — the
+    // write-flush the QuickJS path silently dropped before the fix (write-then-read hand-off between two scripted tools).
+    const definition = tool<{ token: string }>(async (input, ctx) => {
+      ctx.memory.set("session_token", input.token);
+      return "stored";
+    });
+    const out = (await definition(
+      { token: "tok-9" },
+      { memory: { existing: "v" } } as never,
+      { tools: {} } as never,
+    )) as { content: unknown[]; _meta: { trailblaze: { memoryDelta: Record<string, string> } } };
+    expect(out._meta.trailblaze.memoryDelta).toEqual({ session_token: "tok-9" });
+    expect(out.content).toEqual([{ type: "text", text: "stored" }]);
+  });
+
+  // Local re-implementation of the synthesized in-process wrapper's `__normalizeResult`
+  // (`sdks/typescript/tools/in-process-wrapper-template.mjs`) — kept minimal and inline rather than
+  // importing the .mjs template (it's a build-time text template, not an importable module). Proves
+  // that whatever `defineTypedTool` returns survives the SAME normalization step production applies
+  // before the Kotlin host ever sees the envelope.
+  function normalizeResultLikeInProcessWrapper(result: unknown): { content: unknown[]; _meta?: unknown } {
+    if (result == null) return { content: [] };
+    if (typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
+      return result as { content: unknown[]; _meta?: unknown };
+    }
+    if (typeof result === "string") return { content: [{ type: "text", text: result }] };
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+
+  test("typed handler returning a plain object still flushes the delta through the in-process wrapper's normalization", async () => {
+    // Code-review regression: a typed tool's `TResult` can be any author-declared object (e.g.
+    // `{ ok: true }`), not just a string. The FIRST cut of the fix bolted `_meta` onto that bare
+    // object, but the synthesized in-process wrapper's `__normalizeResult` only passes an object
+    // through untouched when it ALREADY has a `content` array — a bare `{ ok: true, _meta: {...} }`
+    // would hit its `JSON.stringify` fallback and lose `_meta` (and the memoryDelta inside it)
+    // entirely. `attachMemoryDeltaToResult` must wrap a bare object the same way, so the delta
+    // survives the downstream normalization pass unchanged.
+    interface Output { ok: boolean }
+    const definition = tool<{ token: string }, Output>(async (input, ctx) => {
+      ctx.memory.set("session_token", input.token);
+      return { ok: true };
+    });
+    const out = await definition({ token: "tok-9" }, { memory: {} } as never, { tools: {} } as never);
+
+    // The adapter's own output must already carry a `content` array (not a bare `{ ok, _meta }`).
+    expect(Array.isArray((out as { content?: unknown }).content)).toBe(true);
+
+    // Simulate what production actually does next: hand this to the in-process wrapper's
+    // normalizer. It must pass through unchanged (the `Array.isArray(content)` branch), preserving
+    // `_meta.trailblaze.memoryDelta` for the Kotlin host to apply.
+    const normalized = normalizeResultLikeInProcessWrapper(out) as {
+      _meta: { trailblaze: { memoryDelta: Record<string, string> } };
+      structuredContent?: Output;
+    };
+    expect(normalized._meta.trailblaze.memoryDelta).toEqual({ session_token: "tok-9" });
+    // The typed value itself must still be recoverable by a composing caller.
+    expect(normalized.structuredContent).toEqual({ ok: true });
+  });
+
+  test("typed handler returning an object with NO memory writes is left byte-for-byte unchanged", async () => {
+    // Negative companion: attachMemoryDeltaToResult must not touch a write-free tool's return value
+    // at all — its shape (bare object, no `content`) is exactly what the downstream normalizer
+    // already knows how to handle, so re-wrapping it here would be an unnecessary behavior change.
+    interface Output { ok: boolean }
+    const definition = tool<Record<string, never>, Output>(async (_input, _ctx) => ({ ok: true }));
+    const out = await definition({}, { memory: {} } as never, { tools: {} } as never);
+    expect(out).toEqual({ ok: true });
+  });
+
+  test("typed handler does NOT attach a delta on the subprocess path (already-wrapped TrailblazeMemory)", async () => {
+    // When memory arrives already wrapped (the subprocess/MCP `fromMeta` path), the surrounding
+    // `attachMemoryDelta` in tool.ts owns the flush. The adapter must return the raw handler value
+    // untouched — otherwise the two paths would both wrap. Pins the `memoryIsWrapped` gate: the
+    // write is still buffered on the shared memory for the external drain to pick up.
+    const wrapped = createMemory({});
+    const definition = tool<{ token: string }>(async (input, ctx) => {
+      ctx.memory.set("session_token", input.token);
+      return "stored";
+    });
+    const out = await definition({ token: "tok-9" }, { memory: wrapped } as never, { tools: {} } as never);
+    expect(out).toBe("stored");
+    expect((wrapped as unknown as DrainableMemory)[DRAIN_DELTA]().sets).toEqual({
+      session_token: "tok-9",
+    });
   });
 
   test("imperative tool(name, spec, handler) queues a pending registration", () => {

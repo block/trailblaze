@@ -48,6 +48,25 @@ object IosHostSimctlUtils {
   }
 
   /**
+   * Reads the iOS simulator's current pasteboard (clipboard) content via
+   * `xcrun simctl pbpaste <deviceId>`. Counterpart to [setPasteboard]. Used by the iOS branch
+   * of the cross-platform `mobile_pasteClipboard` tool to read the value `mobile_setClipboard`
+   * wrote, so it can be typed directly (mirroring the Android branch's `InputTextCommand`
+   * approach) instead of relying on Maestro's iOS `PasteTextCommand` (long-press + tap "Paste"
+   * on the system edit menu), which does not reliably complete in simulator/CI environments.
+   */
+  fun getPasteboard(deviceId: String): String {
+    if (!isMacOs()) error("getPasteboard is only supported on macOS hosts")
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "pbpaste", deviceId),
+    ).runProcess {}
+    if (output.exitCode != 0) {
+      error("xcrun simctl pbpaste failed with exit code ${output.exitCode} for device $deviceId")
+    }
+    return output.fullOutput
+  }
+
+  /**
    * Lists the bundle identifiers of the apps installed on the given iOS simulator via
    * `xcrun simctl listapps <deviceId>`. Backs the iOS branch of the cross-platform
    * `mobile_listInstalledApps` tool.

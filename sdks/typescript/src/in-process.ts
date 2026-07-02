@@ -22,6 +22,7 @@ import {
   type EmptyInput,
   type ToolContext,
   type TrailblazeTypedToolSpec,
+  type TrailheadSpec,
   type TypedToolDefinition,
 } from "./tool-core.js";
 
@@ -160,4 +161,10 @@ export const trailblaze = {
 
 // Re-export the slim-relevant authoring types so in-process tool authors get the same type
 // surface (`ToolContext`, `EmptyInput`, `TypedToolDefinition`, `TrailblazeTypedToolSpec`).
-export type { ToolContext, EmptyInput, TypedToolDefinition, TrailblazeTypedToolSpec };
+export type {
+  ToolContext,
+  EmptyInput,
+  TypedToolDefinition,
+  TrailblazeTypedToolSpec,
+  TrailheadSpec,
+};
