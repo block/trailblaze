@@ -187,8 +187,12 @@ class TrailExecutorImpl(
     val startTime = Clock.System.now()
     val stepResults = mutableListOf<StepExecutionResult>()
 
-    // Extract all prompt steps from the trail
-    val promptSteps = trailItems
+    // Extract all prompt steps from the trail. The trailhead (if any) lowers to the leading step 0,
+    // so it runs before the trail's own prompts.
+    val trailheadSteps = trailItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .map { it.trailhead.toPromptStep() }
+    val promptSteps = trailheadSteps + trailItems
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
       .flatMap { it.promptSteps }
 

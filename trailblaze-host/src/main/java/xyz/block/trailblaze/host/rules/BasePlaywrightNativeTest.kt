@@ -260,6 +260,13 @@ open class BasePlaywrightNativeTest(
             selfHeal = config.selfHeal,
             onStepProgress = onStepProgress,
           )
+        is TrailYamlItem.TrailheadTrailItem ->
+          activeRunnerUtil.runPromptSuspend(
+            prompts = listOf(item.trailhead.toPromptStep()),
+            useRecordedSteps = true,
+            selfHeal = config.selfHeal,
+            onStepProgress = onStepProgress,
+          )
         is TrailYamlItem.ToolTrailItem -> activeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { activeRunner.appendToSystemPrompt(it) }
       }

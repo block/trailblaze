@@ -101,6 +101,15 @@ object TrailblazeHostYamlRunner {
     xyz.block.trailblaze.waypoint.WaypointRegistryResolver.scriptedToolEnrichmentProvider = {
       xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
     }
+    // Point waypoint resolution at the SAME active-workspace dir that target/tool discovery uses
+    // (`WorkspaceConfigDirHolder`), so a workspace selected in the desktop app / Trail Runner — which
+    // installs it without changing the JVM cwd — resolves app waypoints too. The holder lives in
+    // trailblaze-models (JVM-only); this host module bridges it into the common resolver. Ensure the
+    // holder's own default delegation is installed first (idempotent).
+    xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigBootstrap.ensureInstalled()
+    xyz.block.trailblaze.waypoint.WaypointRegistryResolver.workspaceConfigDirProvider = {
+      xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder.resolver()
+    }
   }
 
   /**
@@ -931,6 +940,12 @@ object TrailblazeHostYamlRunner {
               useRecordedSteps = runYamlRequest.useRecordedSteps,
               selfHeal = runYamlRequest.config.selfHeal,
             )
+          is TrailYamlItem.TrailheadTrailItem ->
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
+              selfHeal = runYamlRequest.config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem ->
             trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem ->
@@ -1232,6 +1247,12 @@ object TrailblazeHostYamlRunner {
                 useRecordedSteps = runYamlRequest.useRecordedSteps,
                 selfHeal = runYamlRequest.config.selfHeal,
               )
+            is TrailYamlItem.TrailheadTrailItem ->
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = listOf(item.trailhead.toPromptStep()),
+                useRecordedSteps = true,
+                selfHeal = runYamlRequest.config.selfHeal,
+              )
             is TrailYamlItem.ToolTrailItem ->
               trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
             is TrailYamlItem.ConfigTrailItem ->
@@ -1516,7 +1537,11 @@ object TrailblazeHostYamlRunner {
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     val toolItems = trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>()
-    val promptSteps = trailItems
+    // The trailhead (if any) lowers to the leading step 0, ahead of the trail's prompts.
+    val trailheadSteps = trailItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .map { it.trailhead.toPromptStep() }
+    val promptSteps = trailheadSteps + trailItems
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
       .flatMap { it.promptSteps }
 
@@ -2205,6 +2230,12 @@ object TrailblazeHostYamlRunner {
             runnerUtil.runPromptSuspend(
               prompts = item.promptSteps,
               useRecordedSteps = runYamlRequest.useRecordedSteps,
+              selfHeal = runYamlRequest.config.selfHeal,
+            )
+          is TrailYamlItem.TrailheadTrailItem ->
+            runnerUtil.runPromptSuspend(
+              prompts = listOf(item.trailhead.toPromptStep()),
+              useRecordedSteps = true,
               selfHeal = runYamlRequest.config.selfHeal,
             )
           is TrailYamlItem.ToolTrailItem ->

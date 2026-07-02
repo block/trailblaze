@@ -15,9 +15,12 @@ import { trailblaze } from "@trailblaze/scripting";
  * the old Kotlin tool had in `PlaywrightTrailblazeAgent` was never reachable via normal tool
  * advertising.
  *
- * Unlike the Kotlin tool, this does NOT interpolate `{{var}}` in the URL — the in-process
- * context exposes no memory snapshot. Both committed `openUrl` trails pass literal URLs;
- * revisit if a trail ever needs an interpolated URL here.
+ * Unlike the Kotlin tool, this does NOT interpolate `{{var}}` in the URL — not because it can't,
+ * but because it doesn't need to. The in-process on-device context DOES expose a working memory
+ * surface (`ctx.memory.interpolate` reconstitutes the snapshot the host serializes into the ctx
+ * envelope — see `QuickJsOnDeviceMemorySmokeTest`), and both committed `openUrl` trails pass literal
+ * URLs, so interpolating here would be a no-op. Add `ctx.memory.interpolate(input.url)` if a trail
+ * ever needs a tokenized URL.
  */
 interface OpenUrlInput {
   /** The URL to open that starts with https. */

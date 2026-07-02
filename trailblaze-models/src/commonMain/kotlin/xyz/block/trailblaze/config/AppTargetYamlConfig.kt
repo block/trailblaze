@@ -165,6 +165,20 @@ data class InlineScriptToolConfig(
   @SerialName("inputSchema")
   @Serializable(with = JsonObjectYamlSerializer::class)
   val inputSchema: JsonObject = JsonObject(emptyMap()),
+  /**
+   * Marks this scripted tool as a **trailhead** — same [TrailheadMetadata] shape a
+   * `*.trailhead.yaml` sidecar's `trailhead:` block produces, but populated from the tool's own
+   * `.ts` source (`TrailblazeTypedToolSpec.trailhead`) instead of a companion YAML file. Set by
+   * [xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment] from the analyzer-captured
+   * spec; `null` for scripted tools that aren't trailheads or don't declare the field.
+   *
+   * Not a dispatch gate — doesn't affect registration or execution, so it deliberately does NOT
+   * ride in [meta] (same carve-out as [description]). Discovery surfaces
+   * (`ToolDiscoveryToolSet.computeRoleNames`, the Trail Runner "Use as Trailhead" picker) read it
+   * directly off this config, alongside `ToolYamlLoader.discoverShortcutsAndTrailheads()`'s
+   * YAML-sourced index.
+   */
+  val trailhead: TrailheadMetadata? = null,
 ) {
   init {
     // Enforce at the canonical runtime construction site so EVERY decode path is gated:

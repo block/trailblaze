@@ -4,7 +4,8 @@ import kotlin.test.assertTrue
 
 /**
  * Unit tests for [synthesizeInProcessScriptedToolWrapper] — the multi-export registration wrapper
- * the `trailblaze.author-tool-bundle` plugin hands esbuild as the bundle entry.
+ * both the `trailblaze.author-tool-bundle` plugin (build-logic) and this plugin's `trailmap { }`
+ * block hand esbuild as the bundle entry.
  *
  * These exercise the generated TS source DIRECTLY (no esbuild, no bun, no device), so the
  * multi-export registration contract is guarded even in environments where the end-to-end esbuild
@@ -22,9 +23,9 @@ class SynthesizeInProcessScriptedToolWrapperTest {
     val sdkDir = System.getProperty("trailblaze.sdkDir")
     requireNotNull(sdkDir) {
       "trailblaze.sdkDir system property is not set. Run this through Gradle " +
-        "(./gradlew :build-logic:test) — the `test` task wires `trailblaze.sdkDir` to sdks/typescript. " +
-        "A bare IDE run of a single test won't have it; failing fast here avoids a confusing " +
-        "file-not-found from the template lookup below."
+        "(./gradlew :trailblaze-android-gradle:test) — the `test` task wires `trailblaze.sdkDir` " +
+        "to sdks/typescript. A bare IDE run of a single test won't have it; failing fast here " +
+        "avoids a confusing file-not-found from the template lookup below."
     }
     File(sdkDir, "tools/in-process-wrapper-template.mjs").also { file ->
       require(file.isFile) {

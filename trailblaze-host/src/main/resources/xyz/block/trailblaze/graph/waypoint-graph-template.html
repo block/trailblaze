@@ -4452,9 +4452,11 @@
       const platforms = useMemo(() => {
         const counts = new Map();
         data.waypoints.forEach(wp => {
-          if (!wp.platform) return;
           if (selectedTarget && wp.id.split('/')[0] !== selectedTarget) return;
-          counts.set(wp.platform, (counts.get(wp.platform) || 0) + 1);
+          // A cross-platform v2 waypoint declares multiple classifier blocks (wp.platforms) and
+          // counts toward each; fall back to the path-derived single platform for id-only nodes.
+          const wpPlatforms = (wp.platforms && wp.platforms.length) ? wp.platforms : (wp.platform ? [wp.platform] : []);
+          wpPlatforms.forEach(p => counts.set(p, (counts.get(p) || 0) + 1));
         });
         return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
       }, [data.waypoints, selectedTarget]);
@@ -4469,7 +4471,12 @@
         if (!selectedTarget && !selectedPlatform) return data;
         const matches = (wp) => {
           if (selectedTarget && wp.id.split('/')[0] !== selectedTarget) return false;
-          if (selectedPlatform && wp.platform !== selectedPlatform) return false;
+          if (selectedPlatform) {
+            // Cross-platform v2 waypoints declare multiple classifier blocks (wp.platforms);
+            // keep them in any scoped view they declare. Fall back to the single path-derived platform.
+            const wpPlatforms = (wp.platforms && wp.platforms.length) ? wp.platforms : (wp.platform ? [wp.platform] : []);
+            if (!wpPlatforms.includes(selectedPlatform)) return false;
+          }
           return true;
         };
         const waypoints = data.waypoints.filter(matches);

@@ -234,4 +234,32 @@ class TrailFileManagerTest {
       "saveTrail must not create a root-level <platform>.trail.yaml on rejection",
     )
   }
+
+  @Test
+  fun `editing a trail does not surface or drop its trailhead root element`() {
+    val file = File(trailsDir, "flows/p2p/p2p.trail.yaml")
+    file.parentFile?.mkdirs()
+    file.writeText(
+      "- config:\n    target: myapp\n- trailhead: myapp_freshInstall\n- prompts:\n  - step: Tap Pay\n",
+    )
+    val mgr = manager()
+
+    val (config, steps) = mgr.getEditableSteps(file.absolutePath)
+      ?: error("getEditableSteps returned null")
+    // The trailhead is NOT an editable step — only the real prompt is.
+    assertEquals(1, steps.size)
+    assertEquals("Tap Pay", steps[0].prompt)
+
+    // An unrelated edit (append a step) must not drop the trailhead.
+    val edited = steps + TrailFileManager.EditableStep(prompt = "Tap Confirm", type = "step", recording = null)
+    val result = mgr.saveEditedSteps(file.absolutePath, config, edited)
+    assertTrue(result.success, "save failed: ${result.error}")
+
+    // The trailhead survives the edit. (The bare-string shorthand canonicalizes to the
+    // `{ tools: [...] }` form on re-emit — semantically identical, re-parses the same.)
+    val rewritten = file.readText()
+    assertTrue(rewritten.contains("trailhead:"), "trailhead lost on save:\n$rewritten")
+    assertTrue(rewritten.contains("myapp_freshInstall"), "trailhead tool lost on save:\n$rewritten")
+    assertTrue(rewritten.contains("Tap Confirm"), "edit not applied:\n$rewritten")
+  }
 }

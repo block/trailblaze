@@ -7,32 +7,35 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  *
  * ```yaml
  * - step: <natural-language intent — required>
- *   <classifier>: [tool, tool, ...]
- *   <classifier>: [tool, tool, ...]
- *   recordable: false   # mutually exclusive with classifier keys
+ *   recording:
+ *     <classifier>: [tool, tool, ...]
+ *     <classifier>: [tool, tool, ...]
+ *   recordable: false   # mutually exclusive with non-empty recordings
  * ```
  *
  * `step` is the canonical NL — exactly one prose string per step across all
- * devices. Per-classifier tool lists live alongside it as dynamic keys whose
- * names come from the device-classifier vocabulary (e.g. `android-phone`,
- * `ios`, `android`).
+ * devices, and it is **required** (natural language is forced so every step
+ * carries its intent and a trail stays legible / self-healing). Per-classifier
+ * tool lists live **under `recording:`** (a singular key, optional), so a step's
+ * top-level keys are reserved schema only (`step`, `recording`, `recordable`,
+ * `maxRetries`) and never collide with the dynamic device-classifier vocabulary
+ * (e.g. `android-phone`, `ios`, `android`). A step is therefore NL-only (blazed
+ * live) or NL + per-device recording — never recording-only.
  *
- * Reserved step-level keys: `step`, `recordable`. Any other key is treated as
- * a device classifier name. An empty classifier list (`<classifier>: []`) is
- * an explicit no-op for that device class — distinguishable in coverage
- * reports from accidental absence.
+ * An empty classifier list (`<classifier>: []`) is an explicit no-op for that
+ * device class — distinguishable in coverage reports from accidental absence.
  *
  * Custom (de)serialization lives in `UnifiedTrailStepSerializer` because the
- * per-classifier keys are dynamic and can't be modeled with stock kotlinx
- * serialization.
+ * per-classifier keys under `recording:` are dynamic and can't be modeled with
+ * stock kotlinx serialization.
  */
 data class UnifiedTrailStep(
-  /** Natural-language description — the test's intent at this step. */
+  /** Natural-language description — the test's intent at this step. Required (NL is forced). */
   val step: String,
   /**
-   * Per-classifier tool lists. Key is the classifier name (e.g.
-   * `android-phone`, `ios`); value is the list of tool calls. Empty list
-   * means explicit no-op for that classifier.
+   * Per-classifier tool lists (authored under the `recording:` key). Key is the
+   * classifier name (e.g. `android-phone`, `ios`); value is the ordered list of
+   * tool calls. Empty list means explicit no-op for that classifier.
    */
   val recordings: Map<String, List<TrailblazeToolYamlWrapper>> = emptyMap(),
   /**

@@ -34,7 +34,7 @@ From code, not kdoc. Both surfaces target QuickJS, but the docs over-claimed wha
 
 | | `@trailblaze/scripting` | `@trailblaze/tools` |
 |---|---|---|
-| Real tools using it | ~38 (example trailmaps + internal targets) | 3 (`openUrl` + 2 sample-app examples) |
+| Real tools using it | many (example trailmaps + downstream targets) | 3 (`openUrl` + 2 sample-app examples) |
 | Typed bindings | Generated `client.tools.<name>` + private `callTool` | Hand-seeded proxy only; generator unbuilt |
 | MCP framing | Yes (justified at the bun-subprocess boundary) | No (reads `globalThis.__trailblazeTools` directly) |
 | On-device runtime | Not launched (its on-device bits were fiction) | Yes — the runtime `AndroidTrailblazeRule` launches |
@@ -55,7 +55,7 @@ installer to write.
 ## The decision
 
 **One author surface: `@trailblaze/scripting`** (it has the typed-binding generator, the private
-`callTool`, and ~38 consumers). Per-tool `runtime:` is the single source of truth, resolved at
+`callTool`, and dozens of consumers). Per-tool `runtime:` is the single source of truth, resolved at
 load time by `ScriptedToolRuntime.resolve`:
 
 - `runtime: inProcess` is the **unconditional default** → embedded QuickJS, composes by calling
@@ -93,7 +93,7 @@ The earlier stated intent (in the `@trailblaze/tools` module README) was the opp
 - The hard piece (in-process composition) is one shared problem regardless of surface — solve it
   once, on the mature surface that already has typed bindings and 38 consumers, rather than
   rebuilding the generator + composition on the 3-tool newcomer.
-- Migrating 3 tools beats migrating 38.
+- Migrating 3 tools beats migrating dozens.
 
 MCP is not overkill *everywhere* — at a real bun-subprocess boundary it is the right wire protocol.
 It is overkill only when dragged into the in-process path, where there is no process boundary to

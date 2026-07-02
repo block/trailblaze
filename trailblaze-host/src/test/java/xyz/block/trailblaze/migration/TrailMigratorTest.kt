@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -19,6 +20,25 @@ class TrailMigratorTest {
 
   private val yaml = TrailblazeYaml.Default
   private val migrator = TrailMigrator(yaml)
+
+  @Test
+  fun `refuses to migrate a trail that contains a trailhead block`() {
+    // Mapping a per-classifier trailhead into the unified `trailhead:` is a follow-up; until then the
+    // migrator must fail fast rather than silently drop the deterministic step 0 (same policy as
+    // top-level `- tools:`).
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+        - trailhead: x_freshInstall
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    assertFailsWith<IllegalArgumentException> { migrator.migrate(dir) }
+  }
 
   @Test
   fun `simple two-platform merge yields one step per index with both classifiers`() {
@@ -54,10 +74,67 @@ class TrailMigratorTest {
     )
     val result = migrator.migrate(dir)
     assertEquals(1, result.trail.trail.size)
-    assertEquals(listOf("android-phone", "ios-iphone"), result.trail.config.devices)
+    // Each per-platform file pinned a driver → the merged `devices:` map keys each file's
+    // driver under its classifier.
+    assertEquals(
+      mapOf(
+        "android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION",
+        "ios-iphone" to "IOS_HOST",
+      ),
+      result.trail.config.devices,
+    )
     assertEquals(setOf("android-phone", "ios-iphone"), result.trail.trail[0].recordings.keys)
     assertEquals("x/y", result.trail.config.id)
     assertEquals("x", result.trail.config.target)
+  }
+
+  @Test
+  fun `config description and driver are preserved through migration, not dropped`() {
+    // description is runtime-surfaced (a display label); driver is an optional pin needed by
+    // trails whose recordings are driver-specific. Both must survive migration — `platform`
+    // and `title` are the retired fields, not these. The driver is keyed by the file's
+    // classifier (`android-phone`).
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            driver: ANDROID_ONDEVICE_ACCESSIBILITY
+            description: Open the app and verify the home tab.
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals("Open the app and verify the home tab.", result.trail.config.description)
+    assertEquals(
+      mapOf("android-phone" to "ANDROID_ONDEVICE_ACCESSIBILITY"),
+      result.trail.config.devices,
+    )
+  }
+
+  @Test
+  fun `each platform file's driver is collected into the per-classifier devices map`() {
+    // A multi-platform trail can't collapse to one driver — android and ios need different
+    // drivers. Each per-platform file contributes its own `driver:` keyed by its classifier.
+    val dir = makeDir(
+      "android.trail.yaml" to """
+        - config: {id: x, target: x, platform: android, driver: ANDROID_ONDEVICE_ACCESSIBILITY}
+        - prompts:
+          - step: Do the thing
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x, target: x, platform: ios, driver: IOS_HOST}
+        - prompts:
+          - step: Do the thing
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(
+      mapOf("android" to "ANDROID_ONDEVICE_ACCESSIBILITY", "ios-iphone" to "IOS_HOST"),
+      result.trail.config.devices,
+    )
   }
 
   @Test
@@ -150,7 +227,10 @@ class TrailMigratorTest {
   }
 
   @Test
-  fun `no recording on any platform auto-emits recordable false`() {
+  fun `no recording on any platform leaves recordable at its default (true)`() {
+    // A step with no recording is "not recorded yet" — it runs via the agent and can be
+    // recorded later — NOT "never record". So the migrator does not emit `recordable: false`;
+    // the steps stay at the default recordable=true.
     val dir = makeDir(
       "android-phone.trail.yaml" to """
         - config: {id: x, target: x, platform: android}
@@ -161,9 +241,9 @@ class TrailMigratorTest {
     )
     val result = migrator.migrate(dir)
     assertEquals(2, result.trail.trail.size)
-    assertFalse(result.trail.trail[0].recordable)
-    assertFalse(result.trail.trail[1].recordable)
-    assertEquals(2, result.report.unrecordableSteps)
+    assertTrue(result.trail.trail[0].recordable)
+    assertTrue(result.trail.trail[1].recordable)
+    assertEquals(0, result.report.unrecordableSteps)
   }
 
   @Test
@@ -273,9 +353,11 @@ class TrailMigratorTest {
     )
     val result = migrator.migrate(dir)
     assertEquals(3, result.trail.trail.size, "blaze.yaml's full step count should be preserved")
+    // recordable stays at the default (true) for every step now — the migrator no longer
+    // auto-emits `recordable: false` for not-yet-recorded steps.
     assertTrue(result.trail.trail[0].recordable, "step 0 has a recording")
-    assertFalse(result.trail.trail[1].recordable, "step 1 has no recording on any platform")
-    assertFalse(result.trail.trail[2].recordable, "step 2 has no recording on any platform")
+    assertTrue(result.trail.trail[1].recordable, "step 1 not yet recorded — still recordable")
+    assertTrue(result.trail.trail[2].recordable, "step 2 not yet recorded — still recordable")
     assertEquals("Not-yet-recorded step", result.trail.trail[1].step)
     assertEquals("Another not-yet-recorded step", result.trail.trail[2].step)
   }
@@ -342,8 +424,12 @@ class TrailMigratorTest {
     val result = migrator.migrate(dir)
     assertNull(result.trail.config.id)
     assertNull(result.trail.config.target)
-    // devices: should still be populated even when other config fields are absent
-    assertEquals(listOf("android-phone"), result.trail.config.devices)
+    // devices: (classifier → driver) is populated from the file's driver even when other config
+    // fields are absent.
+    assertEquals(
+      mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
+      result.trail.config.devices,
+    )
   }
 
   @Test

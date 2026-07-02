@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml.unified
 
 import com.charleskorn.kaml.Yaml
 import kotlinx.serialization.builtins.ListSerializer
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 
 /**
@@ -28,14 +29,28 @@ internal class UnifiedTrailEmitter(
     }
     if (leadingComments.isNotEmpty()) sb.append('\n')
 
-    sb.append("config:\n")
-    val configYaml = yamlInstance.encodeToString(
-      UnifiedTrailConfig.serializer(),
-      trail.config,
-    )
-    appendIndented(sb, configYaml, indent = INDENT_2)
+    // `config:` is optional — omit it entirely when empty so an absent config round-trips (decode
+    // defaults a missing config to the same empty value). Track whether a section was written so the
+    // blank-line separators only appear between present sections, never as a leading blank line.
+    var wroteSection = false
+    if (trail.config != UnifiedTrailConfig()) {
+      sb.append("config:\n")
+      val configYaml = yamlInstance.encodeToString(
+        UnifiedTrailConfig.serializer(),
+        trail.config,
+      )
+      appendIndented(sb, configYaml, indent = INDENT_2)
+      wroteSection = true
+    }
 
-    sb.append('\n')
+    trail.trailhead?.let { trailhead ->
+      if (wroteSection) sb.append('\n')
+      sb.append("trailhead:\n")
+      appendTrailhead(sb, trailhead)
+      wroteSection = true
+    }
+
+    if (wroteSection) sb.append('\n')
     sb.append("trail:\n")
     trail.trail.forEachIndexed { idx, step ->
       if (idx > 0) sb.append('\n')
@@ -45,11 +60,46 @@ internal class UnifiedTrailEmitter(
     return sb.toString()
   }
 
+  /**
+   * Emit the singleton `trailhead:` block, rendered as a top-level mapping (no `- ` list prefix), so
+   * its keys sit one indent level shallower than a `trail:` step's: `step:`/`recording:` at
+   * [INDENT_2], classifiers at [INDENT_4], tool lists at [INDENT_6].
+   */
+  private fun appendTrailhead(sb: StringBuilder, step: UnifiedTrailStep) {
+    sb.append(INDENT_2).append("step: ")
+    appendScalar(sb, step.step, blockIndent = INDENT_4)
+    if (step.recordings.isNotEmpty()) {
+      sb.append(INDENT_2).append("recording:\n")
+      appendClassifierMap(sb, step.recordings, classifierIndent = INDENT_4, toolIndent = INDENT_6)
+    }
+    if (!step.recordable) {
+      sb.append(INDENT_2).append("recordable: false\n")
+    }
+    step.maxRetries?.let { sb.append(INDENT_2).append("maxRetries: ").append(it).append('\n') }
+  }
+
   private fun appendStep(sb: StringBuilder, step: UnifiedTrailStep) {
     sb.append(INDENT_2).append("- step: ")
     appendScalar(sb, step.step, blockIndent = INDENT_6)
-    for ((classifier, tools) in step.recordings) {
-      sb.append(INDENT_4).append(classifier).append(':')
+    if (step.recordings.isNotEmpty()) {
+      sb.append(INDENT_4).append("recording:\n")
+      appendClassifierMap(sb, step.recordings, classifierIndent = INDENT_6, toolIndent = INDENT_8)
+    }
+    if (!step.recordable) {
+      sb.append(INDENT_4).append("recordable: false\n")
+    }
+    step.maxRetries?.let { sb.append(INDENT_4).append("maxRetries: ").append(it).append('\n') }
+  }
+
+  /** Emit a `recording:` map body: one `<classifier>:` key per device, each a tool list (or `[]`). */
+  private fun appendClassifierMap(
+    sb: StringBuilder,
+    recordings: Map<String, List<TrailblazeToolYamlWrapper>>,
+    classifierIndent: String,
+    toolIndent: String,
+  ) {
+    for ((classifier, tools) in recordings) {
+      sb.append(classifierIndent).append(classifier).append(':')
       if (tools.isEmpty()) {
         sb.append(" []\n")
       } else {
@@ -58,13 +108,9 @@ internal class UnifiedTrailEmitter(
           ListSerializer(toolWrapperSerializer),
           tools,
         )
-        appendIndented(sb, toolListYaml, indent = INDENT_6)
+        appendIndented(sb, toolListYaml, indent = toolIndent)
       }
     }
-    if (!step.recordable) {
-      sb.append(INDENT_4).append("recordable: false\n")
-    }
-    step.maxRetries?.let { sb.append(INDENT_4).append("maxRetries: ").append(it).append('\n') }
   }
 
   /**
@@ -130,5 +176,6 @@ internal class UnifiedTrailEmitter(
     private const val INDENT_2 = "  "
     private const val INDENT_4 = "    "
     private const val INDENT_6 = "      "
+    private const val INDENT_8 = "        "
   }
 }

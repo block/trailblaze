@@ -125,7 +125,6 @@ class MigrateTrailsCommand : Callable<Int> {
       }.joinToString(", ")
       Console.log("Family-collapses: $summary")
     }
-    Console.log("Steps marked recordable: false: ${result.report.unrecordableSteps}")
     return EXIT_OK
   }
 

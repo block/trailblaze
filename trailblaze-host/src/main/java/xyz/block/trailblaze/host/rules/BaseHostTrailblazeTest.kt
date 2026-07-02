@@ -463,6 +463,12 @@ abstract class BaseHostTrailblazeTest(
                   useRecordedSteps = true,
                   selfHeal = false,
                 )
+              is TrailYamlItem.TrailheadTrailItem ->
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = listOf(setupItem.trailhead.toPromptStep()),
+                  useRecordedSteps = true,
+                  selfHeal = false,
+                )
               is TrailYamlItem.ToolTrailItem ->
                 trailblazeRunnerUtil.runTrailblazeTool(
                   setupItem.tools.map { it.trailblazeTool }
@@ -486,6 +492,12 @@ abstract class BaseHostTrailblazeTest(
           trailblazeRunnerUtil.runPromptSuspend(
             prompts = item.promptSteps,
             useRecordedSteps = useRecordedSteps,
+            selfHeal = resolveSelfHealFromEnvOrConfig(),
+          )
+        is TrailYamlItem.TrailheadTrailItem ->
+          trailblazeRunnerUtil.runPromptSuspend(
+            prompts = listOf(item.trailhead.toPromptStep()),
+            useRecordedSteps = true,
             selfHeal = resolveSelfHealFromEnvOrConfig(),
           )
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })

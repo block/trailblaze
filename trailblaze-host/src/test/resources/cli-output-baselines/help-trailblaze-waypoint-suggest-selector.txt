@@ -8,14 +8,18 @@
 Usage: trailblaze waypoint suggest-selector [-hV] [--anchor=<anchor>]
        [--at=<at>] [--maestro-selector=<maestroSelector>] [--max=<max>]
        [--ref=<ref>] [--session=<session>] [--step=<step>] [<positionalLogFile>]
-Suggest waypoint-ready selector YAML for a specific element ref in a captured
-screen.
+Suggest selector YAML for a specific element ref in a captured screen — the
+whole menu.
 Pair with `./trailblaze snapshot --all` to see refs, then run this on the
 matching
-session log to translate ref → selector. Returns up to --max named candidates
-(the
-TrailblazeNodeSelectorGenerator strategies that uniquely resolve to the target),
-plus one structural-only candidate at the bottom for forbidden-clause use.
+session log to translate ref → selector. Prints EVERY strategy that computes a
+selector
+resolving to the target (resource id, text, structural, childOf, containsChild,
+spatial,
+index-qualified variants, plus a run-variable-wildcarded text variant), each
+with its
+strategy name + live match count, ranked most-stable first. Nothing computable
+is hidden.
       [<positionalLogFile>] Path to a *_TrailblazeLlmRequestLog.json (required
                               unless --session/--step given).
                             Same shape as the input to `waypoint validate`.
@@ -70,7 +74,8 @@ plus one structural-only candidate at the bottom for forbidden-clause use.
                             This is the deterministic Maestro→accessibility
                               migration primitive.
                             Mutually exclusive with --ref / --at.
-      --max=<max>           Maximum candidate selectors to return (default: 5)
+      --max=<max>           Maximum candidate selectors to print (default: 25 —
+                              enough to show them all)
       --ref=<ref>           Element ref from the captured tree (e.g. 'a812').
                             Mutually exclusive with --at; exactly one must be
                               provided.

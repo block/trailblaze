@@ -161,12 +161,13 @@ class ToolDiscoveryToolSet(
     // Only show "other targets" hint when no device is connected (target tools not listed)
     val otherTargets = if (targetToolsets == null) buildOtherTargets(currentTarget, allTargets) else null
 
-    // Enrich the response with role-grouped slim views (trailheads / shortcuts). These are
-    // computed from the YAML-side metadata — every class-backed trailhead in this codebase has
-    // a sidecar `*.trailhead.yaml`, so `discoverShortcutsAndTrailheads()` is a complete index.
+    // Enrich the response with role-grouped slim views (trailheads / shortcuts). Trailheads come
+    // from two sources — see computeRoleNames: YAML-side `*.trailhead.yaml` metadata, and scripted
+    // (.ts) tools that self-declare `trailhead:` inline in their spec (InlineScriptToolConfig.trailhead).
     // Filtered to tool names actually surfaced in the current platform / target toolsets so the
     // role lists never reference tools the CLI can't show details for.
-    val (trailheadToolNames, shortcutToolNames) = computeRoleNames(platformToolsets, targetToolsets)
+    val (trailheadToolNames, shortcutToolNames) =
+      computeRoleNames(platformToolsets, targetToolsets, target = currentTarget)
 
     val result = ToolDiscoveryIndexResult(
       currentTarget = currentTarget?.id,
@@ -203,10 +204,26 @@ class ToolDiscoveryToolSet(
    * intersection logic. Each source contributes its in-scope tool ids via either the compact
    * `tools` list or the detailed `toolDetails` list — the helper accepts whichever shape the
    * caller has on hand.
+   *
+   * Trailhead names are the union of two sources: YAML-side `*.trailhead.yaml` /
+   * `*.shortcut.yaml` metadata (via [ToolYamlLoader.discoverShortcutsAndTrailheads]), and
+   * scripted (`.ts`) tools that self-declare `trailhead:` inline in their
+   * `TrailblazeTypedToolSpec` instead of a sidecar YAML — those land on
+   * [xyz.block.trailblaze.config.InlineScriptToolConfig.trailhead], reachable off [target]'s
+   * [xyz.block.trailblaze.model.TrailblazeHostAppTarget.getInlineScriptTools]. Shortcuts have no
+   * scripted-tool equivalent yet, so that half stays YAML-only.
+   *
+   * @param target the app target whose scripted tools to scan for inline trailheads.
+   *   [handleIndexMode] passes the daemon's currently-connected target; [handleTargetMode] passes
+   *   the explicitly-requested target. No default — every caller must decide, so a future call
+   *   site can't silently inherit the wrong target for its mode (`toolbox trailheads
+   *   --target=<other>` reporting the daemon's connected target's scripted trailheads instead of
+   *   the requested one).
    */
   private fun computeRoleNames(
     vararg toolsetSources: List<ToolDiscoveryToolsetInfo>?,
     extraInScopeNames: Collection<String> = emptyList(),
+    target: TrailblazeHostAppTarget?,
   ): Pair<List<String>, List<String>> {
     val inScopeNames: Set<String> = buildSet {
       toolsetSources.forEach { sets ->
@@ -221,9 +238,14 @@ class ToolDiscoveryToolSet(
     // is also visible — otherwise we'd silently drop workspace role tools that ARE present in
     // the in-scope toolsets (because the host's target/toolset discovery uses a layered source).
     val allRoles = ToolYamlLoader.discoverShortcutsAndTrailheads(resourceSourceProvider())
-    val trailheads = allRoles.values
-      .filter { it.trailhead != null && it.id in inScopeNames }
-      .map { it.id }
+    val yamlTrailheadNames = allRoles.values.filter { it.trailhead != null }.map { it.id }
+    val scriptedTrailheadNames = target?.getInlineScriptTools()
+      .orEmpty()
+      .filter { it.trailhead != null }
+      .map { it.name }
+    val trailheads = (yamlTrailheadNames + scriptedTrailheadNames)
+      .filter { it in inScopeNames }
+      .distinct()
       .sorted()
     val shortcuts = allRoles.values
       .filter { it.shortcut != null && it.id in inScopeNames }
@@ -346,7 +368,7 @@ class ToolDiscoveryToolSet(
       // "No trailheads available" for any non-default target. Scope the intersection guard to
       // this target's own toolGroups so we never surface a tool that won't appear when the
       // user drills in via `--name <id>`.
-      val (trailheadToolNames, shortcutToolNames) = computeRoleNames(toolGroups)
+      val (trailheadToolNames, shortcutToolNames) = computeRoleNames(toolGroups, target = targetApp)
 
       return jsonFormat.encodeToString(
         ToolDiscoveryTargetResult(
@@ -383,7 +405,8 @@ class ToolDiscoveryToolSet(
     // connected. Tool ids here come from the per-platform [TrailblazeToolDescriptor] lists rather
     // than a toolset shape, so feed them via the extraInScopeNames hook.
     val flatInScopeNames = platformTools.flatMap { it.tools.map { d -> d.name } }
-    val (trailheadToolNames, shortcutToolNames) = computeRoleNames(extraInScopeNames = flatInScopeNames)
+    val (trailheadToolNames, shortcutToolNames) =
+      computeRoleNames(extraInScopeNames = flatInScopeNames, target = targetApp)
 
     return jsonFormat.encodeToString(
       ToolDiscoveryTargetResult(

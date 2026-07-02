@@ -64,8 +64,21 @@ data class WaypointGraphNode(
    * platform-specific. Derived from the waypoint file's location on disk
    * (`trailmaps/<trailmap>/waypoints/<platform>/...`); the id itself no longer carries the
    * platform segment. Drives the platform filter pills in the graph viewer.
+   *
+   * NOTE: this is the *path-derived* platform and is `null` for a v2 waypoint that lives at a
+   * platform-neutral path (`waypoints/<name>.waypoint.yaml`) while declaring multiple classifier
+   * blocks. For platform scoping, use [platforms] (the declared classifier blocks) — a single
+   * value can't represent an android+ios waypoint.
    */
   val platform: String?,
+  /**
+   * The device classifiers this waypoint actually declares (`byClassifier` keys — e.g.
+   * `["android", "ios"]`). This is the authoritative source for platform scoping/counts: a
+   * cross-platform v2 waypoint at a platform-neutral path has `platform = null` but
+   * `platforms = ["android", "ios"]`, so it correctly appears in BOTH the android and ios
+   * graph views. Empty for an id-only waypoint with no classifier blocks.
+   */
+  val platforms: List<String> = emptyList(),
   /**
    * Selector entries that must ALL match in the captured tree for the waypoint matcher to
    * accept this screen. The detail panel renders these as the "how does the matcher know

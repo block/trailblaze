@@ -1,13 +1,3 @@
-import org.gradle.api.DefaultTask
-import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
-import org.gradle.api.tasks.InputDirectory
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.OutputFile
-import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
-
 plugins {
   alias(libs.plugins.android.library)
   alias(libs.plugins.kotlin.android)
@@ -16,48 +6,135 @@ plugins {
   // assets. Replaces what used to be a hand-rolled Copy + dependsOn block here so future
   // downstream test modules only register the bundle and asset path.
   id("trailblaze.quickjs-bundle-assets")
+  // Auto-generates a JUnit shell per `<methodName>.trail.yaml` under the configured trails
+  // directory, replacing the hand-rolled `GenerateSampleAppTestsTask` this module used to carry.
+  // The plugin is published to Maven Central and is the canonical way an external team adds
+  // trail-derived JUnit tests to an Android library module — this example dogfoods it so the
+  // OSS docs and the example stay in sync.
+  id("xyz.block.trailblaze.android-gradle")
 }
 
 val installSampleAppMcpTools =
   project(":trailblaze-scripting-subprocess").tasks.named("installSampleAppMcpTools")
 
-// Stage the sample-app trails into a build-output directory, filtering out `node_modules/`
-// (and any sibling `install/` artifacts written by bun/npm). Two reasons:
-//   1) AGP walks the asset src tree from many tasks (mergeAssets, lintAnalyze, lintReport,
-//      generateLintModel, …); under Gradle 8.14 each one trips an implicit-dependency
-//      validation error on the install tasks that *write into* `node_modules/` beneath
-//      `trails/config/`. Excluding those subtrees means no AGP task ever reads from a
-//      directory the install tasks write to, so the validator has nothing to flag —
-//      regardless of which AGP task family is added next.
-//   2) `node_modules/` would bloat the test APK with megabytes of npm packages that
-//      runFromAsset() never opens.
+// Stage the sample-app trails into the layout the plugin expects:
+// `<staging>/trails/GeneratedSampleAppTests/<methodName>.trail.yaml`. Two inputs are merged:
 //
-// The copy depends on the install tasks so any consumer of the staged dir transitively
-// gets the dependency, replacing the per-task `dependsOn` whack-a-mole that the matcher
-// approach required.
-val stagedTrailAssets = layout.buildDirectory.dir("intermediates/staged-trail-assets")
+//  1) Instrumentation trails under
+// `../android-sample-app/trails/android-ondevice-instrumentation/`,
+//     where each scenario lives at `<category>/<scenario>/android-phone.trail.yaml`. The Copy's
+//     `eachFile` flattens that to `<scenarioCamel>.trail.yaml` (e.g. `text-input/android-phone…`
+//     → `textInput.trail.yaml`) so a single `GeneratedSampleAppTests` class collects every
+//     scenario as a `@Test fun <scenarioCamel>()`.
+//
+//  2) Repo-root sample-app evals under `trails/eval/android/sample-app/<basename>.trail.yaml`
+//     (e.g. `clipboard-round-trip.trail.yaml`). Each file's basename is camel-cased the same way
+//     and joined into the same `GeneratedSampleAppTests` class.
+//
+// AGP's asset packager then ships everything under `<staging>` as `assets/`, so runtime
+// `runFromAsset("trails/GeneratedSampleAppTests/<m>.trail.yaml")` calls — the path shape the
+// plugin emits in its inline-rule mode — resolve via AssetManager.
+//
+// Excludes `node_modules/` and `install/` because AGP walks the asset src tree from many tasks
+// (mergeAssets, lintAnalyze, lintReport, generateLintModel, …) and under Gradle 8.14 each one
+// would trip an implicit-dependency validation error on the install tasks that *write into*
+// those directories beneath `trails/config/`. The Copy depends on the install tasks so any
+// consumer of the staged dir transitively gets the dependency, replacing per-task `dependsOn`
+// whack-a-mole.
+val stagedSampleAppTrailsRoot = layout.buildDirectory.dir("intermediates/staged-sample-app-trails")
+val stagedSampleAppTrailsForPlugin =
+  layout.buildDirectory.dir("intermediates/staged-sample-app-trails/trails")
 
-val stageTrailAssets =
-  tasks.register<Copy>("stageTrailAssetsForAndroidTest") {
-    from("../android-sample-app/trails") { exclude("**/node_modules/**", "**/install/**") }
-    into(stagedTrailAssets)
+val stageSampleAppTrails =
+  tasks.register<Copy>("stageSampleAppTrailsForGenerator") {
+    // Top-level `fun dashedToCamel(...)` would be a Gradle "script object reference" and the
+    // configuration cache can't serialize that across builds. Defining the camel converter as a
+    // local val inside the action keeps the closure self-contained and CC-clean.
+    val dashedToCamel: (String) -> String = { raw ->
+      raw
+        .split("-")
+        .mapIndexed { i, s -> if (i == 0) s else s.replaceFirstChar { c -> c.uppercase() } }
+        .joinToString("")
+    }
+    // Instrumentation trails: `<cat>/<scenario>/android-phone.trail.yaml` →
+    // `trails/GeneratedSampleAppTests/<scenarioCamel>.trail.yaml`.
+    from("../android-sample-app/trails/android-ondevice-instrumentation") {
+      exclude("**/node_modules/**", "**/install/**")
+      eachFile {
+        val segments = relativePath.segments
+        if (segments.isNotEmpty() && segments.last().endsWith(".trail.yaml")) {
+          require(segments.size >= 2) {
+            "Unexpected sample-app trail path: ${relativePath.pathString}"
+          }
+          // Second-to-last segment is the scenario dir (e.g. `text-input`).
+          val scenarioDir = segments[segments.size - 2]
+          relativePath =
+            org.gradle.api.file.RelativePath(
+              true,
+              "trails",
+              "GeneratedSampleAppTests",
+              "${dashedToCamel(scenarioDir)}.trail.yaml",
+            )
+        }
+      }
+      includeEmptyDirs = false
+    }
+    // Eval trails: `trails/eval/android/sample-app/<basename>.trail.yaml` →
+    // `trails/GeneratedSampleAppTests/<basenameCamel>.trail.yaml`. Repo-root layout per
+    // `trails/eval/README.md`; the eval set deliberately lives outside the sample-app dir so
+    // the `pr_eval_android.sh` Square-POS-targeted runner's `find -maxdepth 1` doesn't scoop
+    // them up.
+    from("../../../trails/eval/android/sample-app") {
+      eachFile {
+        if (name.endsWith(".trail.yaml")) {
+          val base = name.removeSuffix(".trail.yaml")
+          relativePath =
+            org.gradle.api.file.RelativePath(
+              true,
+              "trails",
+              "GeneratedSampleAppTests",
+              "${dashedToCamel(base)}.trail.yaml",
+            )
+        }
+      }
+      includeEmptyDirs = false
+    }
+    // Copy the trailmap `config/` subtree VERBATIM (no path rewriting). This ships the sample-app
+    // trailmap definition and its scripted-tool sources — most importantly
+    // `config/trailmaps/sampleapp/tools/quickjs-tools/pure.js`, which
+    // `QuickJsToolBundleOnDeviceTest`
+    // loads via `AndroidAssetBundleSource(assetPath =
+    // "config/trailmaps/sampleapp/tools/quickjs-tools/pure.js")`.
+    // The pre-conversion `stageTrailAssets` Copy copied all of `trails/` (including `config/`)
+    // wholesale; the trail-YAML flattening in the two `from(...)` blocks above only handles the
+    // executable trails, so this block preserves everything else that used to ride along.
+    from("../android-sample-app/trails/config") {
+      into("config")
+      exclude("**/node_modules/**", "**/install/**")
+    }
+    into(stagedSampleAppTrailsRoot)
     dependsOn(installSampleAppMcpTools)
   }
 
-// Stage the repo-root `trails/eval/android/sample-app/` directory under the same
-// asset root used by [stageTrailAssets]. Mirrors the [trails/eval/README.md]
-// platform-only layout for agent evals, but slotted under a `sample-app/` subdir
-// so the sample-app-targeted clipboard-round-trip eval doesn't get scooped up by
-// the Square-POS-targeted `pr_eval_android.sh` runner (its `find -maxdepth 1` in
-// `trails/eval/android/` deliberately ignores subdirectories). The auto-generated
-// `GeneratedSampleAppTests` below scans this directory too so each `.trail.yaml`
-// here becomes a JUnit test on the existing sample-app device-farm step.
-val sampleAppEvalTrailsDir = file("../../../trails/eval/android/sample-app")
-val stageSampleAppEvalTrails =
-  tasks.register<Copy>("stageSampleAppEvalTrailAssetsForAndroidTest") {
-    from(sampleAppEvalTrailsDir)
-    into("${stagedTrailAssets.get().asFile}/eval/android/sample-app")
-  }
+// Wire the plugin's codegen task to depend on the staging Copy. The plugin's `trailsAssetsDir`
+// is `@Internal`, so Gradle's standard "input directory carries producer info" inference doesn't
+// apply — the dep has to be explicit. Going through `tasks.named(...)` rather than the
+// extension's `generateTask.configure { ... }` proved more reliable on CI's fresh task graph
+// (the extension-side wiring silently dropped on some CI builds).
+tasks.named("generateAndroidTrailJUnitShells").configure { dependsOn(stageSampleAppTrails) }
+
+// Point the plugin at the flattened staging dir and class-name everything under
+// `GeneratedSampleAppTests`. No `baseClassFqn` → inline-rule mode with the OSS-default
+// `xyz.block.trailblaze.android.AndroidTrailblazeRule` (no-arg). The generated source emits
+// `@get:Rule val rule = AndroidTrailblazeRule()` + one `@Test fun <m>() =
+// rule.runFromAsset("trails/GeneratedSampleAppTests/<m>.trail.yaml")` per staged file.
+trailblazeAndroid {
+  packageName = "xyz.block.trailblaze.examples.sampleapp.generated"
+  // Static path — the producer dep is wired via the explicit `tasks.named(...).dependsOn(...)`
+  // call above.
+  trailsAssetsDir = stagedSampleAppTrailsForPlugin
+  onlyClassNames = setOf("GeneratedSampleAppTests")
+}
 
 // Stage the typed `@trailblaze/scripting` bundle at a stable test-APK asset path so
 // `QuickJsToolBundleOnDeviceTest` can load it via `AndroidAssetBundleSource`. Sourced
@@ -84,15 +161,17 @@ android {
 
   sourceSets {
     getByName("androidTest") {
-      // Bundle sample-app trails as assets in the test APK so runFromAsset() can read them.
-      // The trails dir is sourced from the staged copy (see [stageTrailAssets]) rather than
-      // the live tree so AGP asset consumers don't walk into the install tasks' npm output.
+      // Bundle the staged sample-app trails (under `trails/GeneratedSampleAppTests/…`) and the
+      // typed QuickJS bundle in the test APK so runFromAsset() can read them. The trails dir
+      // is sourced from the staged copy rather than the live tree so AGP asset consumers don't
+      // walk into the install tasks' npm output.
       assets.srcDirs(
-        stagedTrailAssets,
+        stagedSampleAppTrailsRoot,
         trailblazeQuickjsBundleAssets.stagingRoot,
         "src/androidTest/assets",
       )
-      java.srcDirs("src/androidTest/java", "src/androidTest/generated")
+      // The plugin's generated source dir (GeneratedSampleAppTests.kt) and its dependency on
+      // `generateAndroidTrailJUnitShells` are now auto-wired by `apply()` — no srcDir needed here.
     }
   }
 
@@ -114,10 +193,11 @@ android {
   testOptions { animationsDisabled = true }
 }
 
-// AGP wires the staged-asset directory into `assets.srcDirs` lazily — its asset-merge,
-// lint-model, and lint-analysis tasks all consume `srcDirs` but don't auto-import a
-// `Provider`'s task dependency. Wiring [stageTrailAssets] explicitly into the asset and
-// lint task families closes that gap so they each run after the staging copy completes.
+// AGP wires staged-asset directories into `assets.srcDirs` lazily — its asset-merge, lint-model,
+// and lint-analysis tasks all consume `srcDirs` but don't auto-import a `Provider`'s task
+// dependency. Wiring [stageSampleAppTrails] and the QuickJS bundle staging tasks explicitly into
+// the asset and lint task families closes that gap so they each run after the staging copies
+// complete.
 tasks
   .matching {
     val n = it.name
@@ -128,8 +208,7 @@ tasks
       (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
   }
   .configureEach {
-    dependsOn(stageTrailAssets)
-    dependsOn(stageSampleAppEvalTrails)
+    dependsOn(stageSampleAppTrails)
     // Each registered QuickJS bundle has its own `stage<Name>QuickjsBundleAsset` task;
     // the plugin exposes them as a list so this AGP-task wiring stays a single line as
     // bundles get added.
@@ -153,126 +232,4 @@ dependencies {
   androidTestRuntimeOnly(libs.androidx.test.runner)
   androidTestRuntimeOnly(libs.coroutines.android)
   androidTestImplementation(libs.maestro.orchestra.models) { isTransitive = false }
-}
-
-// ---------------------------------------------------------------------------
-// generateSampleAppTests
-// Scans ../android-sample-app/trails/android-ondevice-instrumentation/**/*.trail.yaml
-// and writes a JUnit test class so the sample-app trails can run on a remote device farm.
-// Usage: ./gradlew :examples:android-sample-app-uitests:generateSampleAppTests
-// ---------------------------------------------------------------------------
-abstract class GenerateSampleAppTestsTask : DefaultTask() {
-  @get:InputDirectory
-  @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val trailsDir: DirectoryProperty
-
-  @get:InputDirectory
-  @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val evalSampleAppTrailsDir: DirectoryProperty
-
-  @get:OutputFile abstract val outputFile: RegularFileProperty
-
-  @get:Internal abstract val projectDir: DirectoryProperty
-
-  @TaskAction
-  fun generate() {
-    val trailsDir = trailsDir.get().asFile
-    val evalSampleAppTrailsDir = evalSampleAppTrailsDir.get().asFile
-    val outputFile = outputFile.get().asFile
-    outputFile.parentFile.mkdirs()
-
-    // Convert a dash-or-trail-file-prefix-style name to a camelCase JUnit test method.
-    fun toMethodName(raw: String) =
-      raw
-        .split("-")
-        .mapIndexed { i, s -> if (i == 0) s else s.replaceFirstChar { c -> c.uppercase() } }
-        .joinToString("")
-
-    val instrumentationTests =
-      trailsDir
-        .walkTopDown()
-        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-        .map { trailFile ->
-          val relPath = trailFile.relativeTo(trailsDir).path
-          val testDirName = relPath.split("/").let { it[it.size - 2] }
-          val methodName = toMethodName(testDirName)
-          val assetPath = "android-ondevice-instrumentation/$relPath"
-          Pair(methodName, assetPath)
-        }
-
-    // Eval-sample-app trails live one file per scenario directly under
-    // `trails/eval/android/sample-app/` (e.g. `clipboard-round-trip.trail.yaml`).
-    // The JUnit method name is derived from the filename (sans `.trail.yaml`).
-    val evalSampleAppTests =
-      evalSampleAppTrailsDir
-        .walkTopDown()
-        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-        .map { trailFile ->
-          val relPath = trailFile.relativeTo(evalSampleAppTrailsDir).path
-          val baseName = trailFile.name.removeSuffix(".trail.yaml")
-          val methodName = toMethodName(baseName)
-          val assetPath = "eval/android/sample-app/$relPath"
-          Pair(methodName, assetPath)
-        }
-
-    val testMethods = (instrumentationTests + evalSampleAppTests).sortedBy { it.first }.toList()
-
-    outputFile.writeText(
-      buildString {
-        appendLine("// AUTO-GENERATED — do not edit manually.")
-        appendLine(
-          "// Re-generate: ./gradlew :examples:android-sample-app-uitests:generateSampleAppTests"
-        )
-        appendLine()
-        appendLine("package xyz.block.trailblaze.examples.sampleapp.generated")
-        appendLine()
-        appendLine("import org.junit.Rule")
-        appendLine("import org.junit.Test")
-        appendLine("import xyz.block.trailblaze.android.AndroidTrailblazeRule")
-        appendLine()
-        appendLine("class GeneratedSampleAppTests {")
-        appendLine()
-        appendLine("  @get:Rule val rule = AndroidTrailblazeRule()")
-        appendLine()
-        testMethods.forEachIndexed { index, (method, path) ->
-          appendLine("  @Test")
-          appendLine("  fun $method() =")
-          val runFromAsset = "rule.runFromAsset(\"$path\")"
-          if (runFromAsset.length <= 95) {
-            appendLine("    $runFromAsset")
-          } else {
-            appendLine("    rule.runFromAsset(")
-            appendLine("      \"$path\"")
-            appendLine("    )")
-          }
-          if (index != testMethods.lastIndex) appendLine()
-        }
-        appendLine("}")
-      }
-    )
-
-    logger.lifecycle(
-      "Generated ${testMethods.size} tests → ${outputFile.relativeTo(projectDir.get().asFile)}"
-    )
-  }
-}
-
-tasks.register<GenerateSampleAppTestsTask>("generateSampleAppTests") {
-  description = "Generate JUnit instrumentation tests from trail YAML files for remote device farm"
-  group = "trailblaze"
-
-  trailsDir.set(
-    layout.projectDirectory.dir("../android-sample-app/trails/android-ondevice-instrumentation")
-  )
-  // Also pick up sample-app-targeted eval trails that live under the repo-root
-  // `trails/eval/android/sample-app/` per the [trails/eval/README.md] platform-only
-  // layout. Asset-staging for this dir is wired in [stageSampleAppEvalTrails] above —
-  // files land in the test APK at `eval/android/sample-app/<name>.trail.yaml`.
-  evalSampleAppTrailsDir.set(layout.projectDirectory.dir("../../../trails/eval/android/sample-app"))
-  outputFile.set(
-    layout.projectDirectory.file(
-      "src/androidTest/generated/xyz/block/trailblaze/examples/sampleapp/generated/GeneratedSampleAppTests.kt"
-    )
-  )
-  projectDir.set(layout.projectDirectory)
 }

@@ -58,10 +58,13 @@ data class RunTrailTool(
       deviceClassifiers = toolExecutionContext.trailblazeDeviceInfo.classifiers,
     )
 
+    // The trailhead (if any) is the deterministic step 0 — run its lowered step first, ahead of the
+    // trail's prompt steps, so a sub-trail starts from its declared state.
+    val trailheadSteps = items
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .map { it.trailhead.toPromptStep() }
     val recordedSteps =
-      items
-        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
-        .flatMap { it.promptSteps }
+      (trailheadSteps + items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().flatMap { it.promptSteps })
         .filter { it.recording != null }
 
     if (recordedSteps.isEmpty()) {

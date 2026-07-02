@@ -5,6 +5,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import xyz.block.trailblaze.applyScriptedToolMemoryDelta
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -97,7 +98,25 @@ class QuickJsTrailblazeTool(
     binding?.activeContext = toolExecutionContext
     return try {
       val resultJson = host.callTool(advertisedName.toolName, resolvedArgs, ctx)
-      resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
+      val toolResult = resultJson.toTrailblazeToolResult(toolName = advertisedName.toolName)
+      // Flush the handler's `ctx.memory.set(...)` / `.delete(...)` writes back into the shared
+      // AgentMemory, mirroring SubprocessTrailblazeTool. The in-process/on-device SDK
+      // (`defineTypedTool` → `attachMemoryDeltaToResult`) stamps the buffered diff onto the result's
+      // `_meta.trailblaze.memoryDelta`; applying it here is what makes a scripted tool's write
+      // visible to the NEXT tool's `ctx.memory.get(...)` on the QuickJS path (it previously wasn't —
+      // the write-then-read hand-off between two scripted tools). Gated on the DECODED
+      // `TrailblazeToolResult` being `Success` — not a raw `isError` field check — so a
+      // structurally-invalid envelope (e.g. missing `content`, which `toTrailblazeToolResult` maps
+      // to `Error.ExceptionThrown`) that happens to also carry a `memoryDelta` commits nothing.
+      // Checking `resultJson["isError"]` directly here would have let exactly that malformed-but-
+      // not-explicitly-errored shape slip past (isError absent → falsy → looked like success),
+      // silently mutating host memory from a call the caller sees fail. Mirrors the subprocess
+      // path's `response.isError != true` gate, but against the fully-decoded result rather than
+      // the raw wire field, since the QuickJS envelope has no SDK-guaranteed `isError` presence.
+      if (toolResult is TrailblazeToolResult.Success) {
+        applyScriptedToolMemoryDelta(toolExecutionContext.memory, resultJson["_meta"] as? JsonObject)
+      }
+      toolResult
     } catch (e: CancellationException) {
       // Coroutine cancellation must propagate — swallowing breaks structured concurrency
       // for session teardown, agent abort, etc. Same pattern the legacy BundleTrailblazeTool

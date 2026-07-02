@@ -27,7 +27,8 @@
 //           "supportedPlatforms": ["web"],
 //           "requiresContext": true,
 //           "requiresHost": false,
-//           "supportedDrivers": ["playwright-native"]
+//           "supportedDrivers": ["playwright-native"],
+//           "trailhead": { "to": "myapp/android/home_signed_in" }
 //         }
 //       },
 //       ...
@@ -110,13 +111,17 @@ const TRAILBLAZE_SDK_PACKAGE =
  * Adding a new field to `TrailblazeTypedToolSpec` requires updating all these
  * sites; there is no compile-time check that they agree.
  *
- * **`description` is the exception — a primary-descriptor field, NOT a `_meta`
- * key.** It's captured here like any other recognized field, but on the Kotlin
- * side `AnalyzerScriptedToolEnrichment` routes it into the resolved tool
- * description (YAML sidecar `description:` > spec `description` > TSDoc) rather
- * than projecting it into `_meta`. So `projectAnalyzerSpec` deliberately does NOT
- * forward it, and the two runtime `_meta` parsers above never read it — the
- * description rides the tool's primary descriptor envelope, which they don't touch.
+ * **`description` and `trailhead` are exceptions — primary-descriptor fields, NOT
+ * `_meta` keys.** Both are captured here like any other recognized field, but on the
+ * Kotlin side `AnalyzerScriptedToolEnrichment` routes them elsewhere instead of
+ * projecting them into `_meta`: `description` into the resolved tool description
+ * (YAML sidecar `description:` > spec `description` > TSDoc), `trailhead` into
+ * `InlineScriptToolConfig.trailhead` (the same `TrailheadMetadata` shape a
+ * `*.trailhead.yaml` sidecar's `trailhead:` block produces). So `projectAnalyzerSpec`
+ * deliberately does NOT forward either, and the two runtime `_meta` parsers above
+ * never read them — neither is a dispatch gate, so they never need to affect
+ * registration or execution, only discovery surfaces (`toolbox trailheads`, the
+ * Trail Runner "Use as Trailhead" picker).
  */
 const RECOGNIZED_SPEC_FIELDS = new Set([
   "description",
@@ -126,13 +131,16 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "supportedDrivers",
   "surfaceToLlm",
   "isRecordable",
+  "trailhead",
 ]);
 
 /**
- * Maximum recursion depth for [literalValueOf]. The recognized
- * `TrailblazeTypedToolSpec` fields are all 1-level shapes (boolean, string,
- * string array) — depth 2 covers `supportedPlatforms: ["web"]` and friends
- * with headroom. A pathological author literal like `[[[[[[[["web"]]]]]]]]`
+ * Maximum recursion depth for [literalValueOf]. Most recognized
+ * `TrailblazeTypedToolSpec` fields are 1-level shapes (boolean, string,
+ * string array) — `trailhead` is the one 2-level shape (`{ to: string,
+ * dynamic: boolean }`) — so depth 2 covers `supportedPlatforms: ["web"]`,
+ * `trailhead: { to: "..." }`, and friends with headroom. A pathological
+ * author literal like `[[[[[[[["web"]]]]]]]]`
  * (deliberate or accidental, perhaps via `as any`) won't exhaust the JS stack
  * before we bail out with `undefined` (treated upstream as "skip this field").
  * 8 picked because it's well beyond any realistic spec depth and well below
@@ -757,12 +765,14 @@ function specArgIsUncapturedReference(callExpression) {
  * `undefined` if the node isn't an inline literal we can safely read.
  *
  * Recognized shapes (matched against the value-shapes used by the recognized
- * `TrailblazeTypedToolSpec` fields, which are all boolean / string /
- * string[] today):
+ * `TrailblazeTypedToolSpec` fields — boolean / string / string[] for most,
+ * plus the one nested-object shape `trailhead: { to, dynamic }`):
  *   - `"text"` / `'text'` → string
  *   - `true` / `false` → boolean
  *   - `[expr, expr, ...]` → array (recursively; an element that doesn't
  *     resolve to a literal causes the whole array to return `undefined`)
+ *   - `{ key: expr, ... }` → object (recursively; unlike arrays this is a
+ *     PARTIAL-capture policy — see [objectLiteralValueOf])
  *
  * Identifier references, template literals with substitutions, function calls,
  * spread elements, numeric literals, the `null` keyword, and other expression
@@ -776,10 +786,12 @@ function specArgIsUncapturedReference(callExpression) {
  *
  * The `depth` parameter is the recursion-depth counter (defaults to 0 from
  * top-level call sites). Caps at [MAX_LITERAL_DEPTH] to defend against
- * pathologically nested array literals exhausting the JS stack.
+ * pathologically nested array/object literals exhausting the JS stack — a node
+ * at `depth == MAX_LITERAL_DEPTH` is rejected rather than processed, so at most
+ * `MAX_LITERAL_DEPTH` levels of nesting are ever walked.
  */
 function literalValueOf(node, depth = 0) {
-  if (depth > MAX_LITERAL_DEPTH) return undefined;
+  if (depth >= MAX_LITERAL_DEPTH) return undefined;
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
   }
@@ -800,7 +812,38 @@ function literalValueOf(node, depth = 0) {
     }
     return result;
   }
+  if (ts.isObjectLiteralExpression(node)) {
+    return objectLiteralValueOf(node, depth + 1);
+  }
   return undefined;
+}
+
+/**
+ * Resolve a nested object literal (e.g. `trailhead: { to: "...", dynamic: true }`) into a
+ * plain JSON-compatible object, or `undefined` if NOTHING on it resolved.
+ *
+ * **Partial-capture, unlike arrays.** A spread property, computed key, or unresolvable value
+ * is skipped rather than failing the whole object — matching [extractToolSpec]'s own
+ * top-level policy (skip the unresolvable field, keep the rest) rather than
+ * [literalValueOf]'s array policy (one bad element voids the whole array). Arrays are
+ * order-sensitive lists where a missing element changes meaning; an object's keys are
+ * independent, so dropping one unresolvable key doesn't misrepresent the others.
+ */
+function objectLiteralValueOf(node, depth) {
+  // Null-prototype: `prop.name.text` comes straight from author-controlled source (a `.ts` file),
+  // and a literal `{ __proto__: {...} }` property assignment would otherwise mutate `result`'s
+  // prototype instead of setting an own property — a `JSON.stringify`-serializable but
+  // surprising-to-consume object for anything that later walks this result with `for...in` or
+  // treats it as a plain record. `Object.create(null)` makes `__proto__` just another key.
+  const result = Object.create(null);
+  for (const prop of node.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue;
+    if (!ts.isIdentifier(prop.name) && !ts.isStringLiteral(prop.name)) continue;
+    const value = literalValueOf(prop.initializer, depth);
+    if (value === undefined) continue;
+    result[prop.name.text] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function extractLeadingTsDoc(node, source) {

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 
@@ -42,6 +43,25 @@ class TrailblazeYamlBuilder {
           target = target,
           driver = driver,
           platform = platform,
+        ),
+      ),
+    )
+  }
+
+  /**
+   * Add the trail's `trailhead:` — the deterministic step 0 (sign in / launch into a known state)
+   * that runs before any prompts. Optional NL [step] describing the starting state, plus the bootstrap
+   * [tools] that reach it. At least one must be provided (an empty trailhead is rejected at build).
+   */
+  fun trailhead(
+    step: String? = null,
+    tools: List<TrailblazeTool>? = null,
+  ) = apply {
+    recordings.add(
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(
+          step = step,
+          tools = tools?.map { fromTrailblazeTool(it) } ?: emptyList(),
         ),
       ),
     )

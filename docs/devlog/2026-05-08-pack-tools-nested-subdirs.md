@@ -8,7 +8,7 @@ date: 2026-05-08
 
 The [2026-04-27 trailmap manifest devlog](2026-04-27-pack-manifest-v1.md) introduced `<trailmap-id>/tools/<name>.<kind>.yaml` as the canonical location for trailmap-bundled tool YAMLs, and the [2026-05-08 library-vs-target trailmaps devlog](2026-05-08-library-vs-target-packs.md) added the auto-discovery hook (`ToolYamlLoader.discoverTrailmapBundledToolContents`) that registers every matching YAML in the trailmap's `tools/` dir into the global tool registry. Both pinned a deliberate constraint: tool YAMLs must be **direct children** of `tools/` — `<trailmap>/tools/<subdir>/foo.tool.yaml` was silently dropped, with a test (`trailmap-bundled YAML nested under tools subdirectory is NOT picked up`) and a kdoc rationale (*"the convention is intentionally narrow"*) enforcing it.
 
-That constraint outlives its purpose once a target trailmap grows past a handful of tools. The Square trailmap landed ~85 tool YAMLs across three platforms (web, android, ios) plus universal launch trailheads — all flat in one directory. Sister waypoints organize the same surface across `waypoints/{android,ios,web}/` subdirs without any registration drama, because the waypoint loader was always recursive. The asymmetry was the artifact of two different scan paths landing in different PRs, not a load-bearing design decision.
+That constraint outlives its purpose once a target trailmap grows past a handful of tools. The Square trailmap landed dozens of tool YAMLs across three platforms (web, android, ios) plus universal launch trailheads — all flat in one directory. Sister waypoints organize the same surface across `waypoints/{android,ios,web}/` subdirs without any registration drama, because the waypoint loader was always recursive. The asymmetry was the artifact of two different scan paths landing in different PRs, not a load-bearing design decision.
 
 This PR loosens the rule: **tool YAMLs can sit at any depth under `<trailmap>/tools/`**. The structural guarantee — *only* YAMLs under `tools/` register as tools, so a stray YAML at `<trailmap>/waypoints/foo.tool.yaml` doesn't accidentally pollute the registry — is preserved by keeping the `segments[1] == "tools"` check; what's relaxed is the prior `segments.size == 3` exact match, now `segments.size >= 3`. The auto-discovery hook itself was already recursive (uses `ClasspathResourceDiscovery.discoverFilenamesRecursive`); the segment check was the only thing rejecting nested matches.
 
@@ -47,7 +47,7 @@ The structural-integrity test `trailmap-bundled YAML in non-tools subdirectory i
 This same PR closes the symmetric asymmetry on the waypoint side. Before:
 
 - **Tools** were auto-discovered from `<trailmap>/tools/**.{tool,shortcut,trailhead}.yaml` — the manifest didn't list them.
-- **Waypoints** still had to be enumerated under `waypoints:` in `trailmap.yaml`. The Square trailmap manifest carried a 120-line list mirroring the on-disk directory structure exactly.
+- **Waypoints** still had to be enumerated under `waypoints:` in `trailmap.yaml`. The Square trailmap manifest carried a long list mirroring the on-disk directory structure exactly.
 
 Both sides were already doing recursive directory walks (Square's web waypoints sit four levels deep at `waypoints/web/dashboard/items/categories.waypoint.yaml`); only the resolution code differed. The tools side called `TrailmapSource.listSiblings` then iterated; the waypoints side iterated `manifest.waypoints` instead. There was no design reason for the split — same artifact of two PRs landing in different sequences.
 
@@ -77,6 +77,6 @@ The `waypoints: List<String>` slot stays in `TrailblazeTrailmapManifest` to keep
 
 ### Worked migration: Square
 
-The Square trailmap's `waypoints:` block went from ~120 lines to zero — the directory structure is the source of truth now. The remaining comment in `square/trailmap.yaml` only points at the rationale devlog (2026-05-07) and the `waypoints/web/` subdirectory.
+The Square trailmap's `waypoints:` block went from a long list to zero — the directory structure is the source of truth now. The remaining comment in `square/trailmap.yaml` only points at the rationale devlog (2026-05-07) and the `waypoints/web/` subdirectory.
 
 Symmetry checked: Square's tools were already auto-discovered after the previous PR; waypoints now match. `trailmap.yaml` reads as a target descriptor (id, target block, platform tool_sets, dependencies) rather than a directory mirror.

@@ -1,3 +1,7 @@
+// Isolated in its own `bundler/` subdirectory (still default package) so `build-logic/build.gradle
+// .kts` can compose just this subdir back into its own source set — its `trailblaze.author-tool-
+// bundle` plugin keeps compiling against `BundleAuthorToolsTask` without pulling in this module's
+// unrelated plugin/extension classes.
 import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject

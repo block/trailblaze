@@ -245,4 +245,91 @@ class AgentMemoryTest {
     assertContains(memory.sensitiveKeys, "token")
     assertFalse("token" in resolved)
   }
+
+  // ---- applyScriptedToolMemoryDelta -------------------------------------------------------------
+  // The models-level entry point both scripted-tool runtimes apply through: the subprocess/MCP path
+  // (via TrailblazeContextEnvelope.applyResultMemoryDelta, which delegates here) and the
+  // in-process/on-device QuickJS path (QuickJsTrailblazeTool.execute, which calls this directly).
+
+  private fun resultMetaWith(build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) =
+    buildJsonObject { put("trailblaze", buildJsonObject(build)) }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta merges sets and reports applied`() {
+    val memory = AgentMemory().apply { remember("existing", "old") }
+    val applied = applyScriptedToolMemoryDelta(
+      memory,
+      resultMetaWith { put("memoryDelta", buildJsonObject { put("user", "ada"); put("existing", "new") }) },
+    )
+    assertTrue(applied)
+    assertEquals("ada", memory.variables["user"])
+    assertEquals("new", memory.variables["existing"])
+  }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta applies deletions`() {
+    val memory = AgentMemory().apply {
+      remember("keep", "k")
+      remember("drop", "d")
+    }
+    applyScriptedToolMemoryDelta(
+      memory,
+      resultMetaWith { put("memoryDeletions", buildJsonArray { add(JsonPrimitive("drop")) }) },
+    )
+    assertFalse(memory.has("drop"))
+    assertEquals("k", memory.variables["keep"])
+  }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta no-ops on null meta or missing trailblaze envelope`() {
+    val memory = AgentMemory().apply { remember("k", "v") }
+    assertFalse(applyScriptedToolMemoryDelta(memory, null))
+    assertFalse(applyScriptedToolMemoryDelta(memory, buildJsonObject { put("other", "bucket") }))
+    assertEquals("v", memory.variables["k"])
+  }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta preserves sensitive marker on overwrite and deletion`() {
+    // A scripted tool never sees sensitive values in its snapshot, so it must not be able to leak a
+    // sensitive value into logs (overwrite routes through rememberSensitive) nor unmark the key
+    // (deletion drops the value but keeps the marker). Host owns the sensitivity lifecycle.
+    val memory = AgentMemory().apply { rememberSensitive("pin", "1234") }
+    applyScriptedToolMemoryDelta(memory, resultMetaWith { put("memoryDelta", buildJsonObject { put("pin", "5678") }) })
+    assertEquals("5678", memory.variables["pin"])
+    assertContains(memory.sensitiveKeys, "pin")
+
+    applyScriptedToolMemoryDelta(memory, resultMetaWith { put("memoryDeletions", buildJsonArray { add(JsonPrimitive("pin")) }) })
+    assertFalse(memory.has("pin"))
+    assertContains(memory.sensitiveKeys, "pin")
+  }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta skips non-string entries`() {
+    // A producer-side bug that emits one bad entry must not sabotage the sibling writes.
+    val memory = AgentMemory()
+    applyScriptedToolMemoryDelta(
+      memory,
+      resultMetaWith { put("memoryDelta", buildJsonObject { put("good", "value"); put("bad", JsonPrimitive(42)) }) },
+    )
+    assertEquals("value", memory.variables["good"])
+    assertNull(memory.variables["bad"])
+  }
+
+  @Test
+  fun `applyScriptedToolMemoryDelta deletion wins when the same key appears in both sets and deletions`() {
+    // Pins the documented precedence for an otherwise-impossible shape (the well-behaved TS SDK's
+    // last-write-wins buffer can never emit the same key in both `memoryDelta` and
+    // `memoryDeletions` — see `drainDelta` in memory.ts). This function is a standalone,
+    // defensive entry point, so the behavior for a malformed delta from any other producer is
+    // still pinned deliberately: sets apply before deletions, so deletion wins.
+    val memory = AgentMemory().apply { remember("k", "old") }
+    applyScriptedToolMemoryDelta(
+      memory,
+      resultMetaWith {
+        put("memoryDelta", buildJsonObject { put("k", "new") })
+        put("memoryDeletions", buildJsonArray { add(JsonPrimitive("k")) })
+      },
+    )
+    assertFalse(memory.has("k"))
+  }
 }

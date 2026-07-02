@@ -20,7 +20,7 @@ What the LLM sees as graph context lands on a spectrum. Cheapest is just the too
 
 ## Express-route shortcuts as graph-equivalent edges
 
-The current `*.shortcut.yaml` schema already accepts a multi-step `tools:` body. We've underused it: 64 of 64 atomic shortcuts in the calendar trailmap landed today are single-tap edges. That's correct for the atom layer — every adjacent waypoint pair has a one-tap edge — but the framework also wants *express routes* for common deep paths.
+The current `*.shortcut.yaml` schema already accepts a multi-step `tools:` body. We've underused it: every atomic shortcut in the calendar trailmap landed today is a single-tap edge. That's correct for the atom layer — every adjacent waypoint pair has a one-tap edge — but the framework also wants *express routes* for common deep paths.
 
 The key insight is that an express route is just an edge from the planner's perspective. A `from: day_view → to: event_saved` shortcut whose body fires seven taps is graph distance 1, full stop. Shortest-path picks it over the equivalent seven-atom traversal automatically. No special casing. The planner doesn't know or care whether an edge is one tap or seven; the executor just walks the body.
 

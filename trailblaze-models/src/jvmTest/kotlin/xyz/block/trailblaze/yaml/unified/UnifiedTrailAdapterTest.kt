@@ -143,11 +143,12 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
-  fun `config lowering drops devices and keeps id target context memory metadata`() {
+  fun `config lowering drops devices and keeps id target description context memory metadata`() {
     val unifiedConfig = UnifiedTrailConfig(
       id = "myapp/checkout",
       target = "myapp",
-      devices = listOf("android-phone", "ios"),
+      description = "Open the checkout flow and pay.",
+      devices = mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
       context = "Test context",
       memory = mapOf("email" to "tb+test@example.com"),
       metadata = mapOf("jira" to "PROJ-123"),
@@ -155,15 +156,54 @@ class UnifiedTrailAdapterTest {
     val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)
     assertEquals("myapp/checkout", v1.id)
     assertEquals("myapp", v1.target)
+    // description is runtime-surfaced; it must round-trip back to v1, not be dropped.
+    assertEquals("Open the checkout flow and pay.", v1.description)
     assertEquals("Test context", v1.context)
     assertEquals(mapOf("jira" to "PROJ-123"), v1.metadata)
     // memory flows through so the v3 runner can pre-seed AgentMemory before the first step.
     // Without this, `config.memory:` in v3 YAMLs would parse but never reach the runner.
     assertEquals(mapOf("email" to "tb+test@example.com"), v1.memory)
+    // driver is resolved per-device at lowerToTrailItems time, not by lowerConfig alone.
+    assertNull(v1.driver, "lowerConfig without a resolved driver leaves v1.driver null")
     // unified-only fields that the v1 executor doesn't model are dropped.
     assertNull(v1.platform, "the unified format has no platform field — must lower as null")
-    assertNull(v1.driver, "the unified format has no driver field — must lower as null")
     assertNull(v1.title, "the unified format has no title field — must lower as null")
+  }
+
+  @Test
+  fun `per-classifier driver resolves closest-wins for the device under test`() {
+    // A multi-platform trail pins a driver per platform; each device gets its own.
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf(
+          "android" to "ANDROID_ONDEVICE_ACCESSIBILITY",
+          "ios" to "IOS_HOST",
+        ),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+    )
+
+    fun driverFor(vararg segs: String): String? =
+      UnifiedTrailAdapter.lowerToTrailItems(unified, segs.map { classifier(it) })
+        .filterIsInstance<TrailYamlItem.ConfigTrailItem>().single().config.driver
+
+    // android-phone → chain [android-phone, android] → matches the `android` pin.
+    assertEquals("ANDROID_ONDEVICE_ACCESSIBILITY", driverFor("android", "phone"))
+    // iPhone → chain [ios-iphone, ios] → matches the `ios` pin (different driver).
+    assertEquals("IOS_HOST", driverFor("ios", "iphone"))
+  }
+
+  @Test
+  fun `driver is null when the config pins none for the device's classifier chain`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to "IOS_HOST")),
+      trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
+    )
+    val v1 = UnifiedTrailAdapter.lowerToTrailItems(unified, listOf(classifier("android"), classifier("phone")))
+      .filterIsInstance<TrailYamlItem.ConfigTrailItem>().single().config
+    assertNull(v1.driver, "no android pin → driver resolves at run time (null here)")
   }
 
   @Test
@@ -171,6 +211,53 @@ class UnifiedTrailAdapterTest {
     val unifiedConfig = UnifiedTrailConfig(id = "x", target = "y")
     val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)
     assertNull(v1.memory, "absent config.memory must round-trip to v1 as null, not empty map")
+  }
+
+  @Test
+  fun `resolveDriver resolves the per-classifier pin closest-wins for the device`() {
+    // The driver a unified trail pins for a device must be resolvable BEFORE device selection
+    // (the CLI needs it to pick the ANDROID_ONDEVICE_ACCESSIBILITY device variant rather than
+    // the INSTRUMENTATION default). This is that resolution.
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf(
+        "android" to "ANDROID_ONDEVICE_ACCESSIBILITY",
+        "android-tablet" to "ANDROID_ONDEVICE_INSTRUMENTATION",
+        "ios" to "IOS_HOST",
+      ),
+    )
+    // Phone → chain [android-phone, android, phone] → family `android` pin.
+    assertEquals(
+      "ANDROID_ONDEVICE_ACCESSIBILITY",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("android"), classifier("phone"))),
+    )
+    // Tablet → chain [android-tablet, android, tablet] → the more-specific `android-tablet` pin.
+    assertEquals(
+      "ANDROID_ONDEVICE_INSTRUMENTATION",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("android"), classifier("tablet"))),
+    )
+    // iPhone → the `ios` pin.
+    assertEquals(
+      "IOS_HOST",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("ios"), classifier("iphone"))),
+    )
+  }
+
+  @Test
+  fun `resolveDriver returns null when nothing matches or no pins exist`() {
+    val pinned = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to "IOS_HOST"))
+    // Android device, only an ios pin → no match → null (driver resolves at run time).
+    assertNull(UnifiedTrailAdapter.resolveDriver(pinned, listOf(classifier("android"), classifier("phone"))))
+    // Empty classifier list (e.g. no --device spec) → null, never throws.
+    assertNull(UnifiedTrailAdapter.resolveDriver(pinned, emptyList()))
+    // No devices map at all → null.
+    assertNull(
+      UnifiedTrailAdapter.resolveDriver(
+        UnifiedTrailConfig(id = "x", target = "y"),
+        listOf(classifier("android")),
+      ),
+    )
   }
 
   @Test

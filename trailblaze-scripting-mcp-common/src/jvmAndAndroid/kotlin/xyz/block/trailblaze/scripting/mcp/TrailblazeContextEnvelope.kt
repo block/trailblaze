@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.scripting.mcp
 
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
@@ -10,6 +9,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.applyScriptedToolMemoryDelta
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -70,13 +70,20 @@ object TrailblazeContextEnvelope {
   /** Top-level `_meta` bucket holding the Trailblaze envelope. */
   const val META_KEY: String = "trailblaze"
 
-  // Wire-key constants for the `_meta.trailblaze.{memory,memoryDelta,memoryDeletions}`
-  // sub-fields. Mirrored on the TS side as `META_KEY_MEMORY` / `META_KEY_MEMORY_DELTA` /
-  // `META_KEY_MEMORY_DELETIONS` in [./sdks/typescript/src/memory.ts]; a rename must
-  // happen on both sides in lockstep or the inbound/outbound parsers silently drift.
+  // Wire-key constant for the `_meta.trailblaze.memory` sub-field (the inbound snapshot this
+  // module builds). Mirrored on the TS side as `META_KEY_MEMORY` in
+  // [./sdks/typescript/src/memory.ts]; a rename must happen on both sides in lockstep or the
+  // inbound parser silently drifts.
+  //
+  // The sibling OUTBOUND keys — `memoryDelta` / `memoryDeletions` — used to live here too, but
+  // this module never reads them directly anymore: [applyResultMemoryDelta] below delegates
+  // entirely to [xyz.block.trailblaze.applyScriptedToolMemoryDelta] in `:trailblaze-models`,
+  // which owns those two constants as the single Kotlin-side declaration (see
+  // `ScriptedToolMemoryDelta.kt`) — both the subprocess path (this module) and the on-device
+  // QuickJS path (`:trailblaze-quickjs-tools`, which can't depend on this module) read them from
+  // there. Keeping a second copy here would have been dead code from the day it stopped being
+  // read, and a real drift risk the day someone renamed one copy and not the other.
   internal const val META_KEY_MEMORY: String = "memory"
-  internal const val META_KEY_MEMORY_DELTA: String = "memoryDelta"
-  internal const val META_KEY_MEMORY_DELETIONS: String = "memoryDeletions"
 
   /**
    * Runtime tag stamped onto `_meta.trailblaze.runtime` for invocations dispatched through
@@ -184,55 +191,21 @@ object TrailblazeContextEnvelope {
    * Apply a tool-result memory delta to [memory]. Reads `_meta.trailblaze.memoryDelta`
    * (a `Record<String, String>` of sets) and `_meta.trailblaze.memoryDeletions` (a
    * `List<String>` of removed keys) from the [resultMeta] block emitted by the TS SDK's
-   * `attachMemoryDelta`. Symmetric counterpart to [buildMetaTrailblaze]'s `memory`
+   * `attachMemoryDeltaToResult`. Symmetric counterpart to [buildMetaTrailblaze]'s `memory`
    * snapshot — that one carries host-to-handler reads, this one carries
    * handler-to-host writes.
    *
-   * No-op when [resultMeta] is null, has no `trailblaze` envelope, or has neither
-   * `memoryDelta` nor `memoryDeletions` set. Malformed entries (non-string values, a
-   * non-string key in deletions) are skipped individually rather than failing the
-   * apply — a producer-side bug that emits a single bad entry shouldn't sabotage the
-   * other writes in the same delta.
-   *
-   * Returns true when at least one set or deletion was applied; useful for tests and
-   * for callers that want to log whether a delta arrived.
+   * Thin delegate to [xyz.block.trailblaze.applyScriptedToolMemoryDelta] in `:trailblaze-models`
+   * — see that function's kdoc for the full apply semantics (no-op conditions, malformed-entry
+   * handling, sensitive-key preservation). Kept here, rather than having
+   * [xyz.block.trailblaze.scripting.subprocess.SubprocessTrailblazeTool] (this function's only
+   * production caller) call the shared function directly, so the subprocess runtime's
+   * envelope-building ([buildMetaTrailblaze]) and envelope-applying ([applyResultMemoryDelta])
+   * halves stay paired on this one object — a caller reasoning about the subprocess wire
+   * contract reads both directions from the same place.
    */
-  fun applyResultMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): Boolean {
-    if (resultMeta == null) return false
-    val trailblaze = resultMeta[META_KEY] as? JsonObject ?: return false
-    var applied = false
-    (trailblaze[META_KEY_MEMORY_DELTA] as? JsonObject)?.forEach { (k, v) ->
-      val prim = v as? JsonPrimitive ?: return@forEach
-      if (!prim.isString) return@forEach
-      // Preserve redaction on overwrites: if the host already marked this key sensitive
-      // (e.g. `rememberSensitive("pin", ...)`), the TS-side scripted tool can't see the
-      // sensitive flag through the snapshot, but the LOG it emits via `remember` would
-      // leak the new value in plain text. Route the apply through `rememberSensitive`
-      // when the key carries an existing sensitive marker so the log stays `[REDACTED]`.
-      if (k in memory.sensitiveKeys) {
-        memory.rememberSensitive(k, prim.content)
-      } else {
-        memory.remember(k, prim.content)
-      }
-      applied = true
-    }
-    (trailblaze[META_KEY_MEMORY_DELETIONS] as? JsonArray)?.forEach { entry ->
-      val prim = entry as? JsonPrimitive ?: return@forEach
-      if (!prim.isString) return@forEach
-      val k = prim.content
-      if (k in memory.sensitiveKeys) {
-        // Symmetric to the sensitive-preserve guard on the set path: a TS scripted tool
-        // can clear a sensitive value, but it shouldn't be able to UNMARK the key — the
-        // host owns the sensitivity lifecycle. Drop the value only; keep the marker so a
-        // future `rememberSensitive`/delta-write through this key still redacts logs.
-        memory.variables.remove(k)
-      } else {
-        memory.delete(k)
-      }
-      applied = true
-    }
-    return applied
-  }
+  fun applyResultMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): Boolean =
+    applyScriptedToolMemoryDelta(memory, resultMeta)
 
   /**
    * Wire shape of the session's resolved target, projected into the `_meta.trailblaze.target`

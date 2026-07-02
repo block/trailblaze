@@ -513,6 +513,53 @@ class PerTrailmapTsconfigEmitterTest {
     }
   }
 
+  @Test
+  fun `emitClasspathValidationTsconfigs writes a tsconfig into the scratch dir keyed by id`() {
+    // Classpath-bundled targets get their validation-surface tsconfig in a caller-supplied
+    // scratch dir (not their JAR). The `paths` mapping must still resolve to the workspace SDK
+    // bundle via a correctly-computed relative path from the scratch tools/ dir. No `.gitignore`
+    // is written (the scratch tree lives under an already-ignored `.trailblaze/`).
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val outputBase = File(workspaceRoot, ".trailblaze/trail-validation")
+
+    val emitted = PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs(
+      workspaceRoot = workspaceRoot.toPath(),
+      trailmapIds = listOf("bundled_app"),
+      outputBaseDir = outputBase.toPath(),
+    )
+
+    assertEquals(1, emitted.size, "expected one tsconfig for the classpath target: $emitted")
+    val tsconfig = File(outputBase, "bundled_app/tools/tsconfig.json")
+    assertTrue(tsconfig.isFile, "expected tsconfig at $tsconfig")
+    val rendered = tsconfig.readText()
+    // From <workspace>/.trailblaze/trail-validation/bundled_app/tools up to
+    // <workspace>/.trailblaze/sdk/dist/index is 3 `..` segments back to `.trailblaze/`.
+    assertTrue("expected paths mapping to the SDK bundle: $rendered") {
+      rendered.contains("\"@trailblaze/scripting\": [\"../../../sdk/dist/index\"]")
+    }
+    assertTrue("expected framework banner: $rendered") {
+      rendered.contains(PerTrailmapTsconfigEmitter.FRAMEWORK_BANNER)
+    }
+    assertFalse("must not emit a .gitignore into the scratch tree") {
+      File(outputBase, "bundled_app/.gitignore").exists()
+    }
+  }
+
+  @Test
+  fun `emitClasspathValidationTsconfigs is a no-op for an empty id list`() {
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val outputBase = File(workspaceRoot, ".trailblaze/trail-validation")
+
+    val emitted = PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs(
+      workspaceRoot = workspaceRoot.toPath(),
+      trailmapIds = emptyList(),
+      outputBaseDir = outputBase.toPath(),
+    )
+
+    assertTrue(emitted.isEmpty(), "expected no tsconfig for an empty id list: $emitted")
+    assertFalse("scratch dir must stay empty for an empty id list") { outputBase.exists() }
+  }
+
   private fun filesystemTrailmap(id: String, trailmapDir: File): ResolvedTrailmap = ResolvedTrailmap(
     manifest = TrailblazeTrailmapManifest(
       id = id,

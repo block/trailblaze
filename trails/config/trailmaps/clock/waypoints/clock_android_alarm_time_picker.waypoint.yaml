@@ -1,14 +1,12 @@
 id: "clock/android/alarm_time_picker"
 description: >
-  Google Clock app, Material time-picker dialog is open with the radial clock
+  AOSP Desk Clock app, Material time-picker dialog is open with the radial clock
   face, AM/PM toggle, and OK/Cancel buttons. Reached after tapping the FAB on
   the alarm tab.
 
-  Resource IDs use the `{{target.appId}}` template variable. In-session it expands
-  to the single resolved app id (the Google variant `com.google.android.deskclock`
-  or the AOSP variant `com.android.deskclock`, whichever is installed); at
-  log-replay time it falls back to an alternation over both app_ids declared in
-  the clock target.
+  Resource IDs use the `{{target.appId}}` template variable. In-session and at
+  log-replay time it expands to the clock target's single app id
+  `com.android.deskclock` (the AOSP Desk Clock).
 android:
   required:
     - description: "Radial clock face (uniquely indicates the time-picker dialog)"

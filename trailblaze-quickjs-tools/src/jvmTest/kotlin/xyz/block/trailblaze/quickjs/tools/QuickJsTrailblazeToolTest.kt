@@ -356,6 +356,114 @@ class QuickJsTrailblazeToolTest {
     assertEquals(null, success.structuredContent)
   }
 
+  @Test
+  fun `execute flushes result memoryDelta into the shared AgentMemory`() = runBlocking {
+    // Root-cause regression for the write-then-read hand-off between two scripted tools: a scripted
+    // tool's `ctx.memory.set(...)` is buffered on the JS side and surfaced as
+    // `_meta.trailblaze.memoryDelta` on the result. execute() must merge it into the shared
+    // AgentMemory so the NEXT tool's `ctx.memory.get(...)` sees it. Before this fix the QuickJS path
+    // dropped the write entirely (only the subprocess path flushed).
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["writer"] = {
+        name: "writer",
+        spec: {},
+        handler: async () => ({
+          content: [{ type: "text", text: "wrote" }],
+          _meta: { trailblaze: { memoryDelta: { session_token: "tok-123" } } },
+        }),
+      };
+      """.trimIndent(),
+    )
+    val memory = AgentMemory()
+    val tool = QuickJsTrailblazeTool(host, ToolName("writer"), buildJsonObject {})
+    val result = tool.execute(buildContext(memory = memory))
+    assertTrue("expected Success, got $result") { result is TrailblazeToolResult.Success }
+    // The observable contract: the write is now visible in the host memory the next tool reads from.
+    assertEquals("tok-123", memory.variables["session_token"])
+  }
+
+  @Test
+  fun `execute applies result memoryDeletions into the shared AgentMemory`() = runBlocking {
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["deleter"] = {
+        name: "deleter",
+        spec: {},
+        handler: async () => ({
+          content: [{ type: "text", text: "deleted" }],
+          _meta: { trailblaze: { memoryDeletions: ["staleKey"] } },
+        }),
+      };
+      """.trimIndent(),
+    )
+    val memory = AgentMemory().apply {
+      remember("staleKey", "old")
+      remember("keepKey", "v")
+    }
+    val tool = QuickJsTrailblazeTool(host, ToolName("deleter"), buildJsonObject {})
+    tool.execute(buildContext(memory = memory))
+    assertTrue("staleKey should be deleted") { !memory.has("staleKey") }
+    assertEquals("v", memory.variables["keepKey"])
+  }
+
+  @Test
+  fun `execute leaves memory untouched when the result is an error envelope`() = runBlocking {
+    // Transactional contract, symmetric with SubprocessTrailblazeTool's `response.isError != true`
+    // gate: a failed dispatch commits no memory writes even if the error envelope carries a delta.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["failWrite"] = {
+        name: "failWrite",
+        spec: {},
+        handler: async () => ({
+          isError: true,
+          content: [{ type: "text", text: "nope" }],
+          _meta: { trailblaze: { memoryDelta: { session_token: "should-not-persist" } } },
+        }),
+      };
+      """.trimIndent(),
+    )
+    val memory = AgentMemory()
+    val tool = QuickJsTrailblazeTool(host, ToolName("failWrite"), buildJsonObject {})
+    val result = tool.execute(buildContext(memory = memory))
+    assertTrue("expected Error, got $result") { result is TrailblazeToolResult.Error }
+    assertEquals(null, memory.variables["session_token"])
+  }
+
+  @Test
+  fun `execute leaves memory untouched when the envelope is malformed but not explicitly isError`() =
+    runBlocking {
+      // Code-review regression: the delta-apply gate must key off the DECODED TrailblazeToolResult
+      // (Success vs Error), not a raw `isError` field check. A bundle bug can return a structurally
+      // invalid envelope — e.g. missing `content` entirely — that `toTrailblazeToolResult` maps to
+      // Error.ExceptionThrown even though `isError` is absent (so a naive `isError == true` check
+      // would have read it as a success and committed the delta anyway).
+      val host = connect(
+        """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["malformedWrite"] = {
+        name: "malformedWrite",
+        spec: {},
+        handler: async () => ({
+          result: 42,
+          _meta: { trailblaze: { memoryDelta: { session_token: "should-not-persist" } } },
+        }),
+      };
+      """.trimIndent(),
+      )
+      val memory = AgentMemory()
+      val tool = QuickJsTrailblazeTool(host, ToolName("malformedWrite"), buildJsonObject {})
+      val result = tool.execute(buildContext(memory = memory))
+      assertTrue("expected Error for the missing-content envelope, got $result") {
+        result is TrailblazeToolResult.Error
+      }
+      assertEquals(null, memory.variables["session_token"])
+    }
+
   private suspend fun connect(
     bundleJs: String,
     bundleFilename: String = "tools.bundle.js",
