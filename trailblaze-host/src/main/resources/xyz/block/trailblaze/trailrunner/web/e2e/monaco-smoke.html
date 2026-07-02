@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Monaco LSP smoke</title>
+<!-- Loads ONLY the LSP client module — no React app, no daemon. Monaco itself is lazy-loaded from the
+     CDN on the first mountTypescript() call, so merely loading this module is hermetic (no network):
+     it just has to parse and publish window.TBMonaco, which is the contract tools.jsx feature-detects
+     to decide between the Monaco editor and the CodeMirror fallback. -->
+<script src="../app/editor/monaco-lsp.js"></script>
+</head>
+<body>
+<div id="root"></div>
+</body>
+</html>

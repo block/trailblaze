@@ -1,0 +1,366 @@
+:root {
+  /* Trail Runner semantic colors — ONE meaning per hue (Design for Hackers ch08/ch09: functional color).
+     Status hues use base palette tokens; the AI/blaze accent is Trail Runner's one signature
+     color. Use these by MEANING, never by appearance — if it isn't the listed concept, don't use the hue. */
+  --tb-pass:    var(--tb-primary-green);     /* success · passed · done · primary "go" action (brand green — used sparingly) */
+  --tb-fail:    var(--status-danger);  /* failure · error · destructive */
+  --tb-running: #5e9bff;               /* in-progress · running · active · informational */
+  --tb-link:    var(--tb-running);     /* links · "edit"/"open" affordances · filenames — the informational blue (a link is an informational affordance) */
+  --tb-warning: #ff9d2e;               /* warning · caution · needs attention · self-healed */
+  --tb-amber:   var(--tb-warning);     /* legacy alias for --tb-warning (kept so existing call sites resolve) */
+  --tb-ai:      #b58cff;               /* AI · blaze · prompt-authored content — the agent "magic" accent */
+  --tb-analytics: #f5b041;             /* analytics / metrics gold */
+  --tb-danger-text: #ffb3b8;
+
+  --fz-2xs: 10.5px; --fz-xs: 11.5px; --fz-sm: 12.5px; --fz-md: 13.5px;
+  --fz-lg: 15.5px; --fz-xl: 20px; --fz-2xl: 26px;
+}
+
+* { box-sizing: border-box; }
+
+.tb-window { user-select: none; -webkit-user-select: none; cursor: default; }
+.tb-window input, .tb-window textarea,
+.tb-window .tb-mono, .tb-window pre, .tb-window code, .tb-window .hljs,
+.tb-window [data-selectable] {
+  user-select: text; -webkit-user-select: text; cursor: auto;
+}
+
+:where(button, [role="button"], a, select, .tb-nav, .tb-pal-row, .tb-tab):focus-visible {
+  outline: 2px solid var(--tb-primary-green);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.tb-btn:active { transform: translateY(0.5px); }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg-window);
+  font-family: var(--font-display);
+  color: var(--text-standard);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--tb-hairline-strong); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--tb-hairline-stronger); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+button { font-family: inherit; cursor: pointer; }
+[data-lucide] { stroke-width: 1.6; }
+
+.tb-window {
+  position: fixed; inset: 0; overflow: hidden;
+  display: flex; flex-direction: column; background: var(--bg-window);
+}
+.tb-native .tb-window { padding-top: 28px; }
+.tb-body { flex: 1; min-height: 0; display: flex; }
+
+.tb-rail {
+  width: 214px; flex: 0 0 214px; background: transparent;
+  display: flex; flex-direction: column;
+  padding: 12px 10px; transition: width .18s var(--ease-out-soft); overflow: hidden;
+}
+.tb-brand { display: flex; align-items: center; padding: 4px 8px 12px; white-space: nowrap; }
+.tb-brand .name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.tb-rail-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+.tb-rail-group { margin-bottom: 13px; }
+.tb-rail-h { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-subtle); padding: 0 9px 5px; white-space: nowrap; }
+.tb-nav {
+  display: flex; align-items: center; gap: 11px; padding: 7px 9px; border-radius: 8px;
+  color: var(--text-subtle-variant); font-size: 13.5px; font-weight: 500; white-space: nowrap;
+  position: relative; transition: background .12s, color .12s; margin-bottom: 1px;
+}
+.tb-nav:hover { background: var(--bg-standard); color: var(--text-standard); }
+/* Nav items carry their own active highlight (bg + green bar), so the global green focus-visible ring
+   is redundant noise here — replace it with a quiet background (keyboard feedback, no border). Listed
+   before .active so a focused active item keeps its prominent fill. */
+.tb-nav:focus-visible { outline: none; background: var(--bg-standard); color: var(--text-standard); }
+.tb-nav.active { background: var(--bg-prominent); color: var(--text-standard); font-weight: 600; }
+.tb-nav.active::before { content:""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 99px; background: var(--tb-primary-green); }
+.tb-nav .ico { flex: 0 0 18px; display: inline-flex; }
+.tb-nav .cnt { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--text-subtle); background: var(--bg-standard); padding: 1px 7px; border-radius: 99px; }
+.tb-rail-foot { padding-top: 8px; }
+
+/* Right rail — mirrors .tb-rail on the opposite edge; holds the portaled pair-with-agent chat.
+   Zero width when empty (no draft open) so it doesn't reserve space on other screens. */
+.tb-rail-right { flex: 0 0 auto; display: flex; align-items: stretch; }
+
+@media (max-width: 1000px) {
+  .tb-rail { width: 60px; flex-basis: 60px; }
+  .tb-rail .label, .tb-rail .tb-rail-h, .tb-rail .tb-brand .name, .tb-rail .cnt { display: none; }
+  .tb-rail .tb-nav { justify-content: center; padding: 9px; }
+}
+
+.tb-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background: var(--bg-sheet);
+  margin: 0 12px 12px 0; border-radius: 14px;
+  border: 1px solid var(--tb-hairline);
+  box-shadow: 0 1px 3px rgba(0,0,0,.05); overflow: hidden;
+}
+.tb-colsplit {
+  flex: 0 0 5px; align-self: stretch; margin: 0 -2px; cursor: col-resize;
+  background: transparent; transition: background .12s var(--ease-out-soft); z-index: 5;
+}
+.tb-colsplit:hover, .tb-colsplit:active { background: var(--tb-hairline-strong); }
+.tb-screen { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+
+.tb-kbd { font-size: 11px; color: var(--text-subtle); border: 1px solid var(--tb-hairline-strong); border-radius: 5px; padding: 1px 6px; font-family: var(--font-mono); }
+
+.tb-btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--tb-hairline-strong); background: var(--bg-prominent); color: var(--text-standard); font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 99px; white-space: nowrap; transition: background .12s; }
+.tb-btn:hover { background: var(--bg-extra-prominent); }
+.tb-btn.ghost { background: transparent; border-color: transparent; color: var(--text-subtle-variant); }
+.tb-btn.ghost:hover { background: var(--bg-standard); color: var(--text-standard); }
+.tb-btn.primary { background: var(--tb-primary-green); color: #00220a; border-color: transparent; font-weight: 700; }
+.tb-btn.primary:hover { background: #00c711; }
+.tb-btn:disabled { opacity: .4; cursor: not-allowed; }
+.tb-btn:disabled:hover { background: var(--bg-prominent); }
+.tb-btn.primary:disabled:hover { background: var(--tb-primary-green); }
+.tb-btn.sm { padding: 6px 11px; font-size: 12.5px; }
+.tb-btn.danger { color: var(--status-danger); border-color: rgba(248,71,82,.3); background: rgba(248,71,82,.08); }
+
+.tb-card { background: var(--bg-subtle); border: 1px solid var(--tb-hairline); border-radius: 12px; }
+.tb-card.pad { padding: 16px 18px; }
+.tb-h1 { font-size: 25px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
+.tb-h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
+.tb-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-subtle); }
+.tb-sub { font-size: 13px; color: var(--text-subtle); }
+.tb-mono { font-family: var(--font-mono); }
+
+.tb-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 6px; background: var(--bg-prominent); color: var(--text-subtle-variant); white-space: nowrap; }
+.tb-chip.green { background: rgba(0,224,19,.12); color: #00E013; }
+.tb-chip.red { background: rgba(248,71,82,.14); color: #F84752; }
+.tb-chip.blue { background: rgba(94,155,255,.16); color: #5e9bff; }
+.tb-chip.amber { background: rgba(255,135,0,.16); color: #ff9d2e; }
+.tb-chip.purple { background: rgba(151,82,255,.18); color: #b58cff; }
+.tb-dot { width: 8px; height: 8px; border-radius: 99px; flex: 0 0 auto; }
+
+/* Split token: a two-segment pill, label on the left, value on the right (shields-badge style). */
+.tb-split { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--tb-hairline-strong); border-radius: 6px; overflow: hidden; font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.tb-split > .k { display: inline-flex; align-items: center; padding: 4px 8px; background: var(--bg-prominent); color: var(--text-subtle); letter-spacing: .01em; }
+.tb-split > .v { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 9px; background: var(--bg-elevated); color: var(--text-standard); border-left: 1px solid var(--tb-hairline-strong); }
+.tb-split > .v > .vt { overflow: hidden; text-overflow: ellipsis; }
+
+/* minimal commit-readiness segments (drafts header): a short colored line per gate. green=done,
+   red=failed (blocks save), muted=pending. The line is a button (hover bg + tooltip, click to fix). */
+/* Readiness meter: segments bound into one recessed pill (common region, ch06) so they read as a
+   single control, sized to match the adjacent Finalize button + kebab for a cohesive action cluster. */
+.tb-ready { display: inline-flex; align-items: center; gap: 4px; height: 30px; box-sizing: border-box; padding: 0 9px; border-radius: 999px; background: var(--bg-subtle); border: 1px solid var(--tb-hairline-strong); }
+.tb-ready-line { width: 20px; height: 22px; flex: 0 0 auto; padding: 0; border: none; background: transparent; cursor: pointer; position: relative; border-radius: 6px; }
+.tb-ready-line::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 5px; transform: translateY(-50%); border-radius: 99px; background: var(--bg-extra-prominent); transition: background .12s, filter .12s; }
+.tb-ready-line[data-state="done"]::after { background: #00E013; }
+.tb-ready-line[data-state="fail"]::after { background: #F84752; }
+.tb-ready-line:hover::after { filter: brightness(1.18); }
+.tb-ready-line:active::after { transform: translateY(-50%) scale(.92); }
+.tb-ready-line:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -1px; }
+
+/* square icon button (kebab "more actions") — square hover state, like macOS toolbar buttons */
+.tb-icon-sq { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 auto; border: none; border-radius: 8px; background: transparent; color: var(--text-subtle); cursor: pointer; transition: background .12s var(--ease-out-soft), color .12s var(--ease-out-soft); }
+.tb-icon-sq:hover { background: var(--bg-prominent); color: var(--text-standard); }
+.tb-icon-sq:active { background: var(--bg-extra-prominent); }
+.tb-icon-sq:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: 2px; }
+
+/* dropdown / popover menu row: background lift on hover (replaces per-row inline JS handlers) */
+.tb-menu-item:hover { background: var(--bg-subtle); }
+
+/* clickable board cell (drafts steps×recordings): subtle inset ring on hover signals it opens the editor */
+.tb-cell-click { transition: box-shadow .12s var(--ease-out-soft); }
+.tb-cell-click:hover { box-shadow: inset 0 0 0 1px var(--tb-hairline-stronger); }
+
+/* Drafts board: pin the leftmost (blaze) column so device columns scroll horizontally under it.
+   The cells carry an opaque bg-subtle, so scrolled content is occluded; a light right-edge drop
+   shadow appears only once scrolled (data-scrolled set by the container's onScroll). */
+.tb-board-pin { position: sticky; left: 0; z-index: 3; border-right: 2px solid var(--tb-hairline-stronger); }
+.tb-board-scroll[data-scrolled="true"] .tb-board-pin { box-shadow: 7px 0 14px -3px rgba(0, 0, 0, .55); }
+
+/* "jump to step" flash in the YAML editor: a step's block lights up then fades after navigation */
+.CodeMirror .cm-flash { background-color: rgba(94,155,255,.30); animation: cmFlash 1.9s var(--ease-out-soft) forwards; }
+@keyframes cmFlash { 0%,55% { background-color: rgba(94,155,255,.30); } 100% { background-color: transparent; } }
+@media (prefers-reduced-motion: reduce) { .CodeMirror .cm-flash { animation: none; background-color: rgba(94,155,255,.20); } }
+
+.tb-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--tb-hairline); }
+/* Constant weight across states so switching tabs doesn't reflow (active = color + underline, not a
+   weight change). A weight bump on .active widens the text and shifts neighboring tabs ("jumpy"). */
+/* `background: none; border: none` so a real <button> (keyboard-accessible tab) resets the UA chrome
+   and reads identically to the <div> tab callers; the bottom border is re-declared after the reset so
+   the active underline survives. */
+.tb-tab { font-size: 13.5px; font-weight: 600; color: var(--text-subtle); padding: 0 0 11px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.tb-tab:hover { color: var(--text-standard); }
+.tb-tab.active { color: var(--text-standard); border-bottom-color: var(--tb-primary-green); }
+
+.tb-row { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid var(--tb-hairline); background: var(--bg-subtle); border-radius: 10px; transition: background .12s, border-color .12s; }
+.tb-row:hover { background: var(--bg-standard); border-color: var(--tb-hairline-strong); }
+.tb-row.sel { border-color: rgba(0,224,19,.4); background: rgba(0,224,19,.06); }
+.tb-tree { display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text-subtle-variant); white-space: nowrap; }
+.tb-tree:hover { background: var(--bg-standard); }
+.tb-tree.active { background: rgba(0,224,19,.1); color: #fff; font-weight: 600; }
+.tb-tree:hover .tb-pin { opacity: .7 !important; }
+.tb-ws-btn { transition: background .12s; }
+.tb-ws-btn:hover { background: var(--bg-standard); }
+
+html[data-theme="light"] .tb-nav.active { background: rgba(0,176,20,.16); }
+html[data-theme="light"] .tb-tree.active { background: rgba(0,176,20,.20); color: var(--text-standard); }
+html[data-theme="light"] .tb-row.sel { background: rgba(0,176,20,.14); border-color: rgba(0,176,20,.5); }
+/* Pins are a subtle-until-hover affordance in dark; in light the resting 0.28 opacity is invisible, so lift it (the inline style needs !important to beat). */
+html[data-theme="light"] .tb-pin { opacity: .7 !important; }
+/* Chip tints stay (the hue is the signal); only the text color needs to deepen — the dark-mode neon tones drop below AA on the pale light fills. */
+html[data-theme="light"] .tb-chip.green { color: #08660f; }
+html[data-theme="light"] .tb-chip.red { color: #c81e2b; }
+html[data-theme="light"] .tb-chip.blue { color: #2358b8; }
+html[data-theme="light"] .tb-chip.amber { color: #8a4500; }
+html[data-theme="light"] .tb-chip.purple { color: #5b21b6; }
+/* --tb-danger-text is a light pink tuned for dark mode; on the pale error banner/snippet fills in
+   light mode it drops below AA (pink-on-pink). Deepen it to the same red the light chip uses, so the
+   error banner text + icon, the "Full error" triangle, and the Screen-error boundary stay readable. */
+html[data-theme="light"] { --tb-danger-text: #c81e2b; }
+/* Settings rows divide with a bottom border; drop it on the last row in a section so there isn't a
+   stray line floating just above the card's bottom edge. !important beats the row's inline border. */
+.tb-srow:last-child { border-bottom: none !important; }
+/* Light mode gets a soft, cool-hue-shifted float shadow on the content sheet (ch09: shadows skew
+   cool, never pure black). In dark, bg-tiering carries the elevation, so this is light-only. */
+html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 12px 32px -10px rgba(15,23,42,.12); }
+
+.tb-input { display: flex; align-items: center; gap: 8px; background: var(--bg-standard); border: 1px solid var(--tb-hairline); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--text-subtle); }
+.tb-input input { background: transparent; border: none; outline: none; color: var(--text-standard); font-family: inherit; font-size: 13px; width: 100%; }
+.tb-select { display: inline-flex; position: relative; }
+.tb-select.full { display: flex; width: 100%; }
+.tb-select-control { display: inline-flex; align-items: stretch; width: 100%; height: 30px; padding: 0; font: inherit; cursor: pointer; position: relative; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); border-radius: 8px; color: var(--text-standard); overflow: hidden; transition: border-color .12s var(--ease-out-soft); }
+.tb-select-control:hover { border-color: var(--tb-hairline-stronger); }
+.tb-select-control[aria-expanded="true"] { border-color: var(--tb-primary-green); }
+.tb-select-label { display: inline-flex; align-items: center; min-width: 68px; padding: 0 10px; background: var(--bg-standard); border-right: 1px solid var(--tb-hairline); color: var(--text-subtle); font-size: 11px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+.tb-select-value { flex: 1; min-width: 0; display: inline-flex; align-items: center; padding: 0 30px 0 11px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-select-chev { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: var(--text-subtle); pointer-events: none; display: inline-flex; }
+.tb-select-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); color: var(--text-subtle-variant); font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; position: relative; white-space: nowrap; transition: border-color .12s var(--ease-out-soft), color .12s var(--ease-out-soft); }
+.tb-select-chip:hover { border-color: var(--tb-hairline-stronger); color: var(--text-standard); }
+.tb-select-chip[aria-expanded="true"] { border-color: var(--tb-primary-green); color: var(--text-standard); }
+/* An engaged (non-default) filter chip: a quiet informational-blue tint so an active filter reads as
+   "on" at a glance, without competing with the green "go"/primary accent. */
+.tb-select-chip.active { border-color: rgba(94,155,255,.5); background: rgba(94,155,255,.08); color: var(--text-standard); }
+/* Subtle variant: borderless muted text that only gains a faint background on hover/open. Used for
+   low-chrome inline pickers (e.g. the model picker in the Create-blaze footer). */
+.tb-select-chip.subtle { background: transparent; border-color: transparent; color: var(--text-subtle); font-weight: 500; padding: 0 8px; }
+.tb-select-chip.subtle:hover,
+.tb-select-chip.subtle[aria-expanded="true"] { background: var(--bg-elevated); border-color: transparent; color: var(--text-standard); }
+/* Settings sidebar tab (left rail of the tabbed Settings view). */
+.tb-settings-tab { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 11px; border: none; border-radius: 8px; background: transparent; color: var(--text-subtle); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; text-align: left; transition: background .12s var(--ease-out-soft), color .12s var(--ease-out-soft); }
+.tb-settings-tab:hover { background: var(--bg-subtle); color: var(--text-standard); }
+.tb-settings-tab[data-on="1"] { background: var(--bg-prominent); color: var(--text-standard); font-weight: 600; }
+.tb-chip-dot { position: absolute; top: -2px; right: 0; width: 8px; height: 8px; border-radius: 99px; background: var(--tb-running); border: 2px solid var(--bg-subtle); }
+.tb-select-pop { overflow-y: auto; z-index: 200; padding: 5px; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); border-radius: 10px; box-shadow: 0 16px 44px rgba(0,0,0,.5); }
+.tb-select-opt { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 6px; font-size: 12.5px; color: var(--text-standard); cursor: pointer; white-space: nowrap; }
+.tb-select-opt.active { background: var(--bg-prominent); }
+.tb-select-opt.sel { color: var(--tb-primary-green); }
+.tb-select-tick { flex: 0 0 auto; color: var(--tb-primary-green); }
+
+/* Scannable option/table rows — shared by the rich Select popup and the full tool palette. */
+.tb-opt-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: start; gap: 11px; padding: 10px 11px; border-radius: 9px; cursor: pointer; transition: background .1s var(--ease-out-soft); }
+.tb-opt-row.dense { padding: 5px 9px; gap: 8px; }
+.tb-opt-row.dense .tb-opt-ico { margin-top: 0; }
+.tb-opt-row.dense .tb-opt-main { gap: 1px; }
+.tb-opt-row.dense .tb-opt-name { font-size: 12.5px; }
+.tb-opt-row.dense .tb-opt-meta { font-size: 10.5px; line-height: 1.3; }
+.tb-opt-row.dense .tb-opt-desc { font-size: 11px; line-height: 1.3; }
+.tb-opt-row:hover, .tb-opt-row.active { background: var(--bg-subtle); }
+.tb-opt-row.sel { background: rgba(0,224,19,.06); }
+.tb-opt-row:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -2px; }
+.tb-opt-ico { margin-top: 1px; display: inline-flex; flex: 0 0 auto; }
+.tb-opt-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tb-opt-line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.tb-opt-name { font-size: 13px; font-weight: 700; color: var(--text-standard); }
+.tb-opt-row.sel .tb-opt-name { color: var(--tb-primary-green); }
+.tb-opt-meta { font-size: 11px; line-height: 1.5; color: var(--text-subtle-variant); word-break: break-word; }
+.tb-opt-desc { font-size: 11.5px; line-height: 1.45; color: var(--text-subtle); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tb-opt-trail { display: inline-flex; align-items: center; gap: 6px; align-self: center; flex: 0 0 auto; font-size: 10.5px; color: var(--text-subtle); white-space: nowrap; }
+.tb-opt-check { color: var(--tb-primary-green); flex: 0 0 auto; }
+
+/* Tool palette as an aligned table — one scannable row per tool, columns line up down the list. */
+.tb-paltbl-head, .tb-paltbl-row { display: grid; grid-template-columns: minmax(0,1fr) 108px 96px 66px; align-items: center; gap: 14px; padding: 0 14px; }
+.tb-paltbl-head { position: sticky; top: 0; z-index: 1; height: 32px; background: var(--bg-elevated); border-bottom: 1px solid var(--tb-hairline); }
+.tb-paltbl-head > span { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle); }
+.tb-paltbl-row { height: 42px; border-radius: 8px; cursor: pointer; transition: background .1s var(--ease-out-soft); }
+.tb-paltbl-row:hover, .tb-paltbl-row.active { background: var(--bg-subtle); }
+.tb-paltbl-row:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -2px; }
+.tb-paltbl-tool { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.tb-paltbl-tool .nm { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--text-standard); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-paltbl-cell { min-width: 0; overflow: hidden; }
+.tb-paltbl-args { text-align: right; font-size: 11px; color: var(--text-subtle); white-space: nowrap; }
+
+.tb-switch { width: 38px; height: 22px; border-radius: 99px; background: var(--bg-extra-prominent); position: relative; transition: background .15s; flex: 0 0 auto; }
+.tb-switch.on { background: var(--tb-primary-green); }
+.tb-switch::after { content:""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 99px; background: #fff; transition: transform .15s var(--ease-out-soft); }
+.tb-switch.on::after { transform: translateX(16px); }
+
+.tb-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.5); display: flex; justify-content: center; align-items: flex-start; z-index: 50; }
+.tb-palette { width: min(560px, 86%); margin-top: 64px; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); border-radius: 16px; box-shadow: 0 30px 70px rgba(0,0,0,.65); overflow: hidden; }
+.tb-pal-row { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-radius: 9px; }
+.tb-pal-row.on { background: var(--bg-prominent); }
+
+.tb-phone { position: relative; aspect-ratio: .487; background: linear-gradient(180deg,#0b1c13,#04100a); border-radius: 26px; border: 6px solid #1c1c1e; overflow: hidden; }
+.tb-skel { background: var(--tb-hairline); border-radius: 5px; }
+
+.hljs { background: transparent !important; padding: 0 !important; color: var(--text-subtle-variant); }
+
+@keyframes tbIn { from { opacity: 0; } to { opacity: 1; } }
+.tb-in { animation: tbIn .24s var(--ease-out-soft); }
+
+.tb-overlay { animation: tbOverlayIn .16s var(--ease-out-soft); }
+.tb-overlay > * { animation: tbPopIn .2s var(--ease-out-soft); }
+.tb-overlay.closing { animation: tbOverlayOut .15s var(--ease-out-soft) forwards; pointer-events: none; }
+.tb-overlay.closing > * { animation: tbPopOut .15s var(--ease-out-soft) forwards; }
+@keyframes tbOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tbOverlayOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes tbPopIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes tbPopOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6px) scale(.99); } }
+
+.tb-pop { animation: tbPopIn .15s var(--ease-out-soft); transform-origin: top center; }
+
+@media (prefers-reduced-motion: reduce){
+  .tb-in, .tb-overlay, .tb-overlay > *, .tb-overlay.closing, .tb-overlay.closing > *, .tb-pop, .tb-glowdot, .tb-pulse { animation: none !important; }
+}
+
+@keyframes tbPulse { 0%,100%{ opacity:1 } 50%{ opacity:.35 } }
+.tb-pulse { animation: tbPulse 1.1s ease-in-out infinite; }
+/* Live-activity dot: a small green dot with a breathing glow, signalling an in-flight run
+   in the sidebar. Motion is tied to system state (a run is happening), not decoration; the
+   resting box-shadow keeps it reading as "glowing" even when the animation is off. */
+.tb-glowdot { width: 8px; height: 8px; border-radius: 99px; background: var(--tb-primary-green); flex: 0 0 auto; box-shadow: 0 0 4px 1px rgba(0,224,19,.5); animation: tbGlow 1.6s ease-in-out infinite; }
+@keyframes tbGlow { 0%,100% { box-shadow: 0 0 3px 0 rgba(0,224,19,.45); } 50% { box-shadow: 0 0 8px 2px rgba(0,224,19,.85); } }
+@keyframes tbSpin { to { transform: rotate(360deg); } }
+.tb-spin { animation: tbSpin .8s linear infinite; transform-origin: 50% 50%; }
+
+/* Subtle enter for list rows that genuinely mount (e.g. a new run prepended). Polls that change
+   nothing keep stable keys + data refs, so existing rows don't remount and don't re-animate. */
+@keyframes tb-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.tb-enter { animation: tb-enter 200ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .tb-enter { animation: none; } }
+.tb-editor { border: 1px solid var(--tb-hairline); border-radius: 10px; overflow: hidden; background: var(--bg-standard); padding: 8px 10px; }
+.tb-editor > div { height: 100%; }
+/* a little breathing room above the first line / below the last, on top of the wrapper padding */
+.cm-s-tb .CodeMirror-lines { padding: 4px 0; }
+.cm-s-tb.CodeMirror { height: 100%; background: var(--bg-standard); color: var(--text-standard); font-family: var(--font-mono), ui-monospace, monospace; font-size: 12.5px; line-height: 1.55; }
+.cm-s-tb .CodeMirror-gutters { background: var(--bg-standard); border-right: 1px solid var(--tb-hairline); }
+.cm-s-tb .CodeMirror-linenumber { color: var(--text-subtle); }
+.cm-s-tb .CodeMirror-cursor { border-left: 1.5px solid var(--text-standard); }
+.cm-s-tb .CodeMirror-selected { background: rgba(110, 168, 254, .22); }
+.cm-s-tb .CodeMirror-activeline-background { background: transparent; }
+.cm-s-tb .cm-atom { color: #6ea8fe; }
+.cm-s-tb .cm-number { color: #d2a8ff; }
+.cm-s-tb .cm-string { color: #9ece9e; }
+.cm-s-tb .cm-keyword, .cm-s-tb .cm-meta, .cm-s-tb .cm-def { color: #6ea8fe; }
+.cm-s-tb .cm-comment { color: var(--text-subtle); }
+.cm-s-tb .cm-variable-2 { color: #6ea8fe; }
+.cm-s-tb .cm-tag { color: #f0883e; }
+.CodeMirror-lint-tooltip { background: var(--bg-standard); color: var(--text-standard); border: 1px solid var(--tb-hairline); border-radius: 8px; font-size: 12px; }
+/* Light mode: the syntax tokens above are pastels tuned for a dark bg; on the white editor
+   surface they drop to ~1.8:1 (strings/numbers unreadable). Deepen to the same hues the light
+   chips use (ch08 contrast + cross-component consistency). */
+html[data-theme="light"] .cm-s-tb .cm-atom,
+html[data-theme="light"] .cm-s-tb .cm-keyword,
+html[data-theme="light"] .cm-s-tb .cm-meta,
+html[data-theme="light"] .cm-s-tb .cm-def,
+html[data-theme="light"] .cm-s-tb .cm-variable-2 { color: #2358b8; }
+html[data-theme="light"] .cm-s-tb .cm-number { color: #5b21b6; }
+html[data-theme="light"] .cm-s-tb .cm-string { color: #08660f; }
+html[data-theme="light"] .cm-s-tb .cm-tag    { color: #8a4500; }
+html[data-theme="light"] .cm-s-tb .CodeMirror-selected { background: rgba(35,88,184,.16); }
+.tb-row-link { transition: background .12s ease, border-color .12s ease; }
+.tb-row-link:hover { background: var(--bg-elevated); border-color: var(--tb-hairline-strong); }
+.tb-row-link:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: 1px; }

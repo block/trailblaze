@@ -1,0 +1,12 @@
+{
+  "name": "trailrunner-web-e2e",
+  "private": true,
+  "description": "Hermetic Playwright smoke test for the typed daemon-RPC bundle (window.TbRpc).",
+  "scripts": {
+    "test": "playwright test",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

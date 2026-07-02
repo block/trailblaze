@@ -1,0 +1,30 @@
+{
+  // Type-check config for the Trail Runner web UI's .tsx source. SEPARATE from tsconfig.json on
+  // purpose: tsconfig.json is a declared, byte-deterministic INPUT to the `bundleTrailRunnerDaemon`
+  // Gradle task (it bundles app/rpc/daemon.ts), so widening its `include`/lib/jsx there would churn
+  // the daemon bundle. This file only drives `tsc --noEmit` (the `checkTrailRunnerTypes` gate).
+  //
+  // The UI files are global-scope SCRIPTS (no import/export — they share one global lexical scope and
+  // publish onto `window`), so TS sees every top-level `const Foo` cross-file as a global, and React
+  // resolves via @types/react's UMD `export as namespace React`. Ambient declarations for the CDN
+  // globals and the `window.*` surface live in types/globals.d.ts.
+  //
+  // Strictness is relaxed for the migration by turning OFF `noImplicitAny` only — that's the noisiest
+  // check for JS-origin code (untyped params/locals) and the one worth deferring. We deliberately KEEP
+  // `strictNullChecks` (inherited via base `strict: true`): it is the high-value check that catches
+  // real null/undefined bugs, AND turning off `strict` wholesale regresses already-clean code — with
+  // `strictNullChecks` off, TS stops narrowing discriminated unions, so app/rpc/daemon.ts's
+  // `if (result.ok) …; result.error` stops type-checking (bogus "Property 'error' does not exist").
+  // Tighten by flipping `noImplicitAny` back on once the .tsx files are annotated.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "jsx": "react",
+    "noImplicitAny": false,
+    "allowJs": false,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["app/**/*.ts", "app/**/*.tsx", "types/**/*.d.ts"],
+  "exclude": ["**/*.test.ts", "e2e/**", "**/node_modules/**"]
+}

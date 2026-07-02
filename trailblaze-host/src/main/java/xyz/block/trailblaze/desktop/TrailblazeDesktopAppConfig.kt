@@ -2,12 +2,14 @@ package xyz.block.trailblaze.desktop
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -161,6 +163,28 @@ abstract class TrailblazeDesktopAppConfig(
    * `TrailRunnerEndpoint.register(...)`.
    */
   open val trailRunnerExtension: TrailRunnerExtension = DefaultTrailRunnerExtension
+
+  /**
+   * The workspace `trails/config` directory, or null when none resolves on disk. Shared anchor for
+   * app-target discovery, the workspace-aware config resolver, and the target-drift check, so all
+   * three follow the same workspace. `TRAILBLAZE_CONFIG_DIR` wins (CI / scripting / alternate
+   * workspace launches) to match [TrailblazeWorkspaceConfigResolver]'s contract; otherwise it's the
+   * configured trails dir's `config/`. Desktop apps install this into
+   * [xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder] at startup so the tool catalog, LSP
+   * schema, and scripted-tool lookups follow the trails directory the user picks in settings
+   * rather than whatever directory the daemon happened to launch from.
+   */
+  fun workspaceConfigDirOrNull(): File? {
+    System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR)
+      ?.takeIf { it.isNotBlank() }
+      ?.let { File(it) }
+      ?.takeIf { it.isDirectory }
+      ?.let { return it }
+    val trailsDir = File(
+      TrailblazeDesktopUtil.getEffectiveTrailsDirectory(trailblazeSettingsRepo.serverStateFlow.value.appConfig),
+    )
+    return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR).takeIf { it.isDirectory }
+  }
 
   abstract val defaultAppTarget: TrailblazeHostAppTarget
 

@@ -1,0 +1,480 @@
+/* ============================================================
+ * Trail Runner Interface — Design Tokens
+ *
+ * Authoring rules (do not break):
+ *  • Every color = a semantic token. Never paste raw hex in components.
+ *  • Every type style = a token. Never invent new sizes/weights.
+ *  • Type color and type style are SEPARATE concerns —
+ *    pair `--type-*` with `--text-*` at the component level.
+ * ============================================================ */
+
+/* ─── Webfont ────────────────────────────────────────────────
+ * Hanken Grotesk gives the Trail Runner UI a compact, readable
+ * grotesque without depending on host-company fonts.
+ * ──────────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* ═══════════════════════════════════════════════════════════
+   * COLORS — base neutral scale (16 perceptually-tuned steps)
+   * Never used directly. Feed downstream semantic tokens.
+   * ═══════════════════════════════════════════════════════════ */
+  --base-neutral-0:  #000000;
+  --base-neutral-1:  #0F0F0F;
+  --base-neutral-2:  #181818;
+  --base-neutral-3:  #232323;
+  --base-neutral-4:  #333333;
+  --base-neutral-5:  #454545;
+  --base-neutral-6:  #595959;
+  --base-neutral-7:  #666666;
+  --base-neutral-8:  #878787;
+  --base-neutral-9:  #A2A2A2;
+  --base-neutral-10: #C4C4C4;
+  --base-neutral-11: #DADADA;
+  --base-neutral-12: #E8E8E8;
+  --base-neutral-13: #F0F0F0;
+  --base-neutral-14: #F7F7F7;
+  --base-neutral-15: #FFFFFF;
+
+  /* ─── Semantic — text (dark) ────────────────────────────── */
+  --text-standard:          var(--base-neutral-15); /* #FFF */
+  --text-subtle:            var(--base-neutral-8);  /* #878787 */
+  --text-subtle-input:      var(--base-neutral-7);  /* #666 */
+  --text-subtle-variant:    var(--base-neutral-9);  /* #A2A2A2 */
+  --text-disabled:          var(--base-neutral-6);  /* #595959 */
+
+  /* Decorative tones for low-emphasis text on dynamic / AI surfaces */
+  --text-decorative-strong: var(--base-neutral-10); /* #C4C4C4 — most visible */
+  --text-decorative-medium: #B8B8B8;
+  --text-decorative-soft:   #747474;                /* least visible */
+
+  /* ─── Semantic — backgrounds (tiered by depth from page) ── */
+  --bg-app:             var(--base-neutral-0);   /* page */
+  --bg-subtle:          var(--base-neutral-1);
+  --bg-standard:        var(--base-neutral-2);
+  --bg-prominent:       var(--base-neutral-3);   /* default pill CTA */
+  --bg-extra-prominent: var(--base-neutral-4);   /* CTA hover */
+  --bg-elevated:        #2c2c2e;                 /* secondary surface — neutral charcoal (dropdowns, menus, palette, modals); neutral R≈G≈B so it doesn't read blue */
+  --bg-inverse:         var(--base-neutral-15);
+  --bg-window:          #0f0f0f;                 /* backdrop behind the floating sheet + transparent nav rail (the black the sidebar reads as) */
+  --bg-sheet:           #1a1a1a;                 /* the floating content sheet (.tb-main) — one step lighter than the black backdrop so it reads as elevated */
+
+  /* ─── Hairlines / overlays — borders, dividers, hover fills.
+   * Theme-flipping: white-alpha in dark, black-alpha in light (see [data-theme]). */
+  --tb-hairline:          rgba(255,255,255,.07);
+  --tb-hairline-strong:   rgba(255,255,255,.12);
+  --tb-hairline-stronger: rgba(255,255,255,.20);
+
+  /* ─── Primary action green ──────────────────────────────── */
+  /* Zero to one high-emphasis green moment per screen. Never more, sometimes none. */
+  --tb-primary-green:           #00E013;
+  --tb-primary-green-pressed:   #00B843;
+  --tb-primary-green-disabled:  #006B0E;
+
+  /* ─── Status ────────────────────────────────────────────── */
+  --status-danger:          #F84752;
+  --status-danger-pressed:  #B31E30;
+  --status-warning:         #FF8700;
+  --status-warning-pressed: #CC4B03;
+  --status-success:         #00D533;
+
+  /* ─── Optional palette accents ───────────────────────────── */
+  --accent-purple:      #9752FF;
+  --accent-violet:      #B141FF;
+  --accent-deep-violet: #632CA6;
+  --accent-plum:        #581D79;
+  --accent-blue:        #377BFF;
+  --accent-sky:         #3399FF;
+  --accent-cobalt:      #3B7FE6;
+
+  /* ─── Accent — for AI-generated UI (avatars, decorative) ── */
+  --accent-magenta: #CC00FF;
+  --accent-pink:    #FB60C4;
+  --accent-mauve:   #A43979;
+
+  /* ─── Agent — translucent text for glass / dynamic canvases */
+  --text-on-glass:     rgba(255, 255, 255, 0.5);
+  --text-canvas-state: rgba(255, 255, 255, 0.6);
+
+  /* ═══════════════════════════════════════════════════════════
+   * TYPOGRAPHY — font families
+   * ═══════════════════════════════════════════════════════════ */
+  --font-display: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-ios:     -apple-system, "SF Pro", system-ui, sans-serif; /* iOS chrome only */
+
+  /* ─── On-system text — used in agent workflows ────────────
+   * Six core styles. Don't invent new ones. */
+
+  /* display/page-title — 32 / 500 / 32 / -0.48
+   * H1 · primary screen title, command labels, page headers */
+  --type-display-page-title-size:    32px;
+  --type-display-page-title-weight:  500;
+  --type-display-page-title-lh:      32px;
+  --type-display-page-title-ls:      -0.48px;
+
+  /* display/headline-small — 32 / 400 / 32 / -0.80
+   * H1-alt · lighter-weight headline for prompts */
+  --type-display-headline-small-size:    32px;
+  --type-display-headline-small-weight:  400;
+  --type-display-headline-small-lh:      32px;
+  --type-display-headline-small-ls:      -0.80px;
+
+  /* display/section-title — 24 / 500 / 24 / -0.18
+   * H2 · most common heading; sections + modals */
+  --type-display-section-title-size:    24px;
+  --type-display-section-title-weight:  500;
+  --type-display-section-title-lh:      24px;
+  --type-display-section-title-ls:      -0.18px;
+
+  /* body/label-medium — 16 / 500 / 24 / 0
+   * Label · buttons, nav, row labels (most-used style) */
+  --type-body-label-medium-size:    16px;
+  --type-body-label-medium-weight:  500;
+  --type-body-label-medium-lh:      24px;
+  --type-body-label-medium-ls:      0;
+
+  /* body/body-medium — 16 / 400 / 24 / -0.08
+   * Body-M · general body, descriptions, metadata */
+  --type-body-body-medium-size:    16px;
+  --type-body-body-medium-weight:  400;
+  --type-body-body-medium-lh:      24px;
+  --type-body-body-medium-ls:      -0.08px;
+
+  /* body/body-small — 14 / 400 / 20 / -0.04
+   * Body-S · helper text, secondary descriptions */
+  --type-body-body-small-size:    14px;
+  --type-body-body-small-weight:  400;
+  --type-body-body-small-lh:      20px;
+  --type-body-body-small-ls:      -0.04px;
+
+  /* ─── Cover (marketing/hero ONLY — never product UI) ───── */
+  --type-cover-large-title-size:   90px;
+  --type-cover-large-title-weight: 400;
+  --type-cover-large-title-lh:     0.90;
+  --type-cover-large-title-ls:     -3.6px; /* -4% of 90 */
+
+  --type-cover-small-title-size:   44px;
+  --type-cover-small-title-weight: 400;
+  --type-cover-small-title-lh:     1.0;
+  --type-cover-small-title-ls:     -1.32px; /* -3% of 44 */
+
+  --type-cover-large-body-size:    22px;
+  --type-cover-large-body-weight:  400;
+  --type-cover-large-body-lh:      1.10;
+  --type-cover-large-body-ls:      -0.165px; /* -0.75% of 22 */
+
+  /* ─── Agent — chat-bubble styles ────────────────────────── */
+  /* agent/text/chat-large — 24 / 400 / 26 / -0.48
+   * H2-chat · chat heading with looser line-height */
+  --type-agent-chat-large-size:   24px;
+  --type-agent-chat-large-weight: 400;
+  --type-agent-chat-large-lh:     26px;
+  --type-agent-chat-large-ls:     -0.48px;
+
+  /* agent/text/chat-small — 20 / 400 / 26 / -0.48
+   * Body-L · longer AI response text */
+  --type-agent-chat-small-size:   20px;
+  --type-agent-chat-small-weight: 400;
+  --type-agent-chat-small-lh:     26px;
+  --type-agent-chat-small-ls:     -0.48px;
+
+  /* agent/text/input-label — 22 / 400 / 22 / -0.80
+   * Form-input label / prompt header on agent surfaces */
+  --type-agent-input-label-size:   22px;
+  --type-agent-input-label-weight: 400;
+  --type-agent-input-label-lh:     22px;
+  --type-agent-input-label-ls:     -0.80px;
+
+  /* agent/text/label-small — 12 / 500 / 12 / 0
+   * Small dense chip / eyebrow text */
+  --type-agent-label-small-size:   12px;
+  --type-agent-label-small-weight: 500;
+  --type-agent-label-small-lh:     12px;
+  --type-agent-label-small-ls:     0;
+
+  /* ─── Numeral / mono (agent markdown rendering) ─────────── */
+  /* numeral/large — for hero metrics ($410.09 as the answer).
+   * Spec is partly TBD upstream — these are working defaults. */
+  --type-numeral-large-size:   72px;
+  --type-numeral-large-weight: 500;
+  --type-numeral-large-lh:     0.95;
+  --type-numeral-large-ls:     -2.5px;
+
+  /* mono/regular — code blocks, inline mono */
+  --type-mono-regular-size:    16px;
+  --type-mono-regular-weight:  400;
+  --type-mono-regular-lh:      24px;
+  --type-mono-regular-ls:      0;
+
+  /* ═══════════════════════════════════════════════════════════
+   * SPACING — powers of close to 1.4×
+   * Trail Runner leans into spaciousness: whitespace is a material.
+   * ═══════════════════════════════════════════════════════════ */
+  --space-xxs: 4px;
+  --space-xs:  8px;
+  --space-sm:  12px;
+  --space-md:  16px;   /* default page inset */
+  --space-lg:  24px;   /* common section gap */
+  --space-xl:  32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --space-4xl: 96px;
+
+  /* ═══════════════════════════════════════════════════════════
+   * RADII — pill is the signature shape
+   * ═══════════════════════════════════════════════════════════ */
+  --radius-sm:    8px;
+  --radius-md:    16px;   /* card corners (warmth via shape) */
+  --radius-lg:    24px;
+  --radius-xl:    32px;
+  --radius-pill:  9999px; /* primary CTA shape */
+  --radius-device: 55px;  /* device-frame corner — matches POC */
+
+  /* ═══════════════════════════════════════════════════════════
+   * ELEVATION
+   * v1 is dark-mode-only — shadows do less work than in light
+   * mode. We rely on background tiering (bg-subtle → bg-elevated)
+   * for depth. Shadows below are used sparingly, typically on
+   * floating modals.
+   * ═══════════════════════════════════════════════════════════ */
+  --shadow-sm:      0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:      0 8px 24px rgba(0,0,0,.5);
+  --shadow-glass:   0 0 0 1px rgba(255,255,255,.06), 0 24px 48px rgba(0,0,0,.6);
+
+  /* Border (used sparingly; tiering is preferred) */
+  --border-subtle:  1px solid rgba(255,255,255,.06);
+  --border-line:    1px solid var(--base-neutral-3);
+
+  /* ═══════════════════════════════════════════════════════════
+   * MOTION — composer & chat-surface timing (Moneybot iOS proto)
+   * ═══════════════════════════════════════════════════════════ */
+  --ease-out-soft:    cubic-bezier(.22,.61,.36,1);
+  --ease-in-out-soft: cubic-bezier(.45,.05,.55,.95);
+  --duration-fast:    150ms;
+  --duration-base:    280ms;
+  --duration-slow:    320ms;
+  /* Spring approximations (composer photo add/remove): swift values
+   * spring(response: 0.32, dampingFraction: 0.88). For CSS, use
+   * --ease-out-soft with --duration-slow as the working analog. */
+
+  /* ═══════════════════════════════════════════════════════════
+   * CHART
+   * ═══════════════════════════════════════════════════════════ */
+  --chart-stroke-width:  2px;
+  --chart-grid:          var(--base-neutral-3);
+  --chart-axis-label:    var(--text-subtle);
+  --chart-positive:      var(--tb-primary-green);
+  --chart-neutral:       var(--text-decorative-soft);
+  --chart-negative:      var(--status-danger);
+  --chart-comparison-dash: 2 4; /* SVG dash pattern */
+}
+
+/* ─── Light theme ────────────────────────────────────────────
+ * Applied by the theme controller (shell.jsx) via html[data-theme="light"].
+ * Only surface / text / hairline semantics flip; brand + status hues stay the
+ * same. Everything else in the app reads these tokens, so the UI follows. */
+html[data-theme="light"] {
+  --text-standard:       #14161a;
+  --text-subtle:         #525964;
+  --text-subtle-input:   #6b7280;
+  --text-subtle-variant: #434a55;
+  --text-disabled:       #9aa1ab;
+  /* Light mode: cool-neutral, NOT warm-tan. The text tokens are cool slate (#14161a /
+     #525964 / #6b7280), so the surfaces are tuned cool-neutral to match — a warm-tan
+     paper under cool ink reads dingy/mismatched (warm/cool clash). A faint cool bias
+     (b a few levels over r) keeps this the consistent inverse of the deliberately-neutral
+     dark theme instead of drifting yellow. The rail/window chrome is a light-gray frame;
+     the floating content sheet is clean white so it reads as elevated above the chrome —
+     the depth that bg-tiering provides in dark. */
+  --bg-window:           #edeff3;                /* rail + window chrome — cool light-gray frame */
+  --bg-app:              #ffffff;                /* page / modal surface */
+  --bg-sheet:            #ffffff;                /* floating content sheet — clean white, floats on the gray chrome */
+  --bg-subtle:           #f1f4f8;                /* cards / list rows — faint cool well inside the sheet */
+  --bg-standard:         #ffffff;                /* inputs, crisp surfaces */
+  --bg-prominent:        #e7eaf0;                /* pills / default CTA / active nav / selected rows */
+  --bg-extra-prominent:  #dce1e9;                /* hover */
+  --bg-elevated:         #ffffff;                /* dropdowns / menus / palette / modals */
+  --bg-inverse:          #14161a;
+  /* Hairlines: cool-slate alpha (not pure black) so dividers sit inside the cool scheme. */
+  --tb-hairline:          rgba(15,23,42,.10);
+  --tb-hairline-strong:   rgba(15,23,42,.16);
+  --tb-hairline-stronger: rgba(15,23,42,.27);
+}
+
+/* ============================================================
+ * SEMANTIC TYPE CLASSES
+ * Apply via class, never re-define sizes inline.
+ * Color and type are separate concerns — set color on
+ * the element, not on the type class.
+ * ============================================================ */
+
+.t-display-page-title {
+  font-family: var(--font-display);
+  font-size: var(--type-display-page-title-size);
+  font-weight: var(--type-display-page-title-weight);
+  line-height: var(--type-display-page-title-lh);
+  letter-spacing: var(--type-display-page-title-ls);
+}
+.t-display-headline-small {
+  font-family: var(--font-display);
+  font-size: var(--type-display-headline-small-size);
+  font-weight: var(--type-display-headline-small-weight);
+  line-height: var(--type-display-headline-small-lh);
+  letter-spacing: var(--type-display-headline-small-ls);
+}
+.t-display-section-title {
+  font-family: var(--font-display);
+  font-size: var(--type-display-section-title-size);
+  font-weight: var(--type-display-section-title-weight);
+  line-height: var(--type-display-section-title-lh);
+  letter-spacing: var(--type-display-section-title-ls);
+}
+.t-label-medium {
+  font-family: var(--font-display);
+  font-size: var(--type-body-label-medium-size);
+  font-weight: var(--type-body-label-medium-weight);
+  line-height: var(--type-body-label-medium-lh);
+  letter-spacing: var(--type-body-label-medium-ls);
+}
+.t-body-medium {
+  font-family: var(--font-display);
+  font-size: var(--type-body-body-medium-size);
+  font-weight: var(--type-body-body-medium-weight);
+  line-height: var(--type-body-body-medium-lh);
+  letter-spacing: var(--type-body-body-medium-ls);
+}
+.t-body-small {
+  font-family: var(--font-display);
+  font-size: var(--type-body-body-small-size);
+  font-weight: var(--type-body-body-small-weight);
+  line-height: var(--type-body-body-small-lh);
+  letter-spacing: var(--type-body-body-small-ls);
+}
+.t-cover-large-title {
+  font-family: var(--font-display);
+  font-size: var(--type-cover-large-title-size);
+  font-weight: var(--type-cover-large-title-weight);
+  line-height: var(--type-cover-large-title-lh);
+  letter-spacing: var(--type-cover-large-title-ls);
+}
+.t-cover-small-title {
+  font-family: var(--font-display);
+  font-size: var(--type-cover-small-title-size);
+  font-weight: var(--type-cover-small-title-weight);
+  line-height: var(--type-cover-small-title-lh);
+  letter-spacing: var(--type-cover-small-title-ls);
+}
+.t-cover-large-body {
+  font-family: var(--font-display);
+  font-size: var(--type-cover-large-body-size);
+  font-weight: var(--type-cover-large-body-weight);
+  line-height: var(--type-cover-large-body-lh);
+  letter-spacing: var(--type-cover-large-body-ls);
+}
+.t-agent-chat-large {
+  font-family: var(--font-display);
+  font-size: var(--type-agent-chat-large-size);
+  font-weight: var(--type-agent-chat-large-weight);
+  line-height: var(--type-agent-chat-large-lh);
+  letter-spacing: var(--type-agent-chat-large-ls);
+}
+.t-agent-chat-small {
+  font-family: var(--font-display);
+  font-size: var(--type-agent-chat-small-size);
+  font-weight: var(--type-agent-chat-small-weight);
+  line-height: var(--type-agent-chat-small-lh);
+  letter-spacing: var(--type-agent-chat-small-ls);
+}
+.t-agent-input-label {
+  font-family: var(--font-display);
+  font-size: var(--type-agent-input-label-size);
+  font-weight: var(--type-agent-input-label-weight);
+  line-height: var(--type-agent-input-label-lh);
+  letter-spacing: var(--type-agent-input-label-ls);
+}
+.t-agent-label-small {
+  font-family: var(--font-display);
+  font-size: var(--type-agent-label-small-size);
+  font-weight: var(--type-agent-label-small-weight);
+  line-height: var(--type-agent-label-small-lh);
+  letter-spacing: var(--type-agent-label-small-ls);
+}
+.t-numeral-large {
+  font-family: var(--font-display);
+  font-size: var(--type-numeral-large-size);
+  font-weight: var(--type-numeral-large-weight);
+  line-height: var(--type-numeral-large-lh);
+  letter-spacing: var(--type-numeral-large-ls);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: var(--type-mono-regular-size);
+  font-weight: var(--type-mono-regular-weight);
+  line-height: var(--type-mono-regular-lh);
+  letter-spacing: var(--type-mono-regular-ls);
+}
+
+/* Money / numerics — always tabular numerals */
+.money {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.02em;
+}
+
+/* ============================================================
+ * MARKDOWN-TO-TYPE CONTRACT
+ * Agents write markdown; this is what renders.
+ * Drop these on a .bi-markdown wrapper.
+ * ============================================================ */
+.bi-markdown {
+  color: var(--text-standard);
+  font-family: var(--font-display);
+}
+.bi-markdown h1 { /* `# heading` → display/headline-small */
+  font-size: var(--type-display-headline-small-size);
+  font-weight: var(--type-display-headline-small-weight);
+  line-height: var(--type-display-headline-small-lh);
+  letter-spacing: var(--type-display-headline-small-ls);
+  margin: 0 0 var(--space-md);
+}
+.bi-markdown h2 { /* `## heading` → display/section-title */
+  font-size: var(--type-display-section-title-size);
+  font-weight: var(--type-display-section-title-weight);
+  line-height: var(--type-display-section-title-lh);
+  letter-spacing: var(--type-display-section-title-ls);
+  margin: var(--space-lg) 0 var(--space-sm);
+}
+.bi-markdown h3 { /* `### heading` → body/label-medium */
+  font-size: var(--type-body-label-medium-size);
+  font-weight: var(--type-body-label-medium-weight);
+  line-height: var(--type-body-label-medium-lh);
+  letter-spacing: var(--type-body-label-medium-ls);
+  margin: var(--space-md) 0 var(--space-xs);
+}
+.bi-markdown p { /* body — body/body-medium */
+  font-size: var(--type-body-body-medium-size);
+  font-weight: var(--type-body-body-medium-weight);
+  line-height: var(--type-body-body-medium-lh);
+  letter-spacing: var(--type-body-body-medium-ls);
+  color: var(--text-subtle-variant);
+  margin: 0 0 var(--space-sm);
+}
+.bi-markdown strong { /* `**bold**` — body/label-medium for key values */
+  font-weight: var(--type-body-label-medium-weight);
+  color: var(--text-standard);
+}
+.bi-markdown code { /* inline code */
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-standard);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.bi-markdown hr {
+  border: 0;
+  border-top: var(--border-line);
+  margin: var(--space-lg) 0;
+}

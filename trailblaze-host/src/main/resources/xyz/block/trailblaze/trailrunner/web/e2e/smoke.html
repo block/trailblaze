@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>TbRpc smoke</title>
+  </head>
+  <body>
+    <!-- Loads only the typed daemon-RPC bundle (no React/CDN), so the test stays hermetic and fast.
+         The bundle's side effect publishes window.TbRpc; the test drives it directly. -->
+    <script src="/app/rpc/daemon.bundle.js"></script>
+  </body>
+</html>

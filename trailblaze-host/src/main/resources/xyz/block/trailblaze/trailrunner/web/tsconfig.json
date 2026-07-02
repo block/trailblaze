@@ -1,0 +1,18 @@
+{
+  // Minimal TypeScript build for the Trail Runner web UI. Lets the data layer migrate from
+  // hand-written fetch in global-script .jsx to a typed module (app/rpc/daemon.ts) that consumes the
+  // generated daemon bindings. The bindings are imported by relative path from the SDK and bundled
+  // in by `bun build`. (A workspace package mapping would replace the long relative path once the UI
+  // gets a proper package.json.) Test files are excluded — `bun test` provides the bun:test types.
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["app/**/*.ts"],
+  "exclude": ["**/*.test.ts", "e2e/**"]
+}

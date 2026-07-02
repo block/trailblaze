@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trail Runner</title>
+<link rel="icon" type="image/png" href="./favicon.png" />
+<script>
+  (function () {
+    try {
+      var m = JSON.parse(localStorage.getItem('tb-theme')) || 'system';
+      var prefersLight = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches;
+      var dark = m === 'dark' || (m === 'system' && !prefersLight);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+<link rel="stylesheet" href="./styles/trailrunner.css" />
+<link rel="stylesheet" href="./app/app.css" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css" />
+<script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/codemirror@5.65.16/lib/codemirror.css" />
+<link rel="stylesheet" href="https://unpkg.com/codemirror@5.65.16/addon/lint/lint.css" />
+<script src="https://unpkg.com/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/yaml/yaml.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/clike/clike.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/mode/javascript/javascript.js"></script>
+<script src="https://unpkg.com/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/addon/lint/lint.js"></script>
+<script src="https://unpkg.com/codemirror@5.65.16/addon/lint/yaml-lint.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<!-- Typed daemon-RPC client (generated bindings, bundled by `bun build app/rpc/daemon.ts`).
+     Loaded before the .jsx so `window.TbRpc` is published before any data hook runs. -->
+<script src="./app/rpc/daemon.bundle.js"></script>
+<!-- Shared run-report renderer + log→timeline extraction (plain JS, no JSX). Loaded as a classic
+     script BEFORE the babel screens so extractTrace/extractLlmLogs/buildRunReportHtml are globals
+     the timeline + Share button use. The same module is require()'d by the bun CLI report generator. -->
+<script src="./app/run-report-core.js"></script>
+<!-- Monaco + LSP client for the scripted-tool (.ts) + tool-definition (.tool.yaml) editors. Plain JS
+     (no JSX/bundler): lazy-loads Monaco from the CDN on first use and publishes `window.TBMonaco`.
+     Loaded before the babel screens so tools.jsx can feature-detect it; if it's absent or fails, the
+     editor falls back to CodeMirror. lsp-convert.js (shared, unit-tested conversions) loads first. -->
+<script src="./app/editor/lsp-convert.js"></script>
+<script src="./app/editor/monaco-lsp.js"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/ui.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/data-core.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/data-hooks.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/data-extract.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/editor.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/home.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/settings.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/devices.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/integrations.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/blaze.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/create.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/record.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/steps-board.tsx"></script>
+<script type="text/babel" src="./app/screens/import.jsx"></script>
+<script type="text/babel" src="./app/screens/yaml.jsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/drafts.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trail-tree.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trail-detail.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trails.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/tools.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trailmaps.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/timeline.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/phone-preview.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/llm-panel.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/share-export.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trace-viewer.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/sessions.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/runcommand.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/runconfig-steps.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/runconfig.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/shell.tsx"></script>
+</body>
+</html>

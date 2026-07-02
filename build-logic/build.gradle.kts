@@ -20,6 +20,12 @@ gradlePlugin {
       id = "trailblaze.spotless"
       implementationClass = "TrailblazeSpotlessPlugin"
     }
+    // No-op marker: applying it puts build-logic's classes (e.g. ShrinkUberJarWithProguardTask)
+    // on the applying script's classpath without any convention side effects. See the class kdoc.
+    create("build-logic-classpath") {
+      id = "trailblaze.build-logic-classpath"
+      implementationClass = "TrailblazeBuildLogicClasspathPlugin"
+    }
     create("multi-simulator") {
       id = "trailblaze.multi-simulator"
       implementationClass = "TrailblazeMultiSimulatorPlugin"

@@ -89,6 +89,11 @@ sdks/typescript/dist/
 trailblaze-scripting-bundle/src/jvmAndAndroid/resources/trailblaze/scripting/bundle/trailblaze-sdk-bundle.js
 trailblaze-common/src/commonMain/resources/trails/config/trailmaps/trailblaze/tools/*.bundle.js
 
+# Trail Runner web RPC client bundle — same story: generated at build time from
+# `app/rpc/daemon.ts` via `bun build` (`:trailblaze-host:bundleTrailRunnerDaemon`), shipped in the
+# desktop app's resources, not committed. The resource-packaging tasks depend on the generator.
+trailblaze-host/src/main/resources/xyz/block/trailblaze/trailrunner/web/app/rpc/daemon.bundle.js
+
 # Daemon local data — settings JSON, cache, in-progress logs. Created in the working
 # tree when the daemon's `appDataDirectory` points at the repo (developer convenience
 # for "run from source" setups), kept out of version control.
@@ -110,6 +115,10 @@ package-lock.json
 bun.lock
 bun.lockb
 !sdks/typescript/bun.lock
+# Second exception: the Trail Runner web UI's type-check toolchain lockfile, pinning its @types +
+# typescript devDependencies so the `tsc --noEmit` gate resolves identically everywhere. Resolved-URL
+# fields are kept empty (registry-neutral), same convention as the SDK lockfile above.
+!trailblaze-host/src/main/resources/xyz/block/trailblaze/trailrunner/web/bun.lock
 # Report-gallery per-trail assets (docs/report-assets/<trail>/): fetched from CI
 # artifacts at docs-build time or filled with the generic placeholder by docs_hooks.py.
 # Never committed — only the generic docs/images/report-pending.webp lives in the repo.

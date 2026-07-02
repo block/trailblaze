@@ -1,18 +1,22 @@
 package xyz.block.trailblaze.desktop
 
+import java.io.File
 import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.trailrunner.TrailRunnerEndpoint
 import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 
@@ -32,6 +36,12 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
 
   override fun startTrailblazeDesktopApp(headless: Boolean) {
     installRunHandler()
+    // Anchor every workspace-config consumer (tool catalog, LSP schema, scripted-tool source
+    // lookups, target discovery) to the trails directory picked in Trail Runner settings — not the
+    // CWD-based default `TrailblazeWorkspaceConfigBootstrap` wires at CLI startup. Installed here,
+    // after that one-shot init, so this assignment is final; an explicit `TRAILBLAZE_CONFIG_DIR`
+    // still wins inside [TrailblazeDesktopAppConfig.workspaceConfigDirOrNull].
+    WorkspaceConfigDirHolder.resolver = { desktopAppConfig.workspaceConfigDirOrNull() }
     MainTrailblazeApp(
       trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
       logsRepo = desktopAppConfig.logsRepo,
@@ -46,6 +56,24 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       },
       deviceManager = deviceManager,
       headless = headless,
+      // Serve the Trail Runner web UI (/trailrunner/) on the daemon. The open-source build runs it
+      // with the config's extension (DefaultTrailRunnerExtension unless a downstream build
+      // overrides it): no integrations, no analytics, no LLM authoring assists — the UI degrades
+      // gracefully wherever an extension member is absent.
+      extraDaemonRoutes = {
+        TrailRunnerEndpoint.register(
+          routing = this,
+          trailsRootProvider = {
+            val appConfig = desktopAppConfig.trailblazeSettingsRepo.serverStateFlow.value.appConfig
+            File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
+          },
+          logsRepo = desktopAppConfig.logsRepo,
+          settingsRepo = desktopAppConfig.trailblazeSettingsRepo,
+          deviceManager = deviceManager,
+          llmModelListsProvider = { desktopAppConfig.getAllSupportedLlmModelLists() },
+          extension = desktopAppConfig.trailRunnerExtension,
+        )
+      },
     )
   }
 

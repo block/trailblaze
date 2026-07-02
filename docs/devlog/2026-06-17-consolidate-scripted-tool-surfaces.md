@@ -91,7 +91,7 @@ The earlier stated intent (in the `@trailblaze/tools` module README) was the opp
 - `@trailblaze/tools` exists for exactly one reason: MCP-free in-process execution. Once
   `@trailblaze/scripting` can do that too (slim profile, below), it has no remaining justification.
 - The hard piece (in-process composition) is one shared problem regardless of surface — solve it
-  once, on the mature surface that already has typed bindings and 38 consumers, rather than
+  once, on the mature surface that already has typed bindings and dozens of consumers, rather than
   rebuilding the generator + composition on the 3-tool newcomer.
 - Migrating 3 tools beats migrating dozens.
 

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Trail Runner">
+  <defs>
+    <linearGradient id="tr-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1FE83F"/>
+      <stop offset="1" stop-color="#00B814"/>
+    </linearGradient>
+  </defs>
+  <!-- App tile -->
+  <rect width="32" height="32" rx="8.5" fill="url(#tr-tile)"/>
+  <!-- Winding trail climbing from the trailhead to the summit -->
+  <path d="M8.5 24.8 C 8.5 19.6 15 20.4 15 16 C 15 11.6 21 12.4 21 8.8"
+        fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>
+  <!-- Trailhead marker -->
+  <circle cx="8.5" cy="24.8" r="1.9" fill="#ffffff"/>
+  <!-- Planted flag (the "blaze") at the summit -->
+  <path d="M21 9 L21 5" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+  <path d="M21 5.1 L26 6.7 L21 8.5 Z" fill="#ffffff"/>
+</svg>
