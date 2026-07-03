@@ -11,6 +11,7 @@ android {
   compileSdk = 36
   defaultConfig {
     minSdk = 26
+    targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testApplicationId = "xyz.block.trailblaze.runner"
   }
