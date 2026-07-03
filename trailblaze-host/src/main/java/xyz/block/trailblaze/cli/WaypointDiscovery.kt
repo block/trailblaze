@@ -9,6 +9,7 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.WaypointLoader
 
@@ -132,6 +133,7 @@ object WaypointDiscovery {
       val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
         configFile = configFile,
         includeClasspathTrailmaps = true,
+        scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
       )
       resolved?.waypoints
     } catch (e: TrailblazeProjectConfigException) {
@@ -166,6 +168,7 @@ object WaypointDiscovery {
           sourceFile = File(".").absoluteFile,
         ),
         includeClasspathTrailmaps = true,
+        scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment(),
       ).waypoints
     } catch (e: TrailblazeProjectConfigException) {
       // Typed loader error from a malformed classpath trailmap manifest. Logged at error

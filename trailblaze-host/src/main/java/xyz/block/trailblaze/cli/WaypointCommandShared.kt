@@ -7,9 +7,11 @@ import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.waypoint.WaypointLoader
@@ -327,11 +329,13 @@ private fun trailmapManifestAppIds(
     .orEmpty()
 }
 
-private fun loadResolvedConfig(fromPath: java.nio.file.Path) =
-  TrailblazeWorkspaceConfigResolver.resolve(fromPath).configFile?.let { configFile ->
+private fun loadResolvedConfig(fromPath: java.nio.file.Path): TrailblazeResolvedConfig? {
+  val scriptedToolEnrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+  return TrailblazeWorkspaceConfigResolver.resolve(fromPath).configFile?.let { configFile ->
     TrailblazeProjectConfigLoader.loadResolvedRuntime(
       configFile = configFile,
       includeClasspathTrailmaps = true,
+      scriptedToolEnrichment = scriptedToolEnrichment,
     )
   } ?: TrailblazeProjectConfigLoader.resolveRuntime(
     loaded = LoadedTrailblazeProjectConfig(
@@ -339,7 +343,9 @@ private fun loadResolvedConfig(fromPath: java.nio.file.Path) =
       sourceFile = File(".").absoluteFile,
     ),
     includeClasspathTrailmaps = true,
+    scriptedToolEnrichment = scriptedToolEnrichment,
   )
+}
 
 /** Renders a [WaypointMatchResult] into a multi-line, human-friendly string. */
 internal fun formatResult(r: WaypointMatchResult): String = buildString {

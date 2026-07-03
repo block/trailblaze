@@ -7,7 +7,10 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
+import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
 
 /**
  * Tests for [WaypointDiscovery] — the helper that combines workspace trailmap waypoints,
@@ -275,6 +278,33 @@ class WaypointDiscoveryTest {
   }
 
   @Test
+  fun `scripted-tool workspace trailmap waypoints surface once analyzer enrichment is wired in`() {
+    // Regression test for issue #196: `WaypointDiscovery`'s two trailmap-load call sites
+    // used to call TrailblazeProjectConfigLoader without `scriptedToolEnrichment`, so any
+    // workspace trailmap carrying a `.ts` scripted-tool descriptor threw during resolution
+    // and its waypoints were silently dropped (even though `trailblaze check`/`run` resolved
+    // the same trailmap fine via `AnalyzerScriptedToolEnrichment.resolveFromEnvironment()`).
+    val enrichment = AnalyzerScriptedToolEnrichment.resolveFromEnvironment()
+    assumeTrue(MetaOnlyDescriptorTestFixture.ANALYZER_UNAVAILABLE_SKIP_MESSAGE, enrichment != null)
+
+    val classpathRoot = newTempDir()
+    val workspaceRoot = newTempDir()
+    addWorkspaceScriptedToolTrailmap(workspaceRoot, trailmapId = "myapp")
+    val emptyRoot = File(workspaceRoot, "trails-not-here")
+
+    val result = withClasspathRoot(classpathRoot) {
+      WaypointDiscovery.discover(root = emptyRoot, fromPath = workspaceRoot.toPath())
+    }
+
+    assertEquals(listOf("myapp/ready"), result.definitions.map(WaypointDefinition::id))
+    assertTrue(
+      !result.trailmapLoadFailed,
+      "a workspace trailmap with a scripted (.ts) tool should resolve cleanly, not be " +
+        "dropped for lack of wired-in analyzer enrichment",
+    )
+  }
+
+  @Test
   fun `empty classpath and empty root yields empty result`() {
     val classpathRoot = newTempDir()
     val workspaceRoot = newTempDir()
@@ -349,6 +379,57 @@ class WaypointDiscoveryTest {
     val trailmapsBlock = (existingTrailmaps + listOf("  - trailmaps/$trailmapId/trailmap.yaml"))
       .joinToString("\n")
     workspaceConfig.writeText("trailmaps:\n$trailmapsBlock\n")
+  }
+
+  /**
+   * Drops a workspace trailmap at `<workspaceRoot>/trails/config/trailmaps/<trailmapId>/`
+   * carrying one meta-only scripted (`.ts`) tool plus one waypoint, and wires it into
+   * `trailblaze.yaml`. Mirrors [MetaOnlyDescriptorTestFixture]'s authoring shape but adds a
+   * `waypoints:` entry, since that fixture (shared with [CompileCommandTest]) has no need
+   * for waypoints of its own.
+   */
+  private fun addWorkspaceScriptedToolTrailmap(workspaceRoot: File, trailmapId: String) {
+    val configDir = File(workspaceRoot, "trails/config").apply { mkdirs() }
+    val trailmapDir = File(configDir, "trailmaps/$trailmapId").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: $trailmapId
+      target:
+        display_name: $trailmapId
+        tools:
+          - sampleTool
+      waypoints:
+        - waypoints/ready.waypoint.yaml
+      """.trimIndent(),
+    )
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "sampleTool.yaml").writeText(
+      """
+      script: ./sampleTool.ts
+      _meta:
+        trailblaze/requiresContext: true
+      """.trimIndent(),
+    )
+    File(toolsDir, "sampleTool.ts").writeText(
+      """
+      import { trailblaze } from "@trailblaze/scripting";
+
+      export interface SampleArgs {
+        who: string;
+      }
+
+      export const sampleTool = trailblaze.tool<SampleArgs>(async (input) => {
+        return `hello, ${'$'}{input.who}`;
+      });
+      """.trimIndent(),
+    )
+    val waypointDir = File(trailmapDir, "waypoints").apply { mkdirs() }
+    File(waypointDir, "ready.waypoint.yaml").writeText(
+      "id: \"$trailmapId/ready\"\ndescription: \"Ready.\"",
+    )
+    File(configDir, "trailblaze.yaml").writeText(
+      "trailmaps:\n  - trailmaps/$trailmapId/trailmap.yaml\n",
+    )
   }
 
   private fun newTempDir(): File =
