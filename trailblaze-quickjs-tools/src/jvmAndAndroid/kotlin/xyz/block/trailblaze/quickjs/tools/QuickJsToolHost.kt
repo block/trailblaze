@@ -3,10 +3,12 @@ package xyz.block.trailblaze.quickjs.tools
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.function
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -26,6 +28,16 @@ class QuickJsToolHost internal constructor(
    * assertion needs to read state outside the normal listTools/callTool surface.
    */
   internal val quickJs: QuickJs,
+  /**
+   * The single owning thread for [quickJs]. QuickJS-NG (via quickjs-kt) is NOT thread-safe:
+   * `evaluate` runs the native call on the *calling* thread while async host functions resume
+   * on `CoroutineScope(jobDispatcher)`. If those differ, the async resume re-enters the engine
+   * (and JNI) from the wrong thread and the JVM segfaults (`SIGSEGV` in `jni_CallObjectMethod`).
+   * So the engine is created, evaluated, resumed, and closed entirely on this one-thread
+   * dispatcher (used as the engine's `jobDispatcher` AND wrapped around every `quickJs.*` call).
+   * Owned by this host; closed in [shutdown].
+   */
+  private val engineDispatcher: ExecutorCoroutineDispatcher,
 ) {
 
   /**
@@ -43,31 +55,40 @@ class QuickJsToolHost internal constructor(
   internal val evalMutex: Mutex = Mutex()
 
   /**
+   * Guards [shutdown] so a second call is a no-op instead of dispatching onto an
+   * already-[ExecutorCoroutineDispatcher.close]d [engineDispatcher], which rejects new tasks
+   * with a `CancellationException` rather than the idempotent no-op callers expect.
+   */
+  private val isShutdown = java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /**
    * List the tools the bundle registered. Reads `globalThis.__trailblazeTools` and serializes
    * per-tool spec to a [RegisteredToolSpec]. Returns an empty list when the bundle didn't
    * register anything (legitimate — the bundle might be a no-op fixture).
    */
   suspend fun listTools(): List<RegisteredToolSpec> = evalMutex.withLock {
-    val specsJson = quickJs.evaluate<String>(
-      // Reads the registry, projects each entry to `{name, spec}`, JSON-stringifies. The
-      // `|| {}` fallback means an empty registry returns `[]` rather than crashing on `Object.keys(undefined)`.
-      """
-      JSON.stringify(
-        Object.entries(globalThis.__trailblazeTools || {}).map(([name, t]) => ({
-          name,
-          spec: t.spec || {}
-        }))
+    withContext(engineDispatcher) {
+      val specsJson = quickJs.evaluate<String>(
+        // Reads the registry, projects each entry to `{name, spec}`, JSON-stringifies. The
+        // `|| {}` fallback means an empty registry returns `[]` rather than crashing on `Object.keys(undefined)`.
+        """
+        JSON.stringify(
+          Object.entries(globalThis.__trailblazeTools || {}).map(([name, t]) => ({
+            name,
+            spec: t.spec || {}
+          }))
+        )
+        """.trimIndent(),
+        "list-tools.js",
+        false,
       )
-      """.trimIndent(),
-      "list-tools.js",
-      false,
-    )
-    val parsed = JSON.parseToJsonElement(specsJson) as kotlinx.serialization.json.JsonArray
-    parsed.map { entry ->
-      val obj = entry.jsonObject
-      val name = (obj["name"] as kotlinx.serialization.json.JsonPrimitive).content
-      val spec = obj["spec"]?.jsonObject ?: JsonObject(emptyMap())
-      RegisteredToolSpec(name = name, spec = spec)
+      val parsed = JSON.parseToJsonElement(specsJson) as kotlinx.serialization.json.JsonArray
+      parsed.map { entry ->
+        val obj = entry.jsonObject
+        val name = (obj["name"] as kotlinx.serialization.json.JsonPrimitive).content
+        val spec = obj["spec"]?.jsonObject ?: JsonObject(emptyMap())
+        RegisteredToolSpec(name = name, spec = spec)
+      }
     }
   }
 
@@ -82,6 +103,7 @@ class QuickJsToolHost internal constructor(
    */
   suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject =
     evalMutex.withLock {
+      withContext(engineDispatcher) {
       // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
       // splicing the raw JSON output into the generated source. JSON encodes the U+2028
       // (line separator) and U+2029 (paragraph separator) code points as themselves — valid
@@ -258,20 +280,31 @@ class QuickJsToolHost internal constructor(
         false,
       )
       JSON.parseToJsonElement(resultJson).jsonObject
+      }
     }
 
   /**
-   * Free the QuickJS engine. Idempotent; safe to call multiple times. Runs the native free
-   * under `Dispatchers.IO` because tearing down a bundle with lots of retained JS allocations
-   * can block.
+   * Free the QuickJS engine. Idempotent; safe to call multiple times. The native free runs on
+   * [engineDispatcher] (the engine's owning thread — freeing it from any other thread is the same
+   * cross-thread hazard as evaluating from one), then the dedicated thread is released.
    */
   suspend fun shutdown() {
-    withContext(Dispatchers.IO) {
+    if (!isShutdown.compareAndSet(false, true)) return
+    withContext(engineDispatcher) {
       runCatching { quickJs.close() }
     }
+    engineDispatcher.close()
   }
 
   companion object {
+
+    /**
+     * Monotonic id for engine threads. Each [connect] mints its own single-thread dispatcher, so
+     * in a multi-tenant daemon (many devices/agents/bundles at once) every engine runs on its own
+     * uniquely-named thread — a thread dump or `hs_err` crash log then names exactly which engine
+     * it was, instead of N identical `quickjs-tool-engine` threads.
+     */
+    private val engineThreadSeq = java.util.concurrent.atomic.AtomicLong(0)
 
     /**
      * Stand up a fresh QuickJS engine, install the optional host binding, evaluate the bundle.
@@ -303,8 +336,18 @@ class QuickJsToolHost internal constructor(
       engineExtension: QuickJsEngineExtension? = null,
       logSink: (String) -> Unit = DEFAULT_LOG_SINK,
     ): QuickJsToolHost {
-      val quickJs = QuickJs.create(Dispatchers.Default)
+      // One dedicated daemon thread owns this engine for its entire lifecycle. It is BOTH the
+      // engine's `jobDispatcher` (so async host-function resumes run here) AND the thread every
+      // `quickJs.*` call below is confined to via `withContext`. Using a multi-threaded pool like
+      // `Dispatchers.Default` lets `evaluate` (caller thread) and the async resume (a pool worker)
+      // land on different threads, which re-enters the single-threaded native engine cross-thread
+      // and segfaults the JVM (`SIGSEGV` in `jni_CallObjectMethod`).
+      val engineDispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "quickjs-tool-engine-${engineThreadSeq.incrementAndGet()}").apply { isDaemon = true }
+      }.asCoroutineDispatcher()
+      val quickJs = withContext(engineDispatcher) { QuickJs.create(engineDispatcher) }
       try {
+        withContext(engineDispatcher) {
         if (hostBinding != null) {
           // Async binding so JS can `await __trailblazeCall(name, argsJson)`. Returns the
           // result-JSON string the SDK shim will JSON.parse on the JS side.
@@ -360,9 +403,11 @@ class QuickJsToolHost internal constructor(
         // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
         // here as a side effect.
         quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)
-        return QuickJsToolHost(quickJs)
+        }
+        return QuickJsToolHost(quickJs, engineDispatcher)
       } catch (t: Throwable) {
-        runCatching { quickJs.close() }
+        withContext(engineDispatcher) { runCatching { quickJs.close() } }
+        engineDispatcher.close()
         throw t
       }
     }

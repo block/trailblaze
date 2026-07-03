@@ -3,8 +3,11 @@ package xyz.block.trailblaze.scripting
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.QuickJsException
 import com.dokar.quickjs.binding.function
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
@@ -22,6 +25,12 @@ import kotlinx.serialization.json.JsonObject
  * `DelegatingTrailblazeTool.toExecutableTrailblazeTools` is not suspending.
  */
 object TrailblazeScriptEngine {
+
+  /**
+   * Monotonic id so each per-call engine thread is uniquely named — a thread dump / crash log in a
+   * multi-tenant daemon then names exactly which script evaluation it was.
+   */
+  private val scriptEngineThreadSeq = AtomicLong(0)
 
   /**
    * Synchronous bridge that resolves a tool name + JSON params into an executed
@@ -77,29 +86,44 @@ object TrailblazeScriptEngine {
       appendLine(source)
       appendLine("})()")
     }
-    val quickJs = QuickJs.create(Dispatchers.Default)
+    // Dedicated single owning thread for this engine (see QuickJsToolHost for the full rationale):
+    // quickjs-kt's engine is single-threaded and resumes Promise/async jobs on its jobDispatcher, so
+    // a multi-threaded dispatcher can resume on a different thread and segfault the JVM (SIGSEGV in
+    // jni_CallObjectMethod). Confine create/evaluate/close to one thread. Per-call, matching this
+    // method's per-call engine lifecycle; concurrent (multi-tenant) calls each get their own engine
+    // + thread rather than sharing one.
+    val engineDispatcher = Executors.newSingleThreadExecutor { r ->
+      Thread(r, "quickjs-script-engine-${scriptEngineThreadSeq.incrementAndGet()}").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
     try {
-      if (dispatcher != null) {
-        quickJs.function("__trailblazeExecuteRaw") { args ->
-          val toolName = args[0] as String
-          val paramsJson = args[1] as String
-          dispatcher.dispatch(toolName, paramsJson)
+      withContext(engineDispatcher) {
+        val quickJs = QuickJs.create(engineDispatcher)
+        try {
+          if (dispatcher != null) {
+            quickJs.function("__trailblazeExecuteRaw") { args ->
+              val toolName = args[0] as String
+              val paramsJson = args[1] as String
+              dispatcher.dispatch(toolName, paramsJson)
+            }
+          }
+          // No wall-clock timeout: quickjs-kt 1.0.5 exposes no interrupt handler, so a
+          // `while(true){}` in JS never yields to the coroutine and withTimeout can't fire.
+          // Real timeout discipline lands in a follow-up (interrupt handler + budget).
+          quickJs.evaluate<String>(wrapped)
+        } catch (e: QuickJsException) {
+          // quickjs-kt raises QuickJsException for every engine-side failure — syntax errors,
+          // runtime throws, and type-mismatches (including "script did not return a String").
+          throw ScriptEvaluationException(
+            "JavaScript evaluation failed: ${e.message}",
+            cause = e,
+            source = source,
+          )
+        } finally {
+          quickJs.close()
         }
       }
-      // No wall-clock timeout: quickjs-kt 1.0.5 exposes no interrupt handler, so a
-      // `while(true){}` in JS never yields to the coroutine and withTimeout can't fire.
-      // Real timeout discipline lands in a follow-up (interrupt handler + budget).
-      quickJs.evaluate<String>(wrapped)
-    } catch (e: QuickJsException) {
-      // quickjs-kt raises QuickJsException for every engine-side failure — syntax errors,
-      // runtime throws, and type-mismatches (including "script did not return a String").
-      throw ScriptEvaluationException(
-        "JavaScript evaluation failed: ${e.message}",
-        cause = e,
-        source = source,
-      )
     } finally {
-      quickJs.close()
+      engineDispatcher.close()
     }
   }
 }
