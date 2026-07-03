@@ -249,8 +249,9 @@ object AndroidHostAdbUtils {
   /**
    * Runs an `adb` ProcessBuilder with a timeout, force-killing it if it does not exit in time.
    * Matches the legacy `process.waitFor(timeout, SECONDS) -> destroyForcibly` pattern that protected
-   * device discovery and port-forward cleanup from a wedged adb/adbd. Returns true on a clean exit
-   * within the deadline.
+   * device discovery and port-forward cleanup from a wedged adb/adbd. Returns true only if the
+   * process both exited within the deadline and exited with a zero exit code — a process that ran
+   * to completion but failed (e.g. `adb forward` rejecting a bad port) is not a "clean exit".
    */
   private fun runProcessBuilderWithTimeout(
     pb: ProcessBuilder,
@@ -262,7 +263,7 @@ object AndroidHostAdbUtils {
       process.destroyForcibly()
       process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)
     }
-    finished
+    finished && process.exitValue() == 0
   } catch (_: Exception) {
     false
   }
@@ -276,19 +277,27 @@ object AndroidHostAdbUtils {
    * e.g. the Galaxy Tab S8 — flooding "tcp:<port>: closed"). Returns an [AutoCloseable] that tears
    * the forward down via `adb forward --remove tcp:$localPort`. Mirrors [adbPortForwardLocalAbstract]
    * and [adbPortReverse], which already shell out to the binary.
+   *
+   * @throws IOException if the `adb forward` command times out or exits non-zero, so callers
+   * ([adbPortForward], [diagnoseAndReAdbPortForward]) surface the failure instead of silently
+   * believing a forward is active when the device never actually got one — the exact class of
+   * silent hang this whole binary-based approach exists to fix.
    */
   private fun installAdbForwardViaBinary(
     deviceId: TrailblazeDeviceId,
     localPort: Int,
     remotePort: Int,
   ): AutoCloseable {
-    runProcessBuilderWithTimeout(
+    val installed = runProcessBuilderWithTimeout(
       createAdbCommandProcessBuilder(
         deviceId = deviceId,
         args = listOf("forward", "tcp:$localPort", "tcp:$remotePort"),
       ),
       timeoutMs = DEFAULT_SHORT_CALL_TIMEOUT_MS,
     )
+    if (!installed) {
+      throw IOException("adb forward tcp:$localPort tcp:$remotePort failed or timed out")
+    }
     return AutoCloseable {
       runCatching {
         runProcessBuilderWithTimeout(
@@ -325,10 +334,9 @@ object AndroidHostAdbUtils {
       // localPort), so just drop our duplicate AutoCloseable WITHOUT running `--remove`.
       activeForwards.putIfAbsent(key, forwarder)
     } catch (e: Exception) {
-      // Many transports throw with a null `message` (notably dadb's BindException for
-      // "Address already in use"), so falling back to `e.javaClass.simpleName` keeps the
-      // user-visible error informative instead of "null". Stack trace is still preserved
-      // via the `cause` parameter for log inspection.
+      // Fall back to the exception's class name if the message is blank, so the user-visible
+      // error stays informative instead of "null". Stack trace is still preserved via the
+      // `cause` parameter for log inspection.
       val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
       throw RuntimeException(
         "Failed to start port forwarding tcp:$localPort -> tcp:$remotePort on " +
