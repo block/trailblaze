@@ -2,14 +2,20 @@ package xyz.block.trailblaze.mcp
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 
@@ -123,6 +129,65 @@ class TrailblazeMcpBridgeImplTest {
         "Child at index $idx must be an executable primitive (not a delegating wrapper); " +
           "got ${child::class.simpleName}",
       )
+    }
+  }
+
+  // -- renderExecutionResult: what `trailblaze tool` prints for the HOST/Maestro blocking path --
+  //
+  // This is the pure helper the HOST-blocking branch of `executeTrailblazeTool` now routes its
+  // completion result through, so a read tool run via `trailblaze tool` shows its real return
+  // value instead of a generic "Executed …" acknowledgement. Pins the observable contract:
+  // structuredContent wins over message, message wins over the fallback, and Failed / Cancelled
+  // throw so the CLI reports a non-zero exit.
+
+  private val fallback = "Executed FooTool on device test-emu"
+
+  @Test
+  fun `renderExecutionResult prefers structured content over message and fallback`() {
+    val structured = buildJsonObject { put("count", JsonPrimitive(3)) }
+    val rendered = TrailblazeMcpBridgeImpl.renderExecutionResult(
+      result = TrailExecutionResult.Success(
+        toolMessage = "human readable message",
+        toolStructuredContent = structured,
+      ),
+      fallback = fallback,
+    )
+    // The typed return value the caller/device receives is the structured content serialized
+    // verbatim — the message and fallback are fully ignored when structured content is present.
+    assertEquals(
+      TrailblazeJsonInstance.encodeToString(JsonElement.serializer(), structured),
+      rendered,
+    )
+  }
+
+  @Test
+  fun `renderExecutionResult surfaces the tool message when there is no structured content`() {
+    val rendered = TrailblazeMcpBridgeImpl.renderExecutionResult(
+      result = TrailExecutionResult.Success(toolMessage = "com.example.app is not installed"),
+      fallback = fallback,
+    )
+    assertEquals("com.example.app is not installed", rendered)
+  }
+
+  @Test
+  fun `renderExecutionResult falls back for an action tool with no payload`() {
+    // A tap/swipe-style Success carries neither message nor structured content — the caller
+    // should still see the generic acknowledgement rather than an empty string.
+    assertEquals(fallback, TrailblazeMcpBridgeImpl.renderExecutionResult(TrailExecutionResult.Success(), fallback))
+    // A blank message is treated the same as none.
+    assertEquals(
+      fallback,
+      TrailblazeMcpBridgeImpl.renderExecutionResult(TrailExecutionResult.Success(toolMessage = "   "), fallback),
+    )
+  }
+
+  @Test
+  fun `renderExecutionResult throws on failure and cancellation`() {
+    assertFailsWith<IllegalStateException> {
+      TrailblazeMcpBridgeImpl.renderExecutionResult(TrailExecutionResult.Failed("boom"), fallback)
+    }
+    assertFailsWith<IllegalStateException> {
+      TrailblazeMcpBridgeImpl.renderExecutionResult(TrailExecutionResult.Cancelled, fallback)
     }
   }
 

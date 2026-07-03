@@ -44,8 +44,20 @@ async function collectScreenshots(trace, sessionId, onProgress) {
 // Build the full self-contained HTML document for a run. Async because it inlines screenshots.
 // The trace/llmLogs are already derived (the Run details page holds them); we just gather the
 // screenshot bytes and hand everything to the shared core renderer.
+// Best-effort fetch of the session's recorded .trail.yaml so the exported report's Recording tab
+// matches the headless `trailblaze report` output. Failure is non-fatal — the tab just won't show.
+async function fetchRecordingYaml(sessionId) {
+  try {
+    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/export`);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text && text.trim() ? text : null;
+  } catch (e) { return null; }
+}
+
 async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress }) {
   const shots = await collectScreenshots(trace, sessionId, onProgress);
+  const recordingYaml = await fetchRecordingYaml(sessionId);
   const meta = {
     title: s.title || s.id || 'Trailblaze run',
     status: s.status || 'unknown',
@@ -58,6 +70,7 @@ async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress
     trailId: s.trailId || null,
     cmd: cmd || null,
     error: s.err || null,
+    recordingYaml,
     generatedAt: new Date().toLocaleString(),
   };
   return buildRunReportHtml({ meta, trace, llmLogs, shots });

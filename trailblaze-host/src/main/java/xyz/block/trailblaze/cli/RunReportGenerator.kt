@@ -1,0 +1,246 @@
+package xyz.block.trailblaze.cli
+
+import java.io.File
+import java.nio.file.Files
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionInfo
+import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedYaml
+
+/**
+ * Headless generator for the interactive Trailblaze run report — the CLI/CI counterpart to the
+ * in-app "Share as HTML" button. It produces the SAME self-contained, dependency-free HTML the
+ * Share button does, by reusing the exact same extraction + renderer
+ * ([run-report-core.js][CORE_RESOURCE], the build-time transpiled artifact of run-report-core.ts) under
+ * a thin bun driver ([run-report-cli.ts][DRIVER_RESOURCE]).
+ *
+ * `trailblaze report` (and the after-run report) generate this artifact ALONGSIDE the legacy WASM
+ * report ([xyz.block.trailblaze.report.WasmReport]) — every run emits both. When this generator
+ * can't run (`bun` unavailable, subprocess failure) callers still have the legacy artifact.
+ *
+ * One report can cover one OR many sessions: a single session opens straight on its detail; several
+ * open on a pass/fail session index that drills into each run (parity with the old multi-session
+ * WASM index). Per-session it carries the step timeline, the LLM transcript, the recorded
+ * `.trail.yaml`, and the run metadata.
+ *
+ * Requires `bun` on PATH (the same hard prerequisite the scripted-tool analyzer already imposes).
+ * When bun can't be resolved, or the subprocess fails, [generate] returns null so the caller can
+ * fall back to the legacy report rather than leaving the user with no artifact.
+ */
+class RunReportGenerator(
+  private val bunBinary: File? = ScriptedToolDefinitionAnalyzer.resolveBunBinary(),
+) {
+
+  /**
+   * Generate the interactive HTML report for [sessionIds] into `logsRepo.logsDir/reports/`.
+   *
+   * @return the report [File], or null if bun is unavailable, no session resolved, or the
+   *   subprocess failed (each logged via [Console]).
+   */
+  fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
+    if (sessionIds.isEmpty()) return null
+    val bun = bunBinary
+    if (bun == null) {
+      Console.log(
+        "[RunReportGenerator] bun not found on PATH — cannot build the interactive report. " +
+          "Install bun (it ships with the repo toolchain via `source bin/activate-hermit`) or " +
+          "run `trailblaze report --legacy` for the WASM report.",
+      )
+      return null
+    }
+
+    val sessionsJson = buildJsonArray {
+      for (sessionId in sessionIds) {
+        val sessionObj = buildSessionJson(logsRepo, sessionId) ?: continue
+        add(sessionObj)
+      }
+    }
+    if (sessionsJson.isEmpty()) {
+      Console.log("[RunReportGenerator] no resolvable sessions among ${sessionIds.size} requested.")
+      return null
+    }
+
+    val generatedAt = LocalDateTime.now().format(HUMAN_TS)
+    val inputJson = buildJsonObject {
+      put("generatedAt", generatedAt)
+      put("sessions", sessionsJson)
+    }
+
+    val workDir = Files.createTempDirectory("trailblaze-run-report-").toFile()
+    try {
+      copyResource(CORE_RESOURCE, File(workDir, "run-report-core.js"))
+      copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
+      val inputFile = File(workDir, "input.json").apply { writeText(inputJson.toString()) }
+      val outputFile = File(workDir, "report.html")
+
+      val exit = runBun(bun, workDir, inputFile, outputFile)
+      if (exit != 0 || !outputFile.exists() || outputFile.length() == 0L) {
+        Console.error("[RunReportGenerator] report subprocess failed (exit=$exit).")
+        return null
+      }
+
+      val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }
+      // "interactive" in the name keeps it from colliding with the legacy WASM report, which is
+      // written to the same reports/ dir with the same timestamp pattern in the same run.
+      val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
+      outputFile.copyTo(dest, overwrite = true)
+      return dest
+    } finally {
+      workDir.deleteRecursively()
+    }
+  }
+
+  /** Build one session's payload object: meta + recorded YAML + screenshot dir + raw log array. */
+  private fun buildSessionJson(logsRepo: LogsRepo, sessionId: SessionId): JsonObject? {
+    val logs = logsRepo.getLogsForSession(sessionId)
+    val sessionInfo = logs.getSessionInfo() ?: return null
+    val status = logs.getSessionStatus()
+    val sessionDir = logsRepo.getSessionDir(sessionId)
+
+    val recordingYaml = runCatching {
+      logs.generateRecordedYaml(createTrailblazeYaml())
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    return buildJsonObject {
+      put("meta", sessionMetaJson(sessionInfo, status))
+      if (recordingYaml != null) put("recordingYaml", recordingYaml)
+      put("sessionDir", sessionDir.absolutePath)
+      put("logs", readSessionLogJson(sessionDir))
+    }
+  }
+
+  /**
+   * Read a session dir's raw per-log JSON files into a [JsonArray] — byte-identical to what the
+   * daemon serves the web app at `/trailrunner/api/session/{id}/logs` (the same files
+   * `TrailblazeJsonInstance` wrote, with discriminator `class`). Mirrors that route's filter:
+   * hex-prefixed `*.json` files, sorted by name.
+   */
+  private fun readSessionLogJson(sessionDir: File): JsonArray = buildJsonArray {
+    (sessionDir.listFiles() ?: emptyArray())
+      .filter { f ->
+        f.extension == "json" &&
+          f.name.firstOrNull()?.let { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' } == true
+      }
+      .sortedBy { it.name }
+      .forEach { f ->
+        runCatching { PARSER.parseToJsonElement(f.readText()) }.getOrNull()?.let { add(it) }
+      }
+  }
+
+  private fun copyResource(resourcePath: String, dest: File) {
+    val stream = javaClass.classLoader.getResourceAsStream(resourcePath)
+      ?: error("Missing report resource on classpath: $resourcePath")
+    stream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+  }
+
+  /** Run `bun run-report-cli.ts <input> <output>`, draining output, bounded by a timeout. */
+  private fun runBun(bun: File, workDir: File, input: File, output: File): Int {
+    val proc = ProcessBuilder(
+      bun.absolutePath,
+      "run-report-cli.ts",
+      input.absolutePath,
+      output.absolutePath,
+    ).directory(workDir).redirectErrorStream(true).start()
+
+    // Drain stdout/stderr on a daemon thread so the subprocess can't deadlock on a full pipe.
+    val sink = StringBuilder()
+    val drain = Thread {
+      proc.inputStream.bufferedReader().forEachLine { line -> synchronized(sink) { sink.appendLine(line) } }
+    }.apply { isDaemon = true; start() }
+
+    val finished = proc.waitFor(SUBPROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    if (!finished) {
+      proc.destroyForcibly()
+      Console.error("[RunReportGenerator] report subprocess timed out after ${SUBPROCESS_TIMEOUT_SECONDS}s.")
+      return -1
+    }
+    drain.join(1_000)
+    val out = synchronized(sink) { sink.toString() }.trim()
+    if (proc.exitValue() != 0 && out.isNotEmpty()) Console.error("[RunReportGenerator] $out")
+    return proc.exitValue()
+  }
+
+  companion object {
+    private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/run-report-core.js"
+    private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
+    private const val SUBPROCESS_TIMEOUT_SECONDS = 120L
+    private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
+    private val PARSER = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    /**
+     * The run `meta` the viewer renders (title, status badge, device/platform strip, error banner,
+     * rerun command). Pure over [SessionInfo]/[SessionStatus] so it's unit-testable without a device
+     * or a logs dir. `steps` is intentionally omitted — the renderer derives it from the trace length.
+     */
+    internal fun sessionMetaJson(
+      sessionInfo: xyz.block.trailblaze.logs.model.SessionInfo,
+      status: SessionStatus,
+    ): JsonObject = buildJsonObject {
+      put("title", sessionInfo.displayName)
+      put("status", statusLabel(status))
+      sessionInfo.trailConfig?.target?.let { put("target", it) }
+      sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase()?.let { put("platform", it) }
+      sessionInfo.trailblazeDeviceId?.instanceId?.let { put("device", it) }
+      put("duration", formatDuration(sessionInfo.durationMs))
+      put("ranAt", LocalDateTime.ofInstant(
+        java.time.Instant.ofEpochMilli(sessionInfo.timestamp.toEpochMilliseconds()),
+        ZoneId.systemDefault(),
+      ).format(HUMAN_TS))
+      sessionInfo.trailConfig?.id?.let { put("trailId", it) }
+      sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "trailblaze run $it") }
+      failureReason(status)?.let { put("error", it) }
+      // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
+      // badge in the viewer — the legacy report's SelfHealChip distinction.
+      if (status is SessionStatus.Ended.SucceededWithSelfHeal || status is SessionStatus.Ended.FailedWithSelfHeal) {
+        put("selfHeal", true)
+      }
+    }
+
+    /** Map a [SessionStatus] to the badge class the viewer expects (passed/failed/cancelled/running/unknown). */
+    internal fun statusLabel(status: SessionStatus): String = when (status) {
+      is SessionStatus.Ended.Succeeded,
+      is SessionStatus.Ended.SucceededWithSelfHeal -> "passed"
+      is SessionStatus.Ended.Failed,
+      is SessionStatus.Ended.FailedWithSelfHeal,
+      is SessionStatus.Ended.TimeoutReached,
+      is SessionStatus.Ended.MaxCallsLimitReached -> "failed"
+      is SessionStatus.Ended.Cancelled -> "cancelled"
+      is SessionStatus.Started -> "running"
+      is SessionStatus.Unknown -> "unknown"
+    }
+
+    internal fun failureReason(status: SessionStatus): String? = when (status) {
+      is SessionStatus.Ended.Failed -> status.exceptionMessage
+      is SessionStatus.Ended.FailedWithSelfHeal -> status.exceptionMessage
+      is SessionStatus.Ended.Cancelled -> status.cancellationMessage
+      is SessionStatus.Ended.TimeoutReached -> status.message
+      is SessionStatus.Ended.MaxCallsLimitReached ->
+        "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+      else -> null
+    }
+
+    internal fun formatDuration(ms: Long): String = when {
+      ms < 1000 -> "${ms}ms"
+      ms < 60_000 -> "${"%.1f".format(ms / 1000.0)}s"
+      else -> "${ms / 60_000}m ${(ms % 60_000) / 1000}s"
+    }
+  }
+}

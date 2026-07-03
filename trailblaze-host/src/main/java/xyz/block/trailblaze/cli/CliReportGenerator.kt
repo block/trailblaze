@@ -129,6 +129,20 @@ open class CliReportGenerator {
     return statuses
   }
 
+  private val runReportGenerator by lazy { RunReportGenerator() }
+
+  /**
+   * Generates the lightweight, self-contained interactive HTML report — the same artifact the
+   * Trail Runner app's "Share as HTML" button produces. Report-producing surfaces generate this
+   * ALONGSIDE the legacy WASM report from [generateReport]; there is no format selector.
+   *
+   * Generated headlessly by [RunReportGenerator] (a bun subprocess over the shared run-report
+   * renderer). Returns null when it can't be produced — `bun` missing, subprocess failure — with
+   * the cause logged; callers still have the legacy artifact in that case.
+   */
+  open fun generateInteractiveReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? =
+    runReportGenerator.generate(logsRepo, sessionIds)
+
   /**
    * Generates a self-contained HTML report for the given session IDs.
    *

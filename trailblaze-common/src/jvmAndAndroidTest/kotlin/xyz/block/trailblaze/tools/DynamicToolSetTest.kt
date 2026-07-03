@@ -1,8 +1,5 @@
 package xyz.block.trailblaze.tools
 
-import ai.koog.agents.core.tools.ToolParameterType
-import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -19,150 +16,21 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.getInitialToolClassesForDriver
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
-import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.VerificationStep
 
+/**
+ * Covers the catalog-backed tool surface: driver-scoped resolution, the all-tools-on initial
+ * repo surface built by [TrailblazeToolRepo.withDynamicToolSets], and verify-step scoping. There
+ * is no longer a runtime toolset switch (`setActiveToolSets`) — every driver-compatible tool is
+ * advertised up front.
+ */
 class DynamicToolSetTest {
 
-  // -- TrailblazeToolSetCatalog --
-
-  @Test
-  fun `formatCatalogSummary includes all YAML-defined toolsets`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val summary = TrailblazeToolSetCatalog.formatCatalogSummary(catalog)
-
-    assertTrue(summary.contains("core_interaction"), "Should list core_interaction toolset")
-    assertTrue(summary.contains("navigation"), "Should list navigation toolset")
-    assertTrue(summary.contains("verification"), "Should list verification toolset")
-    assertTrue(summary.contains("memory"), "Should list memory toolset")
-    assertTrue(summary.contains("observation"), "Should list observation toolset")
-    assertTrue(summary.contains("meta"), "Should list meta toolset")
-    assertTrue(summary.contains("[always enabled]"), "Should mark always-enabled sets")
-  }
-
-  // -- TrailblazeToolRepo.setActiveToolSets --
-
-  @Test
-  fun `setActiveToolSets replaces tools with requested toolsets`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "core",
-        toolClasses = coreTools.toolClasses,
-        yamlToolNames = coreTools.yamlToolNames,
-      ),
-      toolSetCatalog = catalog,
-    )
-
-    // Initially the alwaysEnabled toolsets are live: `meta` + `core_interaction`.
-    val initialToolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("tap" in initialToolNames, "core_interaction (alwaysEnabled) should include tap")
-    assertTrue("inputText" in initialToolNames, "core_interaction should include inputText")
-    assertTrue("pressKey" in initialToolNames, "core_interaction should include pressKey")
-    assertTrue("swipe" in initialToolNames, "core_interaction should include swipe")
-    assertTrue("setActiveToolSets" in initialToolNames, "meta (alwaysEnabled) should include setActiveToolSets")
-    assertTrue("rememberText" !in initialToolNames, "memory toolset should not be active initially")
-
-    // Enable memory toolset — adds rememberText / assertEquals / etc.
-    val result = repo.setActiveToolSets(listOf("memory"))
-    assertTrue(result.contains("Active tool sets updated"), "Should confirm update")
-
-    val updatedToolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("rememberText" in updatedToolNames, "Memory tools should now be active")
-    assertTrue("tap" in updatedToolNames, "core_interaction tools should still be present")
-  }
-
-  @Test
-  fun `setActiveToolSets rejects unknown toolset IDs`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "core",
-        toolClasses = coreTools.toolClasses,
-        yamlToolNames = coreTools.yamlToolNames,
-      ),
-      toolSetCatalog = catalog,
-    )
-
-    val result = repo.setActiveToolSets(listOf("nonexistent"))
-    assertTrue(result.contains("Unknown toolset IDs"), "Should reject unknown IDs")
-  }
-
-  @Test
-  fun `setActiveToolSets with empty list resets to alwaysEnabled only`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "core",
-        toolClasses = coreTools.toolClasses,
-        yamlToolNames = coreTools.yamlToolNames,
-      ),
-      toolSetCatalog = catalog,
-    )
-
-    // Enable memory then reset
-    repo.setActiveToolSets(listOf("memory"))
-    repo.setActiveToolSets(emptyList())
-
-    val toolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("rememberText" !in toolNames, "Memory tools should be removed after reset")
-    assertTrue("tap" in toolNames, "core_interaction (alwaysEnabled) tools should remain")
-    assertTrue("pressKey" in toolNames, "core_interaction (alwaysEnabled) tools should remain")
-  }
-
-  @Test
-  fun `setActiveToolSets preserves extra tools not in catalog`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
-    // Simulate an app-specific custom tool added alongside catalog tools
-    val customToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-      name = "core + custom",
-      toolClasses = coreTools.toolClasses + InputTextTrailblazeTool::class, // InputText is already in core, but let's use a known tool
-      yamlToolNames = coreTools.yamlToolNames,
-    )
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = customToolSet,
-      toolSetCatalog = catalog,
-    )
-
-    // Switch toolsets - extra (non-catalog) tools should be preserved
-    repo.setActiveToolSets(listOf("memory"))
-    val toolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("inputText" in toolNames, "core_interaction (alwaysEnabled) tool should still be present")
-  }
-
-  @Test
-  fun `setActiveToolSets returns error when catalog not configured`() {
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "minimal",
-        setOf(TapTrailblazeTool::class),
-      ),
-    )
-
-    val result = repo.setActiveToolSets(listOf("memory"))
-    assertTrue(result.contains("not configured"), "Should indicate catalog is not configured")
-  }
-
-  // -- meta toolset includes meta tools --
-
-  @Test
-  fun `meta toolset includes setActiveToolSets and objectiveStatus`() {
-    val metaEntry = TrailblazeToolSetCatalog.defaultEntries().first { it.id == "meta" }
-    assertTrue(metaEntry.alwaysEnabled, "Meta toolset should be alwaysEnabled")
-    val names = metaEntry.toolNames.toSet()
-    assertTrue("setActiveToolSets" in names)
-    assertTrue("objectiveStatus" in names)
-  }
+  // -- withDynamicToolSets: everything the driver supports is advertised up front --
 
   @Test
   fun `getCurrentToolDescriptors surfaces YAML-defined tools alongside class-backed tools`() {
@@ -181,42 +49,6 @@ class DynamicToolSetTest {
     val names = repo.getCurrentToolDescriptors().map { it.name }.toSet()
     assertTrue("eraseText" in names, "YAML-defined eraseText must surface in tool descriptors")
     assertTrue("hideKeyboard" in names, "class-backed hideKeyboard must surface in tool descriptors")
-  }
-
-  @Test
-  fun `getCurrentToolDescriptors advertises setActiveToolSets toolSetIds as an array`() {
-    // Regression: round-tripping the LLM surface through the string-typed TrailblazeToolDescriptor
-    // collapsed this List<String> to String, so the model sent a string the array decoder rejected.
-    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = TrailblazeToolSetCatalog.defaultEntries())
-
-    val descriptor = repo.getCurrentToolDescriptors()
-      .single { it.name == SetActiveToolSetsTrailblazeTool.TOOL_NAME }
-    val toolSetIds = descriptor.requiredParameters.single { it.name == "toolSetIds" }
-
-    assertEquals(
-      ToolParameterType.List(ToolParameterType.String),
-      toolSetIds.type,
-      "toolSetIds must surface as an array of strings, not a bare String",
-    )
-  }
-
-  @Test
-  fun `MULTI_AGENT_V3 wrapping preserves setActiveToolSets toolSetIds as an array`() {
-    // Mirrors the live provider chain (AndroidTrailblazeRule / TrailblazeHostYamlRunner):
-    // getCurrentToolDescriptors -> toTrailblazeToolDescriptor -> wrapToolsWithAnalysis. The wrapper
-    // used to hardcode every param to String, re-collapsing the list after the repo preserved it.
-    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = TrailblazeToolSetCatalog.defaultEntries())
-    val providerTools = repo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
-
-    val wrapped = InnerLoopScreenAnalyzer.wrapToolsWithAnalysis(providerTools)
-    val setActive = wrapped.single { it.name == SetActiveToolSetsTrailblazeTool.TOOL_NAME }
-    val toolSetIds = setActive.requiredParameters.single { it.name == "toolSetIds" }
-
-    assertEquals(
-      ToolParameterType.List(ToolParameterType.String),
-      toolSetIds.type,
-      "wrapped setActiveToolSets must keep toolSetIds as an array of strings",
-    )
   }
 
   @Test
@@ -247,18 +79,17 @@ class DynamicToolSetTest {
   }
 
   @Test
-  fun `getToolDescriptorsForStep returns verify tools for VerificationStep`() {
+  fun `getToolDescriptorsForStep scopes a VerificationStep to the verify surface`() {
+    // Verify-step scoping is the one narrowing that survives: a `verify:` step advertises only the
+    // assertion tools + objectiveStatus so the agent can't tap/scroll during a verification. The
+    // full surface (including the verify tools) is still on for DirectionSteps.
     val repo = TrailblazeToolRepo.withDynamicToolSets()
-    val verifyStep = xyz.block.trailblaze.yaml.VerificationStep(verify = "test")
+    val verifyStep = VerificationStep(verify = "test")
     val verifyDescriptors = repo.getToolDescriptorsForStep(verifyStep).map { it.name }.toSet()
 
     assertTrue("assertNotVisibleWithText" in verifyDescriptors, "Should include assertNotVisibleWithText")
     assertTrue("objectiveStatus" in verifyDescriptors, "Should include objectiveStatus")
-
-    // Verify tools should NOT be in getRegisteredTrailblazeTools (they're only for verification)
-    val registeredToolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("assertNotVisibleWithText" !in registeredToolNames,
-      "Verify tools should not be in registered tool classes with dynamic toolsets")
+    assertFalse("tap" in verifyDescriptors, "A verify step must not advertise interaction tools like tap")
   }
 
   // -- defaultToolClassesForDriver --
@@ -390,6 +221,33 @@ class DynamicToolSetTest {
         ).toSet()
     assertTrue("tap" in mobileNames, "Mobile drivers should receive core_interaction 'tap'")
     assertTrue("inputText" in mobileNames, "Mobile drivers should receive core_interaction 'inputText'")
+  }
+
+  @Test
+  fun `resolveForSession with the full id list stays driver-aware`() {
+    // This is the exact contract both the MCP tool registration (TrailblazeMcpServer.registerTools)
+    // and the initial repo surface (withDynamicToolSets) now rely on: resolve EVERY catalog id, but
+    // still filter by the session's driver. The existing leak tests use an empty requestedIds list
+    // (i.e. only always-enabled entries), so this pins the all-ids + driver combination that the
+    // "advertise everything up front" model introduced. A null driver returns the full cross-driver
+    // set (the "see everything" pre-connect default an external MCP client gets).
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
+    val allIds = catalog.map { it.id }
+
+    fun classNames(driver: TrailblazeDriverType?) =
+      TrailblazeToolSetCatalog.resolveForSession(driver, allIds, catalog)
+        .toolClasses.map { it.toolName().toolName }.toSet()
+
+    val playwright = classNames(TrailblazeDriverType.PLAYWRIGHT_NATIVE)
+    assertFalse("tap" in playwright, "Playwright session must not get mobile-only core_interaction 'tap' even with all ids")
+    assertFalse("hideKeyboard" in playwright, "Playwright session must not get mobile-only 'hideKeyboard'")
+    assertTrue("objectiveStatus" in playwright, "driver-agnostic meta tool is still present")
+
+    val android = classNames(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION)
+    assertTrue("tap" in android, "Android session keeps mobile core_interaction 'tap'")
+
+    val noDriver = classNames(driver = null)
+    assertTrue("tap" in noDriver, "A null driver falls back to the full cross-driver set")
   }
 
   // -- DefaultLlmTrailblazeTools (catalog-derived) --
@@ -571,8 +429,8 @@ class DynamicToolSetTest {
   @Test
   fun `entryToolClasses returns only the requested entry's tools, no alwaysEnabled leakage`() {
     // Invariant 3: resolve() auto-includes alwaysEnabled entries (meta, core_interaction);
-    // entryToolClasses() must NOT. Otherwise VERIFY-hint progressive disclosure would leak
-    // core_interaction tools into supposedly read-only contexts.
+    // entryToolClasses() must NOT. Otherwise a single-entry lookup would leak core_interaction
+    // tools into a context that asked for one entry in isolation.
     val verificationOnly = TrailblazeToolSetCatalog.entryToolClasses("verification")
     val verificationNames = verificationOnly.map { it.toolName().toolName }.toSet()
 
@@ -595,38 +453,14 @@ class DynamicToolSetTest {
     assertTrue(TrailblazeToolSetCatalog.entryToolClasses("not_a_real_toolset_id").isEmpty())
   }
 
-  @Test
-  fun `setActiveToolSets persists tools across calls`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
-    val repo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "core",
-        toolClasses = coreTools.toolClasses,
-        yamlToolNames = coreTools.yamlToolNames,
-      ),
-      toolSetCatalog = catalog,
-    )
-
-    // Enable navigation
-    repo.setActiveToolSets(listOf("navigation"))
-    val afterFirst = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("launchApp" in afterFirst, "Navigation tools should be active")
-
-    // Tools should still be there without re-requesting
-    val afterSecondCheck = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertEquals(afterFirst, afterSecondCheck, "Tools should persist without re-requesting")
-  }
-
   // -- withDynamicToolSets(driverType) --
   //
-  // The repo's default `always_enabled` core includes `core_interaction` (mobile-only). Without
-  // a driver hint, that leaks into Playwright/Compose sessions — the LLM is advertised `tap`,
-  // `hideKeyboard`, etc. even though they don't run on a web driver. Passing `driverType`
-  // routes through `resolveForDriver`, filtering the core by YAML `drivers:`.
+  // Every driver-compatible tool is advertised up front. Passing `driverType` filters the surface
+  // by each toolset's YAML `drivers:`, so mobile-only tools (core_interaction's `tap`,
+  // `hideKeyboard`, …) don't leak into Playwright/Compose sessions.
 
   @Test
-  fun `withDynamicToolSets with driverType filters alwaysEnabled core to driver-compatible entries`() {
+  fun `withDynamicToolSets with driverType filters the surface to driver-compatible entries`() {
     val playwrightRepo = TrailblazeToolRepo.withDynamicToolSets(
       driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
     )
@@ -638,13 +472,15 @@ class DynamicToolSetTest {
   }
 
   @Test
-  fun `withDynamicToolSets without driverType keeps pre-existing behavior`() {
-    // Regression guard: callers that don't pass driverType must see the unfiltered
-    // `alwaysEnabled` core (meta + core_interaction). Android-context callers rely on this.
+  fun `withDynamicToolSets without driverType advertises the full mobile surface`() {
+    // Without a driver hint the repo carries every catalog tool, including the driver-agnostic
+    // and mobile ones. Memory / verification tools that used to require an explicit opt-in are
+    // now on from the start.
     val repo = TrailblazeToolRepo.withDynamicToolSets()
     val names = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("tap" in names, "Without driverType, core_interaction's 'tap' is still advertised")
+    assertTrue("tap" in names, "core_interaction 'tap' is advertised")
     assertTrue("objectiveStatus" in names, "meta tools still present")
+    assertTrue("rememberText" in names, "memory tools are on up front (no opt-in)")
   }
 
   @Test

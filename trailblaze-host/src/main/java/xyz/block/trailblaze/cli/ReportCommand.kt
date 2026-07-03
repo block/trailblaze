@@ -19,19 +19,26 @@ import kotlin.system.exitProcess
  * With `--id` or `--current`, the report narrows to a single session and the timeline
  * exports (`--video`, `--gif`, `--webp`) become available.
  *
+ * Every run produces BOTH HTML report artifacts: the legacy Compose/WebAssembly report and the
+ * lightweight, self-contained interactive report (the same artifact the Trail Runner app's
+ * "Share as HTML" button produces). Either can individually be unavailable (missing WASM template /
+ * missing `bun`) — the command only fails when neither could be generated. The animated exports
+ * (`--video`/`--gif`/`--webp`) always capture the legacy timeline, since only it implements the
+ * autoplay-capture contract.
+ *
  * Examples:
- *   trailblaze report                              - HTML + JSON for all sessions
+ *   trailblaze report                              - HTML (legacy + interactive) + JSON for all sessions
  *   trailblaze report --open                       - ...and open the HTML in a browser
- *   trailblaze report --id abc123                  - HTML + JSON for one session
- *   trailblaze report --current                    - HTML + JSON for the currently active session
- *   trailblaze report --current --gif              - HTML + JSON + GIF + animated-WebP (one bare
+ *   trailblaze report --id abc123                  - reports for one session
+ *   trailblaze report --current                    - reports for the currently active session
+ *   trailblaze report --current --gif              - reports + GIF + animated-WebP (one bare
  *                                                    --gif or --webp flag triggers a shared frame
  *                                                    capture and auto-emits both formats; pass
  *                                                    explicit paths to limit which file is written)
  *   trailblaze report --current --webp --no-gif    - WebP only (suppress the auto-GIF companion)
  *   trailblaze report --id abc --gif out.gif       - Only out.gif (explicit path = single-format)
- *   trailblaze report --id abc123 --output-dir out - Drop report.html / summary.json /
- *                                                    (timeline.{mp4,gif,webp}) into `out/`
+ *   trailblaze report --id abc123 --output-dir out - Drop report.html / report-interactive.html /
+ *                                                    summary.json / (timeline.{mp4,gif,webp}) into `out/`
  */
 @Command(
   name = "report",
@@ -92,9 +99,9 @@ class ReportCommand : Callable<Int> {
     names = ["--output-dir"],
     description = [
       "Write all artifacts into this directory with canonical names (report.html, " +
-        "summary.json, timeline.mp4, timeline.gif, timeline.webp). Created if it " +
-        "doesn't exist. If omitted, artifacts land in the default `logs/reports/` " +
-        "location with timestamped names.",
+        "report-interactive.html, summary.json, timeline.mp4, timeline.gif, timeline.webp). " +
+        "Created if it doesn't exist. If omitted, artifacts land in the default " +
+        "`logs/reports/` location with timestamped names.",
     ],
   )
   var outputDir: File? = null
@@ -375,7 +382,8 @@ class ReportCommand : Callable<Int> {
  * @param sessionId When non-null, narrows to a single session. Prefix matching is
  *   applied so callers can pass an abbreviated ID.
  * @param outputDir When non-null, all artifacts are moved into this directory with
- *   canonical names (`report.html`, `summary.json`, `timeline.{mp4,gif,webp}`).
+ *   canonical names (`report.html`, `report-interactive.html`, `summary.json`,
+ *   `timeline.{mp4,gif,webp}`).
  * @param videoSpec / [gifSpec] / [webpSpec] When non-null, an animation export is requested.
  *   The string is either an explicit destination path or [ReportCommand.USE_DEFAULT_PATH]
  *   meaning "drop the artifact at the conventional location."
@@ -425,11 +433,22 @@ internal fun generateSessionReport(
 
   Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
 
+  // Every run produces BOTH HTML artifacts: the legacy WASM report and the interactive report.
+  // Either can individually be unavailable (missing WASM template / missing bun) — the command
+  // only fails when neither could be generated.
   val reportGenerator = app.createCliReportGenerator()
-  val initialHtml = reportGenerator.generateReport(logsRepo, sessionIds)
-  if (initialHtml == null) {
-    Console.error("Failed to generate HTML report. No report template found.")
+  val legacyHtml = reportGenerator.generateReport(logsRepo, sessionIds)
+  if (legacyHtml == null) {
+    Console.error("Warning: could not generate the legacy WASM report (no report template found).")
     Console.error("Ensure trailblaze_report_template.html is bundled or at the git root.")
+  }
+  val interactiveHtml = reportGenerator.generateInteractiveReport(logsRepo, sessionIds)
+  if (interactiveHtml == null) {
+    // RunReportGenerator already logged the specific cause (bun missing / subprocess failure).
+    Console.error("Warning: could not generate the interactive report.")
+  }
+  if (legacyHtml == null && interactiveHtml == null) {
+    Console.error("Failed to generate any HTML report.")
     return TrailblazeExitCode.INFRA_FAILED.code
   }
   val initialJson = reportGenerator.generateJsonReport(logsRepo, sessionIds)
@@ -440,19 +459,37 @@ internal fun generateSessionReport(
 
   // If --output-dir is set, relocate the auto-generated artifacts to canonical names there.
   // We move (rather than copy) so the auto-named originals don't accumulate in logs/reports/.
-  val (htmlFile, jsonFile) = if (outputDir != null) {
+  val htmlFile: File?
+  val interactiveFile: File?
+  val jsonFile: File?
+  if (outputDir != null) {
     outputDir.mkdirs()
-    val htmlDest = File(outputDir, "report.html")
-    val jsonDest = File(outputDir, "summary.json")
-    relocate(initialHtml, htmlDest)
-    initialJson?.let { relocate(it, jsonDest) }
-    htmlDest to (initialJson?.let { jsonDest })
+    htmlFile = legacyHtml?.let { src -> File(outputDir, "report.html").also { relocate(src, it) } }
+    interactiveFile = interactiveHtml?.let { src -> File(outputDir, "report-interactive.html").also { relocate(src, it) } }
+    jsonFile = initialJson?.let { src -> File(outputDir, "summary.json").also { relocate(src, it) } }
   } else {
-    initialHtml to initialJson
+    htmlFile = legacyHtml
+    interactiveFile = interactiveHtml
+    jsonFile = initialJson
   }
 
-  Console.info("\nHTML: file://${htmlFile.absolutePath}")
+  Console.info("")
+  if (htmlFile != null) Console.info("HTML: file://${htmlFile.absolutePath}")
+  if (interactiveFile != null) Console.info("Interactive: file://${interactiveFile.absolutePath}")
   if (jsonFile != null) Console.info("JSON: file://${jsonFile.absolutePath}")
+
+  // The animated timeline exports (--video/--gif/--webp) drive headless Playwright over the
+  // report's autoplay timeline — a contract only the legacy WASM report implements (it honors
+  // `?autoplay=1` and signals `__tbPlaybackEnded`), so they require the legacy artifact.
+  // (--storyboard builds its own grid HTML from logs and only needs a path anchor.)
+  if (htmlFile == null && (videoSpec != null || gifSpec != null || webpSpec != null)) {
+    Console.error("--video/--gif/--webp capture the legacy timeline report, which could not be generated.")
+    return TrailblazeExitCode.INFRA_FAILED.code
+  }
+  // Non-null anchor for export path resolution. Equal to the legacy report whenever it exists —
+  // in particular for the capture exports, which the guard above restricts to that case. At
+  // least one artifact exists here (the both-failed case already returned).
+  val exportHtml = htmlFile ?: interactiveFile!!
 
   val (effectiveGifSpec, effectiveWebpSpec) =
     resolveSharedCaptureSpecs(gifSpec, webpSpec, suppressGif, suppressWebp)
@@ -495,12 +532,12 @@ internal fun generateSessionReport(
   // that contract.
   val outputsToCleanupOnFailure = mutableListOf<File>()
 
-  val videoFile = resolveExportPath(videoSpec, htmlFile, defaultNames.mp4)
+  val videoFile = resolveExportPath(videoSpec, exportHtml, defaultNames.mp4)
   if (videoFile != null) {
     try {
       Console.log("Exporting timeline autoplay to ${videoFile.absolutePath} ...")
       outputsToCleanupOnFailure.add(videoFile)
-      ReportVideoExporter.export(reportHtml = htmlFile, outputMp4 = videoFile, maxBytes = maxBytes)
+      ReportVideoExporter.export(reportHtml = exportHtml, outputMp4 = videoFile, maxBytes = maxBytes)
       Console.info("Video: ${videoFile.absolutePath} (${videoFile.length() / 1024}KB)")
     } catch (e: Exception) {
       Console.error("Failed to export report video: ${e.message}")
@@ -513,8 +550,8 @@ internal fun generateSessionReport(
   // cost (30s+ of headless screenshotting); running it once instead of twice halves the
   // export time when both formats are produced. Each encoder runs against the same
   // frames-on-disk source — see the `encode()` entry points on each exporter object.
-  val gifFile = resolveExportPath(effectiveGifSpec, htmlFile, defaultNames.gif)
-  val webpFile = resolveExportPath(effectiveWebpSpec, htmlFile, defaultNames.webp)
+  val gifFile = resolveExportPath(effectiveGifSpec, exportHtml, defaultNames.gif)
+  val webpFile = resolveExportPath(effectiveWebpSpec, exportHtml, defaultNames.webp)
   if (gifFile != null || webpFile != null) {
     // Preflight the libwebp tools BEFORE capture if we're going to encode WebP. Same
     // fail-fast rationale as the single-format path: avoid burning 30s on screenshotting
@@ -537,7 +574,7 @@ internal fun generateSessionReport(
     try {
       val capture = try {
         PlaywrightReportCapture.captureFrames(
-          reportHtml = htmlFile,
+          reportHtml = exportHtml,
           framesDir = ws.framesDir,
           headless = true,
           deviceId = ws.deviceId,
@@ -590,7 +627,7 @@ internal fun generateSessionReport(
   // (not the timeline report) and takes a single fullPage screenshot. Not part of the
   // shared-capture block above because the input HTML is different. The companion
   // .storyboard.html sits next to the .storyboard.webp for standalone viewing.
-  val storyboardWebpFile = resolveExportPath(storyboardSpec, htmlFile, defaultNames.storyboard)
+  val storyboardWebpFile = resolveExportPath(storyboardSpec, exportHtml, defaultNames.storyboard)
   if (storyboardWebpFile != null) {
     val storyboardHtmlFile = File(
       storyboardWebpFile.parentFile ?: File("."),
@@ -619,7 +656,7 @@ internal fun generateSessionReport(
   }
 
   if (open) {
-    TrailblazeDesktopUtil.openInDefaultBrowser("file://${htmlFile.absolutePath}")
+    TrailblazeDesktopUtil.openInDefaultBrowser("file://${exportHtml.absolutePath}")
   }
 
   // Background threads spawned by the report generator keep the JVM alive after

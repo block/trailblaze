@@ -10,7 +10,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
 import kotlin.reflect.KClass
 
@@ -118,7 +117,6 @@ data class CustomTrailblazeTools(
     addAll(initialToolRepoToolClasses)
     addAll(TrailblazeToolSet.DefaultLlmTrailblazeTools)
     addAll(TrailblazeToolSet.NonLlmTrailblazeTools)
-    add(SetActiveToolSetsTrailblazeTool::class)
     add(ObjectiveStatusTrailblazeTool::class)
   }
 

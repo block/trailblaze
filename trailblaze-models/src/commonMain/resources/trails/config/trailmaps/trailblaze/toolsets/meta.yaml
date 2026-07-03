@@ -1,9 +1,7 @@
-# Framework meta tools — always enabled regardless of which other toolsets are active.
-# - setActiveToolSets: lets the LLM toggle which toolsets are live.
+# Framework meta tools — always enabled.
 # - objectiveStatus: lets the LLM declare a step complete or failed.
 id: meta
-description: "Framework meta tools for toolset control and objective reporting."
+description: "Framework meta tools for objective reporting."
 always_enabled: true
 tools:
-  - setActiveToolSets
   - objectiveStatus

@@ -486,9 +486,6 @@ data class TrailmapEntry(
   val displayName: String? = null,
   val manifestPath: String? = null,
   val tools: List<TrailmapComponent> = emptyList(),
-  val toolsets: List<TrailmapComponent> = emptyList(),
-  val waypoints: List<TrailmapComponent> = emptyList(),
-  val shortcuts: List<TrailmapComponent> = emptyList(),
   val trailheads: List<TrailmapComponent> = emptyList(),
   val systemPrompts: List<TrailmapComponent> = emptyList(),
 )
@@ -499,7 +496,7 @@ data class TrailmapComponent(
   // Path relative to the workspace, carrying the trails/config/trailmaps/ marker so
   // it resolves via ToolSourceFiles.fileForResource for reveal + lazy body read.
   val relPath: String,
-  // Tools only — null for waypoints/shortcuts/trailheads/toolsets/system-prompts.
+  // Tools only — null for trailheads/system-prompts.
   val flavor: ToolFlavor? = null,
 )
 

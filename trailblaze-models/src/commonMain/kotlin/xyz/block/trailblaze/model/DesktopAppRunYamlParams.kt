@@ -1,18 +1,37 @@
 package xyz.block.trailblaze.model
 
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.RunYamlRequest
 
 /**
  * Result of a trail execution.
+ *
+ * Not `@Serializable`: this is an in-process runtime result handed to a completion callback
+ * (`DesktopAppRunYamlParams.onComplete`), never persisted or sent over the wire — which is why
+ * [Success] can hold a raw [JsonElement] without the serialization contract `RunYamlResponse`
+ * (the wire type carrying the equivalent payload) requires.
  */
 sealed class TrailExecutionResult {
-  /** Trail completed successfully. */
-  data object Success : TrailExecutionResult()
-  
+  /**
+   * Trail completed successfully.
+   *
+   * [toolMessage] / [toolStructuredContent] mirror the last successfully-executed tool's
+   * [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success] payload — the same "last
+   * success wins" semantics as `RunYamlResponse.toolMessage` / `toolStructuredContent`. They
+   * let the host/Maestro `trailblaze tool <read-tool>` path surface the tool's real return
+   * value instead of a generic "Executed …" acknowledgement, matching the on-device-RPC,
+   * host-local web, and iOS-AXE branches. Both are null for action-style tools (tap/swipe) that
+   * produce no payload and for runs where no tool produced a `Success`.
+   */
+  data class Success(
+    val toolMessage: String? = null,
+    val toolStructuredContent: JsonElement? = null,
+  ) : TrailExecutionResult()
+
   /** Trail failed with an error. */
   data class Failed(val errorMessage: String?) : TrailExecutionResult()
-  
+
   /** Trail was cancelled. */
   data object Cancelled : TrailExecutionResult()
 }

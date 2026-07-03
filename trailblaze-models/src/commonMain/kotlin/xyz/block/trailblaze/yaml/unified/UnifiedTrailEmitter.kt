@@ -70,12 +70,34 @@ internal class UnifiedTrailEmitter(
     appendScalar(sb, step.step, blockIndent = INDENT_4)
     if (step.recordings.isNotEmpty()) {
       sb.append(INDENT_2).append("recording:\n")
-      appendClassifierMap(sb, step.recordings, classifierIndent = INDENT_4, toolIndent = INDENT_6)
+      appendTrailheadClassifierMap(sb, step.recordings, classifierIndent = INDENT_4, toolIndent = INDENT_6)
     }
     if (!step.recordable) {
       sb.append(INDENT_2).append("recordable: false\n")
     }
     step.maxRetries?.let { sb.append(INDENT_2).append("maxRetries: ").append(it).append('\n') }
+  }
+
+  /**
+   * Emit a trailhead `recording:` body: one `<classifier>:` key per device, each a **single tool
+   * call** (a map, no `- ` list prefix) — a trailhead is one tool per platform. The internal model
+   * stores that tool as a 1-element list, so assert exactly one before emitting the map form.
+   */
+  private fun appendTrailheadClassifierMap(
+    sb: StringBuilder,
+    recordings: Map<String, List<TrailblazeToolYamlWrapper>>,
+    classifierIndent: String,
+    toolIndent: String,
+  ) {
+    for ((classifier, tools) in recordings) {
+      require(tools.size == 1) {
+        "A trailhead is one tool per platform, but classifier `$classifier` has ${tools.size} tools. " +
+          "Compose multi-step bootstraps inside the trailhead tool's own definition instead."
+      }
+      sb.append(classifierIndent).append(classifier).append(":\n")
+      val toolYaml = yamlInstance.encodeToString(toolWrapperSerializer, tools.single())
+      appendIndented(sb, toolYaml, indent = toolIndent)
+    }
   }
 
   private fun appendStep(sb: StringBuilder, step: UnifiedTrailStep) {

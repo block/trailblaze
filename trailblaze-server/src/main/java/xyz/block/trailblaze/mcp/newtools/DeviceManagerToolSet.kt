@@ -19,9 +19,6 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
-import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
-import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 
@@ -39,8 +36,6 @@ class DeviceManagerToolSet(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val mcpBridge: TrailblazeMcpBridge,
   private val deviceClaimRegistry: DeviceClaimRegistry? = null,
-  private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
-  private val onActiveToolSetsChanged: (activeToolSetIds: List<String>, catalog: List<ToolSetCatalogEntry>) -> Unit = { _, _ -> },
   /** Callback to terminate a displaced MCP session when yielding a device claim. */
   private val onTerminateSession: ((sessionId: String) -> String?)? = null,
   /** Callback after the session binds to a device and driver. */
@@ -666,49 +661,6 @@ class DeviceManagerToolSet(
     return "Session ended with result: $wasSessionEnded"
   }
 
-  @LLMDescription(
-    """Enable additional tool sets for device interaction. By default, only core tools (tap, input text) are available.
-Use this to enable more tools when needed. You can enable multiple tool sets at once.
-Call with an empty list to reset to only the core tools.""",
-  )
-  @Tool(TOOL_SET_ACTIVE_TOOLSETS)
-  fun setActiveToolSets(
-    @LLMDescription("The list of toolset IDs to enable (e.g. ['navigation', 'text-editing']). Core tools are always included.")
-    toolSetIds: List<String>,
-  ): String {
-    val validIds = toolSetCatalog.map { it.id }.toSet()
-    val invalidIds = toolSetIds.filter { it !in validIds }
-    if (invalidIds.isNotEmpty()) {
-      return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> toolSetCatalog.firstOrNull { it.id == id }?.alwaysEnabled != true }}"
-    }
-
-    onActiveToolSetsChanged(toolSetIds, toolSetCatalog)
-
-    // Driver-aware resolve so the acknowledgement string matches what the LLM actually
-    // gets registered (see `TrailblazeMcpServer.registerTools`'s onActiveToolSetsChanged
-    // path). The central `resolveForSession` helper handles the null-driver fallback so
-    // all three callsites (here, MCP server, TrailblazeToolRepo) stay aligned.
-    val driverType = mcpBridge.getDriverType()
-    val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, toolSetIds, toolSetCatalog)
-    // Apply the same `surfaceToLlm` filter that `KClass.toKoogToolDescriptor()` applies
-    // at MCP registration time so the acknowledgement count matches what the LLM ends up
-    // with — without this, `android_adbShell` and friends (surfaceToLlm = false) inflate
-    // the count even though they never reach the LLM.
-    val classNames = resolved.toolClasses
-      .filter { it.trailblazeToolClassAnnotation().surfaceToLlm }
-      .map { it.simpleName?.removeSuffix("TrailblazeTool")?.removeSuffix("Tool") ?: it.toString() }
-    val toolNames = classNames +
-      resolved.yamlToolNames.map { it.toolName } +
-      resolved.scriptedToolNames.map { it.toolName }
-    return buildString {
-      appendLine("Active tool sets updated.")
-      appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")
-      appendLine("Total tools available: ${toolNames.size}")
-      appendLine("Tools: $toolNames")
-      appendLine("[driver=${driverType?.name ?: "none"}]")
-    }
-  }
-
   /**
    * Builds a summary of custom tools available for the current target + driver.
    * Returns null if no target is set, no driver is connected, or no custom tools exist.
@@ -821,7 +773,6 @@ Call with an empty list to reset to only the core tools.""",
     const val TOOL_PIN_MCP_SESSION = "pinMostRecentUnboundMcpSession"
     const val TOOL_RUN_PROMPT = "runPrompt"
     const val TOOL_END_SESSION = "endSession"
-    const val TOOL_SET_ACTIVE_TOOLSETS = "setActiveToolSets"
 
     // Parameter names for the `device` tool. MCP binds arguments by the Kotlin
     // parameter name via reflection, so these string keys must exactly match

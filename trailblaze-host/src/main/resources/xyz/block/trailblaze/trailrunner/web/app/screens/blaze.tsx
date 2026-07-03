@@ -10,7 +10,7 @@ const BLAZE_EXAMPLES = [
 ];
 
 // The component types a trailmap exposes to a blaze, in the order the rail shows them.
-const BLAZE_TM_KINDS = ['tools', 'toolsets', 'waypoints', 'shortcuts', 'trailheads'];
+const BLAZE_TM_KINDS = ['tools', 'trailheads'];
 
 function BlazeScreen({ pinnedId, go }) {
   useLucide();

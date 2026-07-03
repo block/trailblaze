@@ -32,17 +32,17 @@ class TrailblazeToolRepo(
    */
   trailblazeToolSet: TrailblazeToolSet,
   /**
-   * Optional catalog for dynamic toolset switching. When set, the LLM can call
-   * `setActiveToolSets` to swap which tools are available.
+   * Optional catalog used to resolve the initial tool surface and to scope a `verify:` step to
+   * its driver-appropriate verification tools. The whole surface is advertised up front; there is
+   * no runtime switching.
    */
   val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
   /**
-   * Optional driver type the repo is bound to. When set, [setActiveToolSets] routes
-   * through [TrailblazeToolSetCatalog.resolveForDriver] so `always_enabled` catalog
-   * entries that declare incompatible `drivers:` (e.g. `core_interaction.yaml` on a
-   * Playwright session) are filtered out — mirrors the inner-agent-tools-provider in
-   * `TrailblazeMcpServer`. Leave null in test fixtures and callers that don't know
-   * the driver yet; the resolution falls back to the non-driver-aware catalog filter.
+   * Optional driver type the repo is bound to. When set, [withDynamicToolSets] resolves the initial
+   * surface through [TrailblazeToolSetCatalog.resolveForDriver] so catalog entries that declare
+   * incompatible `drivers:` (e.g. `core_interaction.yaml` on a Playwright session) are filtered out.
+   * Leave null in test fixtures and callers that don't know the driver yet; resolution then falls
+   * back to the non-driver-aware catalog filter.
    */
   val driverType: TrailblazeDriverType? = null,
 ) {
@@ -61,11 +61,10 @@ class TrailblazeToolRepo(
     .toMutableSet()
 
   /**
-   * Scripted (`.ts` / `.js`) tool names the LLM should see via active toolsets. These are
-   * dispatched through [registeredDynamicTools] (registered at session start by the bundling
-   * layer), but TRACKED here so [setActiveToolSets] can swap the advertised set and the
-   * acknowledgement message includes accurate counts. Symmetric with [registeredYamlToolNames]
-   * for the scripted-tool case.
+   * Scripted (`.ts` / `.js`) tool names the LLM should see. These are dispatched through
+   * [registeredDynamicTools] (registered at session start by the bundling layer), but TRACKED
+   * here so [advertisedDynamic] can hide a scripted tool that a target's `excluded_tools:` opted
+   * out of. Symmetric with [registeredYamlToolNames] for the scripted-tool case.
    */
   private val registeredScriptedToolNames: MutableSet<ToolName> = trailblazeToolSet
     .asScriptedToolNames()
@@ -80,42 +79,6 @@ class TrailblazeToolRepo(
    */
   private val registeredDynamicTools: MutableMap<ToolName, DynamicTrailblazeToolRegistration> =
     mutableMapOf()
-
-  /**
-   * Tools that are not part of the catalog (e.g., app-specific custom tools).
-   * These are preserved across [setActiveToolSets] calls.
-   */
-  private val extraToolClasses: Set<KClass<out TrailblazeTool>> by lazy {
-    val catalogToolClasses = toolSetCatalog
-      ?.flatMap { it.toolClasses }
-      ?.toSet()
-      ?: emptySet()
-    registeredTrailblazeToolClasses.filter { it !in catalogToolClasses }.toSet()
-  }
-
-  /**
-   * YAML-defined tool names that are not part of the catalog. Preserved across
-   * [setActiveToolSets] calls alongside [extraToolClasses].
-   */
-  private val extraYamlToolNames: Set<ToolName> by lazy {
-    val catalogYamlToolNames = toolSetCatalog
-      ?.flatMap { it.yamlToolNames }
-      ?.toSet()
-      ?: emptySet()
-    registeredYamlToolNames.filter { it !in catalogYamlToolNames }.toSet()
-  }
-
-  /**
-   * Scripted tool names that are not part of the catalog. Preserved across
-   * [setActiveToolSets] calls alongside [extraToolClasses] and [extraYamlToolNames].
-   */
-  private val extraScriptedToolNames: Set<ToolName> by lazy {
-    val catalogScriptedToolNames = toolSetCatalog
-      ?.flatMap { it.scriptedToolNames }
-      ?.toSet()
-      ?: emptySet()
-    registeredScriptedToolNames.filter { it !in catalogScriptedToolNames }.toSet()
-  }
 
   fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = synchronized(registeredTrailblazeToolClasses) {
     registeredTrailblazeToolClasses.toSet()
@@ -133,10 +96,10 @@ class TrailblazeToolRepo(
    * Every scripted tool name the catalog could deliver for this repo's driver — i.e. the union of
    * `scriptedToolNames` across all (driver-compatible) toolsets, not just the active ones.
    *
-   * The bundling layer registers a dynamic tool for EACH of these at session start (not just the
-   * initially-active set), so a toolset enabled later via [setActiveToolSets] can still dispatch
-   * its scripted tools. Advertisement is still gated to the active set ([advertisedDynamic]), so
-   * registering-but-not-advertising a scripted tool from an inactive toolset is harmless.
+   * The bundling layer registers a dynamic tool for EACH of these at session start, so recorded
+   * replays can dispatch a scripted tool even when it's hidden from the LLM. Advertisement is gated
+   * by [advertisedDynamic] to the non-excluded set, so registering-but-not-advertising a scripted
+   * tool that a target's `excluded_tools:` dropped is harmless.
    */
   val allCatalogScriptedToolNames: Set<ToolName> by lazy {
     val catalog = toolSetCatalog ?: return@lazy emptySet()
@@ -152,35 +115,35 @@ class TrailblazeToolRepo(
 
   /**
    * Point-in-time snapshot of class-backed, YAML-defined, and dynamic registered tools.
-   * Read under a single lock so concurrent [setActiveToolSets] / [addDynamicTools] calls
+   * Read under a single lock so concurrent [addDynamicTools] calls
    * can't yield a half-registered view.
    */
   private data class RegisteredToolsSnapshot(
     val toolClasses: Set<KClass<out TrailblazeTool>>,
     val yamlToolNames: Set<ToolName>,
     val dynamic: Map<ToolName, DynamicTrailblazeToolRegistration>,
-    /** Scripted tool names advertised right now (from the active toolsets). */
-    val activeScriptedToolNames: Set<ToolName>,
-    /** Every scripted tool name the catalog could deliver (active or not). */
+    /** Scripted tool names that survived the target's `excluded_tools:` — i.e. the advertised set. */
+    val advertisedScriptedToolNames: Set<ToolName>,
+    /** Every scripted tool name the catalog could deliver (before exclusions). */
     val allCatalogScriptedToolNames: Set<ToolName>,
   ) {
     /**
-     * Dynamic registrations visible to the LLM right now: every dynamic tool EXCEPT scripted
-     * tools whose toolset isn't active. A scripted tool is registered for dispatch as soon as its
-     * bundle loads (so recorded replays + active calls work via [toolCallToTrailblazeTool]), but
-     * only ADVERTISED when its toolset is active — that's the toolset gating. Non-scripted dynamic
+     * Dynamic registrations visible to the LLM right now: every dynamic tool EXCEPT a catalog
+     * scripted tool that a target's `excluded_tools:` dropped. A scripted tool is registered for
+     * dispatch as soon as its bundle loads (so recorded replays + direct calls work via
+     * [toolCallToTrailblazeTool]), but an excluded one is hidden from the LLM. Non-scripted dynamic
      * tools (subprocess MCP, target-declared scripted tools) are always advertised.
      *
      * A registration that declares `surfaceToLlm = false` (e.g. a scripted internal step composed
-     * by a parent tool) is dropped regardless of toolset activity — it stays dispatchable by name
-     * and resolvable for recorded replays, but never enters the LLM's tool menu. Defaults to `true`,
-     * so registrations that don't model LLM-visibility (subprocess MCP, etc.) are unaffected.
+     * by a parent tool) is dropped regardless — it stays dispatchable by name and resolvable for
+     * recorded replays, but never enters the LLM's tool menu. Defaults to `true`, so registrations
+     * that don't model LLM-visibility (subprocess MCP, etc.) are unaffected.
      */
     fun advertisedDynamic(): List<DynamicTrailblazeToolRegistration> =
       dynamic.entries
         .filter { (name, reg) ->
           reg.surfaceToLlm &&
-            (name !in allCatalogScriptedToolNames || name in activeScriptedToolNames)
+            (name !in allCatalogScriptedToolNames || name in advertisedScriptedToolNames)
         }
         .map { it.value }
   }
@@ -190,7 +153,7 @@ class TrailblazeToolRepo(
       toolClasses = registeredTrailblazeToolClasses.toSet(),
       yamlToolNames = registeredYamlToolNames.toSet(),
       dynamic = registeredDynamicTools.toMap(),
-      activeScriptedToolNames = registeredScriptedToolNames.toSet(),
+      advertisedScriptedToolNames = registeredScriptedToolNames.toSet(),
       allCatalogScriptedToolNames = allCatalogScriptedToolNames,
     )
   }
@@ -323,62 +286,6 @@ class TrailblazeToolRepo(
     registeredYamlToolNames.clear()
     registeredScriptedToolNames.clear()
     registeredDynamicTools.clear()
-  }
-
-  /**
-   * Replaces all registered tools with the resolved set from the given toolset IDs.
-   * Requires [toolSetCatalog] to be set.
-   *
-   * **Dynamic tools are session-scoped and persist across switches.** [registeredDynamicTools]
-   * is deliberately not rebuilt here: subprocess MCP / future on-device bundle tools are
-   * registered once at session start (via [addDynamicTools]) and stay available regardless
-   * of which catalog toolsets the LLM enables. The reported tool count + acknowledgement
-   * string include them so the LLM's view of "tools available" matches reality.
-   *
-   * **A target's `excluded_tools:` opt-outs are NOT re-applied here.** Exclusions
-   * ([withDynamicToolSets]' `excluded*` params) are subtracted from the INITIAL surface only;
-   * re-enabling a toolset via this method re-resolves it from the catalog without the exclusion.
-   * If a target must never surface a tool, exclude it AND don't author a toolset switch that
-   * re-enables it. See [withDynamicToolSets].
-   */
-  fun setActiveToolSets(toolSetIds: List<String>): String {
-    val catalog = toolSetCatalog
-      ?: return "Dynamic toolsets not configured for this test."
-    val validIds = catalog.map { it.id }.toSet()
-    val invalidIds = toolSetIds.filter { it !in validIds }
-    if (invalidIds.isNotEmpty()) {
-      return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> !catalog.first { it.id == id }.alwaysEnabled }}"
-    }
-    val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, toolSetIds, catalog)
-    val newToolClasses = resolved.toolClasses + extraToolClasses
-    val newYamlToolNames = resolved.yamlToolNames + extraYamlToolNames
-    val newScriptedToolNames = resolved.scriptedToolNames + extraScriptedToolNames
-    val dynamicToolCount = synchronized(registeredTrailblazeToolClasses) {
-      registeredTrailblazeToolClasses.clear()
-      registeredTrailblazeToolClasses.addAll(newToolClasses)
-      registeredYamlToolNames.clear()
-      registeredYamlToolNames.addAll(newYamlToolNames)
-      registeredScriptedToolNames.clear()
-      registeredScriptedToolNames.addAll(newScriptedToolNames)
-      // Count only the dynamic tools that are ADVERTISED under the new active set: every dynamic
-      // tool except scripted tools whose toolset isn't active (those are registered for dispatch
-      // but hidden). This matches the gated surface in [getCurrentToolDescriptors] /
-      // [asToolRegistry], so the acknowledgement count reflects what the LLM actually sees — and
-      // scripted tools aren't double-counted (they're in `registeredDynamicTools`, not added again
-      // via `newScriptedToolNames`).
-      registeredDynamicTools.keys.count {
-        it !in allCatalogScriptedToolNames || it in newScriptedToolNames
-      }
-    }
-    val totalTools = newToolClasses.size + newYamlToolNames.size + dynamicToolCount
-    val driverLabel = "[driver=${driverType?.name ?: "none"}]"
-    Console.log("Active toolsets changed to: $toolSetIds ($totalTools tools) $driverLabel")
-    return buildString {
-      appendLine("Active tool sets updated.")
-      appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")
-      appendLine("Total tools available: $totalTools")
-      appendLine(driverLabel)
-    }
   }
 
   fun toolCallToTrailblazeTool(toolCall: MessagePart.Tool.Call): TrailblazeTool? = toolCallToTrailblazeTool(
@@ -696,17 +603,14 @@ class TrailblazeToolRepo(
       id == GENERIC_VERIFICATION_TOOLSET_ID || id.endsWith("_verification")
 
     /**
-     * Creates a [TrailblazeToolRepo] with dynamic toolset support.
+     * Creates a [TrailblazeToolRepo] carrying every catalog tool the driver can run, plus any
+     * [customToolClasses] / [customYamlToolNames] / [customScriptedToolNames]. The full surface is
+     * advertised from the start — there is no runtime opt-in.
      *
-     * Starts with only core tools (the catalog's `always_enabled` entries) plus any
-     * [customToolClasses] / [customYamlToolNames]. The LLM can enable additional toolsets at
-     * runtime via `setActiveToolSets`.
-     *
-     * When [driverType] is non-null, the core tool resolution runs through
-     * [TrailblazeToolSetCatalog.resolveForDriver] so alwaysEnabled entries that declare
-     * incompatible `drivers:` (e.g. `core_interaction.yaml` on Playwright) are filtered out
-     * before being added to the initial surface. Leave null if the driver isn't known — the
-     * catalog resolves all alwaysEnabled entries regardless of driver (pre-existing behavior).
+     * When [driverType] is non-null, resolution runs through
+     * [TrailblazeToolSetCatalog.resolveForDriver] so catalog entries that declare incompatible
+     * `drivers:` (e.g. `core_interaction.yaml` on Playwright) are filtered out. Leave null if the
+     * driver isn't known — the catalog then resolves every entry regardless of driver.
      *
      * [customYamlToolNames] lets callers contribute YAML-defined tools (those without a
      * backing [KClass]) to the initial surface — symmetric with [customToolClasses] for
@@ -715,12 +619,9 @@ class TrailblazeToolRepo(
      *
      * [excludedToolClasses] / [excludedYamlToolNames] / [excludedScriptedToolNames] are the
      * target's `excluded_tools:` opt-outs, one set per backing — each subtracted from the matching
-     * initial surface so an excluded tool (e.g. the scripted `openUrl`) isn't served to the LLM.
-     * Callers should populate all three from `getExcludedToolSurfaceForDriver` rather than wiring
-     * them individually, so a backing can't be excluded here but forgotten elsewhere. This applies
-     * to the INITIAL surface only — a later `setActiveToolSets` that re-enables the delivering
-     * toolset re-resolves from the catalog without the exclusion (a pre-existing limitation shared
-     * by all three partitions).
+     * surface so an excluded tool (e.g. the scripted `openUrl`) isn't served to the LLM. Callers
+     * should populate all three from `getExcludedToolSurfaceForDriver` rather than wiring them
+     * individually, so a backing can't be excluded here but forgotten elsewhere.
      */
     fun withDynamicToolSets(
       customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
@@ -732,17 +633,22 @@ class TrailblazeToolRepo(
       catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
       driverType: TrailblazeDriverType? = null,
     ): TrailblazeToolRepo {
-      val coreTools = if (driverType != null) {
-        TrailblazeToolSetCatalog.resolveForDriver(driverType, emptyList(), catalog)
+      // Every tool the driver can run is advertised up front — there is no progressive
+      // disclosure / opt-in narrowing anymore (the LLM sees the full surface and it works;
+      // browsing a catalog only added complexity). Resolving with every catalog id selects
+      // all entries, still filtered to the driver's compatible set when [driverType] is known.
+      val allIds = catalog.map { it.id }
+      val allTools = if (driverType != null) {
+        TrailblazeToolSetCatalog.resolveForDriver(driverType, allIds, catalog)
       } else {
-        TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
+        TrailblazeToolSetCatalog.resolve(allIds, catalog)
       }
       return TrailblazeToolRepo(
         trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-          name = "Core Tool Set",
-          toolClasses = coreTools.toolClasses + customToolClasses - excludedToolClasses,
-          yamlToolNames = coreTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
-          scriptedToolNames = coreTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
+          name = "All Tools",
+          toolClasses = allTools.toolClasses + customToolClasses - excludedToolClasses,
+          yamlToolNames = allTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
+          scriptedToolNames = allTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
         ),
         toolSetCatalog = catalog,
         driverType = driverType,
@@ -777,12 +683,11 @@ class TrailblazeToolRepo(
   // class-backed assertion tools (generic `assertVisible` / `assertNotVisibleWithText`, plus
   // driver-specific ones like Revyl's class-backed `revyl_assert`) plus objectiveStatus. It is
   // added to the executor-routed Koog registry (the `asToolRegistry` overloads) so those tools are
-  // always DISPATCHABLE on a verify step regardless of which toolsets are active. It MUST use the
-  // same driver-scoped entry selection as [verifyStepToolDescriptors] (the advertised surface):
-  // otherwise a driver-specific class-backed verify tool could be advertised but not registered,
-  // stranding the agent under `ToolChoice.Required` after a `setActiveToolSets` that drops it. The
-  // driver-specific YAML verify tools (`web_verifyTextVisible`, …) have no backing KClass, so they
-  // still reach the registry through the active toolsets (`advertisedDynamic`).
+  // always DISPATCHABLE on a verify step. It MUST use the same driver-scoped entry selection as
+  // [verifyStepToolDescriptors] (the advertised surface): otherwise a driver-specific class-backed
+  // verify tool could be advertised but not registered, stranding the agent under
+  // `ToolChoice.Required`. The driver-specific YAML verify tools (`web_verifyTextVisible`, …) have
+  // no backing KClass, so they still reach the registry as dynamic registrations (`advertisedDynamic`).
   private val verifyTools: Set<KClass<out TrailblazeTool>> by lazy {
     verificationToolsetEntries().flatMap { it.toolClasses }.toSet() +
       ObjectiveStatusTrailblazeTool::class

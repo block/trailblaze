@@ -1,0 +1,35 @@
+{
+  // Typecheck project for the interactive run report's TypeScript sources (the transpiled JS is a
+  // build artifact; see :trailblaze-host's transpileRunReportCore task). Run it with the SDK
+  // package's pinned typescript, e.g. from the repo root:
+  //   sdks/typescript/node_modules/.bin/tsc --noEmit -p <this file>
+  // CI wires the exact path in its typescript-unit-tests step after materializing the SDK's
+  // node_modules (typescript + @types/node are pinned SDK devDependencies). NOT packaged into
+  // the JAR.
+  //
+  // Non-strict on purpose: run-report-core.ts is a ported plain-JS renderer whose contract types
+  // (run-report-types.d.ts) guard the payload seams; strictness can ratchet up later.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": ["node"],
+    // Both checkout layouts: sdks/typescript sits at the repo root in the public repo and one
+    // level deeper in the monorepo (same dual-path convention as the SDK dir resolvers). tsc
+    // silently skips the entry that doesn't exist.
+    "typeRoots": [
+      "../../../../../../sdks/typescript/node_modules/@types",
+      "../../../../../../../sdks/typescript/node_modules/@types"
+    ],
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "report/run-report-cli.ts",
+    "trailrunner/web/app/run-report-core.ts",
+    "trailrunner/web/app/run-report-types.d.ts"
+  ]
+}

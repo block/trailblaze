@@ -307,22 +307,28 @@ object TrailblazeHostYamlRunner {
 
   /**
    * Runs a Trailblaze YAML test on a specific host-connected device with the given LLM client.
+   *
+   * Returns a [HostYamlRunResult] so the local-device Maestro path (iOS_HOST / Android HOST) can
+   * thread the last successful tool's result up to `DesktopYamlRunner` — that's what lets
+   * `trailblaze tool <read-tool>` show the tool's real return value. The web / Compose / Revyl
+   * branches carry a null `lastToolResult`: they surface their payloads to the CLI through their
+   * own dispatch branches, not this one, so wrapping their session id is enough.
    */
   suspend fun runHostYaml(
     dynamicLlmClient: DynamicLlmClient,
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
+  ): HostYamlRunResult {
     return when (runOnHostParams.trailblazeDriverType) {
       TrailblazeDriverType.PLAYWRIGHT_NATIVE ->
-        runPlaywrightNativeYaml(dynamicLlmClient, runOnHostParams, deviceManager)
+        HostYamlRunResult(runPlaywrightNativeYaml(dynamicLlmClient, runOnHostParams, deviceManager))
       TrailblazeDriverType.PLAYWRIGHT_ELECTRON ->
-        runPlaywrightElectronYaml(dynamicLlmClient, runOnHostParams, deviceManager)
+        HostYamlRunResult(runPlaywrightElectronYaml(dynamicLlmClient, runOnHostParams, deviceManager))
       TrailblazeDriverType.COMPOSE ->
-        runComposeYaml(dynamicLlmClient, runOnHostParams, deviceManager)
+        HostYamlRunResult(runComposeYaml(dynamicLlmClient, runOnHostParams, deviceManager))
       TrailblazeDriverType.REVYL_ANDROID,
       TrailblazeDriverType.REVYL_IOS ->
-        runRevylYaml(dynamicLlmClient, runOnHostParams, deviceManager)
+        HostYamlRunResult(runRevylYaml(dynamicLlmClient, runOnHostParams, deviceManager))
       else ->
         runMaestroHostYaml(dynamicLlmClient, runOnHostParams, deviceManager)
     }
@@ -1118,7 +1124,7 @@ object TrailblazeHostYamlRunner {
             logger = loggingRule.logger,
             sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
             maxLlmCalls = runYamlRequest.maxLlmCalls,
-            systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(toolSetCatalog = toolRepo.toolSetCatalog),
+            systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
           )
         } else {
           TrailblazeRunner(
@@ -1301,12 +1307,15 @@ object TrailblazeHostYamlRunner {
 
   /**
    * Original Maestro-based path for Android/iOS/web-playwright-host devices.
+   *
+   * Returns a [HostYamlRunResult] carrying the last successful tool's result so the local-device
+   * Maestro path can surface a read tool's payload via `trailblaze tool` (iOS_HOST + Android HOST).
    */
   private suspend fun runMaestroHostYaml(
     dynamicLlmClient: DynamicLlmClient,
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
+  ): HostYamlRunResult {
 
     val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
     val onProgressMessage = runOnHostParams.onProgressMessage
@@ -1392,7 +1401,11 @@ object TrailblazeHostYamlRunner {
     // reference the collection directly without a forward-declared nullable var.
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
 
-    return executeTrailSession(
+    // Captured from inside the session lambda so it survives back out to the HostYamlRunResult
+    // this method returns — executeTrailSession itself only hands back the SessionId.
+    var lastToolResult: TrailblazeToolResult.Success? = null
+
+    val sessionId = executeTrailSession(
       loggingRule = hostTbRunner.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
       testName = runYamlRequest.testName,
@@ -1446,7 +1459,7 @@ object TrailblazeHostYamlRunner {
 
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
-      val sessionId = hostTbRunner.runTrailblazeYamlSuspend(
+      val yamlRun = hostTbRunner.runTrailblazeYamlSuspend(
         yaml = runYamlRequest.yaml,
         forceStopApp = runOnHostParams.forceStopTargetApp,
         trailFilePath = runYamlRequest.trailFilePath,
@@ -1454,6 +1467,9 @@ object TrailblazeHostYamlRunner {
         traceId = runYamlRequest.traceId,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
       )
+      // Surface the last successful tool's payload back out through HostYamlRunResult.
+      lastToolResult = yamlRun.lastToolResult
+      val sessionId = yamlRun.sessionId
       Console.log("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
 
@@ -1461,14 +1477,17 @@ object TrailblazeHostYamlRunner {
         hostTbRunner.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
-      generateAndSaveRecording(
-        sessionId = sessionId,
-        customToolClasses = runOnHostParams.targetTestApp
-          ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-      )
+      sessionId?.let {
+        generateAndSaveRecording(
+          sessionId = it,
+          customToolClasses = runOnHostParams.targetTestApp
+            ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
+        )
+      }
 
       sessionId
     }
+    return HostYamlRunResult(sessionId, lastToolResult)
   }
 
   /**
@@ -2025,7 +2044,7 @@ object TrailblazeHostYamlRunner {
           logger = loggingRule.logger,
           sessionProvider = { loggingRule.session ?: error("Session not available") },
           maxLlmCalls = runYamlRequest.maxLlmCalls,
-          systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(toolSetCatalog = toolRepo.toolSetCatalog),
+          systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
         )
       } else {
         TrailblazeRunner(

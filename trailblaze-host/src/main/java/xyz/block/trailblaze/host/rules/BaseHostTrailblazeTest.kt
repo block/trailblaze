@@ -26,6 +26,7 @@ import java.io.File
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
+import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
@@ -439,8 +440,18 @@ abstract class BaseHostTrailblazeTest(
   /**
    * Suspend version of runTrail that checks for coroutine cancellation.
    * This allows proper cancellation propagation when running in a coroutine context.
+   *
+   * Returns the last successful **tool** step's [TrailblazeToolResult.Success] — the "last
+   * successful tool wins" payload the host runner threads up so `trailblaze tool <read-tool>`
+   * surfaces the tool's real return value. Only [TrailYamlItem.ToolTrailItem] results count:
+   * prompt / trailhead steps return a bare `Success()` with no payload, so tracking them would
+   * let a trailing prompt clobber a real tool payload. Null when no tool step ran. Setup-trail
+   * items are preamble and never contribute to the returned result.
    */
-  private suspend fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
+  private suspend fun runTrail(
+    trailItems: List<TrailYamlItem>,
+    useRecordedSteps: Boolean,
+  ): TrailblazeToolResult.Success? {
     // Capture the trail title once so caseTitleProvider in the V3 runner can read it for every
     // step. We scan for the first ConfigTrailItem rather than relying on item order so the title
     // is available even if prompts appear before the config block in the YAML.
@@ -484,6 +495,7 @@ abstract class BaseHostTrailblazeTest(
         }
       }
     }
+    var lastSuccess: TrailblazeToolResult.Success? = null
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.PromptsTrailItem ->
@@ -506,7 +518,13 @@ abstract class BaseHostTrailblazeTest(
       if (itemResult is TrailblazeToolResult.Error) {
         throw TrailblazeException(itemResult.errorMessage)
       }
+      // Only tool steps carry a payload worth surfacing. Prompt / trailhead steps return a bare
+      // Success(), so tracking them would let a trailing prompt overwrite a real tool payload.
+      if (item is TrailYamlItem.ToolTrailItem && itemResult is TrailblazeToolResult.Success) {
+        lastSuccess = itemResult
+      }
     }
+    return lastSuccess
   }
 
   private fun resolveTrailContextFromEnv(): String? =
@@ -550,7 +568,6 @@ abstract class BaseHostTrailblazeTest(
     maxLlmCalls = null,
     systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(
       platformPrompt = systemPromptTemplate,
-      toolSetCatalog = toolRepo.toolSetCatalog,
     ),
   )
 
@@ -568,7 +585,7 @@ abstract class BaseHostTrailblazeTest(
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
     sendSessionStartLog: Boolean,
-  ): SessionId {
+  ): HostYamlRunResult {
     // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
     if (forceStopApp) {
       ensureTargetAppIsStopped()
@@ -587,7 +604,7 @@ abstract class BaseHostTrailblazeTest(
       Console.log(
         "[Trailblaze] Skipping trail" + (trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
       )
-      return loggingRule.session?.sessionId ?: SessionId("unknown")
+      return HostYamlRunResult(loggingRule.session?.sessionId ?: SessionId("unknown"))
     }
 
     if (sendSessionStartLog) {
@@ -637,6 +654,7 @@ abstract class BaseHostTrailblazeTest(
     // launched here (`includeSubprocess = false`) — no host test needs one, and `target.tools:` isn't
     // platform-scoped, so launching them would fork the web sign-in subprocess on a mobile session.
     var launchedScripting: LaunchedScriptingRuntime? = null
+    var lastToolResult: TrailblazeToolResult.Success? = null
     try {
       val session = loggingRule.session
       if (session != null) {
@@ -662,14 +680,17 @@ abstract class BaseHostTrailblazeTest(
             (trailUrl?.let { " $it" } ?: ""),
         )
       }
-      runTrail(trailItems, useRecordedSteps)
+      lastToolResult = runTrail(trailItems, useRecordedSteps)
     } finally {
       // Free QuickJS engines + deregister the dynamic tools so a reused repo doesn't collide on a
       // later session. NonCancellable so teardown completes even on trail timeout / abort.
       launchedScripting?.let { runtime -> withContext(NonCancellable) { runtime.shutdownAll() } }
       currentToolTraceId = null
     }
-    return loggingRule.session?.sessionId ?: SessionId("unknown")
+    return HostYamlRunResult(
+      sessionId = loggingRule.session?.sessionId ?: SessionId("unknown"),
+      lastToolResult = lastToolResult,
+    )
   }
 
   /**
@@ -684,7 +705,9 @@ abstract class BaseHostTrailblazeTest(
     sendSessionStartLog: Boolean,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
-  ) = runBlocking {
+  ): SessionId = runBlocking {
+    // JUnit callers only care about the session id; the tool-result payload is threaded
+    // through the suspend variant for the `trailblaze tool` host path.
     runTrailblazeYamlSuspend(
       yaml = yaml,
       trailblazeDeviceId = trailblazeDeviceId,
@@ -693,7 +716,7 @@ abstract class BaseHostTrailblazeTest(
       forceStopApp = forceStopApp,
       useRecordedSteps = useRecordedSteps,
       sendSessionStartLog = sendSessionStartLog
-    )
+    ).sessionId ?: SessionId("unknown")
   }
 
   fun runFromResource(

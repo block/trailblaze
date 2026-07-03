@@ -113,7 +113,6 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
-import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.toolName
@@ -1799,9 +1798,9 @@ class TrailblazeMcpServer(
   /**
    * Registers all tools with the MCP server.
    *
-   * Device control tools (TrailblazeTools) use progressive disclosure: only the core
-   * toolset is registered initially. The LLM can request additional toolsets via the
-   * `setActiveToolSets` MCP tool.
+   * Every device-control tool (TrailblazeTool) the catalog knows about is registered up front —
+   * an MCP client (e.g. an external coding agent) reads the full toolbox once, so there is no
+   * benefit to withholding tools behind a runtime opt-in.
    *
    * Visible as `internal` so out-of-band events (mode changes via
    * [TrailblazeMcpSessionContext.onModeChanged], target changes via
@@ -1835,37 +1834,6 @@ class TrailblazeMcpServer(
       sessionContext = sessionContext,
     )
 
-    // Callback for when the LLM requests a toolset change via setActiveToolSets.
-    // Routes through the driver-aware resolver when a driver is currently attached so
-    // mobile-only `always_enabled` entries (e.g. `core_interaction`) don't leak into a
-    // web/Compose session and vice versa — matches the inner-agent-tools-provider path
-    // below, the single authoritative source for "what the LLM sees".
-    val onActiveToolSetsChanged: (List<String>, List<ToolSetCatalogEntry>) -> Unit =
-      { activeToolSetIds, catalog ->
-        val driverType = mcpBridge.getDriverType()
-        val resolved = TrailblazeToolSetCatalog.resolveForSession(driverType, activeToolSetIds, catalog)
-        val newToolClasses = resolved.toolClasses
-
-        // Remove previously registered TrailblazeTool MCP tools
-        if (registeredTrailblazeToolNames.isNotEmpty()) {
-          mcpServer.removeTools(registeredTrailblazeToolNames.toList())
-          registeredTrailblazeToolNames.clear()
-        }
-
-        // Register the new set of TrailblazeTools
-        trailblazeToolBridge.registerTrailblazeTools(
-          toolClasses = newToolClasses,
-          mcpServer = mcpServer,
-          mcpSessionId = mcpSessionId,
-        )
-        registeredTrailblazeToolNames.addAll(newToolClasses.map { it.toolName().toolName })
-
-        Console.log(
-          "Active toolsets changed to: $activeToolSetIds (${newToolClasses.size} tools) " +
-            "[driver=${driverType?.name ?: "none"}]",
-        )
-      }
-
     val initialToolRegistry = ToolRegistry {
       // Minimal default tools: device management and session control only
       // ObservationToolSet (getScreenState, viewHierarchy) NOT registered by default
@@ -1877,8 +1845,6 @@ class TrailblazeMcpServer(
           sessionContext = sessionContext,
           mcpBridge = mcpBridge,
           deviceClaimRegistry = deviceClaimRegistry,
-          toolSetCatalog = toolSetCatalog,
-          onActiveToolSetsChanged = onActiveToolSetsChanged,
           onTerminateSession = ::terminateSession,
           onDeviceConnected = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
           onTargetAppChanged = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
@@ -2157,14 +2123,25 @@ class TrailblazeMcpServer(
     )
 
     if (!isMinimalProfile) {
-      // Register core TrailblazeTools (progressive disclosure) — skipped in MINIMAL mode
-      val coreToolClasses = TrailblazeToolSetCatalog.resolve(emptyList(), toolSetCatalog).toolClasses
+      // Register every catalog TrailblazeTool the session's driver can run — skipped in MINIMAL
+      // mode. Resolving with every catalog id (rather than only the always-enabled core) advertises
+      // the full toolbox to the MCP client immediately; there is no runtime opt-in to widen it later.
+      // Route through the driver-aware resolver (same as the inner-agent repo path) so that once a
+      // driver is attached, toolsets whose `drivers:` exclude it (e.g. mobile-only `core_interaction`
+      // on a Playwright/Compose session) aren't advertised. When no driver is attached yet, this
+      // falls back to the full cross-driver set — the intended "see everything" default.
+      // Known limitation: the driver is snapshotted here; if a device is connected AFTER this
+      // registration (driver becomes known late), the toolbox is not re-filtered for the rest of
+      // the session. Re-registering on device-connect is a pre-existing gap left for a follow-up.
+      val allToolClasses = TrailblazeToolSetCatalog
+        .resolveForSession(mcpBridge.getDriverType(), toolSetCatalog.map { it.id }, toolSetCatalog)
+        .toolClasses
       trailblazeToolBridge.registerTrailblazeTools(
-        toolClasses = coreToolClasses,
+        toolClasses = allToolClasses,
         mcpServer = mcpServer,
         mcpSessionId = mcpSessionId,
       )
-      registeredTrailblazeToolNames.addAll(coreToolClasses.map { it.toolName().toolName })
+      registeredTrailblazeToolNames.addAll(allToolClasses.map { it.toolName().toolName })
     }
 
     if (isMinimalProfile) {

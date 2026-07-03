@@ -301,7 +301,7 @@ internal fun Route.toolRoutes(deps: TrailRunnerDeps) {
   get("$PATH_BASE/api/tool-source") {
     // Read a tool/component body either by Kotlin FQN (?class=) or by a
     // trailmap-relative resource path (?path=, used by the Trailmaps viewer for
-    // toolsets/waypoints/shortcuts/etc.). Both resolve through the catalog index.
+    // trailheads/tools/etc.). Both resolve through the catalog index.
     val fqn = call.request.queryParameters["class"]?.trim().orEmpty()
     val path = call.request.queryParameters["path"]?.trim().orEmpty()
     if (fqn.isEmpty() && path.isEmpty()) {

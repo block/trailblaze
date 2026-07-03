@@ -649,15 +649,15 @@ describe("createDaemonRpc", () => {
   });
 
   test("createTrailmapComponent posts the request to NewComponentRequest and surfaces the error", async () => {
-    const { impl, calls } = fakeFetch(200, { ok: false, error: "a waypoints named 'home' already exists" });
+    const { impl, calls } = fakeFetch(200, { ok: false, error: "a trailheads named 'home' already exists" });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
 
-    const r = await rpc.createTrailmapComponent({ trailmap: "sample", kind: "waypoints", name: "home" });
+    const r = await rpc.createTrailmapComponent({ trailmap: "sample", kind: "trailheads", name: "home" });
 
     expect(calls[0].url).toBe("http://daemon/rpc/NewComponentRequest");
-    expect(JSON.parse(calls[0].init!.body as string)).toEqual({ trailmap: "sample", kind: "waypoints", name: "home" });
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({ trailmap: "sample", kind: "trailheads", name: "home" });
     expect(r?.ok).toBe(false);
-    expect(r?.error).toBe("a waypoints named 'home' already exists");
+    expect(r?.error).toBe("a trailheads named 'home' already exists");
   });
 
   // --- Settings patch (updateSetting) ---

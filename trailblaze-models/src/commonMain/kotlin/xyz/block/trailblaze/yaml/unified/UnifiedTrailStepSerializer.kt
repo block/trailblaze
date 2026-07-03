@@ -28,6 +28,14 @@ import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
  */
 class UnifiedTrailStepSerializer(
   private val toolWrapperSerializer: TrailblazeToolYamlWrapperSerializer,
+  /**
+   * When true, this parses a `trailhead:` (the deterministic step 0) rather than a `trail:` step.
+   * The only shape difference is the `recording:` value: a trailhead is **one tool per platform**,
+   * so each classifier maps to a single tool call (a map, `android: { launchApp: {...} }`), not a
+   * list. It's stored internally as a 1-element list so the runtime lowering stays uniform with
+   * regular steps.
+   */
+  private val isTrailhead: Boolean = false,
 ) : KSerializer<UnifiedTrailStep> {
 
   override val descriptor: SerialDescriptor = buildClassSerialDescriptor("UnifiedTrailStep")
@@ -72,11 +80,29 @@ class UnifiedTrailStepSerializer(
           }
           for ((classifierNode, classifierValue) in valueNode.entries) {
             val classifier = classifierNode.content
-            require(classifierValue is YamlList) {
-              "`recording:` classifier `$classifier:` must map to a list of tool calls, " +
-                "got ${classifierValue::class.simpleName}. Use `$classifier: []` for an explicit no-op."
+            if (isTrailhead) {
+              // A trailhead is a single tool per platform: each classifier maps to ONE tool call
+              // (a map), never a list. Stored as a 1-element list so lowering matches a regular step.
+              require(classifierValue is YamlMap) {
+                "trailhead `recording:` classifier `$classifier:` must be a single tool call, e.g. " +
+                  "`$classifier: { toolName: { ... } }`, got ${classifierValue::class.simpleName}. " +
+                  "A trailhead is one tool per platform, not a list."
+              }
+              // Exactly one tool — the wrapper serializer would otherwise silently decode only the
+              // first key of a multi-key map, dropping the rest and violating the one-tool contract.
+              require(classifierValue.entries.size == 1) {
+                "trailhead `recording:` classifier `$classifier:` must be exactly ONE tool call, got " +
+                  "${classifierValue.entries.size}. A trailhead is one tool per platform — compose " +
+                  "multiple actions inside that tool's own definition."
+              }
+              recordings[classifier] = listOf(yaml.decodeFromYamlNode(toolWrapperSerializer, classifierValue))
+            } else {
+              require(classifierValue is YamlList) {
+                "`recording:` classifier `$classifier:` must map to a list of tool calls, " +
+                  "got ${classifierValue::class.simpleName}. Use `$classifier: []` for an explicit no-op."
+              }
+              recordings[classifier] = yaml.decodeFromYamlNode(toolListSerializer, classifierValue)
             }
-            recordings[classifier] = yaml.decodeFromYamlNode(toolListSerializer, classifierValue)
           }
         }
         else -> throw IllegalArgumentException(

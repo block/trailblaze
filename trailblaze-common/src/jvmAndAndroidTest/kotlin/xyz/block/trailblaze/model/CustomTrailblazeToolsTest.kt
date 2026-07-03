@@ -197,27 +197,25 @@ class CustomTrailblazeToolsTest {
   }
 
   @Test
-  fun `toTrailblazeToolRepo forwards toolSetCatalog so custom catalogs drive resolution`() {
-    // Two independent fields need to flow through the extension. If `toolSetCatalog` is
-    // dropped from the forward, dynamic toolset switching (setActiveToolSets) silently
-    // resolves against the classpath catalog instead of the caller's. To catch that, the
-    // custom catalog must be *different* from the default — here we strip the `navigation`
-    // entry. If the forward works, `navigation` is absent and `setActiveToolSets` reports
-    // "Unknown toolset IDs". If the forward were dropped, the classpath default still has
-    // `navigation` and the call would succeed — a failure of this test.
-    val customCatalog = TrailblazeToolSetCatalog.defaultEntries().filter { it.id != "navigation" }
-    val tools = CustomTrailblazeTools(
+  fun `toTrailblazeToolRepo forwards toolSetCatalog to the resulting repo`() {
+    // The custom catalog must flow through the extension to the repo (it drives verify-step
+    // scoping + scripted-tool bundling). To catch a dropped forward, the custom catalog is
+    // *different* from the default — here we strip the `navigation` entry — and we assert the
+    // repo carries the stripped catalog, not the classpath default.
+    val default = TrailblazeToolSetCatalog.defaultEntries()
+    assertTrue(default.any { it.id == "navigation" }, "baseline catalog must have navigation, else vacuous")
+
+    val customCatalog = default.filter { it.id != "navigation" }
+    val repo = CustomTrailblazeTools(
       registeredAppSpecificLlmTools = emptySet(),
       config = TrailblazeConfig.DEFAULT,
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       toolSetCatalog = customCatalog,
-    )
-    val repo = tools.toTrailblazeToolRepo()
-    val result = repo.setActiveToolSets(listOf("navigation"))
-    assertTrue(
-      "Unknown toolset IDs" in result,
-      "toolSetCatalog was not forwarded to the resulting repo — navigation was stripped from " +
-        "the custom catalog but setActiveToolSets resolved it anyway (result was: $result)",
+    ).toTrailblazeToolRepo()
+
+    assertFalse(
+      repo.toolSetCatalog?.any { it.id == "navigation" } ?: true,
+      "toolSetCatalog was not forwarded — the repo's catalog still has the stripped `navigation` entry",
     )
   }
 }

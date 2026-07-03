@@ -73,11 +73,11 @@ written with a warning.
                                generation.
       --output-dir=<outputDir>
                              Write all artifacts into this directory with
-                               canonical names (report.html, summary.json,
-                               timeline.mp4, timeline.gif, timeline.webp).
-                               Created if it doesn't exist. If omitted,
-                               artifacts land in the default `logs/reports/`
-                               location with timestamped names.
+                               canonical names (report.html, report-interactive.
+                               html, summary.json, timeline.mp4, timeline.gif,
+                               timeline.webp). Created if it doesn't exist. If
+                               omitted, artifacts land in the default
+                               `logs/reports/` location with timestamped names.
       --storyboard[=<storyboardOutput>]
                              Export a single-frame WebP storyboard — every
                                step's screenshot tiled into a CSS grid (one

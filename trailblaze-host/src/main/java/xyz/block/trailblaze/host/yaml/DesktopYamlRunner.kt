@@ -26,6 +26,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
@@ -129,7 +130,12 @@ class DesktopYamlRunner(
       Console.log("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
       
       // Track the execution result to report in finally block
-      var executionResult: TrailExecutionResult = TrailExecutionResult.Success
+      var executionResult: TrailExecutionResult = TrailExecutionResult.Success()
+
+      // The last successful tool's result from a host/Maestro run (null otherwise). Folded into
+      // the terminal TrailExecutionResult.Success below so the `trailblaze tool <read-tool>` HOST
+      // path can surface the tool's real return value instead of a generic acknowledgement.
+      var lastToolResult: TrailblazeToolResult.Success? = null
 
       // Try filtered first (correct driver selection for Android which has 3 driver variants
       // sharing the same device ID). Fall back to unfiltered for Compose/Playwright which are
@@ -279,7 +285,7 @@ class DesktopYamlRunner(
                 "(web, Revyl, Electron, and local Maestro iOS paths via runHostYaml).",
             )
 
-            val hostSessionId = TrailblazeHostYamlRunner.runHostYaml(
+            val hostResult = TrailblazeHostYamlRunner.runHostYaml(
               dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
               runOnHostParams = RunOnHostParams(
                 runYamlRequest = runYamlRequest,
@@ -299,16 +305,17 @@ class DesktopYamlRunner(
               ),
               deviceManager = trailblazeDeviceManager,
             )
+            lastToolResult = hostResult.lastToolResult
 
             // Mirror the neighboring branches' session/connection bookkeeping: fire the
             // capture activator for the resolved session and report instrumentation-running.
-            hostSessionId?.let { captureSessionStarted(it) }
+            hostResult.sessionId?.let { captureSessionStarted(it) }
             onConnectionStatus(
               DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
                 trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
               ),
             )
-            hostSessionId
+            hostResult.sessionId
           }
 
           // V3 on host with accessibility driver: run planner/analyzer on the host JVM,
@@ -414,7 +421,7 @@ class DesktopYamlRunner(
           }
 
           else -> {
-            val hostSessionId = TrailblazeHostYamlRunner.runHostYaml(
+            val hostResult = TrailblazeHostYamlRunner.runHostYaml(
               dynamicLlmClient = dynamicLlmClientProvider(desktopAppRunYamlParams.runYamlRequest.trailblazeLlmModel),
               runOnHostParams = RunOnHostParams(
                 runYamlRequest = runYamlRequest,
@@ -438,13 +445,14 @@ class DesktopYamlRunner(
               ),
               deviceManager = trailblazeDeviceManager,
             )
+            lastToolResult = hostResult.lastToolResult
 
             onConnectionStatus(
               DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
                 trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
               ),
             )
-            hostSessionId
+            hostResult.sessionId
           }
         }
 
@@ -456,6 +464,18 @@ class DesktopYamlRunner(
         if (sessionId == null && executionResult is TrailExecutionResult.Success) {
           executionResult = TrailExecutionResult.Failed(
             "Test execution did not produce a session id (see daemon log for details)",
+          )
+        }
+
+        // A successful host/Maestro run whose last tool produced a payload carries it on the
+        // terminal Success so the `trailblaze tool <read-tool>` blocking path can render the
+        // tool's real return value. No-op for every other branch: lastToolResult stays null,
+        // and a run that already failed above keeps its Failed result.
+        val resolvedToolResult = lastToolResult
+        if (resolvedToolResult != null && executionResult is TrailExecutionResult.Success) {
+          executionResult = TrailExecutionResult.Success(
+            toolMessage = resolvedToolResult.message,
+            toolStructuredContent = resolvedToolResult.structuredContent,
           )
         }
       } catch (e: CancellationException) {

@@ -26,9 +26,6 @@ object TrailmapCatalogBuilder {
     var displayName: String? = null
     var manifestPath: String? = null
     val tools = mutableListOf<TrailmapComponent>()
-    val toolsets = mutableListOf<TrailmapComponent>()
-    val waypoints = mutableListOf<TrailmapComponent>()
-    val shortcuts = mutableListOf<TrailmapComponent>()
     val trailheads = mutableListOf<TrailmapComponent>()
     val systemPrompts = mutableListOf<TrailmapComponent>()
   }
@@ -59,10 +56,6 @@ object TrailmapCatalogBuilder {
           m.manifestPath = rel(r)
           m.displayName = DISPLAY_NAME.find(content)?.groupValues?.get(1)?.trim()?.ifBlank { null }
         }
-        name.endsWith(".waypoint.yaml") ->
-          tm(id).waypoints += TrailmapComponent(name.removeSuffix(".waypoint.yaml"), rel(r))
-        name.endsWith(".shortcut.yaml") ->
-          tm(id).shortcuts += TrailmapComponent(name.removeSuffix(".shortcut.yaml"), rel(r))
         name.endsWith(".trailhead.yaml") ->
           tm(id).trailheads += TrailmapComponent(name.removeSuffix(".trailhead.yaml"), rel(r))
         name.endsWith(".tool.yaml") ->
@@ -71,8 +64,6 @@ object TrailmapCatalogBuilder {
             relPath = rel(r),
             flavor = if (CLASS_KEY.containsMatchIn(content)) ToolFlavor.KOTLIN else ToolFlavor.YAML,
           )
-        seg.getOrNull(1) == "toolsets" ->
-          tm(id).toolsets += TrailmapComponent(name.removeSuffix(".yaml"), rel(r))
         else -> {} // multi-tool .ts descriptors and stray yaml: skip in the inventory
       }
     }
@@ -103,9 +94,6 @@ object TrailmapCatalogBuilder {
         displayName = m.displayName,
         manifestPath = m.manifestPath,
         tools = m.tools.sortedBy { it.name },
-        toolsets = m.toolsets.sortedBy { it.name },
-        waypoints = m.waypoints.sortedBy { it.name },
-        shortcuts = m.shortcuts.sortedBy { it.name },
         trailheads = m.trailheads.sortedBy { it.name },
         systemPrompts = m.systemPrompts.sortedBy { it.name },
       )
@@ -115,15 +103,15 @@ object TrailmapCatalogBuilder {
 
 // Where each component type lives inside a trailmap, and the file suffix it uses.
 private val TRAILMAP_COMPONENT_DIR = mapOf(
-  "tools" to "tools", "toolsets" to "toolsets", "waypoints" to "waypoints", "shortcuts" to "shortcuts", "trailheads" to "trailheads",
+  "tools" to "tools", "trailheads" to "trailheads",
 )
 private val TRAILMAP_COMPONENT_SUFFIX = mapOf(
-  "tools" to ".ts", "toolsets" to ".yaml", "waypoints" to ".waypoint.yaml", "shortcuts" to ".shortcut.yaml", "trailheads" to ".trailhead.yaml",
+  "tools" to ".ts", "trailheads" to ".trailhead.yaml",
 )
 // Names may include sub-dirs (e.g. android/foo) but nothing path-escaping.
 private val SAFE_COMPONENT_NAME = Regex("^[A-Za-z0-9_][A-Za-z0-9_/-]*$")
 
-internal fun trailmapComponentSkeleton(kind: String, trailmap: String, name: String): String = when (kind) {
+internal fun trailmapComponentSkeleton(kind: String, name: String): String = when (kind) {
   "tools" -> {
     val id = name.substringAfterLast('/')
     """
@@ -142,12 +130,6 @@ internal fun trailmapComponentSkeleton(kind: String, trailmap: String, name: Str
     );
     """.trimIndent() + "\n"
   }
-  "toolsets" -> "id: ${name.substringAfterLast('/')}\ndescription: \"\"\ndrivers: []\ntools: []\n"
-  // v2 classifier-keyed shape: selectors live under an explicit classifier block. Default to
-  // `android:` (the author retargets to ios:/web: as needed); a top-level required:/forbidden:
-  // skeleton would be rejected by WaypointLoader as legacy v1.
-  "waypoints" -> "id: \"$trailmap/$name\"\ndescription: \"\"\nandroid:\n  required:\n    - description: \"\"\n      selector: {}\n  forbidden: []\n"
-  "shortcuts" -> "description: \"\"\nshortcut:\n  from: \"\"\n  to: \"\"\ntools: []\n"
   "trailheads" -> "description: \"\"\ntrailhead:\n  to: \"\"\ntools: []\n"
   else -> ""
 }
@@ -161,7 +143,7 @@ internal fun trailmapComponentSkeleton(kind: String, trailmap: String, name: Str
 internal data class NewComponentOutcome(val status: HttpStatusCode, val body: NewComponentResponse)
 
 /**
- * Scaffolds a new component file (toolset/waypoint/shortcut/trailhead/tool) inside an existing
+ * Scaffolds a new component file (trailhead/tool) inside an existing
  * trailmap with a type-appropriate skeleton — the shared source for both the REST
  * `POST /api/trailmap/component` route and the `NewComponentRequest` RPC handler. Refuses to
  * overwrite. Every failure rides in `NewComponentResponse.ok=false` + `error`.
@@ -195,7 +177,7 @@ internal suspend fun buildNewComponentResponse(request: NewComponentRequest): Ne
     }
     runCatching {
       file.parentFile?.mkdirs()
-      file.writeText(trailmapComponentSkeleton(kind, trailmap, name))
+      file.writeText(trailmapComponentSkeleton(kind, name))
       NewComponentOutcome(
         HttpStatusCode.OK,
         NewComponentResponse(
@@ -222,7 +204,7 @@ internal fun Route.trailmapRoutes() {
     )
   }
 
-  // Scaffold a new component file (toolset/waypoint/shortcut/trailhead) inside an
+  // Scaffold a new component file (trailhead/tool) inside an
   // existing trailmap, with a type-appropriate skeleton. Refuses to overwrite.
   post("$PATH_BASE/api/trailmap/component") {
     val body = runCatching { call.receive<NewComponentRequest>() }.getOrNull()

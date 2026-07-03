@@ -162,6 +162,12 @@ class TrailblazeYaml(
   /** Custom KAML serializer for [UnifiedTrailStep]; handles the dynamic per-classifier keys. */
   val unifiedTrailStepSerializer: UnifiedTrailStepSerializer
 
+  /**
+   * Trailhead variant of [unifiedTrailStepSerializer]: same shape, except each `recording:`
+   * classifier is a single tool call (a map), not a list — a trailhead is one tool per platform.
+   */
+  val unifiedTrailheadSerializer: UnifiedTrailStepSerializer
+
   private val yamlInstance: Yaml
 
   init {
@@ -177,6 +183,7 @@ class TrailblazeYaml(
       trailblazeToolYamlWrapperSerializer,
     )
     unifiedTrailStepSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer)
+    unifiedTrailheadSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer, isTrailhead = true)
     yamlInstance = Yaml(
       configuration = yamlConfiguration,
       serializersModule = SerializersModule {
@@ -440,7 +447,7 @@ class TrailblazeYaml(
           valueNode,
         )
         "trailhead" -> trailhead = yamlInstance.decodeFromYamlNode(
-          unifiedTrailStepSerializer,
+          unifiedTrailheadSerializer,
           valueNode,
         )
         "trail" -> trail = yamlInstance.decodeFromYamlNode(

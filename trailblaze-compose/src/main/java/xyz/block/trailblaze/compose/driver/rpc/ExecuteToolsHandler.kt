@@ -7,7 +7,6 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.compose.driver.ComposeScreenState
 import xyz.block.trailblaze.compose.driver.tools.ComposeExecutableTool
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -160,15 +159,14 @@ class ExecuteToolsHandler(
 
   companion object {
     /**
-     * Default [TrailblazeToolRepo] used when callers don't inject one — opens the full Compose
-     * toolset (`compose_core`, `compose_verification`, `memory`) so every
-     * [ComposeExecutableTool] the agent might advertise is reachable. Embedders that need a
-     * narrower or richer surface (e.g. with custom dynamic tool registrations) can construct
-     * their own repo and pass it via the constructor.
+     * Default [TrailblazeToolRepo] used when callers don't inject one — carries the full Compose
+     * surface (`compose_core`, `compose_verification`, `memory`) so every [ComposeExecutableTool]
+     * the agent might advertise is reachable. `withDynamicToolSets` advertises every
+     * driver-compatible tool up front, so no further activation is needed. Embedders that need a
+     * narrower or richer surface (e.g. with custom dynamic tool registrations) can construct their
+     * own repo and pass it via the constructor.
      */
     fun defaultComposeToolRepo(): TrailblazeToolRepo =
-      TrailblazeToolRepo
-        .withDynamicToolSets(driverType = TrailblazeDriverType.COMPOSE)
-        .also { it.setActiveToolSets(ComposeToolSetIds.ALL) }
+      TrailblazeToolRepo.withDynamicToolSets(driverType = TrailblazeDriverType.COMPOSE)
   }
 }

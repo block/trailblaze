@@ -48,16 +48,16 @@ data class ResolvedToolSet(
 ) : TrailblazeToolSurface
 
 /**
- * Catalog of available TrailblazeTool sets that can be dynamically enabled/disabled.
+ * Catalog of available TrailblazeTool sets.
  *
  * Entries are discovered from `.yaml` files under `trails/config/trailmaps/<id>/toolsets/` on
  * the classpath. YAML is the single source of truth — there are no Kotlin-declared toolsets
  * here. Authoring a new toolset is a matter of dropping a YAML file into the correct
  * trailmap's `toolsets/` directory.
  *
- * The LLM starts with only the `alwaysEnabled` toolsets and can request additional ones via the
- * `setActiveToolSets` MCP tool. Each entry carries an id, description, and tool list so the LLM
- * can preview what's available without loading the full tool definitions.
+ * The catalog is resolved once per session to build the initial tool surface (the whole
+ * driver-compatible set is advertised up front — there is no runtime switching) and to scope a
+ * `verify:` step to its driver-appropriate verification tools.
  */
 object TrailblazeToolSetCatalog {
 
@@ -243,16 +243,15 @@ object TrailblazeToolSetCatalog {
   ): ResolvedToolSet = resolve(requestedIds, compatibleEntries(driverType, catalog))
 
   /**
-   * Conditional resolver used by session-attached callsites (`setActiveToolSets` on the
-   * MCP server, the device-manager tool, and the tool repo) that may or may not know the
-   * driver yet. Routes through [resolveForDriver] when [driverType] is non-null —
-   * `always_enabled` entries that declare incompatible `drivers:` are filtered out — and
-   * falls back to the driver-agnostic [resolve] otherwise.
+   * Conditional resolver used by session-attached callsites (initial repo construction in
+   * [TrailblazeToolRepo.withDynamicToolSets] and MCP tool registration in `TrailblazeMcpServer`)
+   * that may or may not know the driver yet. Routes through [resolveForDriver] when [driverType] is
+   * non-null — entries that declare incompatible `drivers:` are filtered out — and falls back to the
+   * driver-agnostic [resolve] otherwise.
    *
-   * Centralizes the `if (driver != null) resolveForDriver else resolve` conditional that
-   * used to be duplicated across three callsites. Drift between them is the same risk
-   * class that caused the report/runtime mismatch fixed in
-   * `docs/internal/devlog/2026-05-22-agent-toolbox-report-driver-leak.md`.
+   * Centralizes the `if (driver != null) resolveForDriver else resolve` conditional so the
+   * "what the LLM sees" callsites can't drift — the same risk class that caused the report/runtime
+   * mismatch fixed in `docs/internal/devlog/2026-05-22-agent-toolbox-report-driver-leak.md`.
    */
   fun resolveForSession(
     driverType: TrailblazeDriverType?,
@@ -310,16 +309,4 @@ object TrailblazeToolSetCatalog {
     catalog: List<ToolSetCatalogEntry> = defaultEntries(),
   ): Set<ToolName> =
     compatibleEntries(driverType, catalog).flatMap { it.scriptedToolNames }.toSet()
-
-  /**
-   * Formats the catalog as a human-readable summary for embedding in tool descriptions.
-   */
-  fun formatCatalogSummary(catalog: List<ToolSetCatalogEntry>): String = buildString {
-    appendLine("Available toolsets:")
-    for (entry in catalog) {
-      val toolNamesPreview = entry.toolNames.joinToString(", ")
-      val marker = if (entry.alwaysEnabled) " [always enabled]" else ""
-      appendLine("- **${entry.id}**$marker: ${entry.description} Tools: [$toolNamesPreview]")
-    }
-  }
 }

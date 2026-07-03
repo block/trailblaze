@@ -205,9 +205,9 @@ class TrailheadTrailItemTest {
         step: Sign in fresh
         recording:
           android-phone:
-            - myapp_android_signInViaUI: {}
+            myapp_android_signInViaUI: {}
           ios:
-            - myapp_ios_signInViaUI: {}
+            myapp_ios_signInViaUI: {}
       trail:
         - step: Tap Pay
           recording:
@@ -220,6 +220,76 @@ class TrailheadTrailItemTest {
     assertEquals("Sign in fresh", th.step)
     assertEquals(listOf("myapp_android_signInViaUI"), th.tools.map { it.name })
     assertTrue(items[2] is TrailYamlItem.PromptsTrailItem)
+  }
+
+  @Test
+  fun `unified trailhead rejects a list of tools — one tool per platform`() {
+    // A trailhead is a single tool per platform, so each classifier is a tool MAP, not a list. A
+    // multi-step bootstrap composes inside the trailhead tool's own definition, not as a list here.
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          target: myapp
+        trailhead:
+          step: Sign in fresh
+          recording:
+            android-phone:
+              - myapp_android_signInViaUI: {}
+        trail:
+          - step: Tap Pay
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      ex.message!!.contains("single tool call") || ex.message!!.contains("one tool per platform"),
+      "expected a one-tool-per-platform message, got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `unified single-tool-map trailhead parses to exactly one tool per classifier`() {
+    val trail = yaml.decodeUnifiedTrail(
+      """
+      config:
+        target: myapp
+      trailhead:
+        step: Sign in fresh
+        recording:
+          android-phone:
+            myapp_android_signInViaUI: { email: sam@example.com }
+      trail:
+        - step: Tap Pay
+      """.trimIndent(),
+    )
+    val tools = trail.trailhead?.recordings?.get("android-phone")
+    assertEquals(listOf("myapp_android_signInViaUI"), tools?.map { it.name })
+  }
+
+  @Test
+  fun `unified trailhead rejects a classifier map with more than one tool`() {
+    // The single-tool-map is exactly-one: a two-key map would otherwise silently decode only the
+    // first tool (the wrapper serializer reads entries.first()), dropping the rest.
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          target: myapp
+        trailhead:
+          step: Sign in fresh
+          recording:
+            android-phone:
+              myapp_android_signInViaUI: {}
+              myapp_android_openMoney: {}
+        trail:
+          - step: Tap Pay
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      ex.message!!.contains("exactly ONE tool") || ex.message!!.contains("one tool per platform"),
+      "expected an exactly-one-tool message, got: ${ex.message}",
+    )
   }
 
   @Test
@@ -237,7 +307,7 @@ class TrailheadTrailItemTest {
           step: Sign in
           recording:
             android-phone:
-              - myapp_android_signInViaUI: {}
+              myapp_android_signInViaUI: {}
         trail:
           - step: Tap Pay
         """.trimIndent(),
@@ -257,7 +327,7 @@ class TrailheadTrailItemTest {
         maxRetries: 7
         recording:
           android-phone:
-            - myapp_android_signInViaUI: {}
+            myapp_android_signInViaUI: {}
       trail:
         - step: Tap Pay
           recording:

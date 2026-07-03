@@ -159,64 +159,11 @@ class TrailblazeToolRepoDynamicTest {
     assertThat((decoded as NonLlmTool).reason).isEqualTo("replay")
   }
 
-  @Test fun `setActiveToolSets routes through driver-aware resolver when driverType set`() {
-    // Pre-fix, both branches of setActiveToolSets called the non-driver-aware
-    // `TrailblazeToolSetCatalog.resolve`, so a Playwright-bound session that asked the
-    // LLM to enable `core_interaction` (always_enabled, drivers: [android-*, ios-host])
-    // would end up with `tap`/`swipe`/`launchApp` registered. Post-fix, the
-    // `driverType` field routes through `resolveForSession` → `resolveForDriver`, which
-    // filters out catalog entries whose `compatibleDriverTypes` don't include the
-    // session driver.
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val coreInteractionEntry = catalog.firstOrNull { it.id == "core_interaction" }
-      ?: error("core_interaction toolset missing from catalog — test fixture is stale")
-    val coreInteractionToolClasses = coreInteractionEntry.toolClasses
-    val coreInteractionToolClassNames = coreInteractionToolClasses
-      .map { it.toolName().toolName }
-      .toSet()
-
-    val repo = TrailblazeToolRepo.withDynamicToolSets(
-      catalog = catalog,
-      driverType = xyz.block.trailblaze.devices.TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-    )
-    val ack = repo.setActiveToolSets(listOf("core_interaction"))
-    assertThat(ack).contains("[driver=PLAYWRIGHT_NATIVE]")
-
-    val registeredClasses = repo.getRegisteredTrailblazeTools()
-    val registeredClassNames = registeredClasses.map { it.toolName().toolName }.toSet()
-    // No tool class from core_interaction should have made it into the repo because the
-    // toolset declares drivers that exclude playwright-native.
-    val leaks = registeredClasses.intersect(coreInteractionToolClasses)
-    assertThat(leaks.isEmpty()).isEqualTo(true)
-    val nameLeaks = registeredClassNames.intersect(coreInteractionToolClassNames)
-    assertThat(nameLeaks.isEmpty()).isEqualTo(true)
-  }
-
-  @Test fun `setActiveToolSets preserves dynamic tools across switches`() {
-    // Derive a valid toolset id from the default catalog rather than hardcoding — if the
-    // catalog evolves (rename / removal) this test keeps exercising the preservation
-    // invariant instead of breaking for unrelated reasons.
-    val catalog = TrailblazeToolSetCatalog.defaultEntries()
-    val switchableId = catalog.first { !it.alwaysEnabled }.id
-
-    val repo = TrailblazeToolRepo.withDynamicToolSets(
-      customToolClasses = setOf(TapTrailblazeTool::class),
-      catalog = catalog,
-    )
-    repo.addDynamicTools(listOf(stubRegistration("subprocess_foo")))
-    val beforeSwap = repo.getRegisteredDynamicTools().keys.toList()
-
-    val ack = repo.setActiveToolSets(listOf(switchableId))
-    assertThat(ack).contains("Active tool sets updated")
-    assertThat(ack).contains("Total tools available")
-
-    assertThat(repo.getRegisteredDynamicTools().keys.toList()).isEqualTo(beforeSwap)
-  }
-
-  @Test fun `scripted dynamic tools are advertised only when their toolset is active`() {
-    // P1: the bundling layer registers a dynamic tool for EVERY catalog scripted tool at session
-    // start (so late activation can dispatch), but a scripted tool is only ADVERTISED when its
-    // toolset is active. Here a single opt-in toolset delivers `canary_scripted` by name.
+  @Test fun `an excluded scripted tool is registered and dispatchable but never advertised`() {
+    // The scripted-tool advertisement gate now enforces `excluded_tools:`. The bundling layer
+    // registers a dynamic tool for EVERY catalog scripted tool (so recorded replays can dispatch),
+    // but an excluded scripted name is subtracted from the repo's registered set, so
+    // `advertisedDynamic` hides it from the LLM while it stays dispatchable by name.
     val scriptedName = ToolName("canary_scripted")
     val catalog = listOf(
       ToolSetCatalogEntry(
@@ -224,38 +171,48 @@ class TrailblazeToolRepoDynamicTest {
         description = "canary",
         toolClasses = emptySet(),
         scriptedToolNames = setOf(scriptedName),
-        alwaysEnabled = false,
+        alwaysEnabled = true,
       ),
     )
-    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = catalog)
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = catalog,
+      excludedScriptedToolNames = setOf(scriptedName),
+    )
     repo.addDynamicTools(listOf(stubRegistration(scriptedName.toolName)))
 
-    // Inactive toolset: registered (dispatchable) but NOT advertised to the LLM.
+    // Excluded: registered (dispatchable) but NOT advertised to the LLM.
     assertThat(repo.getRegisteredDynamicTools().keys).contains(scriptedName)
     assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain(scriptedName.toolName)
     // Still dispatchable directly — e.g. a recorded-trail replay that bypasses advertisement.
     assertThat(repo.toolCallToTrailblazeTool(scriptedName.toolName, "{}"))
       .isInstanceOf(StubDynamicTool::class)
-
-    // Activate the toolset → now advertised.
-    repo.setActiveToolSets(listOf("canary"))
-    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains(scriptedName.toolName)
-
-    // Deactivate → hidden again, but still registered + dispatchable.
-    repo.setActiveToolSets(emptyList())
-    assertThat(repo.getCurrentToolDescriptors().map { it.name }).doesNotContain(scriptedName.toolName)
-    assertThat(repo.getRegisteredDynamicTools().keys).contains(scriptedName)
   }
 
-  @Test fun `non-scripted dynamic tools are advertised regardless of active toolsets`() {
-    // A subprocess-MCP / target-declared dynamic tool isn't a catalog scripted name, so the gate
-    // never hides it — it's advertised even with no opt-in toolsets active.
+  @Test fun `a non-excluded catalog scripted tool is advertised up front`() {
+    // The counterpart to the exclusion test: with no exclusion, a catalog scripted tool the
+    // bundler registered is advertised immediately — there is no opt-in step.
+    val scriptedName = ToolName("canary_scripted")
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "canary",
+        description = "canary",
+        toolClasses = emptySet(),
+        scriptedToolNames = setOf(scriptedName),
+        alwaysEnabled = true,
+      ),
+    )
+    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = catalog)
+    repo.addDynamicTools(listOf(stubRegistration(scriptedName.toolName)))
+    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains(scriptedName.toolName)
+  }
+
+  @Test fun `non-scripted dynamic tools are always advertised`() {
+    // A subprocess-MCP / target-declared dynamic tool isn't a catalog scripted name, so the
+    // exclusion gate never hides it — it's always advertised.
     val repo = TrailblazeToolRepo.withDynamicToolSets(
       catalog = TrailblazeToolSetCatalog.defaultEntries(),
     )
     repo.addDynamicTools(listOf(stubRegistration("subprocess_mcp_tool")))
-    assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
-    repo.setActiveToolSets(emptyList())
     assertThat(repo.getCurrentToolDescriptors().map { it.name }).contains("subprocess_mcp_tool")
   }
 

@@ -26,5 +26,8 @@
     "skipLibCheck": true
   },
   "include": ["app/**/*.ts", "app/**/*.tsx", "types/**/*.d.ts"],
-  "exclude": ["**/*.test.ts", "e2e/**", "**/node_modules/**"]
+  // run-report-core.ts + run-report-types.d.ts are checked by their own gate (the run-report
+  // tsconfig at ../../tsconfig.json) under its own compiler profile; see the matching exclude in
+  // the sibling tsconfig.json.
+  "exclude": ["**/*.test.ts", "e2e/**", "**/node_modules/**", "app/run-report-core.ts", "app/run-report-types.d.ts"]
 }

@@ -499,7 +499,7 @@ class TrailRunnerIntegrationTest {
     // not a bad request — 409, distinct from the 400 validation rejections above.
     val response = client.post("/trailrunner/api/trailmap/component") {
       contentType(ContentType.Application.Json)
-      setBody("""{"trailmap":"no-such-trailmap","kind":"waypoints","name":"home"}""")
+      setBody("""{"trailmap":"no-such-trailmap","kind":"trailheads","name":"home"}""")
     }
     assertEquals(HttpStatusCode.Conflict, response.status)
   }

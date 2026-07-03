@@ -3,10 +3,10 @@
 // Babel strips types at load time regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-// The target + device picker. It now lives in the Home screen's left rail. Home and the
-// old standalone "Targets" screen are one screen. Pick a target app, then tick the devices
-// to run it on. The choice is the global target: it scopes the Trailmaps views and is the
-// default for runs. Styled as a left list-rail to match the other tabs.
+// The target + device picker, embedded in the Home screen's left rail (the standalone
+// Devices screen was removed). Pick a target app, then tick the devices to run it on.
+// The choice is the global target: it scopes the Trailmaps views and is the default for
+// runs. Styled as a left list-rail to match the other tabs.
 function TargetDevicePicker({ go }) {
   const devices = TB.useDevices();
   const [gt, setGlobalTarget] = TB.useGlobalTarget();
@@ -212,91 +212,4 @@ function DeviceToggleRow({ device: d, app: a, selected, onToggle }) {
   );
 }
 
-function DevicesSummaryPanel({ go }) {
-  useLucide();
-  const devices = TB.useDevices();
-  const [gt] = TB.useGlobalTarget();
-  const deviceList = devices.data || [];
-  const selected = ((gt && gt.deviceIds) || []).map((id) => deviceList.find((d) => d.id === id)).filter(Boolean);
-  const connected = deviceList.filter((d) => d.connected);
-  const selectedConnected = selected.filter((d) => d.connected !== false);
-  const platformLabel = (p) => (p === 'ios' ? 'iOS' : p === 'android' ? 'Android' : p === 'web' ? 'Web' : (p || 'Unknown'));
-  return (
-    <div style={{ padding: '28px 32px 60px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      <ScreenHead ico="smartphone" title="Devices" sub="Choose the app under test and the connected devices Trail Runner should use." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginTop: 18 }}>
-        <div className="tb-card pad">
-          <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Target</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <AppIcon target={gt && gt.target} size={28} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gt ? (gt.label || gt.target || 'Web') : 'No target selected'}</div>
-              <div className="tb-sub" style={{ fontSize: 12, marginTop: 2 }}>{selected.length} selected device{selected.length === 1 ? '' : 's'}</div>
-            </div>
-          </div>
-        </div>
-        <div className="tb-card pad">
-          <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Connected</div>
-          <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{connected.length}</div>
-          <div className="tb-sub" style={{ fontSize: 12, marginTop: 5 }}>{deviceList.length} total device{deviceList.length === 1 ? '' : 's'} discovered</div>
-        </div>
-        <div className="tb-card pad">
-          <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Next run</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 99, background: selectedConnected.length ? 'var(--tb-pass)' : 'var(--tb-amber)', flex: '0 0 auto' }} />
-            <span style={{ fontSize: 13.5, fontWeight: 600 }}>{selectedConnected.length ? 'Ready to run' : selected.length ? 'Selected devices are offline' : 'Select a device'}</span>
-          </div>
-          <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 7 }}>Run dialogs default to this target and device selection.</div>
-        </div>
-      </div>
-
-      <div className="tb-card" style={{ marginTop: 16, overflow: 'hidden' }}>
-        <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--tb-hairline)', display: 'flex', alignItems: 'center', gap: 9 }}>
-          <Ico n="check-square" s={15} c="var(--tb-running)" />
-          <span style={{ fontSize: 13.5, fontWeight: 700 }}>Selected devices</span>
-        </div>
-        <div style={{ padding: 14 }}>
-          {selected.length === 0 ? (
-            <EmptyState ico="mouse-pointer-2" title="No devices selected" sub="Use the picker on the left to choose where Trail Runner should run trails." />
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              {selected.map((d) => (
-                <div key={d.id} className="tb-row" style={{ marginBottom: 0 }}>
-                  <PlatformGlyph platform={d.platform} s={18} c="var(--text-subtle-variant)" />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
-                    <div className="tb-mono tb-sub" style={{ fontSize: 11, marginTop: 2 }}>{platformLabel(d.platform)} · {d.driver || 'driver'} · {d.id}</div>
-                  </div>
-                  <Chip tone={d.connected ? 'green' : 'red'}>{d.connected ? 'Connected' : 'Offline'}</Chip>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-        <Btn kind="ghost" ico="sparkles" onClick={() => go('create')}>Create prompt</Btn>
-        <Btn kind="ghost" ico="pointer" onClick={() => go('interact')}>Interact</Btn>
-        <Btn kind="primary" ico="route" onClick={() => go('trails')}>Browse trails</Btn>
-      </div>
-    </div>
-  );
-}
-
-function DevicesScreen({ go }) {
-  const [railW, startDrag] = useResizableWidth('tb-devices-target-w', 332, 280, 520);
-  return (
-    <div className="tb-in" style={{ display: 'flex', height: '100%' }}>
-      <div style={{ width: railW, flex: '0 0 ' + railW + 'px', minWidth: 0, borderRight: '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column' }}>
-        <TargetDevicePicker go={go} />
-      </div>
-      <Splitter onDown={startDrag} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <DevicesSummaryPanel go={go} />
-      </div>
-    </div>
-  );
-}
-
-Object.assign(window, { TargetDevicePicker, DeviceToggleRow, DevicesScreen, DevicesSummaryPanel });
+Object.assign(window, { TargetDevicePicker });

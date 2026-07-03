@@ -704,6 +704,10 @@ open class TrailCommand : Callable<Int> {
         if (reportFile != null) {
           Console.info("\nReport: file://${reportFile.absolutePath}")
         }
+        val interactiveReport = reportGenerator.generateInteractiveReport(logsRepo, allNewSessionIds)
+        if (interactiveReport != null) {
+          Console.info("Interactive report: file://${interactiveReport.absolutePath}")
+        }
       } catch (e: Exception) {
         Console.error("Failed to generate report: ${e.message}")
       }

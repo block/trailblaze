@@ -55,9 +55,16 @@ async function safeText(url) {
 function useFetched(loader, deps = []) {
   const [state, setState] = React.useState({ data: null, loading: true, error: null, mock: false });
   const [version, setVersion] = React.useState(0);
+  const depsKeyRef = React.useRef(null);
   React.useEffect(() => {
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true }));
+    // Only surface `loading` on the initial load or a real deps change (a different id/target).
+    // A background reload (poll tick, manual refresh, workspace signal) keeps the current data on
+    // screen without flipping loading — otherwise every poll blinks skeletons/spinners bound to it.
+    const depsKey = JSON.stringify(deps);
+    const isReload = depsKeyRef.current === depsKey;
+    depsKeyRef.current = depsKey;
+    setState((s) => (isReload && s.data != null ? s : { ...s, loading: true }));
     Promise.resolve(loader()).then((result) => {
       if (cancelled) return;
       setState((prev) => {
@@ -69,7 +76,13 @@ function useFetched(loader, deps = []) {
       });
     }).catch((e) => {
       if (cancelled) return;
-      setState({ data: null, loading: false, error: e, mock: false });
+      // Same-deps refresh failure: keep the last good data — a transient poll error must not blank
+      // sections that were already rendering (the empty state flashes in, then data pops back).
+      // Deps-change failure: clear it — consumers gate stale data on `loading`, and leaving the
+      // previous entity's data behind would let e.g. a trail editor adopt the wrong trail's yaml.
+      setState((prev) => (isReload
+        ? { ...prev, loading: false, error: e }
+        : { data: null, loading: false, error: e, mock: false }));
     });
     return () => { cancelled = true; };
   }, [...deps, version]);
@@ -390,7 +403,7 @@ async function importSessionArchive(file) {
   return body;
 }
 
-// Lazily read a trailmap component body (toolset/waypoint/shortcut/etc.) by its
+// Lazily read a trailmap component body (trailhead/tool/etc.) by its
 // trails/config/trailmaps-relative path. Reuses the tool-source endpoint's ?path= form.
 async function fetchComponentSource(relPath) {
   // Component/tool source comes from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).

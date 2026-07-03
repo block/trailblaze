@@ -492,9 +492,6 @@ export interface TrailmapEntry {
   displayName?: string | null;
   manifestPath?: string | null;
   tools?: TrailmapComponent[];
-  toolsets?: TrailmapComponent[];
-  waypoints?: TrailmapComponent[];
-  shortcuts?: TrailmapComponent[];
   trailheads?: TrailmapComponent[];
   systemPrompts?: TrailmapComponent[];
 }

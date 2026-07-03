@@ -3,41 +3,29 @@
 // Babel strips types at load time regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-// Trailmaps section — one page per component type (Toolsets, Waypoints, Shortcuts,
-// Trailheads). Each page is a flat, cross-trailmap list of that component type,
-// grouped by trailmap, with a read-only viewer. (Tools has its own richer screen.)
+// Trailmaps section — one page per component type (Trailheads). Each page is a flat,
+// cross-trailmap list of that component type, grouped by trailmap, with a read-only
+// viewer. (Tools has its own richer screen.)
 
 const TM_COMP_TYPES = {
   tools: { ico: 'wrench', color: 'var(--text-subtle-variant)', label: 'Tools', singular: 'tool',
     def: 'Named actions a trail can call - tap, seed data, clear state.',
     help: { title: 'Actions the agent can take', tag: '3 flavors',
       body: 'A tool is one named action a trail can invoke - tap, seed an account, clear app state. Authored as typed TypeScript (.ts), a declarative .tool.yaml, or a Kotlin-backed class. The Tools page lists, edits, and tests them.' } },
-  toolsets: { ico: 'boxes', color: 'var(--tb-running)', label: 'Toolsets', singular: 'toolset',
-    def: 'A named bundle of tool IDs + drivers; a target opts in per platform via tool_sets.',
-    help: { title: 'Reusable tool bundles', foot: 'toolsets/<name>.yaml',
-      body: 'A named bundle of tool IDs plus the drivers they need. A target opts in per platform via tool_sets, so several targets can share one curated set instead of re-listing tools.' } },
-  waypoints: { ico: 'map-pin', color: 'var(--tb-pass)', label: 'Waypoints', singular: 'waypoint',
-    def: 'A named UI state defined by selector matchers that must (or must not) be present.',
-    help: { title: 'Known UI states', foot: 'waypoints/**.waypoint.yaml',
-      body: 'A named, recognizable screen - “logged-in home”, “cart open” - defined by selector matchers that must (or must not) be present. Trails assert waypoints; the agent uses them to know where it is.' } },
-  shortcuts: { ico: 'route', color: 'var(--tb-amber)', label: 'Shortcuts', singular: 'shortcut',
-    def: 'An authored navigation edge between two waypoints (from → to) - deterministic movement between known states.',
-    help: { title: 'The navigation graph', foot: '*.shortcut.yaml',
-      body: 'An authored edge between two waypoints (from → to) - the fast, deterministic way to move between known states without re-deriving every step.' } },
   trailheads: { ico: 'flag', color: 'var(--tb-pass)', label: 'Trailheads', singular: 'trailhead',
-    def: 'Bootstraps from any state to a known waypoint (→ to). Always available.',
+    def: 'A specialized tool that runs before a trail’s steps, bootstrapping the app from any state to a known starting screen (→ to).',
     help: { title: 'Entry points', foot: '*.trailhead.yaml',
-      body: 'Bootstraps from any state to a known waypoint (→ to). Always available, so the agent can always get to a known starting point.' } },
+      body: 'A trailhead is a specialized tool that runs before the steps in a trail run: it bootstraps the app from whatever state it’s in to a known starting screen (→ to), so every trail begins from the same place.' } },
   systemPrompts: { ico: 'file-text', color: 'var(--text-subtle)', label: 'System prompt', singular: 'system prompt',
     def: 'Markdown template that frames this target for the model - prepended when the agent runs.' },
 };
 const TM_FLAVOR_TINT = { scripted: 'var(--tb-pass)', yaml: 'var(--tb-running)', kotlin: 'var(--tb-amber)', unknown: 'var(--text-subtle)' };
-const TM_DIR = { tools: 'tools', toolsets: 'toolsets', waypoints: 'waypoints', shortcuts: 'shortcuts', trailheads: 'trailheads' };
-const TM_SUFFIX = { tools: '.ts', toolsets: '.yaml', waypoints: '.waypoint.yaml', shortcuts: '.shortcut.yaml', trailheads: '.trailhead.yaml' };
+const TM_DIR = { tools: 'tools', trailheads: 'trailheads' };
+const TM_SUFFIX = { tools: '.ts', trailheads: '.trailhead.yaml' };
 
 // The path within a trailmap, minus the leading component dir and the file suffix —
-// e.g. .../sample/waypoints/web/about.waypoint.yaml → "web/about". Gives waypoints
-// their platform context that a bare stem would lose.
+// e.g. .../sample/trailheads/web/home.trailhead.yaml → "web/home". Keeps the platform
+// context that a bare stem would lose.
 function tmInnerLabel(relPath, name) {
   const m = relPath.split('/trailmaps/');
   const after = m.length > 1 ? m[1] : relPath;
@@ -45,14 +33,12 @@ function tmInnerLabel(relPath, name) {
   return segs.length ? segs.join('/') + '/' + name : name;
 }
 
-// The label shown in list rows and the detail title. For shortcuts/trailheads the
+// The label shown in list rows and the detail title. For trailheads the
 // file stems repeat the trailmap and platform (e.g. android/sample_android_openDashboard),
 // which is pure noise once the row is already under the "sample" group and "android/" path —
 // strip those prefixes for display. The full id stays in the row tooltip and the Source row.
-// Toolsets are left intact: their id (e.g. sample_checkout_flow) is referenced verbatim in
-// a target's tool_sets config, so the displayed string must stay copy-accurate.
 function tmDisplayLabel(kind, trailmap, label) {
-  if (kind !== 'shortcuts' && kind !== 'trailheads') return label;
+  if (kind !== 'trailheads') return label;
   const slash = label.lastIndexOf('/');
   const dir = slash >= 0 ? label.slice(0, slash + 1) : '';
   let stem = slash >= 0 ? label.slice(slash + 1) : label;
@@ -67,11 +53,11 @@ function tmDisplayLabel(kind, trailmap, label) {
 function tmSynthComp(relPath) {
   const after = (relPath.split('/trailmaps/')[1]) || relPath;
   const trailmap = after.split('/')[0];
-  const name = (relPath.split('/').pop() || '').replace(/\.(waypoint|shortcut|trailhead)\.yaml$/, '').replace(/\.(yaml|ts|md)$/, '');
+  const name = (relPath.split('/').pop() || '').replace(/\.trailhead\.yaml$/, '').replace(/\.(yaml|ts|md)$/, '');
   return { name, relPath, flavor: null, trailmap, label: tmInnerLabel(relPath, name) };
 }
 
-function ComponentTypeScreen({ kind, go, initSel }) {
+function ComponentTypeScreen({ kind, initSel }) {
   useLucide();
   const meta = TM_COMP_TYPES[kind] || TM_COMP_TYPES.tools;
   const tmResult = TB.useTrailmaps();
@@ -110,14 +96,6 @@ function ComponentTypeScreen({ kind, go, initSel }) {
   // scope reduction against the absolute total, matching the Trails footer ("23 of 1016").
   const fullCount = React.useMemo(() => tms.reduce((n, t) => n + ((t[kind] || []).length), 0), [tms, kind]);
 
-  // Map a waypoint id (e.g. "sample/web/about") → its relPath, so shortcuts and
-  // trailheads can deep-link their from/to waypoints to the Waypoints page.
-  const waypointIndex = React.useMemo(() => {
-    const idx = {};
-    tms.forEach((t) => (t.waypoints || []).forEach((w) => { idx[t.id + '/' + tmInnerLabel(w.relPath, w.name)] = w.relPath; }));
-    return idx;
-  }, [tms]);
-
   const filtered = React.useMemo(() => {
     const ql = q.trim().toLowerCase();
     return all.filter((c) => !ql || c.label.toLowerCase().includes(ql) || c.trailmap.toLowerCase().includes(ql));
@@ -138,7 +116,7 @@ function ComponentTypeScreen({ kind, go, initSel }) {
   }, [filtered, sort]);
 
   // Re-apply whenever the routed component changes (keyed on the value, not a one-shot)
-  // — screens stay mounted, so a deep-link to a different waypoint/shortcut must move
+  // — screens stay mounted, so a deep-link to a different component must move
   // the selection. Value key avoids re-clobbering a manual pick on catalog reload.
   const appliedSel = React.useRef(null);
   React.useEffect(() => {
@@ -210,7 +188,7 @@ function ComponentTypeScreen({ kind, go, initSel }) {
             <EmptyState ico={meta.ico} title={`Select a ${meta.singular}`} sub={meta.def} />
           </div>
         )}
-        {cur && <ComponentDetail comp={cur} kind={kind} go={go} waypointIndex={waypointIndex} />}
+        {cur && <ComponentDetail comp={cur} kind={kind} />}
       </div>
       {showNew && <NewComponentModal kind={kind} trailmaps={tms.map((t) => t.id)} onClose={() => setShowNew(false)} onCreated={(rel) => { setSelPath(rel); tmResult.reload(); }} />}
       {menu && <TrailmapComponentContextMenu menu={menu} onClose={() => setMenu(null)} />}
@@ -241,7 +219,7 @@ function NewComponentModal({ kind, trailmaps, onClose, onCreated }) {
         <div className="tb-eyebrow" style={{ marginBottom: 6 }}>Trailmap</div>
         <Select full value={trailmap} onChange={(e) => setTrailmap(e.target.value)} options={trailmaps.map((t) => [t, t])} />
         <div className="tb-eyebrow" style={{ margin: '14px 0 6px' }}>Name</div>
-        <div className="tb-input"><input autoFocus placeholder={kind === 'waypoints' ? 'e.g. android/home' : 'e.g. my_' + meta.singular} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') create(); }} /></div>
+        <div className="tb-input"><input autoFocus placeholder={'e.g. my_' + meta.singular} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') create(); }} /></div>
         <div className="tb-sub" style={{ fontSize: 11, marginTop: 6 }}>Creates <span className="tb-mono">{trailmap || '<trailmap>'}/{TM_DIR[kind]}/{name.trim() || '<name>'}{TM_SUFFIX[kind]}</span></div>
         {err ? <div style={{ marginTop: 10, fontSize: 12, color: 'var(--tb-fail)' }}>{err}</div> : null}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
@@ -255,7 +233,7 @@ function NewComponentModal({ kind, trailmaps, onClose, onCreated }) {
 
 function tmParseYaml(text) { try { return window.jsyaml ? window.jsyaml.load(text) : null; } catch (_) { return null; } }
 
-function ComponentDetail({ comp, kind, go, waypointIndex }) {
+function ComponentDetail({ comp, kind }) {
   useLucide();
   const [tab, setTab] = React.useState('overview');
   const [text, setText] = React.useState(null);
@@ -280,13 +258,13 @@ function ComponentDetail({ comp, kind, go, waypointIndex }) {
         right={<Btn sm ico="folder-open" onClick={() => TB.revealToolSource({ path: comp.relPath })}>Open in Finder</Btn>}
       />
       <div className="tb-tabs" style={{ marginTop: 16, marginBottom: 18 }}>
-        {[['overview', 'Overview', 'eye'], ...(kind === 'shortcuts' || kind === 'trailheads' ? [['run', 'Run', 'play']] : []), ['edit', 'Edit', 'pencil']].map(([id, label, ico]) => (
+        {[['overview', 'Overview', 'eye'], ...(kind === 'trailheads' ? [['run', 'Run', 'play']] : []), ['edit', 'Edit', 'pencil']].map(([id, label, ico]) => (
           <div key={id} className={'tb-tab ' + (tab === id ? 'active' : '')} onClick={() => setTab(id)} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
             <Ico n={ico} s={15} />{label}
           </div>
         ))}
       </div>
-      {tab === 'overview' && body(() => <ComponentOverview comp={comp} kind={kind} text={text} go={go} waypointIndex={waypointIndex} />)}
+      {tab === 'overview' && body(() => <ComponentOverview comp={comp} kind={kind} text={text} />)}
       {tab === 'run' && body(() => <ComponentRunTab comp={comp} kind={kind} text={text} />)}
       {tab === 'edit' && body(() => (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -349,7 +327,7 @@ function ComponentRunTab({ comp, kind, text }) {
   return (
     <div style={{ marginTop: 4 }}>
       <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
-        Runs this {(TM_COMP_TYPES[kind] || {}).singular}'s {steps.length} step{steps.length === 1 ? '' : 's'} on the selected device, as-is. {kind === 'shortcuts' ? "Assumes the device is already at the shortcut's “from” state." : 'Drives from the current state to the target waypoint.'}
+        Runs this {(TM_COMP_TYPES[kind] || {}).singular}'s {steps.length} step{steps.length === 1 ? '' : 's'} on the selected device, as-is. Drives from the current state to the target screen.
       </div>
       {steps.length === 0 ? <div className="tb-sub" style={{ fontSize: 12.5 }}>No steps to run.</div> : (
         <div className="tb-card" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -382,43 +360,7 @@ function ComponentRunTab({ comp, kind, text }) {
   );
 }
 
-// A toolset lists tool IDs; the LLM-facing descriptions live in the tools catalog.
-// Join them into a clickable table so you can read what each tool does and jump to it.
-function ToolsetToolsTable({ tools, go }) {
-  useLucide();
-  const toolsResult = TB.useTools();
-  const byId = React.useMemo(() => {
-    const m = {};
-    (toolsResult.data || []).forEach((t) => { if (m[t.id] == null) m[t.id] = t; });
-    return m;
-  }, [toolsResult.data]);
-  if (!tools.length) return <div className="tb-sub" style={{ fontSize: 12.5 }}>No tools listed.</div>;
-  return (
-    <div className="tb-card" style={{ padding: 0, overflow: 'hidden' }}>
-      {tools.map((id, i) => {
-        const t = byId[id];
-        const desc = (t && (t.llmDescription || t.description)) || '';
-        return (
-          <div key={id} role="button" onClick={() => go && go('tools', { tool: id })} title={'Open ' + id + ' in Tools'}
-            style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderTop: i ? '1px solid var(--tb-hairline)' : 'none', cursor: 'pointer' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-standard)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-            <Ico n="wrench" s={13} c={t ? (TM_FLAVOR_TINT[t.flavor] || 'var(--text-subtle-variant)') : 'var(--text-subtle-variant)'} style={{ flex: '0 0 auto', marginTop: 2 }} />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div className="tb-mono" style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-standard)' }}>{id}</div>
-              {desc
-                ? <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{desc}</div>
-                : <div className="tb-sub" style={{ fontSize: 11.5, marginTop: 3, fontStyle: 'italic' }}>{toolsResult.loading ? 'Loading…' : 'No description'}</div>}
-            </div>
-            <Ico n="arrow-up-right" s={13} c="var(--text-subtle)" style={{ flex: '0 0 auto', marginTop: 2 }} />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ComponentOverview({ comp, kind, text, go, waypointIndex }) {
+function ComponentOverview({ comp, kind, text }) {
   useLucide();
   const doc = React.useMemo(() => tmParseYaml(text), [text]);
   if (!doc || typeof doc !== 'object') {
@@ -426,12 +368,7 @@ function ComponentOverview({ comp, kind, text, go, waypointIndex }) {
   }
   const desc = typeof doc.description === 'string' ? doc.description : '';
   const Desc = desc ? <p className="tb-sub" style={{ fontSize: 13, lineHeight: 1.55, margin: '0 0 18px' }}>{desc}</p> : null;
-  const wpLink = (id) => {
-    const rel = waypointIndex && waypointIndex[id];
-    return <TmPill key={id} ico="map-pin" color="var(--tb-pass)" onClick={rel ? (() => go && go('waypoints', { sel: rel })) : null} title={rel ? 'Open waypoint' : id}>{id}</TmPill>;
-  };
-  const wrap = (children) => <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{children}</div>;
-  const dump = (v) => { try { return window.jsyaml ? window.jsyaml.dump(v).trimEnd() : JSON.stringify(v, null, 2); } catch (_) { return JSON.stringify(v); } };
+  const wpLink = (id) => <TmPill key={id} ico="map-pin" color="var(--tb-pass)" title={id}>{id}</TmPill>;
 
   const renderSteps = (tools) => (Array.isArray(tools) ? tools : []).map((step, i) => {
     const k = step && typeof step === 'object' ? Object.keys(step)[0] : null;
@@ -445,60 +382,13 @@ function ComponentOverview({ comp, kind, text, go, waypointIndex }) {
     );
   });
 
-  const matcherList = (arr) => (Array.isArray(arr) ? arr : []).map((m, i) => (
-    <div key={i} className="tb-card" style={{ padding: '10px 12px', marginBottom: 8 }}>
-      {m && m.description ? <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-standard)', marginBottom: m.selector ? 6 : 0 }}>{m.description}</div> : null}
-      {m && m.selector ? <pre className="tb-mono" style={{ fontSize: 11, lineHeight: 1.5, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text-subtle-variant)' }}>{dump(m.selector)}</pre> : null}
-      {(!m || (!m.description && !m.selector)) ? <pre className="tb-mono" style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap' }}>{dump(m)}</pre> : null}
-    </div>
-  ));
-
-  if (kind === 'toolsets') {
-    const tools = Array.isArray(doc.tools) ? doc.tools : [];
-    const drivers = Array.isArray(doc.drivers) ? doc.drivers : [];
-    return (
-      <div>
-        {Desc}
-        {drivers.length ? <TmSection label="Drivers">{wrap(drivers.map((d) => <TmPill key={d} ico="cpu">{d}</TmPill>))}</TmSection> : null}
-        <TmSection label={`Tools · ${tools.length}`}><ToolsetToolsTable tools={tools.map((t) => (typeof t === 'string' ? t : (t && t.id) || String(t)))} go={go} /></TmSection>
-      </div>
-    );
-  }
-  if (kind === 'waypoints') {
-    const req = Array.isArray(doc.required) ? doc.required : [];
-    const forb = Array.isArray(doc.forbidden) ? doc.forbidden : [];
-    return (
-      <div>
-        {Desc}
-        <TmSection label={`Required · ${req.length}`}>{req.length ? matcherList(req) : <div className="tb-sub" style={{ fontSize: 12.5 }}>None.</div>}</TmSection>
-        {forb.length ? <TmSection label={`Forbidden · ${forb.length}`}>{matcherList(forb)}</TmSection> : null}
-      </div>
-    );
-  }
-  if (kind === 'shortcuts') {
-    const sc = doc.shortcut || {};
-    const tools = Array.isArray(doc.tools) ? doc.tools : [];
-    return (
-      <div>
-        {Desc}
-        <TmSection label="Navigation">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            {sc.from ? wpLink(sc.from) : <span className="tb-sub">any state</span>}
-            <Ico n="arrow-right" s={16} c="var(--text-subtle)" />
-            {sc.to ? wpLink(sc.to) : <span className="tb-sub">?</span>}
-          </div>
-        </TmSection>
-        <TmSection label={`Steps · ${tools.length}`}>{tools.length ? <div>{renderSteps(tools)}</div> : <div className="tb-sub" style={{ fontSize: 12.5 }}>No steps.</div>}</TmSection>
-      </div>
-    );
-  }
   if (kind === 'trailheads') {
     const th = doc.trailhead || {};
     const tools = Array.isArray(doc.tools) ? doc.tools : [];
     return (
       <div>
         {Desc}
-        <TmSection label="Bootstraps to">{th.to ? wpLink(th.to) : <span className="tb-sub">a known waypoint</span>}</TmSection>
+        <TmSection label="Bootstraps to">{th.to ? wpLink(th.to) : <span className="tb-sub">a known starting screen</span>}</TmSection>
         <TmSection label={`Steps · ${tools.length}`}>{tools.length ? <div>{renderSteps(tools)}</div> : <div className="tb-sub" style={{ fontSize: 12.5 }}>No steps.</div>}</TmSection>
       </div>
     );

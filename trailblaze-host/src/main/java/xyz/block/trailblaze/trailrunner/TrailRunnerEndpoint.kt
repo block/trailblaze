@@ -88,7 +88,7 @@ internal class TrailRunnerDeps(
   val eventCaptureController: ((sessionId: String, captureEvents: Boolean) -> AutoCloseable?)?,
   // Executes a single TrailblazeTool against the currently-connected device,
   // blocking until it completes; returns the tool's result string. Drives the
-  // Trailmaps "Run on device" tab (shortcuts/trailheads). Null when the daemon
+  // Trailmaps "Run on device" tab (trailheads). Null when the daemon
   // runs without an executor (e.g. the integration test harness).
   val toolExecutor: (suspend (xyz.block.trailblaze.toolcalls.TrailblazeTool, xyz.block.trailblaze.devices.TrailblazeDeviceId?) -> String)? = null,
   // Supplies the LLM model lists the settings UI should offer: the framework's

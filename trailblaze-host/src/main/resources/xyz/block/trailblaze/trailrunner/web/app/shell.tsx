@@ -22,17 +22,14 @@ const NAV = [
   { group: 'Create', items: [
     ['create', 'Prompt', 'sparkles'],
     ['interact', 'Interact', 'pointer'],
-    ['yaml', 'Run YAML', 'braces'],
-    ['import', 'Import', 'download'],
   ] },
   { group: 'Drafts', items: [['drafts', 'In Progress', 'files']] },
   { group: 'Trails', items: [['trails', 'List', 'route']] },
   { group: 'Runs', items: [['active', 'Active', 'radio'], ['completed', 'Completed', 'check-circle-2']] },
-  { group: 'Environment', items: [['devices', 'Devices', 'smartphone'], ['mcp', 'MCP', 'plug-zap']] },
 ];
 // Trailmaps is reference material, not part of the Blaze→Trails authoring flow — pin it to the
 // bottom of the rail (just above Search), visually separated by a divider.
-const TRAILMAPS = [['tools', 'Tools', 'wrench'], ['toolsets', 'Toolsets', 'boxes'], ['waypoints', 'Waypoints', 'map-pin'], ['shortcuts', 'Shortcuts', 'route'], ['trailheads', 'Trailheads', 'flag']];
+const TRAILMAPS = [['trailheads', 'Trailheads', 'flag'], ['tools', 'Tools', 'wrench']];
 // Integrations is folded into the Settings screen (reached from there), so the rail foot is just
 // Settings. The `integrations` route still exists; Settings links to it.
 const FOOT = [['settings', 'Settings', 'settings']];
@@ -305,13 +302,11 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
 
   const actions = [
     ['sparkles', 'Blaze from a prompt', '⌘B', () => { go('create'); close(); }],
-    ['braces', 'Run ad hoc YAML…', null, () => { go('yaml'); close(); }],
-    ['download', 'Import a trail YAML…', null, () => { go('import'); close(); }],
+    ['braces', 'Run ad hoc YAML…', null, () => { go('interact', { openYaml: true }); close(); }],
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
-    ['smartphone', 'Choose target & devices…', '⌘D', () => { go('devices'); close(); }],
+    ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
     ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('completed'); close(); }],
     ['wrench', 'Browse custom tools', null, () => { go('tools'); close(); }],
-    ['plug-zap', 'Open MCP', null, () => { go('mcp'); close(); }],
   ].filter(([, label]) => match(label)).map(([ico, label, kbd, fn]) => ({ ico, label, kbd, sub: null, fn }));
 
   const trailItems = (trails || [])
@@ -496,22 +491,15 @@ function App() {
     home: <HomeScreen go={go} openRun={openRun} />,
     prompt: <BlazeScreen pinnedId={pinnedId} go={go} />,
     create: <CreateScreen go={go} />,
-    interact: <RecordScreen go={go} />,
-    yaml: <RunYamlScreen go={go} initialYaml={pf('yaml').yaml} initialName={pf('yaml').name} />,
-    import: <ImportScreen go={go} />,
-    devices: <DevicesScreen go={go} />,
+    interact: <RecordScreen go={go} yamlSeed={pf('interact')} />,
     drafts: <DraftsScreen go={go} initSel={pf('drafts').sel} />,
     trails: <TrailsScreen go={go} openRun={openRun} initSel={pf('trails').sel} initMode={pf('trails').mode} />,
     tools: <ToolsScreen initTool={pf('tools').tool} go={go} />,
-    toolsets: <ComponentTypeScreen kind="toolsets" initSel={pf('toolsets').sel} go={go} />,
-    waypoints: <ComponentTypeScreen kind="waypoints" initSel={pf('waypoints').sel} go={go} />,
-    shortcuts: <ComponentTypeScreen kind="shortcuts" initSel={pf('shortcuts').sel} go={go} />,
-    trailheads: <ComponentTypeScreen kind="trailheads" initSel={pf('trailheads').sel} go={go} />,
+    trailheads: <ComponentTypeScreen kind="trailheads" initSel={pf('trailheads').sel} />,
     active: <SessionsScreen view="active" initSel={pf('active').sel} followLive={pf('active').followLive} go={go} />,
     completed: <SessionsScreen view="completed" initSel={pf('completed').sel} followLive={pf('completed').followLive} go={go} />,
     runs: <SessionsScreen view="all" initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
     integrations: <IntegrationsScreen />,
-    mcp: <SettingsScreen go={go} initTab="mcp" />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
   };
   // Fall back to Home for any route that no longer maps to a screen, so an upgrade can't strand the

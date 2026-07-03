@@ -371,7 +371,7 @@ function targetLabel(id, displayMap) {
   return (displayMap && displayMap[id]) || humanizeTarget(id);
 }
 
-// The trailmaps whose components (tools, toolsets, waypoints, shortcuts, trailheads) are in scope
+// The trailmaps whose components (tools, trailheads) are in scope
 // when `target` is active on `platform`: the target's own trailmap PLUS the generalized ones —
 // the framework core (trailblaze) and the platform's shared trailmaps (android/ios/web/mobile/
 // compose). This mirrors the agent's session-start tool composition and the trail/draft editor

@@ -420,8 +420,8 @@ function RunControls({ showAgent = true }) {
   );
 }
 
-// The shared header for every left list-rail (Tools, Toolsets, Waypoints, Shortcuts,
-// Trailheads, Devices, Trails, Active, Completed). One source of truth for the rail
+// The shared header for every left list-rail (Tools, Trailheads, Devices, Trails,
+// Active, Completed). One source of truth for the rail
 // header's padding, title size, leading-icon size, and right-action alignment so they
 // all look identical. `help` is an inline node placed after the title (e.g. a HelpDot);
 // `right` holds action buttons; `sub` is an optional one-line description under the title.

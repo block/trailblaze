@@ -397,7 +397,7 @@ function TrailheadStep({ target, platform, trailheads, selected, onSelect, detai
 // The Interact screen: connect a device, mirror it, and turn gestures into editable steps. Reads
 // top-to-bottom as state → connect/mirror → propose/confirm → tree inspector → step editing →
 // trailhead/save → render; the `// ───` dividers below mark those sections.
-function RecordScreen({ go, active }) {
+function RecordScreen({ go, active, yamlSeed }) {
   useLucide();
   const [gt] = TB.useGlobalTarget();
   const devices = TB.useDevices();
@@ -542,8 +542,22 @@ function RecordScreen({ go, active }) {
   const [appendArm, setAppendArm] = React.useState(null);
   // Intent for the next mirror tap: 'interact' drives the app; 'check' records an assertion.
   const [mode, setMode] = React.useState('interact');
-  // Right panel: the recorded trail ('steps') or the on-screen element inspector ('elements').
+  // Right panel: the recorded trail ('steps'), the on-screen element inspector ('elements'),
+  // or the ad hoc YAML runner ('runyaml' — the old standalone Run YAML screen, folded in).
   const [rightTab, setRightTab] = React.useState('steps');
+  // Ad hoc YAML runner state: paste trail YAML, dispatch it as a full run on this device.
+  const [adhocYaml, setAdhocYaml] = React.useState('');
+  const [adhocName, setAdhocName] = React.useState('');
+  const [adhocRunning, setAdhocRunning] = React.useState(false);
+  const [adhocErr, setAdhocErr] = React.useState(null);
+  // A `go('interact', { openYaml, yaml, name })` payload (the command palette's "Run ad hoc
+  // YAML…" action) opens the Run YAML tab, prefilled when it carries yaml. Keyed on the payload
+  // object itself — each navigation delivers a fresh one, so re-invoking it re-opens the tab.
+  React.useEffect(() => {
+    if (!yamlSeed || (!yamlSeed.openYaml && !yamlSeed.yaml)) return;
+    setRightTab('runyaml');
+    if (yamlSeed.yaml) { setAdhocYaml(yamlSeed.yaml); setAdhocName(yamlSeed.name || ''); setAdhocErr(null); }
+  }, [yamlSeed]);
   const [els, setEls] = React.useState([]);
   const [elsLoading, setElsLoading] = React.useState(false);
   const [elsErr, setElsErr] = React.useState(null);
@@ -936,6 +950,35 @@ function RecordScreen({ go, active }) {
   }
   const stopTest = () => { testAbortRef.current = true; };
 
+  // Dispatch the pasted ad hoc YAML as a full run on this device (same recipe as the trail and
+  // draft run flows: connect, dispatch, then follow it live in Active).
+  async function runAdhocYaml() {
+    const id = tbId();
+    if (!adhocYaml.trim() || !id || adhocRunning) return;
+    setAdhocRunning(true); setAdhocErr(null);
+    try {
+      const connected = platform === 'web' ? true : await TB.connectDevice(id);
+      if (!connected) { setAdhocErr('Could not connect to the selected device.'); return; }
+      const resp = await TB.dispatchRun(id, adhocYaml);
+      if (!resp || resp.ok === false || resp.success === false) {
+        setAdhocErr((resp && resp.error) || 'Could not start the run.');
+        return;
+      }
+      const parsed = parseTrailYaml(adhocYaml);
+      const cfg = parsed.ok ? (parsed.config || {}) : {};
+      TB.recordPendingRun({
+        title: cfg.title || adhocName || 'Pasted YAML',
+        target: cfg.target,
+        device: (device && device.name) || selectedId,
+      });
+      go('active', { followLive: Date.now() });
+    } catch (e) {
+      setAdhocErr((e && e.message) || 'Could not start the run.');
+    } finally {
+      setAdhocRunning(false);
+    }
+  }
+
   // The assembled <platform>.trail.yaml exactly as Save would write it (trailhead baked in as step 0).
   const previewYaml = React.useMemo(() => {
     if (!window.jsyaml) return '';
@@ -1051,6 +1094,32 @@ function RecordScreen({ go, active }) {
     return els.filter((e) => [e.label, e.type].some((v) => v && String(v).toLowerCase().includes(q)));
   }, [els, elQuery]);
 
+  // Ad hoc YAML runner card + its Run footer. Shared by the connected right panel's "Run YAML"
+  // tab and the disconnected view (the command palette can open this before a Record session
+  // exists — dispatching a run doesn't need the mirror, it connects the device itself).
+  const runYamlCard = (
+    <div className="tb-card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid var(--tb-hairline)' }}>
+        <Ico n="braces" s={14} c="var(--text-subtle)" />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)' }}>{adhocName || 'Trail YAML'}</span>
+        <span className="tb-sub" style={{ fontSize: 11 }}>runs on {(device && device.name) || 'the selected device'}</span>
+      </div>
+      <textarea value={adhocYaml} onChange={(e) => { setAdhocYaml(e.target.value); setAdhocErr(null); }} spellCheck={false}
+        placeholder={'- config:\n    title: "Ad hoc run"\n- prompts:\n  - step: "Open the app"'}
+        style={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', display: 'block', resize: 'none', border: 'none', outline: 'none', background: '#0a0a0a', color: '#d7dee8', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.55, tabSize: 2 }} />
+    </div>
+  );
+  const runYamlFooter = (
+    <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+      <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{adhocErr
+        ? <span role="alert" style={{ color: 'var(--tb-danger-text)' }}>{adhocErr}</span>
+        : 'Runs the pasted YAML as a full run — follow it in Active.'}</span>
+      <Btn kind="primary" ico={adhocRunning ? 'loader-2' : 'play'} spin={adhocRunning} onClick={runAdhocYaml} disabled={!adhocYaml.trim() || adhocRunning || !device}>
+        {adhocRunning ? 'Starting…' : 'Run YAML'}
+      </Btn>
+    </div>
+  );
+
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Header band — title on the left, connection cluster on the right. */}
@@ -1129,7 +1198,22 @@ function RecordScreen({ go, active }) {
             </div>
           </div>
           <Splitter onDown={startDrag} />
-          {/* Right — Context is editable now, no wait. Padding gives the active-stage ring room. */}
+          {rightTab === 'runyaml' ? (
+            /* The palette's "Run ad hoc YAML…" lands here when no Record session exists yet — the
+               runner doesn't need the mirror (dispatching connects the device itself), so show it
+               against the device selected in the chooser instead of hiding it behind Connect. */
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700 }}>Run YAML</span>
+                <span style={{ flex: 1 }} />
+                <Btn sm kind="ghost" ico="trash-2" onClick={() => { setAdhocYaml(''); setAdhocName(''); setAdhocErr(null); }} disabled={!adhocYaml.trim()}>Clear</Btn>
+                <Btn sm kind="ghost" ico="x" onClick={() => setRightTab('steps')}>Close</Btn>
+              </div>
+              {runYamlCard}
+              {runYamlFooter}
+            </div>
+          ) : (
+          /* Right — Context is editable now, no wait. Padding gives the active-stage ring room. */
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto', gap: 12, padding: 6 }}>
             <ContextCard value={context} onChange={(e) => setContext(e.target.value)} expanded={contextExpanded}
               onFocus={() => setContextFocused(true)} onBlur={() => setContextFocused(false)}
@@ -1139,6 +1223,7 @@ function RecordScreen({ go, active }) {
               <span>{connecting ? 'Connecting to the device… meanwhile, write what this trail validates above.' : 'Pick a device and connect to start recording steps. You can write the context now.'}</span>
             </div>
           </div>
+          )}
         </div>
       ) : (
         /* Connected: left = device stage + drive controls; right = the recorded trail. */
@@ -1227,12 +1312,13 @@ function RecordScreen({ go, active }) {
           <Splitter onDown={startDrag} />
           {/* Right — the recorded trail */}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {/* Tabs: the recorded trail, or the on-screen element inspector (the accessibility tree). */}
+            {/* Tabs: the recorded trail, the on-screen element inspector (the accessibility tree),
+                or the ad hoc YAML runner. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ display: 'inline-flex', border: '1px solid var(--tb-hairline)', borderRadius: 9, overflow: 'hidden' }}>
-                {[['steps', 'Steps', steps.length], ['elements', 'Elements', els.length]].map(([val, lbl, n]) => {
+                {[['steps', 'Steps', steps.length], ['elements', 'Elements', els.length], ['runyaml', 'Run YAML', null]].map(([val, lbl, n]) => {
                   const on = rightTab === val;
-                  const showN = val === 'steps' || els.length > 0;
+                  const showN = val === 'steps' || (val === 'elements' && els.length > 0);
                   return (
                     <button key={val} onClick={() => setRightTab(val)}
                       style={{ border: 'none', cursor: 'pointer', padding: '6px 13px', fontSize: 12.5, fontWeight: 650, display: 'inline-flex', alignItems: 'center', gap: 7,
@@ -1243,9 +1329,11 @@ function RecordScreen({ go, active }) {
                 })}
               </div>
               <span style={{ flex: 1 }} />
-              {rightTab === 'steps' ? (
+              {rightTab === 'steps' && (
                 <Btn sm kind={showYaml ? 'primary' : 'ghost'} ico="braces" onClick={() => setShowYaml((v) => !v)} title="Toggle the raw trail YAML view">YAML</Btn>
-              ) : <Btn sm kind="ghost" ico={elsLoading ? 'loader-2' : 'refresh-cw'} spin={elsLoading} onClick={loadTree} disabled={elsLoading}>Refresh</Btn>}
+              )}
+              {rightTab === 'elements' && <Btn sm kind="ghost" ico={elsLoading ? 'loader-2' : 'refresh-cw'} spin={elsLoading} onClick={loadTree} disabled={elsLoading}>Refresh</Btn>}
+              {rightTab === 'runyaml' && <Btn sm kind="ghost" ico="trash-2" onClick={() => { setAdhocYaml(''); setAdhocName(''); setAdhocErr(null); }} disabled={!adhocYaml.trim()}>Clear</Btn>}
             </div>
 
             {rightTab === 'steps' ? (
@@ -1321,11 +1409,15 @@ function RecordScreen({ go, active }) {
                 </div>
               </div>
               )
-            ) : (
+            ) : rightTab === 'elements' ? (
               <ElementsPanel els={elList} total={els.length} loading={elsLoading} err={elsErr} query={elQuery} setQuery={setElQuery}
                 mode={mode} disabled={busy} onHover={setHoverEl} onPick={proposeElement} />
+            ) : (
+              /* Ad hoc YAML runner — paste trail YAML and dispatch it as a full run on this device. */
+              runYamlCard
             )}
 
+            {rightTab === 'runyaml' ? runYamlFooter : (
             <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
               <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{steps.length === 0 ? 'Record or add a step to save this trail.' : (testing ? 'Running every step on the device…' : 'Test replays the steps on the device. Saves to In Progress.')}</span>
               {saveErr && <span role="alert" style={{ color: 'var(--tb-danger-text)', fontSize: 12 }}>{saveErr}</span>}
@@ -1338,6 +1430,7 @@ function RecordScreen({ go, active }) {
                 {saving ? 'Saving…' : 'Save trail'}
               </Btn>
             </div>
+            )}
           </div>
         </div>
       )}

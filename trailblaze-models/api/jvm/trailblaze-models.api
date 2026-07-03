@@ -10798,8 +10798,16 @@ public final class xyz/block/trailblaze/model/TrailExecutionResult$Failed : xyz/
 }
 
 public final class xyz/block/trailblaze/model/TrailExecutionResult$Success : xyz/block/trailblaze/model/TrailExecutionResult {
-	public static final field INSTANCE Lxyz/block/trailblaze/model/TrailExecutionResult$Success;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Lxyz/block/trailblaze/model/TrailExecutionResult$Success;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/model/TrailExecutionResult$Success;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Lxyz/block/trailblaze/model/TrailExecutionResult$Success;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getToolMessage ()Ljava/lang/String;
+	public final fun getToolStructuredContent ()Lkotlinx/serialization/json/JsonElement;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -12683,6 +12691,7 @@ public final class xyz/block/trailblaze/yaml/TrailblazeYaml {
 	public final fun getInstance ()Lcom/charleskorn/kaml/Yaml;
 	public final fun getTrailYamlItemSerializer ()Lxyz/block/trailblaze/yaml/serializers/TrailYamlItemSerializer;
 	public final fun getUnifiedTrailStepSerializer ()Lxyz/block/trailblaze/yaml/unified/UnifiedTrailStepSerializer;
+	public final fun getUnifiedTrailheadSerializer ()Lxyz/block/trailblaze/yaml/unified/UnifiedTrailStepSerializer;
 	public final fun hasActionableSteps (Ljava/util/List;)Z
 	public final fun hasRecordedSteps (Ljava/lang/String;)Z
 	public final fun hasRecordedSteps (Ljava/util/List;)Z
@@ -12939,7 +12948,8 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailStepSerializer 
 	public static final field KEY_RECORDABLE Ljava/lang/String;
 	public static final field KEY_RECORDING Ljava/lang/String;
 	public static final field KEY_STEP Ljava/lang/String;
-	public fun <init> (Lxyz/block/trailblaze/yaml/serializers/TrailblazeToolYamlWrapperSerializer;)V
+	public fun <init> (Lxyz/block/trailblaze/yaml/serializers/TrailblazeToolYamlWrapperSerializer;Z)V
+	public synthetic fun <init> (Lxyz/block/trailblaze/yaml/serializers/TrailblazeToolYamlWrapperSerializer;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
 	public fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailStep;
 	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;

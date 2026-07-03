@@ -3,65 +3,6 @@
 // Babel strips types at load time regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-const QUICK_START_SAMPLES = [
-  {
-    id: 'search-wikipedia',
-    env: 'web',
-    title: 'Search Wikipedia',
-    desc: 'Open Wikipedia, search for a topic, and verify the article content.',
-    ico: 'search',
-    yaml: `- prompts:
-    - step: Navigate to https://en.wikipedia.org
-    - step: Search for "Golden Gate Bridge"
-    - step: Verify the article page for "Golden Gate Bridge" has loaded
-    - step: Read the opening paragraph and confirm it mentions San Francisco
-    - step: Scroll down to find the "History" section
-    - step: Verify the History section is visible on the page`,
-  },
-  {
-    id: 'trailblaze-releases',
-    env: 'web',
-    title: 'Explore releases',
-    desc: 'Browse the Trailblaze releases page and inspect the latest release notes.',
-    ico: 'globe',
-    yaml: `- prompts:
-    - step: Navigate to https://github.com/block/trailblaze
-    - step: Click on the "Releases" section
-    - step: Browse the available releases
-    - step: Click on the latest release to learn more about it
-    - step: Read the release notes and describe what changed
-    - step: Find the download assets listed for the release`,
-  },
-  {
-    id: 'set-alarm',
-    env: 'mobile',
-    title: 'Set an alarm',
-    desc: 'Open Clock, create a morning alarm, and verify it appears in the list.',
-    ico: 'alarm-clock',
-    yaml: `- prompts:
-    - step: Open the Clock app
-    - step: Navigate to the Alarms tab
-    - step: Create a new alarm set for 7:30 AM
-    - step: Save the alarm
-    - step: Verify the alarm for 7:30 AM is visible in the list`,
-  },
-  {
-    id: 'add-contact',
-    env: 'mobile',
-    title: 'Add a contact',
-    desc: 'Create a sample contact and verify it is visible after saving.',
-    ico: 'contact',
-    yaml: `- prompts:
-    - step: Open the Contacts app
-    - step: Tap the button to add a new contact
-    - step: Enter "Jane" as the first name
-    - step: Enter "Doe" as the last name
-    - step: Enter "555-0123" as the phone number
-    - step: Save the contact
-    - step: Verify the contact "Jane Doe" appears in the contacts list`,
-  },
-];
-
 // One stage in the Create / Draft steps / Save pipeline shown on Home. Clickable when
 // `onClick` is given (it jumps to the matching tab). The preview inside `children` makes the
 // stage concrete: a prompt field, a recording device, a saved trail folder. Titles are kept
@@ -217,9 +158,7 @@ function HomePipeline({ go, vertical }) {
 function CreateOptions({ go }) {
   const opts = [
     { key: 'create', ico: 'sparkles', color: 'var(--tb-ai)', bg: 'rgba(181,140,255,.16)', kicker: 'Agent', title: 'Prompt', sub: 'Describe the flow in plain language. The agent proposes ordered steps you refine, then record.', cta: 'Write a prompt' },
-    { key: 'interact', ico: 'pointer', color: 'var(--tb-running)', bg: 'rgba(94,155,255,.16)', kicker: 'Hands-on', title: 'Interact', sub: 'Drive a live device yourself. Every tap, type, and check becomes an editable step as you go.', cta: 'Open a device' },
-    { key: 'yaml', ico: 'braces', color: 'var(--tb-amber)', bg: 'rgba(255,190,92,.14)', kicker: 'Ad hoc', title: 'Run YAML', sub: 'Paste or load a trail YAML definition and run it immediately on a connected device.', cta: 'Run YAML' },
-    { key: 'import', ico: 'download', color: 'var(--tb-pass)', bg: 'rgba(76,209,148,.14)', kicker: 'Import', title: 'Import', sub: 'Bring in an existing test from another source and turn it into a trail.', cta: 'Import a file' },
+    { key: 'interact', ico: 'pointer', color: 'var(--tb-running)', bg: 'rgba(94,155,255,.16)', kicker: 'Hands-on', title: 'Interact', sub: 'Drive a live device yourself. Every tap, type, and check becomes an editable step — or paste trail YAML and run it.', cta: 'Open a device' },
   ];
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
@@ -247,54 +186,6 @@ function CreateOptions({ go }) {
   );
 }
 
-function QuickStartSamples({ go }) {
-  const devices = TB.useDevices();
-  const deviceList = devices.data || [];
-  const hasWeb = deviceList.some((d) => d.platform === 'web' && d.connected !== false);
-  const hasMobile = deviceList.some((d) => (d.platform === 'android' || d.platform === 'ios') && d.connected !== false);
-  const grouped = [
-    { id: 'web', label: 'Web', ready: hasWeb, empty: 'Connect a web target from Devices to run these immediately.' },
-    { id: 'mobile', label: 'Mobile', ready: hasMobile, empty: 'Connect an Android or iOS device to run these immediately.' },
-  ];
-  const openSample = (sample) => go('yaml', { name: sample.title, yaml: sample.yaml });
-  return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      {grouped.map((group) => {
-        const samples = QUICK_START_SAMPLES.filter((s) => s.env === group.id);
-        return (
-          <div key={group.id}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <div className="tb-eyebrow">{group.label}</div>
-              <Chip tone={group.ready ? 'green' : 'amber'}>{group.ready ? 'Ready' : 'Needs device'}</Chip>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
-              {samples.map((sample) => (
-                <div key={sample.id} className="tb-card" role="button" tabIndex={0}
-                  onClick={() => openSample(sample)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSample(sample); } }}
-                  style={{ padding: 14, cursor: 'pointer', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 9, background: group.id === 'web' ? 'rgba(94,155,255,.14)' : 'rgba(76,209,148,.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
-                      <Ico n={sample.ico} s={16} c={group.id === 'web' ? 'var(--tb-running)' : 'var(--tb-pass)'} />
-                    </div>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sample.title}</div>
-                      <div className="tb-mono tb-sub" style={{ fontSize: 10.5, marginTop: 2 }}>{group.label.toLowerCase()} sample</div>
-                    </div>
-                    <Ico n="arrow-right" s={14} c="var(--text-subtle)" />
-                  </div>
-                  <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.45, flex: 1 }}>{sample.desc}</div>
-                </div>
-              ))}
-            </div>
-            {!group.ready && <div className="tb-sub" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 7 }}>{group.empty}</div>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function ReadinessPanel({ go }) {
   const status = TB.useStatus();
   const devices = TB.useDevices();
@@ -305,53 +196,50 @@ function ReadinessPanel({ go }) {
   const selectedDevices = selectedIds.map((id) => deviceList.find((d) => d.id === id)).filter(Boolean);
   const selectedConnected = selectedDevices.filter((d) => d.connected !== false).length;
   const totalTrails = TB.countTrailBundles(trails.data || []);
+  // One compact segment per check; the short value renders inline, the full guidance rides on hover.
   const rows = [
     {
       label: 'Daemon',
-      desc: status.data?.running ? `Running on port ${status.data.daemonPort || '?'}` : 'Start the daemon before running tests.',
+      value: status.data?.running ? `port ${status.data.daemonPort || '?'}` : 'not running',
+      hint: status.data?.running ? `Running on port ${status.data.daemonPort || '?'}` : 'Start the daemon before running tests.',
       ok: !!status.data?.running,
       action: 'settings',
     },
     {
       label: 'Target',
-      desc: gt && gt.target ? (gt.label || gt.target) : 'Choose the app or web target under test.',
+      value: gt && gt.target ? (gt.label || gt.target) : 'none',
+      hint: gt && gt.target ? (gt.label || gt.target) : 'Choose the app or web target under test.',
       ok: !!(gt && gt.target),
       action: 'home',
     },
     {
       label: 'Devices',
-      desc: selectedConnected ? `${selectedConnected} selected and connected` : deviceList.length ? 'Select a connected device for runs.' : 'Connect Android, iOS, or web.',
+      value: selectedConnected ? `${selectedConnected} connected` : 'none',
+      hint: selectedConnected ? `${selectedConnected} selected and connected` : deviceList.length ? 'Select a connected device for runs.' : 'Connect Android, iOS, or web.',
       ok: selectedConnected > 0,
-      action: 'devices',
+      action: 'home',
     },
     {
       label: 'Workspace',
-      desc: totalTrails ? `${totalTrails} saved trail${totalTrails === 1 ? '' : 's'} available` : 'No saved trails yet; create, import, or run a sample.',
+      value: totalTrails ? `${totalTrails} trail${totalTrails === 1 ? '' : 's'}` : 'no trails',
+      hint: totalTrails ? `${totalTrails} saved trail${totalTrails === 1 ? '' : 's'} available` : 'No saved trails yet; create a trail to get started.',
       ok: totalTrails > 0,
-      action: totalTrails > 0 ? 'trails' : 'import',
+      action: totalTrails > 0 ? 'trails' : 'create',
     },
   ];
   return (
-    <div className="tb-card" style={{ padding: 14, background: 'var(--bg-subtle)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <Ico n="activity" s={15} c="var(--tb-running)" />
-        <span style={{ fontSize: 13.5, fontWeight: 700 }}>Readiness</span>
-      </div>
-      <div style={{ display: 'grid', gap: 7 }}>
-        {rows.map((r) => (
-          <div key={r.label} role="button" tabIndex={0}
-            onClick={() => go(r.action)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(r.action); } }}
-            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 0', cursor: 'pointer', borderTop: '1px solid var(--tb-hairline)' }}>
-            <Ico n={r.ok ? 'circle-check-big' : 'circle-alert'} s={15} c={r.ok ? 'var(--tb-pass)' : 'var(--tb-amber)'} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600 }}>{r.label}</div>
-              <div className="tb-sub" style={{ fontSize: 11.5, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.desc}</div>
-            </div>
-            <Ico n="chevron-right" s={13} c="var(--text-subtle)" />
-          </div>
-        ))}
-      </div>
+    <div className="tb-card" style={{ padding: '6px 10px', background: 'var(--bg-subtle)', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      <span className="tb-eyebrow" style={{ padding: '0 6px 0 2px', flex: '0 0 auto' }}>Readiness</span>
+      {rows.map((r) => (
+        <div key={r.label} role="button" tabIndex={0} title={r.hint}
+          onClick={() => go(r.action)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(r.action); } }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 7, cursor: 'pointer', minWidth: 0 }}>
+          <Ico n={r.ok ? 'circle-check-big' : 'circle-alert'} s={13} c={r.ok ? 'var(--tb-pass)' : 'var(--tb-amber)'} />
+          <span style={{ fontSize: 11.5, fontWeight: 600, flex: '0 0 auto' }}>{r.label}</span>
+          <span className="tb-sub" style={{ fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>{r.value}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -454,11 +342,6 @@ function HomeContent({ go, openRun }) {
         <CreateOptions go={go} />
       </HomeSection>
 
-      <HomeSection ico="rocket" color="var(--tb-amber)" bg="rgba(255,190,92,.14)"
-        title="Quick start" sub="Load a sample trail into Run YAML, then run it on a connected device.">
-        <QuickStartSamples go={go} />
-      </HomeSection>
-
       {/* Section 2 — re-run something that already exists: browse the library or revisit a run. */}
       <HomeSection ico="circle-play" color="var(--tb-running)" bg="rgba(94,155,255,.16)"
         title="Run an existing test" sub="Browse your saved trails or revisit a recent run.">
@@ -467,8 +350,8 @@ function HomeContent({ go, openRun }) {
       </HomeSection>
 
       {/* First-run status — mirrors the native app's environment status without duplicating the
-          workspace chip's path details. */}
-      <div style={{ marginTop: 34, paddingTop: 18, borderTop: '1px solid var(--tb-hairline)' }}>
+          workspace chip's path details. Rendered as one slim strip. */}
+      <div style={{ marginTop: 26, paddingTop: 14, borderTop: '1px solid var(--tb-hairline)' }}>
         <ReadinessPanel go={go} />
       </div>
 

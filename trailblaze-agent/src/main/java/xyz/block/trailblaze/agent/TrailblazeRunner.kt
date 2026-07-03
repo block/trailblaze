@@ -40,9 +40,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.LlmCallStrategy
-import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
@@ -87,7 +85,6 @@ class TrailblazeRunner(
 
   private var currentSystemPrompt: String = composeSystemPrompt(
     platformPrompt = systemPromptTemplate,
-    toolSetCatalog = trailblazeToolRepo.toolSetCatalog,
   )
 
   /**
@@ -472,21 +469,13 @@ class TrailblazeRunner(
      * The base system prompt is always included. The platform/app-specific prompt
      * is appended after it. If no platform prompt is provided, the default mobile
      * prompt is used.
-     *
-     * When a [toolSetCatalog] is provided, the available toolset summary is inlined
-     * into the prompt so the LLM knows what's available without an extra round trip.
      */
     fun composeSystemPrompt(
       platformPrompt: String? = null,
-      toolSetCatalog: List<ToolSetCatalogEntry>? = null,
     ): String = buildString {
       append(baseSystemPrompt)
       append("\n\n")
       append(platformPrompt ?: defaultPlatformPrompt)
-      if (toolSetCatalog != null) {
-        append("\n\n")
-        append(TrailblazeToolSetCatalog.formatCatalogSummary(toolSetCatalog).trimEnd())
-      }
     }
 
     @Deprecated("Use composeSystemPrompt() instead", ReplaceWith("composeSystemPrompt()"))

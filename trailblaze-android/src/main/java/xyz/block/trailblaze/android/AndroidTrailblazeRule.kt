@@ -757,7 +757,7 @@ open class AndroidTrailblazeRule(
    * enrichment, session logging) the legacy on-device runner uses. Only the reasoning loop differs.
    *
    * The system prompt mirrors the host mobile path: the legacy base + default-platform prompt via
-   * [TrailblazeRunner.composeSystemPrompt], with the session's toolset catalog inlined.
+   * [TrailblazeRunner.composeSystemPrompt].
    */
   private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
     agent = trailblazeAgent,
@@ -769,9 +769,7 @@ open class AndroidTrailblazeRule(
     logger = trailblazeLoggingRule.logger,
     sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
     maxLlmCalls = maxLlmCalls,
-    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(
-      toolSetCatalog = trailblazeToolRepo.toolSetCatalog,
-    ),
+    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
   )
 
   @Deprecated("Prefer the suspend version.")

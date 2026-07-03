@@ -224,57 +224,6 @@ function SettingsScreen({ go, initTab }) {
 
   const IntegrationsBody = () => <IntegrationsScreen embedded />;
 
-  const McpBody = () => {
-    const running = !!status.data?.running;
-    const port = status.data?.daemonPort;
-    const endpoint = `http://localhost:${port}/mcp`;
-    const copy = (value) => { if (navigator.clipboard) navigator.clipboard.writeText(value); };
-    return (
-      <React.Fragment>
-        <Section title="MCP server" sub="Connect agent clients directly to the running Trailblaze daemon.">
-          <Row label="HTTP endpoint" desc="Use this from local MCP clients that support streamable HTTP.">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              {running && port ? (
-                <React.Fragment>
-                  <Val v={endpoint} />
-                  <Btn sm kind="ghost" ico="copy" onClick={() => copy(endpoint)}>Copy</Btn>
-                </React.Fragment>
-              ) : (
-                <Chip tone="red">Unavailable</Chip>
-              )}
-            </div>
-          </Row>
-          <Row label="Stdio command" desc="Use this from MCP clients that spawn a local command.">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              <Val v="./trailblaze mcp" />
-              <Btn sm kind="ghost" ico="copy" onClick={() => copy('./trailblaze mcp')}>Copy</Btn>
-            </div>
-          </Row>
-          <Row label="Daemon status">
-            <Chip tone={running ? 'green' : 'red'}>{running ? 'Running' : 'Offline'}</Chip>
-          </Row>
-        </Section>
-        <Section title="What agents can do" sub="The MCP server exposes the same Trailblaze device, trail, run, and inspection tools used by this app.">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, padding: '10px 0 4px' }}>
-            {[
-              ['smartphone', 'Devices', 'Connect to local Android, iOS, or web targets.'],
-              ['route', 'Trails', 'Read, run, and inspect workspace trails.'],
-              ['wrench', 'Tools', 'Call Trailblaze tools through the active driver.'],
-              ['gallery-vertical-end', 'Sessions', 'Inspect recent run logs, artifacts, and results.'],
-            ].map(([ico, title, desc]) => (
-              <div key={title} style={{ border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '11px 12px', background: 'var(--bg-subtle)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 600 }}>
-                  <Ico n={ico} s={15} c="var(--tb-running)" /> {title}
-                </div>
-                <div className="tb-sub" style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45 }}>{desc}</div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      </React.Fragment>
-    );
-  };
-
   const RunsBody = () => {
     if (!available) return <NotWired />;
     return (
@@ -374,7 +323,6 @@ function SettingsScreen({ go, initTab }) {
     { id: 'models', label: 'Models', ico: 'cpu', body: ModelsBody },
     { id: 'agents', label: 'Agents', ico: 'bot', body: AgentsBody },
     { id: 'integrations', label: 'Integrations', ico: 'plug', body: IntegrationsBody, badge: intgConnected || null },
-    { id: 'mcp', label: 'MCP', ico: 'plug-zap', body: McpBody },
     { id: 'runs', label: 'Run behavior', ico: 'wand-sparkles', body: RunsBody },
     { id: 'workspace', label: 'Workspace', ico: 'folder', body: WorkspaceBody },
     { id: 'appearance', label: 'Appearance', ico: 'palette', body: AppearanceBody },

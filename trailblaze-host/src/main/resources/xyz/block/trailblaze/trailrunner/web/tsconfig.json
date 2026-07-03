@@ -14,5 +14,9 @@
     "skipLibCheck": true
   },
   "include": ["app/**/*.ts"],
-  "exclude": ["**/*.test.ts", "e2e/**"]
+  // run-report-core.ts + run-report-types.d.ts are the run-report renderer's SOURCE, not app
+  // source — the app consumes their build-time transpiled run-report-core.js artifact. They have
+  // their own compiler profile + `tsc --noEmit` gate (../tsconfig.json, two dirs up), so keep them
+  // out of the app's program on both sides.
+  "exclude": ["**/*.test.ts", "e2e/**", "app/run-report-core.ts", "app/run-report-types.d.ts"]
 }

@@ -551,6 +551,53 @@ class TrailblazeMcpBridgeImpl(
     }
 
     /**
+     * Maps a blocking [TrailExecutionResult] (delivered by `DesktopYamlRunner`'s onComplete
+     * callback) to the string the `trailblaze tool` CLI prints for the HOST/Maestro path.
+     *
+     * `Success` renders the last successful tool's own payload via [renderToolResultOutput] so a
+     * read-oriented tool shows its real return value; `Failed` / `Cancelled` throw so the bridge's
+     * error path reports a non-zero exit. Pure — no bridge instance required, so it's unit-tested
+     * in isolation (mirrors [expandDelegatingToolHostSide]).
+     */
+    internal fun renderExecutionResult(
+      result: TrailExecutionResult,
+      fallback: String,
+    ): String = when (result) {
+      is TrailExecutionResult.Success -> renderToolResultOutput(
+        message = result.toolMessage,
+        structuredContent = result.toolStructuredContent,
+        fallback = fallback,
+      )
+      is TrailExecutionResult.Failed -> error("Tool execution failed: ${result.errorMessage}")
+      is TrailExecutionResult.Cancelled -> error("Tool execution cancelled")
+    }
+
+    /**
+     * Renders a tool's own result payload for callers that surface tool output to a
+     * human (the `trailblaze tool` CLI) — 1:1 with what the agent sees over MCP.
+     *
+     * Priority mirrors the [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success]
+     * contract and the `RunYamlResponse.toolStructuredContent`/`toolMessage` wire fields:
+     *  1. [structuredContent] serialized to JSON when present (the typed return value a
+     *     scripted tool rides over the MCP `structured_content` field);
+     *  2. else the text [message];
+     *  3. else the generic [fallback] acknowledgement — so an action tool (tap/swipe)
+     *     that produces no payload still reads sensibly and the pre-existing UX for
+     *     `executeTrailblazeTool` callers doesn't regress.
+     */
+    internal fun renderToolResultOutput(
+      message: String?,
+      structuredContent: JsonElement?,
+      fallback: String,
+    ): String {
+      structuredContent?.let {
+        return TrailblazeJsonInstance.encodeToString(JsonElement.serializer(), it)
+      }
+      message?.takeUnless { it.isBlank() }?.let { return it }
+      return fallback
+    }
+
+    /**
      * How long to wait for the Maestro driver during device connect. Sized to cover the
      * worst real first-connection case: an iOS XCTest setup against a device-farm simulator,
      * which can take 60+ seconds end-to-end. The previous 5s value was the source of the
@@ -1321,14 +1368,14 @@ class TrailblazeMcpBridgeImpl(
         onComplete = { completion.complete(it) },
       )
       val executionResult = withTimeout(300.seconds) { completion.await() }
-      return when (executionResult) {
-        is TrailExecutionResult.Success ->
-          "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId}"
-        is TrailExecutionResult.Failed ->
-          error("Tool execution failed: ${executionResult.errorMessage}")
-        is TrailExecutionResult.Cancelled ->
-          error("Tool execution cancelled")
-      }
+      // Surface the tool's own result (structured content, else message) so a read-oriented tool
+      // run via `trailblaze tool` on a host/Maestro device shows its payload — matching the
+      // on-device-RPC, host-local web, and iOS-AXE branches. Falls back to the generic
+      // acknowledgement for action tools that emit no payload; Failed / Cancelled throw.
+      return renderExecutionResult(
+        result = executionResult,
+        fallback = "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId}",
+      )
     }
 
     val sessionId = runYamlInternal(yaml, startNewSession = false, traceId = traceId)
@@ -1573,32 +1620,6 @@ class TrailblazeMcpBridgeImpl(
     }
     cachedScreenStates.remove(trailblazeDeviceId.instanceId)
     return lastResult
-  }
-
-
-  /**
-   * Renders a tool's own result payload for callers that surface tool output to a
-   * human (the `trailblaze tool` CLI) — 1:1 with what the agent sees over MCP.
-   *
-   * Priority mirrors the [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success]
-   * contract and the `RunYamlResponse.toolStructuredContent`/`toolMessage` wire fields:
-   *  1. [structuredContent] serialized to JSON when present (the typed return value a
-   *     scripted tool rides over the MCP `structured_content` field);
-   *  2. else the text [message];
-   *  3. else the generic [fallback] acknowledgement — so an action tool (tap/swipe)
-   *     that produces no payload still reads sensibly and the pre-existing UX for
-   *     `executeTrailblazeTool` callers doesn't regress.
-   */
-  private fun renderToolResultOutput(
-    message: String?,
-    structuredContent: JsonElement?,
-    fallback: String,
-  ): String {
-    structuredContent?.let {
-      return TrailblazeJsonInstance.encodeToString(JsonElement.serializer(), it)
-    }
-    message?.takeUnless { it.isBlank() }?.let { return it }
-    return fallback
   }
 
   /**

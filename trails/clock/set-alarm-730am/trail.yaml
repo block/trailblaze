@@ -8,7 +8,7 @@ trailhead:
   step: "Launch the AOSP Desk Clock app (com.android.deskclock) fresh, landing on the Clock tab."
   recording:
     android:
-      - clock_android_launchApp: {}
+      clock_android_launchApp: {}
 
 trail:
   - step: "Navigate to the ALARM tab"

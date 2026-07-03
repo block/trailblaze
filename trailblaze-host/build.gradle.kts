@@ -484,6 +484,30 @@ val copyScriptedToolWrapperTemplate by tasks.registering(Copy::class) {
   into(layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper/xyz/block/trailblaze/scripting"))
 }
 
+// Transpile the interactive run-report renderer from its TypeScript source into the plain-JS
+// resource its consumers load: the Trail Runner web app fetches it as a classic browser <script>,
+// and RunReportGenerator copies it beside the bun driver. `bun build --no-bundle` is a type-strip
+// only pass (no bundling, no syntax lowering), so the emitted file keeps the classic-script +
+// guarded-CommonJS shape the source is written in — including the serialized RUN_REPORT_VIEWER
+// function. bun is a hard build prerequisite repo-wide (see AGENTS.md), same as the SDK bundlers.
+val transpileRunReportCore by tasks.registering(Exec::class) {
+  group = "trailblaze"
+  description = "Transpiles run-report-core.ts into the run-report-core.js JAR resource (bun build --no-bundle)."
+  val src = layout.projectDirectory.file(
+    "src/main/resources/xyz/block/trailblaze/trailrunner/web/app/run-report-core.ts",
+  )
+  val out = layout.buildDirectory.file(
+    "generated-resources/run-report/xyz/block/trailblaze/trailrunner/web/app/run-report-core.js",
+  )
+  inputs.file(src)
+  outputs.file(out)
+  commandLine(
+    "bun", "build", src.asFile.absolutePath,
+    "--no-bundle",
+    "--outfile", out.get().asFile.absolutePath,
+  )
+}
+
 // Add generated resources to source sets
 sourceSets {
   main {
@@ -494,13 +518,26 @@ sourceSets {
     resources.srcDir(
       copyScriptedToolWrapperTemplate.map { layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper").get() },
     )
+    resources.srcDir(
+      transpileRunReportCore.map { layout.buildDirectory.dir("generated-resources/run-report").get() },
+    )
   }
 }
 
-tasks.named("processResources") {
+tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
   dependsOn(generateVersionProperties)
   dependsOn(copyTypescriptCompilerResources)
   dependsOn(copyScriptedToolWrapperTemplate)
+  dependsOn(transpileRunReportCore)
+  // The bun test co-located with run-report-core.ts (run-report-core.test.ts) lives under
+  // resources so it can `require("./run-report-core.ts")`; keep it out of the packaged JAR.
+  exclude("**/*.test.ts")
+  // TypeScript source + ambient types + tsconfig for the run-report renderer: the packaged
+  // artifact is the transpiled run-report-core.js from `transpileRunReportCore` above (the bun
+  // driver run-report-cli.ts IS packaged — bun executes TS natively).
+  exclude("**/trailrunner/web/app/run-report-core.ts")
+  exclude("**/trailrunner/web/app/run-report-types.d.ts")
+  exclude("**/xyz/block/trailblaze/tsconfig.json")
 }
 
 dependencyGuard {
