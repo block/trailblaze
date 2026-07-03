@@ -250,8 +250,7 @@ object AndroidHostAdbUtils {
    * Runs an `adb` ProcessBuilder with a timeout, force-killing it if it does not exit in time.
    * Matches the legacy `process.waitFor(timeout, SECONDS) -> destroyForcibly` pattern that protected
    * device discovery and port-forward cleanup from a wedged adb/adbd. Returns true only if the
-   * process both exited within the deadline and exited with a zero exit code — a process that ran
-   * to completion but failed (e.g. `adb forward` rejecting a bad port) is not a "clean exit".
+   * process exited within the deadline with a zero exit code.
    */
   private fun runProcessBuilderWithTimeout(
     pb: ProcessBuilder,
@@ -278,10 +277,7 @@ object AndroidHostAdbUtils {
    * the forward down via `adb forward --remove tcp:$localPort`. Mirrors [adbPortForwardLocalAbstract]
    * and [adbPortReverse], which already shell out to the binary.
    *
-   * @throws IOException if the `adb forward` command times out or exits non-zero, so callers
-   * ([adbPortForward], [diagnoseAndReAdbPortForward]) surface the failure instead of silently
-   * believing a forward is active when the device never actually got one — the exact class of
-   * silent hang this whole binary-based approach exists to fix.
+   * @throws IOException if the `adb forward` command times out or exits non-zero.
    */
   private fun installAdbForwardViaBinary(
     deviceId: TrailblazeDeviceId,
@@ -334,9 +330,7 @@ object AndroidHostAdbUtils {
       // localPort), so just drop our duplicate AutoCloseable WITHOUT running `--remove`.
       activeForwards.putIfAbsent(key, forwarder)
     } catch (e: Exception) {
-      // Fall back to the exception's class name if the message is blank, so the user-visible
-      // error stays informative instead of "null". Stack trace is still preserved via the
-      // `cause` parameter for log inspection.
+      // Fall back to the class name when message is blank, so the error isn't just "null".
       val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
       throw RuntimeException(
         "Failed to start port forwarding tcp:$localPort -> tcp:$remotePort on " +
