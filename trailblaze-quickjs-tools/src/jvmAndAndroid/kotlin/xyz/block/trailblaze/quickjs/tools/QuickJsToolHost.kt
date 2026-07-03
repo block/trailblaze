@@ -104,182 +104,182 @@ class QuickJsToolHost internal constructor(
   suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject =
     evalMutex.withLock {
       withContext(engineDispatcher) {
-      // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
-      // splicing the raw JSON output into the generated source. JSON encodes the U+2028
-      // (line separator) and U+2029 (paragraph separator) code points as themselves — valid
-      // JSON, but in classic JS source they are line terminators that break a multi-line
-      // string-spliced expression at parse time. Embedding via a JS string literal turns the
-      // bytes into characters QuickJS reads through the string-literal grammar (which treats
-      // them as ordinary characters), and `JSON.parse` reconstructs the object on the JS side.
-      val argsLiteral = jsString(JSON.encodeToString(JsonObject.serializer(), args))
-      val ctxLiteral = if (ctx != null) {
-        // Same string-literal-then-parse trick. Wrapping in `JSON.parse(<literal>)` produces
-        // an Object the handler sees as `ctx`.
-        "JSON.parse(${jsString(JSON.encodeToString(JsonObject.serializer(), ctx))})"
-      } else {
-        "undefined"
-      }
-      // Module-mode evaluation supports top-level await in QuickJS-NG; script-mode does not, and
-      // quickjs-kt's `evaluate<T>` doesn't unwrap returned Promises (returns the literal Promise
-      // object stringified). The dispatch path therefore uses module mode + writes the result to a
-      // global, then a separate script-mode read picks the result up. The [evalMutex] above
-      // makes the "evaluate then read" pair atomic so concurrent callers can't clobber each
-      // other's `__trailblazeLastResult`.
-      // The `try { JSON.stringify } catch` on the JS side guarantees the string we read back
-      // is always parseable JSON — handlers that return non-serializable values (functions,
-      // BigInts, circular structures) get a structured `{ isError: true, ... }` envelope
-      // instead of crashing the Kotlin parse step. Without this, `JSON.stringify` on a bad
-      // value emits `undefined`, the read-back returns the literal string `"undefined"`, and
-      // `JSON.parseToJsonElement` throws an opaque `JsonDecodingException` from a layer with
-      // no author context.
-      val dispatchExpr = """
-        const __registry = globalThis.__trailblazeTools || {};
-        const tool = __registry[${jsString(name)}];
-        if (!tool) {
-          // Include the registered tool names in the error so the author sees which tools
-          // actually loaded — typo, mismatched `name:` field in the descriptor, or a bundle
-          // that registered nothing at all are the three things this catches. The bundler
-          // should have ensured at least one registration; emit a more pointed hint when
-          // the registry is empty.
-          const __known = Object.keys(__registry);
-          const __hint = __known.length === 0
-            ? ' (no tools are registered on this host — the bundle may have loaded but its synthesized wrapper failed to populate `globalThis.__trailblazeTools`. Verify your scripted-tool source exports the function under the same `name:` declared in its YAML descriptor.)'
-            : ' (registered tools: ' + __known.sort().join(', ') + ')';
-          throw new Error('Tool not registered: ' + ${jsString(name)} + __hint);
-        }
-        const __args = JSON.parse(${argsLiteral});
-        const __ctx = ${ctxLiteral};
-        // Inject framework-provided resolver methods on `ctx.target`. Methods can't
-        // survive the JSON-serialization round-trip (host → JS engine), so we attach
-        // them here on the JS side after deserialization. The methods read from the
-        // same `target` data the framework already populates (appId, appIds[],
-        // and the future resolvedBaseUrl / baseUrls[] fields when the manifest schema
-        // for `target.platforms.web.base_urls:` lands). Forward-compatible: when the
-        // framework starts emitting baseUrls data, `resolveBaseUrl` automatically
-        // picks it up without any author-side change.
-        if (__ctx && __ctx.target) {
-          __ctx.target.resolveAppId = function(options) {
-            const opts = options || {};
-            const fromTarget = this.appId || (this.appIds && this.appIds[0]);
-            if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
-            if (typeof opts.defaultAppId === 'string') {
-              const trimmed = opts.defaultAppId.trim();
-              if (trimmed.length > 0) return trimmed;
-            }
-            return undefined;
-          };
-          __ctx.target.resolveBaseUrl = function(options) {
-            const opts = options || {};
-            const fromTarget = this.resolvedBaseUrl || (this.baseUrls && this.baseUrls[0]);
-            if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
-            if (typeof opts.defaultBaseUrl === 'string') {
-              const trimmed = opts.defaultBaseUrl.trim();
-              if (trimmed.length > 0) return trimmed;
-            }
-            return undefined;
-          };
-        }
-        // Wrap the handler call in a JS-side try/catch so a JS-side throw surfaces through
-        // the same `isError: true` envelope path that `toTrailblazeToolResult` already maps
-        // to `ExceptionThrown.errorMessage`. Without this catch, the throw escapes QuickJS as
-        // a Kotlin throwable whose `.message` carries the JS error message but loses
-        // `Error.stack` (the bundle filename + line/col QuickJS-NG fills in) — the author
-        // debugging from session logs sees "boom" with no breadcrumb to the source line.
-        // Surfacing the stack here keeps the existing Kotlin-side catch a fallback for
-        // anything QuickJS still routes through the throwable path (engine crashes,
-        // unhandled rejections that escape this scope, etc.).
-        let __dispatchResult;
-        let __dispatchError;
-        // Track caught-ness with an explicit boolean rather than `if (__dispatchError)`.
-        // Falsy throws (`throw 0`, `throw ''`, `throw false`, `throw null`, `throw undefined`)
-        // are legal in JS and must still surface as `isError: true` envelopes — a truthiness
-        // check would misclassify them as successes and silently swallow the failure.
-        let __dispatchCaught = false;
-        try {
-          __dispatchResult = await tool.handler(__args, __ctx);
-        } catch (e) {
-          __dispatchError = e;
-          __dispatchCaught = true;
-        }
-        if (__dispatchCaught) {
-          // `e.name` ('Error', 'TypeError', 'RangeError', …) prefixes the message so the
-          // class of failure is visible at a glance. `e.stack` is QuickJS-NG's filled-in
-          // stack with the bundle filename and line/col of every frame; missing on
-          // primitive throws (`throw "string"`, `throw 42`) which don't carry stack info,
-          // in which case we just fall back to the stringified value.
-          const __e = __dispatchError;
-          // `__isErrorObj` and `__name` both read properties off the thrown value. Each access
-          // can independently throw — `Object.defineProperty(o, 'name', { get() { throw … } })`
-          // and proxy `has` traps are both legal — so a hostile throw could re-introduce the
-          // lost-envelope failure mode this catch exists to prevent. The defensive wrappers
-          // around `String(__e)` and `__e.stack` aren't enough on their own; the property
-          // accesses ahead of them need the same treatment. `hasOwnProperty.call(...)` is used
-          // instead of `'message' in __e` so a proxy `has` trap can't intercept the check.
-          let __isErrorObj = false;
-          try {
-            __isErrorObj = __e !== null && __e !== undefined && typeof __e === 'object' &&
-              Object.prototype.hasOwnProperty.call(__e, 'message');
-          } catch (__hasOwnError) {
-            // Even `hasOwnProperty` can be tripped up by a poisoned prototype — fall back to
-            // the safer object-presence check and treat the throw as a primitive.
-            __isErrorObj = false;
-          }
-          let __name = 'Error';
-          if (__isErrorObj) {
-            try {
-              const __n = __e.name;
-              if (typeof __n === 'string' && __n.length > 0) __name = __n;
-            } catch (__nameError) {
-              // Accessor-defined `name` that throws — keep the default `'Error'` prefix.
-            }
-          }
-          // Defensive stringify: `String(obj)` itself can throw for some objects (null prototype
-          // + missing toString/valueOf, throwing accessor on toString, etc.). If it does, we'd
-          // re-introduce the very Kotlin-side-throw + lost-envelope failure mode this catch
-          // exists to prevent — flagged by automated review. Fall back to a static placeholder
-          // so the error envelope still ships rather than crashing the dispatch.
-          let __msg;
-          try {
-            __msg = __isErrorObj ? __e.message : String(__e);
-          } catch (__stringifyError) {
-            __msg = '<unstringifiable thrown value>';
-          }
-          if (__msg === undefined || __msg === null) {
-            __msg = String(__msg);
-          }
-          let __stack = '';
-          if (__isErrorObj) {
-            try {
-              if (typeof __e.stack === 'string' && __e.stack.length > 0) {
-                __stack = '\n' + __e.stack;
-              }
-            } catch (__stackError) {
-              // Accessor-defined `stack` that throws — same defense as above. Drop the stack
-              // rather than crashing; the message is still informative on its own.
-            }
-          }
-          globalThis.__trailblazeLastResult = JSON.stringify({
-            isError: true,
-            content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
-          });
+        // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
+        // splicing the raw JSON output into the generated source. JSON encodes the U+2028
+        // (line separator) and U+2029 (paragraph separator) code points as themselves — valid
+        // JSON, but in classic JS source they are line terminators that break a multi-line
+        // string-spliced expression at parse time. Embedding via a JS string literal turns the
+        // bytes into characters QuickJS reads through the string-literal grammar (which treats
+        // them as ordinary characters), and `JSON.parse` reconstructs the object on the JS side.
+        val argsLiteral = jsString(JSON.encodeToString(JsonObject.serializer(), args))
+        val ctxLiteral = if (ctx != null) {
+          // Same string-literal-then-parse trick. Wrapping in `JSON.parse(<literal>)` produces
+          // an Object the handler sees as `ctx`.
+          "JSON.parse(${jsString(JSON.encodeToString(JsonObject.serializer(), ctx))})"
         } else {
+          "undefined"
+        }
+        // Module-mode evaluation supports top-level await in QuickJS-NG; script-mode does not, and
+        // quickjs-kt's `evaluate<T>` doesn't unwrap returned Promises (returns the literal Promise
+        // object stringified). The dispatch path therefore uses module mode + writes the result to a
+        // global, then a separate script-mode read picks the result up. The [evalMutex] above
+        // makes the "evaluate then read" pair atomic so concurrent callers can't clobber each
+        // other's `__trailblazeLastResult`.
+        // The `try { JSON.stringify } catch` on the JS side guarantees the string we read back
+        // is always parseable JSON — handlers that return non-serializable values (functions,
+        // BigInts, circular structures) get a structured `{ isError: true, ... }` envelope
+        // instead of crashing the Kotlin parse step. Without this, `JSON.stringify` on a bad
+        // value emits `undefined`, the read-back returns the literal string `"undefined"`, and
+        // `JSON.parseToJsonElement` throws an opaque `JsonDecodingException` from a layer with
+        // no author context.
+        val dispatchExpr = """
+          const __registry = globalThis.__trailblazeTools || {};
+          const tool = __registry[${jsString(name)}];
+          if (!tool) {
+            // Include the registered tool names in the error so the author sees which tools
+            // actually loaded — typo, mismatched `name:` field in the descriptor, or a bundle
+            // that registered nothing at all are the three things this catches. The bundler
+            // should have ensured at least one registration; emit a more pointed hint when
+            // the registry is empty.
+            const __known = Object.keys(__registry);
+            const __hint = __known.length === 0
+              ? ' (no tools are registered on this host — the bundle may have loaded but its synthesized wrapper failed to populate `globalThis.__trailblazeTools`. Verify your scripted-tool source exports the function under the same `name:` declared in its YAML descriptor.)'
+              : ' (registered tools: ' + __known.sort().join(', ') + ')';
+            throw new Error('Tool not registered: ' + ${jsString(name)} + __hint);
+          }
+          const __args = JSON.parse(${argsLiteral});
+          const __ctx = ${ctxLiteral};
+          // Inject framework-provided resolver methods on `ctx.target`. Methods can't
+          // survive the JSON-serialization round-trip (host → JS engine), so we attach
+          // them here on the JS side after deserialization. The methods read from the
+          // same `target` data the framework already populates (appId, appIds[],
+          // and the future resolvedBaseUrl / baseUrls[] fields when the manifest schema
+          // for `target.platforms.web.base_urls:` lands). Forward-compatible: when the
+          // framework starts emitting baseUrls data, `resolveBaseUrl` automatically
+          // picks it up without any author-side change.
+          if (__ctx && __ctx.target) {
+            __ctx.target.resolveAppId = function(options) {
+              const opts = options || {};
+              const fromTarget = this.appId || (this.appIds && this.appIds[0]);
+              if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
+              if (typeof opts.defaultAppId === 'string') {
+                const trimmed = opts.defaultAppId.trim();
+                if (trimmed.length > 0) return trimmed;
+              }
+              return undefined;
+            };
+            __ctx.target.resolveBaseUrl = function(options) {
+              const opts = options || {};
+              const fromTarget = this.resolvedBaseUrl || (this.baseUrls && this.baseUrls[0]);
+              if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
+              if (typeof opts.defaultBaseUrl === 'string') {
+                const trimmed = opts.defaultBaseUrl.trim();
+                if (trimmed.length > 0) return trimmed;
+              }
+              return undefined;
+            };
+          }
+          // Wrap the handler call in a JS-side try/catch so a JS-side throw surfaces through
+          // the same `isError: true` envelope path that `toTrailblazeToolResult` already maps
+          // to `ExceptionThrown.errorMessage`. Without this catch, the throw escapes QuickJS as
+          // a Kotlin throwable whose `.message` carries the JS error message but loses
+          // `Error.stack` (the bundle filename + line/col QuickJS-NG fills in) — the author
+          // debugging from session logs sees "boom" with no breadcrumb to the source line.
+          // Surfacing the stack here keeps the existing Kotlin-side catch a fallback for
+          // anything QuickJS still routes through the throwable path (engine crashes,
+          // unhandled rejections that escape this scope, etc.).
+          let __dispatchResult;
+          let __dispatchError;
+          // Track caught-ness with an explicit boolean rather than `if (__dispatchError)`.
+          // Falsy throws (`throw 0`, `throw ''`, `throw false`, `throw null`, `throw undefined`)
+          // are legal in JS and must still surface as `isError: true` envelopes — a truthiness
+          // check would misclassify them as successes and silently swallow the failure.
+          let __dispatchCaught = false;
           try {
-            globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);
+            __dispatchResult = await tool.handler(__args, __ctx);
           } catch (e) {
+            __dispatchError = e;
+            __dispatchCaught = true;
+          }
+          if (__dispatchCaught) {
+            // `e.name` ('Error', 'TypeError', 'RangeError', …) prefixes the message so the
+            // class of failure is visible at a glance. `e.stack` is QuickJS-NG's filled-in
+            // stack with the bundle filename and line/col of every frame; missing on
+            // primitive throws (`throw "string"`, `throw 42`) which don't carry stack info,
+            // in which case we just fall back to the stringified value.
+            const __e = __dispatchError;
+            // `__isErrorObj` and `__name` both read properties off the thrown value. Each access
+            // can independently throw — `Object.defineProperty(o, 'name', { get() { throw … } })`
+            // and proxy `has` traps are both legal — so a hostile throw could re-introduce the
+            // lost-envelope failure mode this catch exists to prevent. The defensive wrappers
+            // around `String(__e)` and `__e.stack` aren't enough on their own; the property
+            // accesses ahead of them need the same treatment. `hasOwnProperty.call(...)` is used
+            // instead of `'message' in __e` so a proxy `has` trap can't intercept the check.
+            let __isErrorObj = false;
+            try {
+              __isErrorObj = __e !== null && __e !== undefined && typeof __e === 'object' &&
+                Object.prototype.hasOwnProperty.call(__e, 'message');
+            } catch (__hasOwnError) {
+              // Even `hasOwnProperty` can be tripped up by a poisoned prototype — fall back to
+              // the safer object-presence check and treat the throw as a primitive.
+              __isErrorObj = false;
+            }
+            let __name = 'Error';
+            if (__isErrorObj) {
+              try {
+                const __n = __e.name;
+                if (typeof __n === 'string' && __n.length > 0) __name = __n;
+              } catch (__nameError) {
+                // Accessor-defined `name` that throws — keep the default `'Error'` prefix.
+              }
+            }
+            // Defensive stringify: `String(obj)` itself can throw for some objects (null prototype
+            // + missing toString/valueOf, throwing accessor on toString, etc.). If it does, we'd
+            // re-introduce the very Kotlin-side-throw + lost-envelope failure mode this catch
+            // exists to prevent — flagged by automated review. Fall back to a static placeholder
+            // so the error envelope still ships rather than crashing the dispatch.
+            let __msg;
+            try {
+              __msg = __isErrorObj ? __e.message : String(__e);
+            } catch (__stringifyError) {
+              __msg = '<unstringifiable thrown value>';
+            }
+            if (__msg === undefined || __msg === null) {
+              __msg = String(__msg);
+            }
+            let __stack = '';
+            if (__isErrorObj) {
+              try {
+                if (typeof __e.stack === 'string' && __e.stack.length > 0) {
+                  __stack = '\n' + __e.stack;
+                }
+              } catch (__stackError) {
+                // Accessor-defined `stack` that throws — same defense as above. Drop the stack
+                // rather than crashing; the message is still informative on its own.
+              }
+            }
             globalThis.__trailblazeLastResult = JSON.stringify({
               isError: true,
-              content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
+              content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
             });
+          } else {
+            try {
+              globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);
+            } catch (e) {
+              globalThis.__trailblazeLastResult = JSON.stringify({
+                isError: true,
+                content: [{ type: 'text', text: 'Tool ' + ${jsString(name)} + ' returned a non-JSON-serializable value: ' + (e && e.message || String(e)) }]
+              });
+            }
           }
-        }
-      """.trimIndent()
-      quickJs.evaluate<Any?>(dispatchExpr, "call-tool-$name.js", true)
-      val resultJson = quickJs.evaluate<String>(
-        "globalThis.__trailblazeLastResult",
-        "read-result.js",
-        false,
-      )
-      JSON.parseToJsonElement(resultJson).jsonObject
+        """.trimIndent()
+        quickJs.evaluate<Any?>(dispatchExpr, "call-tool-$name.js", true)
+        val resultJson = quickJs.evaluate<String>(
+          "globalThis.__trailblazeLastResult",
+          "read-result.js",
+          false,
+        )
+        JSON.parseToJsonElement(resultJson).jsonObject
       }
     }
 
@@ -287,13 +287,24 @@ class QuickJsToolHost internal constructor(
    * Free the QuickJS engine. Idempotent; safe to call multiple times. The native free runs on
    * [engineDispatcher] (the engine's owning thread — freeing it from any other thread is the same
    * cross-thread hazard as evaluating from one), then the dedicated thread is released.
+   *
+   * Takes [evalMutex] for the whole close, not just a courtesy — without it, `shutdown()` could
+   * close `quickJs` and `engineDispatcher` while a `callTool`/`listTools` is mid-dispatch (e.g.
+   * suspended inside an async host callback). kotlinx.coroutines' `ExecutorCoroutineDispatcher`
+   * falls back to `Dispatchers.IO` when a dispatch is rejected by an already-`close()`d executor,
+   * so that in-flight call would resume on an arbitrary IO thread against an engine this thread
+   * just freed — the exact cross-thread hazard this whole class exists to eliminate. Holding
+   * [evalMutex] here guarantees `shutdown()` either runs before any call starts or waits for the
+   * current one to finish first.
    */
   suspend fun shutdown() {
     if (!isShutdown.compareAndSet(false, true)) return
-    withContext(engineDispatcher) {
-      runCatching { quickJs.close() }
+    evalMutex.withLock {
+      withContext(engineDispatcher) {
+        runCatching { quickJs.close() }
+      }
+      runCatching { engineDispatcher.close() }
     }
-    engineDispatcher.close()
   }
 
   companion object {
@@ -345,69 +356,85 @@ class QuickJsToolHost internal constructor(
       val engineDispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { r ->
         Thread(r, "quickjs-tool-engine-${engineThreadSeq.incrementAndGet()}").apply { isDaemon = true }
       }.asCoroutineDispatcher()
-      val quickJs = withContext(engineDispatcher) { QuickJs.create(engineDispatcher) }
       try {
-        withContext(engineDispatcher) {
-        if (hostBinding != null) {
-          // Async binding so JS can `await __trailblazeCall(name, argsJson)`. Returns the
-          // result-JSON string the SDK shim will JSON.parse on the JS side.
-          quickJs.asyncFunction(HOST_CALL_BINDING) { args ->
-            val name = args.getOrNull(0) as? String
-              ?: error("$HOST_CALL_BINDING called without a tool name string")
-            val argsJson = args.getOrNull(1) as? String
-              ?: error("$HOST_CALL_BINDING called without an argsJson string")
-            hostBinding.callFromBundle(name, argsJson)
+        return withContext(engineDispatcher) {
+          // `QuickJs.create` itself runs on engineDispatcher and lives inside this try/catch —
+          // not just the setup below it. A creation failure (native init/OOM) still needs to
+          // reach the outer catch so engineDispatcher gets closed; hoisting `create` above this
+          // try (as an earlier version of this function did) leaks the dedicated thread on that
+          // failure, since nothing downstream would ever call engineDispatcher.close().
+          val quickJs = QuickJs.create(engineDispatcher)
+          try {
+            if (hostBinding != null) {
+              // Async binding so JS can `await __trailblazeCall(name, argsJson)`. Returns the
+              // result-JSON string the SDK shim will JSON.parse on the JS side.
+              quickJs.asyncFunction(HOST_CALL_BINDING) { args ->
+                val name = args.getOrNull(0) as? String
+                  ?: error("$HOST_CALL_BINDING called without a tool name string")
+                val argsJson = args.getOrNull(1) as? String
+                  ?: error("$HOST_CALL_BINDING called without an argsJson string")
+                hostBinding.callFromBundle(name, argsJson)
+              }
+            }
+            // `console.log`/`error`/`warn`/`info` shim — author code from any Node-flavored
+            // source expects `console` to exist. Bundles that hit `console.foo(...)` route
+            // through the [logSink] parameter so callers control destination (logcat, daemon
+            // log, test capture). Default sink uses `println` to stderr so a developer running
+            // a host-embedded engine sees their own log lines without wiring anything; on-device
+            // callers can pass a sink that forwards to logcat. Mirrors the field-style format
+            // `BundleRuntimePrelude.CONSOLE_BINDING` uses in the legacy bundle module so the
+            // two modules' logs grep the same.
+            quickJs.function("__trailblazeLog") { args ->
+              val level = (args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: "log"
+              val message = args.getOrNull(1) as? String ?: ""
+              val sanitized = message.replace("\n", "\\n").replace("\r", "\\r")
+              logSink("[trailblaze-tools] level=$level msg=$sanitized")
+              null
+            }
+            // Console shim: each method joins its variadic args to a single string so the
+            // Kotlin-side binding receives (level, message) and not a fan-out of N positional
+            // args. Joiner mirrors the convention used by the legacy bundle module's prelude.
+            quickJs.evaluate<Any?>(
+              """
+              (function () {
+                function fmt(args) { return Array.prototype.map.call(args, function (a) {
+                  return typeof a === 'string' ? a : (function () { try { return JSON.stringify(a); } catch (e) { return String(a); } })();
+                }).join(' '); }
+                globalThis.console = globalThis.console || {
+                  log:   function () { __trailblazeLog('log',   fmt(arguments)); },
+                  error: function () { __trailblazeLog('error', fmt(arguments)); },
+                  warn:  function () { __trailblazeLog('warn',  fmt(arguments)); },
+                  info:  function () { __trailblazeLog('info',  fmt(arguments)); },
+                };
+              })();
+              """.trimIndent(),
+              "console-shim.js",
+              false,
+            )
+            // Optional engine extension (e.g. an OkHttp-backed `fetch`). Installed after the
+            // console shim and BEFORE the author bundle so a tool handler can reference whatever
+            // globals it binds. Kept as a caller-supplied hook so this module stays free of the
+            // extension's transitive deps (OkHttp etc.) — the on-device APK only pays for it if a
+            // caller actually opts in.
+            engineExtension?.install(quickJs)
+            // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
+            // here as a side effect.
+            quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)
+            QuickJsToolHost(quickJs, engineDispatcher)
+          } catch (t: Throwable) {
+            // Runs on engineDispatcher (still inside the outer withContext) — freeing the
+            // native engine from any other thread is the same cross-thread hazard `evaluate`
+            // has, so this can't be hoisted out to the outer catch below.
+            runCatching { quickJs.close() }
+            throw t
           }
         }
-        // `console.log`/`error`/`warn`/`info` shim — author code from any Node-flavored
-        // source expects `console` to exist. Bundles that hit `console.foo(...)` route
-        // through the [logSink] parameter so callers control destination (logcat, daemon
-        // log, test capture). Default sink uses `println` to stderr so a developer running
-        // a host-embedded engine sees their own log lines without wiring anything; on-device
-        // callers can pass a sink that forwards to logcat. Mirrors the field-style format
-        // `BundleRuntimePrelude.CONSOLE_BINDING` uses in the legacy bundle module so the
-        // two modules' logs grep the same.
-        quickJs.function("__trailblazeLog") { args ->
-          val level = (args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: "log"
-          val message = args.getOrNull(1) as? String ?: ""
-          val sanitized = message.replace("\n", "\\n").replace("\r", "\\r")
-          logSink("[trailblaze-tools] level=$level msg=$sanitized")
-          null
-        }
-        // Console shim: each method joins its variadic args to a single string so the
-        // Kotlin-side binding receives (level, message) and not a fan-out of N positional
-        // args. Joiner mirrors the convention used by the legacy bundle module's prelude.
-        quickJs.evaluate<Any?>(
-          """
-          (function () {
-            function fmt(args) { return Array.prototype.map.call(args, function (a) {
-              return typeof a === 'string' ? a : (function () { try { return JSON.stringify(a); } catch (e) { return String(a); } })();
-            }).join(' '); }
-            globalThis.console = globalThis.console || {
-              log:   function () { __trailblazeLog('log',   fmt(arguments)); },
-              error: function () { __trailblazeLog('error', fmt(arguments)); },
-              warn:  function () { __trailblazeLog('warn',  fmt(arguments)); },
-              info:  function () { __trailblazeLog('info',  fmt(arguments)); },
-            };
-          })();
-          """.trimIndent(),
-          "console-shim.js",
-          false,
-        )
-        // Optional engine extension (e.g. an OkHttp-backed `fetch`). Installed after the
-        // console shim and BEFORE the author bundle so a tool handler can reference whatever
-        // globals it binds. Kept as a caller-supplied hook so this module stays free of the
-        // extension's transitive deps (OkHttp etc.) — the on-device APK only pays for it if a
-        // caller actually opts in.
-        engineExtension?.install(quickJs)
-        // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
-        // here as a side effect.
-        quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)
-        }
-        return QuickJsToolHost(quickJs, engineDispatcher)
       } catch (t: Throwable) {
-        withContext(engineDispatcher) { runCatching { quickJs.close() } }
-        engineDispatcher.close()
+        // Runs on the caller's original dispatcher (we've already left `withContext`). Closing
+        // the executor is plain bookkeeping (`ExecutorService.shutdown()`), not a native call,
+        // so it doesn't need engineDispatcher confinement — and covers every failure above,
+        // including `QuickJs.create` itself throwing before `quickJs` ever existed to close.
+        runCatching { engineDispatcher.close() }
         throw t
       }
     }

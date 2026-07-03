@@ -7,10 +7,13 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -446,6 +449,28 @@ class QuickJsToolHostTest {
   }
 
   @Test
+  fun `connect closes its dedicated engine thread when it fails, not just the engine`() = runBlocking {
+    // `connect()` mints a dedicated single-thread `engineDispatcher` before the engine even
+    // exists, so closing `quickJs` alone on failure isn't enough — regression coverage for a
+    // bug where `QuickJs.create` (and, by extension, the whole per-engine setup) ran outside
+    // the try/catch that closes `engineDispatcher`, leaking the dedicated daemon thread on any
+    // connect() failure (a real risk for a long-running daemon that retries failed connects).
+    val before = Thread.getAllStackTraces().keys.count { it.name.startsWith("quickjs-tool-engine-") }
+    runCatching {
+      QuickJsToolHost.connect("this is not valid JavaScript ((", bundleFilename = "broken.js")
+    }
+    // Executor shutdown terminates its worker thread asynchronously; poll briefly rather than
+    // asserting immediately, which would flake on a slow CI runner.
+    val settled = withTimeoutOrNull(2_000) {
+      while (Thread.getAllStackTraces().keys.count { it.name.startsWith("quickjs-tool-engine-") } > before) {
+        delay(20)
+      }
+      true
+    }
+    assertTrue(settled == true, "connect() must not leak its dedicated engine thread when it fails")
+  }
+
+  @Test
   fun `callTool surfaces handler throws as isError envelope with name message and JS stack`() = runBlocking {
     // Pin the JS stack-preservation contract. A handler throw is caught on the JS side and
     // surfaced through the same `isError: true` envelope as a handler-returned error, but
@@ -767,6 +792,58 @@ class QuickJsToolHostTest {
     if (secondShutdown.isFailure) {
       fail("shutdown is not idempotent: second call threw ${secondShutdown.exceptionOrNull()}")
     }
+  }
+
+  @Test
+  fun `shutdown waits for an in-flight callTool instead of racing it`() = runBlocking {
+    // Regression test for the cross-thread hazard `engineDispatcher` confinement exists to
+    // prevent, reintroduced via a different door: `shutdown()` used to close `quickJs` and
+    // `engineDispatcher` without taking `evalMutex`, so it could run concurrently with a
+    // `callTool` that was suspended mid-dispatch (e.g. inside an async host callback, exactly
+    // the `await ctx.tools.*` shape from the original bug report). kotlinx.coroutines'
+    // `ExecutorCoroutineDispatcher` falls back to `Dispatchers.IO` when a task is submitted to
+    // an already-`close()`d executor, so the stranded `callTool` would resume on an arbitrary
+    // IO thread against an engine `shutdown()` just freed. `shutdown()` now takes `evalMutex`
+    // for its whole close, so it must block until the in-flight call finishes.
+    val handlerStarted = CompletableDeferred<Unit>()
+    val releaseHandler = CompletableDeferred<Unit>()
+    val binding = HostBinding { _, _ ->
+      handlerStarted.complete(Unit)
+      releaseHandler.await()
+      """{"content":[]}"""
+    }
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["slow"] = {
+        name: "slow",
+        spec: {},
+        handler: async () => {
+          await globalThis.__trailblazeCall("inner", "{}");
+          return { content: [] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+
+    val callToolResult = async { host.callTool("slow", JsonObject(emptyMap())) }
+    handlerStarted.await()
+
+    // Issued while `callTool` is suspended inside the async host callback, still holding
+    // `evalMutex`. It must block rather than closing the engine out from under that call.
+    val shutdownJob = async { host.shutdown() }
+    val shutdownFinishedEarly = withTimeoutOrNull(200) { shutdownJob.await() } != null
+    assertTrue(!shutdownFinishedEarly, "shutdown() must not complete while a callTool is still in flight")
+
+    releaseHandler.complete(Unit)
+    val result = withTimeoutOrNull(5_000) { callToolResult.await() }
+    assertNotNull(result, "callTool should complete normally once its handler is released")
+    assertEquals(0, (result["content"] as JsonArray).size)
+
+    // Now that the in-flight call is done, shutdown proceeds and completes cleanly.
+    withTimeoutOrNull(5_000) { shutdownJob.await() }
+      ?: fail("shutdown() should have completed once the in-flight callTool released evalMutex")
   }
 
   @Test
