@@ -56,6 +56,18 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 data class AppTargetYamlConfig(
   val id: String,
   @SerialName("display_name") val displayName: String,
+  /**
+   * Optional workspace-relative path to an icon rendered beside this target in the TrailRunner
+   * UI (Android launcher icon / web favicon). When null, the UI may fall back to a filename
+   * convention under the shared icons folder — see [TargetIconConvention]. An explicit value
+   * here overrides that convention.
+   *
+   * Authored on the trailmap `target:` block
+   * ([TrailmapTargetConfig.icon][xyz.block.trailblaze.config.project.TrailmapTargetConfig.icon])
+   * and threaded onto this resolved config by
+   * [TrailmapTargetConfig.toAppTargetYamlConfig][xyz.block.trailblaze.config.project.TrailmapTargetConfig.toAppTargetYamlConfig].
+   */
+  val icon: String? = null,
   val platforms: Map<String, PlatformConfig>? = null,
   @SerialName("has_custom_ios_driver") val hasCustomIosDriver: Boolean = false,
   /**

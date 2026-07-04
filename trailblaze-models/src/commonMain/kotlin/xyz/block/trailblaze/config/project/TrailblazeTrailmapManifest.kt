@@ -216,6 +216,15 @@ data class TrailblazeTrailmapManifest(
 data class TrailmapTargetConfig(
   @SerialName("id") val id: String? = null,
   @SerialName("display_name") val displayName: String,
+  /**
+   * Optional workspace-relative path to an icon shown beside this target in the TrailRunner UI
+   * (Android launcher icon / web favicon). Threaded onto the generated [AppTargetYamlConfig.icon]
+   * by [toAppTargetYamlConfig]. When absent, the UI may fall back to the filename convention in
+   * [xyz.block.trailblaze.config.TargetIconConvention] (`android_<app_id>.png` /
+   * `favicon_<host>.png` under the shared icons folder), so simply populating that folder fills the
+   * first-run target list without per-target authoring. An explicit value overrides the convention.
+   */
+  @SerialName("icon") val icon: String? = null,
   @SerialName("platforms") val platforms: Map<String, PlatformConfig>? = null,
   @SerialName("has_custom_ios_driver") val hasCustomIosDriver: Boolean = false,
   /**
@@ -247,6 +256,7 @@ data class TrailmapTargetConfig(
     AppTargetYamlConfig(
       id = id ?: defaultId,
       displayName = displayName,
+      icon = icon,
       platforms = platforms,
       hasCustomIosDriver = hasCustomIosDriver,
       systemPrompt = resolvedSystemPrompt,
