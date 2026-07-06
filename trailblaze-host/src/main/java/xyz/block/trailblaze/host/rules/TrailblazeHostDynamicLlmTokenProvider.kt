@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.rules
 
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.executor.clients.anthropic.AnthropicClientSettings
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
@@ -11,6 +12,7 @@ import io.ktor.client.HttpClient
 import xyz.block.trailblaze.host.llm.OpenAICompatibleLlmClientFactory
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.LlmProviderType
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
@@ -101,6 +103,12 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
       when (trailblazeLlmProvider) {
         TrailblazeLlmProvider.ANTHROPIC -> AnthropicLLMClient(
           apiKey = apiKey,
+          settings = AnthropicClientSettings(
+            modelVersionsMap = BuiltInLlmModelRegistry
+              .modelListForProvider(TrailblazeLlmProvider.ANTHROPIC)
+              ?.entries.orEmpty()
+              .associate { it.toKoogLlmModel() to it.modelId },
+          ),
           httpClientFactory = httpClientFactory,
         )
 

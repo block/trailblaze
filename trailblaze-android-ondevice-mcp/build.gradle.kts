@@ -55,6 +55,7 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.ktor.server.content.negotiation)
+  implementation(libs.koog.prompt.executor.anthropic)
   implementation(libs.koog.prompt.executor.openai)
   implementation(libs.koog.prompt.executor.ollama)
   // Koog 1.0.0: LLM clients no longer accept a raw Ktor `HttpClient`; the androidTest source

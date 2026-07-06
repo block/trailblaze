@@ -31,6 +31,7 @@ To see more content BELOW (scroll down), use 'UP' (finger swipes upward).
 To see more content ABOVE (scroll up), use 'DOWN' (finger swipes downward).
 Default is 'DOWN'.""",
   )
+  @Serializable(with = LenientSwipeDirectionSerializer::class)
   val direction: SwipeDirection = SwipeDirection.DOWN,
   @param:LLMDescription(
     """

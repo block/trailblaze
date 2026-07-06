@@ -48,6 +48,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   @param:LLMDescription("A 0-based index to disambiguate multiple views with the same text. Default is '0'.")
   val index: Int = 0,
   @param:LLMDescription("Direction to scroll. Default is 'DOWN'.")
+  @Serializable(with = LenientScrollDirectionSerializer::class)
   val direction: ScrollDirection = ScrollDirection.DOWN,
   @param:LLMDescription("Percentage of element visible in viewport. Default is '100'.")
   val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,

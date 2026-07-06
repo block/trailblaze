@@ -2,6 +2,8 @@ package xyz.block.trailblaze.android
 
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.executor.clients.anthropic.AnthropicClientSettings
+import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
@@ -178,6 +180,23 @@ object AndroidLlmClientResolver {
               OpenAIClientSettings(
                 baseUrl = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
               ),
+            httpClientFactory = httpClientFactory,
+          ),
+        )
+      }
+
+      // Anthropic
+      getToken(TrailblazeLlmProvider.ANTHROPIC)?.let { key ->
+        put(
+          LLMProvider.Anthropic,
+          AnthropicLLMClient(
+            apiKey = key,
+            settings = AnthropicClientSettings(
+              modelVersionsMap = BuiltInLlmModelRegistry
+                .modelListForProvider(TrailblazeLlmProvider.ANTHROPIC)
+                ?.entries.orEmpty()
+                .associate { it.toKoogLlmModel() to it.modelId },
+            ),
             httpClientFactory = httpClientFactory,
           ),
         )
