@@ -220,7 +220,7 @@ private fun isInTimeWindow(timestampMs: Long, startMs: Long?, endMs: Long?): Boo
   }
 }
 
-private fun buildScreenshotTimelineItems(
+internal fun buildScreenshotTimelineItems(
   logs: List<TrailblazeLog>,
 ): List<ScreenshotTimelineItem> {
   // Build traceId → (toolName, trailblazeTool) lookup from tool logs

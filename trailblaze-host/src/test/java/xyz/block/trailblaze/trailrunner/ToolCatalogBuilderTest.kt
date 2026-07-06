@@ -7,6 +7,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -28,7 +29,7 @@ class ToolCatalogBuilderTest {
   // assume-skip gate `ScriptedToolDefinitionAnalyzerTest` uses so this runs wherever that suite does
   // (Hermit-pinned `bun` + a `bun install`'d SDK) and skips cleanly elsewhere instead of failing red.
   private fun assumeAnalyzerRunnable() {
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary()
+    val bun = BunBinaryResolver.resolveBunBinary()
     assumeTrue("bun binary not found on PATH — see ScriptedToolDefinitionAnalyzerTest.", bun != null && bun.isFile)
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
     assumeTrue("SDK dir not resolvable.", sdkDir != null && sdkDir.isDirectory)

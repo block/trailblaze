@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.tabs.session
 enum class SessionViewMode {
   Timeline,
   Grid,
+  Storyboard,
   LlmUsage,
   Recording;
 

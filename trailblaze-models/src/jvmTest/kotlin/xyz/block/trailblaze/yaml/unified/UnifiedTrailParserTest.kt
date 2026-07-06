@@ -46,6 +46,38 @@ class UnifiedTrailParserTest {
   }
 
   @Test
+  fun `config parses per-classifier skip map and flat tags list`() {
+    val src =
+      """
+      config:
+        target: myapp
+        tags: [smoke, flaky]
+        skip:
+          android: "blocked on #123"
+          ios: "not implemented on iOS yet"
+      trail:
+        - step: Do the thing
+          recording:
+            android:
+              - launchApp:
+                  appId: com.example.myapp
+      """.trimIndent()
+
+    val parsed = yaml.decodeUnifiedTrail(src)
+    assertEquals(listOf("smoke", "flaky"), parsed.config.tags)
+    assertEquals(
+      mapOf("android" to "blocked on #123", "ios" to "not implemented on iOS yet"),
+      parsed.config.skip,
+    )
+
+    // Device-agnostic config extraction (the CLI pre-flight skip gate) lowers the per-classifier
+    // skip map to a v1 scalar: skipped if any classifier declares a reason. Tags lower verbatim.
+    val v1 = yaml.extractTrailConfig(src)
+    assertEquals("blocked on #123", v1?.skip)
+    assertEquals(listOf("smoke", "flaky"), v1?.tags)
+  }
+
+  @Test
   fun `full-shape the unified format — multi-device classifier hierarchy + recordable false + explicit empty`() {
     val parsed = yaml.decodeUnifiedTrail(
       """

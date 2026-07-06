@@ -498,6 +498,52 @@ class AndroidHostAdbUtilsTest {
     assertThat(calls).isEqualTo(2)
   }
 
+  // ── mismatchedPackageFromInstallError (signing-key-change recovery) ──────
+  //
+  // A same-package upgrade across signing identities fails with
+  // INSTALL_FAILED_UPDATE_INCOMPATIBLE; installApkFile recovers by uninstalling the named package
+  // and reinstalling clean. This parser is the pure seam that decides whether to recover and which
+  // package to uninstall — so a genuine, non-recoverable failure still surfaces unchanged.
+
+  @Test
+  fun mismatchedPackageParsedFromSignatureMismatchFailure() {
+    val message =
+      "Install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: " +
+        "Existing package com.example.app signatures do not match newer version; ignoring!]"
+    assertThat(AndroidHostAdbUtils.mismatchedPackageFromInstallError(message))
+      .isEqualTo("com.example.app")
+  }
+
+  @Test
+  fun mismatchedPackageParsedWithoutExplicitFailureCode() {
+    // Some Android builds surface the phrasing without the INSTALL_FAILED_UPDATE_INCOMPATIBLE token.
+    val message = "Existing package com.example.app signatures do not match newer version; ignoring!"
+    assertThat(AndroidHostAdbUtils.mismatchedPackageFromInstallError(message))
+      .isEqualTo("com.example.app")
+  }
+
+  @Test
+  fun nonSignatureInstallFailureReturnsNull() {
+    // A non-recoverable install failure must NOT trigger an uninstall-then-reinstall.
+    assertThat(
+      AndroidHostAdbUtils.mismatchedPackageFromInstallError("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]"),
+    ).isNull()
+  }
+
+  @Test
+  fun nullInstallErrorMessageReturnsNull() {
+    assertThat(AndroidHostAdbUtils.mismatchedPackageFromInstallError(null)).isNull()
+  }
+
+  @Test
+  fun signatureMismatchWithoutANamedPackageReturnsNull() {
+    // The mismatch marker is present but no package is named to uninstall — decline rather than
+    // guess, so the original failure surfaces instead.
+    assertThat(
+      AndroidHostAdbUtils.mismatchedPackageFromInstallError("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"),
+    ).isNull()
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────
 
   /** Tiny env-var fixture so callers can write `env("KEY" to "value", ...)`. */

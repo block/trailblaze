@@ -211,7 +211,7 @@ class FrameworkToolDispatchTest {
     // on the context to route nested-tool dispatch through their driver-specific path
     // (logging / recording / Playwright's PlaywrightExecutableTool wrap / etc.). The bridge
     // MUST honor that hook — calling `executable.execute(this)` directly would bypass the
-    // driver layer, so a Kotlin tool composing `android_grantPermission` from a Maestro-
+    // driver layer, so a Kotlin tool composing `android_grantPermissions` from a Maestro-
     // driven session would skip the agent's logging/recording wrapper and a Playwright tool
     // composed from Kotlin would error out (PlaywrightExecutableTool refuses direct
     // execute()). Mirrors the same pattern in `JsScriptingCallbackDispatcher`.

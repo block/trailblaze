@@ -31,6 +31,7 @@ import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterVisibility
 import xyz.block.trailblaze.toolcalls.toTrailblazeToolDescriptorWithSource
 import xyz.block.trailblaze.toolcalls.trailblazeToolSourceForScript
 import xyz.block.trailblaze.util.Console
@@ -910,6 +911,12 @@ class ToolDiscoveryToolSet(
 
     properties.forEach { (name, schema) ->
       val schemaObj = schema as? JsonObject
+      val flattenedUnion = schemaObj?.let { discriminatedUnionParameters(name, it, name in requiredNames) }
+      if (flattenedUnion != null) {
+        required += flattenedUnion.first
+        optional += flattenedUnion.second
+        return@forEach
+      }
       val enumValues = (schemaObj?.get("enum") as? JsonArray)
         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
       val descriptor = TrailblazeToolParameterDescriptor(
@@ -939,6 +946,83 @@ class ToolDiscoveryToolSet(
       source = trailblazeToolSourceForScript(tool.script),
     )
   }
+
+  private fun discriminatedUnionParameters(
+    parentName: String,
+    schema: JsonObject,
+    parentRequired: Boolean,
+  ): Pair<List<TrailblazeToolParameterDescriptor>, List<TrailblazeToolParameterDescriptor>>? {
+    val variants = (schema["anyOf"] as? JsonArray)
+      ?.mapNotNull { it as? JsonObject }
+      ?: return null
+    if (variants.isEmpty()) return null
+
+    val typeValues = mutableListOf<String>()
+    val typeDescriptions = mutableListOf<String>()
+    val associated = LinkedHashMap<String, AssociatedUnionParameter>()
+    for (variant in variants) {
+      val properties = variant["properties"] as? JsonObject ?: return null
+      val typeSchema = properties["type"] as? JsonObject ?: return null
+      val typeValue = (typeSchema["const"] as? JsonPrimitive)?.contentOrNull ?: return null
+      typeValues += typeValue
+      (typeSchema["description"] as? JsonPrimitive)?.contentOrNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { typeDescriptions += "$typeValue: $it" }
+
+      properties.forEach { (childName, childSchema) ->
+        if (childName == "type") return@forEach
+        val parameterName = "$parentName.$childName"
+        associated.getOrPut(parameterName) {
+          AssociatedUnionParameter(
+            descriptor = TrailblazeToolParameterDescriptor(
+              name = "$parentName.$childName",
+              type = jsonSchemaTypeLabel(childSchema),
+              description = (childSchema as? JsonObject)
+                ?.get("description")
+                ?.let { it as? JsonPrimitive }
+                ?.contentOrNull,
+              validValues = ((childSchema as? JsonObject)?.get("enum") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
+            ),
+          )
+        }.visibleForValues += typeValue
+      }
+    }
+
+    val typeParam = TrailblazeToolParameterDescriptor(
+      name = "$parentName.type",
+      type = "String",
+      description = buildString {
+        append((schema["description"] as? JsonPrimitive)?.contentOrNull ?: "Select the $parentName variant.")
+        if (typeDescriptions.isNotEmpty()) {
+          append(" ")
+          append(typeDescriptions.joinToString(" "))
+        }
+      },
+      validValues = typeValues,
+    )
+
+    val required = if (parentRequired) listOf(typeParam) else emptyList()
+    val optional = buildList {
+      if (!parentRequired) add(typeParam)
+      associated.values.forEach { associatedParam ->
+        add(
+          associatedParam.descriptor.copy().also {
+            it.visibleWhen = TrailblazeToolParameterVisibility(
+              parameterName = typeParam.name,
+              values = associatedParam.visibleForValues.distinct(),
+            )
+          },
+        )
+      }
+    }
+    return required to optional
+  }
+
+  private data class AssociatedUnionParameter(
+    val descriptor: TrailblazeToolParameterDescriptor,
+    val visibleForValues: MutableList<String> = mutableListOf(),
+  )
 
   private fun jsonSchemaTypeLabel(schema: JsonElement): String {
     val obj = schema as? JsonObject ?: return "Any"

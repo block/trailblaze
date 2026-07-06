@@ -1054,16 +1054,58 @@ object AndroidHostAdbUtils {
   }
 
   /**
+   * Parses the conflicting package name out of an `adb install` failure caused by a signing-key
+   * change. Android rejects a same-package upgrade across signing identities with
+   * `INSTALL_FAILED_UPDATE_INCOMPATIBLE` and a message like
+   * `Existing package <pkg> signatures do not match newer version; ignoring!`.
+   *
+   * Returns the package to uninstall-then-reinstall, or null when the failure is NOT a signature
+   * mismatch (or the message doesn't name a package) — so genuine install failures still surface
+   * unchanged instead of triggering a spurious uninstall.
+   */
+  internal fun mismatchedPackageFromInstallError(errorMessage: String?): String? {
+    val message = errorMessage ?: return null
+    val isSignatureMismatch = message.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") ||
+      message.contains("signatures do not match")
+    if (!isSignatureMismatch) return null
+    return Regex("""Existing package (\S+) signatures do not match""")
+      .find(message)?.groupValues?.getOrNull(1)
+  }
+
+  /**
    * Installs an APK file via dadb (`pm install` over the adb wire protocol). Returns true on
    * success, false on failure (with the failure reason logged).
+   *
+   * If the install is rejected because the package is already installed with a *different signing
+   * key* (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), a plain `-r` upgrade can never succeed and would
+   * loop forever — the only recovery is to uninstall the stale package and install clean. The
+   * failure names the conflicting package, so this self-heals: uninstall that package, then retry
+   * the install once. (This happens when a rebuilt runner APK is signed with a new key while an
+   * older-key copy is still on the device.)
    */
   fun installApkFile(apkFile: File, trailblazeDeviceId: TrailblazeDeviceId): Boolean = try {
     Console.log("adb install ${apkFile.absolutePath}")
     withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t") }
     true
   } catch (e: Exception) {
-    Console.log("APK installation failed: ${e.message}")
-    false
+    val stalelySignedPackage = mismatchedPackageFromInstallError(e.message)
+    if (stalelySignedPackage != null) {
+      Console.log(
+        "APK install rejected: '$stalelySignedPackage' is already installed with a different " +
+          "signing key — uninstalling the stale package and reinstalling clean",
+      )
+      uninstallApp(trailblazeDeviceId, stalelySignedPackage)
+      try {
+        withDadb(trailblazeDeviceId) { it.install(apkFile, "-r", "-t") }
+        true
+      } catch (retry: Exception) {
+        Console.log("APK reinstall after uninstalling the stale package still failed: ${retry.message}")
+        false
+      }
+    } else {
+      Console.log("APK installation failed: ${e.message}")
+      false
+    }
   }
 
   // Single-byte boundaries used by the streaming line-decoder. Newline (`\n`) and the optional

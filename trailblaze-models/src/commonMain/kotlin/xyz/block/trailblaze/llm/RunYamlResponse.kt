@@ -47,6 +47,17 @@ data class RunYamlResponse(
   val memorySnapshot: Map<String, String> = emptyMap(),
 
   /**
+   * Keys that on-device tools EXPLICITLY deleted (`ctx.memory.delete(...)`) during this RPC. The
+   * host applies these as removals on top of the merged [memorySnapshot], so an explicit deletion
+   * of a host-seeded key propagates back — whereas a key merely absent from [memorySnapshot] is
+   * preserved (the merge that fixed a remembered value being wiped between steps).
+   *
+   * Defaults to `emptyList()` for back-compat: an older device omits the field and the host applies
+   * no deletions. Can only be non-empty when [memorySnapshot] can be — see the init-block require.
+   */
+  val memoryDeletions: List<String> = emptyList(),
+
+  /**
    * The last successfully-executed tool's [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success.message]
    * payload, mirrored back to the host so scripted-tool authors composing dual-mode primitives
    * (`android_adbShell`, `android_sendBroadcast`, `mobile_listInstalledApps`) via
@@ -130,6 +141,10 @@ data class RunYamlResponse(
     require(success != null || memorySnapshot.isEmpty()) {
       "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry a " +
         "memorySnapshot — memory sync requires a completion event."
+    }
+    require(success != null || memoryDeletions.isEmpty()) {
+      "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry " +
+        "memoryDeletions — memory sync requires a completion event."
     }
     require(success != null || (toolMessage == null && toolStructuredContent == null)) {
       "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry a tool " +

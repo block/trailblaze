@@ -729,3 +729,48 @@ This changes the step shape that shipped with the unified format (classifier key
 grouped under `recording:`; `step` now optional; `config` optional; trailhead reworked to a single tool
 per platform). Only a handful of files use the unified format and there are no external users, so this
 is a **hard cut** — migrate the few files, delete the old shape, no shim.
+
+## Revision — 2026-07-02: `config.skip` (per-classifier) and `config.tags` restored
+
+Migrating the first real batch of legacy trails into the unified format surfaced two `TrailConfig`
+fields the initial `UnifiedTrailConfig` had dropped: `skip:` (gate a trail off a known blocker —
+parsed and validated but not executed) and `tags:` (free-form grouping/filter labels). Neither had a
+home in the unified config, so a straight migration would have silently un-skipped every gated trail.
+Both are added back:
+
+### `config.skip` — per-classifier, closest-wins
+
+`skip:` is a **map of device-classifier → reason**, resolved with the same
+[`TrailblazeClassifierLineage`](#classifier-hierarchy-resolution) the recordings and the `devices:`
+driver pins use — so a trail can be skipped on one device family while still running on another.
+
+```yaml
+config:
+  target: myapp
+  skip:
+    android: "blocked on #123 — flaky offline banner"
+    # ios: not listed → still runs on iOS
+```
+
+- Resolved closest-wins for the device under test, then lowered to the single v1 `TrailConfig.skip`
+  so every existing skip consumer (`firstSkipReason`, the CLI's `planTrailExecution` pre-flight,
+  the runtime rules) is unchanged.
+- **Device-agnostic fallback:** a caller with no classifiers at all counts the trail as skipped if
+  *any* classifier declares a non-blank reason, so the skip gate still fires. The CLI planner
+  resolves classifiers from `--device`, or — for a `--driver`-only run with no `--device` — from the
+  driver's platform, so a device- or driver-pinned run gets the precise per-classifier verdict
+  (e.g. `--driver=IOS_HOST` won't be halted by an `android`-only skip). The any-skip fallback only
+  applies when neither `--device` nor `--driver` is set.
+- Blank reasons (`skip: {android: ""}`) are treated as not-skipped, matching the v1 scalar semantics.
+
+Per-classifier (not a scalar) because everything else per-device in this format already is; a
+single scalar couldn't express "skip Android but keep running iOS."
+
+### `config.tags` — flat, trail-level
+
+`tags:` is a flat `List<String>`, identical to v1. Tags name the *whole* test (`smoke`, `flaky`),
+not a device, so they lower verbatim with no per-classifier resolution and feed the CLI's `--tags`
+filter for unified trails exactly as they did for v1.
+
+Both are additive optional fields on `UnifiedTrailConfig`; absent from a file they default to null
+and nothing changes.

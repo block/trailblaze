@@ -56,6 +56,21 @@ data class UnifiedTrailConfig(
    * introduce a new object-valued map instead. See the unified-syntax devlog.
    */
   val devices: Map<String, String>? = null,
+  /**
+   * Per-classifier skip map (e.g. `{android: "blocked on #123"}`). When the entry that resolves
+   * closest-wins for the device under test is non-blank, the trail is parsed and validated but not
+   * executed. Per-classifier (not a scalar) so a trail can be skipped on one device family while
+   * still running on others — resolved with the same lineage the recordings and [devices] pins use,
+   * then lowered to the single v1 `TrailConfig.skip` for that run. A device-agnostic caller (no
+   * classifiers) treats the trail as skipped if *any* classifier declares a non-blank reason.
+   */
+  val skip: Map<String, String>? = null,
+  /**
+   * Free-form labels for grouping/filtering (e.g. `[smoke, flaky]`). Trail-level, not per-device —
+   * a tag names the whole test, so it stays a flat list like the v1 `TrailConfig.tags`. Lowered
+   * verbatim so the CLI's `--tags` filter sees unified trails too.
+   */
+  val tags: List<String>? = null,
   /** Free-form context injected into the LLM system prompt. */
   val context: String? = null,
   /** Pre-seeded variables for `{{name}}` interpolation in NL and tool params. */

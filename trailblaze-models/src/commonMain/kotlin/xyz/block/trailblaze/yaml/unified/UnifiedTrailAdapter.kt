@@ -55,6 +55,9 @@ object UnifiedTrailAdapter {
     // device the same closest-wins way as recordings, collapsing to the single driver the v1
     // executor consumes for the run.
     val resolvedDriver = resolveClosestMatch(unified.config.devices, resolutionChain)
+    // Resolve the per-classifier skip reason the same closest-wins way, lowering to the single v1
+    // `TrailConfig.skip` the runner/CLI consult before executing.
+    val resolvedSkip = resolveSkip(unified.config, classifiers)
     // Observability, mirroring the per-step recording fall-through below: the trail pins drivers
     // for some classifiers but none match this device's chain, so the driver silently falls back
     // to runtime resolution (--driver > app setting). Surface it so an unexpected default-driver
@@ -107,7 +110,7 @@ object UnifiedTrailAdapter {
       )
     }
     return listOfNotNull(
-      TrailYamlItem.ConfigTrailItem(config = lowerConfig(unified.config, resolvedDriver)),
+      TrailYamlItem.ConfigTrailItem(config = lowerConfig(unified.config, resolvedDriver, resolvedSkip)),
       trailheadItem,
       TrailYamlItem.PromptsTrailItem(promptSteps = promptSteps),
     )
@@ -126,16 +129,58 @@ object UnifiedTrailAdapter {
    * [resolvedDriver] (null when unpinned), so the executor's driver resolution
    * (`--driver` > config driver > app setting) is unchanged. Callers with no
    * device (e.g. static config extraction) pass null.
+   *
+   * [resolvedSkip] is the closest-wins skip reason for the device under test (see [resolveSkip]);
+   * like [resolvedDriver] it's resolved by the caller so this stays a pure field-mapper. `tags`
+   * are trail-level, so they lower verbatim (no per-device resolution).
    */
-  fun lowerConfig(unified: UnifiedTrailConfig, resolvedDriver: String? = null): TrailConfig = TrailConfig(
+  fun lowerConfig(
+    unified: UnifiedTrailConfig,
+    resolvedDriver: String? = null,
+    resolvedSkip: String? = null,
+  ): TrailConfig = TrailConfig(
     id = unified.id,
     target = unified.target,
     description = unified.description,
     driver = resolvedDriver,
+    skip = resolvedSkip,
+    tags = unified.tags,
     context = unified.context,
     metadata = unified.metadata,
     memory = unified.memory,
   )
+
+  /**
+   * Resolve the skip reason a unified [config] declares for the device described by
+   * [deviceClassifiers], using the same closest-wins [TrailblazeClassifierLineage] the recordings
+   * and [resolveDriver] use — so an `android:` skip covers `android-phone`/`android-tablet`.
+   *
+   * Returns `null` when nothing applies. Two cases where nothing applies: the config declares no
+   * skip at all, or it skips only classifiers this device's chain doesn't reach (skip is
+   * per-platform — a trail skipped on `ios:` still runs on Android). The one exception is a
+   * **device-agnostic** caller (empty [deviceClassifiers], e.g. a pre-flight with no device yet):
+   * with no chain to resolve against, the trail counts as skipped if *any* classifier declares a
+   * non-blank reason, so the CLI's skip gate still fires. Blank reasons are ignored (v1 semantics:
+   * `skip: ""` is not a skip).
+   */
+  fun resolveSkip(
+    config: UnifiedTrailConfig,
+    deviceClassifiers: List<TrailblazeDeviceClassifier>,
+  ): String? {
+    val skipMap = config.skip
+    if (skipMap.isNullOrEmpty()) return null
+    val resolutionChain = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier }
+    for (classifier in resolutionChain) {
+      skipMap[classifier]?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    // No device chain (device-agnostic caller) → skipped if any classifier declares a reason.
+    // Pick deterministically (sort by classifier key) since `skip` is a plain Map with no
+    // guaranteed iteration order, so the reason surfaced here doesn't depend on decode order.
+    if (resolutionChain.isEmpty()) {
+      return skipMap.entries.sortedBy { it.key }.firstOrNull { it.value.isNotBlank() }?.value
+    }
+    return null
+  }
 
   /**
    * Resolve the driver a unified [config] pins for the device described by

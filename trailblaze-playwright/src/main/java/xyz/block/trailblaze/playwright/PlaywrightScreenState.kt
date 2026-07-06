@@ -1050,17 +1050,6 @@ class PlaywrightScreenState(
     }
 
   /**
-   * Enriches a [ViewHierarchyTreeNode] tree with bounds from the live page.
-   *
-   * Uses Playwright's locator-based [boundingBox] API (via ARIA descriptors) rather than
-   * raw DOM [getBoundingClientRect]. This is critical for Compose Web Wasm pages where
-   * accessibility overlay elements have zero-size DOM rects but valid positions in
-   * Playwright's internal accessibility tree.
-   *
-   * Populates [ViewHierarchyTreeNode.centerPoint] and [ViewHierarchyTreeNode.dimensions] so
-   * the UI Inspector's hover overlay can highlight elements on the screenshot.
-   */
-  /**
    * Tracks whether we've already logged the budget-exceeded warning for THIS screen-state
    * instance. Per-instance (not companion-level) so each state capture gets one warning;
    * a session that traverses several Wikipedia-class pages logs once per page rather than
@@ -1068,58 +1057,202 @@ class PlaywrightScreenState(
    */
   private var enrichmentBudgetExceededLogged = false
 
+  /**
+   * Enriches a [ViewHierarchyTreeNode] tree with bounds from the live page.
+   *
+   * Resolves bounds for the WHOLE tree in a single batched `page.evaluate`
+   * ([computeViewHierarchyBoundsBatched]) instead of one Playwright locator round-trip
+   * per node. The per-node path made ~2-3 CDP round-trips per node and, on DOM-heavy
+   * pages (thousands of nodes), saturated [ENRICHMENT_BUDGET_MS] and shipped partial
+   * bounds; the batched pass is a single round-trip regardless of tree size
+   * (https://github.com/block/trailblaze/issues/199).
+   *
+   * The locator-based path survives as a bounded FALLBACK ([resolveNodeBoundsViaLocator])
+   * for nodes the batch couldn't resolve — unmatched role/name, or a zero-size DOM rect,
+   * which is the Compose-Web-Wasm case where accessibility overlay elements have no DOM
+   * rect but valid positions in Playwright's accessibility tree. On normal pages that
+   * fallback set is small, so [ENRICHMENT_BUDGET_MS] rarely bites.
+   *
+   * Populates [ViewHierarchyTreeNode.x1], [ViewHierarchyTreeNode.y1], [ViewHierarchyTreeNode.x2],
+   * and [ViewHierarchyTreeNode.y2] so the UI Inspector's hover overlay can highlight elements on
+   * the screenshot.
+   */
   private fun enrichViewHierarchyWithBounds(
     tree: ViewHierarchyTreeNode,
   ): ViewHierarchyTreeNode {
-    // Build ARIA descriptor occurrence counts to disambiguate duplicate elements
+    val batchedBounds = computeViewHierarchyBoundsBatched(tree)
+    // Build ARIA descriptor occurrence counts to disambiguate duplicate elements for the
+    // fallback locator path, and share one wall-clock budget across all fallback RPCs.
     val descriptorOccurrences = mutableMapOf<String, Int>()
     val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
-    return enrichNodeWithLocatorBounds(tree, descriptorOccurrences, deadlineMs)
+    val nextIndex = intArrayOf(0)
+    return enrichNodeWithBounds(tree, batchedBounds, descriptorOccurrences, deadlineMs, nextIndex)
   }
 
-  private fun enrichNodeWithLocatorBounds(
+  /**
+   * Builds the ARIA descriptor string that [PlaywrightAriaSnapshot.resolveRef] and
+   * [BATCH_VIEWPORT_CHECK_JS] both consume, from a node's role + name. Kept in one place
+   * so the pre-order (role, name, nth) numbering in [computeViewHierarchyBoundsBatched]
+   * and [enrichNodeWithBounds] can't drift apart.
+   *
+   * The inverse of [parseAriaDescriptor] (which recovers role/name from this same string
+   * format for the compact-element-list enrichment path) — both must agree on the
+   * `text: $name` / `$role "$name"` / `$role` shapes.
+   */
+  private fun boundsDescriptorFor(role: String, name: String?): String = when {
+    name != null && role == "text" -> "text: $name"
+    name != null -> "$role \"$name\""
+    else -> role
+  }
+
+  /**
+   * Returns this descriptor's occurrence count so far and records this occurrence,
+   * i.e. the 0-based "nth" index used to disambiguate duplicate (role, name) pairs.
+   * Shared by [computeViewHierarchyBoundsBatched] and [enrichNodeWithBounds] so the two
+   * independent pre-order passes count occurrences identically — each still keeps its
+   * own [descriptorOccurrences] map instance (one feeds the batch request, the other
+   * feeds the locator fallback), but the counting logic itself isn't duplicated.
+   */
+  private fun MutableMap<String, Int>.nextOccurrence(descriptor: String): Int {
+    val nth = getOrDefault(descriptor, 0)
+    this[descriptor] = nth + 1
+    return nth
+  }
+
+  /**
+   * Resolves bounds for every node in [tree] in ONE `page.evaluate`, reusing
+   * [BATCH_VIEWPORT_CHECK_JS]'s role/name/nth → element resolution (the same batched
+   * resolver that powers [computeElementVisibility]). Returns a map from pre-order node
+   * index to bounds; nodes the batch couldn't resolve — or whose DOM rect was zero-size
+   * (dropped by [toBoundsOrNull]) — are simply absent, and the caller falls back to a
+   * per-node locator lookup for those.
+   *
+   * The pre-order (role, name, nth) numbering here mirrors [enrichNodeWithBounds] exactly
+   * (both are pure pre-order DFS over the same immutable tree), so the integer keys line
+   * up between the two passes.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun computeViewHierarchyBoundsBatched(
+    tree: ViewHierarchyTreeNode,
+  ): Map<Int, TrailblazeNode.Bounds> = TrailblazeTracer.trace(
+    "computeViewHierarchyBoundsBatched",
+    "screenState",
+  ) {
+    val descriptorOccurrences = mutableMapOf<String, Int>()
+    val elements = mutableListOf<Map<String, Any?>>()
+    var index = 0
+    fun collect(node: ViewHierarchyTreeNode) {
+      // `className` is null only for malformed/non-Playwright-sourced nodes — a real ARIA
+      // snapshot never emits a roleless entry, so this "generic" fallback is expected to
+      // never actually match BATCH_VIEWPORT_CHECK_JS's roleNameMap (which excludes
+      // computedRole == 'generic'). Such a node always resolves via the per-node locator
+      // fallback below instead, same as before this batching pass existed.
+      val role = node.className ?: "generic"
+      val name = node.text
+      val descriptor = boundsDescriptorFor(role, name)
+      val nth = descriptorOccurrences.nextOccurrence(descriptor)
+      elements.add(mapOf("id" to index.toString(), "role" to role, "name" to name, "nth" to nth))
+      index++
+      node.children.forEach { collect(it) }
+    }
+    collect(tree)
+    if (elements.isEmpty()) return@trace emptyMap()
+
+    try {
+      val result = page.evaluate(
+        BATCH_VIEWPORT_CHECK_JS,
+        mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
+      ) as? Map<String, Any?> ?: return@trace emptyMap()
+      val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: return@trace emptyMap()
+      val resolved = rawBounds.mapNotNull { (id, b) ->
+        val idx = id.toIntOrNull() ?: return@mapNotNull null
+        val bounds = b.toBoundsOrNull() ?: return@mapNotNull null
+        idx to bounds
+      }.toMap()
+      if (resolved.size < elements.size) {
+        Console.log(
+          "[PlaywrightScreenState] batch resolved ${resolved.size}/${elements.size} " +
+            "viewHierarchy node(s); falling back to per-node locator bounds for the remainder",
+        )
+      }
+      resolved
+    } catch (e: Exception) {
+      Console.log(
+        "[PlaywrightScreenState] batched viewHierarchy bounds failed for ${elements.size} node(s) " +
+          "(${e::class.simpleName}: ${e.message}); falling back to per-node locator bounds",
+      )
+      emptyMap()
+    }
+  }
+
+  private fun enrichNodeWithBounds(
     node: ViewHierarchyTreeNode,
+    batchedBounds: Map<Int, TrailblazeNode.Bounds>,
     descriptorOccurrences: MutableMap<String, Int>,
     deadlineMs: Long,
+    nextIndex: IntArray,
   ): ViewHierarchyTreeNode {
-    // Bail out of every Playwright RPC once we've blown the wall-clock budget. Returning
-    // the unenriched subtree preserves the structural shape for the timeline-viewer
-    // inspector overlay — bounds may be missing for some nodes, but `boundingBox != null`
-    // is already a tolerated state at the consumer side (see line 1098 below). The
-    // alternative — letting the recursion run to completion — locks the next tool's
-    // pre-action log path for many minutes on content-heavy pages. Log once per affected
-    // screen-state so future "missing bounds" investigations have a greppable anchor.
+    val index = nextIndex[0]
+    nextIndex[0] = index + 1
+
+    val role = node.className ?: "generic"
+    val name = node.text
+    val descriptor = boundsDescriptorFor(role, name)
+    // Track nth occurrence for disambiguation of duplicate descriptors (needed by the
+    // fallback locator path). Counted for EVERY node, batched or not, so a later
+    // duplicate's nth stays correct even when earlier duplicates were served by the batch.
+    val nthIndex = descriptorOccurrences.nextOccurrence(descriptor)
+
+    // Prefer the batched DOM rect (one round-trip for the whole tree). Only when the batch
+    // had no usable bounds for this node do we pay for a per-node locator round-trip — the
+    // accessibility-aware path that still works on zero-DOM-rect Compose-Web-Wasm overlay
+    // elements. The wall-clock budget guards only that fallback fan-out.
+    val bounds = batchedBounds[index]
+      ?: resolveNodeBoundsViaLocator(descriptor, nthIndex, deadlineMs)
+
+    // Recurse into children even past the fallback budget so batched bounds already
+    // resolved for the subtree are still applied — only the per-node locator RPCs stop.
+    val enrichedChildren = node.children.map { child ->
+      enrichNodeWithBounds(child, batchedBounds, descriptorOccurrences, deadlineMs, nextIndex)
+    }
+
+    return if (bounds != null) {
+      node.copy(
+        children = enrichedChildren,
+        x1 = bounds.left,
+        y1 = bounds.top,
+        x2 = bounds.right,
+        y2 = bounds.bottom,
+      )
+    } else {
+      node.copy(children = enrichedChildren)
+    }
+  }
+
+  /**
+   * Fallback per-node bounds resolution via Playwright's accessibility-tree-aware locator
+   * API, used only when [computeViewHierarchyBoundsBatched] produced no usable bounds for
+   * the node. Bounded by a shared wall-clock [deadlineMs]: once the budget is blown this
+   * returns null (a tolerated "no bounds" state downstream) rather than locking the next
+   * tool's pre-action log path for minutes on content-heavy pages. Logs once per affected
+   * screen-state so future "missing bounds" investigations have a greppable anchor.
+   */
+  private fun resolveNodeBoundsViaLocator(
+    descriptor: String,
+    nthIndex: Int,
+    deadlineMs: Long,
+  ): TrailblazeNode.Bounds? {
     if (System.currentTimeMillis() > deadlineMs) {
       if (!enrichmentBudgetExceededLogged) {
         Console.log(
           "[PlaywrightScreenState] viewHierarchy enrichment budget (${ENRICHMENT_BUDGET_MS}ms) " +
-            "exceeded — returning partial bounds for remaining nodes."
+            "exceeded — returning partial bounds for remaining nodes.",
         )
         enrichmentBudgetExceededLogged = true
       }
-      return node
+      return null
     }
-
-    val role = node.className ?: "generic"
-    val name = node.text
-
-    // Build ARIA descriptor matching the format PlaywrightAriaSnapshot.resolveRef expects
-    val descriptor = when {
-      name != null && role == "text" -> "text: $name"
-      name != null -> "$role \"$name\""
-      else -> role
-    }
-
-    // Track nth occurrence for disambiguation of duplicate descriptors
-    val nthIndex = descriptorOccurrences.getOrDefault(descriptor, 0)
-    descriptorOccurrences[descriptor] = nthIndex + 1
-
-    // Resolve bounds via Playwright's accessibility-tree-aware locator API
-    var bLeft: Int? = null
-    var bTop: Int? = null
-    var bRight: Int? = null
-    var bBottom: Int? = null
-    try {
+    return try {
       val elementRef = PlaywrightAriaSnapshot.ElementRef(descriptor, nthIndex)
       val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
       if (locator.count() > 0) {
@@ -1127,32 +1260,21 @@ class PlaywrightScreenState(
           Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
         )
         if (box != null && box.width > 0 && box.height > 0) {
-          bLeft = box.x.toInt()
-          bTop = box.y.toInt()
-          bRight = (box.x + box.width).toInt()
-          bBottom = (box.y + box.height).toInt()
+          TrailblazeNode.Bounds(
+            left = box.x.toInt(),
+            top = box.y.toInt(),
+            right = (box.x + box.width).toInt(),
+            bottom = (box.y + box.height).toInt(),
+          )
+        } else {
+          null
         }
+      } else {
+        null
       }
     } catch (_: Exception) {
       // Resolution failed — leave without bounds
-    }
-
-    // Enrich children recursively, threading the same deadline so the whole tree's
-    // enrichment shares one wall-clock budget (not a per-node budget).
-    val enrichedChildren = node.children.map { child ->
-      enrichNodeWithLocatorBounds(child, descriptorOccurrences, deadlineMs)
-    }
-
-    return if (bLeft != null && bTop != null && bRight != null && bBottom != null) {
-      node.copy(
-        children = enrichedChildren,
-        x1 = bLeft,
-        y1 = bTop,
-        x2 = bRight,
-        y2 = bBottom,
-      )
-    } else {
-      node.copy(children = enrichedChildren)
+      null
     }
   }
 
@@ -1226,22 +1348,34 @@ class PlaywrightScreenState(
     private const val MAX_HIDDEN_CSS_ELEMENTS = 50
 
     /**
-     * Wall-clock cap on per-screen-state `viewHierarchy` enrichment.
+     * Wall-clock cap on the per-node locator FALLBACK during `viewHierarchy` enrichment.
      *
-     * `enrichViewHierarchyWithBounds` issues one synchronous Playwright `Locator.count()` +
-     * `boundingBox()` RPC per node in the ARIA tree. On a typical app page (a few hundred
-     * nodes at ~100 ms/RPC) that finishes in a few seconds; on a content-heavy page
-     * (Wikipedia article, ~thousands of nodes) the serial RPC traffic stretches into many
-     * minutes and wedges the next tool's pre-action diagnostic log path.
+     * `enrichViewHierarchyWithBounds` now resolves the whole tree's bounds in a single
+     * batched `page.evaluate` (`computeViewHierarchyBoundsBatched`) — one browser
+     * round-trip regardless of tree size. Only nodes the batch can't resolve (unmatched
+     * role/name, or zero-size DOM rects such as Compose-Web-Wasm overlay elements) fall
+     * back to a per-node `Locator.count()` + `boundingBox()` RPC. This budget bounds that
+     * residual fallback fan-out.
      *
-     * 5 s comfortably covers the normal case; pages that blow the budget bail out and
-     * ship partial bounds rather than locking the agent loop. Downstream consumers
-     * already tolerate `bounds == null` (see `boundingBox != null` check around line
-     * 1098), so the contract is preserved.
+     * Before batching, the per-node path ran for EVERY node: on a typical app page (a few
+     * hundred nodes at ~100 ms/RPC) it finished in a few seconds, but on a content-heavy
+     * page (Wikipedia article, ~thousands of nodes) the serial RPC traffic stretched into
+     * many minutes and wedged the next tool's pre-action diagnostic log path — a Wikipedia
+     * trail hung for 10+ minutes on every CI run, with the thread dump pinned inside
+     * `LocatorImpl.count()` (https://github.com/block/trailblaze/issues/199). Batching removes
+     * that as the common case; the budget survives as a backstop for pages with an unusually
+     * large unmatched-node set.
      *
-     * Caught in the field by a Wikipedia trail hanging for 10+ minutes on every CI run —
-     * thread dump pinned the wedge inside `LocatorImpl.count()` called from
-     * `enrichNodeWithLocatorBounds` in tight recursion across a ~thousand-node tree.
+     * 5 s comfortably covers the normal case; a page whose fallback set blows the budget
+     * ships partial bounds rather than locking the agent loop. Downstream consumers already
+     * tolerate `bounds == null`, so the contract is preserved.
+     *
+     * Left at 5 s rather than tightened after batching landed: the fallback set is *usually*
+     * tiny now, but its size still depends on how much of a given page's accessibility tree
+     * the batch's role/name matching misses, which varies by app (e.g. more on pages heavy
+     * with Compose-Web-Wasm overlays). 5 s is cheap insurance against a worse case we haven't
+     * measured yet; revisit with production fallback-set-size data (see the size-mismatch log
+     * in `computeViewHierarchyBoundsBatched`) before tightening it.
      */
     private const val ENRICHMENT_BUDGET_MS = 5_000L
 

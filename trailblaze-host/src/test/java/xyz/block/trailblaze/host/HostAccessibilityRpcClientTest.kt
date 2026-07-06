@@ -8,6 +8,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
@@ -592,21 +593,23 @@ class HostAccessibilityRpcClientTest {
 
   /**
    * Bidirectional memory sync — inbound half: when the device's RPC response carries a
-   * `memorySnapshot`, the host replaces its `AgentMemory` with it. This is the path that
-   * makes writes from on-device tools (Kotlin or scripted TS handlers) visible to the next
-   * host-side or RPC dispatch.
+   * `memorySnapshot`, the host MERGES it into its `AgentMemory` (device wins on conflict). This
+   * is the path that makes writes from on-device tools (Kotlin or scripted TS handlers) visible
+   * to the next host-side or RPC dispatch — without wiping host-set keys the snapshot omitted.
    */
   @Test
-  fun `device response memory snapshot replaces host memory on success`() {
+  fun `device response memory snapshot merges into host memory on success`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to
         """{"sessionId":"host-top-level-session","success":true,""" +
-        """"memorySnapshot":{"deviceWroteThis":"value-from-device","preserved":"still-here"}}"""
+        """"memorySnapshot":{"deviceWroteThis":"value-from-device","shared":"from-device"},""" +
+        """"memoryDeletions":[]}"""
     }
 
     val sharedMemory = AgentMemory().apply {
-      remember("preserved", "still-here")
-      remember("willBeReplaced", "old-value")
+      // A host-only key the device's snapshot does NOT carry back, plus a key both write.
+      remember("hostOnly", "kept")
+      remember("shared", "from-host")
     }
     runBlocking {
       val result = createClient(sharedMemory).execute(
@@ -617,22 +620,53 @@ class HostAccessibilityRpcClientTest {
       assertThat(result).isInstanceOf(ExecutionResult.Success::class)
     }
 
-    // Full-state replace: device's snapshot wins. Keys present only on the host vanish
-    // (deletes via absence); keys the device wrote appear; carried-through keys stay.
+    // Merge: device write appears; the host-only key survives an omitting snapshot; device wins
+    // on the conflicting key.
     assertThat(sharedMemory.variables["deviceWroteThis"]).isEqualTo("value-from-device")
-    assertThat(sharedMemory.variables["preserved"]).isEqualTo("still-here")
-    assertThat(sharedMemory.variables.containsKey("willBeReplaced")).isFalse()
+    assertThat(sharedMemory.variables["hostOnly"]).isEqualTo("kept")
+    assertThat(sharedMemory.variables["shared"]).isEqualTo("from-device")
   }
 
   /**
-   * The host always replaces its memory with the device's post-execution snapshot. An
-   * empty server-sent `memorySnapshot` (or the field omitted entirely — they decode to
-   * the same default `emptyMap()`) means "device's memory is empty," and the host
-   * mirrors that. Host and on-device runtime ship 1-to-1 so there is no
-   * "older server omits the field" case to defend against.
+   * The explicit-deletion half of the merge contract: a device response carrying
+   * `memoryDeletions:["k"]` REMOVES `k` from host memory (an on-device tool explicitly deleted it),
+   * while a host key the snapshot merely omits still survives the merge. Without the deletions
+   * signal, merge alone can't distinguish an explicit delete from an omission and a later `${k}`
+   * would resolve stale data.
    */
   @Test
-  fun `empty memorySnapshot clears host memory`() {
+  fun `device response memoryDeletions removes the key while an omitted host key survives`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        """{"sessionId":"host-top-level-session","success":true,"memorySnapshot":{},""" +
+        """"memoryDeletions":["explicitlyDeleted"]}"""
+    }
+
+    val sharedMemory = AgentMemory().apply {
+      remember("explicitlyDeleted", "stale")
+      remember("omittedButKept", "survives")
+    }
+    runBlocking {
+      createClient(sharedMemory).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+
+    assertThat(sharedMemory.variables["explicitlyDeleted"]).isNull()
+    assertThat(sharedMemory.variables["omittedButKept"]).isEqualTo("survives")
+  }
+
+  /**
+   * An empty server-sent `memorySnapshot` (or the field omitted entirely — they decode to the
+   * same default `emptyMap()`) means "this tool wrote no memory," NOT "clear everything." Because
+   * the host merges rather than replaces, an empty snapshot is a no-op: pre-existing host memory
+   * survives so a later `${var}` step can still resolve it. A plain tap returning `{}` used to
+   * wipe host memory under the old replace semantics — the "typed ''" empty-input false green.
+   */
+  @Test
+  fun `empty memorySnapshot leaves host memory intact`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to
         """{"sessionId":"host-top-level-session","success":true,"memorySnapshot":{}}"""
@@ -646,7 +680,7 @@ class HostAccessibilityRpcClientTest {
         null,
       )
     }
-    assertThat(sharedMemory.variables.isEmpty()).isTrue()
+    assertThat(sharedMemory.variables["k"]).isEqualTo("v")
   }
 
   // ── Structured wedge arming (V3 on-device-source redesign) ──────────────────────────────────

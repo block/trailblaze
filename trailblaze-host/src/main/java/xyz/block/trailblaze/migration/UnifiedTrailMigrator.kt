@@ -23,15 +23,22 @@ import java.io.File
  * 1. Load every `<classifier>.trail.yaml` in the directory; filename minus
  *    `.trail.yaml` is the classifier.
  * 2. Canonicalize config from the first file: keep `id` / `target` / `context`
- *    / `memory` / `metadata` verbatim, drop `platform:` / `title:`. Each v1
- *    file's `driver:` (which is per-platform-file) is carried onto the unified
- *    `devices:` map, keyed by that file's classifier — so a multi-platform
- *    trail keeps each platform's driver. `devices:` is emitted only when at
- *    least one file pinned a driver; otherwise it is omitted entirely (the
- *    device set is derived from the recorded classifiers at run time).
- *    `memory:` (the AgentMemory pre-seed block) round-trips through the
- *    migration intact — added to v1 `TrailConfig` in the same change that
- *    surfaced it on the unified format.
+ *    / `memory` / `metadata` verbatim, drop `platform:` / `title:`.
+ *    Two v1 fields are per-platform-file and become per-classifier maps keyed by
+ *    each file's classifier: `driver:` → `devices:`, and `skip:` → `skip:` (v1's
+ *    scalar skip reason keyed under that file's classifier, so a trail can be
+ *    skipped on one device family while running on others — closest-wins at run
+ *    time). Both maps are emitted only when at least one file contributed an
+ *    entry; otherwise omitted (the device set is derived from the recorded
+ *    classifiers at run time). Blank skip reasons are dropped (v1 semantics:
+ *    `skip: ""` is not a skip). A non-blank `skip:` on `blaze.yaml` is
+ *    device-agnostic (the CLI runs `blaze.yaml` standalone when no platform
+ *    recording matches), so it's copied onto every present classifier that
+ *    doesn't already declare its own skip — the unified map has no universal
+ *    wildcard key. `tags:` is trail-level (device-agnostic), so every file's
+ *    tags are unioned (de-duplicated, first-seen order) — a tag on any file
+ *    describes the whole test. `memory:` (the AgentMemory pre-seed block)
+ *    round-trips through the migration intact.
  * 3. For each step index, gather per-classifier NL and tool recordings.
  *    Disagreeing NL becomes a drift warning surfaced in the output's leading
  *    comments; canonical NL is the first platform's.
@@ -51,7 +58,7 @@ import java.io.File
  * format (and the CLI command refuses non-v1 inputs). Drift is surfaced via
  * comments, never silently flattened.
  */
-class TrailMigrator(
+class UnifiedTrailMigrator(
   private val trailblazeYaml: TrailblazeYaml = TrailblazeYaml.Default,
 ) {
 
@@ -77,6 +84,16 @@ class TrailMigrator(
     // one entry keyed by its classifier — a multi-platform trail keeps each platform's driver
     // (android accessibility, ios host, …) rather than collapsing to one.
     val driversByClassifier = linkedMapOf<String, String>()
+    // Per-classifier skip reasons. v1's `skip:` is a scalar per-platform-file, so each file's
+    // reason keys under its classifier — same shape as the driver map above. Blank reasons are
+    // ignored (v1 semantics: `skip: ""` means "not skipped").
+    val skipByClassifier = linkedMapOf<String, String>()
+    // Trail-level tags. Unlike driver/skip these aren't device-specific, so they're unioned across
+    // every file (a tag on any platform describes the whole test) rather than keyed by classifier.
+    // LinkedHashSet keeps first-seen order and de-duplicates a tag shared by multiple files.
+    val tagsUnion = linkedSetOf<String>()
+    // blaze.yaml's own skip reason (device-agnostic — see the propagation comment below).
+    var blazeSkip: String? = null
     var canonicalConfig: UnifiedTrailConfig? = null
     for (file in platformFiles) {
       val classifier = file.name.removeSuffix(TRAIL_YAML_SUFFIX)
@@ -88,6 +105,8 @@ class TrailMigrator(
         canonicalConfig = v1ConfigToUnified(v1Config)
       }
       v1Config?.driver?.let { driversByClassifier[classifier] = it }
+      v1Config?.skip?.takeIf { it.isNotBlank() }?.let { skipByClassifier[classifier] = it }
+      v1Config?.tags?.let { tagsUnion.addAll(it) }
       // Track each platform's memory block so divergence across files surfaces as a drift
       // warning instead of silently using the first file's values. Mirrors the NL drift
       // pass below — same migrator philosophy: when platforms disagree, the user sees it.
@@ -111,16 +130,36 @@ class TrailMigrator(
       if (canonicalConfig == null && cfg != null) {
         canonicalConfig = v1ConfigToUnified(cfg)
       }
+      // blaze.yaml is device-agnostic, so its tags join the trail-level union too.
+      cfg?.tags?.let { tagsUnion.addAll(it) }
+      blazeSkip = cfg?.skip?.takeIf { it.isNotBlank() }
       items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().flatMap { it.promptSteps }
     } else emptyList()
 
     // Classifiers present across the per-platform files — used for the family-collapse pass.
     val presentClassifiers = perClassifier.keys.toList().sorted()
-    // `devices:` is the per-classifier device → driver map. Emit it only when at least one
-    // classifier pins a driver; otherwise omit it entirely — the supported classifiers are
-    // derivable from the steps' recordings, and driverless trails resolve the driver at run time.
-    val configWithDevices = (canonicalConfig ?: UnifiedTrailConfig())
-      .copy(devices = driversByClassifier.ifEmpty { null })
+    // blaze.yaml's `skip:` is honored by the CLI as a standalone runnable trail file (the
+    // device-agnostic fallback when no platform recording matches), so a non-blank reason there
+    // means "skip this trail everywhere" — not just wherever a platform file happens to repeat it.
+    // The unified `skip:` map has no universal wildcard key (closest-wins resolves through a
+    // classifier's own lineage only), so the only faithful translation is to copy the reason onto
+    // every present classifier that doesn't already declare its own (more specific) skip — a
+    // platform file's own `skip:` still wins for that platform.
+    blazeSkip?.let { reason ->
+      for (classifier in presentClassifiers) {
+        skipByClassifier.putIfAbsent(classifier, reason)
+      }
+    }
+    // Merge the per-classifier maps onto the canonical config. `devices:` (driver pins) and
+    // `skip:` (skip reasons) are each emitted only when at least one classifier contributed an
+    // entry; otherwise omitted — the supported classifiers are derivable from the steps'
+    // recordings, and a driverless trail resolves the driver at run time.
+    val mergedConfig = (canonicalConfig ?: UnifiedTrailConfig())
+      .copy(
+        devices = driversByClassifier.ifEmpty { null },
+        skip = skipByClassifier.ifEmpty { null },
+        tags = tagsUnion.ifEmpty { null }?.toList(),
+      )
 
     // Per-step reconciliation across platforms; step count is the max of
     // (any platform's prompts length, blaze.yaml's prompts length).
@@ -203,7 +242,7 @@ class TrailMigrator(
       }
 
     return Result(
-      trail = UnifiedTrail(config = configWithDevices, trail = collapsedSteps),
+      trail = UnifiedTrail(config = mergedConfig, trail = collapsedSteps),
       report = Report(
         platformFilesLoaded = platformFiles.map { it.name },
         drift = driftReports,
@@ -260,9 +299,11 @@ class TrailMigrator(
       // Preserve the human description — it's runtime-surfaced (a display label), so dropping
       // it would be silent information loss.
       description = v1.description,
-      // `drivers` (the per-classifier driver map) is populated by the caller from every
-      // platform file's `driver:`, not from this single first-file config.
+      // `devices:` / `skip:` (per-classifier maps) and `tags:` (a trail-level union) are all
+      // populated by the caller from every file — this single first-file config can't express them.
       devices = null,
+      skip = null,
+      tags = null,
       context = v1.context,
       memory = v1.memory,
       metadata = v1.metadata,

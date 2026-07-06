@@ -536,6 +536,15 @@ fun SessionDetailComposable(
                   }
                 }
 
+                SessionViewMode.Storyboard -> {
+                  StoryboardTabComposable(
+                    logs = sessionDetail.logs,
+                    sessionId = sessionDetail.session.sessionId.value,
+                    imageLoader = imageLoader,
+                    onShowScreenshotModal = onShowScreenshotModal,
+                  )
+                }
+
                 SessionViewMode.LlmUsage -> {
                   // Get LLM request logs to map index to actual log
                   val llmRequestLogs = sessionDetail.logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
@@ -583,8 +592,9 @@ fun SessionDetailComposable(
             }
           }
         }
-        // VerticalScrollbar — hidden in Timeline mode which has its own scrolling
-        if (viewMode != SessionViewMode.Timeline) {
+        // VerticalScrollbar — hidden in modes with their own scrolling (Timeline scrubs
+        // internally; Storyboard owns its own LazyVerticalGrid + scroll state).
+        if (viewMode != SessionViewMode.Timeline && viewMode != SessionViewMode.Storyboard) {
           VerticalScrollbar(
             adapter = rememberScrollbarAdapter(gridState),
             modifier = Modifier

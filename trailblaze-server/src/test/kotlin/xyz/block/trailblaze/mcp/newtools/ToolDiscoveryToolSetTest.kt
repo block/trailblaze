@@ -108,7 +108,46 @@ class ToolDiscoveryToolSetTest {
             put("count", buildJsonObject { put("type", "integer") })
           })
         },
-      )
+      ),
+      InlineScriptToolConfig(
+        script = "./tools/web_signed_in.ts",
+        name = "web_signed_in",
+        description = "Sign in with a configurable account source.",
+        meta = buildJsonObject {
+          put("trailblaze/supportedPlatforms", buildJsonArray { add(JsonPrimitive("WEB")) })
+          put("trailblaze/toolset", "web_core")
+        },
+        inputSchema = buildJsonObject {
+          put("type", "object")
+          put("required", buildJsonArray { add(JsonPrimitive("account")) })
+          put("properties", buildJsonObject {
+            put("account", buildJsonObject {
+              put("anyOf", buildJsonArray {
+                add(buildJsonObject {
+                  put("type", "object")
+                  put("properties", buildJsonObject {
+                    put("type", buildJsonObject { put("const", JsonPrimitive("pool")) })
+                    put("serviceId", buildJsonObject { put("type", "string") })
+                  })
+                })
+                add(buildJsonObject {
+                  put("type", "object")
+                  put("properties", buildJsonObject {
+                    put("type", buildJsonObject { put("const", JsonPrimitive("existing")) })
+                    put("email", buildJsonObject { put("type", "string") })
+                  })
+                })
+                add(buildJsonObject {
+                  put("type", "object")
+                  put("properties", buildJsonObject {
+                    put("type", buildJsonObject { put("const", JsonPrimitive("newUser")) })
+                  })
+                })
+              })
+            })
+          })
+        },
+      ),
     )
   }
 
@@ -1409,6 +1448,42 @@ class ToolDiscoveryToolSetTest {
     assertNotNull(descriptor, "Inline scripted tool should be returned with detail=true")
     assertEquals(TrailblazeToolSourceType.TYPESCRIPT, descriptor.source?.type)
     assertEquals("./tools/web_inline.ts", descriptor.source?.scriptPath)
+  }
+
+  @Test
+  fun `TARGET mode details expose discriminated union fields with UI visibility rules`() = runTest {
+    val toolSet = createToolSet(
+      allTargets = setOf(inlineToolTarget),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(target = "inlineapp", detail = true)
+    val typed = json.decodeFromString(ToolDiscoveryTargetResult.serializer(), result)
+    val descriptor = typed.toolGroups
+      ?.flatMap { it.toolDetails ?: emptyList() }
+      ?.firstOrNull { it.name == "web_signed_in" }
+    assertNotNull(descriptor, "Inline scripted union tool should be returned with detail=true")
+
+    val requiredByName = descriptor.requiredParameters.associateBy { it.name }
+    val optionalByName = descriptor.optionalParameters.associateBy { it.name }
+
+    assertEquals(
+      listOf("pool", "existing", "newUser"),
+      requiredByName["account.type"]?.validValues,
+      "The discriminator should render as a dropdown for any TypeScript discriminated union.",
+    )
+    assertEquals(
+      "account.type",
+      optionalByName["account.serviceId"]?.visibleWhen?.parameterName,
+    )
+    assertEquals(
+      listOf("pool"),
+      optionalByName["account.serviceId"]?.visibleWhen?.values,
+    )
+    assertEquals(
+      listOf("existing"),
+      optionalByName["account.email"]?.visibleWhen?.values,
+    )
   }
 
   @Test

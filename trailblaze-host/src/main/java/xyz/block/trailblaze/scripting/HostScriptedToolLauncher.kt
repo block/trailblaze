@@ -2,6 +2,7 @@ package xyz.block.trailblaze.scripting
 
 import java.io.File
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
@@ -243,15 +244,39 @@ object HostScriptedToolLauncher {
    * Resolve a target-declared scripted tool's `.ts`/`.js` source to an existing file, independent
    * of the JVM working directory.
    *
-   * The bundled `targets/<id>.yaml` rewrites each `script:` to be relative to the repo root (so the
-   * daemon, launched from the repo root via `./trailblaze`, resolves it against its CWD). The JUnit
-   * host test rule, however, runs with CWD = the Gradle module dir, so a bare `File(script)` would
-   * resolve to `<module>/<repo-root-relative-path>` and miss. Walk up from CWD to the first ancestor
-   * where the repo-root-relative path resolves — that ancestor IS the repo root. Falls back to the
-   * direct `File(script)` (absolute paths, or the not-found case so the bundler throws its clear
-   * "Scripted-tool source not found" error with the resolved absolute path).
+   * Resolution order:
+   *  1. Absolute path or a file that already resolves against CWD — return as-is.
+   *  2. **CWD walk-up** (source / gradle mode): the bundled `targets/<id>.yaml` rewrites each
+   *     `script:` to be relative to the repo root (so the daemon, launched from the repo root via
+   *     `./trailblaze`, resolves it against its CWD). The JUnit host test rule runs with CWD = the
+   *     Gradle module dir, so a bare `File(script)` would miss — walk up from CWD to the first
+   *     ancestor where the repo-root-relative path resolves. That ancestor IS the repo root.
+   *  3. **Classpath-resource fallback** (JAR / installed-CLI mode): the daemon runs from the
+   *     installed uber JAR in a workspace repo root that does NOT contain the framework module's
+   *     `.ts` sources on disk (a bundled trailmap's `.ts` sources live in that framework module's
+   *     resources, not in the workspace), so the repo-root-relative `script:` the walk-up in (2)
+   *     resolves against never resolves to a real file there. But the JAR bundles those `.ts`
+   *     sources as classpath resources under `trails/config/trailmaps/<id>/tools/…/<name>.ts`.
+   *     Recover the source from the classpath and extract it — together with the trailmap's whole
+   *     `tools/` tree (recursively, subdirectories preserved), so esbuild/bun relative-import
+   *     resolution still finds imported modules — into a temp dir, returning the extracted path (at
+   *     its nested path when the script lives in a subdirectory). See [resolveFromClasspath].
+   *  4. Fall back to the direct `File(script)` (the not-found case) so the bundler throws its clear
+   *     "Scripted-tool source not found" error with the resolved absolute path.
    */
-  private fun resolveScriptFile(script: String): File {
+  internal fun resolveScriptFile(
+    script: String,
+    loadClasspathResource: (String) -> String? = { path ->
+      ClasspathResourceDiscovery.loadResource(path)
+    },
+    listClasspathToolScripts: (String) -> Set<String> = { toolsRoot ->
+      ClasspathResourceDiscovery.discoverFilenamesRecursive(toolsRoot, ".ts")
+    },
+    classpathExtractRoot: File = File(
+      System.getProperty("java.io.tmpdir"),
+      CLASSPATH_EXTRACT_SUBDIR,
+    ),
+  ): File {
     val direct = File(script)
     if (direct.isAbsolute || direct.isFile) return direct
     var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
@@ -260,6 +285,78 @@ object HostScriptedToolLauncher {
       if (candidate.isFile) return candidate
       dir = dir.parentFile
     }
+    resolveFromClasspath(script, loadClasspathResource, listClasspathToolScripts, classpathExtractRoot)
+      ?.let { return it }
     return direct
   }
+
+  /**
+   * Classpath-resource fallback for [resolveScriptFile], used in JAR / installed-CLI mode where the
+   * `.ts` source isn't on the workspace filesystem but IS bundled in the uber JAR under classpath
+   * path `trails/config/trailmaps/<id>/tools/…/<name>.ts`. The `script:` field the bundler receives
+   * may carry a longer repo-relative prefix (a framework module's resource path ending in that
+   * segment) AND may point at a script nested in a subdirectory (`tools/internal/…`,
+   * `tools/android/…`, `tools/host/…`); we anchor on the `<id>/tools` root to derive the canonical
+   * classpath path regardless of the prefix or nesting depth.
+   *
+   * The whole `tools/` tree is extracted (recursively, preserving subdirectory structure) rather
+   * than just the one script, so a tool that imports another module — a sibling (`./shared.ts`), a
+   * nested helper (`./subdir/…`), or one up a level — resolves under esbuild/bun, which walk the
+   * entry's directory for relative imports and need those modules present on disk. Extraction is
+   * keyed by trailmap id under [extractRoot], so repeated calls for tools in the same trailmap reuse
+   * the dir. Returns null when the script path has no recognizable `<id>/tools` anchor or the
+   * requested resource isn't on the classpath (the caller then falls back to its clear not-found
+   * error).
+   */
+  private fun resolveFromClasspath(
+    script: String,
+    loadClasspathResource: (String) -> String?,
+    listClasspathToolScripts: (String) -> Set<String>,
+    extractRoot: File,
+  ): File? {
+    val normalized = script.replace(File.separatorChar, '/')
+    val anchorIdx = normalized.indexOf("$TRAILMAPS_CLASSPATH_ANCHOR/")
+    if (anchorIdx < 0) return null
+    // classpathPath = trails/config/trailmaps/<id>/tools/<subdirs…>/<name>.ts
+    val classpathPath = normalized.substring(anchorIdx)
+    // Segments after the anchor: <id>/tools/<subdirs…>/<name>.ts. Require <id>/tools/<file> at
+    // minimum; the script may sit any number of subdirectories deep under `tools`.
+    val segments = classpathPath.removePrefix("$TRAILMAPS_CLASSPATH_ANCHOR/").split('/')
+    if (segments.size < 3 || segments[1] != SCRIPTED_TOOLS_DIR) return null
+    val trailmapId = segments[0]
+    val toolsRoot = "$TRAILMAPS_CLASSPATH_ANCHOR/$trailmapId/$SCRIPTED_TOOLS_DIR"
+    // The requested script's path relative to the tools root — preserves any subdirectories.
+    val requestedRelPath = classpathPath.removePrefix("$toolsRoot/")
+    // The requested script must itself be present on the classpath — otherwise this isn't a
+    // classpath-bundled trailmap tool, so return null and let the caller's not-found error fire.
+    if (loadClasspathResource(classpathPath) == null) return null
+
+    // trailmap id keys the extraction dir so tools from different trailmaps don't collide, and
+    // repeated calls within one trailmap reuse it.
+    val extractDir = File(extractRoot, "$trailmapId/$SCRIPTED_TOOLS_DIR")
+    // Extract every `.ts` under the tools root, PRESERVING subdirectory structure, so nested
+    // scripts (tools/<subdir>/x.ts) resolve AND their relative imports (siblings, ./subdir/…, ../)
+    // find their targets on disk for esbuild/bun.
+    for (relPath in listClasspathToolScripts(toolsRoot) + requestedRelPath) {
+      val content = loadClasspathResource("$toolsRoot/$relPath") ?: continue
+      val out = File(extractDir, relPath)
+      out.parentFile?.mkdirs() // nested names (e.g. host/foo.ts) need their parent dir created first
+      // Overwrite unconditionally: content is immutable for a given JAR, so a re-extract is idempotent.
+      out.writeText(content)
+    }
+    return File(extractDir, requestedRelPath).takeIf { it.isFile }
+  }
+
+  /**
+   * Classpath directory prefix under which trailmaps (and their `tools/<name>.ts` sources) are
+   * bundled as resources. A tool's `script:` field is anchored on this segment to derive the
+   * canonical classpath path regardless of any repo-relative prefix the baked target carries.
+   */
+  private const val TRAILMAPS_CLASSPATH_ANCHOR = "trails/config/trailmaps"
+
+  /** Trailmap-relative subdirectory that owns scripted-tool `.ts` sources. */
+  private const val SCRIPTED_TOOLS_DIR = "tools"
+
+  /** Temp-dir subdirectory under `java.io.tmpdir` for classpath-extracted `.ts` sources. */
+  private const val CLASSPATH_EXTRACT_SUBDIR = "trailblaze-classpath-scripted-tools"
 }

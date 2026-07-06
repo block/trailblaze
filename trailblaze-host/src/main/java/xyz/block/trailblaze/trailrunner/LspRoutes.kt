@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -277,7 +278,7 @@ private suspend fun DefaultWebSocketServerSession.bridge(proc: Process, logTag: 
  * `TRAILBLAZE_SDK_DIR`) are found exactly the way the rest of the framework's bun tooling finds them.
  */
 private fun resolveBunLaunch(): Pair<File, File>? {
-  val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return null
+  val bun = BunBinaryResolver.resolveBunBinary() ?: return null
   val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
   return bun to sdkDir
 }

@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.cli
+package xyz.block.trailblaze.report
 
 import java.io.File
 import java.nio.file.Files
@@ -19,7 +19,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedYaml
@@ -32,8 +32,8 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
  * a thin bun driver ([run-report-cli.ts][DRIVER_RESOURCE]).
  *
  * `trailblaze report` (and the after-run report) generate this artifact ALONGSIDE the legacy WASM
- * report ([xyz.block.trailblaze.report.WasmReport]) — every run emits both. When this generator
- * can't run (`bun` unavailable, subprocess failure) callers still have the legacy artifact.
+ * report ([WasmReport]) — every run emits both. When this generator can't run (`bun` unavailable,
+ * subprocess failure) callers still have the legacy artifact.
  *
  * One report can cover one OR many sessions: a single session opens straight on its detail; several
  * open on a pass/fail session index that drills into each run (parity with the old multi-session
@@ -45,7 +45,7 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
  * fall back to the legacy report rather than leaving the user with no artifact.
  */
 class RunReportGenerator(
-  private val bunBinary: File? = ScriptedToolDefinitionAnalyzer.resolveBunBinary(),
+  private val bunBinary: File? = BunBinaryResolver.resolveBunBinary(),
 ) {
 
   /**
@@ -101,6 +101,7 @@ class RunReportGenerator(
       // written to the same reports/ dir with the same timestamp pattern in the same run.
       val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
       outputFile.copyTo(dest, overwrite = true)
+      Console.log("[RunReportGenerator] report generated at ${dest.absolutePath}")
       return dest
     } finally {
       workDir.deleteRecursively()
@@ -178,6 +179,11 @@ class RunReportGenerator(
   }
 
   companion object {
+    // Both resources are packaged into THIS (:trailblaze-report) module's JAR — see
+    // transpileRunReportCore in trailblaze-report/build.gradle.kts — despite CORE_RESOURCE's
+    // "trailrunner" path segment. That segment is a historical artifact of where this class
+    // used to live (:trailblaze-host); it's kept as-is so :trailblaze-host's Trail Runner web
+    // app can keep serving run-report-core.js at the same URL/classpath path it always has.
     private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/run-report-core.js"
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
     private const val SUBPROCESS_TIMEOUT_SECONDS = 120L

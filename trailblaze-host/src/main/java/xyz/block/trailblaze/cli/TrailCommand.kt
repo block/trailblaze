@@ -613,7 +613,14 @@ open class TrailCommand : Callable<Int> {
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
-    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers)
+    // Skip/tags resolve against the device classifiers, or — for a `--driver`-only run with no
+    // `--device` — the driver's platform classifier. Logged symmetrically with the device line
+    // above so "why was my trail (not) skipped?" is answerable straight from the run output.
+    val configClassifiers = deviceClassifiers.ifEmpty { DeviceClassifierResolver.fromDriver(driverType) }
+    if (deviceClassifiers.isEmpty() && configClassifiers.isNotEmpty()) {
+      Console.info("Skip/tags classifiers (from --driver): ${configClassifiers.joinToString(", ") { it.classifier }}")
+    }
+    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers, configClassifiers = configClassifiers)
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
@@ -745,7 +752,14 @@ open class TrailCommand : Callable<Int> {
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
-    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers)
+    // Skip/tags resolve against the device classifiers, or — for a `--driver`-only run with no
+    // `--device` — the driver's platform classifier. Logged symmetrically with the device line
+    // above so "why was my trail (not) skipped?" is answerable straight from the run output.
+    val configClassifiers = deviceClassifiers.ifEmpty { DeviceClassifierResolver.fromDriver(driverType) }
+    if (deviceClassifiers.isEmpty() && configClassifiers.isNotEmpty()) {
+      Console.info("Skip/tags classifiers (from --driver): ${configClassifiers.joinToString(", ") { it.classifier }}")
+    }
+    val plan = planTrailExecution(trailFiles, includeTags, deviceClassifiers, configClassifiers = configClassifiers)
     if (plan.filteredOutByTag > 0) {
       Console.info("Filtered ${plan.filteredOutByTag} trail(s) by --tags")
     }
@@ -2037,10 +2051,15 @@ open class TrailCommand : Callable<Int> {
      * succeeding at run time — silently bypassing any pre-pass gate (skip detection, tag filter)
      * the caller depends on.
      */
-    fun readResolvedTrailConfig(file: File): TrailConfig? = try {
+    fun readResolvedTrailConfig(
+      file: File,
+      deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    ): TrailConfig? = try {
       val rawYaml = file.readText()
       val resolvedYaml = TrailYamlTemplateResolver.resolve(rawYaml, file)
-      createTrailblazeYaml().extractTrailConfig(resolvedYaml)
+      // Pass the device's classifiers so a unified trail's per-classifier `devices:`/`skip:` pins
+      // resolve for the device under test (empty list → device-agnostic: any-classifier skip fires).
+      createTrailblazeYaml().extractTrailConfig(resolvedYaml, deviceClassifiers)
     } catch (_: Exception) {
       null
     }
@@ -2238,15 +2257,26 @@ open class TrailCommand : Callable<Int> {
       files: List<File>,
       includeTags: List<String>,
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      configClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     ): TrailExecutionPlan {
       val expanded = expandTrailFiles(files, deviceClassifiers)
+      // [configClassifiers] resolves per-classifier `skip:`/`tags:`; it's the device classifiers,
+      // or — for a `--driver`-only run with no `--device` — the driver's platform classifier
+      // (see [DeviceClassifierResolver.fromDriver]). Without it, `resolveSkip` would take the
+      // device-agnostic any-skip fallback and an `android`-only `skip:` would wrongly halt a run
+      // forced to `--driver=IOS_HOST`. It's a SEPARATE param from [deviceClassifiers] (which feeds
+      // [expandTrailFiles] recording-file selection) on purpose: skip/tags gain the driver
+      // fallback while recording selection stays device-only. Empty [configClassifiers] falls back
+      // to [deviceClassifiers] so direct callers (e.g. tests) that pass only the device list are
+      // unchanged.
+      val skipTagClassifiers = configClassifiers.ifEmpty { deviceClassifiers }
       val items = mutableListOf<TrailExecutionItem>()
       var filteredOutByTag = 0
       for (file in expanded) {
         // Resolve templates before reading metadata so a `{{var}}` in the `config:` block
         // doesn't trip up the planner while the runtime would have substituted it cleanly.
         // See [readResolvedTrailConfig] for the consistency rationale.
-        val config = readResolvedTrailConfig(file)
+        val config = readResolvedTrailConfig(file, skipTagClassifiers)
         val tags = config?.tags.orEmpty()
 
         if (includeTags.isNotEmpty() && tags.none { it in includeTags }) {

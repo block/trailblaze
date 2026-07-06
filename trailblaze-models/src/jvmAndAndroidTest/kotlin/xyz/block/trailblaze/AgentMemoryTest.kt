@@ -144,6 +144,52 @@ class AgentMemoryTest {
     assertEquals(0, memory.sensitiveKeys.size)
   }
 
+  // ---------- deletedKeys: the explicit-deletion signal carried back to the host per-RPC ----------
+
+  @Test
+  fun `deletedKeys tracks an explicit delete`() {
+    val memory = AgentMemory()
+    memory.remember("k", "v")
+    memory.delete("k")
+    assertContains(memory.deletedKeys, "k")
+  }
+
+  @Test
+  fun `remember after delete un-tracks the key`() {
+    // Re-setting a key after deleting it is not a deletion — the host must not remove it.
+    val memory = AgentMemory()
+    memory.delete("k")
+    assertContains(memory.deletedKeys, "k")
+    memory.remember("k", "v")
+    assertFalse("k" in memory.deletedKeys)
+  }
+
+  @Test
+  fun `rememberSensitive after delete un-tracks the key`() {
+    val memory = AgentMemory()
+    memory.delete("pin")
+    assertContains(memory.deletedKeys, "pin")
+    memory.rememberSensitive("pin", "1234")
+    assertFalse("pin" in memory.deletedKeys)
+  }
+
+  @Test
+  fun `clear empties the deleted set`() {
+    val memory = AgentMemory()
+    memory.delete("k")
+    memory.clear()
+    assertEquals(0, memory.deletedKeys.size)
+  }
+
+  @Test
+  fun `seeding via variables putAll does not populate deletedKeys`() {
+    // The host seeds device-returned snapshots via variables.putAll, bypassing delete/remember —
+    // a seeded key must never be mistaken for an explicit deletion.
+    val memory = AgentMemory()
+    memory.variables.putAll(mapOf("a" to "1", "b" to "2"))
+    assertEquals(0, memory.deletedKeys.size)
+  }
+
   // ---------- seedFrom: YAML defaults → CLI seeds → CLI sensitive seeds ----------
 
   @Test

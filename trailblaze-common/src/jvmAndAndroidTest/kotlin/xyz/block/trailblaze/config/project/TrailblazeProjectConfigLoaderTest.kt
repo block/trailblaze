@@ -820,6 +820,123 @@ class TrailblazeProjectConfigLoaderTest {
   }
 
   @Test
+  fun `includeOrphanTrailmaps off (default) drops a library trailmap nothing depends on`() {
+    // A library trailmap (no `target:` block) that no target trailmap lists under
+    // `dependencies:` is invisible to resolveRuntime by default — it's not a root candidate
+    // (targets only) and it's not reached transitively (nothing depends on it). This documents
+    // that existing, unchanged behavior before proving the opt-in flag below.
+    val targetTrailmapDir = File(tempFolder.root, "trailmaps/hostapp").apply { mkdirs() }
+    File(targetTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: hostapp
+      target:
+        display_name: Host App
+      """.trimIndent(),
+    )
+    val orphanTrailmapDir = File(tempFolder.root, "trailmaps/orphanlib").apply { mkdirs() }
+    File(orphanTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: orphanlib
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig("")
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)!!
+
+    assertEquals(listOf("hostapp"), resolved.resolvedTrailmaps.map { it.manifest.id })
+  }
+
+  @Test
+  fun `includeOrphanTrailmaps true resolves a library trailmap nothing depends on`() {
+    val targetTrailmapDir = File(tempFolder.root, "trailmaps/hostapp").apply { mkdirs() }
+    File(targetTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: hostapp
+      target:
+        display_name: Host App
+      """.trimIndent(),
+    )
+    val orphanTrailmapDir = File(tempFolder.root, "trailmaps/orphanlib").apply { mkdirs() }
+    File(orphanTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: orphanlib
+      """.trimIndent(),
+    )
+    val toolsDir = File(orphanTrailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "orphan-tool.tool.yaml").writeText(
+      """
+      id: orphan_tool
+      class: com.example.tools.OrphanTool
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig("")
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      file,
+      includeClasspathTrailmaps = false,
+      scriptedToolEnrichment = null,
+      includeOrphanTrailmaps = true,
+    )!!
+
+    val ids = resolved.resolvedTrailmaps.map { it.manifest.id }
+    assertContains(ids, "hostapp")
+    assertContains(ids, "orphanlib")
+    val orphan = resolved.resolvedTrailmaps.single { it.manifest.id == "orphanlib" }
+    assertNull(orphan.target)
+    assertEquals(listOf("orphan_tool"), orphan.tools.map { it.id })
+  }
+
+  @Test
+  fun `includeOrphanTrailmaps also walks an orphan's own transitive dependencies`() {
+    // Regression test: an orphan trailmap is loaded via loadById (not loadTransitively), so its
+    // own `dependencies:` used to never get pulled in — Step 3's strict dep-graph validation
+    // would then see a "missing" dependency edge for a trailmap that was perfectly loadable on
+    // disk, and fail the ENTIRE resolution rather than just skip the one orphan.
+    val targetTrailmapDir = File(tempFolder.root, "trailmaps/hostapp").apply { mkdirs() }
+    File(targetTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: hostapp
+      target:
+        display_name: Host App
+      """.trimIndent(),
+    )
+    val orphanTrailmapDir = File(tempFolder.root, "trailmaps/orphanlib").apply { mkdirs() }
+    File(orphanTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: orphanlib
+      dependencies: [sharedlib]
+      """.trimIndent(),
+    )
+    val sharedLibDir = File(tempFolder.root, "trailmaps/sharedlib").apply { mkdirs() }
+    File(sharedLibDir, "trailmap.yaml").writeText(
+      """
+      id: sharedlib
+      """.trimIndent(),
+    )
+    val sharedLibToolsDir = File(sharedLibDir, "tools").apply { mkdirs() }
+    File(sharedLibToolsDir, "shared-tool.tool.yaml").writeText(
+      """
+      id: shared_tool
+      class: com.example.tools.SharedTool
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig("")
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      file,
+      includeClasspathTrailmaps = false,
+      scriptedToolEnrichment = null,
+      includeOrphanTrailmaps = true,
+    )!!
+
+    val ids = resolved.resolvedTrailmaps.map { it.manifest.id }
+    assertContains(ids, "orphanlib")
+    assertContains(ids, "sharedlib")
+    val sharedLib = resolved.resolvedTrailmaps.single { it.manifest.id == "sharedlib" }
+    assertEquals(listOf("shared_tool"), sharedLib.tools.map { it.id })
+  }
+
+  @Test
   fun `toolset ref loads ToolSetYamlConfig`() {
     val toolsetsDir = File(tempFolder.root, "toolsets").apply { mkdirs() }
     File(toolsetsDir, "custom.yaml").writeText(

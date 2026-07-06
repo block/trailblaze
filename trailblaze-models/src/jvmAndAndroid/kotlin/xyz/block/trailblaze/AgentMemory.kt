@@ -26,9 +26,16 @@ class AgentMemory {
   private val _sensitiveKeys = mutableSetOf<String>()
   val sensitiveKeys: Set<String> get() = _sensitiveKeys
 
+  // Keys explicitly removed via `delete` this session. Concurrent-set because tool execution may
+  // be parallelized (see class doc). Carried back to the host per-RPC so an explicit deletion of a
+  // host-seeded key propagates as a removal — a key merely absent from the snapshot is preserved.
+  private val _deletedKeys = ConcurrentHashMap.newKeySet<String>()
+  val deletedKeys: Set<String> get() = _deletedKeys
+
   fun clear() {
     variables.clear()
     _sensitiveKeys.clear()
+    _deletedKeys.clear()
   }
 
   fun has(key: String): Boolean = variables.containsKey(key)
@@ -36,11 +43,13 @@ class AgentMemory {
   fun delete(key: String) {
     variables.remove(key)
     _sensitiveKeys.remove(key)
+    _deletedKeys.add(key)
   }
 
   fun remember(key: String, value: String) {
     Console.log("Remembering for current test: $key and value: $value")
     variables[key] = value
+    _deletedKeys.remove(key)
   }
 
   /** Like [remember] but redacts the value in logs and excludes it from scripting envelopes. */
@@ -48,6 +57,7 @@ class AgentMemory {
     Console.log("Remembering for current test: $key and value: [REDACTED]")
     variables[key] = value
     _sensitiveKeys.add(key)
+    _deletedKeys.remove(key)
   }
 
   /**

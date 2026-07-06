@@ -68,7 +68,7 @@ class ToolToolEdgeExtractionTest {
        * Opens a URL. Historically this also did a `ctx.tools.android_adbShell(...)` step.
        */
       export const openUrl = trailblaze.tool(SPEC, async (args, ctx) => {
-        // NOTE: we no longer call ctx.tools.android_grantPermission(...) here.
+        // NOTE: we no longer call ctx.tools.android_grantPermissions(...) here.
         await ctx.tools.mobile_maestro({ commands: [] });
       });
       """.trimIndent()

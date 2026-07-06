@@ -235,6 +235,14 @@ internal fun SessionDetailHeader(
           )
         }
         TextButton(onClick = {
+          onViewModeChanged(SessionViewMode.Storyboard)
+        }) {
+          Text(
+            text = "Storyboard",
+            color = if (viewMode == SessionViewMode.Storyboard) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+          )
+        }
+        TextButton(onClick = {
           onViewModeChanged(SessionViewMode.LlmUsage)
         }) {
           Text(

@@ -28,7 +28,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *  - `ACCESS_NOTIFICATIONS` — read notifications.
  *  - `PICTURE_IN_PICTURE` — picture-in-picture mode.
  *
- * **Distinction from [AndroidGrantPermissionTrailblazeTool] (`android_grantPermission`).**
+ * **Distinction from [AndroidGrantPermissionsTrailblazeTool] (`android_grantPermissions`).**
  * `pm grant` (the other tool) grants `protectionLevel="dangerous"` runtime permissions
  * (CAMERA, BLUETOOTH_CONNECT, POST_NOTIFICATIONS, etc.) — the kind that show OS dialogs
  * to the user. `appops set` (this tool) grants the privileged-operation class above.
@@ -55,7 +55,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
     "allow`. Use for the privileged-operation class — MANAGE_EXTERNAL_STORAGE, " +
     "SYSTEM_ALERT_WINDOW, REQUEST_INSTALL_PACKAGES, WRITE_SETTINGS, ACCESS_NOTIFICATIONS, " +
     "PICTURE_IN_PICTURE. For standard `dangerous` runtime permissions (CAMERA, " +
-    "BLUETOOTH_CONNECT, etc.) use `android_grantPermission` instead — the two mechanisms " +
+    "BLUETOOTH_CONNECT, etc.) use `android_grantPermissions` instead — the two mechanisms " +
     "aren't interchangeable.",
 )
 data class AndroidGrantAppOpsPermissionTrailblazeTool(

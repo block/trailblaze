@@ -141,6 +141,9 @@ class McpCommand : Callable<Int> {
         port = port,
         httpsPort = httpsPort,
         wait = true,
+        additionalRouteRegistration = {
+          xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
+        },
       )
     } else if (direct) {
       // Direct STDIO transport (opt-in via --direct/--no-daemon) — runs an in-process

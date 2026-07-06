@@ -279,7 +279,8 @@ class WaypointDiscoveryTest {
 
   @Test
   fun `scripted-tool workspace trailmap waypoints surface once analyzer enrichment is wired in`() {
-    // Regression test for issue #196: `WaypointDiscovery`'s two trailmap-load call sites
+    // Regression test for https://github.com/block/trailblaze/issues/196:
+    // `WaypointDiscovery`'s two trailmap-load call sites
     // used to call TrailblazeProjectConfigLoader without `scriptedToolEnrichment`, so any
     // workspace trailmap carrying a `.ts` scripted-tool descriptor threw during resolution
     // and its waypoints were silently dropped (even though `trailblaze check`/`run` resolved

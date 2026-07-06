@@ -33,6 +33,12 @@ object TrailmapCatalogBuilder {
   private val DISPLAY_NAME = Regex("(?m)^\\s*display_name:\\s*[\"']?(.+?)[\"']?\\s*$")
   private val CLASS_KEY = Regex("(?m)^\\s*class:\\s*\\S")
 
+  // A scripted tool may self-declare an inline `trailhead: { to / dynamic }` block in its spec
+  // object — the TS equivalent of a `*.trailhead.yaml` sidecar. Cheap content scan, same weight
+  // class as DISPLAY_NAME/CLASS_KEY above — not the full bun/ts-json-schema-generator analyzer
+  // pipeline.
+  private val TRAILHEAD_INLINE = Regex("(?m)^\\s*trailhead\\s*:\\s*\\{")
+
   fun build(resourceSource: ConfigResourceSource = platformConfigResourceSource()): List<TrailmapEntry> {
     val dir = TrailblazeConfigPaths.TRAILMAPS_DIR
     fun discover(suffix: String): Map<String, String> =
@@ -69,7 +75,7 @@ object TrailmapCatalogBuilder {
     }
 
     // Scripted (.ts) tools — same filtering as the tool catalog.
-    discover(".ts").forEach { (r, _) ->
+    discover(".ts").forEach { (r, content) ->
       val seg = r.split('/')
       val id = seg.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@forEach
       if (seg.getOrNull(1) != "tools") return@forEach
@@ -78,6 +84,12 @@ object TrailmapCatalogBuilder {
       val stem = name.removeSuffix(".ts")
       if (name.startsWith("_") || stem.endsWith("_shared") || stem == "tools") return@forEach
       tm(id).tools += TrailmapComponent(stem, rel(r), flavor = ToolFlavor.SCRIPTED)
+      // Union into `trailheads` alongside its `tools` entry, so the picker doesn't regress when a
+      // `*.trailhead.yaml` sidecar is replaced by this inline form (mirrors the YAML-sourced +
+      // scripted union ToolDiscoveryToolSet.computeRoleNames already does for the CLI/desktop).
+      if (TRAILHEAD_INLINE.containsMatchIn(content)) {
+        tm(id).trailheads += TrailmapComponent(stem, rel(r))
+      }
     }
 
     // System-prompt markdown living at the trailmap root (id/<file>.md).

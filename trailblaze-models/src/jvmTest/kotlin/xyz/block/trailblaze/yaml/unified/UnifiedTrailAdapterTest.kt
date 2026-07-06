@@ -207,6 +207,71 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
+  fun `per-classifier skip resolves closest-wins for the device under test`() {
+    // A trail skipped on android but not ios: each device sees only its own verdict.
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      skip = linkedMapOf("android" to "flaky on android — see #123"),
+    )
+    // Android phone → chain [android-phone, android] → matches the `android` skip.
+    assertEquals(
+      "flaky on android — see #123",
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("android"), classifier("phone"))),
+    )
+    // iPhone → chain [ios-iphone, ios] → no match → runs (per-platform skip).
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("ios"), classifier("iphone"))),
+      "a skip pinned only to android must not skip an ios run",
+    )
+  }
+
+  @Test
+  fun `resolveSkip device-agnostic — any declared skip counts as skipped`() {
+    val config = UnifiedTrailConfig(id = "x", target = "y", skip = mapOf("ios" to "ios only"))
+    // No classifiers (pre-flight with no device yet): skipped if ANY classifier declares a reason,
+    // so the CLI's skip gate still fires. Blank reasons are ignored.
+    assertEquals("ios only", UnifiedTrailAdapter.resolveSkip(config, emptyList()))
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(
+        UnifiedTrailConfig(id = "x", target = "y", skip = mapOf("android" to "  ")),
+        emptyList(),
+      ),
+      "a blank skip reason is not a skip",
+    )
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(UnifiedTrailConfig(id = "x", target = "y"), emptyList()),
+      "no skip map → null",
+    )
+    // Multi-entry map, device-agnostic → deterministic (lowest classifier key), never decode-order.
+    assertEquals(
+      "aaa",
+      UnifiedTrailAdapter.resolveSkip(
+        UnifiedTrailConfig(id = "x", target = "y", skip = linkedMapOf("z" to "zzz", "a" to "aaa")),
+        emptyList(),
+      ),
+      "device-agnostic skip picks the lowest classifier key deterministically",
+    )
+  }
+
+  @Test
+  fun `lowerConfig carries resolved skip and verbatim tags to the v1 TrailConfig`() {
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      tags = listOf("smoke", "flaky"),
+      skip = mapOf("android" to "blocked"),
+    )
+    // Full lowering (device-aware) resolves the android skip and passes tags through.
+    val v1 = UnifiedTrailAdapter.lowerToTrailItems(config.let {
+      UnifiedTrail(config = it, trail = listOf(UnifiedTrailStep(step = "s", recordable = false)))
+    }, listOf(classifier("android"), classifier("phone")))
+      .filterIsInstance<TrailYamlItem.ConfigTrailItem>().single().config
+    assertEquals("blocked", v1.skip, "resolved per-classifier skip must lower to v1 skip")
+    assertEquals(listOf("smoke", "flaky"), v1.tags, "tags lower verbatim (trail-level, not per-device)")
+  }
+
+  @Test
   fun `config lowering preserves null memory when v3 config omits the field`() {
     val unifiedConfig = UnifiedTrailConfig(id = "x", target = "y")
     val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)

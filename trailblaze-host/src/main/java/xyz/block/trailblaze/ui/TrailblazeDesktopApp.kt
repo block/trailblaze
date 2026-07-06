@@ -101,6 +101,9 @@ abstract class TrailblazeDesktopApp(
         port = serverPort,
         httpsPort = serverHttpsPort,
         wait = false,
+        additionalRouteRegistration = {
+          xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
+        },
       )
     }
     // Advertise the live daemon URL to subprocess MCP plumbing so session spawns can

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -299,7 +300,7 @@ object ToolCatalogBuilder {
 
   private val scriptedAnalyzer: ScriptedToolDefinitionAnalyzer? by lazy {
     runCatching {
-      val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return@runCatching null
+      val bun = BunBinaryResolver.resolveBunBinary() ?: return@runCatching null
       val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return@runCatching null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return@runCatching null
       if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) return@runCatching null

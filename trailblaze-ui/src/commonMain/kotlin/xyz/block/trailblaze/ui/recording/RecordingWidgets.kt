@@ -151,13 +151,15 @@ fun ToolParamForm(
   paramValues: Map<String, String>,
   onValueChange: (String, String) -> Unit,
 ) {
-  if (descriptor.requiredParameters.isNotEmpty()) {
+  val requiredParameters = visibleParameters(descriptor.requiredParameters, paramValues)
+  val optionalParameters = visibleParameters(descriptor.optionalParameters, paramValues)
+  if (requiredParameters.isNotEmpty()) {
     Text(
       text = "Required",
       style = MaterialTheme.typography.labelMedium,
     )
     Spacer(Modifier.height(4.dp))
-    descriptor.requiredParameters.forEach { param ->
+    requiredParameters.forEach { param ->
       ParameterField(param = param, value = paramValues[param.name] ?: "") { v ->
         onValueChange(param.name, v)
       }
@@ -165,15 +167,15 @@ fun ToolParamForm(
     }
   }
 
-  if (descriptor.optionalParameters.isNotEmpty()) {
-    if (descriptor.requiredParameters.isNotEmpty()) Spacer(Modifier.height(8.dp))
+  if (optionalParameters.isNotEmpty()) {
+    if (requiredParameters.isNotEmpty()) Spacer(Modifier.height(8.dp))
     Text(
       text = "Optional",
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(4.dp))
-    descriptor.optionalParameters.forEach { param ->
+    optionalParameters.forEach { param ->
       ParameterField(param = param, value = paramValues[param.name] ?: "") { v ->
         onValueChange(param.name, v)
       }
@@ -235,17 +237,49 @@ fun buildSingleToolYaml(
   descriptor: TrailblazeToolDescriptor,
   paramValues: Map<String, String>,
 ): String {
-  val requiredNames = descriptor.requiredParameters.map { it.name }.toSet()
-  val emittedParams = (descriptor.requiredParameters + descriptor.optionalParameters).filter { param ->
+  val requiredParameters = visibleParameters(descriptor.requiredParameters, paramValues)
+  val optionalParameters = visibleParameters(descriptor.optionalParameters, paramValues)
+  val requiredNames = requiredParameters.map { it.name }.toSet()
+  val emittedParams = (requiredParameters + optionalParameters).filter { param ->
     val raw = paramValues[param.name]
     raw != null && (param.name in requiredNames || raw.isNotBlank())
   }
   if (emittedParams.isEmpty()) {
     return "${descriptor.name}:\n"
   }
-  val body = emittedParams.joinToString("\n") { param ->
-    val raw = paramValues[param.name].orEmpty()
-    "  ${param.name}: $raw"
-  }
+  val body = buildYamlBody(emittedParams.map { it.name }, paramValues)
   return "${descriptor.name}:\n$body"
+}
+
+fun visibleParameters(
+  parameters: List<TrailblazeToolParameterDescriptor>,
+  paramValues: Map<String, String>,
+): List<TrailblazeToolParameterDescriptor> =
+  parameters.filter { it.isVisible(paramValues) }
+
+private fun TrailblazeToolParameterDescriptor.isVisible(paramValues: Map<String, String>): Boolean {
+  val condition = visibleWhen ?: return true
+  val controllingValue = paramValues[condition.parameterName] ?: return false
+  return controllingValue in condition.values
+}
+
+private fun buildYamlBody(paramNames: List<String>, paramValues: Map<String, String>): String {
+  val lines = mutableListOf<String>()
+  val emittedNestedParents = mutableSetOf<String>()
+  for (name in paramNames) {
+    if (!name.contains(".")) {
+      lines += "  $name: ${paramValues[name].orEmpty()}"
+      continue
+    }
+    val parent = name.substringBefore(".")
+    if (!emittedNestedParents.add(parent)) continue
+    val children = paramNames
+      .filter { it.startsWith("$parent.") }
+      .map { it.substringAfter(".") to paramValues[it].orEmpty() }
+    lines += "  $parent:"
+    children.forEach { (child, value) ->
+      lines += "    $child: $value"
+    }
+  }
+  return lines.joinToString("\n")
 }

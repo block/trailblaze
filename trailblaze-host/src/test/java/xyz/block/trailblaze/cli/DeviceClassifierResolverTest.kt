@@ -45,6 +45,30 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
+  fun `fromDriver lowers a driver to its platform classifier`() {
+    // An Android on-device driver → [android]; an iOS host driver → [ios]. Platform-only —
+    // phone/tablet needs a real device to probe, which a driver-only (device-less) run lacks.
+    assertEquals(
+      listOf("android"),
+      DeviceClassifierResolver.fromDriver("ANDROID_ONDEVICE_ACCESSIBILITY").map { it.classifier },
+    )
+    assertEquals(
+      listOf("ios"),
+      DeviceClassifierResolver.fromDriver("IOS_HOST").map { it.classifier },
+    )
+  }
+
+  @Test
+  fun `fromDriver returns empty for null, blank, or unknown driver`() {
+    // No --driver, or a garbage value, must not synthesize a classifier — the caller then falls
+    // back to the device-agnostic any-skip behavior rather than a wrong per-platform verdict.
+    assertTrue(DeviceClassifierResolver.fromDriver(null).isEmpty())
+    assertTrue(DeviceClassifierResolver.fromDriver("").isEmpty())
+    assertTrue(DeviceClassifierResolver.fromDriver("   ").isEmpty())
+    assertTrue(DeviceClassifierResolver.fromDriver("NOT_A_REAL_DRIVER").isEmpty())
+  }
+
+  @Test
   fun `iOS spec with iPhone-shaped dims yields ios iphone`() {
     // iPhone 17 Pro is 1206x2622-ish; min side ~1206, well under 1536 → iphone per canonical.
     val udid = "D27D6F3F-AAAA-BBBB-CCCC-1234567890AB"

@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.cli
+package xyz.block.trailblaze.report
 
 import java.nio.file.Files
 import kotlin.test.Test
@@ -13,7 +13,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 
 /**
  * Pure-logic tests for the headless report generator's metadata mapping — the contract the viewer's
@@ -88,7 +88,7 @@ class RunReportGeneratorTest {
    */
   @Test
   fun generate_buildsSelfContainedReport_endToEnd() {
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
     val tmp = Files.createTempDirectory("rrg-e2e-").toFile()
     try {
       val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)

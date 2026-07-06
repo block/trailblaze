@@ -90,6 +90,24 @@ object TrailblazeProjectConfigLoader {
     resolveInternal(loaded, includeClasspathTrailmaps = true, scriptedToolEnrichment = null).projectConfig
 
   /**
+   * Binary-compatible shim for the pre-[includeOrphanTrailmaps] public signature.
+   *
+   * The 4-arg overload below is the canonical form; this 3-arg form delegates with
+   * `includeOrphanTrailmaps = false`. Keeping the original signature live preserves the Kotlin
+   * metadata + JVM bytecode contract for any external consumer compiled against an earlier
+   * `:trailblaze-common` jar — without this, adding a 4th defaulted parameter would silently
+   * break with `NoSuchMethodError` for those callers (Kotlin default-args generate a
+   * `resolveRuntime$default(...)` synthetic that includes every positional slot, so its
+   * descriptor changes shape when a slot is added even with a default). Same pattern as
+   * [TrailblazeCompiler.compile]'s 4-arg/5-arg shim.
+   */
+  fun resolveRuntime(
+    loaded: LoadedTrailblazeProjectConfig,
+    includeClasspathTrailmaps: Boolean = true,
+    scriptedToolEnrichment: ScriptedToolEnrichment? = null,
+  ): TrailblazeResolvedConfig = resolveRuntime(loaded, includeClasspathTrailmaps, scriptedToolEnrichment, includeOrphanTrailmaps = false)
+
+  /**
    * Resolves [loaded] into a [TrailblazeResolvedConfig] that includes runtime artifacts
    * surfaced from trailmaps — today: waypoints. Use this when callers need access to
    * trailmap-bundled non-schema data; otherwise [resolveRefs] is sufficient.
@@ -114,23 +132,40 @@ object TrailblazeProjectConfigLoader {
    * analyzer subprocess is `suspend` for symmetry with its internals, but the production
    * entry points are all single-shot). Do NOT invoke from a request-serving thread when
    * an analyzer-backed enrichment is wired in.
+   *
+   * **[includeOrphanTrailmaps]** — off by default, so every existing caller (target/waypoint
+   * discovery, CLI `check`/`compile`) is unaffected. Normally [resolvedTrailmaps] only contains
+   * target trailmaps plus whatever they pull in transitively via `dependencies:` — a library
+   * trailmap nothing declares as a dependency (e.g. one whose tools are only ever referenced by
+   * id through the global tool/toolset registry, not a static `dependencies:` edge) is invisible
+   * to this method even though it's a perfectly real, authored trailmap. Set this to `true` when
+   * a caller's job is enumerating every trailmap that exists (e.g. a catalog/browsing UI), not
+   * just what a specific target's dispatch graph reaches — every additional trailmap found this
+   * way still goes through the exact same per-trailmap sibling-resolution and analyzer enrichment
+   * as any other, it's just not gated on dependency-graph reachability.
+   *
+   * No default values on this overload — giving both overloads defaulted trailing params would
+   * make a 3-arg call ambiguous between "exact match on the shim above" and "default-substituted
+   * match on this one". Every internal call site passes all 4 explicitly.
    */
   fun resolveRuntime(
     loaded: LoadedTrailblazeProjectConfig,
-    includeClasspathTrailmaps: Boolean = true,
-    scriptedToolEnrichment: ScriptedToolEnrichment? = null,
-  ): TrailblazeResolvedConfig = resolveInternal(loaded, includeClasspathTrailmaps, scriptedToolEnrichment)
+    includeClasspathTrailmaps: Boolean,
+    scriptedToolEnrichment: ScriptedToolEnrichment?,
+    includeOrphanTrailmaps: Boolean,
+  ): TrailblazeResolvedConfig = resolveInternal(loaded, includeClasspathTrailmaps, scriptedToolEnrichment, includeOrphanTrailmaps)
 
   private fun resolveInternal(
     loaded: LoadedTrailblazeProjectConfig,
     includeClasspathTrailmaps: Boolean,
     scriptedToolEnrichment: ScriptedToolEnrichment?,
+    includeOrphanTrailmaps: Boolean = false,
   ): TrailblazeResolvedConfig {
     val anchor = loaded.sourceFile.parentFile ?: File(".")
     val raw = loaded.raw
     val resolvedToolsets = raw.toolsets.map { resolveToolsetEntry(it, anchor) }
     val resolvedTools = raw.tools.map { resolveToolEntry(it, anchor) }
-    val trailmapArtifacts = resolveTrailmapArtifacts(raw.targets, anchor, includeClasspathTrailmaps, scriptedToolEnrichment)
+    val trailmapArtifacts = resolveTrailmapArtifacts(raw.targets, anchor, includeClasspathTrailmaps, scriptedToolEnrichment, includeOrphanTrailmaps)
     val projectConfig = TrailblazeProjectConfig(
       defaults = raw.defaults,
       targets = trailmapArtifacts.successfulTargetIds,
@@ -177,6 +212,17 @@ object TrailblazeProjectConfigLoader {
     load(configFile)?.let(::resolveRefs)
 
   /**
+   * Binary-compatible shim for the pre-[includeOrphanTrailmaps] public signature — see the
+   * [resolveRuntime] shim above for the full rationale. Delegates with
+   * `includeOrphanTrailmaps = false`.
+   */
+  fun loadResolvedRuntime(
+    configFile: File,
+    includeClasspathTrailmaps: Boolean = true,
+    scriptedToolEnrichment: ScriptedToolEnrichment? = null,
+  ): TrailblazeResolvedConfig? = loadResolvedRuntime(configFile, includeClasspathTrailmaps, scriptedToolEnrichment, includeOrphanTrailmaps = false)
+
+  /**
    * Convenience: [load] + [resolveRuntime] in one call. Returns a
    * [TrailblazeResolvedConfig] wrapper that bundles the resolved
    * [TrailblazeProjectConfig] schema together with classpath+workspace trailmap-bundled
@@ -187,13 +233,17 @@ object TrailblazeProjectConfigLoader {
    * resolution on the returned wrapper. Use this for runtime code paths
    * (CLI commands, agent runtime). Use [loadResolved] for tests that need an
    * isolated workspace view, or for legacy callers that only need the schema.
+   *
+   * [includeOrphanTrailmaps] — see [resolveRuntime]'s kdoc; off by default. No default values on
+   * this overload for the same overload-ambiguity reason as [resolveRuntime]'s canonical form.
    */
   fun loadResolvedRuntime(
     configFile: File,
-    includeClasspathTrailmaps: Boolean = true,
-    scriptedToolEnrichment: ScriptedToolEnrichment? = null,
+    includeClasspathTrailmaps: Boolean,
+    scriptedToolEnrichment: ScriptedToolEnrichment?,
+    includeOrphanTrailmaps: Boolean,
   ): TrailblazeResolvedConfig? =
-    load(configFile)?.let { resolveRuntime(it, includeClasspathTrailmaps, scriptedToolEnrichment) }
+    load(configFile)?.let { resolveRuntime(it, includeClasspathTrailmaps, scriptedToolEnrichment, includeOrphanTrailmaps) }
 
   private fun parseFile(file: File): TrailblazeProjectConfig {
     return try {
@@ -328,6 +378,7 @@ object TrailblazeProjectConfigLoader {
     anchor: File,
     includeClasspathTrailmaps: Boolean,
     scriptedToolEnrichment: ScriptedToolEnrichment?,
+    includeOrphanTrailmaps: Boolean = false,
   ): ResolvedTrailmapArtifacts {
     val workspaceTrailmapDir = File(anchor, TrailblazeConfigPaths.TRAILMAPS_SUBDIR)
 
@@ -406,6 +457,44 @@ object TrailblazeProjectConfigLoader {
         "Workspace `targets:` validation failed:\n" +
           rootValidationErrors.joinToString("\n") { "  - $it" },
       )
+    }
+
+    // Step 2b (opt-in): pull in every remaining trailmap on disk/classpath that the target +
+    // dependency-graph walk above didn't already reach — e.g. a library trailmap nothing
+    // declares as a `dependencies:` edge because its tools are only ever called by id through
+    // the global registry. These are NOT root candidates (no target-block requirement, no
+    // rootValidationErrors on failure) — a missing or malformed one is just skipped with a
+    // logged warning, same tolerance as a transitive-dependency load failure above.
+    if (includeOrphanTrailmaps) {
+      val allKnownIds = linkedSetOf<String>()
+      if (workspaceTrailmapDir.isDirectory) {
+        workspaceTrailmapDir.listFiles().orEmpty()
+          .filter { it.isDirectory }
+          .sortedBy { it.name }
+          .forEach { allKnownIds += it.name }
+      }
+      classpathById.keys.sorted().forEach { allKnownIds += it }
+      allKnownIds.forEach { id ->
+        if (id in loadCtx.loaded) return@forEach
+        when (val result = loadCtx.loadById(id)) {
+          is TrailmapLoadResult.Found -> {
+            // Walk this orphan's transitive `dependencies:` too — same as a root target
+            // trailmap — so an orphan that depends on another disk/classpath trailmap doesn't
+            // fail Step 3/4's strict dep-graph validation for a dependency that was perfectly
+            // loadable, just never reached because nothing declared it as a root.
+            try {
+              loadCtx.loadTransitively(result.manifest)
+            } catch (e: TrailblazeProjectConfigException) {
+              Console.log(
+                "Warning: Failed to load a dependency of orphan trailmap '$id' " +
+                  "(${result.manifest.source.describe()}): ${e.message}",
+              )
+            }
+          }
+          is TrailmapLoadResult.ParseFailure -> {} // already logged inside loadById.
+          is TrailmapLoadResult.NotFound -> {} // directory listing raced a delete, or classpath id mismatch; not an error.
+        }
+      }
     }
 
     // Step 3: strict dependency-graph validation across the full loaded pool. Every trailmap's

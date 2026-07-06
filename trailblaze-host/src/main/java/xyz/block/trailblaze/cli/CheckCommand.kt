@@ -19,6 +19,7 @@ import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
@@ -271,7 +272,7 @@ class CheckCommand : Callable<Int> {
    * `[ScriptedToolDefinitionAnalyzer]` prefix for grep-ability.
    */
   private fun emitScriptedToolDefinitionsDebug(trailmaps: List<Path>, workspaceRoot: File) {
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary()
+    val bun = BunBinaryResolver.resolveBunBinary()
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir)
     if (bun == null || sdkDir == null || shim == null) {

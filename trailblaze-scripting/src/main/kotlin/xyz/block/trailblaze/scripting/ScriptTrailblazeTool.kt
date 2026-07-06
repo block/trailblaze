@@ -128,11 +128,12 @@ data class ScriptTrailblazeTool(
     internal const val MAX_DISPATCH_DEPTH = 16
 
     /**
-     * Per-thread counter that bumps for every `trailblaze.execute()` call in progress.
-     * Scripted-tool-in-scripted-tool reentrance is legitimate; runaway recursion is not.
-     * Thread-local is sufficient because the engine evaluates synchronously via
-     * `runBlocking`, so all dispatch frames for a given top-level invocation share
-     * the same calling thread.
+     * Counter that bumps for every `trailblaze.execute()` call in progress. Scripted-tool-in-
+     * scripted-tool reentrance is legitimate; runaway recursion is not. Each top-level
+     * [TrailblazeScriptEngine.evaluate] call runs on its own dedicated engine thread, so a bare
+     * ThreadLocal would reset to 0 across a nested `evaluate()` call rather than reflecting the
+     * real nesting depth — [TrailblazeScriptEngine.evaluate] carries the current value forward
+     * into each new engine thread via `dispatchDepth.asContextElement()`.
      */
     internal val dispatchDepth = ThreadLocal.withInitial { 0 }
   }

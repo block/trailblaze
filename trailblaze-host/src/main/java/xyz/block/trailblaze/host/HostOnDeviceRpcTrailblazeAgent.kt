@@ -491,7 +491,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             // Apply the on-device agent's post-execution memory back into the host's shared
             // instance so writes from on-device tools (including TS handlers) are visible to
             // subsequent host-side or RPC dispatches.
-            applyMemorySnapshot(first.data.memorySnapshot)
+            applyMemorySnapshot(first.data.memorySnapshot, first.data.memoryDeletions)
             onDeviceToolLogCount.set(first.data.onDeviceToolLogCount)
             toToolResult(name, first, timeBeforeExecution)
           }
@@ -518,7 +518,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             }
             when (val retry: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
               is RpcResult.Success -> {
-                applyMemorySnapshot(retry.data.memorySnapshot)
+                applyMemorySnapshot(retry.data.memorySnapshot, retry.data.memoryDeletions)
                 onDeviceToolLogCount.set(retry.data.onDeviceToolLogCount)
                 toToolResult(name, retry, timeBeforeExecution)
               }
@@ -620,9 +620,17 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
   }
 
-  /** Replaces this agent's [memory] with the device's post-execution snapshot. */
-  private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>) {
-    memory.variables.clear()
+  /** Merges the device's post-execution snapshot into this agent's [memory] then applies explicit deletes. */
+  private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>, deletions: List<String>) {
+    // Merge (device wins on conflict) rather than replace. An on-device tool's per-request
+    // AgentMemory is seeded from the host push at request start, so its returned snapshot SHOULD
+    // carry back every host key — but some dispatch paths (e.g. a scripted tool whose request
+    // resets the on-device session) return a snapshot that drops host-set keys, and a plain
+    // clear()+putAll() then WIPED them, losing a value a later ${var} step needed (the "typed ''"
+    // empty-input false green). Preserving host-only keys keeps cross-step remembers alive;
+    // device-written keys still overwrite on conflict. [deletions] then removes keys an on-device
+    // tool EXPLICITLY deleted — merge alone can't distinguish those from a merely-omitted key.
     memory.variables.putAll(deviceSnapshot)
+    deletions.forEach { memory.variables.remove(it) }
   }
 }

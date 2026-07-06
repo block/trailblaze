@@ -1399,21 +1399,32 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Dispatches [text] via `ACTION_SET_TEXT` on the focused editable node. Returns the
-     * action's boolean result (or false when no focused editable exists). Callers must
-     * verify the field actually changed via [focusedTextChangedFrom] — many masked
+     * Appends [text] to the focused editable node's existing content via `ACTION_SET_TEXT`.
+     * Returns the action's boolean result (or false when no focused editable exists). Callers
+     * must verify the field actually changed via [focusedTextChangedFrom] — many masked
      * EditTexts return true here while silently rejecting the CharSequence.
+     *
+     * **Why we append rather than set-only.** `ACTION_SET_TEXT` REPLACES the entire field, so
+     * dispatching just [text] clears whatever was already there. The instrumentation (Maestro/
+     * UiAutomator) and iOS drivers insert at the cursor and never clear, and the keystroke-
+     * synthesis fallback below (`inputTextByTyping`) also appends — so a set-only fast path made
+     * the accessibility driver the odd one out (it wiped the field before typing). We read the
+     * node's current text and set `existing + text` to match the other drivers' additive
+     * behavior. (This appends at the end; it does not honor a mid-field cursor position — the
+     * common focus-then-type flow puts the caret at the end, and the reported divergence was
+     * purely the clearing, not caret placement.)
      */
     private fun tryDispatchActionSetText(text: String): Boolean {
       val root = getApplicationWindowRoot() ?: return false
       return try {
         val editableNode = findFocusedEditableNode(root) ?: return false
         try {
+          val existing = editableNode.text?.toString().orEmpty()
           val args =
             Bundle().apply {
               putCharSequence(
                 AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text,
+                existing + text,
               )
             }
           editableNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)

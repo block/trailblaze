@@ -574,7 +574,7 @@ class TrailblazeTrailmapManifestLoaderTest {
         listOf(
           "android_adbShell",
           "android_grantAppOpsPermission",
-          "android_grantPermission",
+          "android_grantPermissions",
           "android_sendBroadcast",
           "android_systemUiDemoMode",
           "android_writeBytesToFile",

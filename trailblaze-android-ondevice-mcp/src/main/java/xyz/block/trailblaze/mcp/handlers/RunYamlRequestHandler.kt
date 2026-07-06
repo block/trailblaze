@@ -505,6 +505,7 @@ class RunYamlRequestHandler(
               success = false,
               errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
               memorySnapshot = agentMemory.variables.toMap(),
+              memoryDeletions = agentMemory.deletedKeys.toList(),
               nonRecoverableWedge = timedOutWhileWedged,
             ),
           )
@@ -518,6 +519,7 @@ class RunYamlRequestHandler(
             errorMessage = (resolved as? Outcome.Failure)?.message
               ?: (resolved as? Outcome.Cancelled)?.let { "Execution cancelled" },
             memorySnapshot = agentMemory.variables.toMap(),
+            memoryDeletions = agentMemory.deletedKeys.toList(),
             toolMessage = toolPayload?.message,
             toolStructuredContent = toolPayload?.structuredContent,
             onDeviceToolLogCount = successOutcome?.onDeviceToolLogCount ?: 0,

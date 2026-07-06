@@ -437,27 +437,60 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
-   * Bidirectional memory sync — inbound: the device's response `memorySnapshot` replaces
-   * the agent's memory on RPC success, so on-device tool writes flow back to the host.
+   * Bidirectional memory sync — inbound: the device's response `memorySnapshot` is MERGED into
+   * the agent's memory on RPC success (device wins on conflict), so on-device tool writes flow
+   * back to the host without wiping host-set keys the device's snapshot happened to omit.
    */
   @Test
-  fun `device response memory snapshot replaces agent memory on success`() {
+  fun `device response memory snapshot merges into agent memory on success`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to
         """{"sessionId":"test-session","success":true,""" +
-        """"memorySnapshot":{"deviceWroteThis":"value-from-device"}}"""
+        """"memorySnapshot":{"deviceWroteThis":"value-from-device","shared":"from-device"},""" +
+        """"memoryDeletions":[]}"""
     }
 
     val agent = createAgent()
-    agent.memory.remember("willBeReplaced", "old-value")
+    // A host-only key the device's snapshot does NOT carry back, plus a key the device also writes.
+    agent.memory.remember("hostOnly", "kept")
+    agent.memory.remember("shared", "from-host")
     val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
     runBlocking {
       agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
     }
 
-    // Full-state replace: device wins.
+    // Device write appears; host-only key survives (not clobbered by an omitting snapshot);
+    // device wins on the conflicting key.
     assertThat(agent.memory.variables["deviceWroteThis"]).isEqualTo("value-from-device")
-    assertThat(agent.memory.variables.containsKey("willBeReplaced")).isFalse()
+    assertThat(agent.memory.variables["hostOnly"]).isEqualTo("kept")
+    assertThat(agent.memory.variables["shared"]).isEqualTo("from-device")
+  }
+
+  /**
+   * The explicit-deletion half of the merge contract: a device response carrying
+   * `memoryDeletions:["k"]` REMOVES `k` from host memory (an on-device tool explicitly deleted it),
+   * while a host key the snapshot merely omits still survives the merge. Without the deletions
+   * signal, merge alone can't distinguish an explicit delete from an omission and a later `${k}`
+   * would see stale data.
+   */
+  @Test
+  fun `device response memoryDeletions removes the key while an omitted host key survives`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        """{"sessionId":"test-session","success":true,"memorySnapshot":{},""" +
+        """"memoryDeletions":["explicitlyDeleted"]}"""
+    }
+
+    val agent = createAgent()
+    agent.memory.remember("explicitlyDeleted", "stale")
+    agent.memory.remember("omittedButKept", "survives")
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    runBlocking {
+      agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(agent.memory.variables["explicitlyDeleted"]).isNull()
+    assertThat(agent.memory.variables["omittedButKept"]).isEqualTo("survives")
   }
 
   @Test

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.scripting
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.QuickJsException
 import com.dokar.quickjs.binding.function
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -96,7 +97,11 @@ object TrailblazeScriptEngine {
       Thread(r, "quickjs-script-engine-${scriptEngineThreadSeq.incrementAndGet()}").apply { isDaemon = true }
     }.asCoroutineDispatcher()
     try {
-      withContext(engineDispatcher) {
+      // Carry ScriptTrailblazeTool.dispatchDepth's current value into the new engine thread —
+      // a bare ThreadLocal would silently read back 0 there, defeating MAX_DISPATCH_DEPTH for
+      // any nested evaluate() call (e.g. a tool dispatched via trailblaze.execute() that itself
+      // triggers another script evaluation).
+      withContext(engineDispatcher + ScriptTrailblazeTool.dispatchDepth.asContextElement()) {
         val quickJs = QuickJs.create(engineDispatcher)
         try {
           if (dispatcher != null) {

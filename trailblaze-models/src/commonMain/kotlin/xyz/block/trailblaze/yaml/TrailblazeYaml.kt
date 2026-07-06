@@ -330,8 +330,13 @@ class TrailblazeYaml(
       .firstOrNull()?.config
     // No device here (static config extraction), so no per-classifier driver to resolve —
     // pass resolvedDriver = null explicitly. The device-aware driver resolution happens in
-    // lowerToTrailItems, not here (or via the device-aware overload below).
-    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(doc.trail.config, resolvedDriver = null)
+    // lowerToTrailItems, not here (or via the device-aware overload below). Skip resolves
+    // device-agnostically: skipped if any classifier declares a reason (see resolveSkip).
+    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
+      doc.trail.config,
+      resolvedDriver = null,
+      resolvedSkip = UnifiedTrailAdapter.resolveSkip(doc.trail.config, emptyList()),
+    )
   }
 
   /**
@@ -353,6 +358,7 @@ class TrailblazeYaml(
     is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
       doc.trail.config,
       resolvedDriver = UnifiedTrailAdapter.resolveDriver(doc.trail.config, deviceClassifiers),
+      resolvedSkip = UnifiedTrailAdapter.resolveSkip(doc.trail.config, deviceClassifiers),
     )
   }
 

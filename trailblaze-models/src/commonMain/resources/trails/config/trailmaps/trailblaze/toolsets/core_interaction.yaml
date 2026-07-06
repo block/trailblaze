@@ -17,6 +17,7 @@ tools:
   - eraseText
   - hideKeyboard
   - inputText
+  - inputTextRandom
   - launchApp
   - networkConnection
   - openUrl

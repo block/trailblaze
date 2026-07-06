@@ -113,7 +113,7 @@ data class AndroidWriteBytesToFileTrailblazeTool(
       )
     } catch (e: CancellationException) {
       // Propagate cancellation so structured-concurrency teardown isn't swallowed. Precedent:
-      // `AdbShellTrailblazeTool.execute`, `AndroidGrantPermissionTrailblazeTool.execute`.
+      // `AdbShellTrailblazeTool.execute`, `AndroidGrantPermissionsTrailblazeTool.execute`.
       throw e
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown(

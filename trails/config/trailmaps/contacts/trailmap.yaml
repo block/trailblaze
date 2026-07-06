@@ -32,6 +32,8 @@ target:
     ios:
       app_ids:
         - com.apple.MobileAddressBook
+      tools:
+        - contacts_ios_launchApp
     web: {}
     compose: {}
 waypoints:

@@ -12,6 +12,7 @@ target:
       # into the delivered top-level tool list at load time.
       tools:
         - calendar_android_launchApp
+        - calendar_android_launch
     ios: {}
     web: {}
     compose: {}

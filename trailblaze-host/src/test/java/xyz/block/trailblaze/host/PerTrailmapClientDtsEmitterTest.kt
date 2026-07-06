@@ -25,6 +25,7 @@ import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import kotlinx.serialization.json.buildJsonArray
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -779,7 +780,7 @@ class PerTrailmapClientDtsEmitterTest {
 
   @Test
   fun `analyzer-derived TypedToolOverride upgrades args and result in the rendered client_d_ts`() {
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary()
+    val bun = BunBinaryResolver.resolveBunBinary()
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir)
     val tsjsg = sdkDir?.let { File(it, "node_modules/ts-json-schema-generator") }
@@ -909,7 +910,7 @@ class PerTrailmapClientDtsEmitterTest {
     // typed-surface upgrade across the trailmap boundary. Fix: pre-analyze every trailmap once
     // and walk the dep closure (same shape as `collectTrailmapTypedScriptedTools`) when
     // building each consumer's override map.
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary()
+    val bun = BunBinaryResolver.resolveBunBinary()
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir()
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir)
     val tsjsg = sdkDir?.let { File(it, "node_modules/ts-json-schema-generator") }

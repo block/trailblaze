@@ -573,16 +573,20 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Grant a dangerous runtime permission to an app via `pm grant`. Android-only.
+     * Grant one or more dangerous runtime permissions to an app via `pm grant`, in a single call.
+     * A permission the target doesn't declare is a tolerated no-op (not a failure), so a
+     * conservative superset is fine; an empty list is a no-op; a single grant is a one-element
+     * array. For AppOps-class operations (`MANAGE_EXTERNAL_STORAGE`, …) use
+     * `android_grantAppOpsPermission` instead. Android-only.
      *
-     * Source: `AndroidGrantPermissionTrailblazeTool.kt` (`android_grantPermission`).
+     * Source: `AndroidGrantPermissionsTrailblazeTool.kt` (`android_grantPermissions`).
      */
-    android_grantPermission: {
+    android_grantPermissions: {
       args: {
         /** App id (package) to grant to. */
         appId: string;
-        /** Permission name, e.g. `android.permission.CAMERA`. */
-        permission: string;
+        /** Permission names, e.g. `["android.permission.CAMERA", "android.permission.RECORD_AUDIO"]`. */
+        permissions: string[];
       };
       result: string;
     };

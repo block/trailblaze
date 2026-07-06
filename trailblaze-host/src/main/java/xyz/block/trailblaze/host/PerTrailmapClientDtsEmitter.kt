@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
@@ -245,7 +246,7 @@ object PerTrailmapClientDtsEmitter {
    * degradation path) and bypass this resolver by passing `analyzer = ...` to [emit].
    */
   private fun resolveAnalyzerOrNull(): ScriptedToolDefinitionAnalyzer? {
-    val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return null
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return null
     val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
     val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
     // Preflight: the shim's deps must be resolvable — either a real SDK tree with

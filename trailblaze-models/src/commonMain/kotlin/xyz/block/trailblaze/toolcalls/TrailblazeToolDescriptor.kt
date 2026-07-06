@@ -20,6 +20,21 @@ data class TrailblazeToolParameterDescriptor(
    * case worth surfacing as a misconfiguration rather than silently coercing to null).
    */
   val validValues: List<String>? = null,
+) {
+  /**
+   * Optional UI visibility rule for parameters that only make sense after another parameter has
+   * selected a particular value. Kept outside the primary constructor so adding this serialized
+   * metadata does not change the public JVM constructor/copy ABI for existing callers.
+   *
+   * Null means always visible.
+   */
+  var visibleWhen: TrailblazeToolParameterVisibility? = null
+}
+
+@Serializable
+data class TrailblazeToolParameterVisibility(
+  val parameterName: String,
+  val values: List<String>,
 )
 
 /**

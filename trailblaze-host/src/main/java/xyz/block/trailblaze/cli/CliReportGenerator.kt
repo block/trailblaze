@@ -18,6 +18,7 @@ import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.ReportTemplateResolver
+import xyz.block.trailblaze.report.RunReportGenerator
 import xyz.block.trailblaze.report.WasmReport
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata

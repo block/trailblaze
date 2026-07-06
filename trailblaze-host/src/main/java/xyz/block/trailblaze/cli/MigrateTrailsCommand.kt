@@ -3,7 +3,7 @@ package xyz.block.trailblaze.cli
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
-import xyz.block.trailblaze.migration.TrailMigrator
+import xyz.block.trailblaze.migration.UnifiedTrailMigrator
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import java.io.File
@@ -69,7 +69,7 @@ class MigrateTrailsCommand : Callable<Int> {
     }
 
     val result = try {
-      TrailMigrator(TrailblazeYaml.Default).migrate(dir)
+      UnifiedTrailMigrator(TrailblazeYaml.Default).migrate(dir)
     } catch (e: IllegalArgumentException) {
       Console.error("trailblaze migrate-trails: ${e.message ?: e::class.simpleName}")
       return EXIT_USAGE
@@ -78,8 +78,8 @@ class MigrateTrailsCommand : Callable<Int> {
       return EXIT_FAILURE
     }
 
-    val drift = TrailMigrator.driftComments(result.report.drift) +
-      TrailMigrator.memoryDriftComments(result.report.memoryDrift)
+    val drift = UnifiedTrailMigrator.driftComments(result.report.drift) +
+      UnifiedTrailMigrator.memoryDriftComments(result.report.memoryDrift)
     val yamlText = TrailblazeYaml.Default.encodeUnifiedTrailToString(
       trail = result.trail,
       leadingComments = drift,

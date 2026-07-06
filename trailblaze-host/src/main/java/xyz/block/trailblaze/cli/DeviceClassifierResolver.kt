@@ -229,6 +229,22 @@ object DeviceClassifierResolver {
   }
 
   /**
+   * Resolve the classifier list for a `--driver` value when no `--device` spec is available.
+   * A driver names its platform ([TrailblazeDriverType.platform]), so `ANDROID_ONDEVICE_*` lowers
+   * to `[android]` and `IOS_HOST` to `[ios]`. Used as a pre-flight fallback for per-classifier
+   * `skip:`/`tags:` resolution on a driver-pinned, device-less run — so an `android`-only skip
+   * halts an android run but not an `IOS_HOST` one, instead of the device-agnostic any-skip
+   * fallback. Returns the platform-only classifier (no phone/tablet category — that needs a real
+   * device to probe); `emptyList()` when [driverSpec] is null/blank or names no known
+   * [TrailblazeDriverType].
+   */
+  fun fromDriver(driverSpec: String?): List<TrailblazeDeviceClassifier> {
+    if (driverSpec.isNullOrBlank()) return emptyList()
+    val driver = runCatching { TrailblazeDriverType.valueOf(driverSpec) }.getOrNull() ?: return emptyList()
+    return listOf(driver.platform.asTrailblazeDeviceClassifier())
+  }
+
+  /**
    * Direct entry point for callers that already hold a [TrailblazeDevicePlatform] + instance ID
    * pair (e.g. `device list` walking the discovered device summaries). Skips the spec parse
    * and goes straight to the canonical classifier.

@@ -12,14 +12,14 @@ import kotlin.test.assertTrue
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
- * Algorithm tests for [TrailMigrator]. Each test materializes a tiny v1 trail
+ * Algorithm tests for [UnifiedTrailMigrator]. Each test materializes a tiny v1 trail
  * folder in a temp dir, runs the migrator, and asserts on the resulting unified
  * trail's shape. Family collapse cases verify the `reason:` stripping rule.
  */
-class TrailMigratorTest {
+class UnifiedTrailMigratorTest {
 
   private val yaml = TrailblazeYaml.Default
-  private val migrator = TrailMigrator(yaml)
+  private val migrator = UnifiedTrailMigrator(yaml)
 
   @Test
   fun `refuses to migrate a trail that contains a trailhead block`() {
@@ -550,7 +550,7 @@ class TrailMigratorTest {
     assertTrue(result.trail.trail.isNotEmpty())
     val emitted = yaml.encodeUnifiedTrailToString(
       result.trail,
-      leadingComments = TrailMigrator.driftComments(result.report.drift),
+      leadingComments = UnifiedTrailMigrator.driftComments(result.report.drift),
     )
     val reparsed = yaml.decodeUnifiedTrail(emitted)
     assertEquals(result.trail.config.id, reparsed.config.id)
@@ -639,13 +639,13 @@ class TrailMigratorTest {
 
   @Test
   fun `memoryDriftComments renders every per-platform memory map`() {
-    val drift = TrailMigrator.MemoryDriftEntry(
+    val drift = UnifiedTrailMigrator.MemoryDriftEntry(
       memoryByClassifier = linkedMapOf(
         "android-phone" to mapOf("user" to "sam"),
         "ios-iphone" to mapOf("user" to "alice"),
       ),
     )
-    val lines = TrailMigrator.memoryDriftComments(listOf(drift))
+    val lines = UnifiedTrailMigrator.memoryDriftComments(listOf(drift))
     assertTrue(
       lines.any { it.contains("android-phone") && it.contains("sam") },
       "comments should mention each platform's memory",
@@ -690,6 +690,293 @@ class TrailMigratorTest {
       mapOf("user" to "sam", "accountTier" to "PRO"),
       result.trail.config.memory,
     )
+  }
+
+  @Test
+  fun `each platform file's distinct v1 skip reason is keyed under its classifier`() {
+    // Unified `skip:` is a per-classifier map, not a scalar — so each per-platform file's scalar
+    // `skip:` keys under that file's classifier (the same way `driver:` folds into `devices:`).
+    // Different reasons per platform are preserved side-by-side, not collapsed to one.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            skip: "blocked on android — see #123"
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: ios
+            skip: "blocked on ios — see #456"
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(
+      mapOf(
+        "android-phone" to "blocked on android — see #123",
+        "ios-iphone" to "blocked on ios — see #456",
+      ),
+      result.trail.config.skip,
+    )
+  }
+
+  @Test
+  fun `unquoted hash in a v1 skip reason is a YAML comment — quoting preserves the issue ref`() {
+    // Documents the real-world convention: a skip reason carrying an issue ref (`#123`) MUST be
+    // quoted, else YAML treats ` #123` as a trailing comment. This is a property of the v1 parser,
+    // but pinning both sides here keeps the skip fixtures honest.
+    val unquoted = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            skip: see #123
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    assertEquals(mapOf("android-phone" to "see"), migrator.migrate(unquoted).trail.config.skip)
+
+    val quoted = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android, skip: "see #123"}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    assertEquals(mapOf("android-phone" to "see #123"), migrator.migrate(quoted).trail.config.skip)
+  }
+
+  @Test
+  fun `a v1 skip on one platform only leaves the other platform runnable`() {
+    // android-phone is skipped; ios-iphone declares no skip. Because skip is per-classifier, the
+    // unified map carries ONLY android-phone — ios-iphone stays runnable (closest-wins finds no
+    // ios skip at run time). A scalar skip couldn't express "skip here, run there".
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            skip: "flaky on android — see #123"
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: ios
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(
+      mapOf("android-phone" to "flaky on android — see #123"),
+      result.trail.config.skip,
+    )
+  }
+
+  @Test
+  fun `a blank v1 skip is treated as not-skipped and dropped from the map`() {
+    // v1 semantics: `skip: ""` is "not skipped" (guards against an accidental empty skip silently
+    // disabling a trail). The migrator honors that — a blank reason contributes no map entry, and
+    // with no non-blank reason anywhere the whole `skip:` block is omitted (null, not empty map).
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            skip: ""
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertNull(result.trail.config.skip)
+  }
+
+  @Test
+  fun `no skip on any platform yields a null skip map, not an empty one`() {
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertNull(result.trail.config.skip)
+  }
+
+  @Test
+  fun `a non-blank blaze yaml skip is copied to every present classifier`() {
+    // blaze.yaml's `skip:` is device-agnostic (the CLI honors it as a standalone runnable trail
+    // file when no platform recording matches), so it means "skip everywhere" — not "skip nowhere",
+    // which is what would happen if it were silently dropped. The unified `skip:` map has no
+    // universal wildcard key, so the only faithful translation is to copy the reason onto every
+    // classifier this trail actually targets.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x, skip: "blocked globally — see #123"}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(
+      mapOf(
+        "android-phone" to "blocked globally — see #123",
+        "ios-iphone" to "blocked globally — see #123",
+      ),
+      result.trail.config.skip,
+    )
+  }
+
+  @Test
+  fun `a platform's own skip reason wins over a device-agnostic blaze yaml skip`() {
+    // android-phone declares its own (more specific) skip reason; blaze.yaml's device-agnostic
+    // reason only fills in for classifiers that don't already have one — it must not clobber a
+    // platform's explicit override.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x, skip: "blocked globally"}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android, skip: "flaky on android specifically"}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(
+      mapOf(
+        "android-phone" to "flaky on android specifically",
+        "ios-iphone" to "blocked globally",
+      ),
+      result.trail.config.skip,
+    )
+  }
+
+  @Test
+  fun `v1 tags carry through migration as a flat trail-level list`() {
+    // Tags name the whole test (not a device), so they stay a flat list — no per-classifier
+    // keying, no reordering. Single-file case: the list carries through unchanged.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            tags: [smoke, login, flaky]
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(listOf("smoke", "login", "flaky"), result.trail.config.tags)
+  }
+
+  @Test
+  fun `tags are unioned across platform files — deduped, first-seen order`() {
+    // Tags are device-agnostic and name the whole test, so a tag on ANY platform file describes
+    // the test. When per-platform files disagree the migrator unions them (not first-file-wins,
+    // which would silently drop a tag only one platform declared), de-duplicating a shared tag and
+    // preserving first-seen order (android-phone sorts before ios-iphone).
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android, tags: [smoke, login]}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios, tags: [smoke, flaky]}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(listOf("smoke", "login", "flaky"), result.trail.config.tags)
+  }
+
+  @Test
+  fun `absent v1 tags yield null tags`() {
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertNull(result.trail.config.tags)
+  }
+
+  @Test
+  fun `migrated skip and tags round-trip through the unified emitter and parser`() {
+    // The migrated skip map + tags list must survive being written to unified YAML and reparsed —
+    // guards against the emitter/parser silently dropping either field.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            skip: "blocked on android — see #123"
+            tags: [smoke, flaky]
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    val emitted = yaml.encodeUnifiedTrailToString(result.trail)
+    val reparsed = yaml.decodeUnifiedTrail(emitted)
+    assertEquals(mapOf("android-phone" to "blocked on android — see #123"), reparsed.config.skip)
+    assertEquals(listOf("smoke", "flaky"), reparsed.config.tags)
   }
 
   private fun makeDir(vararg files: Pair<String, String>): File {

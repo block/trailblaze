@@ -1385,6 +1385,60 @@ class PlaywrightScreenStateBoundsTest {
   }
 
   /**
+   * Regression guard for https://github.com/block/trailblaze/issues/199: the `viewHierarchy`
+   * tree is now enriched with bounds via a single batched `page.evaluate` instead of a per-node
+   * Playwright locator round-trip. The batched bounds must still line up with
+   * what `Locator.boundingBox` reports (within rounding) for the elements the
+   * batch resolves — if the tree-traversal (role, name, nth) numbering drifted
+   * from the batch resolver's, nodes would be tagged with the wrong element's
+   * bounds.
+   */
+  @Test
+  fun `viewHierarchy tree bounds match locator-based boundingBox`() {
+    page.setContent(complexPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    // Flatten the enriched tree.
+    fun flatten(node: xyz.block.trailblaze.api.ViewHierarchyTreeNode): List<xyz.block.trailblaze.api.ViewHierarchyTreeNode> =
+      listOf(node) + node.children.flatMap { flatten(it) }
+    val nodes = flatten(screenState.viewHierarchy)
+
+    // At least some named, interactive nodes should have been enriched with bounds.
+    val enriched = nodes.filter { it.x2 > it.x1 && it.y2 > it.y1 }
+    assertTrue(enriched.isNotEmpty(), "Expected at least one node enriched with bounds")
+
+    // Cross-check a representative in-viewport control against Playwright's own locator.
+    val saveNode = nodes.find { it.className == "button" && it.text == "Save Changes" }
+    assertNotNull(saveNode, "Should find the 'Save Changes' button node in the tree")
+    assertTrue(saveNode.x2 > saveNode.x1 && saveNode.y2 > saveNode.y1, "Save button should have bounds")
+
+    val locator = page.getByRole(
+      com.microsoft.playwright.options.AriaRole.BUTTON,
+      Page.GetByRoleOptions().setName("Save Changes").setExact(true),
+    )
+    val box = locator.boundingBox()
+    assertNotNull(box, "Locator should resolve a bounding box for the Save button")
+    val tolerance = 2
+    assertTrue(
+      kotlin.math.abs(saveNode.x1 - box.x.toInt()) <= tolerance,
+      "Save button left mismatch: tree=${saveNode.x1} locator=${box.x.toInt()}",
+    )
+    assertTrue(
+      kotlin.math.abs(saveNode.y1 - box.y.toInt()) <= tolerance,
+      "Save button top mismatch: tree=${saveNode.y1} locator=${box.y.toInt()}",
+    )
+    assertTrue(
+      kotlin.math.abs((saveNode.x2 - saveNode.x1) - box.width.toInt()) <= tolerance,
+      "Save button width mismatch: tree=${saveNode.x2 - saveNode.x1} locator=${box.width.toInt()}",
+    )
+  }
+
+  /**
    * Empty page (no interactive content): visibility computation must not
    * crash and must produce no annotations. Regression guard for the
    * `compact.elementIdMapping.isEmpty()` early-out.

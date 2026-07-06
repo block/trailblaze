@@ -236,9 +236,19 @@ function trailheadsForTarget(trailmaps, target, platform) {
   });
 }
 
-// Parse a *.trailhead.yaml body into { description, to, tools, className }.
-function parseTrailhead(text) {
-  if (!text || !window.jsyaml) return null;
+// Parse a *.trailhead.yaml body into { description, to, tools, className }. For a scripted (.ts)
+// trailhead (`scripted` true), the same shape is extracted from its inline `trailhead: { to }`
+// block via a lightweight regex instead — mirrors TrailmapCatalogBuilder's TRAILHEAD_INLINE scan on
+// the Kotlin side. It never has a `tools:`/`class:` of its own: the tool itself IS the trailhead, so
+// `tools` stays [] and `trailheadRunTools` below runs it by name (see the scripted-param fetch this
+// enables in RecordScreen's trailhead-detail effect).
+function parseTrailhead(text, scripted) {
+  if (!text) return null;
+  if (scripted) {
+    const m = /trailhead\s*:\s*\{[^}]*\bto\s*:\s*["']([^"']+)["']/.exec(text);
+    return { description: '', to: m ? m[1] : null, tools: [], className: null };
+  }
+  if (!window.jsyaml) return null;
   try {
     const doc = window.jsyaml.load(text);
     if (!doc || typeof doc !== 'object') return null;
@@ -468,7 +478,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   React.useEffect(() => {
     let alive = true;
     Promise.all(availTrailheads.map(async (t) => {
-      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath));
+      const p = parseTrailhead(await TB.fetchComponentSource(t.relPath), t.relPath.endsWith('.ts'));
       return [t.name, { to: (p && p.to) || null, description: (p && p.description) || '' }];
     })).then((pairs) => { if (alive) setThMetaByName(Object.fromEntries(pairs)); });
     return () => { alive = false; };
@@ -478,14 +488,22 @@ function RecordScreen({ go, active, yamlSeed }) {
     if (!selectedThPath) { setThDetail(null); setThParams([]); setThArgs({}); return; }
     let alive = true;
     setThLoading(true); setThRun(null); setThParams([]); setThArgs({});
+    const scripted = selectedThPath.endsWith('.ts');
     TB.fetchComponentSource(selectedThPath).then(async (src) => {
       if (!alive) return;
-      const parsed = parseTrailhead(src) || { description: '', to: null, tools: [], className: null };
+      const parsed = parseTrailhead(src, scripted) || { description: '', to: null, tools: [], className: null };
       setThDetail({ ...parsed, name: selectedTh.name, relPath: selectedThPath });
       setThLoading(false);
       // CLASS-mode trailhead with no inline tools → fetch its param schema so required args can be filled.
       if (parsed.className && !(parsed.tools && parsed.tools.length)) {
         const params = await TB.recordToolParams(parsed.className);
+        if (alive) setThParams(params || []);
+      } else if (scripted && target && TB.scriptedToolParams) {
+        // Scripted (.ts) trailhead — the tool itself IS the trailhead, so its own `<I>` fields are
+        // the required args. Same on-demand fetch ProposalToolRow already does for a scripted tool
+        // dropped into a recording step; without this, required args (e.g. email/password) would
+        // silently stay unfilled and the baked run would call the tool with `{}`.
+        const params = await TB.scriptedToolParams(target, selectedTh.name);
         if (alive) setThParams(params || []);
       }
     }).catch(() => { if (alive) { setThDetail(null); setThLoading(false); } });

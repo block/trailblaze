@@ -180,4 +180,37 @@ class TrailblazeScriptEngineTest {
       )
     }.transform { it::class.simpleName ?: "" }.isEqualTo("ScriptEvaluationException")
   }
+
+  @Test
+  fun `dispatch depth survives a nested evaluate call's dedicated engine thread`() {
+    // Each evaluate() call gets its own dedicated single-thread engine (see the class kdoc),
+    // so a naive ThreadLocal read inside a nested call would see a fresh thread and read back
+    // 0. Regression guard for MAX_DISPATCH_DEPTH staying meaningful across that thread hop.
+    var depthSeenInNestedDispatch = -1
+    val innerDispatcher = TrailblazeScriptEngine.ToolDispatcher { _, _ ->
+      depthSeenInNestedDispatch = ScriptTrailblazeTool.dispatchDepth.get()
+      """{"isError":false}"""
+    }
+    val outerDispatcher = TrailblazeScriptEngine.ToolDispatcher { _, _ ->
+      // Mirrors ScriptToolDispatcher.dispatch(): bump depth, then run a tool that itself
+      // triggers another top-level script evaluation.
+      ScriptTrailblazeTool.dispatchDepth.set(ScriptTrailblazeTool.dispatchDepth.get() + 1)
+      try {
+        TrailblazeScriptEngine.evaluate(
+          source = "trailblaze.execute('inner', {}); return '';",
+          dispatcher = innerDispatcher,
+        )
+      } finally {
+        ScriptTrailblazeTool.dispatchDepth.set(ScriptTrailblazeTool.dispatchDepth.get() - 1)
+      }
+      """{"isError":false}"""
+    }
+
+    TrailblazeScriptEngine.evaluate(
+      source = "trailblaze.execute('outer', {}); return '';",
+      dispatcher = outerDispatcher,
+    )
+
+    assertThat(depthSeenInNestedDispatch).isEqualTo(1)
+  }
 }

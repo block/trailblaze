@@ -248,6 +248,38 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
+   * A tool that EXPLICITLY deletes a host-seeded key surfaces that key in
+   * `response.memoryDeletions`, so the host can propagate the removal on top of the merged
+   * snapshot. A merely-omitted key is preserved by the host's merge; this signal is the only way
+   * an explicit deletion crosses the RPC boundary.
+   */
+  @Test
+  fun `explicit delete of a seeded key comes back in response memoryDeletions`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, agentMemory ->
+        // Simulate an on-device tool deleting a host-seeded key.
+        agentMemory.delete("host_wrote")
+        RunYamlCallbackResult(session = session)
+      },
+    )
+
+    val result = handler.handle(
+      testRequest.copy(
+        awaitCompletion = true,
+        memorySnapshot = mapOf("host_wrote" to "from-host"),
+      ),
+    )
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertTrue(
+      result.data.memoryDeletions.contains("host_wrote"),
+      "Expected memoryDeletions to carry the explicitly-deleted key, got ${result.data.memoryDeletions}",
+    )
+    // The deleted key must also be gone from the returned snapshot.
+    assertFalse(result.data.memorySnapshot.containsKey("host_wrote"))
+  }
+
+  /**
    * Sync dispatch where the callback throws a non-cancellation exception → response carries
    * `success = false` with the exception's message in `errorMessage`. Pins the contract
    * that the host client reads off the response.

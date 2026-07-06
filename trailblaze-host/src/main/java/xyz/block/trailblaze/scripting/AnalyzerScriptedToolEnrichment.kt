@@ -14,6 +14,7 @@ import xyz.block.trailblaze.config.project.ScriptedToolEnrichment
 import xyz.block.trailblaze.config.project.ScriptedToolProperty
 import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.config.project.buildInputSchemaObject
+import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
 import java.io.File
 
@@ -99,7 +100,7 @@ class AnalyzerScriptedToolEnrichment(
      * underlying [ScriptedToolDefinitionAnalyzer] resolver primitives.
      */
     fun resolveFromEnvironment(): AnalyzerScriptedToolEnrichment? {
-      val bun = ScriptedToolDefinitionAnalyzer.resolveBunBinary() ?: return null
+      val bun = BunBinaryResolver.resolveBunBinary() ?: return null
       val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return null
       // Deps must be resolvable: a real SDK tree with node_modules installed, OR the

@@ -589,6 +589,7 @@ private fun rememberTrayIcon(): Painter {
  * Combines all additional Ktor route registrations for the daemon:
  *  - Waypoint graph endpoints (`/waypoints/graph`, `/waypoints/graph.json`)
  *  - Device API RPC endpoints (`/rpc/GetConnectedDevicesRequest`, etc.)
+ *  - Device reachability health signal (`/health/device`)
  */
 private fun allRouteRegistrations(
   settingsRepo: TrailblazeSettingsRepo,
@@ -608,4 +609,5 @@ private fun allRouteRegistrations(
     sessionManager = sessionManager,
   )
   xyz.block.trailblaze.host.recording.rpc.DevicesPageEndpoint.register(routing = this)
+  xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
 }

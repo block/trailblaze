@@ -13,7 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
  *
  * Motivating use case: incremental Kotlin → TS migration of a multi-step launch-app
  * orchestration. As individual steps land as framework tools that are TS-callable
- * (`android_grantPermission`, `android_pushFile`, `mobile_clearAppData`, …), the
+ * (`android_grantPermissions`, `android_pushFile`, `mobile_clearAppData`, …), the
  * still-Kotlin orchestrator wraps them via this bridge during the transition. When the
  * orchestrator itself flips to TS, the composing call sites stay identical — same tool
  * names, same args shapes, just the caller language changes.

@@ -513,6 +513,44 @@ class TrailCommandPlanTrailExecutionTest {
   }
 
   @Test
+  fun `unified per-classifier skip resolves against configClassifiers - driver-only run`() {
+    // Pins the driver-only-run fix: when a run pins --driver but no --device, the planner passes
+    // the driver's platform classifier as configClassifiers, so an android-only skip halts an
+    // android run but not an ios one — instead of the device-agnostic any-skip fallback firing.
+    val file = File(tempFolder.root, "android-skip.trail.yaml")
+    file.writeText(
+      """
+      config:
+        target: myapp
+        skip:
+          android: "flaky on android — see #123"
+      trail:
+        - step: Do the thing
+          recording:
+            android:
+              - pressBack: {}
+      """.trimIndent() + "\n",
+    )
+
+    fun planItemWith(vararg classifiers: String) = TrailCommand.planTrailExecution(
+      files = listOf(file),
+      includeTags = emptyList(),
+      configClassifiers = classifiers.map { TrailblazeDeviceClassifier(it) },
+    ).items.single()
+
+    // Android driver → android classifier → skipped with the android reason.
+    val androidItem = planItemWith("android")
+    assertIs<TrailExecutionItem.Skip>(androidItem)
+    assertEquals("flaky on android — see #123", androidItem.reason)
+    // iOS driver → ios classifier → NOT skipped (per-platform skip doesn't apply to ios).
+    assertIs<TrailExecutionItem.Run>(planItemWith("ios"))
+    // No device and no driver (device-agnostic) → any-skip fallback → skipped.
+    assertIs<TrailExecutionItem.Skip>(
+      TrailCommand.planTrailExecution(files = listOf(file), includeTags = emptyList()).items.single(),
+    )
+  }
+
+  @Test
   fun `directory argument expands and filter-then-classify works end-to-end`() {
     // Per "one trail per directory" convention, each trail lives in its own subdirectory.
     // The expander then resolves one file per subdir, planTrailExecution applies --tags and

@@ -119,6 +119,20 @@ open class GenerateReportCliCommand :
       useRelativeImageUrls = useRelativeImageUrls,
     )
 
+    // Every run also produces the lightweight, self-contained interactive report ALONGSIDE the
+    // legacy WASM report above — the same artifact `trailblaze report` (the CLI/daemon path)
+    // emits. Either can individually be unavailable (`bun` missing, subprocess failure); this
+    // is a best-effort addition and never fails the overall report generation.
+    val interactiveHtmlFile = File(logsDir, "trailblaze_report_interactive.html")
+    val generatedInteractiveHtml = RunReportGenerator().generate(logsRepo, logsRepo.getSessionIds())
+    if (generatedInteractiveHtml != null) {
+      generatedInteractiveHtml.copyTo(interactiveHtmlFile, overwrite = true)
+      generatedInteractiveHtml.delete()
+      Console.log("file://${interactiveHtmlFile.absolutePath}")
+    } else {
+      Console.error("Warning: could not generate the interactive report (bun unavailable or subprocess failure).")
+    }
+
     afterReportGenerated(logsRepo, rootWorkingDir)
 
     // Generate snapshot viewer using pre-parsed logs from LogsRepo (integrated mode)
