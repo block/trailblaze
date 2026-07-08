@@ -105,9 +105,7 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
           apiKey = apiKey,
           settings = AnthropicClientSettings(
             modelVersionsMap = BuiltInLlmModelRegistry
-              .modelListForProvider(TrailblazeLlmProvider.ANTHROPIC)
-              ?.entries.orEmpty()
-              .associate { it.toKoogLlmModel() to it.modelId },
+              .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC),
           ),
           httpClientFactory = httpClientFactory,
         )
