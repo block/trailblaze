@@ -21,7 +21,8 @@ import kotlinx.serialization.encoding.Encoder
  * }
  * ```
  *
- * Serializes back to the canonical uppercase name; accepts any casing on deserialization.
+ * Serializes back to the canonical uppercase name; accepts any casing and surrounding
+ * whitespace on deserialization.
  * Throws [SerializationException] with the list of valid values if the input doesn't match.
  */
 @Suppress("UNCHECKED_CAST")
@@ -37,7 +38,7 @@ abstract class CaseInsensitiveEnumSerializer<T : Enum<T>>(
   override fun serialize(encoder: Encoder, value: T) = encoder.encodeString(value.name)
 
   override fun deserialize(decoder: Decoder): T {
-    val raw = decoder.decodeString().uppercase()
+    val raw = decoder.decodeString().trim().uppercase()
     return values.firstOrNull { it.name == raw }
       ?: throw SerializationException(
         "Unknown ${descriptor.serialName} value: '$raw'. " +
