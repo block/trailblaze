@@ -9,6 +9,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_scroll")
@@ -39,12 +40,15 @@ class PlaywrightNativeScrollTool(
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
     PlaywrightNativeScrollTool(direction = direction, amount = amount, ref = null, reasoning = reasoning, nodeSelector = selector)
 
-  @Serializable
+  @Serializable(with = ScrollDirection.Serializer::class)
   enum class ScrollDirection {
     UP,
     DOWN,
     LEFT,
     RIGHT,
+    ;
+
+    object Serializer : CaseInsensitiveEnumSerializer<ScrollDirection>(ScrollDirection::class)
   }
 
   override suspend fun executeWithPlaywright(

@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 /**
  * Command to retrieve a selector for an element based on the description.
@@ -52,10 +53,13 @@ data class ElementRetrieverTrailblazeTool(
   /**
    * Types of locators in order of preference.
    */
-  @Serializable
+  @Serializable(with = LocatorType.Serializer::class)
   enum class LocatorType {
     RESOURCE_ID,
     CONTENT_DESCRIPTION,
     TEXT,
+    ;
+
+    object Serializer : CaseInsensitiveEnumSerializer<LocatorType>(LocatorType::class)
   }
 }

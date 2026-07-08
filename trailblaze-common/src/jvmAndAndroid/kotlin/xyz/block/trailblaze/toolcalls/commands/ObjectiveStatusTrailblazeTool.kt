@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("objectiveStatus")
@@ -24,8 +25,14 @@ data class ObjectiveStatusTrailblazeTool(
   val status: Status,
 ) : TrailblazeTool
 
+// The tool's own @LLMDescription instructs the model to return lowercase 'in_progress' /
+// 'completed' / 'failed', so this enum in particular must decode case-insensitively.
+@Serializable(with = Status.Serializer::class)
 enum class Status {
   IN_PROGRESS,
   COMPLETED,
   FAILED,
+  ;
+
+  object Serializer : CaseInsensitiveEnumSerializer<Status>(Status::class)
 }

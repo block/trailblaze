@@ -12,6 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("launchApp")
@@ -83,6 +84,7 @@ Available App Launch Modes:
     ),
   )
 
+  @Serializable(with = LaunchMode.Serializer::class)
   enum class LaunchMode {
     /**
      * Launch the app in a clean state, like when the app is initially installed.
@@ -100,6 +102,8 @@ Available App Launch Modes:
     FORCE_RESTART,
 
     ;
+
+    object Serializer : CaseInsensitiveEnumSerializer<LaunchMode>(LaunchMode::class)
 
     companion object {
       fun fromString(value: String?): LaunchMode = LaunchMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: REINSTALL

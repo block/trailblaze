@@ -10,6 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_verifyValue", isVerification = true)
@@ -45,11 +46,14 @@ class PlaywrightNativeVerifyValueTool(
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
     PlaywrightNativeVerifyValueTool(ref = null, type = type, expected = expected, attribute = attribute, reasoning = reasoning, nodeSelector = selector)
 
-  @Serializable
+  @Serializable(with = VerifyValueType.Serializer::class)
   enum class VerifyValueType {
     TEXT,
     VALUE,
     ATTRIBUTE,
+    ;
+
+    object Serializer : CaseInsensitiveEnumSerializer<VerifyValueType>(VerifyValueType::class)
   }
 
   override suspend fun executeWithPlaywright(
