@@ -192,8 +192,11 @@ object AndroidLlmClientResolver {
           AnthropicLLMClient(
             apiKey = key,
             settings = AnthropicClientSettings(
+              // Include the runtime-resolved model: it may be a findOrFallback() construction
+              // (built-in YAML unreadable on-device → base map empty) or carry yaml overrides,
+              // either of which would miss the built-in map's LLModel keys.
               modelVersionsMap = BuiltInLlmModelRegistry
-                .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC),
+                .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC, extraModels = listOf(model)),
             ),
             httpClientFactory = httpClientFactory,
           ),
