@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.llm.config
 
 import ai.koog.prompt.llm.LLMCapability
+import ai.koog.prompt.llm.LLModel
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -123,6 +124,17 @@ object BuiltInLlmModelRegistry {
    */
   fun modelListForProvider(provider: TrailblazeLlmProvider): TrailblazeLlmModelList? =
     getOrLoadProvider(provider.id)?.modelList
+
+  /**
+   * Koog `modelVersionsMap` for the given provider's built-in models — maps each model's
+   * [LLModel] form to the API model name. Koog clients that take a `modelVersionsMap`
+   * (currently only `AnthropicLLMClient`) resolve the request's [LLModel] in this map by
+   * data-class equality and throw "Unsupported model" on a miss, so any model that can
+   * reach the client at runtime must have an entry here.
+   */
+  fun koogModelVersionsMap(provider: TrailblazeLlmProvider): Map<LLModel, String> =
+    modelListForProvider(provider)?.entries.orEmpty()
+      .associate { it.toKoogLlmModel() to it.modelId }
 
   /**
    * Returns the default model ID for the given provider, or null if not set.

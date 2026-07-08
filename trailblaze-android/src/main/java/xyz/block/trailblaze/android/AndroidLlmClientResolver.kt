@@ -193,9 +193,7 @@ object AndroidLlmClientResolver {
             apiKey = key,
             settings = AnthropicClientSettings(
               modelVersionsMap = BuiltInLlmModelRegistry
-                .modelListForProvider(TrailblazeLlmProvider.ANTHROPIC)
-                ?.entries.orEmpty()
-                .associate { it.toKoogLlmModel() to it.modelId },
+                .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC),
             ),
             httpClientFactory = httpClientFactory,
           ),
