@@ -131,10 +131,24 @@ object BuiltInLlmModelRegistry {
    * (currently only `AnthropicLLMClient`) resolve the request's [LLModel] in this map by
    * data-class equality and throw "Unsupported model" on a miss, so any model that can
    * reach the client at runtime must have an entry here.
+   *
+   * [extraModels] covers models whose [LLModel] form differs from the built-in entry (or has
+   * no built-in entry at all): user-yaml overrides of `context_length`/`max_output_tokens`/
+   * `vision` change [LLModel] equality, custom model ids aren't in the built-in list, and on
+   * runtimes where the built-in YAML isn't readable the base map is empty. Custom ids are a
+   * documented contract (docs/llm_configuration.md "Custom model specs"): users add a
+   * newly-released model via yaml without waiting for a trailblaze release that catalogs it,
+   * so an unknown model must not be rejected as long as the provider exists. Callers that
+   * know the runtime-resolved model(s) should pass them; extras win on key collisions.
+   * Filtered to [provider] so callers can pass a model without checking its provider first.
    */
-  fun koogModelVersionsMap(provider: TrailblazeLlmProvider): Map<LLModel, String> =
-    modelListForProvider(provider)?.entries.orEmpty()
-      .associate { it.toKoogLlmModel() to it.modelId }
+  fun koogModelVersionsMap(
+    provider: TrailblazeLlmProvider,
+    extraModels: List<TrailblazeLlmModel> = emptyList(),
+  ): Map<LLModel, String> = (
+    modelListForProvider(provider)?.entries.orEmpty() +
+      extraModels.filter { it.trailblazeLlmProvider.id == provider.id }
+    ).associate { it.toKoogLlmModel() to it.modelId }
 
   /**
    * Returns the default model ID for the given provider, or null if not set.

@@ -99,8 +99,11 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       llmClients[LLMProvider.Anthropic] = AnthropicLLMClient(
         apiKey = anthropicApiKey,
         settings = AnthropicClientSettings(
+          // Include the model this request resolved on the host — it may carry yaml overrides
+          // (or the built-in YAML may be unreadable on-device), so the built-in map alone can
+          // miss its LLModel key.
           modelVersionsMap = BuiltInLlmModelRegistry
-            .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC),
+            .koogModelVersionsMap(TrailblazeLlmProvider.ANTHROPIC, extraModels = listOf(trailblazeLlmModel)),
         ),
         httpClientFactory = httpClientFactory,
       )
