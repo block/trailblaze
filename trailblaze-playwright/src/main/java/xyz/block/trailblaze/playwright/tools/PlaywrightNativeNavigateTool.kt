@@ -9,6 +9,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("web_navigate")
@@ -33,11 +34,14 @@ class PlaywrightNativeNavigateTool(
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
 
-  @Serializable
+  @Serializable(with = NavigationAction.Serializer::class)
   enum class NavigationAction {
     GOTO,
     BACK,
     FORWARD,
+    ;
+
+    object Serializer : CaseInsensitiveEnumSerializer<NavigationAction>(NavigationAction::class)
   }
 
   override suspend fun executeWithPlaywright(
