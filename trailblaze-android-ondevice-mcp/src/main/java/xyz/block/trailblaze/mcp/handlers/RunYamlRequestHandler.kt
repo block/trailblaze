@@ -381,6 +381,9 @@ class RunYamlRequestHandler(
           )
 
           if (request.config.sendSessionEndLog) {
+            // Terminal frame on success — the JUnit teardown hook that would do this
+            // (TrailblazeLoggingRule.afterTestExecution) never fires on this RPC path.
+            loggingRule.captureFinalScreenshot(finalSession)
             sessionManager.endSession(
               session = finalSession,
               isSuccess = true,

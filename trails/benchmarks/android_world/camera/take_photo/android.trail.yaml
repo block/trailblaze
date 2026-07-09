@@ -1,7 +1,7 @@
 # Android World Benchmark: TakePhoto
 - config:
     id: android-world-benchmarks/camera/take_photo
-    displayName: "Camera - Take Photo"
+    title: "Camera - Take Photo"
     description: "Take one photo."
 
 - tools:

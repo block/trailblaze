@@ -7,7 +7,7 @@
 #   and "Stopwatch" text appears at least twice.
 - config:
     id: android-world-benchmarks/clock/stopwatch_paused
-    displayName: "Clock - Stopwatch Paused"
+    title: "Clock - Stopwatch Paused"
     description: "Pause the stopwatch."
 
 - tools:

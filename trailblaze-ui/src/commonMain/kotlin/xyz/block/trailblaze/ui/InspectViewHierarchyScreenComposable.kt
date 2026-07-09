@@ -185,6 +185,8 @@ fun InspectViewHierarchyScreenComposable(
   LaunchedEffect(activeHierarchy) {
     selectedNode = null
     hoveredNode = null
+    selectedTrailblazeNode = null
+    hoveredTrailblazeNode = null
   }
 
   // Screenshot has fixed width, details and hierarchy use weights

@@ -1,7 +1,7 @@
 # Android World Benchmark: RecordAudio
 - config:
     id: android-world-benchmarks/audio_recorder/record_audio
-    displayName: "Audio Recorder - Record Audio"
+    title: "Audio Recorder - Record Audio"
     description: "Record an audio clip using Audio Recorder app and save it."
 
 - tools:

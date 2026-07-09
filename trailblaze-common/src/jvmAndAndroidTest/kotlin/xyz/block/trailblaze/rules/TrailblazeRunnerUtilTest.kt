@@ -21,6 +21,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.ToolBatchScope
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -341,7 +342,165 @@ class TrailblazeRunnerUtilTest {
     assertEquals(listOf<PromptStep>(step), runner.runSuspendCalls)
   }
 
+  // --- shared tool-batch scope -------------------------------------------------------------
+
+  @Test
+  fun `shared batch makes an earlier tool's context state visible to a later tool`() = runBlocking {
+    // The set→paste round-trip only succeeds when both tools share one execution context (the
+    // clipboard write from `set` must be visible to `paste`). With the batch bracket wired, they do.
+    val runner = FakeTestAgentRunner()
+    val util = clipboardModelUtil(runner, wireBatch = true)
+
+    val result =
+      util.runPromptSuspend(
+        prompts = listOf(recordedStep("Set then paste", tool("set:HELLO"), tool("paste"))),
+        useRecordedSteps = true,
+        selfHeal = false,
+      )
+
+    assertTrue(result is TrailblazeToolResult.Success)
+    assertTrue(runner.recoverCalls.isEmpty())
+  }
+
+  @Test
+  fun `without a shared batch a later tool cannot observe an earlier tool's context state`() {
+    // Documents why the batch is load-bearing: with each tool on its own context, `paste` reads a
+    // fresh (empty) clipboard cache and the recording fails at the paste tool.
+    val runner = FakeTestAgentRunner()
+    val util = clipboardModelUtil(runner, wireBatch = false)
+
+    val ex =
+      assertThrowsTrailblazeException {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(recordedStep("Set then paste", tool("set:HELLO"), tool("paste"))),
+            useRecordedSteps = true,
+            selfHeal = false,
+          )
+        }
+      }
+    val message = ex.message ?: ""
+    assertTrue(message.contains("failed tool: paste"), message)
+    assertTrue(message.contains("device clipboard is empty"), message)
+  }
+
+  @Test
+  fun `shared batch preserves failed-tool attribution for self-heal`() = runBlocking {
+    // The batch bracket must not swallow or blur which tool failed — self-heal still gets the exact
+    // failed tool + successful prefix.
+    val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          if ((tools.single() as InputTextTrailblazeTool).text == "boom") {
+            TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "kaboom")
+          } else {
+            TrailblazeToolResult.Success()
+          }
+        },
+        trailblazeRunner = runner,
+        sharedToolBatch = { block -> block() },
+      )
+
+    util.runPromptSuspend(
+      prompts = listOf(recordedStep("Ok then boom", tool("ok"), tool("boom"))),
+      useRecordedSteps = true,
+      selfHeal = true,
+    )
+
+    assertEquals(1, runner.recoverCalls.size)
+    val (_, failure) = runner.recoverCalls.single()
+    assertEquals("boom", failure.failedTool.name)
+    assertEquals(listOf("ok"), failure.successfulTools.map { it.name })
+  }
+
+  @Test
+  fun `shared batch scope is torn down before self-heal recovery runs`() = runBlocking {
+    // Wires the REAL ToolBatchScope (not a trivial pass-through bracket) so this proves the
+    // production ordering: runRecordedTools' sharedToolBatch bracket wraps only the per-tool
+    // replay loop, and recover() is invoked afterward in runRecordedPrompt — so a lingering
+    // scope from the failed recording can't bleed into self-heal's own tool dispatches.
+    var scopeActiveDuringRecovery: Boolean? = null
+    val runner = FakeTestAgentRunner(
+      recoverReturn = { _, _ ->
+        scopeActiveDuringRecovery = ToolBatchScope.isActive()
+        objectiveComplete("recovered")
+      },
+    )
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ ->
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "selector broke")
+        },
+        trailblazeRunner = runner,
+        sharedToolBatch = { block ->
+          ToolBatchScope.enter()
+          try {
+            block()
+          } finally {
+            ToolBatchScope.exit()
+          }
+        },
+      )
+
+    util.runPromptSuspend(
+      prompts = listOf(recordedStep("Tap login", tool("tapLogin"))),
+      useRecordedSteps = true,
+      selfHeal = true,
+    )
+
+    assertEquals(1, runner.recoverCalls.size)
+    assertEquals(false, scopeActiveDuringRecovery)
+  }
+
   // --- helpers -----------------------------------------------------------------------------
+
+  /**
+   * Builds a [TrailblazeRunnerUtil] whose `runTrailblazeTool` models the real per-context clipboard
+   * cache: a "context" carries an in-process clipboard, `set:<text>` writes to it, and `paste` reads
+   * it (erroring when empty, like [xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool]
+   * on an empty clipboard). When [wireBatch] is true, one cache is installed for the whole recording
+   * (the shared-batch scope); when false, each tool dispatch gets a fresh cache (a fresh context).
+   */
+  private fun clipboardModelUtil(
+    runner: TestAgentRunner,
+    wireBatch: Boolean,
+  ): TrailblazeRunnerUtil {
+    var batchCache: MutableList<String>? = null
+    val runTool: (List<TrailblazeTool>) -> TrailblazeToolResult = { tools ->
+      val cache = batchCache ?: mutableListOf() // fresh per-call cache when not inside a batch
+      when (val cmd = (tools.single() as InputTextTrailblazeTool).text) {
+        "paste" ->
+          if (cache.isEmpty()) {
+            TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "device clipboard is empty")
+          } else {
+            TrailblazeToolResult.Success()
+          }
+        else -> {
+          if (cmd.startsWith("set:")) cache.add(cmd.removePrefix("set:"))
+          TrailblazeToolResult.Success()
+        }
+      }
+    }
+    val batch: (suspend (suspend () -> PromptRecordingResult) -> PromptRecordingResult)? =
+      if (wireBatch) {
+        { block ->
+          batchCache = mutableListOf()
+          try {
+            block()
+          } finally {
+            batchCache = null
+          }
+        }
+      } else {
+        null
+      }
+    return TrailblazeRunnerUtil(
+      runTrailblazeTool = runTool,
+      trailblazeRunner = runner,
+      sharedToolBatch = batch,
+    )
+  }
 
   private fun tool(name: String): TrailblazeToolYamlWrapper =
     TrailblazeToolYamlWrapper(name = name, trailblazeTool = InputTextTrailblazeTool(text = name))

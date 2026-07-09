@@ -23,14 +23,20 @@ object CliShowWindowEndpoint {
 
   fun register(
     routing: Routing,
-    onShowWindowRequest: () -> Unit,
+    /**
+     * Returns `true` when a window handler actually ran, `false` when this daemon has no window
+     * to show (headless server, or the desktop UI hasn't installed its callback yet). Callers
+     * (`trailblaze app` attach detection, the duplicate-instance window handoff) branch on
+     * [CliShowWindowResponse.success], so a no-op must not report success.
+     */
+    onShowWindowRequest: () -> Boolean,
   ) = with(routing) {
     post(CliEndpoints.SHOW_WINDOW) {
       try {
-        onShowWindowRequest()
+        val handled = onShowWindowRequest()
         call.respond(HttpStatusCode.OK, CliShowWindowResponse(
-          success = true,
-          message = "Window shown"
+          success = handled,
+          message = if (handled) "Window shown" else "No window available on this daemon"
         ))
       } catch (e: Exception) {
         call.respond(

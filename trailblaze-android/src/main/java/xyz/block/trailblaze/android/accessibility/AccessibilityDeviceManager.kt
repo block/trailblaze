@@ -296,25 +296,63 @@ class AccessibilityDeviceManager(
     }
   }
 
-  /** Taps at the given coordinates and waits for the UI to settle. */
+  /**
+   * Taps at the given coordinates and waits for the UI to settle.
+   *
+   * Fails loudly (see [failIfGestureNotDispatched]) rather than returning normally when the
+   * underlying `dispatchGesture()` was cancelled or timed out, so callers — including
+   * [AccessibilityDeviceManager.execute]'s direct [AccessibilityAction.Tap] /
+   * [AccessibilityAction.TapRelative] dispatch — can't mistake a no-op gesture for a completed one.
+   */
   fun tap(x: Int, y: Int) = dispatchAndAwaitSettleBlocking {
-    TrailblazeAccessibilityService.tap(x, y)
+    failIfGestureNotDispatched(TrailblazeAccessibilityService.tap(x, y), "tap at ($x, $y)")
   }
 
-  /** Long-presses at the given coordinates and waits for the UI to settle. */
+  /** Long-presses at the given coordinates and waits for the UI to settle. Fails loudly on a
+   *  cancelled/timed-out gesture — see [tap]'s kdoc. */
   fun longPress(x: Int, y: Int, durationMs: Long = 500L) = dispatchAndAwaitSettleBlocking {
-    TrailblazeAccessibilityService.longPress(x, y, durationMs)
+    failIfGestureNotDispatched(
+      TrailblazeAccessibilityService.longPress(x, y, durationMs),
+      "long-press at ($x, $y)",
+    )
   }
 
-  /** Swipes between two points and waits for the UI to settle. */
+  /** Swipes between two points and waits for the UI to settle. Fails loudly on a
+   *  cancelled/timed-out gesture — see [tap]'s kdoc. */
   fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long) =
     dispatchAndAwaitSettleBlocking {
-      TrailblazeAccessibilityService.directionalSwipe(durationMs, startX, startY, endX, endY)
+      failIfGestureNotDispatched(
+        TrailblazeAccessibilityService.directionalSwipe(durationMs, startX, startY, endX, endY),
+        "swipe from ($startX, $startY) to ($endX, $endY)",
+      )
     }
 
-  /** Scrolls forward (up) or backward (down) and waits for the UI to settle. */
+  /** Scrolls forward (up) or backward (down) and waits for the UI to settle. Fails loudly on a
+   *  cancelled/timed-out gesture — see [tap]'s kdoc. */
   fun scroll(forward: Boolean) = dispatchAndAwaitSettleBlocking {
-    TrailblazeAccessibilityService.scroll(forward)
+    failIfGestureNotDispatched(TrailblazeAccessibilityService.scroll(forward), "scroll(forward=$forward)")
+  }
+
+  /**
+   * Throws when [dispatched] is `false` — i.e. the accessibility service's `dispatchGesture()`
+   * was cancelled or didn't report completion within its timeout (see
+   * `TrailblazeAccessibilityService.internalDispatchGesture`), meaning nothing happened on
+   * screen. Every raw gesture dispatch in this class funnels through here so a cancelled/timed-out
+   * gesture surfaces as a real `TrailblazeToolResult.Error` (via `AccessibilityTrailRunner
+   * .runActions`'s existing exception handling) instead of silently reporting success with zero
+   * device effect — the bug this check exists to catch.
+   *
+   * `internal` (not `private`) so [FailIfGestureNotDispatchedTest] can exercise this pure
+   * boolean-check-and-throw logic directly, without instrumentation — mirrors [planActionClickRoute]'s
+   * testability rationale.
+   */
+  internal fun failIfGestureNotDispatched(dispatched: Boolean, description: String) {
+    if (!dispatched) {
+      error(
+        "Gesture dispatch failed or was cancelled ($description) — the accessibility service's " +
+          "dispatchGesture() did not report completion within its timeout.",
+      )
+    }
   }
 
   // --- Text input ---
@@ -712,6 +750,9 @@ class AccessibilityDeviceManager(
   }
 
   private fun tapOrLongPress(x: Int, y: Int, longPress: Boolean) {
+    // `tap`/`longPress` already fail loudly (via `failIfGestureNotDispatched`) when the
+    // accessibility service's `dispatchGesture()` was cancelled or timed out, so this stays a
+    // plain pass-through.
     if (longPress) longPress(x, y) else tap(x, y)
   }
 
@@ -765,7 +806,14 @@ class AccessibilityDeviceManager(
           "[tap-route] ACTION_CLICK lookup miss for ${plan.className ?: "<no-class>"}, " +
             "gesture fallback at ($centerX,$centerY)",
         )
-        TrailblazeAccessibilityService.tap(centerX, centerY)
+        // Dispatched directly (not via the `tap()` wrapper) so this shares the ACTION_CLICK
+        // attempt's single settle-wait rather than paying a second one. Still routes through
+        // `failIfGestureNotDispatched` so a cancelled/timed-out fallback gesture fails loudly
+        // instead of silently reporting success with zero device effect.
+        failIfGestureNotDispatched(
+          TrailblazeAccessibilityService.tap(centerX, centerY),
+          "gesture-fallback tap at ($centerX, $centerY) after an ACTION_CLICK lookup miss",
+        )
       }
     }
   }

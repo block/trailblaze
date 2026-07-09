@@ -23,7 +23,6 @@ const API = {
   sessionEvents: (id) => `/trailrunner/api/session/${encodeURIComponent(id)}/events`,
   trails: '/trailrunner/api/trails',
   tools: '/trailrunner/api/tools',
-  trailmaps: '/trailrunner/api/trailmaps',
   componentSource: (relPath) => `/trailrunner/api/tool-source?path=${encodeURIComponent(relPath)}`,
   toolUsages: (id) => `/trailrunner/api/tool-usages?toolId=${encodeURIComponent(id)}`,
   toolUsageCounts: '/trailrunner/api/tool-usage-counts',
@@ -168,6 +167,25 @@ async function fetchDeviceApps(platform, id) {
   // Installed device apps come from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
   const raw = await window.TbRpc.getDeviceApps(platform, id);
   return raw || { targets: [], currentTargetAppId: null };
+}
+
+// Per-app label/icon enrichment for the Create Target picker — extraction can be slow on a cold
+// cache (Android pulls the APK once per build), so rows fetch this after the fast id list.
+async function fetchInstalledAppBadge(platform, deviceId, appId) {
+  return await safeJson(`/trailrunner/api/installed-app-badge?platform=${encodeURIComponent(platform)}&device=${encodeURIComponent(deviceId)}&appId=${encodeURIComponent(appId)}`);
+}
+function installedAppIconUrl(platform, deviceId, appId) {
+  return `/trailrunner/api/installed-app-icon?platform=${encodeURIComponent(platform)}&device=${encodeURIComponent(deviceId)}&appId=${encodeURIComponent(appId)}`;
+}
+
+// Every installed app on a device (unfiltered by declared targets) — feeds the Create Target
+// form's "Browse installed apps" picker. Returns [{ appId, label?, version? }]. System/preinstalled
+// apps (browser, calculator, etc.) are excluded by default — pass includeSystemApps to reach one
+// of those as a target.
+async function fetchInstalledApps(platform, id, includeSystemApps) {
+  if (!platform || !id || platform === 'web') return [];
+  const raw = await window.TbRpc.getInstalledApps(platform, id, includeSystemApps);
+  return (raw && raw.apps) || [];
 }
 
 async function openSessionFile(id, name) {
@@ -416,6 +434,15 @@ async function fetchComponentSource(relPath) {
 async function createTrailmapComponent(req) {
   const j = await window.TbRpc.createTrailmapComponent(req);
   return j ? { ok: !!j.ok, relPath: j.relPath, error: j.error } : { ok: false, error: 'request failed' };
+}
+
+// Patches the target: block of a trailmap.yaml (Edit Target), or bootstraps a brand-new trailmap
+// when the request carries createIfMissing (Create Target). Goes through the typed RPC client
+// (window.TbRpc, from app/rpc/daemon.ts); the server's error (e.g. "unknown trailmap") rides in
+// the response's error field, `created`/`warning` in their own fields alongside ok=true.
+async function saveTargetConfig(req) {
+  const j = await window.TbRpc.saveTargetConfig(req);
+  return j ? { ok: !!j.ok, error: j.error, created: !!j.created, warning: j.warning } : { ok: false, error: 'request failed' };
 }
 
 // ─── Blaze authoring: propose + drafts ────────────────────────────────────────
@@ -711,10 +738,10 @@ Object.assign(window, {
   API, safeJson, safeText, useFetched, fileUrl,
   recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
   resolveRunDevice, connectDevice, fetchTrailYaml, dispatchRun, retrySession,
-  getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
+  getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   pickDirectoryViaShell, addTrailRoot, removeTrailRoot, updateSetting, runIntegrationAction,
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
-  fetchComponentSource, createTrailmapComponent,
+  fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   proposeSteps, createDraft, fetchDraftDetail, fetchDraftFile, updateDraftBlaze, saveDraftTo, deleteDraft, recordDraft,
   fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
 });

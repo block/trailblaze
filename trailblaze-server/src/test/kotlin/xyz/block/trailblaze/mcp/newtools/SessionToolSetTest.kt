@@ -381,6 +381,10 @@ class SessionToolSetTest {
         File(file).readText().contains("platform: ios"),
         "file content should mark the platform as ios; got: ${File(file).readText()}",
       )
+      assertTrue(
+        File(file).readText().contains("title: iOS pause test"),
+        "the caller-supplied save title must override into the saved config; got: ${File(file).readText()}",
+      )
     } finally {
       logsDir.deleteRecursively()
       trailsDir.deleteRecursively()

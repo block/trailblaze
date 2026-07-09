@@ -14,6 +14,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import java.io.File
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -213,24 +214,10 @@ class TrailMcpTool(
     Console.log("│ Platform: ${platform?.displayName ?: "unknown"}")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
-    // Extract session info from Started log to include platform/driver/app in the recording
+    // Extract session info from Started log to include platform/driver/app in the recording.
     val startedStatus = logs.getSessionStartedInfo()
-    val sessionTrailConfig = startedStatus?.let { started ->
-      val originalConfig = started.trailConfig
-      TrailConfig(
-        id = originalConfig?.id,
-        title = originalConfig?.title,
-        description = originalConfig?.description,
-        priority = originalConfig?.priority,
-        context = originalConfig?.context,
-        source = originalConfig?.source,
-        metadata = originalConfig?.metadata,
-        target = originalConfig?.target,
-        electron = originalConfig?.electron,
-        driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
-        platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
-      )
-    } ?: platform?.let { p -> TrailConfig(platform = p.name.lowercase()) }
+    val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
+      ?: platform?.let { p -> TrailConfig(platform = p.name.lowercase()) }
 
     val yamlContent = try {
       logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
@@ -352,18 +339,10 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    // Load the trail to validate it exists and get step count
-    val loadResult = trailFileManager.loadTrail(trailFile)
-    if (!loadResult.success) {
-      return TrailRunResult(
-        success = false,
-        error = loadResult.error ?: "Failed to load trail",
-      ).toJson()
-    }
-
-    val stepCount = loadResult.promptSteps?.size ?: 0
-
-    // Connect to device if needed
+    // Connect to device if needed — BEFORE loading the trail, because a unified trail's
+    // per-classifier recordings can only be lowered once the session has a bound device
+    // (see [deviceClassifiersFor]). Loading first with no classifiers would trip decodeTrail's
+    // unified-with-recordings guard.
     if (platform != null || device != null) {
       val connectResult = connectToDevice(platform, device)
       if (connectResult.startsWith("Error")) {
@@ -383,6 +362,20 @@ class TrailMcpTool(
         return TrailRunResult(success = false, error = connectResult).toJson()
       }
     }
+
+    // Load with the bound device's classifiers so a unified trail lowers to its recordings.
+    val loadResult = trailFileManager.loadTrail(
+      trailFile,
+      deviceClassifiers = deviceClassifiersFor(sessionContext?.associatedDeviceId),
+    )
+    if (!loadResult.success) {
+      return TrailRunResult(
+        success = false,
+        error = loadResult.error ?: "Failed to load trail",
+      ).toJson()
+    }
+
+    val stepCount = loadResult.promptSteps?.size ?: 0
 
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")

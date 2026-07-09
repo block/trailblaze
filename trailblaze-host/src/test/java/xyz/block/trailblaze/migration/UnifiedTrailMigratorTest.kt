@@ -9,6 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.yaml.TrailSourceType
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -92,7 +93,7 @@ class UnifiedTrailMigratorTest {
   fun `config description and driver are preserved through migration, not dropped`() {
     // description is runtime-surfaced (a display label); driver is an optional pin needed by
     // trails whose recordings are driver-specific. Both must survive migration — `platform`
-    // and `title` are the retired fields, not these. The driver is keyed by the file's
+    // is the one retired field, not these. The driver is keyed by the file's
     // classifier (`android-phone`).
     val dir = makeDir(
       "android-phone.trail.yaml" to """
@@ -247,7 +248,7 @@ class UnifiedTrailMigratorTest {
   }
 
   @Test
-  fun `verify keyword in v1 becomes step keyword in unified — same NL string`() {
+  fun `verify keyword in v1 keeps its kind and NL in unified`() {
     val dir = makeDir(
       "android-phone.trail.yaml" to """
         - config: {id: x, target: x, platform: android}
@@ -261,6 +262,7 @@ class UnifiedTrailMigratorTest {
     val result = migrator.migrate(dir)
     assertEquals(1, result.trail.trail.size)
     assertEquals("The home screen is visible", result.trail.trail[0].step)
+    assertTrue(result.trail.trail[0].verify, "a v1 verify: step must not be downgraded to step:")
   }
 
   @Test
@@ -655,7 +657,7 @@ class UnifiedTrailMigratorTest {
       "comments should mention each platform's memory",
     )
     assertTrue(
-      lines.any { it.contains("first file's memory was used as canonical") },
+      lines.any { it.contains("used as canonical") },
       "comments should explain the canonical-selection behavior",
     )
   }
@@ -898,6 +900,79 @@ class UnifiedTrailMigratorTest {
   }
 
   @Test
+  fun `a blank blaze yaml skip does not propagate to any classifier`() {
+    // blaze.yaml's `skip: ""` is v1's "not skipped" convention, same as a blank platform-file skip
+    // (tested above). `cfg?.skip?.takeIf { it.isNotBlank() }` must no-op here — not populate the
+    // unified skip map with an empty-string reason on every classifier.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x, skip: ""}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertNull(result.trail.config.skip)
+  }
+
+  @Test
+  fun `an absent blaze yaml skip field does not propagate to any classifier`() {
+    // Distinct code path from the blank-string case above: `cfg?.skip` is null here (no `skip:`
+    // key at all) rather than an empty string, so `blazeSkip = cfg?.skip?.takeIf { … }` short-
+    // circuits on the null-safe call instead of the blank check. Both must land on the same
+    // outcome — no propagation — so both are covered.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertNull(result.trail.config.skip)
+  }
+
+  @Test
+  fun `blaze yaml's own tags join the union`() {
+    // blaze.yaml is loaded after platform files (see the loop order in
+    // UnifiedTrailMigrator.migrate), so its unique tags appear after the platform files' tags in
+    // the resulting list — same first-seen-order, dedup semantics as the platform-only union above.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x, tags: [smoke, canary]}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android, tags: [smoke, login]}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios, tags: [flaky]}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(listOf("smoke", "login", "flaky", "canary"), result.trail.config.tags)
+  }
+
+  @Test
   fun `v1 tags carry through migration as a flat trail-level list`() {
     // Tags name the whole test (not a device), so they stay a flat list — no per-classifier
     // keying, no reordering. Single-file case: the list carries through unchanged.
@@ -977,6 +1052,248 @@ class UnifiedTrailMigratorTest {
     val reparsed = yaml.decodeUnifiedTrail(emitted)
     assertEquals(mapOf("android-phone" to "blocked on android — see #123"), reparsed.config.skip)
     assertEquals(listOf("smoke", "flaky"), reparsed.config.tags)
+  }
+
+  @Test
+  fun `v1 verify steps migrate to unified verify steps and round-trip`() {
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+          - verify: The home tab is selected
+            recording: {tools: [{assertVisibleWithText: {text: Home}}]}
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 3, y: 4}}]}
+          - verify: The home tab is selected
+            recording: {tools: [{assertVisibleWithText: {text: Home}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertFalse(result.trail.trail[0].verify, "a v1 step: migrates as a plain step")
+    assertTrue(result.trail.trail[1].verify, "a v1 verify: migrates as a unified verify step")
+    assertTrue(result.report.kindDrift.isEmpty(), "agreeing kinds are not drift")
+
+    // And the kind survives the emit → reparse round-trip of the migrated file.
+    val reparsed = yaml.decodeUnifiedTrail(yaml.encodeUnifiedTrailToString(result.trail))
+    assertTrue(reparsed.trail[1].verify)
+    assertEquals("The home tab is selected", reparsed.trail[1].step)
+  }
+
+  @Test
+  fun `platforms disagreeing on step kind surface as kind drift with first platform canonical`() {
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - verify: The home tab is selected
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: The home tab is selected
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals(1, result.report.kindDrift.size, "kind disagreement must surface as drift")
+    val entry = result.report.kindDrift.single()
+    assertEquals(0, entry.stepIndex)
+    assertEquals(
+      mapOf("android-phone" to true, "ios-iphone" to false),
+      entry.verifyByClassifier,
+    )
+    // Canonical kind follows the same preference as NL: first platform (android-phone → verify).
+    assertTrue(result.trail.trail[0].verify)
+    // And the drift renders as leading comments so it's visible in the migrated file.
+    val comments = UnifiedTrailMigrator.kindDriftComments(result.report.kindDrift)
+    assertTrue(comments.any { "step: vs verify:" in it }, "expected a kind-drift warning, got: $comments")
+  }
+
+  @Test
+  fun `a step absent from one platform is not kind drift`() {
+    // Unequal step counts: ios never reached step 2. Only android declares a kind there, so a
+    // single-voice step must not be reported as kind drift.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Open the app
+          - verify: The home tab is selected
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertTrue(result.report.kindDrift.isEmpty(), "absence is not disagreement")
+    assertTrue(result.trail.trail[1].verify, "the only voice's kind is canonical")
+  }
+
+  @Test
+  fun `blaze yaml's step kind is canonical when platforms disagree with it`() {
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: The home tab is selected
+      """.trimIndent(),
+      "blaze.yaml" to """
+        - config: {id: x/y, target: x}
+        - prompts:
+          - verify: The home tab is selected
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertTrue(
+      result.trail.trail[0].verify,
+      "blaze.yaml is the hand-authored intent — its verify: kind wins over the platform's step:",
+    )
+    assertEquals(1, result.report.kindDrift.size)
+  }
+
+  @Test
+  fun `title priority and source are preserved through migration and the emitter round-trip`() {
+    // Over a thousand corpus trails carry `title:`/`priority:` and hundreds carry `source:` —
+    // the mass migration must not silently drop them. Assert the migrated model, the emitted
+    // YAML round-trip, and the lowered v1 view the runtime consumers (report names, CI priority
+    // filters, source-system mapping) actually read.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            title: Checkout with a saved card
+            priority: P1
+            source:
+              type: HANDWRITTEN
+              reason: authored by hand
+        - prompts:
+          - step: Open the app
+            recording: {tools: [{tapOnPoint: {x: 1, y: 2}}]}
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals("Checkout with a saved card", result.trail.config.title)
+    // priority/source are metadata by nature in the unified format — migration bridges them
+    // into the reserved metadata keys (the shape #4507's hand-migrated trails already use).
+    assertEquals("P1", result.trail.config.metadata?.get("priority"))
+    assertEquals("HANDWRITTEN", result.trail.config.metadata?.get("source"))
+    assertEquals("authored by hand", result.trail.config.metadata?.get("sourceReason"))
+
+    // They survive being written to unified YAML and reparsed …
+    val emitted = yaml.encodeUnifiedTrailToString(result.trail)
+    val reparsed = yaml.decodeUnifiedTrail(emitted)
+    assertEquals(result.trail.config, reparsed.config)
+
+    // … and lower back onto the v1 config runtime consumers read, from the unified file alone.
+    val lowered = yaml.extractTrailConfig(emitted)
+    assertEquals("Checkout with a saved card", lowered?.title)
+    assertEquals("P1", lowered?.priority)
+    assertEquals(TrailSourceType.HANDWRITTEN, lowered?.source?.type)
+    assertEquals("authored by hand", lowered?.source?.reason)
+  }
+
+  @Test
+  fun `a config field declared only in blaze yaml is preserved, first file to declare a scalar still wins`() {
+    // Mirrors real corpus dirs where the platform file carries title/priority but only
+    // blaze.yaml declares source: — canonical seeding must fill fields later files declare,
+    // not adopt the first config seen wholesale and drop the rest.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+            title: Library tab UI display
+            priority: P2
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            title: Library tab UI display (blaze wording)
+            source:
+              type: HANDWRITTEN
+            description: Only blaze.yaml carries this.
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    // Scalars both sides declare: the platform file (read first) stays canonical.
+    assertEquals("Library tab UI display", result.trail.config.title)
+    assertEquals("P2", result.trail.config.metadata?.get("priority"))
+    // Fields only blaze.yaml declares are filled, not dropped (source rides metadata's
+    // reserved bridge key; description is a first-class scalar).
+    assertEquals("HANDWRITTEN", result.trail.config.metadata?.get("source"))
+    assertEquals("Only blaze.yaml carries this.", result.trail.config.description)
+  }
+
+  @Test
+  fun `scalar fold across platform files — first file in filename order wins, later files fill gaps`() {
+    // android.trail.yaml sorts before ios-iphone.trail.yaml, so android's title is canonical;
+    // ios's source (which android lacks) is filled rather than dropped.
+    val dir = makeDir(
+      "android.trail.yaml" to """
+        - config: {id: x, target: x, platform: android, title: Android wording}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config:
+            id: x
+            target: x
+            platform: ios
+            title: iOS wording
+            source:
+              type: HANDWRITTEN
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertEquals("Android wording", result.trail.config.title)
+    assertEquals("HANDWRITTEN", result.trail.config.metadata?.get("source"))
+    // The losing title is surfaced as config drift, not silently dropped.
+    val titleDrift = result.report.configDrift.single { it.field == "title" }
+    assertEquals(
+      mapOf("android" to "Android wording", "ios-iphone" to "iOS wording"),
+      titleDrift.valueBySource,
+    )
+    // And it renders into the leading-comment warning block.
+    val comments = UnifiedTrailMigrator.configDriftComments(result.report.configDrift)
+    assertTrue(comments.any { "iOS wording" in it }, "expected the losing title in the drift comments, got: $comments")
+  }
+
+  @Test
+  fun `agreeing scalars across files produce no config drift`() {
+    val dir = makeDir(
+      "android.trail.yaml" to """
+        - config: {id: x, target: x, platform: android, title: Same title, priority: P1}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x, target: x, platform: ios, title: Same title}
+        - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
+    val result = migrator.migrate(dir)
+    assertTrue(
+      result.report.configDrift.isEmpty(),
+      "identical titles + a single-file priority are not drift, got: ${result.report.configDrift}",
+    )
   }
 
   private fun makeDir(vararg files: Pair<String, String>): File {

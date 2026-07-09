@@ -19,6 +19,35 @@ plugins {
 subprojects {
   apply(plugin = "org.jetbrains.dokka")
 
+  // Unit tests must never touch the developer's real Trailblaze state or a live daemon:
+  // without this, a test that reaches the CLI's connect-or-start path resolves the installed
+  // `trailblaze` from PATH and spawns detached daemon JVMs on the default port that outlive
+  // the test run, and a test that merely *connects* could drive (or shut down) a real daemon
+  // on 52525. A test task that deliberately drives a live daemon opts out by overriding these
+  // (see :trailblaze-server:integrationTest).
+  // NOTE: deliberately NOT setting TRAILBLAZE_HOME here — it outranks the per-test
+  // `user.home` redirect (UserHomeRule) that state-dir tests rely on, so a shared
+  // build-dir home would leak pin/config state across test methods.
+  tasks.withType<Test>().configureEach {
+    // Hard-refuse daemon auto-start (honored by cliTryStartDaemon / McpProxy.startDaemon).
+    environment("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART", "1")
+    // Steer default-port resolution to a port no real daemon uses, so an accidental
+    // connect fails fast instead of reaching a developer's live daemon.
+    environment("TRAILBLAZE_PORT", "52995")
+    // Point `user.home` at the build dir so tests read a fresh ~/.trailblaze instead of the
+    // developer's real one. Without this, a persisted non-default `serverPort` in the real
+    // config outranks the TRAILBLAZE_PORT env above (port precedence: persisted → env) and
+    // tests could still reach a live daemon on a custom port. Also keeps test writes (config,
+    // shell pins) out of the real home. UserHomeRule still overrides per-method on top.
+    systemProperty("user.home", layout.buildDirectory.dir("test-user-home").get().asFile.absolutePath)
+    // Test workers are plain JVMs: any test that touches AWT (image decode, report rendering)
+    // would otherwise initialize a regular macOS GUI app — which macOS activates, stealing
+    // keyboard focus from whatever the developer is typing, once per worker. Tests never need
+    // a real display (the `trailblaze.test.hasDisplay` seam exists to pin display-dependent
+    // logic), so force headless AWT in every worker.
+    systemProperty("java.awt.headless", "true")
+  }
+
   // Target Java 17 bytecode but use whatever JDK is installed
   plugins.withId("org.jetbrains.kotlin.jvm") {
     tasks.withType<JavaCompile>().configureEach {

@@ -12,6 +12,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 
@@ -22,13 +23,18 @@ import xyz.block.trailblaze.util.BunBinaryResolver
  */
 class RunReportGeneratorTest {
 
-  private fun info(status: SessionStatus, durationMs: Long = 12_345L) = SessionInfo(
+  private fun info(
+    status: SessionStatus,
+    durationMs: Long = 12_345L,
+    targetAppInfo: TrailblazeTargetAppInfo? = null,
+  ) = SessionInfo(
     sessionId = SessionId("sess-1"),
     latestStatus = status,
     timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000L),
     durationMs = durationMs,
     trailFilePath = "trails/Login/login.trail.yaml",
     hasRecordedSteps = true,
+    targetAppInfo = targetAppInfo,
   )
 
   @Test
@@ -60,6 +66,35 @@ class RunReportGeneratorTest {
     assertEquals("trailblaze run trails/Login/login.trail.yaml", meta["cmd"]!!.jsonPrimitive.content)
     // A passing run has no error banner.
     assertNull(meta["error"])
+  }
+
+  @Test
+  fun sessionMetaJson_carriesTargetAppIdentityAndComposedVersion() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    // Android shape: versionName + versionCode.
+    val android = RunReportGenerator.sessionMetaJson(
+      info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos", versionName = "5.58.0.0", versionCode = "67500009")),
+      passed,
+    )
+    assertEquals("com.example.pos", android["appId"]!!.jsonPrimitive.content)
+    assertEquals("5.58.0.0 (67500009)", android["appVersion"]!!.jsonPrimitive.content)
+    // iOS shape: the app-specific buildNumber wins over CFBundleVersion in the display string.
+    val ios = RunReportGenerator.sessionMetaJson(
+      info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos", versionName = "6.94", versionCode = "6940515", buildNumber = "6515")),
+      passed,
+    )
+    assertEquals("6.94 (6515)", ios["appVersion"]!!.jsonPrimitive.content)
+    // App resolved but version probe came up empty: id still carried, no version row.
+    val idOnly = RunReportGenerator.sessionMetaJson(
+      info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos")),
+      passed,
+    )
+    assertEquals("com.example.pos", idOnly["appId"]!!.jsonPrimitive.content)
+    assertNull(idOnly["appVersion"])
+    // Sessions without a captured target app carry neither field.
+    val none = RunReportGenerator.sessionMetaJson(info(passed), passed)
+    assertNull(none["appId"])
+    assertNull(none["appVersion"])
   }
 
   @Test

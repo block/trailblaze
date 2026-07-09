@@ -209,7 +209,7 @@ class McpCommand : Callable<Int> {
         // Wrapped in try-catch: if the desktop app crashes, the STDIO server must keep
         // running (the non-daemon thread above keeps the JVM alive).
         try {
-          app.startTrailblazeDesktopApp(headless = true)
+          app.startTrailblazeDesktopApp(headless = true, daemonAlreadyRunning = true)
         } catch (e: Exception) {
           Console.error("[MCP] Desktop app exited with error: ${e.message}")
           Console.error("[MCP] STDIO MCP server continues running without tray icon.")

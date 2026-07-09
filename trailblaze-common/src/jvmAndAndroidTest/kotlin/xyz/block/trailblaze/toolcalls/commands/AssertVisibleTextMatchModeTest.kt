@@ -13,7 +13,6 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -379,7 +378,9 @@ class AssertVisibleTextMatchModeTest {
 
   private fun lowerMaestroTextRegex(expectedText: String, mode: TextMatchMode): String {
     val tool = AssertVisibleBySelectorTrailblazeTool(
-      selector = TrailblazeElementSelector(textRegex = "Review sale"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(textRegex = "Review sale"),
+      ),
       expectedText = expectedText,
       textMatchMode = mode,
     )

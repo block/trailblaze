@@ -3,13 +3,20 @@ package xyz.block.trailblaze.toolcalls
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import assertk.assertions.messageContains
+import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.parseKoogParameterType
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogParameterTypePreservingComposites
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
@@ -200,5 +207,69 @@ class TrailblazeKoogToolTest {
     val plain = TrailblazeToolParameterDescriptor(name = "label", type = "string")
       .toKoogParameterTypePreservingComposites()
     assertThat(plain).isEqualTo(ToolParameterType.String)
+  }
+
+  // ---- selectorParamsForTs: recovers the selector params the Koog descriptor build strips ----
+  //
+  // These params are excluded from the descriptor (excludedParameterTypes) because their
+  // self-referential grammar overflows Koog's lowering; selectorParamsForTs re-derives them typed
+  // against the generated selectors.ts so the trail-recording validator can type-check recordings.
+
+  @LLMDescription("Tap the element resolved by a selector.")
+  @TrailblazeToolClass("requiredNodeSelectorTool")
+  private data class RequiredNodeSelectorTool(
+    @LLMDescription("The node selector identifying the element to tap.")
+    val nodeSelector: TrailblazeNodeSelector,
+    val longPress: Boolean = false,
+  ) : TrailblazeTool
+
+  @LLMDescription("Assert the element resolved by a selector is visible.")
+  @TrailblazeToolClass("optionalNodeSelectorTool")
+  private data class OptionalNodeSelectorTool(
+    val nodeSelector: TrailblazeNodeSelector? = null,
+  ) : TrailblazeTool
+
+  @LLMDescription("Carries both the legacy and node selector.")
+  @TrailblazeToolClass("bothSelectorsTool")
+  private data class BothSelectorsTool(
+    val selector: TrailblazeElementSelector? = null,
+    val nodeSelector: TrailblazeNodeSelector? = null,
+  ) : TrailblazeTool
+
+  @LLMDescription("A tool with no selector params.")
+  @TrailblazeToolClass("noSelectorTool")
+  private data class NoSelectorTool(
+    val text: String,
+  ) : TrailblazeTool
+
+  @Test fun `selectorParamsForTs types a required nodeSelector as non-optional TrailblazeNodeSelector`() {
+    val p = RequiredNodeSelectorTool::class.selectorParamsForTs().single()
+    assertThat(p.name).isEqualTo("nodeSelector")
+    assertThat(p.tsType).isEqualTo("TrailblazeNodeSelector")
+    assertThat(p.optional).isFalse()
+    // Param-level @LLMDescription is surfaced as JSDoc on the emitted field.
+    assertThat(p.description).isEqualTo("The node selector identifying the element to tap.")
+  }
+
+  @Test fun `selectorParamsForTs marks a nullable nodeSelector optional`() {
+    val p = OptionalNodeSelectorTool::class.selectorParamsForTs().single()
+    assertThat(p.name).isEqualTo("nodeSelector")
+    assertThat(p.optional).isTrue()
+  }
+
+  @Test fun `selectorParamsForTs types the legacy element selector as unknown and always optional`() {
+    val params = BothSelectorsTool::class.selectorParamsForTs()
+    // Declaration order preserved; both selector types recovered.
+    assertThat(params.map { it.name }).containsExactly("selector", "nodeSelector")
+    val legacy = params.single { it.name == "selector" }
+    assertThat(legacy.tsType).isEqualTo("unknown")
+    assertThat(legacy.optional).isTrue()
+    // Falls back to a default description when the param carries no @LLMDescription.
+    assertThat(legacy.description).isNotNull()
+    assertThat(params.single { it.name == "nodeSelector" }.tsType).isEqualTo("TrailblazeNodeSelector")
+  }
+
+  @Test fun `selectorParamsForTs returns empty for a tool with no selector params`() {
+    assertThat(NoSelectorTool::class.selectorParamsForTs()).isEmpty()
   }
 }

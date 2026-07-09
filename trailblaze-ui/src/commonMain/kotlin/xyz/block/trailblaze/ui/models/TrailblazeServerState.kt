@@ -39,6 +39,16 @@ data class TrailblazeServerState(
     val llmProvider: String = TrailblazeLlmProvider.NONE.id,
     val llmModel: String = TrailblazeLlmProvider.NONE.id,
     val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
+    /**
+     * Rollout gate for unified-format recording save-back. While false (default), a successful
+     * run saves recordings exactly as before the unified recorder work: a legacy
+     * `<classifier>.trail.yaml` sibling, and never anything next to a unified `trail.yaml`.
+     * Opt in (`trailblaze config unified-recordings true`, `--unified-recordings`, or
+     * `TRAILBLAZE_UNIFIED_RECORDINGS=1`) to have new recordings merge into the unified
+     * `trail.yaml` instead. The default flips to true once the surrounding tooling
+     * (validation, CI discovery, verify steps, MCP/desktop writers) fully supports unified.
+     */
+    val unifiedRecordingsEnabled: Boolean = false,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.toolcalls
 
+import kotlin.reflect.KClass
+
 /**
  * Annotation for Trailblaze tools that defines their execution characteristics.
  *
@@ -33,6 +35,16 @@ package xyz.block.trailblaze.toolcalls
  *   metadata can also live in a sibling `*.trailhead.yaml` file pairing the class with a `to:`
  *   block — discovery merges both sources, so a class can self-declare here without a
  *   companion YAML, or the YAML can stay authoritative if the trailhead is YAML-only.
+ * @property resultType The `@Serializable` class this tool populates
+ *   `TrailblazeToolResult.Success.structuredContent` with, if any. `Unit::class` (the default)
+ *   means "no declared structured result" — the tool either returns plain text, or its
+ *   structured payload isn't a single serializable object (e.g. a bare list or primitive).
+ *   Declaring this makes the result type build-time discoverable via reflection, which feeds
+ *   both the generated TypeScript SDK bindings (`BuiltInToolResultTsBindings` in
+ *   `trailblaze-common`, walking `resultType.serializer().descriptor` via
+ *   `SerialDescriptorTsCodegen`) and the per-trailmap `trailblaze-client.d.ts` generator
+ *   (`WorkspaceClientDtsGenerator`), so both surfaces render the same typed `result` instead of
+ *   one hand-written and the other falling back to `string`.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -43,4 +55,5 @@ annotation class TrailblazeToolClass(
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,
   val trailheadTo: String = "",
+  val resultType: KClass<*> = Unit::class,
 )

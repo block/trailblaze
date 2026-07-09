@@ -6,6 +6,39 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 object IosHostSimctlUtils {
 
+  /**
+   * Lists the UDIDs of currently booted iOS simulators via `xcrun simctl list devices booted`.
+   * Returns empty on non-macOS hosts or when none are booted.
+   *
+   * Exists so callers can iterate real device ids instead of passing the `booted` alias directly
+   * to a `simctl` subcommand — with more than one simulator booted, `booted` is ambiguous for some
+   * subcommands, where enumerating and trying each real UDID is unambiguous regardless.
+   */
+  fun listBootedDeviceIds(): List<String> {
+    if (!isMacOs()) return emptyList()
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "list", "devices", "booted"),
+    ).runProcess {}
+    val udidRegex = Regex("\\(([0-9A-Fa-f-]{36})\\)\\s*\\(Booted\\)")
+    return output.outputLines.mapNotNull { udidRegex.find(it)?.groupValues?.get(1) }
+  }
+
+  /**
+   * Resolves the on-disk `.app` bundle directory for [appId] on [deviceId] via
+   * `xcrun simctl get_app_container <deviceId> <appId> app` — the app's installed bundle itself,
+   * as opposed to [clearAppDataContainer]'s `data` container. Returns null on non-macOS hosts, or
+   * when the app isn't installed on that device (non-zero exit / no output).
+   */
+  fun getAppBundlePath(deviceId: String, appId: String): File? {
+    if (!isMacOs()) return null
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "app"),
+    ).runProcess {}
+    if (output.exitCode != 0) return null
+    val path = output.outputLines.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return File(path).takeIf { it.isDirectory }
+  }
+
   fun clearAppDataContainer(deviceId: String, appId: String) {
     if (!isMacOs()) return
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(

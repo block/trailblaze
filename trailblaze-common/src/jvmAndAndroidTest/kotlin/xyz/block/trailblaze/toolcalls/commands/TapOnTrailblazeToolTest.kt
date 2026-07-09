@@ -468,7 +468,6 @@ class TapOnTrailblazeToolTest {
   @Test
   fun `TapOnByElementSelector accessibility selector with null agent returns ExceptionThrown`() = runBlocking {
     val tap = TapOnByElementSelector(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "x"),
       longPress = false,
       nodeSelector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
@@ -499,7 +498,6 @@ class TapOnTrailblazeToolTest {
     // but didn't resolve" branch that the tool refuses to fall back from under an
     // accessibility-capable agent.
     val tap = TapOnByElementSelector(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "x"),
       longPress = false,
       nodeSelector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
@@ -514,14 +512,12 @@ class TapOnTrailblazeToolTest {
 
   @Test
   fun `TapOnByElementSelector accessibility selector with non-accessibility agent falls back to Maestro`(): Unit = runBlocking {
-    // Recording carries both the legacy Maestro [selector] and an [androidAccessibility]
-    // nodeSelector (cross-driver-portable). Under a non-accessibility runtime agent
-    // (e.g. AndroidMaestroTrailblazeAgent on the on-device test farm), the strict
-    // accessibility refusal must NOT fire — the tool falls through to the Maestro path
-    // so legacy/cross-driver recordings stay runnable. CapturingAgent.executeMaestroCommands
-    // captures the resulting tap and returns Success.
+    // Recording carries an [androidAccessibility] nodeSelector (cross-driver-portable). Under a
+    // non-accessibility runtime agent (e.g. AndroidMaestroTrailblazeAgent on the on-device test
+    // farm), the strict accessibility refusal must NOT fire — the tool falls through to the
+    // Maestro path (lowering the nodeSelector) so cross-driver recordings stay runnable.
+    // CapturingAgent.executeMaestroCommands captures the resulting tap and returns Success.
     val tap = TapOnByElementSelector(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Continue"),
       longPress = false,
       nodeSelector = TrailblazeNodeSelector(
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
@@ -535,16 +531,14 @@ class TapOnTrailblazeToolTest {
 
   @Test
   fun `TapOnByElementSelector with FORCE_NODE_SELECTOR mode dispatches via agent before fallback`(): Unit = runBlocking {
-    // FORCE_NODE_SELECTOR (non-accessibility-shaped recording, e.g. Maestro selector with no
-    // nodeSelector field). The tool must (a) try agent.executeNodeSelectorTap with the
-    // synthesized nodeSelector first, and (b) fall back to super.execute (Maestro path)
-    // when the agent returns null. Pre-merge no test exercised this branch.
+    // FORCE_NODE_SELECTOR: the tool must (a) try agent.executeNodeSelectorTap with the
+    // nodeSelector first, and (b) fall back to super.execute (Maestro path, lowering the
+    // nodeSelector) when the agent returns null. Pre-merge no test exercised this branch.
     val tap = TapOnByElementSelector(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Continue"),
       longPress = false,
-      // nodeSelector deliberately null — `selector.toTrailblazeNodeSelector` will synthesize one
-      // based on the runtime device platform inside the FORCE_NODE_SELECTOR branch.
-      nodeSelector = null,
+      nodeSelector = TrailblazeNodeSelector(
+        androidMaestro = DriverNodeMatch.AndroidMaestro(textRegex = "Continue"),
+      ),
     )
     val agent = CapturingAgent()
     val baseContext = contextWithTree(agent, tree = null)
@@ -563,6 +557,105 @@ class TapOnTrailblazeToolTest {
     // CapturingAgent doesn't override executeNodeSelectorTap → returns null → falls to
     // super.execute which dispatches the Maestro TapOnElementCommand via executeMaestroCommands.
     assertIs<TrailblazeToolResult.Success>(result)
+  }
+
+  // endregion
+
+  // region Android Maestro-driver tap selector fidelity (TapTrailblazeTool)
+
+  @Test
+  fun `android maestro tap on list row records the row's selector, not the scrollable container`() {
+    // Regression: Square AI instrumentation mis-taps after #4538. The TrailblazeNode
+    // hitTest at the row's center climbs to the nearest interactive node — the scrollable
+    // RecyclerView container — so the modern generator describes the container
+    // (resourceId only). That lowers to a non-blank Maestro selector, so preferring it
+    // dispatched `tapOnElement {idRegex: …recycler…}`: Maestro taps the container's
+    // center, landing on an arbitrary row. On ANDROID the recorded nodeSelector must
+    // carry the target row's identity (its text), never just the container's.
+    val bagelRow = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "b1",
+      bounds = TrailblazeNode.Bounds(0, 400, 1000, 600),
+      driverDetail = DriverNodeDetail.AndroidMaestro(text = "Bagel"),
+    )
+    val beerRow = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 200, 1000, 400),
+      driverDetail = DriverNodeDetail.AndroidMaestro(text = "Beer (Bulk)"),
+    )
+    val recycler = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 200, 1000, 1800),
+      children = listOf(beerRow, bagelRow),
+      driverDetail = DriverNodeDetail.AndroidMaestro(
+        resourceId = "com.example:id/library_list_recycler_view",
+        className = "androidx.recyclerview.widget.RecyclerView",
+        scrollable = true,
+      ),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 2000),
+      children = listOf(recycler),
+      driverDetail = DriverNodeDetail.AndroidMaestro(),
+    )
+    // Legacy ViewHierarchyTreeNode mirror of the same screen — the TapSelectorV2 input.
+    // The Bagel row's centerPoint must equal the TrailblazeNode row's center (500, 500).
+    val legacyHierarchy = ViewHierarchyTreeNode(
+      nodeId = 1,
+      x1 = 0, y1 = 0, x2 = 1000, y2 = 2000,
+      centerPoint = "500,1000",
+      children = listOf(
+        ViewHierarchyTreeNode(
+          nodeId = 2,
+          resourceId = "com.example:id/library_list_recycler_view",
+          className = "androidx.recyclerview.widget.RecyclerView",
+          scrollable = true,
+          x1 = 0, y1 = 200, x2 = 1000, y2 = 1800,
+          centerPoint = "500,1000",
+          children = listOf(
+            ViewHierarchyTreeNode(
+              nodeId = 3,
+              text = "Beer (Bulk)",
+              x1 = 0, y1 = 200, x2 = 1000, y2 = 400,
+              centerPoint = "500,300",
+            ),
+            ViewHierarchyTreeNode(
+              nodeId = 4,
+              text = "Bagel",
+              x1 = 0, y1 = 400, x2 = 1000, y2 = 600,
+              centerPoint = "500,500",
+            ),
+          ),
+        ),
+      ),
+    )
+    val agent = CapturingAgent()
+    val screen = object : ScreenState {
+      override val screenshotBytes: ByteArray? = null
+      override val deviceWidth: Int = 1000
+      override val deviceHeight: Int = 2000
+      override val viewHierarchy = legacyHierarchy
+      override val trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+      override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+      override val trailblazeNodeTree: TrailblazeNode? = root
+    }
+    val context = TrailblazeToolExecutionContext(
+      screenState = screen,
+      traceId = null,
+      trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+      sessionProvider = agent.sessionProvider,
+      trailblazeLogger = agent.trailblazeLogger,
+      memory = AgentMemory(),
+      maestroTrailblazeAgent = agent,
+    )
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "b1").toExecutableTrailblazeTools(context).single(),
+    )
+    val lowered = tap.nodeSelector?.toTrailblazeElementSelector()
+    assertEquals("Bagel", lowered?.textRegex)
+    assertNull(lowered?.idRegex)
   }
 
   // endregion

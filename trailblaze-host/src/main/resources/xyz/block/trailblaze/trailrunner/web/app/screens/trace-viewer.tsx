@@ -327,9 +327,15 @@ function CopyableCommand({ text }) {
 function InfoPanel({ s, sessionId, sourceTrail, trace = [], go }) {
   useLucide();
   const cmd = cliRerunCommand(s, sourceTrail);
+  // "5.58.0.0 (67500009)" — user-visible version first, internal build/version code in parens.
+  const appVersion = s.appVersionName
+    ? s.appVersionName + ((s.appBuildNumber || s.appVersionCode) ? ` (${s.appBuildNumber || s.appVersionCode})` : '')
+    : (s.appBuildNumber || s.appVersionCode);
   const rows = [
     ['Session', sessionId],
     ['Target', s.target],
+    ['App', s.appId],
+    ['App version', appVersion],
     ['Device', s.device],
     ['Platform', s.platform],
     ['Trail', s.trailId ? (sourceTrail ? sourceTrail.path || sourceTrail.title : s.trailId) : 'ad-hoc objective (no saved trail)'],
@@ -357,7 +363,7 @@ function InfoPanel({ s, sessionId, sourceTrail, trace = [], go }) {
               {k === 'Trail' && s.trailId
                 ? <span role="button" tabIndex={0} title={'Open this run’s trail'} onClick={() => go && go('trails', { sel: s.trailId })} onKeyDown={(e) => { if (e.key === 'Enter') go && go('trails', { sel: s.trailId }); }}
                     className="tb-mono" style={{ fontSize: 12.5, color: 'var(--tb-running)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(94,155,255,.4)', textUnderlineOffset: 3, wordBreak: 'break-all' }}>{v}</span>
-                : <span className={k === 'Session' ? 'tb-mono' : ''} data-selectable style={{ fontSize: 12.5, color: 'var(--text-standard)', wordBreak: 'break-all' }}>{v}</span>}
+                : <span className={k === 'Session' || k === 'App' ? 'tb-mono' : ''} data-selectable style={{ fontSize: 12.5, color: 'var(--text-standard)', wordBreak: 'break-all' }}>{v}</span>}
             </div>
           ))}
         </div>

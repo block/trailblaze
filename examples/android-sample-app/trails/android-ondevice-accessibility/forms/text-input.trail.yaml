@@ -1,0 +1,77 @@
+config:
+  id: sample-app/forms/text-input
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Navigate to the \"Forms\" tab"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The 'Forms' tab is identified by the node containing the 'Forms' text. Tapping this node should navigate to the 'Forms' tab as requested by the objective.
+            nodeSelector:
+              androidAccessibility:
+                classNameRegex: android.view.View
+                collectionItemRowIndex: 0
+                collectionItemColumnIndex: 1
+
+  - step: "Tap the \"Name\" field and type \"Jane Doe\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The 'Name' field is an EditText with nodeId 10. Tapping it will focus the input field to allow text entry.
+            nodeSelector:
+              androidAccessibility:
+                hintTextRegex: Name
+        - inputText:
+            text: Jane Doe
+
+  - step: "Tap the \"Email\" field and type \"jane@example.com\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The 'Email' field corresponds to the EditText with nodeId 12. To type an email address, the field must first be focused.
+            nodeSelector:
+              androidAccessibility:
+                hintTextRegex: Email
+        - inputText:
+            text: jane@example.com
+
+  - step: "Tap the \"Submit\" button"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The element with nodeId 14 contains the 'Submit' text and is clickable, which matches the objective to tap the 'Submit' button.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Submit
+
+  - step: "Verify \"Jane Doe\" and \"jane@example.com\" appear in the submission result"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: 'This node contains the text ''Name: Jane Doe\nEmail: jane@example.com'', which confirms both ''Jane Doe'' and ''jane@example.com'' appear in the submission result.'
+            nodeSelector:
+              androidAccessibility:
+                textRegex: |-
+                  \QName: Jane Doe
+                  Email: jane@example.com\E
+
+  - step: "Tap \"Clear All\" and verify \"Jane Doe\" is no longer visible"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: Tapping the 'Clear All' button is the required action to attempt clearing out the form and submission result, as per the objective.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Clear All
+        - assertNotVisibleWithText:
+            text: Jane Doe

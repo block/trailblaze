@@ -449,6 +449,65 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue(emitted.isEmpty())
   }
 
+  @Test
+  fun `isRecordable-derived surface injects selector + YAML tools into every binding`() {
+    // The durable fix: the surface is derived from `isRecordable`, so recordable tools that live in
+    // NO tool_sets (the selector-migration pipeline's `assertVisibleBySelector` /
+    // `assertNotVisibleBySelector`, which the LLM never picks) and YAML-defined recordable tools
+    // (`eraseText` / `pressBack`) land in EVERY binding — even a trailmap with no tool_sets and no
+    // scripted tools of its own. Selector-typed args the descriptor path strips are re-injected, and
+    // HAND_CURATED_RECORDABLE tools are left to built-in-tools.ts so the two surfaces don't collide.
+    val trailmapDir = newTrailmapDir("recordable_surface_pack")
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "recordable_surface_pack",
+        target = TrailmapTargetConfig(displayName = "Recordable Surface"),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(id = "recordable_surface_pack", displayName = "Recordable Surface"),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap))
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+
+    // Selector-migration tools that are in no tool_sets still appear — including
+    // `assertNotVisibleBySelector`, the one a prior hand-curation of built-in-tools.ts forgot.
+    assertTrue("expected assertVisibleBySelector in the recordable surface: $rendered") {
+      rendered.contains("assertVisibleBySelector:")
+    }
+    assertTrue("expected assertNotVisibleBySelector (the drift-missed tool): $rendered") {
+      rendered.contains("assertNotVisibleBySelector:")
+    }
+    // Selector arg re-injected, with the grammar type imported from the SDK bundle.
+    assertTrue("expected the TrailblazeNodeSelector import: $rendered") {
+      rendered.contains("import type { TrailblazeNodeSelector } from \"@trailblaze/scripting\";")
+    }
+    assertTrue("expected a re-injected nodeSelector arg on assertVisibleBySelector: $rendered") {
+      toolEntryBlock(rendered, "assertVisibleBySelector").contains("nodeSelector?: TrailblazeNodeSelector;")
+    }
+    // `tapOn` carries a REQUIRED `selector: TrailblazeNodeSelector` — re-injected non-optional. (It
+    // needs a class `@LLMDescription` to be lowerable at all; without one the descriptor build throws
+    // and the tool is silently dropped from the surface, which is how it regressed to "does not
+    // exist" before that annotation was added.)
+    assertTrue("expected tapOn in the recordable surface: $rendered") { rendered.contains("tapOn:") }
+    assertTrue("expected a re-injected required selector arg on tapOn: $rendered") {
+      toolEntryBlock(rendered, "tapOn").contains("selector: TrailblazeNodeSelector;")
+    }
+    // YAML-defined recordable tools flow in from their config params.
+    assertTrue("expected YAML-defined eraseText: $rendered") { rendered.contains("eraseText:") }
+    assertTrue("expected YAML-defined pressBack: $rendered") { rendered.contains("pressBack:") }
+    // HAND_CURATED_RECORDABLE tools are skipped here (they stay in built-in-tools.ts).
+    assertFalse("mobile_maestro must be left to built-in-tools.ts: $rendered") {
+      rendered.contains("mobile_maestro:")
+    }
+    assertFalse("mobile_listInstalledApps must be left to built-in-tools.ts: $rendered") {
+      rendered.contains("mobile_listInstalledApps:")
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Classpath validation surfaces (trail-recording type-validation coverage for
   // JAR-bundled targets like `square` / `dashboardapp`).
@@ -545,16 +604,12 @@ class PerTrailmapClientDtsEmitterTest {
 
   @Test
   fun `trailmap-local platforms_tool_sets surface Kotlin tools in typed binding`() {
-    // Validates the resolver wire-through end-to-end: a trailmap that declares
-    // `platforms.android.tool_sets: [core_interaction]` should see at least one
-    // class-backed Kotlin tool from the classpath catalog land in its typed binding.
-    //
-    // The assertion deliberately avoids naming a specific tool ("inputText", "tap")
-    // because the framework's toolset membership evolves over time — pinning the test
-    // to one tool name turns every catalog refactor into a spurious test-failure
-    // mystery. Instead we compare against a same-shape control trailmap that requests NO
-    // toolsets: anything in the surface delta is by definition something
-    // `core_interaction` contributed.
+    // Validates the resolver wire-through end-to-end together with the isRecordable-derived surface:
+    // every binding — even one that requests NO tool_sets — now carries the recordable framework
+    // tools (source #2 of `resolveKotlinToolDescriptorsForTrailmap`), and a trailmap that DOES
+    // request `core_interaction` is a superset of that recordable-only control. The tool_sets
+    // wire-through itself (source #1, incl. non-recordable tools) is pinned separately by the
+    // synthetic-catalog tests above.
     val trailmapWithToolset = newTrailmapDir("with_toolset")
     val trailmapWithoutToolset = newTrailmapDir("without_toolset")
 
@@ -588,15 +643,18 @@ class PerTrailmapClientDtsEmitterTest {
     val withToolset = Files.readString(File(trailmapWithToolset, "tools/trailblaze-client.d.ts").toPath())
     val withoutToolset = Files.readString(File(trailmapWithoutToolset, "tools/trailblaze-client.d.ts").toPath())
 
-    // The control trailmap has no requested toolsets → empty `TrailblazeToolMap`. The
-    // toolset-requesting trailmap must produce a strictly-larger output (the additional
-    // bytes are the typed entries `core_interaction` contributed).
+    // The recordable-tool surface is now derived from `isRecordable` and injected into EVERY
+    // binding, so the no-toolset control is no longer empty — it carries the recordable framework
+    // tools (e.g. `inputText`). Requesting `core_interaction` can only ADD to that (its
+    // non-recordable tools aren't in the recordable union), so the toolset binding is a superset.
+    assertTrue("no-toolset control should still carry the recordable framework surface: $withoutToolset") {
+      withoutToolset.contains("inputText:")
+    }
     assertTrue(
-      "expected `core_interaction` contributions to make the typed binding longer than " +
-        "the empty-toolset control (with=${withToolset.length}, " +
-        "without=${withoutToolset.length})",
+      "core_interaction binding should be at least as large as the recordable-only control " +
+        "(with=${withToolset.length}, without=${withoutToolset.length})",
     ) {
-      withToolset.length > withoutToolset.length
+      withToolset.length >= withoutToolset.length
     }
   }
 
@@ -680,6 +738,69 @@ class PerTrailmapClientDtsEmitterTest {
   private class TestNoFlagsTool(
     @Suppress("unused") val text: String,
   ) : TrailblazeTool
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Declared resultType renders the same named type built-in-tools.ts would (#4362 follow-up)
+  //
+  // A Kotlin tool that declares `@TrailblazeToolClass(resultType = ...)` must render `result:
+  // <TheTypeName>` (a bare reference resolved via `import type { ... } from
+  // "@trailblaze/scripting"`) instead of the today-default `result: string`. This is the
+  // per-trailmap-generator half of closing the dormant declaration-merge risk documented on
+  // built-in-tools.ts: both this generator and BuiltInToolResultTsBindings derive the same
+  // `result:` type from the same `resultType` annotation, so they can't disagree.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  @Serializable
+  private data class TestTypedToolResult(val value: String)
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_typed_result", resultType = TestTypedToolResult::class)
+  @LLMDescription("Test tool whose structuredContent is a declared result type.")
+  private class TestTypedResultTool(
+    @Suppress("unused") val text: String,
+  ) : TrailblazeTool
+
+  @Test
+  fun `Kotlin tool with declared resultType renders a named result type, not the string fallback`() {
+    val trailmapDir = newTrailmapDir("typed_result_pack")
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.typed_result"),
+        toolSets = listOf("typed_result_test_set"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "typed_result_pack",
+        target = TrailmapTargetConfig(displayName = "Typed Result", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(id = "typed_result_pack", displayName = "Typed Result", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val catalog = listOf(
+      ToolSetCatalogEntry(
+        id = "typed_result_test_set",
+        description = "Synthetic toolset for declared-resultType integration testing.",
+        toolClasses = setOf(TestTypedResultTool::class),
+      ),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = catalog)
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("expected an import of the declared result type: $rendered") {
+      rendered.contains("import type { TestTypedToolResult } from \"@trailblaze/scripting\";")
+    }
+    assertTrue("expected the named result type on the tool entry: $rendered") {
+      rendered.contains("result: TestTypedToolResult;")
+    }
+    assertFalse("must not fall back to the default `result: string;` for this tool: $rendered") {
+      rendered.substringAfter("test_typed_result:").substringBefore("};").contains("result: string;")
+    }
+  }
 
   @Test
   fun `Kotlin tool annotation projects to @trailblaze JSDoc tag in rendered client_d_ts`() {
@@ -849,9 +970,10 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected field-level TSDoc on message: $rendered") {
       rendered.contains("/** The message to format. */")
     }
-    // Result is the real `DemoOutput` shape — NOT the today-default `string`.
-    assertFalse("default `result: string;` must not appear: $rendered") {
-      rendered.contains("result: string;")
+    // Result is the real `DemoOutput` shape — NOT the today-default `string`. Scope to typed_demo's
+    // own entry (the surface now also carries recordable framework tools, each `result: string;`).
+    assertFalse("typed_demo's result must be the typed shape, not `string`: $rendered") {
+      toolEntryBlock(rendered, "typed_demo").contains("result: string;")
     }
     assertTrue("expected typed result shape: $rendered") {
       rendered.contains("formatted: string;") && rendered.contains("inputLength: number;")
@@ -986,8 +1108,8 @@ class PerTrailmapClientDtsEmitterTest {
     assertTrue("expected typed args message field cross-trailmap: $appRendered") {
       appRendered.contains("message: string;")
     }
-    assertFalse("default `result: string;` must not appear cross-trailmap: $appRendered") {
-      appRendered.contains("result: string;")
+    assertFalse("typed_demo's result must be typed cross-trailmap, not `string`: $appRendered") {
+      toolEntryBlock(appRendered, "typed_demo").contains("result: string;")
     }
     assertTrue("expected typed result formatted field cross-trailmap: $appRendered") {
       appRendered.contains("formatted: string;")
@@ -1050,8 +1172,8 @@ class PerTrailmapClientDtsEmitterTest {
     // Healthy tool from partialTools should still surface its typed shape.
     assertTrue("expected typed args from partialTools: $rendered") { rendered.contains("q: string;") }
     assertTrue("expected typed result from partialTools: $rendered") { rendered.contains("ok: boolean;") }
-    assertFalse("must not show fallback `result: string;` for partial-extraction tool: $rendered") {
-      rendered.contains("result: string;")
+    assertFalse("healthy_tool's result must be typed, not `string`: $rendered") {
+      toolEntryBlock(rendered, "healthy_tool").contains("result: string;")
     }
   }
 
@@ -1127,5 +1249,21 @@ class PerTrailmapClientDtsEmitterTest {
     val parent = createTempDirectory("per-trailmap-client-dts-test").toFile()
     tempDirs += parent
     return File(parent, id).apply { mkdirs() }
+  }
+
+  /**
+   * Extract a single tool's `<name>: { … }` entry block from a rendered `trailblaze-client.d.ts`,
+   * for assertions that must be SCOPED to one tool. Since the recordable surface is now injected into
+   * every binding (each framework tool renders `result: string;`), a whole-file `contains("result:
+   * string;")` check would spuriously match a framework tool — scope to the tool under test instead.
+   * The entry closes at the first 4-space-indented `};` after the opener (nested `args:` / `result:`
+   * objects close at deeper indentation).
+   */
+  private fun toolEntryBlock(rendered: String, toolName: String): String {
+    val start = rendered.indexOf("    $toolName: {")
+    assertTrue("expected an entry for `$toolName` in:\n$rendered") { start >= 0 }
+    val end = rendered.indexOf("\n    };", start)
+    assertTrue("expected a closing `};` for the `$toolName` entry") { end >= 0 }
+    return rendered.substring(start, end)
   }
 }

@@ -43,7 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.devices.TrailDeviceSelector
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
@@ -238,9 +240,14 @@ fun YamlTabComposable(
 
     // Device Selection Dialog
     if (showDeviceSelectionDialog) {
+      // Route a web/compose trail's pre-check to its virtual device (see initialRunDeviceSelection).
+      val trailPlatforms = remember(localYamlContent) {
+        TrailDeviceSelector.supportedPlatformsForTrail(createTrailblazeYaml(), localYamlContent)
+      }
       DeviceSelectionDialog(
         deviceManager = deviceManager,
         settingsRepo = trailblazeSettingsRepo,
+        trailPlatforms = trailPlatforms,
         onSelectionChanged = { selectedDeviceInstanceIds ->
           // Save selections immediately as they change
           trailblazeSettingsRepo.updateAppConfig { appConfig ->

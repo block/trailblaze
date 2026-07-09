@@ -185,7 +185,12 @@ class TrailblazeMcpServer(
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
-  /** Optional callback to show the desktop window (for CLI integration) */
+  /**
+   * Optional callback to show the desktop window (for CLI integration). Written by the Compose
+   * UI thread after startup and read by Ktor HTTP threads — the show-window endpoint's
+   * "success=false until installed" contract depends on that cross-thread read, hence @Volatile.
+   */
+  @Volatile
   var onShowWindowRequest: (() -> Unit)? = null,
   /** Optional callback to shutdown the application (for CLI integration) */
   var onShutdownRequest: (() -> Unit)? = null,
@@ -1581,8 +1586,14 @@ class TrailblazeMcpServer(
             onShutdownRequest?.invoke() ?: System.exit(0)
           },
           onShowWindowRequest = {
-            // Call the callback if it's set (it's set by the UI after startup)
-            onShowWindowRequest?.invoke()
+            // The UI installs this callback after Compose startup. Report honestly whether a
+            // window handler ran — a null callback (headless server, or UI still booting) must
+            // surface as success=false so `trailblaze app` attach detection and the
+            // duplicate-instance window handoff don't treat a no-op as "window shown".
+            onShowWindowRequest?.let { showWindow ->
+              showWindow()
+              true
+            } ?: false
           },
           onCliExecRequest = onCliExecRequest?.let { handler ->
             { request -> handler(request) }

@@ -48,6 +48,7 @@ import com.mikepenz.markdown.m3.markdownTypography
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.cli.pickPreferringNativeBrowser
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -58,24 +59,89 @@ import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
 /**
  * Whether this device should be selectable for [target] in the Run Configuration dialog.
  *
- * Web rows are always enabled (no app to install). When no target is selected the row is
- * also enabled — pre-existing behavior. For native rows with a selected target this delegates
+ * Virtual-device rows (web browsers, Compose desktop) are always enabled — there is no app to
+ * install on them, so app-install gating is meaningless and would only disable rows a product
+ * target doesn't declare (e.g. the Compose row under a mobile target, which made compose-only
+ * trails unrunnable without switching targets). When no target is selected the row is also
+ * enabled — pre-existing behavior. For native rows with a selected target this delegates
  * to [TrailblazeHostAppTarget.acceptsDeviceForPlatform], which both checks that the target
  * supports the device platform AND applies the `allowsAppNotInstalled` bypass.
  *
  * Single source of truth for the predicate previously inlined at four sites in this file.
  */
-private fun TrailblazeConnectedDeviceSummary.isEligibleFor(
+internal fun TrailblazeConnectedDeviceSummary.isEligibleFor(
   target: TrailblazeHostAppTarget?,
   installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>>,
 ): Boolean {
-  if (platform == TrailblazeDevicePlatform.WEB) return true
+  if (platform.usesVirtualDevice) return true
   if (target == null) return true
   val installedAppId = target.getAppIdIfInstalled(
     platform = platform,
     installedAppIds = installedAppIdsByDevice[trailblazeDeviceId] ?: emptySet(),
   )
   return target.acceptsDeviceForPlatform(platform, installedAppId)
+}
+
+/**
+ * Which devices the Run Configuration dialog lists. Normally the device manager's filtered list
+ * ([TrailblazeDeviceManager.deviceStateFlow]), whose `targetDeviceFilter` hides virtual devices
+ * (Playwright, Compose) unless the app's testing environment is WEB. For a virtual-only trail
+ * that filter would make the run impossible in a mobile environment — no browser row to check —
+ * so this unions the matching virtual devices from the unfiltered discovery
+ * ([TrailblazeDeviceManager.allDiscoveredDevicesFlow]) into the list. The run path is already
+ * environment-independent (`DesktopYamlRunner` resolves virtual devices via an unfiltered
+ * lookup); listing them here is the missing piece.
+ *
+ * Scoped to virtual-ONLY trails: mobile/mixed/unknown trails and non-trail callers (the Devices
+ * tab passes [trailPlatforms] = null) keep the filtered list untouched. Only devices whose
+ * platform the trail declares are added, so a web trail in a mobile environment gains browser
+ * rows but never, say, a Compose row.
+ */
+internal fun devicesForRunPicker(
+  filteredDevices: List<TrailblazeConnectedDeviceSummary>,
+  allDiscoveredDevices: List<TrailblazeConnectedDeviceSummary>,
+  trailPlatforms: Set<TrailblazeDevicePlatform>?,
+): List<TrailblazeConnectedDeviceSummary> {
+  if (trailPlatforms.isNullOrEmpty() || !trailPlatforms.all { it.usesVirtualDevice }) {
+    return filteredDevices
+  }
+  val listedDeviceIds = filteredDevices.map { it.trailblazeDeviceId }.toSet()
+  return filteredDevices + allDiscoveredDevices.filter {
+    it.platform in trailPlatforms && it.trailblazeDeviceId !in listedDeviceIds
+  }
+}
+
+/**
+ * Which devices the Run Configuration dialog pre-checks when it opens. Pure and unit-tested —
+ * the composables below delegate here so the desktop's default pick shares the CLI's routing
+ * semantics ([TrailDeviceSelector]'s web/compose defer) instead of drifting:
+ *
+ * - A virtual-only trail ([trailPlatforms] all web/compose) pre-checks its virtual device
+ *   (preferring the native Playwright browser) — NOT the last-used mobile devices, which would
+ *   put a one-click "Run Tests" on the wrong platform. The user can still override by checking
+ *   another device (the picker equivalent of `--device`). [availableDevices] comes from
+ *   [devicesForRunPicker], which lists a virtual-only trail's virtual devices regardless of the
+ *   app's testing environment — so this pre-check works in a mobile environment too.
+ * - Otherwise (mobile / unknown / no declared platforms) it restores the last-used devices that
+ *   are still connected and eligible — the pre-existing behavior. The picker itself is the
+ *   fail-loud step: nothing checked keeps "Run Tests" disabled, so 2+ connected devices never
+ *   silently run on a default.
+ *
+ * [trailPlatforms] is null when the caller isn't running a specific trail (e.g. the Devices tab).
+ */
+internal fun initialRunDeviceSelection(
+  availableDevices: List<TrailblazeConnectedDeviceSummary>,
+  lastSelectedInstanceIds: List<String>,
+  trailPlatforms: Set<TrailblazeDevicePlatform>?,
+  isEligible: (TrailblazeConnectedDeviceSummary) -> Boolean,
+): Set<TrailblazeConnectedDeviceSummary> {
+  if (!trailPlatforms.isNullOrEmpty() && trailPlatforms.all { it.usesVirtualDevice }) {
+    val candidates = availableDevices.filter { it.platform in trailPlatforms && isEligible(it) }
+    return setOfNotNull(candidates.pickPreferringNativeBrowser())
+  }
+  return availableDevices.filter { device ->
+    device.instanceId in lastSelectedInstanceIds && isEligible(device)
+  }.toSet()
 }
 
 /**
@@ -91,13 +157,19 @@ fun DeviceConfigurationContent(
   autoRefreshOnLoad: Boolean = true,
   allowSelectionOfActiveDevices: Boolean = false,
   onSessionClick: ((String) -> Unit)? = null,
+  trailPlatforms: Set<TrailblazeDevicePlatform>? = null,
   modifier: Modifier = Modifier,
 ) {
   val currentState by settingsRepo.serverStateFlow.collectAsState()
   val lastSelectedDeviceInstanceIds: List<String> = currentState.appConfig.lastSelectedDeviceInstanceIds
 
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
-  val availableDevices = deviceState.devices.values.map { it.device }
+  val allDiscoveredDevices by deviceManager.allDiscoveredDevicesFlow.collectAsState()
+  val availableDevices = devicesForRunPicker(
+    filteredDevices = deviceState.devices.values.map { it.device },
+    allDiscoveredDevices = allDiscoveredDevices,
+    trailPlatforms = trailPlatforms,
+  )
   val isLoadingDevices = deviceState.isLoading
   val activeDeviceSessions by deviceManager.activeDeviceSessionsFlow.collectAsState()
 
@@ -106,19 +178,19 @@ fun DeviceConfigurationContent(
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
   val appVersionInfoByDevice by deviceManager.appVersionInfoByDeviceFlow.collectAsState()
 
-  // Initialize selectedDevices with previously selected devices that are still available and have the app installed
-  // Web browsers are always considered "installed" since they don't have apps
+  // Initial pre-check: last-used devices that are still available/eligible, except that a
+  // web/compose trail pre-checks its virtual device — see [initialRunDeviceSelection].
   var selectedDevices by remember(
     availableDevices,
     lastSelectedDeviceInstanceIds,
     selectedTargetApp,
     installedAppIdsByDevice,
+    trailPlatforms,
   ) {
     mutableStateOf(
-      availableDevices.filter { device ->
-        device.instanceId in lastSelectedDeviceInstanceIds &&
-            device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
-      }.toSet()
+      initialRunDeviceSelection(availableDevices, lastSelectedDeviceInstanceIds, trailPlatforms) { device ->
+        device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
+      }
     )
   }
 
@@ -274,29 +346,35 @@ fun DeviceSelectionDialog(
   allowSelectionOfActiveDevices: Boolean = false,
   onSelectionChanged: (List<String>) -> Unit = {},
   onSessionClick: ((String) -> Unit)? = null,
+  trailPlatforms: Set<TrailblazeDevicePlatform>? = null,
 ) {
   val currentState by settingsRepo.serverStateFlow.collectAsState()
   val lastSelectedDeviceInstanceIds: List<String> = currentState.appConfig.lastSelectedDeviceInstanceIds
 
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
-  val availableDevices = deviceState.devices.values.map { it.device }
+  val allDiscoveredDevices by deviceManager.allDiscoveredDevicesFlow.collectAsState()
+  val availableDevices = devicesForRunPicker(
+    filteredDevices = deviceState.devices.values.map { it.device },
+    allDiscoveredDevices = allDiscoveredDevices,
+    trailPlatforms = trailPlatforms,
+  )
 
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
-  // Initialize selectedDevices with previously selected devices that are still available and have the app installed
-  // Web browsers are always considered "installed" since they don't have apps
+  // Mirrors DeviceConfigurationContent's initial pre-check (same inputs → same result); the
+  // content's onSelectionChanged keeps the two in sync from then on.
   var selectedDevices by remember(
     availableDevices,
     lastSelectedDeviceInstanceIds,
     selectedTargetApp,
-    installedAppIdsByDevice
+    installedAppIdsByDevice,
+    trailPlatforms,
   ) {
     mutableStateOf(
-      availableDevices.filter { device ->
-        device.instanceId in lastSelectedDeviceInstanceIds &&
-            device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
-      }.toSet()
+      initialRunDeviceSelection(availableDevices, lastSelectedDeviceInstanceIds, trailPlatforms) { device ->
+        device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
+      }
     )
   }
 
@@ -348,6 +426,7 @@ fun DeviceSelectionDialog(
             deviceManager = deviceManager,
             allowMultipleSelection = allowMultipleSelection,
             allowSelectionOfActiveDevices = allowSelectionOfActiveDevices,
+            trailPlatforms = trailPlatforms,
             onSelectionChanged = { instanceIds ->
               selectedDevices = availableDevices.filter { it.instanceId in instanceIds }.toSet()
               onSelectionChanged(instanceIds)
@@ -455,10 +534,11 @@ fun SingleDeviceListItem(
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  // Web browsers don't have apps to install - they're always ready to use
-  val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
+  // Virtual devices (web browsers, Compose desktop) don't have apps to install — they're
+  // always ready to use. Must stay consistent with [isEligibleFor], which gates the pre-check.
+  val isVirtualDevice = device.platform.usesVirtualDevice
   val isAppInstalled = installedAppId != null
-  val isEnabled = isWebPlatform || appTarget == null ||
+  val isEnabled = isVirtualDevice || appTarget == null ||
       appTarget.acceptsDeviceForPlatform(device.platform, installedAppId)
   // Gate the "any app supported" friendly message on the row actually being eligible — a
   // target that opts into [allowsAppNotInstalled] on platforms it supports shouldn't claim
@@ -567,8 +647,8 @@ fun SingleDeviceListItem(
           }
         }
 
-        // Show app installation status for non-web devices, or "Ready" for web browsers
-        if (isWebPlatform) {
+        // Show app installation status for real devices, or "Ready" for virtual ones
+        if (isVirtualDevice) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -580,7 +660,11 @@ fun SingleDeviceListItem(
               modifier = Modifier.size(16.dp)
             )
             Text(
-              text = "Web browser ready for testing",
+              text = if (device.platform == TrailblazeDevicePlatform.WEB) {
+                "Web browser ready for testing"
+              } else {
+                "Virtual device ready for testing"
+              },
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.primary,
               fontWeight = FontWeight.Medium

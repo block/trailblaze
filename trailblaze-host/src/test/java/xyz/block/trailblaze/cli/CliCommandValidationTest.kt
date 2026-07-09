@@ -11,6 +11,7 @@ import xyz.block.trailblaze.docs.Scenario
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -407,32 +408,57 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `trail picocli leaves device null when --device not passed`() {
-    // Deterministic pin for the env-var-fallback contract: picocli MUST leave
-    // [TrailCommand.device] null when `--device` is absent from argv, so the
-    // `if (device == null) device = resolveCliDevice(null) ?: config?.cliDevicePlatform`
-    // branch in call() actually runs. A regression that re-introduced
-    // `required = true` would parse-fail at this assertion instead of slipping
-    // through to the smoke-test-only path. Doesn't depend on TRAILBLAZE_DEVICE
-    // being set in the test JVM — orthogonal to the env-aware path itself,
-    // which is pinned by `DeviceConnectCommandTest::resolveCliDevice falls
-    // back to TRAILBLAZE_DEVICE`.
+  fun `trail picocli leaves devices empty when --device not passed`() {
+    // Deterministic pin for the default-resolution contract: picocli MUST leave
+    // [TrailCommand.devices] empty when `--device` is absent from argv, so the
+    // env / shell-pin / autodetect / persisted-config default-resolution branch
+    // in call() actually runs. A regression that re-introduced `required = true`
+    // would parse-fail at this assertion instead of slipping through to that path.
     val cmd = TrailCommand()
     CommandLine(cmd).parseArgs("any.trail.yaml")
 
-    assertNull(cmd.device, "--device must remain null when not explicitly passed")
+    assertEquals(emptyList(), cmd.devices, "--device must stay empty when not explicitly passed")
   }
 
   @Test
-  fun `trail picocli parses --device when passed explicitly`() {
-    // Sister pin to the null-default test above: when `--device` IS passed,
-    // picocli must store the raw value (no implicit env-var override). Together
-    // these two tests prove the flag has the right shape for the resolver's
-    // first-tier branch to function.
+  fun `trail picocli parses a single --device when passed explicitly`() {
+    // Sister pin to the empty-default test above: when `--device` IS passed,
+    // picocli stores the raw value (no implicit env-var override).
     val cmd = TrailCommand()
     CommandLine(cmd).parseArgs("--device", "android/emulator-5554", "any.trail.yaml")
 
-    assertEquals("android/emulator-5554", cmd.device)
+    assertEquals(listOf("android/emulator-5554"), cmd.devices)
+  }
+
+  @Test
+  fun `trail picocli splits a comma-separated --device into several`() {
+    // The opt-in fan-out surface: `--device android,ios` runs each trail once per device.
+    val cmd = TrailCommand()
+    CommandLine(cmd).parseArgs("--device", "android,ios", "any.trail.yaml")
+
+    assertEquals(listOf("android", "ios"), cmd.devices)
+  }
+
+  @Test
+  fun `trail picocli parses --all-devices as a boolean flag defaulting to false`() {
+    // The other opt-in fan-out surface: run on every connected device the trail supports.
+    val off = TrailCommand()
+    CommandLine(off).parseArgs("any.trail.yaml")
+    assertFalse(off.allDevices, "--all-devices must default to false")
+
+    val on = TrailCommand()
+    CommandLine(on).parseArgs("--all-devices", "any.trail.yaml")
+    assertTrue(on.allDevices, "--all-devices must parse to true when passed")
+  }
+
+  @Test
+  fun `trail --device with --all-devices returns MISUSE`() {
+    // The two are conflicting ways to say which devices to run on. The guard is placed before any
+    // `parent` access so it exits MISUSE at argv-validation time (reachable through call()).
+    val cmd = TrailCommand()
+    CommandLine(cmd).parseArgs("--device", "android", "--all-devices", "any.trail.yaml")
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   // ---------------------------------------------------------------------------
@@ -1344,7 +1370,7 @@ class CliCommandValidationTest {
   }
 
   // ---------------------------------------------------------------------------
-  // resolveTargetDevice — private helper on TrailCommand
+  // resolveRunDevice — the `run --no-daemon` device concretization on TrailCommand
   // ---------------------------------------------------------------------------
 
   /**
@@ -1381,26 +1407,29 @@ class CliCommandValidationTest {
       description = "$driverType - $instanceId",
     )
 
-  /** Reflectively invokes the private resolveTargetDevice on a TrailCommand with the given device spec. */
-  private fun callResolveTargetDevice(
+  /**
+   * Invokes [TrailCommand.resolveRunDevice] with the given device spec, returning the selected
+   * device or `null` for any non-[CliRunDeviceResolution.Selected] outcome (the production call
+   * site maps those onto error envelopes + exit codes). [trailYaml] defaults to a minimal trail
+   * declaring no platforms; pass real YAML to pin the declared-platforms derivation.
+   */
+  private fun callResolveRunDevice(
     deviceSpec: String?,
     allDevices: List<TrailblazeConnectedDeviceSummary>,
     trailDriverType: TrailblazeDriverType? = null,
-    trailPlatform: TrailblazeDevicePlatform? = null,
-  ): TrailblazeConnectedDeviceSummary? {
-    val cmd = TrailCommand()
-    val method =
-      TrailCommand::class.java.getDeclaredMethod(
-        "resolveTargetDevice",
-        List::class.java,
-        TrailblazeDriverType::class.java,
-        TrailblazeDevicePlatform::class.java,
-        String::class.java,
-      )
-    method.isAccessible = true
-    return method.invoke(cmd, allDevices, trailDriverType, trailPlatform, deviceSpec)
-      as? TrailblazeConnectedDeviceSummary
-  }
+    trailYaml: String = "- tools:\n  - pressBack: {}",
+  ): TrailblazeConnectedDeviceSummary? =
+    (callResolveRunDeviceRaw(deviceSpec, allDevices, trailDriverType, trailYaml) as? CliRunDeviceResolution.Selected)
+      ?.device
+
+  /** Raw resolution variant of [callResolveRunDevice] for pinning the fail-loud outcomes. */
+  private fun callResolveRunDeviceRaw(
+    deviceSpec: String?,
+    allDevices: List<TrailblazeConnectedDeviceSummary>,
+    trailDriverType: TrailblazeDriverType? = null,
+    trailYaml: String = "- tools:\n  - pressBack: {}",
+  ): CliRunDeviceResolution =
+    TrailCommand().resolveRunDevice(trailYaml, allDevices, trailDriverType, deviceSpec)
 
   private val testDevices =
     listOf(
@@ -1410,8 +1439,8 @@ class CliCommandValidationTest {
     )
 
   @Test
-  fun `resolveTargetDevice exact instance-id match`() {
-    val result = callResolveTargetDevice("emulator-5554", testDevices)
+  fun `resolveRunDevice exact instance-id match`() {
+    val result = callResolveRunDevice("emulator-5554", testDevices)
 
     assertNotNull(result)
     assertEquals("emulator-5554", result.trailblazeDeviceId.instanceId)
@@ -1419,8 +1448,8 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice platform-prefixed instance-id`() {
-    val result = callResolveTargetDevice("android/emulator-5554", testDevices)
+  fun `resolveRunDevice platform-prefixed instance-id`() {
+    val result = callResolveRunDevice("android/emulator-5554", testDevices)
 
     assertNotNull(result)
     assertEquals("emulator-5554", result.trailblazeDeviceId.instanceId)
@@ -1428,21 +1457,21 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice platform-only auto-selects first for that platform`() {
-    val result = callResolveTargetDevice("android", testDevices)
+  fun `resolveRunDevice platform-only auto-selects first for that platform`() {
+    val result = callResolveRunDevice("android", testDevices)
 
     assertNotNull(result)
     assertEquals(TrailblazeDevicePlatform.ANDROID, result.platform)
   }
 
   @Test
-  fun `resolveTargetDevice web platform-only prefers PLAYWRIGHT_NATIVE`() {
+  fun `resolveRunDevice web platform-only prefers PLAYWRIGHT_NATIVE`() {
     val devices =
       listOf(
         device(TrailblazeDriverType.PLAYWRIGHT_ELECTRON, "electron-1"),
         device(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "native-browser"),
       )
-    val result = callResolveTargetDevice("web", devices)
+    val result = callResolveRunDevice("web", devices)
 
     assertNotNull(result)
     assertEquals("native-browser", result.trailblazeDeviceId.instanceId)
@@ -1450,9 +1479,9 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice driver match when no deviceSpec`() {
+  fun `resolveRunDevice driver match when no deviceSpec`() {
     val result =
-      callResolveTargetDevice(
+      callResolveRunDevice(
         deviceSpec = null,
         allDevices = testDevices,
         trailDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
@@ -1463,12 +1492,12 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice platform match when no deviceSpec and no driver`() {
+  fun `resolveRunDevice routes a v1 web trail to the web device`() {
     val result =
-      callResolveTargetDevice(
+      callResolveRunDevice(
         deviceSpec = null,
         allDevices = testDevices,
-        trailPlatform = TrailblazeDevicePlatform.WEB,
+        trailYaml = "- config:\n    platform: web\n- tools:\n  - pressBack: {}",
       )
 
     assertNotNull(result)
@@ -1476,33 +1505,72 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice first available when no deviceSpec, no driver, no platform`() {
-    val result = callResolveTargetDevice(deviceSpec = null, allDevices = testDevices)
+  fun `resolveRunDevice routes a unified web trail to the browser on a mixed shell`() {
+    // The in-process headline fix: a unified trail declares its platform only through recording
+    // classifiers (no v1 `platform:` field), so the YAML→declared-platforms→device composition
+    // must land on the browser — never whatever device happens to be listed first (here an
+    // Android emulator is listed before the browser).
+    val yaml = """
+      config:
+        target: myapp
+      trail:
+        - step: Open the page
+          recording:
+            web:
+              - tapOnPoint:
+                  x: 1
+                  y: 1
+    """.trimIndent()
+    val result = callResolveRunDevice(deviceSpec = null, allDevices = testDevices, trailYaml = yaml)
 
     assertNotNull(result)
-    assertEquals("emulator-5554", result.trailblazeDeviceId.instanceId)
+    assertEquals("playwright-browser", result.trailblazeDeviceId.instanceId)
   }
 
   @Test
-  fun `resolveTargetDevice returns null when instance-id not found`() {
-    val result = callResolveTargetDevice("nonexistent-device", testDevices)
+  fun `resolveRunDevice fails loud when several real devices and nothing chosen`() {
+    // The shared CliRunDeviceResolver policy: never silently run on the first of several real
+    // devices (the pre-#4573 `allDevices.first()` fallback). The call site maps this onto the
+    // multiple-devices envelope + MISUSE.
+    val result = callResolveRunDeviceRaw(deviceSpec = null, allDevices = testDevices)
+
+    assertIs<CliRunDeviceResolution.MultipleDevices>(result)
+    assertEquals(
+      listOf("emulator-5554", "iphone-15-sim"),
+      result.candidates.map { it.trailblazeDeviceId.instanceId },
+      "only real devices count toward the ambiguity — the web virtual device is excluded",
+    )
+  }
+
+  @Test
+  fun `resolveRunDevice lands on the web catch-all when no real devices connected`() {
+    val webOnly = listOf(device(TrailblazeDriverType.PLAYWRIGHT_NATIVE, "playwright-browser"))
+    val result = callResolveRunDevice(deviceSpec = null, allDevices = webOnly)
+
+    assertNotNull(result)
+    assertEquals("playwright-browser", result.trailblazeDeviceId.instanceId)
+  }
+
+  @Test
+  fun `resolveRunDevice returns null when instance-id not found`() {
+    val result = callResolveRunDevice("nonexistent-device", testDevices)
 
     assertNull(result)
   }
 
   @Test
-  fun `resolveTargetDevice returns null when platform has no devices`() {
+  fun `resolveRunDevice returns null when platform has no devices`() {
     val androidOnly = listOf(device(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, "emulator-5554"))
-    val result = callResolveTargetDevice("ios", androidOnly)
+    val result = callResolveRunDevice("ios", androidOnly)
 
     assertNull(result)
   }
 
   @Test
-  fun `resolveTargetDevice returns null when driver not found`() {
+  fun `resolveRunDevice returns null when driver not found`() {
     val androidOnly = listOf(device(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, "emulator-5554"))
     val result =
-      callResolveTargetDevice(
+      callResolveRunDevice(
         deviceSpec = null,
         allDevices = androidOnly,
         trailDriverType = TrailblazeDriverType.IOS_HOST,
@@ -1512,8 +1580,8 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveTargetDevice partial instance-id match`() {
-    val result = callResolveTargetDevice("5554", testDevices)
+  fun `resolveRunDevice partial instance-id match`() {
+    val result = callResolveRunDevice("5554", testDevices)
 
     assertNotNull(result)
     assertEquals("emulator-5554", result.trailblazeDeviceId.instanceId)

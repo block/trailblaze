@@ -68,6 +68,7 @@ import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as Compose
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
@@ -1658,8 +1659,12 @@ class TrailblazeMcpBridgeImpl(
       // race window where a parallel setSessionTargetForBoundDevice could land
       // between the two reads and the two callers would see different targets.
       val resolvedTargetAppId = getSessionTargetAppIdForDevice(trailblazeDeviceId)
+      // TRAILBLAZE_ANDROID_PROXY_CAPTURE is a self-contained opt-in — it enables Android capture on
+      // its own, without also needing the daemon's captureNetworkTraffic toggle. See the twin gate
+      // in DesktopYamlRunner.maybeStartAndroidNetworkCapture.
+      val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
       if (
-        captureNetworkTraffic &&
+        (captureNetworkTraffic || androidProxyOptIn) &&
           trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
           resolvedLogsRepoForAndroid != null
       ) {

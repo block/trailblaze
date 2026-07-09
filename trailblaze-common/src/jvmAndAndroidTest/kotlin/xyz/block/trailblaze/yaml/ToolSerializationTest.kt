@@ -1065,8 +1065,6 @@ class ToolSerializationTest {
 - tools:
     - assertVisibleBySelector:
         reason: The ALARM tab should be visible.
-        selector:
-          textRegex: ALARM
         nodeSelector:
           androidAccessibility:
             textRegex: ALARM
@@ -1080,7 +1078,6 @@ class ToolSerializationTest {
         assertThat(tools.size).isEqualTo(1)
         val tool = tools[0].trailblazeTool as AssertVisibleBySelectorTrailblazeTool
         assertThat(tool.reason).isEqualTo("The ALARM tab should be visible.")
-        assertThat(tool.selector?.textRegex).isEqualTo("ALARM")
         assertThat(tool.nodeSelector).isNotNull()
         val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
         assertThat(match.textRegex).isEqualTo("ALARM")

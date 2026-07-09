@@ -34,7 +34,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     )
   }
 
-  override fun startTrailblazeDesktopApp(headless: Boolean) {
+  override fun startTrailblazeDesktopApp(headless: Boolean, daemonAlreadyRunning: Boolean) {
     installRunHandler()
     // Anchor every workspace-config consumer (tool catalog, LSP schema, scripted-tool source
     // lookups, target discovery) to the trails directory picked in Trail Runner settings — not the
@@ -56,6 +56,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       },
       deviceManager = deviceManager,
       headless = headless,
+      daemonAlreadyRunning = daemonAlreadyRunning,
       // Serve the Trail Runner web UI (/trailrunner/) on the daemon. The open-source build runs it
       // with the config's extension (DefaultTrailRunnerExtension unless a downstream build
       // overrides it): no integrations, no analytics, no LLM authoring assists — the UI degrades

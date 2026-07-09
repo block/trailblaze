@@ -104,6 +104,57 @@ object FileReadWriteUtil {
     }
   }
 
+  fun writeToImagesFile(
+    context: Context,
+    fileName: String,
+    contentBytes: ByteArray,
+    mimeType: String,
+  ): Uri? {
+    val resolver = context.contentResolver
+
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      // Scoped storage: register the image with MediaStore.Images so a gallery/picker finds it.
+      val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+        put(MediaStore.Images.Media.IS_PENDING, 1)
+      }
+
+      val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+      val uri = resolver.insert(collection, values)
+
+      uri?.let {
+        resolver.openOutputStream(it)?.use { output ->
+          output.write(contentBytes)
+        }
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(it, values, null, null)
+      }
+
+      uri
+    } else {
+      // Legacy (pre-Q): write into the public Pictures dir, then register a MediaStore Images row so
+      // a gallery / picker still finds it. Q+ RELATIVE_PATH / IS_PENDING aren't available here, so use
+      // the pre-Q DATA column pointing at the written file.
+      val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        .also { it.mkdirs() }
+      val file = File(picturesDir, fileName)
+      file.parentFile?.mkdirs()
+      FileOutputStream(file).use { output ->
+        output.write(contentBytes)
+      }
+      val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+        put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+        @Suppress("DEPRECATION")
+        put(MediaStore.Images.Media.DATA, file.absolutePath)
+      }
+      resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: Uri.fromFile(file)
+    }
+  }
+
   fun readFromDownloadsFile(context: Context, fileName: String): String? {
     val uri = getDownloadsFileUri(context, fileName) ?: return null
 

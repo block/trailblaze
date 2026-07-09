@@ -89,12 +89,21 @@ class ComposeRpcTrailblazeAgent(
       // Route nested framework-tool calls — a custom/scripted tool composing an action via
       // `ctx.invokeFrameworkTool(...)` or a scripting callback — back through this agent so a nested
       // ComposeExecutableTool dispatches over RPC. Without it the bridge falls back to
-      // `tool.execute(context)`, which every ComposeExecutableTool implements by throwing. Mirrors
-      // PlaywrightTrailblazeAgent. NoOpElementComparator is intentional: the nested tool reuses this
-      // batch's live screen/`screenStateProvider`, and no nested tool here does LLM element matching.
-      // This routes through the overridden `runTrailblazeTools`, so a nested composition emits its
-      // own post-batch AgentDriverLog screenshot (Playwright doesn't override the method, so it
-      // doesn't) — an acceptable extra report entry on the rare nested-composition path.
+      // `tool.execute(context)`, which every ComposeExecutableTool implements by throwing.
+      // NoOpElementComparator is intentional: the nested tool reuses this batch's live
+      // screen/`screenStateProvider`, and no nested tool here does LLM element matching.
+      //
+      // Deliberately NOT switched to `BaseTrailblazeAgent.nestedToolExecutorFor` (the fix
+      // MaestroTrailblazeAgent / PlaywrightTrailblazeAgent adopted in #4519 for the identical
+      // stale-context bug — see `docs/devlog/2026-07-03-batched-tool-execution-scope.md`).
+      // Two reasons this stays on the old re-entrant-`runTrailblazeTools` shape: (1) unlike
+      // Maestro's `AndroidDeviceCommandExecutor`, this context carries no context-scoped device
+      // state — the mutable state here (`pendingDetailRequests`, `screenStateProvider`) lives on
+      // the agent, so it already survives a context rebuild; there's no demonstrated bug to fix.
+      // (2) this routes through the overridden `runTrailblazeTools` below, so a nested composition
+      // emits its own post-batch AgentDriverLog screenshot — switching to `nestedToolExecutorFor`
+      // would skip that override and silently drop the screenshot for nested compositions.
+      // Revisit if a future Compose-side context-scoped cache creates the same bug class.
       nestedToolExecutor = { nestedTool ->
         runTrailblazeTools(
           tools = listOf(nestedTool),

@@ -495,7 +495,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   return <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />;
 }
 
-function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight }) {
+function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey }) {
   useLucide();
   const [text, setText] = React.useState(null);
   const [baseline, setBaseline] = React.useState(null);
@@ -518,6 +518,20 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
     const dirtyNow = textRef.current !== null && textRef.current !== baselineRef.current;
     if (!dirtyNow) { setText(content); setBaseline(content); }
   }, [content]);
+  // Discard-on-switch: when the parent swaps to a DIFFERENT trail/file (`resetKey` changes), reset the
+  // editor to the incoming content even if there were unsaved edits — this replaces the `key={id}` remount
+  // that used to discard the prior trail's state on switch, now that Monaco + the LSP socket are reused
+  // instead of torn down. A background reload of the SAME trail keeps `resetKey` stable, so the
+  // dirty-preserving effect above still guards real edits. Skips the initial run (mount already seeds above).
+  const firstResetRef = React.useRef(true);
+  React.useEffect(() => {
+    if (firstResetRef.current) { firstResetRef.current = false; return; }
+    setText(content); setBaseline(content); setNote(null);
+    // Also clear per-file editor-surface state so a switch fully resets: a stale palette filter can make
+    // the new file's tool list look empty, and a hover popover can get stuck (unmounting the hovered row
+    // never fires onMouseLeave).
+    setToolQuery(''); setHoverTool(null);
+  }, [resetKey]);
   const dirty = editable && text != null && text !== baseline;
   if (dirtyRef) dirtyRef.current = dirty;
   const save = async () => {

@@ -14,10 +14,11 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 
 /**
- * KAML serializer for [UnifiedTrailStep]. Step entries have a fixed `step:`
- * and optional `recordable:` key, plus a dynamic set of per-device-classifier
- * keys whose values are tool lists. The dynamic shape is why this needs a
- * custom serializer rather than stock kotlinx-serialization.
+ * KAML serializer for [UnifiedTrailStep]. Step entries have a fixed NL key
+ * (exactly one of `step:` / `verify:`) and optional `recordable:` key, plus a
+ * dynamic set of per-device-classifier keys whose values are tool lists. The
+ * dynamic shape is why this needs a custom serializer rather than stock
+ * kotlinx-serialization.
  *
  * Only the deserialize path is implemented — encoding goes through
  * [UnifiedTrailEmitter.emit], which hand-emits the surrounding map structure
@@ -49,6 +50,7 @@ class UnifiedTrailStepSerializer(
     val toolListSerializer = ListSerializer(toolWrapperSerializer)
 
     var step: String? = null
+    var verifyStep: String? = null
     var recordable = true
     var maxRetries: Int? = null
     val recordings = linkedMapOf<String, List<TrailblazeToolYamlWrapper>>()
@@ -60,6 +62,16 @@ class UnifiedTrailStepSerializer(
             "UnifiedTrailStep `step:` must be a string scalar, got ${valueNode::class.simpleName}"
           }
           step = valueNode.content
+        }
+        KEY_VERIFY -> {
+          require(!isTrailhead) {
+            "trailhead does not support `verify:` — a trailhead is a deterministic bootstrap, " +
+              "not an assertion. Use `step:`."
+          }
+          require(valueNode is YamlScalar) {
+            "UnifiedTrailStep `verify:` must be a string scalar, got ${valueNode::class.simpleName}"
+          }
+          verifyStep = valueNode.content
         }
         KEY_RECORDABLE -> {
           require(valueNode is YamlScalar) {
@@ -106,15 +118,21 @@ class UnifiedTrailStepSerializer(
           }
         }
         else -> throw IllegalArgumentException(
-          "Unexpected step-level key `$key`. Valid keys are `step`, `recording`, `recordable`, " +
-            "`maxRetries`. Device classifiers now nest under `recording:`, not at the step level.",
+          "Unexpected step-level key `$key`. Valid keys are `step`, `verify`, `recording`, " +
+            "`recordable`, `maxRetries`. Device classifiers now nest under `recording:`, not at " +
+            "the step level.",
         )
       }
     }
 
-    requireNotNull(step) {
-      "A unified step is missing its required `step:` (natural language). Every step must carry its " +
-        "intent — recording-only steps are not allowed."
+    require(step == null || verifyStep == null) {
+      "A unified step has both `step:` and `verify:` — they are mutually exclusive alternatives. " +
+        "Author exactly one."
+    }
+    val nl = step ?: verifyStep
+    requireNotNull(nl) {
+      "A unified step is missing its required `step:` (or `verify:`) natural language. Every step " +
+        "must carry its intent — recording-only steps are not allowed."
     }
     require(recordable || recordings.values.all { it.isEmpty() }) {
       "UnifiedTrailStep has both `recordable: false` and non-empty recordings; " +
@@ -122,7 +140,8 @@ class UnifiedTrailStepSerializer(
     }
 
     return UnifiedTrailStep(
-      step = step,
+      step = nl,
+      verify = verifyStep != null,
       recordings = recordings,
       recordable = recordable,
       maxRetries = maxRetries,
@@ -138,6 +157,7 @@ class UnifiedTrailStepSerializer(
 
   companion object {
     const val KEY_STEP = "step"
+    const val KEY_VERIFY = "verify"
     const val KEY_RECORDABLE = "recordable"
     const val KEY_MAX_RETRIES = "maxRetries"
     const val KEY_RECORDING = "recording"

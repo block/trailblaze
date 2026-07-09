@@ -123,7 +123,6 @@ class AssertToolNodeSelectorTest {
     )
 
     val tool = AssertVisibleBySelectorTrailblazeTool(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Submit"),
       nodeSelector = nodeSelector,
     )
 
@@ -136,14 +135,14 @@ class AssertToolNodeSelectorTest {
   }
 
   @Test
-  fun `AssertVisible without nodeSelector falls back to Maestro`() = runBlocking {
+  fun `AssertVisible in FORCE_LEGACY mode ignores nodeSelector and falls back to Maestro`() = runBlocking {
     val agent = CapturingAgent()
-    val context = createContext(agent)
-
-    val tool = AssertVisibleBySelectorTrailblazeTool(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Submit"),
-      nodeSelector = null,
+    val context = createContext(agent, nodeSelectorMode = NodeSelectorMode.FORCE_LEGACY)
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Submit"),
     )
+
+    val tool = AssertVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
 
     tool.execute(context)
 
@@ -160,7 +159,6 @@ class AssertToolNodeSelectorTest {
     )
 
     val tool = AssertVisibleBySelectorTrailblazeTool(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Submit"),
       nodeSelector = nodeSelector,
     )
 
@@ -203,14 +201,14 @@ class AssertToolNodeSelectorTest {
   }
 
   @Test
-  fun `AssertNotVisibleBySelector without nodeSelector falls back to Maestro`() = runBlocking {
+  fun `AssertNotVisibleBySelector in FORCE_LEGACY mode ignores nodeSelector and falls back to Maestro`() = runBlocking {
     val agent = CapturingAgent()
-    val context = createContext(agent)
-
-    val tool = AssertNotVisibleBySelectorTrailblazeTool(
-      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Email Marketing"),
-      nodeSelector = null,
+    val context = createContext(agent, nodeSelectorMode = NodeSelectorMode.FORCE_LEGACY)
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Email Marketing"),
     )
+
+    val tool = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
     tool.execute(context)
 
     assertNull(agent.capturedAssertNotVisible, "Should not call agent assertion path")
@@ -308,7 +306,10 @@ class AssertToolNodeSelectorTest {
   private fun TrailblazeToolResult.isSuccess() =
     this is TrailblazeToolResult.Success
 
-  private fun createContext(agent: CapturingAgent): TrailblazeToolExecutionContext {
+  private fun createContext(
+    agent: CapturingAgent,
+    nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.PREFER_NODE_SELECTOR,
+  ): TrailblazeToolExecutionContext {
     return TrailblazeToolExecutionContext(
       screenState = null,
       traceId = null,
@@ -317,7 +318,7 @@ class AssertToolNodeSelectorTest {
       trailblazeLogger = agent.trailblazeLogger,
       memory = agent.memory,
       maestroTrailblazeAgent = agent,
-      nodeSelectorMode = NodeSelectorMode.PREFER_NODE_SELECTOR,
+      nodeSelectorMode = nodeSelectorMode,
     )
   }
 

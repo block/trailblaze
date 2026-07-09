@@ -62,6 +62,11 @@ async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress
     title: s.title || s.id || 'Trailblaze run',
     status: s.status || 'unknown',
     target: s.target || null,
+    appId: s.appId || null,
+    // "5.58.0.0 (67500009)" — same display rule as the Info tab and RunReportGenerator.
+    appVersion: s.appVersionName
+      ? s.appVersionName + ((s.appBuildNumber || s.appVersionCode) ? ` (${s.appBuildNumber || s.appVersionCode})` : '')
+      : (s.appBuildNumber || s.appVersionCode || null),
     device: s.device || null,
     platform: s.platform || null,
     duration: s.dur || null,

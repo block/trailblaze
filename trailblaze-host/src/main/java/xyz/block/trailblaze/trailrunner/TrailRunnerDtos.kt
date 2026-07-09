@@ -89,6 +89,14 @@ data class SessionSummary(
   val platform: String? = null,
   val device: String? = null,
   val target: String? = null,
+  /** Resolved package name (Android) / bundle id (iOS) of the app under test, when captured. */
+  val appId: String? = null,
+  /** User-visible app version (Android versionName / iOS CFBundleShortVersionString). */
+  val appVersionName: String? = null,
+  /** Internal app version (Android versionCode / iOS CFBundleVersion). */
+  val appVersionCode: String? = null,
+  /** iOS app-specific build number, when available. */
+  val appBuildNumber: String? = null,
   val hasRecordedSteps: Boolean = false,
   val error: String? = null,
   val trailId: String? = null,
@@ -335,6 +343,24 @@ data class DeviceAppDto(
 @Serializable
 data class DeviceAppsResponse(val targets: List<DeviceAppDto>, val currentTargetAppId: String? = null)
 
+// One user-installed app on a device, unfiltered by declared targets — what the Create Target
+// form's "Browse installed apps" picker lists. Distinct from [DeviceAppDto], which only covers
+// apps matching an already-declared target.
+@Serializable
+data class InstalledAppDto(
+  val appId: String,
+  val label: String? = null,
+  val version: String? = null,
+)
+
+@Serializable
+data class InstalledAppsResponse(val apps: List<InstalledAppDto>)
+
+// REST-only (GET /api/installed-app-badge) — the per-row enrichment the Create Target picker
+// fetches after the fast id list, since label/icon extraction can be slow on a cold cache.
+@Serializable
+data class InstalledAppBadgeDto(val label: String? = null, val hasIcon: Boolean = false)
+
 @Serializable
 data class DeleteSessionResponse(val deleted: String)
 
@@ -488,6 +514,14 @@ data class TrailmapEntry(
   val tools: List<TrailmapComponent> = emptyList(),
   val trailheads: List<TrailmapComponent> = emptyList(),
   val systemPrompts: List<TrailmapComponent> = emptyList(),
+  // Platform keys of the resolved target block (`android`/`ios`/`web`/`compose`), sorted; empty
+  // for library trailmaps. Lets the Target picker decide which declared-but-undetected targets
+  // can ever surface on a connected device (web-only ones can't — apps aren't "installed" there).
+  val platforms: List<String> = emptyList(),
+  // False when the workspace `trailblaze.yaml` carries a non-empty `targets:` allow-list that
+  // does NOT include this id — the runtime will never load such a target, so the picker must not
+  // offer it as a card that could activate. The Trailmaps screen still browses everything.
+  val workspaceListed: Boolean = true,
 )
 
 @Serializable
@@ -510,6 +544,68 @@ data class NewComponentResponse(
   val relPath: String? = null,
   val savedPath: String? = null,
   val error: String? = null,
+)
+
+/**
+ * Edits the `target:` block of an *existing* `trailmap.yaml` (adds one if the trailmap currently
+ * has none — a "library trailmap", see `docs/trailmaps.md`). Covers the common fields only:
+ * [displayName], [icon], and per-platform [SaveTargetPlatformPatch.appIds]/
+ * [SaveTargetPlatformPatch.baseUrl]/[SaveTargetPlatformPatch.icon]. The target's own `id` and the
+ * rarer target/platform fields (`system_prompt_file`, `has_custom_ios_driver`, `target.tools`,
+ * per-platform `tool_sets`/`tools`/`excluded_tools`/`drivers`/`min_build_version`) are preserved
+ * from the existing manifest untouched — not editable via this request.
+ *
+ * With [createIfMissing] false (the default), [trailmapId] must already resolve via
+ * [ToolSourceFiles.trailmapBaseDir] to a directory carrying a `trailmap.yaml`. With
+ * [createIfMissing] true, a missing trailmap is bootstrapped instead: the directory and a minimal
+ * manifest (`id`, `dependencies: [trailblaze]`, and the requested `target:` block — the exact
+ * shape `docs/your-first-trailmap.md` teaches) are created under the active workspace's
+ * `trailmaps/` dir, and the id is appended to the workspace `trailblaze.yaml`'s `targets:` list
+ * when (and only when) that list is non-empty — an empty/omitted list already auto-discovers
+ * every workspace trailmap, and rewriting it would silently narrow the workspace to an explicit
+ * allow-list.
+ *
+ * [platforms] only carries the platform keys the caller wants to add/edit/remove — any platform
+ * already configured on the trailmap but absent from this map is left completely untouched.
+ * Within an edited platform ([SaveTargetPlatformPatch.remove] false), [SaveTargetPlatformPatch.appIds]/
+ * [SaveTargetPlatformPatch.baseUrl]/[SaveTargetPlatformPatch.icon] wholesale-replace the existing
+ * ones (null clears the field) — the caller (the Edit Target form) is expected to resend the
+ * platform's *current* values for any field the user didn't change, since it loads the form
+ * pre-populated with them. The platform's other fields ([PlatformConfig.toolSets]/
+ * [PlatformConfig.tools]/[PlatformConfig.excludedTools]/[PlatformConfig.drivers]/
+ * [PlatformConfig.minBuildVersion]), which this request doesn't expose, are always carried over
+ * from the existing manifest unchanged for a platform that isn't removed. [SaveTargetPlatformPatch.remove]
+ * true drops the platform key entirely, regardless of any other field set alongside it — the
+ * explicit signal a caller must send to delete a platform the manifest already has; merely
+ * omitting the key from [platforms] means "leave alone," not "remove."
+ */
+@Serializable
+data class SaveTargetConfigRequest(
+  val trailmapId: String,
+  val displayName: String,
+  val icon: String? = null,
+  val platforms: Map<String, SaveTargetPlatformPatch> = emptyMap(),
+  val createIfMissing: Boolean = false,
+) : RpcRequest<SaveTargetConfigResponse>
+
+@Serializable
+data class SaveTargetPlatformPatch(
+  val appIds: List<String>? = null,
+  val baseUrl: String? = null,
+  val icon: String? = null,
+  val remove: Boolean = false,
+)
+
+@Serializable
+data class SaveTargetConfigResponse(
+  val ok: Boolean,
+  val error: String? = null,
+  // True only when this save bootstrapped a brand-new trailmap (createIfMissing path) — the UI
+  // uses it to raise the "restart to load app targets" banner only for genuine creations.
+  val created: Boolean = false,
+  // Non-fatal problem alongside ok=true — e.g. the trailmap was created but the workspace
+  // `targets:` list couldn't be updated, so the user must register the id by hand.
+  val warning: String? = null,
 )
 
 // The toolsets (and their tools) that actually register for a run against a given

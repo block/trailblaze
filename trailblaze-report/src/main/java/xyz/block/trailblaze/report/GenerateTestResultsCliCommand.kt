@@ -231,6 +231,10 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             trail_source = determineTrailSource(sessionInfo.trailConfig),
             device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
               ?.joinToString("-") { it.classifier },
+            app_id = sessionInfo.targetAppInfo?.appId,
+            app_version_name = sessionInfo.targetAppInfo?.versionName,
+            app_version_code = sessionInfo.targetAppInfo?.versionCode,
+            app_build_number = sessionInfo.targetAppInfo?.buildNumber,
             outcome = outcome,
             failure_reason = extractFailureReason(sessionInfo.latestStatus),
             device_log_excerpt = deviceLogExcerpt,

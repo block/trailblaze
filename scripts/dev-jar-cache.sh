@@ -10,30 +10,35 @@
 #     echo "JAR ready at $DEV_JAR_PATH"
 #   fi
 
-# Source fingerprint: HEAD commit + content hash of modified/new build-relevant files.
-# Uses `git diff` for tracked files (captures actual content changes) and file stat
-# for untracked files. ~0.2s — fast enough for a launcher.
+# Source fingerprint: HEAD commit + content hash of modified/new build-relevant
+# files (`git diff` for tracked, file stat for untracked). ~0.2s.
 #
-# Scope is files that invalidate the JVM uber JAR. Two-axis include:
-#  - Kotlin/Java sources + build config by extension anywhere in the tree
-#    (`.kt`/`.kts`/`.java`/`.properties`/`.toml`/`.xml`/`.pro`). No Groovy
-#    `.gradle` — there are none in the repo; `.kts` covers `build.gradle.kts`.
-#  - YAML/JSON/HTML *classpath resources* under `**/src/**/resources/**` —
-#    these get baked into the JAR (e.g. `trailblaze-compose/src/main/resources/
-#    .../*.tool.yaml` tool descriptors, `trailblaze-models/src/commonMain/
-#    resources/.../providers/*.yaml` provider configs, the bundled framework
-#    trailmap at `trailblaze-models/.../resources/.../trailmaps/trailblaze/trailmap.yaml`,
-#    `trailblaze-host/.../waypoint-graph-template.html`).
+# Scope = files that invalidate the JVM uber JAR:
+#  - Kotlin/Java sources + build config anywhere (`.kt`/`.kts`/`.java`/
+#    `.properties`/`.toml`/`.xml`/`.pro`).
+#  - YAML/JSON/HTML/TS/JS *classpath resources* under `**/src/**/resources/**`
+#    (tool descriptors, provider configs, bundled framework trailmaps, etc.
+#    that get baked straight into the JAR).
+#  - The TypeScript SDK source (`sdks/typescript/{src,tools}/**`,
+#    `package.json`, `bun.lock`, `runtime-globals.d.ts`). Lives under `src/`
+#    but not `src/**/resources/**`, so it needs its own entry — yet
+#    `bundleTrailblazeSdkDts`/`bundleTrailblazeSdk`/`bundleScriptedToolAnalyzerShim`
+#    (TrailblazeSdkDtsBundlePlugin.kt / TrailblazeSdkBundlePlugin.kt) bake
+#    derived bundles from it into the JAR. Without this entry, an SDK edit
+#    doesn't invalidate the cached JAR and `./trailblaze check` silently
+#    type-checks against a stale declaration surface — keep this list in sync
+#    with those plugins' Gradle inputs, and with the untracked-file `grep`
+#    below.
 #
-# Everything not matched above is excluded by default — including trailmap-author
-# content under `trails/config/trailmaps/**` and `examples/**` (`trailmap.yaml`,
-# `.ts`/`.js`/`.mjs`/`.cjs` tools, `.md` system prompts, `*.example.json`
-# waypoint snapshots) and top-level `.md` READMEs. These are inputs to the
-# *running daemon*, not the JAR build, and rebuilding for every trailmap-author
-# save killed the edit-test loop (60s per touch → sub-second).
+#    The leading `*` is a git pathspec, not a shell glob — it crosses `/` by
+#    default, so `*sdks/typescript/src/*` matches both a repo-root and a
+#    nested monorepo layout with no `**` needed (verified against this repo).
+#    `dist/` and `node_modules/` are gitignored, so they're excluded already.
 #
-# Framework-generated artifacts under `.trailblaze/` (both repo-root and nested)
-# are explicitly excluded so committing one doesn't accidentally re-include it.
+# Excluded: trailmap-author content (`trails/config/trailmaps/**`,
+# `examples/**`) — inputs to the running daemon, not the JAR build; rebuilding
+# on every author save killed the edit-test loop (60s → sub-second). Also
+# excluded: generated `.trailblaze/**` artifacts.
 dev_source_hash() {
   {
     git rev-parse HEAD
@@ -44,13 +49,15 @@ dev_source_hash() {
       '**/src/**/resources/**/*.json' '**/src/**/resources/**/*.html' \
       '**/src/**/resources/**/*.ts' '**/src/**/resources/**/*.js' \
       '**/src/**/resources/**/*.mjs' '**/src/**/resources/**/*.cjs' \
+      '*sdks/typescript/src/*' '*sdks/typescript/tools/*' \
+      '*sdks/typescript/package.json' '*sdks/typescript/bun.lock' \
+      '*sdks/typescript/runtime-globals.d.ts' \
       ':!.trailblaze/**' ':!**/.trailblaze/**' 2>/dev/null
-    # Untracked files: list names + sizes so new files are detected.
-    # Same scope as the diff filter above so the tracked / untracked paths
-    # give matching results. The `(^|/)src/` anchor mirrors git pathspec's
-    # `**/src/` semantics (matches top-level `src/` too).
+    # Untracked files: list names + sizes so new files are detected. Same
+    # scope as the diff filter above (grep regex instead of pathspec, since
+    # this leg's input is a plain filename list) — keep both in sync.
     git ls-files --others --exclude-standard \
-      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|js|mjs|cjs)$' \
+      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|js|mjs|cjs)$|(^|/)sdks/typescript/(src|tools)/|(^|/)sdks/typescript/(package\.json|bun\.lock|runtime-globals\.d\.ts)$' \
       | grep -vE '(^|/)\.trailblaze/' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
   } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1

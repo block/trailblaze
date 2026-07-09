@@ -10,10 +10,15 @@ import xyz.block.trailblaze.util.Console
  * [SessionLogSource] for `<session-dir>/network.ndjson` — one [ParsedLogLine] per
  * captured [NetworkEvent].
  *
- * Format: `<METHOD> [<STATUS|FAILED>] [<duration>ms] <urlPath>`. RESPONSE_END shows the
+ * Format: `<METHOD> [<STATUS|FAILED>] [<duration>ms] <location>`. RESPONSE_END shows the
  * status code and FAILED shows the literal token; REQUEST_START emits no status token and
  * instead carries [LineGlyph.REQUEST] so the panel draws a forward-arrow vector icon
  * (a text `→` renders as tofu in the WASM report viewer's font).
+ *
+ * `<location>` is the **path only** for a single-host capture (a single-endpoint site/app, where
+ * the domain is implied and just adds noise), but the **full `host/path`** for a multi-host capture
+ * — full-system mobile proxy capture, or a multi-domain web page — so you can tell which domain each
+ * call hit. The choice is made per-[ParsedLog] from the number of distinct hosts present.
  *
  * Severity mapping:
  * - 4xx / 5xx response codes and FAILED → [LogLevel.ERROR]
@@ -53,12 +58,20 @@ object NetworkLogSource : SessionLogSource {
       line to event
     }
     val firstEpoch = parsedLines.firstOrNull()?.second?.timestampMs
+    // Single-host capture → path only (domain is implied); multi-host capture (full-system mobile
+    // proxy, multi-domain web) → full host+path so domains are distinguishable. Decided once per log.
+    val includeHost = parsedLines.asSequence()
+      .map { hostOf(it.second.url) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+      .take(2)
+      .count() > 1
     val rendered = parsedLines.map { (raw, event) ->
       val relativeMs = if (firstEpoch != null) event.timestampMs - firstEpoch else null
       ParsedLogLine(
         raw = raw,
         timestampDisplay = relativeMs?.let { FormattingUtils.formatRelativeTimeWithMillis(it) },
-        content = formatEvent(event),
+        content = formatEvent(event, includeHost),
         epochMs = event.timestampMs,
         level = mapLevel(event),
         glyph = glyphFor(event),
@@ -72,8 +85,11 @@ object NetworkLogSource : SessionLogSource {
     )
   }
 
-  /** Render an event as a single line: `POST 204 [90ms] /v1/cdp/batch`. */
-  internal fun formatEvent(event: NetworkEvent): String = buildString {
+  /**
+   * Render an event as a single line: `POST 204 [90ms] /v1/cdp/batch` (single-host) or
+   * `POST 204 [90ms] https://api.example.com/v1/cdp/batch` (multi-host). [includeHost] selects which.
+   */
+  internal fun formatEvent(event: NetworkEvent, includeHost: Boolean): String = buildString {
     append(event.method)
     // REQUEST_START emits no status token — its outbound indicator is the forward-arrow
     // vector icon the panel draws from [LineGlyph.REQUEST] (see [glyphFor]). A text `→`
@@ -95,8 +111,24 @@ object NetworkLogSource : SessionLogSource {
       append("ms]")
     }
     append(' ')
-    append(event.urlPath.ifEmpty { event.url })
+    append(locationOf(event, includeHost))
   }
+
+  /**
+   * The request location for a line. Multi-host capture → the full URL (scheme + domain + path,
+   * query stripped for brevity) so domains are distinguishable; single-host capture → just the path.
+   * Falls back to the full URL when the path is empty.
+   */
+  internal fun locationOf(event: NetworkEvent, includeHost: Boolean): String =
+    if (includeHost) {
+      event.url.substringBefore("?").ifEmpty { event.urlPath.ifEmpty { event.url } }
+    } else {
+      event.urlPath.ifEmpty { event.url }
+    }
+
+  /** Extracts the host from a URL (`https://host/path?q` → `host`); empty if unparseable. */
+  private fun hostOf(url: String): String =
+    url.substringAfter("://", "").substringBefore("/").substringBefore("?")
 
   /**
    * Leading icon marker for the line. Only REQUEST_START carries one (the outbound arrow);

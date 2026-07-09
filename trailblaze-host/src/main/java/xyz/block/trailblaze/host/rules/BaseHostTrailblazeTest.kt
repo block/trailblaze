@@ -434,6 +434,9 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { loggingRule.setSession(it) },
+      // Replay each step's recorded tools inside one shared execution context + snapshot frame —
+      // see AndroidTrailblazeRule's identical wiring for why (cross-tool device state survival).
+      sharedToolBatch = { block -> trailblazeAgent.runInSharedToolBatch(block) },
     )
   }
 
@@ -636,6 +639,11 @@ abstract class BaseHostTrailblazeTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
+                target = appTarget,
+                trailblazeDeviceId = trailblazeDeviceId,
+                resolvedAppId = resolvedAppIdForSession,
+              ),
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),

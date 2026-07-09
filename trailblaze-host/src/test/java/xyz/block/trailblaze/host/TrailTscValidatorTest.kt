@@ -4,7 +4,10 @@ import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * Unit tests for [TrailTscValidator]'s pure codegen + diagnostic-remap logic — the two halves that
@@ -94,15 +97,28 @@ class TrailTscValidatorTest {
   }
 
   @Test
-  fun `deviceClassifiersFromStem splits a per-device filename into lowercase classifiers`() {
-    assertEquals(
-      listOf("ios", "iphone"),
-      TrailTscValidator.deviceClassifiersFromStem("iOS-iPhone").map { it.classifier },
+  fun `generateGenFile keeps each statement on a single line even when a classifier has line breaks`() {
+    // A YAML quoted-scalar map key can legally carry CR/LF; the classifier interpolated into the
+    // trailing comment must not split the statement (same invariant as the label above).
+    val calls = listOf(
+      TrailTscValidator.RecordedCall("tap", "{}", 1, "Tap", classifier = "android\r\nphone"),
     )
-    assertEquals(
-      listOf("android", "phone"),
-      TrailTscValidator.deviceClassifiersFromStem("android-phone").map { it.classifier },
-    )
+    val gen = TrailTscValidator.generateGenFile("trails/x/trail.yaml", calls)
+    val (lineNo, _) = gen.table.entries.single()
+    val line = gen.source.lines()[lineNo - 1]
+    assertTrue(line.contains("client.tools.tap({})"), "statement intact: $line")
+    assertTrue(!line.contains("\n") && !line.contains("\r"))
+  }
+
+  @Test
+  fun `isTrailFile accepts per-device names and the bare unified trail yaml but not other yaml`() {
+    assertTrue(TrailTscValidator.isTrailFile("android-phone.trail.yaml"))
+    assertTrue(TrailTscValidator.isTrailFile("login.trail.yaml"))
+    // The unified format's canonical filename has no leading dot — a plain suffix check misses it.
+    assertTrue(TrailTscValidator.isTrailFile("trail.yaml"))
+    assertTrue(!TrailTscValidator.isTrailFile("blaze.yaml"))
+    assertTrue(!TrailTscValidator.isTrailFile("notes.yaml"))
+    assertTrue(!TrailTscValidator.isTrailFile("mytrail.yaml"))
   }
 
   @Test
@@ -151,11 +167,274 @@ class TrailTscValidatorTest {
     assertTrue(TrailTscValidator.remap(tsc, metas).isEmpty())
   }
 
+  private fun finding(target: String?, tool: String = "tapOn", trail: String = "t.trail.yaml") =
+    TrailTscValidator.Finding(
+      trailRelPath = trail,
+      stepIndex = 1,
+      stepLabel = "step",
+      toolName = tool,
+      tsCode = "TS2345",
+      message = "bad",
+      target = target,
+    )
+
+  @Test
+  fun `classify makes a finding on a non-exempt target fatal`() {
+    val c = TrailTscValidator.classify(
+      findings = listOf(finding(target = "wikipedia")),
+      skippedNoSurface = emptyMap(),
+      exemptTargets = emptyMap(),
+      allowedUnmodeledTools = emptySet(),
+    )
+    assertEquals(1, c.fatalFindings.size)
+    assertTrue(c.allowlistedToolFindings.isEmpty())
+  }
+
+  @Test
+  fun `classify exempts findings on an exempt target`() {
+    val c = TrailTscValidator.classify(
+      findings = listOf(finding(target = "sampleapp")),
+      skippedNoSurface = emptyMap(),
+      exemptTargets = mapOf("sampleapp" to "not yet validatable"),
+      allowedUnmodeledTools = emptySet(),
+    )
+    assertTrue(c.fatalFindings.isEmpty(), "exempt-target finding must not be fatal")
+  }
+
+  @Test
+  fun `classify downgrades an allow-listed unmodeled tool to non-fatal`() {
+    val c = TrailTscValidator.classify(
+      findings = listOf(finding(target = "wikipedia", tool = "eraseText")),
+      skippedNoSurface = emptyMap(),
+      exemptTargets = emptyMap(),
+      allowedUnmodeledTools = setOf("eraseText"),
+    )
+    assertTrue(c.fatalFindings.isEmpty())
+    assertEquals(1, c.allowlistedToolFindings.size)
+  }
+
+  @Test
+  fun `classify fails a non-exempt target with no surface but not an exempt one`() {
+    val c = TrailTscValidator.classify(
+      findings = emptyList(),
+      skippedNoSurface = mapOf("sampleapp" to 5, "newTarget" to 2, TrailTscValidator.NO_TARGET_KEY to 3),
+      exemptTargets = mapOf("sampleapp" to "reason", TrailTscValidator.NO_TARGET_KEY to "no target fixtures"),
+      allowedUnmodeledTools = emptySet(),
+    )
+    // Only the target that is neither validatable nor exempt is fatal.
+    assertEquals(mapOf("newTarget" to 2), c.fatalMissingSurfaceTargets)
+  }
+
+  @Test
+  fun `classify does not fail missing surfaces on a scoped run`() {
+    // A scoped run only loaded the selected trailmap's surface, so other workspace targets showing
+    // up as no-surface are out-of-scope skips, not defects — nothing fatal.
+    val c = TrailTscValidator.classify(
+      findings = emptyList(),
+      skippedNoSurface = mapOf("newTarget" to 2, "another" to 1),
+      exemptTargets = emptyMap(),
+      allowedUnmodeledTools = emptySet(),
+      failOnMissingSurface = false,
+    )
+    assertTrue(c.fatalMissingSurfaceTargets.isEmpty(), "scoped run must not fail on missing surfaces")
+  }
+
+  @Test
+  fun `classify counts an allow-listed tool on an exempt target as allow-listed`() {
+    // Allow-listed tools are checked before target exemption so the allow-listed tally stays
+    // accurate even when the finding also sits on an exempt target.
+    val c = TrailTscValidator.classify(
+      findings = listOf(finding(target = "sampleapp", tool = "eraseText")),
+      skippedNoSurface = emptyMap(),
+      exemptTargets = mapOf("sampleapp" to "exempt for other reasons"),
+      allowedUnmodeledTools = setOf("eraseText"),
+    )
+    assertTrue(c.fatalFindings.isEmpty())
+    assertEquals(1, c.allowlistedToolFindings.size, "allow-listed tool counted even on an exempt target")
+  }
+
+  @Test
+  fun `Report hasFatal reflects the fatal buckets`() {
+    val clean = TrailTscValidator.Report(
+      trailsDiscovered = 1, trailsValidated = 1, toolCallsChecked = 1,
+      findings = emptyList(), skippedNoSurface = emptyMap(), skippedNoRecording = 0, errors = emptyList(),
+    )
+    assertTrue(!clean.hasFatal())
+    assertTrue(clean.copy(fatalFindings = listOf(finding("wikipedia"))).hasFatal())
+    assertTrue(clean.copy(fatalMissingSurfaceTargets = mapOf("x" to 1)).hasFatal())
+  }
+
   @Test
   fun `remap ignores diagnostics for unknown gen files`() {
     val metas = mapOf("known.trail.gen.ts" to TrailTscValidator.GenFileMeta("trails/known.trail.yaml", mapOf(5 to TrailTscValidator.RecordedCall("tap", "{}", 1, "Tap"))))
     val tsc = "other.trail.gen.ts(5,1): error TS2339: Property 'x' does not exist."
     assertTrue(TrailTscValidator.remap(tsc, metas).isEmpty())
     assertNull(metas["other.trail.gen.ts"])
+  }
+
+  // ── Unified-format trails ──────────────────────────────────────────────────────────────
+
+  @get:Rule
+  val tmp = TemporaryFolder()
+
+  /** Bare decoder — unknown tools fall back to raw args, which is all extraction needs. */
+  private val yaml = TrailblazeYaml()
+
+  @Test
+  fun `extractRecordedCalls flattens every classifier slot of a unified trail`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: demo
+      trailhead:
+        step: Launch the app
+        recording:
+          android:
+            launchApp:
+              appId: com.example
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - tapOn:
+              text: Settings
+          ios-iphone:
+          - tapOn:
+              text: Settings
+          web: []
+      - step: Verify settings shown
+        recordable: false
+      """.trimIndent(),
+    )
+
+    val calls = TrailTscValidator.extractRecordedCalls(doc)
+
+    // Trailhead (step 0) + one call per non-empty classifier slot of step 1. The explicit no-op
+    // slot (`web: []`) and the recordable:false step contribute nothing.
+    assertEquals(3, calls.size)
+    val trailhead = calls.single { it.stepIndex == 0 }
+    assertEquals("launchApp", trailhead.toolName)
+    assertEquals("android", trailhead.classifier)
+    assertEquals("Launch the app", trailhead.stepLabel)
+    assertTrue(trailhead.argsJson.contains("\"appId\""), "raw args preserved: ${trailhead.argsJson}")
+    val step1 = calls.filter { it.stepIndex == 1 }
+    assertEquals(listOf("android", "ios-iphone"), step1.map { it.classifier })
+    assertTrue(step1.all { it.toolName == "tapOn" && it.stepLabel == "Open settings" })
+  }
+
+  @Test
+  fun `a bad tool arg in one unified classifier slot remaps to the right trail step and classifier`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - tapOn:
+              text: Settings
+      - step: Verify settings shown
+        recording:
+          android:
+          - assertVisible:
+              text: Settings
+          ios-iphone:
+          - assertVisible:
+              txt: Settings
+      """.trimIndent(),
+    )
+    val calls = TrailTscValidator.extractRecordedCalls(doc)
+    val gen = TrailTscValidator.generateGenFile("trails/settings/trail.yaml", calls)
+    // The line the bad ios-iphone call landed on — as tsc would report it.
+    val badLine = gen.table.entries.single { it.value.classifier == "ios-iphone" }.key
+    val metas = mapOf(
+      "settings.trail.gen.ts" to TrailTscValidator.GenFileMeta("trails/settings/trail.yaml", gen.table, target = "demo"),
+    )
+    val tsc = "settings.trail.gen.ts($badLine,30): error TS2561: Object literal may only specify known " +
+      "properties, but 'txt' does not exist in type '{ text: string; }'."
+
+    val findings = TrailTscValidator.remap(tsc, metas)
+
+    val f = findings.single()
+    assertEquals("trails/settings/trail.yaml", f.trailRelPath)
+    assertEquals(2, f.stepIndex)
+    assertEquals("ios-iphone", f.classifier)
+    assertEquals("assertVisible", f.toolName)
+    assertEquals("demo", f.target)
+  }
+
+  @Test
+  fun `extractRecordedCalls keeps the v1 shape unchanged with no classifier attribution`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      - config:
+          target: demo
+      - prompts:
+        - step: Open settings
+          recording:
+            tools:
+            - tapOn:
+                text: Settings
+        - step: Verify settings shown
+          recording:
+            tools:
+            - assertVisible:
+                text: Settings
+      """.trimIndent(),
+    )
+
+    val calls = TrailTscValidator.extractRecordedCalls(doc)
+
+    assertEquals(2, calls.size)
+    assertEquals(listOf(1, 2), calls.map { it.stepIndex })
+    assertEquals(listOf("tapOn", "assertVisible"), calls.map { it.toolName })
+    assertTrue(calls.all { it.classifier == null }, "v1 recordings carry no classifier slot")
+  }
+
+  @Test
+  fun `validate discovers bare trail yaml files alongside per-device ones`() {
+    // Tool names deliberately not registered on the classpath (they decode via the raw-args
+    // fallback) — this test is about discovery + target extraction, not real tool schemas.
+    val trailsRoot = tmp.newFolder("trails")
+    File(trailsRoot, "login").mkdirs()
+    File(trailsRoot, "login/trail.yaml").writeText(
+      """
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - demoTap:
+              text: Settings
+      """.trimIndent(),
+    )
+    File(trailsRoot, "checkout.trail.yaml").writeText(
+      """
+      - config:
+          target: demo
+      - prompts:
+        - step: Open settings
+          recording:
+            tools:
+            - demoTap:
+                text: Settings
+      """.trimIndent(),
+    )
+    File(trailsRoot, "notes.yaml").writeText("just: notes")
+
+    // No trailmap surfaces loaded, so nothing is staged and no tsc is spawned — this exercises
+    // discovery + target extraction (both formats) through the real entry point.
+    val report = TrailTscValidator.validate(
+      trailsRoot = trailsRoot,
+      trailmaps = emptyList(),
+      jsRuntime = "bun",
+      tscJs = File(trailsRoot, "unused-tsc.js").toPath(),
+    )
+
+    assertEquals(2, report.trailsDiscovered, "bare trail.yaml and *.trail.yaml discovered; notes.yaml ignored")
+    assertTrue(report.errors.isEmpty(), "no load errors: ${report.errors}")
+    assertEquals(mapOf("demo" to 2), report.skippedNoSurface, "both formats' target: extracted")
   }
 }

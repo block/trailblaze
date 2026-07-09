@@ -335,7 +335,7 @@ object DeviceClassifierResolver {
    * forbidden), iOS wins; document the deterministic order here so a future caller doesn't
    * assume "best match" semantics.
    *
-   * Match policy mirrors `TrailCommand.resolveTargetDevice`: exact equality first, then
+   * Match policy mirrors `CliRunDeviceResolver`'s explicit-id matching: exact equality first, then
    * fall back to `.contains()` so partial UDID prefixes still resolve. The substring match
    * is by design — too short an `instanceId` could match an unintended device, but the
    * resolver only feeds plan-time file lookup (a wrong match still falls back to

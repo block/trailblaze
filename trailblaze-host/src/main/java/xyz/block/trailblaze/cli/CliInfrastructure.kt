@@ -1701,6 +1701,13 @@ private fun checkAndRestartStaleDaemon(port: Int): Boolean {
  * Auto-start the Trailblaze daemon in headless mode.
  */
 private fun cliTryStartDaemon(port: Int): Boolean {
+  if (isDaemonAutoStartDisabled()) {
+    Console.error(
+      "Daemon auto-start is disabled (TRAILBLAZE_DISABLE_DAEMON_AUTOSTART). " +
+        "Start one manually with `trailblaze app` or unset the variable.",
+    )
+    return false
+  }
   val launcher = findTrailblazeLauncher() ?: run {
     Console.error("Cannot auto-start daemon: trailblaze launcher not found.")
     return false
@@ -1712,8 +1719,11 @@ private fun cliTryStartDaemon(port: Int): Boolean {
     if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
       pb.environment()["TRAILBLAZE_PORT"] = port.toString()
     }
-    pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
-    pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+    // Append (not DISCARD) so a spawned daemon that exits — e.g. losing the port-bind race
+    // to a concurrent launch — leaves its exit reason recoverable from the daemon log.
+    val daemonLogFile = xyz.block.trailblaze.ui.TrailblazeDesktopUtil.getDaemonLogFile()
+    pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
+    pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
     pb.start()
   } catch (e: Exception) {
     reportCliError(

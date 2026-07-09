@@ -65,6 +65,8 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 import xyz.block.trailblaze.cli.DaemonClient
+import xyz.block.trailblaze.cli.TrailblazeExitCode
+import kotlin.system.exitProcess
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.target.LiveWindowComposeTarget
 import xyz.block.trailblaze.util.Console
@@ -115,8 +117,34 @@ class MainTrailblazeApp(
      * leave this null.
      */
     extraDaemonRoutes: (io.ktor.server.routing.Routing.() -> Unit)? = null,
+    /**
+     * True when the daemon HTTP server for this port is already running and owned elsewhere —
+     * either another process this instance deliberately attaches to (GUI alongside a window-less
+     * `trailblaze mcp` daemon) or in-process before the UI starts (`trailblaze mcp` legacy STDIO
+     * mode). When false, this process MUST win the port bind or exit: a failed bind means another
+     * daemon owns the port, and lingering would leave a duplicate tray icon advertising a port
+     * this process doesn't serve.
+     */
+    daemonAlreadyRunning: Boolean = false,
   ) {
     val initiallyVisible = !headless && ALWAYS_SHOW_WINDOW
+    // The agent-app property is read at AWT initialization, and the Taskbar call below is the
+    // first AWT touch — this is the last moment the headed/background decision can take effect.
+    if (initiallyVisible) {
+      // Deliberately headed launch (`trailblaze app` without --headless): clear the CLI-wide
+      // agent-app default (set in TrailblazeCli.run) so the window can take focus normally.
+      System.clearProperty(TrailblazeDesktopUtil.AWT_AGENT_APP_PROPERTY)
+    } else {
+      // Hidden-window launch: start as a macOS agent app (LSUIElement). Without it, AWT
+      // initializes as a regular GUI app and macOS activates it — every background daemon
+      // launch steals keyboard focus from whatever the user is typing, and the ACCESSORY
+      // policy flip below lands too late to prevent it. The tray icon is unaffected, and
+      // setDockIconVisible(true) still promotes the process to a regular Dock app when the
+      // window is first shown. (Redundant with TrailblazeCli.run's default — every known
+      // entry point routes through it — kept as defense-in-depth for a future one that
+      // constructs the app directly.)
+      System.setProperty(TrailblazeDesktopUtil.AWT_AGENT_APP_PROPERTY, "true")
+    }
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
     // Apply this immediately after configuring the Taskbar so a headless daemon never lingers
     // in the Dock while the rest of the application initializes.
@@ -149,37 +177,56 @@ class MainTrailblazeApp(
       // `applyPortOverrides`/`ensureServerRunning` paths in `TrailblazeDesktopApp.kt` already
       // do this for the GUI app; mirroring here closes the gap for `trailblaze app --headless`.
       xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
-      trailblazeMcpServer.startStreamableHttpMcpServer(
-        port = portManager.httpPort,
-        httpsPort = portManager.httpsPort,
-        wait = true,
-        additionalRouteRegistration = {
-          allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
-          extraDaemonRoutes?.invoke(this)
-        },
-      )
-      return
-    }
-
-    CoroutineScope(Dispatchers.IO).launch {
-      // Start Server — use portManager so runtime CLI overrides are respected.
-      // Skip if a daemon is already running (e.g., started by `trailblaze mcp`).
-      val portManager = trailblazeSavedSettingsRepo.portManager
-      val daemon = DaemonClient(port = portManager.httpPort)
-      if (!daemon.isRunning()) {
-        // Same callback-URL wiring as the headless branch above — without this, the GUI
-        // path's first-launch case (no prior daemon) drops `_meta.trailblaze` envelopes
-        // on every subprocess scripted-tool dispatch.
-        xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
+      // With no GUI to attach, a process that isn't going to own the server has nothing to do.
+      if (daemonAlreadyRunning && DaemonClient(port = portManager.httpPort).use { it.isRunningBlocking() }) {
+        Console.info("Trailblaze daemon is already running on port ${portManager.httpPort} — nothing to do.")
+        return
+      }
+      try {
         trailblazeMcpServer.startStreamableHttpMcpServer(
           port = portManager.httpPort,
           httpsPort = portManager.httpsPort,
-          wait = false,
+          wait = true,
           additionalRouteRegistration = {
             allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
             extraDaemonRoutes?.invoke(this)
           },
         )
+      } catch (e: Exception) {
+        exitOnPortBindFailure(port = portManager.httpPort, headless = true, cause = e)
+      }
+      return
+    }
+
+    CoroutineScope(Dispatchers.IO).launch {
+      // Start Server — use portManager so runtime CLI overrides are respected.
+      // Skipped only when the caller explicitly attaches to an already-running daemon;
+      // otherwise this process must win the port bind or exit (see exitOnPortBindFailure).
+      val portManager = trailblazeSavedSettingsRepo.portManager
+      // Re-verify the attach target is still alive: the flag was computed at CLI startup, and a
+      // daemon that died in between would otherwise leave this process as a server-less tray
+      // icon — the exact zombie the bind arbiter exists to prevent. A dead target means this
+      // process should take over the port instead.
+      val attachToLiveDaemon = daemonAlreadyRunning &&
+        DaemonClient(port = portManager.httpPort).use { it.isRunning() }
+      if (!attachToLiveDaemon) {
+        // Same callback-URL wiring as the headless branch above — without this, the GUI
+        // path's first-launch case (no prior daemon) drops `_meta.trailblaze` envelopes
+        // on every subprocess scripted-tool dispatch.
+        xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
+        try {
+          trailblazeMcpServer.startStreamableHttpMcpServer(
+            port = portManager.httpPort,
+            httpsPort = portManager.httpsPort,
+            wait = false,
+            additionalRouteRegistration = {
+              allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
+              extraDaemonRoutes?.invoke(this)
+            },
+          )
+        } catch (e: Exception) {
+          exitOnPortBindFailure(port = portManager.httpPort, headless = headless, cause = e)
+        }
       }
 
       // Auto Launch Goose if enabled
@@ -583,6 +630,57 @@ private fun rememberTrayIcon(): Painter {
   ) { _, _ ->
     RenderVectorGroup(group = icon.root)
   }
+}
+
+/**
+ * Terminal handler for a daemon-port bind failure — never returns.
+ *
+ * The bind is the atomic arbiter for "one daemon (and one tray icon) per port". Waits briefly for
+ * the rival to answer (it may have bound the socket before its routes are up), then exits: cleanly
+ * as a duplicate when a rival daemon is healthy, or as an infra failure when nothing owns the port.
+ *
+ * Runs on the server-start coroutine while `application {}` renders concurrently, so a losing
+ * non-headless instance may show its window/tray for the few seconds this takes before exiting —
+ * an accepted trade-off (the alternative was the permanent server-less tray zombie).
+ */
+private fun exitOnPortBindFailure(port: Int, headless: Boolean, cause: Exception): Nothing {
+  val causeText = cause.message ?: cause.toString()
+  DaemonClient(port = port).use { daemon ->
+    val rivalDaemonIsRunning = daemon.waitForDaemon(maxWaitMs = RIVAL_DAEMON_WAIT_MS)
+    when (val action = classifyPortBindFailure(rivalDaemonIsRunning, headless)) {
+      is PortBindFailureAction.ExitAsDuplicate -> {
+        // info (not log): the exit reason must survive CLI quiet mode — this is the only
+        // record of why this instance vanished.
+        Console.info(
+          "Trailblaze is already running on port $port — exiting this duplicate instance ($causeText).",
+        )
+        if (action.requestShowWindow) {
+          requestWinnerShowWindow(daemon)
+        }
+        exitProcess(0)
+      }
+      PortBindFailureAction.ExitAsStartupFailure -> {
+        Console.error("Failed to start the Trailblaze server on port $port: $causeText")
+        exitProcess(TrailblazeExitCode.INFRA_FAILED.code)
+      }
+    }
+  }
+  throw IllegalStateException("unreachable", cause)
+}
+
+/**
+ * Best-effort window handoff to the winning daemon. The winner answers `/ping` before its
+ * Compose UI installs the show-window callback, and the endpoint reports `success = false`
+ * until it does — so retry briefly instead of treating one early no-op as a completed handoff.
+ */
+private fun requestWinnerShowWindow(daemon: DaemonClient, maxWaitMs: Long = WINNER_SHOW_WINDOW_WAIT_MS) {
+  val deadline = System.currentTimeMillis() + maxWaitMs
+  while (System.currentTimeMillis() < deadline) {
+    val shown = runCatching { daemon.showWindowBlocking().success }.getOrDefault(false)
+    if (shown) return
+    Thread.sleep(WINNER_SHOW_WINDOW_POLL_MS)
+  }
+  Console.info("Could not hand off to the running Trailblaze's window — it may be headless. Run `trailblaze app` again to show it.")
 }
 
 /**

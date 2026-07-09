@@ -1,0 +1,5 @@
+# Pinned mitmproxy for the Android proxy capture path. Today the activator resolves `mitmdump` via
+# the TRAILBLAZE_MITMDUMP override or PATH; a managed venv auto-built from this file (so every host
+# runs a byte-identical mitmproxy) is a planned follow-up. To use it now: create a venv and
+# `pip install -r requirements.txt`, then point TRAILBLAZE_MITMDUMP at <venv>/bin/mitmdump. Bump deliberately.
+mitmproxy==12.2.3

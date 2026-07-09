@@ -5,16 +5,20 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.agent.trail.toJsonArgs
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 
 /**
- * Type-validates `.trail.yaml` recordings against each trailmap's generated typed tool surface
- * (`tools/trailblaze-client.d.ts`) by transpiling every recorded tool call into a throwaway
- * TypeScript file and compiling it with the bundled `tsc`.
+ * Type-validates trail recordings — per-device `*.trail.yaml` files AND unified-format trails
+ * (bare `trail.yaml` or any name; detected by content) — against each trailmap's generated typed
+ * tool surface (`tools/trailblaze-client.d.ts`) by transpiling every recorded tool call into a
+ * throwaway TypeScript file and compiling it with the bundled `tsc`. A unified trail's per-step
+ * `recording:` classifier slots are each validated in full (no closest-wins lowering), so a bad
+ * call in any device's slot is caught and attributed to its step + classifier.
  *
  * ## Why this exists
  *
@@ -36,32 +40,35 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
  * looks the line up in the table. The mapping is built while emitting (we know exactly what each
  * line came from) — never recovered by parsing the file back.
  *
- * ## Scope / known limitations (this is a report-only shadow gate today)
+ * ## Default-strict, with explicit per-target exemptions
+ *
+ * The phase **fails the build by default**: a finding on a non-exempt target, or a non-exempt
+ * target that couldn't be validated at all (no generated typed surface), is fatal. This keeps a
+ * new uncovered target from silently slipping in. Two escape hatches keep it honest while the
+ * corpus is brought to zero:
+ *
+ * - **Per-target exemption** — a target's `trail_validation.exempt: "<reason>"` in its
+ *   `trailmap.yaml` (see [xyz.block.trailblaze.config.project.TrailValidationConfig]) opts that
+ *   target out: its findings and its missing-surface status are reported but non-fatal. This is the
+ *   durable, co-located mechanism, honored via [validate]'s `exemptTargets`. Targets whose manifest
+ *   the validator can't reach yet (classpath-bundled targets, and the no-`target:` trails) are
+ *   exempted through the same map from a central, explicitly-transitional allow-list in `CheckCommand`.
+ * - **Framework-surface allow-list** — [DEFAULT_ALLOWED_UNMODELED_TOOLS] downgrades findings for
+ *   recordable tools the generated surface doesn't model yet (a framework gap, not a per-target
+ *   defect).
  *
  * The emitted `trailblaze-client.d.ts` is the FULL, ungated tool surface — every class-backed tool a
- * trailmap resolves is typed there (the `surfaceToScriptedTools` visibility gate has been removed).
- * Validation is therefore bounded not by a visibility gate but by how *faithfully* that surface
- * models a recorded call. Two fidelity gaps keep this report-only rather than a hard-fail gate:
+ * trailmap resolves is typed there. Validation is bounded by how *faithfully* that surface models a
+ * recorded call; the two allow-lists above absorb the residual fidelity gaps (filtered selector
+ * args on selector-backed tools; recordable tools no toolset surfaces) until the emitter follow-ups
+ * close them, at which point the corresponding exemptions shrink away.
  *
- * - **Filtered args.** Selector-backed tools (`tapOn`, `assertVisibleBySelector`, …) carry a
- *   `TrailblazeNodeSelector` arg that the descriptor builder filters out (it can't lower the
- *   self-referential selector type). A recorded call that passes `selector:` then type-checks
- *   against a selector-less binding and reports a spurious "unexpected property `selector`" — a
- *   false positive on an otherwise-fine recording. (Scripted authors get correct selector typing
- *   from the hand-curated `built-in-tools.ts`; modeling those args on the raw tools is the follow-up
- *   that would let this become a hard-fail gate.)
- * - **Tools absent from the surface.** A recordable tool that no resolved toolset surfaces shows up
- *   as "does not exist." A trail whose `target:` resolves to no filesystem trailmap in the workspace
- *   (e.g. a classpath-bundled target with no writable `tools/` dir) is skipped with a distinct
- *   status.
- *
- * Runs by default on every `trailblaze check`; it is strictly **report-only** (it prints findings
- * and never changes the exit code), so it can't break a build while the residual fidelity gaps are
- * worked off. Set `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1` to skip the phase entirely.
+ * Runs by default on every `trailblaze check`. Set `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1`
+ * to skip the phase entirely.
  */
 object TrailTscValidator {
 
-  /** Env var that opts a `check` run OUT of the (report-only) trail-recording validation phase. */
+  /** Env var that opts a `check` run OUT of the trail-recording validation phase entirely. */
   const val DISABLE_ENV_VAR: String = "TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION"
 
   /**
@@ -71,9 +78,9 @@ object TrailTscValidator {
    * [PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces] +
    * [PerTrailmapTsconfigEmitter.emitClasspathValidationTsconfigs]) and discovered by the check
    * phase, which appends each surface dir to the trailmap list handed to [validate] — so a trail
-   * whose `target:` is a JAR-bundled trailmap (e.g. `square`) type-checks against a real surface
-   * instead of reading as skipped-no-surface. Lives under `.trailblaze/` so it's already
-   * gitignored alongside the extracted SDK bundle.
+   * whose `target:` is a JAR-bundled trailmap (e.g. an app-bundled target) type-checks against a
+   * real surface instead of reading as skipped-no-surface. Lives under `.trailblaze/` so it's
+   * already gitignored alongside the extracted SDK bundle.
    */
   const val CLASSPATH_VALIDATION_SURFACES_SUBDIR: String = "trail-validation"
 
@@ -96,6 +103,22 @@ object TrailTscValidator {
   fun trailmapIdForSurfaceFile(surfaceFile: Path): String? =
     surfaceFile.parent?.parent?.fileName?.toString()
 
+  /** [Report.skippedNoSurface] / [exemptTargets] key for a trail that declares no `target:`. */
+  const val NO_TARGET_KEY: String = "<no target:>"
+
+  /**
+   * Recordable tools the generated typed surface doesn't model yet, so a recorded call to one
+   * reads as a spurious "does not exist" finding rather than a real per-target defect. Findings
+   * for these tool names are downgraded to non-fatal by default (still reported).
+   *
+   * This is the framework-surface allow-list the phase carries centrally (by tool name, not by
+   * target). It shrinks as the emitter learns to surface these tools:
+   *  - `eraseText` / `pressBack` — YAML-defined recordable tools; `built-in-tools.ts` can only
+   *    curate `@TrailblazeToolClass`-backed tools (enforced by `BuiltInToolsBindingDriftTest`),
+   *    so a YAML-defined tool can't be added there until the emitter surfaces YAML-defined tools.
+   */
+  val DEFAULT_ALLOWED_UNMODELED_TOOLS: Set<String> = setOf("eraseText", "pressBack")
+
   /** A single recorded tool call, flattened to the shape codegen needs. */
   data class RecordedCall(
     val toolName: String,
@@ -103,6 +126,11 @@ object TrailTscValidator {
     val argsJson: String,
     val stepIndex: Int,
     val stepLabel: String,
+    /**
+     * The `recording:` classifier slot this call came from (`android`, `ios-iphone`, …) in a
+     * unified-format trail. Null for v1 trails, whose recordings aren't classifier-keyed.
+     */
+    val classifier: String? = null,
   )
 
   /** A generated throwaway `.trail.gen.ts` source plus its `genLine -> call` mapping table. */
@@ -116,9 +144,20 @@ object TrailTscValidator {
     val toolName: String,
     val tsCode: String,
     val message: String,
+    /** The trail's `target:` value (null for a no-`target:` trail). Used to classify exemptions. */
+    val target: String? = null,
+    /** The unified-format classifier slot the offending call sits in; null for v1 trails. */
+    val classifier: String? = null,
   )
 
-  /** Aggregate outcome of validating a workspace's trails. */
+  /**
+   * Aggregate outcome of validating a workspace's trails.
+   *
+   * The `fatal*` fields are the subset that fails the build under the default-strict gate — a
+   * finding on a non-exempt target, or a non-exempt target that couldn't be validated at all
+   * (no generated typed surface). Everything a caller needs to decide the exit code is precomputed
+   * here so the CLI stays a thin renderer; [hasFatal] is the single boolean the exit code keys on.
+   */
   data class Report(
     val trailsDiscovered: Int,
     val trailsValidated: Int,
@@ -127,7 +166,27 @@ object TrailTscValidator {
     val skippedNoSurface: Map<String, Int>,
     val skippedNoRecording: Int,
     val errors: List<String>,
-  )
+    /**
+     * Findings that FAIL the build: on a non-exempt target and not attributable to a tool on the
+     * framework-surface allow-list. Empty when the gate is satisfied. A subset of [findings].
+     */
+    val fatalFindings: List<Finding> = emptyList(),
+    /**
+     * Non-exempt targets (by `target:` value; [NO_TARGET_KEY] for the no-`target:` case) that
+     * couldn't be validated because no reachable trailmap in the workspace carries a generated
+     * typed surface for them — a build failure, because a new uncovered target must not slip in
+     * silently. A subset of [skippedNoSurface].
+     */
+    val fatalMissingSurfaceTargets: Map<String, Int> = emptyMap(),
+    /**
+     * Findings suppressed because their tool is on the framework-surface allow-list (a recordable
+     * tool the generated surface doesn't model yet). Reported for visibility; never fatal.
+     */
+    val allowlistedToolFindings: List<Finding> = emptyList(),
+  ) {
+    /** True when the default-strict gate should fail the build. */
+    fun hasFatal(): Boolean = fatalFindings.isNotEmpty() || fatalMissingSurfaceTargets.isNotEmpty()
+  }
 
   // Header lines emitted before the first tool-call statement. The first call therefore lands on
   // line (HEADER.size + 1); [generateGenFile] tracks the real line number as it appends, so this
@@ -151,8 +210,9 @@ object TrailTscValidator {
     val table = mutableMapOf<Int, RecordedCall>()
     for (call in calls) {
       val lineNo = lines.size + 1 // 1-based line this statement will occupy
-      val label = call.stepLabel.replace('\n', ' ').take(70)
-      lines.add("  ${calleeExpr(call.toolName)}(${call.argsJson}); // step ${call.stepIndex}: $label")
+      val label = singleLine(call.stepLabel).take(70)
+      val slot = call.classifier?.let { " [${singleLine(it)}]" } ?: ""
+      lines.add("  ${calleeExpr(call.toolName)}(${call.argsJson}); // step ${call.stepIndex}$slot: $label")
       table[lineNo] = call
     }
     lines.add("}")
@@ -174,6 +234,13 @@ object TrailTscValidator {
       "client.tools[${jsonStringLiteral(toolName)}]"
     }
 
+  /**
+   * Collapse CR/LF to spaces so interpolated YAML-sourced text (a step label, a classifier key —
+   * both may legally contain line breaks as quoted scalars) can't split a generated
+   * one-statement-per-line line or a report row.
+   */
+  private fun singleLine(s: String): String = s.replace('\n', ' ').replace('\r', ' ')
+
   /** Minimal JSON/TS string-literal escaping for a map key. */
   private fun jsonStringLiteral(s: String): String = buildString {
     append('"')
@@ -189,7 +256,12 @@ object TrailTscValidator {
   }
 
   /** Pairs a gen file's source-trail path with its line table for the remap step. */
-  data class GenFileMeta(val trailRelPath: String, val table: Map<Int, RecordedCall>)
+  data class GenFileMeta(
+    val trailRelPath: String,
+    val table: Map<Int, RecordedCall>,
+    /** The source trail's `target:` value (null for a no-`target:` trail); flows onto each [Finding]. */
+    val target: String? = null,
+  )
 
   // `<path>.trail.gen.ts(line,col): error TS####: message`
   private val DIAGNOSTIC_RE =
@@ -226,6 +298,8 @@ object TrailTscValidator {
               toolName = call.toolName,
               tsCode = code,
               message = message,
+              target = meta.target,
+              classifier = call.classifier,
             ),
           )
           current = findings.size - 1
@@ -241,7 +315,7 @@ object TrailTscValidator {
   }
 
   /**
-   * Validate every `.trail.yaml` under [trailsRoot] against the typed surfaces of [trailmaps]
+   * Validate every trail file under [trailsRoot] (see [isTrailFile]) against the typed surfaces of [trailmaps]
    * (the resolved workspace trailmap directories, each expected to carry a generated
    * `tools/trailblaze-client.d.ts` + `tools/tsconfig.json`). Side-effecting: writes and deletes
    * throwaway `*.trail.gen.ts` files under each trailmap's `tools/` dir, and spawns one `tsc` per
@@ -255,6 +329,23 @@ object TrailTscValidator {
     trailmaps: List<Path>,
     jsRuntime: String,
     tscJs: Path,
+    /**
+     * Targets exempted from failing the gate, keyed by `target:` value ([NO_TARGET_KEY] for the
+     * no-`target:` case), with a human-readable reason as the value. Findings on — and the
+     * missing-surface status of — an exempt target are reported but never fatal.
+     */
+    exemptTargets: Map<String, String> = emptyMap(),
+    /**
+     * Tool names whose findings are downgraded to non-fatal — recordable tools the generated
+     * typed surface doesn't model yet (framework-surface gaps, not per-target defects).
+     */
+    allowedUnmodeledTools: Set<String> = emptySet(),
+    /**
+     * When false (a scoped run), a non-exempt target with no loaded surface is reported as skipped
+     * but is NOT fatal — see [classify]. Only an all-workspace pass loads every surface and can
+     * treat a missing surface as an uncovered target.
+     */
+    failOnMissingSurface: Boolean = true,
     timeoutMs: Long = DEFAULT_TSC_TIMEOUT_MS,
   ): Report {
     val yaml = createTrailblazeYaml()
@@ -276,23 +367,26 @@ object TrailTscValidator {
     data class Staged(val genPath: Path, val source: String, val meta: GenFileMeta, val callCount: Int)
     val stagedByTrailmap = mutableMapOf<Path, MutableList<Staged>>()
 
-    val trailFiles = trailsRoot.walkTopDown().filter { it.isFile && it.name.endsWith(".trail.yaml") }.toList()
+    val trailFiles = trailsRoot.walkTopDown().filter { it.isFile && isTrailFile(it.name) }.toList()
     for (trailFile in trailFiles) {
       discovered++
       val rel = trailsRoot.parentFile?.toPath()?.relativize(trailFile.toPath())?.toString() ?: trailFile.name
       try {
         val text = trailFile.readText()
-        val target = yaml.extractTrailConfig(text)?.target
+        // One version-aware parse per trail; the format is detected from CONTENT, never the
+        // filename (a unified trail may be a bare `trail.yaml` or carry any name).
+        val doc = yaml.decodeTrailDocument(text)
+        val target = when (doc) {
+          is TrailDocument.V1 -> yaml.extractTrailConfig(doc.items)?.target
+          is TrailDocument.Unified -> doc.trail.config.target
+        }
         val trailmapDir = target?.let { trailmapDirByName[it] }
         if (trailmapDir == null) {
-          val key = if (target == null) "<no target:>" else target
+          val key = target ?: NO_TARGET_KEY
           skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
           continue
         }
-        // Strip the full `.trail.yaml` suffix (NOT just `.yaml`) so the classifier derivation sees
-        // `ios-iphone`, not `ios-iphone.trail` (which would add a spurious `trail` classifier).
-        val stemForClassifiers = trailFile.name.removeSuffix(".trail.yaml")
-        val calls = extractRecordedCalls(yaml, text, stemForClassifiers)
+        val calls = extractRecordedCalls(doc)
         if (calls.isEmpty()) {
           skippedNoRecording++
           continue
@@ -305,7 +399,7 @@ object TrailTscValidator {
         val unique = Integer.toHexString(rel.hashCode())
         val genPath = trailmapDir.resolve("tools").resolve("${stem}_$unique.trail.gen.ts")
         stagedByTrailmap.getOrPut(trailmapDir) { mutableListOf() }
-          .add(Staged(genPath, gen.source, GenFileMeta(rel, gen.table), calls.size))
+          .add(Staged(genPath, gen.source, GenFileMeta(rel, gen.table, target), calls.size))
       } catch (e: Exception) {
         errors.add("$rel: ${e::class.simpleName}: ${e.message}")
       }
@@ -334,6 +428,9 @@ object TrailTscValidator {
       }
     }
 
+    val classification =
+      classify(findings, skippedNoSurface, exemptTargets, allowedUnmodeledTools, failOnMissingSurface)
+
     return Report(
       trailsDiscovered = discovered,
       trailsValidated = validated,
@@ -342,7 +439,61 @@ object TrailTscValidator {
       skippedNoSurface = skippedNoSurface,
       skippedNoRecording = skippedNoRecording,
       errors = errors,
+      fatalFindings = classification.fatalFindings,
+      fatalMissingSurfaceTargets = classification.fatalMissingSurfaceTargets,
+      allowlistedToolFindings = classification.allowlistedToolFindings,
     )
+  }
+
+  /** The fatal/non-fatal split of a validation pass — the output of [classify]. */
+  data class Classification(
+    val fatalFindings: List<Finding>,
+    val allowlistedToolFindings: List<Finding>,
+    val fatalMissingSurfaceTargets: Map<String, Int>,
+  )
+
+  /**
+   * PURE. Apply the exemption rules to split findings and no-surface targets into fatal vs
+   * non-fatal buckets. A finding is fatal unless its tool is on the framework-surface allow-list or
+   * its target is exempt; a no-surface target is fatal unless it's exempt — and only when
+   * [failOnMissingSurface] is set (see below).
+   *
+   * A finding's `target` is always a validatable target in practice (findings only come from
+   * trailmaps with a generated surface), so `target == null` shouldn't occur — but it's treated
+   * defensively as non-exempt so any future no-target validation path fails loud rather than
+   * silently passing.
+   *
+   * @param failOnMissingSurface when false (a scoped run), a target with no loaded surface is NOT
+   *   fatal. The validator walks every trail under the workspace, but a scoped run only loaded the
+   *   selected trailmap's surface, so the other workspace targets legitimately have no surface here
+   *   and must read as out-of-scope skips, not defects. Only an all-workspace pass — which loads
+   *   every surface — can conclude a missing surface means an uncovered target.
+   */
+  fun classify(
+    findings: List<Finding>,
+    skippedNoSurface: Map<String, Int>,
+    exemptTargets: Map<String, String>,
+    allowedUnmodeledTools: Set<String>,
+    failOnMissingSurface: Boolean = true,
+  ): Classification {
+    val fatalFindings = mutableListOf<Finding>()
+    val allowlistedToolFindings = mutableListOf<Finding>()
+    for (f in findings) {
+      when {
+        // Allow-listed tools are non-fatal on ANY target — checked first so the allow-listed tally
+        // stays accurate even for a finding that also sits on an exempt target (otherwise it would
+        // be silently absorbed into the generic exempt-target count in the report).
+        f.toolName in allowedUnmodeledTools -> allowlistedToolFindings.add(f)
+        f.target != null && exemptTargets.containsKey(f.target) -> Unit // exempt: reported, non-fatal
+        else -> fatalFindings.add(f)
+      }
+    }
+    // A non-exempt target we couldn't validate at all (no generated surface) is a build failure ON AN
+    // ALL-WORKSPACE PASS — it prevents a new uncovered target from slipping in unnoticed. On a scoped
+    // pass we can't draw that conclusion (only the selected surface was loaded), so it's non-fatal.
+    val fatalMissingSurfaceTargets =
+      if (failOnMissingSurface) skippedNoSurface.filterKeys { it !in exemptTargets } else emptyMap()
+    return Classification(fatalFindings, allowlistedToolFindings, fatalMissingSurfaceTargets)
   }
 
   // Tool names that are valid JS identifiers can be emitted as `client.tools.<name>`; any other
@@ -351,28 +502,30 @@ object TrailTscValidator {
   private val VALID_TOOL_NAME = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
 
   /**
-   * PURE. Derive device classifiers from a per-device trail filename stem (e.g. `ios-iphone` ->
-   * [ios, iphone]). Unified (v3) trails use these to lower their closest-wins recordings; v1 trails
-   * ignore them. Split on `-`/`.` and lowercased so `iOS-iPhone` and `ios-iphone` agree.
-   *
-   * Callers must pass the stem WITHOUT the `.trail.yaml` suffix — passing `ios-iphone.trail` would
-   * add a spurious `trail` classifier that can change which unified recording is selected.
+   * True for both trail filename shapes: per-device `<stem>.trail.yaml` and the unified format's
+   * bare `trail.yaml` (no leading dot, so a plain `.trail.yaml` suffix check misses it).
    */
-  internal fun deviceClassifiersFromStem(fileStem: String): List<TrailblazeDeviceClassifier> =
-    fileStem.split('-', '.').filter { it.isNotBlank() }.map { TrailblazeDeviceClassifier(it.lowercase()) }
+  internal fun isTrailFile(fileName: String): Boolean =
+    fileName.endsWith(".trail.yaml") || fileName == "trail.yaml"
 
   /**
-   * Flatten a trail's recorded tool calls into [RecordedCall]s, covering both shapes that carry
-   * executable recordings: per-step recordings under `prompts:` ([TrailYamlItem.PromptsTrailItem])
-   * and a top-level `tools:` block ([TrailYamlItem.ToolTrailItem], reported as step 0). A trail with
-   * no recorded calls yields an empty list (caller treats it as skipped-no-recording).
+   * PURE. Flatten a parsed trail's recorded tool calls into [RecordedCall]s, format-aware:
+   *
+   *  - **v1** — per-step recordings under `prompts:` ([TrailYamlItem.PromptsTrailItem]) and a
+   *    top-level `tools:` block ([TrailYamlItem.ToolTrailItem], reported as step 0).
+   *  - **Unified** — EVERY per-step `recording:` classifier slot (`android:`, `ios-iphone:`, …)
+   *    contributes its tool list, each call tagged with its classifier for attribution. No
+   *    closest-wins lowering here: validation checks all slots, not one device's resolution.
+   *    The trailhead's per-classifier bootstrap tools are validated the same way as step 0.
+   *
+   * A trail with no recorded calls yields an empty list (caller treats it as skipped-no-recording).
    */
-  private fun extractRecordedCalls(
-    yaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
-    text: String,
-    fileStem: String,
-  ): List<RecordedCall> {
-    val items = yaml.decodeTrail(text, deviceClassifiers = deviceClassifiersFromStem(fileStem))
+  internal fun extractRecordedCalls(doc: TrailDocument): List<RecordedCall> = when (doc) {
+    is TrailDocument.V1 -> extractV1RecordedCalls(doc.items)
+    is TrailDocument.Unified -> extractUnifiedRecordedCalls(doc.trail)
+  }
+
+  private fun extractV1RecordedCalls(items: List<TrailYamlItem>): List<RecordedCall> {
     val calls = mutableListOf<RecordedCall>()
     var stepIndex = 0
     items.forEach { item ->
@@ -396,12 +549,33 @@ object TrailTscValidator {
     return calls
   }
 
-  private fun TrailblazeToolYamlWrapper.toRecordedCall(stepIndex: Int, label: String): RecordedCall =
+  private fun extractUnifiedRecordedCalls(trail: UnifiedTrail): List<RecordedCall> {
+    val calls = mutableListOf<RecordedCall>()
+    // The trailhead is the deterministic step 0; type-check each classifier's bootstrap tool.
+    trail.trailhead?.let { trailhead ->
+      trailhead.recordings.forEach { (classifier, tools) ->
+        tools.forEach { calls.add(it.toRecordedCall(stepIndex = 0, label = trailhead.step, classifier = classifier)) }
+      }
+    }
+    trail.trail.forEachIndexed { index, step ->
+      step.recordings.forEach { (classifier, tools) ->
+        tools.forEach { calls.add(it.toRecordedCall(stepIndex = index + 1, label = step.step, classifier = classifier)) }
+      }
+    }
+    return calls
+  }
+
+  private fun TrailblazeToolYamlWrapper.toRecordedCall(
+    stepIndex: Int,
+    label: String,
+    classifier: String? = null,
+  ): RecordedCall =
     RecordedCall(
       toolName = name,
       argsJson = toJsonArgs().toString(),
       stepIndex = stepIndex,
       stepLabel = label,
+      classifier = classifier,
     )
 
   /**
@@ -441,33 +615,59 @@ object TrailTscValidator {
     }
   }
 
-  /** Render [report] as a human-readable, YAML-keyed summary. */
+  /**
+   * Render [report] as a human-readable, YAML-keyed summary. The header states whether the gate
+   * passed or failed; the detailed listing shows the FATAL findings (the ones that fail the build)
+   * grouped by trail, then a compact accounting of what was exempted or downgraded.
+   */
   fun renderReport(report: Report): String = buildString {
-    appendLine("── trail recording type-validation (report-only) ──────────────────")
+    val verdict = if (report.hasFatal()) "FAILED" else "passed"
+    appendLine("── trail recording type-validation ($verdict) ──────────────────")
     appendLine("Trails discovered:        ${report.trailsDiscovered}")
     appendLine("Trails validated:         ${report.trailsValidated}")
     appendLine("Tool calls type-checked:  ${report.toolCallsChecked}")
-    if (report.skippedNoSurface.isNotEmpty()) {
-      appendLine("Skipped (no typed surface for target): ${report.skippedNoSurface}")
-    }
     if (report.skippedNoRecording > 0) appendLine("Skipped (no recording):   ${report.skippedNoRecording}")
     if (report.errors.isNotEmpty()) {
       appendLine("Load/run errors: ${report.errors.size}")
       report.errors.take(10).forEach { appendLine("    ! $it") }
     }
-    val byCode = report.findings.groupingBy { it.tsCode }.eachCount()
-    val trailsWith = report.findings.map { it.trailRelPath }.distinct().size
+
+    // Non-fatal accounting: targets skipped for no surface, split by whether they're exempt.
+    val fatalMissing = report.fatalMissingSurfaceTargets
+    val exemptMissing = report.skippedNoSurface.filterKeys { it !in fatalMissing }
+    if (exemptMissing.isNotEmpty()) {
+      appendLine("Exempt (no surface, non-fatal): $exemptMissing")
+    }
+    if (report.allowlistedToolFindings.isNotEmpty()) {
+      val byTool = report.allowlistedToolFindings.groupingBy { it.toolName }.eachCount()
+      appendLine("Allow-listed unmodeled-tool findings (non-fatal): $byTool")
+    }
+    val exemptTargetFindings = report.findings.size - report.fatalFindings.size - report.allowlistedToolFindings.size
+    if (exemptTargetFindings > 0) {
+      appendLine("Exempt-target findings (non-fatal): $exemptTargetFindings")
+    }
+
+    // Fatal section — the only part that fails the build.
+    if (report.fatalMissingSurfaceTargets.isNotEmpty()) {
+      appendLine("")
+      appendLine("FATAL — non-exempt target(s) with no typed surface to validate against: $fatalMissing")
+      appendLine("  Fix: add a generated surface for the target, or add `trail_validation.exempt: \"<reason>\"`")
+      appendLine("  to its trailmap.yaml (or the central allow-list for classpath-bundled / no-target trails).")
+    }
+    val byCode = report.fatalFindings.groupingBy { it.tsCode }.eachCount()
+    val trailsWith = report.fatalFindings.map { it.trailRelPath }.distinct().size
     appendLine("")
-    appendLine("Type findings: ${report.findings.size} across $trailsWith trail(s)  ${if (byCode.isNotEmpty()) "— by tsc code: $byCode" else ""}")
+    appendLine("FATAL type findings: ${report.fatalFindings.size} across $trailsWith trail(s)  ${if (byCode.isNotEmpty()) "— by tsc code: $byCode" else ""}")
     var currentTrail: String? = null
-    report.findings.sortedWith(compareBy({ it.trailRelPath }, { it.stepIndex })).forEach { f ->
+    report.fatalFindings.sortedWith(compareBy({ it.trailRelPath }, { it.stepIndex })).forEach { f ->
       if (f.trailRelPath != currentTrail) {
         appendLine("")
         appendLine("  ${f.trailRelPath}")
         currentTrail = f.trailRelPath
       }
       val short = f.message.substringBefore(". ").take(140)
-      appendLine("     · step ${f.stepIndex} \"${f.stepLabel.take(48)}\" — tool ${f.toolName}: $short  [${f.tsCode}]")
+      val slot = f.classifier?.let { " [${singleLine(it)}]" } ?: ""
+      appendLine("     · step ${f.stepIndex}$slot \"${singleLine(f.stepLabel).take(48)}\" — tool ${f.toolName}: $short  [${f.tsCode}]")
     }
   }
 

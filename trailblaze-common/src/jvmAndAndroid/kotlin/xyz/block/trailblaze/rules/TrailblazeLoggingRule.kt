@@ -219,9 +219,14 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    // Capture failure screenshot before ending the session
-    if (result.isFailure) {
-      session?.let { captureFailureScreenshot(it) }
+    // Per-step AgentDriverLog screenshots are all pre-action frames, so capture a
+    // terminal screenshot here or the outcome of the last step is never in the report.
+    session?.let { currentSession ->
+      if (result.isFailure) {
+        captureFailureScreenshot(currentSession)
+      } else {
+        captureFinalScreenshot(currentSession)
+      }
     }
 
     // End session if it exists
@@ -269,6 +274,43 @@ abstract class TrailblazeLoggingRule(
     } catch (e: Exception) {
       Console.log(
         "Failed to capture failure screenshot:\n" +
+          "  type=${e::class.simpleName}\n" +
+          "  message=${e.message}\n" +
+          e.stackTraceToString(),
+      )
+    }
+  }
+
+  /**
+   * Captures a terminal screenshot on a passing run and logs it as a snapshot, so the
+   * storyboard/timeline includes the state after the final action (per-step screenshots
+   * are all pre-action). Mirrors [captureFailureScreenshot]; no-ops with a warning if the
+   * provider was never assigned.
+   */
+  fun captureFinalScreenshot(session: TrailblazeSession) {
+    if (!this::failureScreenStateProvider.isInitialized) {
+      Console.log(
+        "⚠️  Skipping final screenshot for session ${session.sessionId.value}: " +
+          "no failureScreenStateProvider wired on TrailblazeLoggingRule"
+      )
+      return
+    }
+    captureFinalScreenshot(session, failureScreenStateProvider)
+  }
+
+  /**
+   * Overload that takes an explicit [screenStateProvider]. Used by host-side runners
+   * where the provider varies per driver (Playwright, Electron, Maestro, etc.) and
+   * isn't pre-wired onto the rule. Mirrors the failure overload.
+   */
+  fun captureFinalScreenshot(session: TrailblazeSession, screenStateProvider: () -> ScreenState) {
+    try {
+      val screenState = screenStateProvider()
+      logger.logSnapshot(session, screenState, displayName = "final_screenshot")
+      Console.log("📸 Final screenshot captured for session ${session.sessionId.value}")
+    } catch (e: Exception) {
+      Console.log(
+        "Failed to capture final screenshot:\n" +
           "  type=${e::class.simpleName}\n" +
           "  message=${e.message}\n" +
           e.stackTraceToString(),

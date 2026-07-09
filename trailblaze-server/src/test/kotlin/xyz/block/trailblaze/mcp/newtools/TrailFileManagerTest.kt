@@ -8,9 +8,11 @@ import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
+import xyz.block.trailblaze.yaml.DirectionStep
 
 /**
  * Tests for [TrailFileManager] — the callers route trail enumeration through
@@ -261,5 +263,53 @@ class TrailFileManagerTest {
     assertTrue(rewritten.contains("trailhead:"), "trailhead lost on save:\n$rewritten")
     assertTrue(rewritten.contains("myapp_freshInstall"), "trailhead tool lost on save:\n$rewritten")
     assertTrue(rewritten.contains("Tap Confirm"), "edit not applied:\n$rewritten")
+  }
+
+  // ---------------------------------------------------------------------------
+  // loadTrail — unified trails and device classifiers
+  // ---------------------------------------------------------------------------
+
+  /** A unified trail whose single step carries an `android:` recording. */
+  private fun newUnifiedTrailWithAndroidRecording(relativePath: String): File {
+    val file = File(trailsDir, relativePath)
+    file.parentFile?.mkdirs()
+    file.writeText(
+      """
+      config:
+        id: app/x
+      trail:
+        - step: "Tap the thing"
+          recording:
+            android:
+              - someRecordedTool:
+                  marker: hi
+      """.trimIndent(),
+    )
+    return file
+  }
+
+  @Test
+  fun `loadTrail lowers a unified trail's recording for the given device classifiers`() {
+    val file = newUnifiedTrailWithAndroidRecording("flows/unified/trail.yaml")
+
+    val result = manager().loadTrail(file.absolutePath, listOf(TrailblazeDeviceClassifier("android")))
+
+    assertTrue(result.success, "load failed: ${result.error}")
+    val step = result.promptSteps?.single() as DirectionStep
+    assertNotNull(step.recording, "the android recording must lower for an [android] device")
+    assertEquals("Tap the thing", step.step)
+  }
+
+  @Test
+  fun `loadTrail without classifiers refuses a unified trail with recordings, actionably`() {
+    // decodeTrail's guard fires; the failure must surface as a LoadResult error that tells the
+    // caller to bind a device — not the raw internal guard text via the generic catch.
+    val file = newUnifiedTrailWithAndroidRecording("flows/unified2/trail.yaml")
+
+    val result = manager().loadTrail(file.absolutePath)
+
+    assertTrue(!result.success, "a unified-with-recordings trail must not load with no classifiers")
+    assertNotNull(result.error)
+    assertTrue(result.error!!.contains("device"), "error should point at binding a device: ${result.error}")
   }
 }

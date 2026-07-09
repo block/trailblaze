@@ -8,6 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailConfig
 
@@ -37,6 +38,8 @@ data class SessionInfo(
   val hasRecordedSteps: Boolean,
   val trailblazeDeviceId: TrailblazeDeviceId? = null,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo? = null,
+  /** Identity + version of the app under test, from the session-start log. Null when not captured. */
+  val targetAppInfo: TrailblazeTargetAppInfo? = null,
   val testName: String? = null,
   val testClass: String? = null,
   val trailConfig: TrailConfig? = null,
@@ -127,6 +130,7 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     testName = sessionStartedInfo?.testMethodName,
     testClass = sessionStartedInfo?.testClassName,
     trailblazeDeviceInfo = sessionStartedInfo?.trailblazeDeviceInfo,
+    targetAppInfo = sessionStartedInfo?.targetAppInfo,
     trailConfig = sessionStartedInfo?.trailConfig,
     durationMs = durationMs,
     trailFilePath = sessionStartedInfo?.trailFilePath,

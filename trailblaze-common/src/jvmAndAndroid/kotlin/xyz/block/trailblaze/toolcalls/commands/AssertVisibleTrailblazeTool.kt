@@ -6,6 +6,7 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.describe
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -21,8 +22,8 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
  * Mirrors [TapTrailblazeTool] — the ref (e.g. `y778`) is the same content-hashed
  * id the user sees in compact snapshot output. Resolution goes through the
  * pre-applied [TrailblazeNode.ref] field, then delegates to
- * [AssertVisibleBySelectorTrailblazeTool] which handles node/legacy selector
- * mode switching internally.
+ * [AssertVisibleBySelectorTrailblazeTool] which handles the node-selector-vs-Maestro
+ * dispatch mode switching internally.
  */
 @Serializable
 @TrailblazeToolClass("assertVisible", isVerification = true)
@@ -122,18 +123,23 @@ data class AssertVisibleTrailblazeTool(
     )
 
     // Generate a rich TrailblazeNodeSelector where possible; AssertVisibleBySelectorTrailblazeTool
-    // honors nodeSelector vs legacy selector based on NodeSelectorMode internally, so we just
-    // supply both and let the downstream tool decide.
-    // hitTest resolves the frontmost interactive node at the coordinates — the same round-trip
-    // validation as TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic).
-    val nodeSelector = tree.hitTest(center.first, center.second)?.let { hitTestNode ->
-      try {
-        TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
-      } catch (e: Exception) {
-        Console.log(
-          "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
-        )
-        null
+    // dispatches via nodeSelector or a Maestro-lowered projection of it based on NodeSelectorMode
+    // internally. hitTest resolves the frontmost interactive node at the coordinates — the same
+    // round-trip validation as TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic).
+    // Skipped on ANDROID: recordedNodeSelectorForMaestroPath below always records the
+    // TapSelectorV2-derived selector there, so the modern generation would be dead work.
+    val nodeSelector = if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+      null
+    } else {
+      tree.hitTest(center.first, center.second)?.let { hitTestNode ->
+        try {
+          TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+        } catch (e: Exception) {
+          Console.log(
+            "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
+          )
+          null
+        }
       }
     }
 
@@ -146,11 +152,21 @@ data class AssertVisibleTrailblazeTool(
       spatialHints = null,
     )
 
+    // AssertVisibleBySelectorTrailblazeTool no longer carries the legacy TrailblazeElementSelector
+    // field, so TapSelectorV2's output is converted to nodeSelector shape before storage; replay
+    // lowers it back to a Maestro selector via `lowerToMaestroSelector`. The selector-source
+    // choice lives in [recordedNodeSelectorForMaestroPath] (shared with TapTrailblazeTool) —
+    // an assert recorded against a container-shaped modern selector would pass vacuously.
     return listOf(
       AssertVisibleBySelectorTrailblazeTool(
         reason = reasoning,
-        selector = selectorWithStrategy.selector,
-        nodeSelector = nodeSelector,
+        nodeSelector = recordedNodeSelectorForMaestroPath(
+          platform = screenState.trailblazeDevicePlatform,
+          modernNodeSelector = nodeSelector,
+          legacyAsNodeSelector = selectorWithStrategy.selector.toTrailblazeNodeSelector(
+            screenState.trailblazeDevicePlatform,
+          ),
+        ),
         expectedText = resolvedText.expectedText,
         textMatchMode = resolvedText.mode,
       ),

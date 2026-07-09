@@ -149,8 +149,30 @@ object TrailblazeDesktopUtil {
    * @return `~/.trailblaze/daemon.log` — directory is created if missing.
    */
   fun getDaemonLogFile(): File {
-    return File(getDefaultAppDataDirectory().apply { mkdirs() }, "daemon.log")
+    val logFile = File(getDefaultAppDataDirectory().apply { mkdirs() }, "daemon.log")
+    // Every daemon spawn appends its whole stdout/stderr lifetime here — without a cap the
+    // file grows without bound on a busy machine (hundreds of MB observed). Roll at most one
+    // generation; losing older history is fine, this log exists for recent-startup triage.
+    if (logFile.length() > DAEMON_LOG_ROLL_BYTES) {
+      runCatching {
+        val rolled = File(logFile.parentFile, "daemon.log.1")
+        rolled.delete()
+        logFile.renameTo(rolled)
+      }
+    }
+    return logFile
   }
+
+  /** Roll `daemon.log` once it exceeds this size; one `.1` generation is kept. */
+  private const val DAEMON_LOG_ROLL_BYTES = 50L * 1024 * 1024
+
+  /**
+   * JVM property that makes the process a macOS agent app (LSUIElement): never activated by
+   * launch, no Dock icon, no keyboard-focus steal. Read once at AWT initialization, so it must
+   * be set/cleared before the first AWT class loads. Set CLI-wide in `TrailblazeCli.run`;
+   * cleared for the one deliberately-headed launch in `MainTrailblazeApp.runTrailblazeApp`.
+   */
+  const val AWT_AGENT_APP_PROPERTY = "apple.awt.UIElement"
 
   /**
    * Gets the effective app data directory based on the app config.

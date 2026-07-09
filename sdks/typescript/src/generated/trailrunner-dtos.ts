@@ -94,6 +94,12 @@ export interface GetEditedTrailsRequest {
 export interface GetFavoritesRequest {
 }
 
+export interface GetInstalledAppsRequest {
+  platform: string;
+  id: string;
+  includeSystemApps?: boolean;
+}
+
 export interface GetIntegrationsRequest {
 }
 
@@ -143,6 +149,16 @@ export interface GetTrailmapsRequest {
 }
 
 export interface GetTrailsRequest {
+}
+
+export interface InstalledAppDto {
+  appId: string;
+  label?: string | null;
+  version?: string | null;
+}
+
+export interface InstalledAppsResponse {
+  apps: InstalledAppDto[];
 }
 
 export interface IntegrationActionDto {
@@ -272,6 +288,28 @@ export interface RunToolsResponse {
   toolsets: RunToolSetDto[];
 }
 
+export interface SaveTargetConfigRequest {
+  trailmapId: string;
+  displayName: string;
+  icon?: string | null;
+  platforms?: Record<string, SaveTargetPlatformPatch>;
+  createIfMissing?: boolean;
+}
+
+export interface SaveTargetConfigResponse {
+  ok: boolean;
+  error?: string | null;
+  created?: boolean;
+  warning?: string | null;
+}
+
+export interface SaveTargetPlatformPatch {
+  appIds?: string[] | null;
+  baseUrl?: string | null;
+  icon?: string | null;
+  remove?: boolean;
+}
+
 export interface SaveTrailRequest {
   yaml: string;
   filename?: string | null;
@@ -301,6 +339,10 @@ export interface SessionSummary {
   platform?: string | null;
   device?: string | null;
   target?: string | null;
+  appId?: string | null;
+  appVersionName?: string | null;
+  appVersionCode?: string | null;
+  appBuildNumber?: string | null;
   hasRecordedSteps?: boolean;
   error?: string | null;
   trailId?: string | null;
@@ -494,6 +536,8 @@ export interface TrailmapEntry {
   tools?: TrailmapComponent[];
   trailheads?: TrailmapComponent[];
   systemPrompts?: TrailmapComponent[];
+  platforms?: string[];
+  workspaceListed?: boolean;
 }
 
 export interface TrailmapsResponse {
@@ -543,6 +587,8 @@ export function createTrailRunnerRpcClient(options: RpcCallOptions = {}) {
       rpcCall<GetEditedTrailsRequest, EditedTrailsResponse>("GetEditedTrailsRequest", request, options),
     getFavorites: (request: GetFavoritesRequest = {}): Promise<RpcResult<FavoritesResponse>> =>
       rpcCall<GetFavoritesRequest, FavoritesResponse>("GetFavoritesRequest", request, options),
+    getInstalledApps: (request: GetInstalledAppsRequest): Promise<RpcResult<InstalledAppsResponse>> =>
+      rpcCall<GetInstalledAppsRequest, InstalledAppsResponse>("GetInstalledAppsRequest", request, options),
     getIntegrations: (request: GetIntegrationsRequest = {}): Promise<RpcResult<IntegrationsResponse>> =>
       rpcCall<GetIntegrationsRequest, IntegrationsResponse>("GetIntegrationsRequest", request, options),
     getRunTools: (request: GetRunToolsRequest): Promise<RpcResult<RunToolsResponse>> =>
@@ -589,6 +635,8 @@ export function createTrailRunnerRpcClient(options: RpcCallOptions = {}) {
       rpcCall<RevealTrailsRootRequest, OkResponse>("RevealTrailsRootRequest", request, options),
     run: (request: RunRequest): Promise<RpcResult<RunResponse>> =>
       rpcCall<RunRequest, RunResponse>("RunRequest", request, options),
+    saveTargetConfig: (request: SaveTargetConfigRequest): Promise<RpcResult<SaveTargetConfigResponse>> =>
+      rpcCall<SaveTargetConfigRequest, SaveTargetConfigResponse>("SaveTargetConfigRequest", request, options),
     setFavorite: (request: SetFavoriteRequest): Promise<RpcResult<FavoritesResponse>> =>
       rpcCall<SetFavoriteRequest, FavoritesResponse>("SetFavoriteRequest", request, options),
     settingsPatch: (request: SettingsPatchRequest): Promise<RpcResult<SettingsDto>> =>

@@ -16,6 +16,8 @@ import xyz.block.trailblaze.trailrunner.EditedTrailsResponse
 import xyz.block.trailblaze.trailrunner.FavoriteRequest
 import xyz.block.trailblaze.trailrunner.FavoritesResponse
 import xyz.block.trailblaze.trailrunner.GetDeviceAppsRequest
+import xyz.block.trailblaze.trailrunner.GetInstalledAppsRequest
+import xyz.block.trailblaze.trailrunner.InstalledAppsResponse
 import xyz.block.trailblaze.trailrunner.GetEditedTrailsRequest
 import xyz.block.trailblaze.trailrunner.GetFavoritesRequest
 import xyz.block.trailblaze.trailrunner.GetIntegrationsRequest
@@ -47,6 +49,8 @@ import xyz.block.trailblaze.trailrunner.RevealTrailRequest
 import xyz.block.trailblaze.trailrunner.RevealTrailsRootRequest
 import xyz.block.trailblaze.trailrunner.RunRequest
 import xyz.block.trailblaze.trailrunner.RunResponse
+import xyz.block.trailblaze.trailrunner.SaveTargetConfigRequest
+import xyz.block.trailblaze.trailrunner.SaveTargetConfigResponse
 import xyz.block.trailblaze.trailrunner.SaveTrailRequest
 import xyz.block.trailblaze.trailrunner.SaveTrailResponse
 import xyz.block.trailblaze.trailrunner.SessionsResponse
@@ -100,6 +104,7 @@ internal object TrailRunnerDtoTsBindings {
     CreateTrailRequest.serializer().descriptor,
     DeleteSessionResponse.serializer().descriptor,
     DeviceAppsResponse.serializer().descriptor,
+    InstalledAppsResponse.serializer().descriptor,
     EditedTrailsResponse.serializer().descriptor,
     FavoriteRequest.serializer().descriptor,
     FavoritesResponse.serializer().descriptor,
@@ -111,6 +116,8 @@ internal object TrailRunnerDtoTsBindings {
     RebuildDaemonResponse.serializer().descriptor,
     RunRequest.serializer().descriptor,
     RunResponse.serializer().descriptor,
+    SaveTargetConfigRequest.serializer().descriptor,
+    SaveTargetConfigResponse.serializer().descriptor,
     SaveTrailRequest.serializer().descriptor,
     SaveTrailResponse.serializer().descriptor,
     SessionsResponse.serializer().descriptor,
@@ -149,6 +156,7 @@ internal object TrailRunnerDtoTsBindings {
     GetToolUsageCountsRequest::class,
     GetToolUsagesRequest::class,
     GetDeviceAppsRequest::class,
+    GetInstalledAppsRequest::class,
     GetRunToolsRequest::class,
     GetSessionAnalyticsRequest::class,
     GetSessionFilesRequest::class,
@@ -175,6 +183,7 @@ internal object TrailRunnerDtoTsBindings {
     IntegrationActionRequest::class,
     OpenSessionFileRequest::class,
     NewComponentRequest::class,
+    SaveTargetConfigRequest::class,
     SettingsPatchRequest::class,
   )
 

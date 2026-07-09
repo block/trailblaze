@@ -7,6 +7,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -14,6 +15,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -257,6 +259,228 @@ class QuickJsToolHostTest {
   }
 
   @Test
+  fun `a hostBinding that re-enters the same host fails fast instead of deadlocking`() = runBlocking {
+    // Before the reentrancy tripwire in QuickJsToolHost (hostCallThread/checkNotReentrant), this
+    // scenario was explicitly left untested -- a real self-reentrant HostBinding would deadlock
+    // the engine thread permanently (evalMutex never frees), which would hang shutdown() and the
+    // whole test run right along with it. The tripwire converts that into a synchronous,
+    // fail-fast error, which is what this test pins. Bounded with withTimeoutOrNull purely as a
+    // belt-and-suspenders guard against a future regression reintroducing the hang -- if the
+    // tripwire itself regresses, this fails loudly with a clear message instead of wedging CI.
+    lateinit var host: QuickJsToolHost
+    val binding = HostBinding { name, argsJson ->
+      // Calls back into the SAME host that is currently dispatching this very callback.
+      val args = Json.parseToJsonElement(argsJson).jsonObject
+      Json.encodeToString(JsonObject.serializer(), host.callTool(name, args))
+    }
+    host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["selfCompose"] = {
+        name: "selfCompose",
+        spec: {},
+        handler: async () => {
+          // Realistic composing-tool shape: __trailblazeCall never throws for an ordinary
+          // failure (see hostCallErrorEnvelopeJson) -- it returns a normal {isError, content}
+          // envelope, same as every other tool-failure path, and it's on the calling JS to
+          // check isError and propagate it, exactly like the SDK shim does in production.
+          const innerResultJson = await globalThis.__trailblazeCall("selfCompose", "{}");
+          const inner = JSON.parse(innerResultJson);
+          if (inner.isError) {
+            throw new Error("composed call failed: " + inner.content[0].text);
+          }
+          return { content: [{ type: "text", text: "should never get here" }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    val outcome = withTimeoutOrNull(10_000) {
+      runCatching { host.callTool("selfCompose", JsonObject(emptyMap())) }
+    } ?: fail(
+      "self-reentrant composition hung instead of failing fast -- the reentrancy tripwire " +
+        "(hostCallThread/checkNotReentrant in QuickJsToolHost) appears to have regressed",
+    )
+    // The tripwire's error returns as a clean {isError, content} envelope from
+    // __trailblazeCall (see hostCallErrorEnvelopeJson) -- same as any other composed-call
+    // failure -- which the JS handler above checks and re-throws, landing in callTool's own
+    // isError envelope. What must NOT happen is the handler's unreachable success text coming
+    // back, which would mean the tripwire never fired at all.
+    val result = outcome.getOrThrow()
+    assertTrue(
+      result["isError"]?.let { it as? JsonPrimitive }?.boolean == true,
+      "expected the self-reentrant call to surface as an isError envelope; got: $result",
+    )
+    assertTrue(
+      textContent(result).contains("reentrant", ignoreCase = true),
+      "expected the error message to explain the reentrancy failure; got: ${textContent(result)}",
+    )
+  }
+
+  // ---- Regression coverage for the __trailblazeCall asyncFunction -> function + runBlocking
+  // fix (block/trailblaze#194; see 2026-07-07-quickjs-async-host-binding-fix.md). The native JNI
+  // crash itself needs real device I/O timing and full-daemon GC pressure to reproduce, so a
+  // unit test can't trigger it directly -- these tests instead pin the composition scenarios the
+  // fix must keep working: concurrent fan-out across hosts (the real production topology, since
+  // each registered scripted tool gets its own engine), multi-level nesting, and stability under
+  // repetition.
+
+  @Test
+  fun `composed tool calls stay isolated under concurrency across nested hosts`() = runBlocking {
+    // Mirrors production topology: a composed call (`ctx.tools.*`) crosses into a DIFFERENT
+    // QuickJsToolHost, not back into the calling host (one engine per registered scripted tool --
+    // see the crash devlog's "29 live quickjs-tool-engine-N threads" observation). Fans many
+    // concurrent outer calls into one shared inner host and asserts none of them cross-talk --
+    // the same failure class `evalMutex serializes concurrent callTool invocations` guards
+    // against for direct calls, now through the synchronous __trailblazeCall binding.
+    val innerHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["inner"] = {
+        name: "inner",
+        spec: {},
+        handler: async (args) => {
+          await Promise.resolve();
+          await Promise.resolve();
+          return { content: [{ type: "text", text: "inner-" + args.marker }] };
+        },
+      };
+      """.trimIndent(),
+    )
+    val binding = HostBinding { name, argsJson ->
+      assertEquals("inner", name)
+      val args = Json.parseToJsonElement(argsJson).jsonObject
+      val result = innerHost.callTool(name, args)
+      Json.encodeToString(JsonObject.serializer(), result)
+    }
+    val outerHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["outer"] = {
+        name: "outer",
+        spec: {},
+        handler: async (args) => {
+          const innerResultJson = await globalThis.__trailblazeCall("inner", JSON.stringify({ marker: args.marker }));
+          const inner = JSON.parse(innerResultJson);
+          return { content: [{ type: "text", text: "outer wraps " + inner.content[0].text }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    val markers = (1..20).map { "m$it" }
+    val results = coroutineScope {
+      markers.map { m ->
+        async { outerHost.callTool("outer", buildJsonObject { put("marker", m) }) }
+      }.awaitAll()
+    }
+    markers.zip(results).forEach { (marker, result) ->
+      assertEquals(
+        "outer wraps inner-$marker",
+        textContent(result),
+        "expected composed result for $marker to not cross-talk with another concurrent call",
+      )
+    }
+  }
+
+  @Test
+  fun `composition survives three levels of nested hosts`() = runBlocking {
+    // Each level bridges through its own synchronous __trailblazeCall binding + runBlocking, on
+    // its own dedicated engine thread. Pins that chaining the fix three deep (runBlocking inside
+    // runBlocking inside runBlocking, each on a different thread) still resolves correctly.
+    val leafHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["leaf"] = {
+        name: "leaf",
+        spec: {},
+        handler: async () => ({ content: [{ type: "text", text: "leaf" }] }),
+      };
+      """.trimIndent(),
+    )
+    val leafBinding = HostBinding { name, argsJson ->
+      Json.encodeToString(JsonObject.serializer(), leafHost.callTool(name, Json.parseToJsonElement(argsJson).jsonObject))
+    }
+    val midHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["mid"] = {
+        name: "mid",
+        spec: {},
+        handler: async () => {
+          const leafResultJson = await globalThis.__trailblazeCall("leaf", "{}");
+          const leaf = JSON.parse(leafResultJson);
+          return { content: [{ type: "text", text: "mid wraps " + leaf.content[0].text }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = leafBinding,
+    )
+    val midBinding = HostBinding { name, argsJson ->
+      Json.encodeToString(JsonObject.serializer(), midHost.callTool(name, Json.parseToJsonElement(argsJson).jsonObject))
+    }
+    val outerHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["outer"] = {
+        name: "outer",
+        spec: {},
+        handler: async () => {
+          const midResultJson = await globalThis.__trailblazeCall("mid", "{}");
+          const mid = JSON.parse(midResultJson);
+          return { content: [{ type: "text", text: "outer wraps " + mid.content[0].text }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = midBinding,
+    )
+    val result = outerHost.callTool("outer", JsonObject(emptyMap()))
+    assertEquals("outer wraps mid wraps leaf", textContent(result))
+  }
+
+  @Test
+  fun `composed calls remain correct across many sequential iterations (soak)`() = runBlocking {
+    // Repeats the two-host composition many times over the SAME hosts/engines to build
+    // confidence against subtle state leakage between calls (e.g. a stale __trailblazeLastResult
+    // read, or the engine thread wedging after N dispatches) that a single call wouldn't surface.
+    val innerHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["inner"] = {
+        name: "inner",
+        spec: {},
+        handler: async (args) => ({ content: [{ type: "text", text: "inner-" + args.i }] }),
+      };
+      """.trimIndent(),
+    )
+    val binding = HostBinding { name, argsJson ->
+      Json.encodeToString(
+        JsonObject.serializer(),
+        innerHost.callTool(name, Json.parseToJsonElement(argsJson).jsonObject),
+      )
+    }
+    val outerHost = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["outer"] = {
+        name: "outer",
+        spec: {},
+        handler: async (args) => {
+          const innerResultJson = await globalThis.__trailblazeCall("inner", JSON.stringify({ i: args.i }));
+          const inner = JSON.parse(innerResultJson);
+          return { content: [{ type: "text", text: inner.content[0].text }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    repeat(100) { i ->
+      val result = outerHost.callTool("outer", buildJsonObject { put("i", i) })
+      assertEquals("inner-$i", textContent(result), "iteration $i unexpectedly diverged")
+    }
+  }
+
+  @Test
   fun `ctx is forwarded through to the handler when supplied`() = runBlocking {
     // Round-trips a session id through the ctx envelope. Proves the runtime correctly
     // serializes ctx and the handler can read it — the basis for handlers branching on
@@ -277,6 +501,85 @@ class QuickJsToolHostTest {
     val result = host.callTool("getSessionId", JsonObject(emptyMap()), ctx = ctx)
     val text = (result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive
     assertEquals("session-abc", text.content)
+  }
+
+  @Test
+  fun `a hostBinding that throws surfaces as a clean isError envelope, not a corrupted native exception`() = runBlocking {
+    // Regression test for a bug this PR's review uncovered while writing test coverage for the
+    // asyncFunction -> function + runBlocking swap: letting an arbitrary exception cross the
+    // HOST_CALL_BINDING native-binding boundary uncaught does NOT surface as a normal JS-level
+    // throw the composing tool's `await` can catch. Empirically (before hostCallErrorEnvelopeJson
+    // existed) it aborted quickJs.evaluate() outright and corrupted the dispatch script's own
+    // error-tracking state: `QuickJsException: ReferenceError: __dispatchError is not
+    // initialized`, losing the real failure message ("boom-from-host-binding") entirely. This
+    // pins the fix: the exception is now converted to the same {isError, content} envelope shape
+    // every other tool-failure path already uses, so the composing tool's own isError check (the
+    // realistic way an SDK shim would handle it) sees the real message.
+    val binding = HostBinding { _, _ -> throw RuntimeException("boom-from-host-binding") }
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["outer"] = {
+        name: "outer",
+        spec: {},
+        handler: async () => {
+          const innerResultJson = await globalThis.__trailblazeCall("inner", "{}");
+          const inner = JSON.parse(innerResultJson);
+          if (inner.isError) {
+            throw new Error("composed call failed: " + inner.content[0].text);
+          }
+          return { content: [{ type: "text", text: "should never get here" }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    val result = withTimeoutOrNull(10_000) { host.callTool("outer", JsonObject(emptyMap())) }
+      ?: fail("host binding throw hung instead of surfacing promptly")
+    assertTrue(
+      result["isError"]?.let { it as? JsonPrimitive }?.boolean == true,
+      "expected a clean isError envelope; got: $result",
+    )
+    assertTrue(
+      textContent(result).contains("boom-from-host-binding"),
+      "expected the real exception message to survive, not a corrupted native-boundary " +
+        "error; got: ${textContent(result)}",
+    )
+  }
+
+  @Test
+  fun `a hostBinding throwing CancellationException still surfaces promptly (known lossy path)`() = runBlocking {
+    // CancellationException is deliberately NOT converted to an isError envelope (see the
+    // catch block at the HOST_CALL_BINDING install site) -- swallowing it would suppress real
+    // coroutine cancellation semantics for the outer call. But rethrowing it raw still crosses
+    // the same native-binding boundary the test above documents as lossy: this pins the CURRENT,
+    // known-imperfect outcome (a thrown QuickJsException, not a clean CancellationException or
+    // isError envelope) so a future change to this boundary's behavior is a deliberate decision,
+    // not a silent regression. Improving this is out of scope for this fix -- see the timeout
+    // follow-up already tracked in the devlog.
+    val binding = HostBinding { _, _ -> throw CancellationException("cancelled-from-host-binding") }
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["outer"] = {
+        name: "outer",
+        spec: {},
+        handler: async () => {
+          await globalThis.__trailblazeCall("inner", "{}");
+          return { content: [{ type: "text", text: "should never get here" }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+    )
+    val outcome = withTimeoutOrNull(10_000) {
+      runCatching { host.callTool("outer", JsonObject(emptyMap())) }
+    } ?: fail("host binding cancellation hung instead of surfacing promptly")
+    assertTrue(
+      outcome.isFailure,
+      "expected the composed cancellation to surface as a thrown exception (current known-" +
+        "lossy behavior), not silently succeed; got: $outcome",
+    )
   }
 
   // ---- ctx.target.resolveAppId / resolveBaseUrl method injection ----

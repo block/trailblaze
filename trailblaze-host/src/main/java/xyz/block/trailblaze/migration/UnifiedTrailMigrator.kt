@@ -9,7 +9,9 @@ import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import java.io.File
@@ -22,8 +24,15 @@ import java.io.File
  *
  * 1. Load every `<classifier>.trail.yaml` in the directory; filename minus
  *    `.trail.yaml` is the classifier.
- * 2. Canonicalize config from the first file: keep `id` / `target` / `context`
- *    / `memory` / `metadata` verbatim, drop `platform:` / `title:`.
+ * 2. Canonicalize config across every file: for each device-agnostic scalar
+ *    (`id` / `target` / `title` / `description` / `context` / `memory`) the
+ *    first file to declare it wins (platform files in filename order, then
+ *    `blaze.yaml`), so a field only one file carries is never dropped;
+ *    `metadata` (which also carries the bridged v1 `priority:` / `source:` —
+ *    see [xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig.metadata])
+ *    merges per-key the same first-wins way. `platform:` is retired (the
+ *    device set derives from the classifier slots) and a v1 `electron:` block
+ *    is refused by the shared seed helper (fail loud, never silently drop).
  *    Two v1 fields are per-platform-file and become per-classifier maps keyed by
  *    each file's classifier: `driver:` → `devices:`, and `skip:` → `skip:` (v1's
  *    scalar skip reason keyed under that file's classifier, so a trail can be
@@ -39,9 +48,13 @@ import java.io.File
  *    tags are unioned (de-duplicated, first-seen order) — a tag on any file
  *    describes the whole test. `memory:` (the AgentMemory pre-seed block)
  *    round-trips through the migration intact.
- * 3. For each step index, gather per-classifier NL and tool recordings.
- *    Disagreeing NL becomes a drift warning surfaced in the output's leading
- *    comments; canonical NL is the first platform's.
+ * 3. For each step index, gather per-classifier NL, step kind (`step:` vs
+ *    `verify:`) and tool recordings. Disagreeing NL becomes a drift warning
+ *    surfaced in the output's leading comments; canonical NL is the first
+ *    platform's. The kind is carried the same way (a v1 `verify:` step becomes
+ *    a unified `verify:` step) with the same canonical preference, and
+ *    platforms disagreeing on kind at an index is surfaced as drift — never
+ *    silently flattened.
  * 4. Steps with no recording on any classifier are left at the default
  *    `recordable = true` — "not recorded yet" (runs via the agent, can be
  *    recorded later), not "never record". The migrator never auto-emits
@@ -86,23 +99,31 @@ class UnifiedTrailMigrator(
     val driversByClassifier = linkedMapOf<String, String>()
     // Per-classifier skip reasons. v1's `skip:` is a scalar per-platform-file, so each file's
     // reason keys under its classifier — same shape as the driver map above. Blank reasons are
-    // ignored (v1 semantics: `skip: ""` means "not skipped").
+    // ignored (v1 semantics: `skip: ""` means "not skipped"). Divergence across files here is
+    // expected by design (a trail can be skipped on one device family but not another), unlike
+    // NL/memory below, where divergence signals an authoring bug and gets drift-detected instead.
     val skipByClassifier = linkedMapOf<String, String>()
     // Trail-level tags. Unlike driver/skip these aren't device-specific, so they're unioned across
     // every file (a tag on any platform describes the whole test) rather than keyed by classifier.
     // LinkedHashSet keeps first-seen order and de-duplicates a tag shared by multiple files.
+    // Files disagreeing on tags is expected (each just contributes what it knows), not drift.
     val tagsUnion = linkedSetOf<String>()
     // blaze.yaml's own skip reason (device-agnostic — see the propagation comment below).
     var blazeSkip: String? = null
     var canonicalConfig: UnifiedTrailConfig? = null
+    // Every file's scalar config, keyed by classifier (or BLAZE_KEY), retained so scalar
+    // disagreements can be surfaced as drift after the fold picks a canonical value.
+    val configsBySource = linkedMapOf<String, UnifiedTrailConfig>()
     for (file in platformFiles) {
       val classifier = file.name.removeSuffix(TRAIL_YAML_SUFFIX)
       val items = trailblazeYaml.decodeTrail(file.readText())
       assertNoTopLevelTools(items, file.name)
       assertNoTrailhead(items, file.name)
       val v1Config = trailblazeYaml.extractTrailConfig(items)
-      if (canonicalConfig == null && v1Config != null) {
-        canonicalConfig = v1ConfigToUnified(v1Config)
+      if (v1Config != null) {
+        val unified = v1ConfigToUnified(v1Config)
+        configsBySource[classifier] = unified
+        canonicalConfig = canonicalConfig.foldConfig(unified)
       }
       v1Config?.driver?.let { driversByClassifier[classifier] = it }
       v1Config?.skip?.takeIf { it.isNotBlank() }?.let { skipByClassifier[classifier] = it }
@@ -127,8 +148,10 @@ class UnifiedTrailMigrator(
       assertNoTopLevelTools(items, blazeFile.name)
       assertNoTrailhead(items, blazeFile.name)
       val cfg = trailblazeYaml.extractTrailConfig(items)
-      if (canonicalConfig == null && cfg != null) {
-        canonicalConfig = v1ConfigToUnified(cfg)
+      if (cfg != null) {
+        val unified = v1ConfigToUnified(cfg)
+        configsBySource[BLAZE_KEY] = unified
+        canonicalConfig = canonicalConfig.foldConfig(unified)
       }
       // blaze.yaml is device-agnostic, so its tags join the trail-level union too.
       cfg?.tags?.let { tagsUnion.addAll(it) }
@@ -166,22 +189,26 @@ class UnifiedTrailMigrator(
     val platformMax = perClassifier.values.maxOfOrNull { it.size } ?: 0
     val maxSteps = maxOf(platformMax, blazePrompts.size)
     val driftReports = mutableListOf<DriftEntry>()
+    val kindDriftReports = mutableListOf<KindDriftEntry>()
     val steps = mutableListOf<UnifiedTrailStep>()
 
     for (i in 0 until maxSteps) {
       val nlByClassifier = linkedMapOf<String, String>()
+      val verifyByClassifier = linkedMapOf<String, Boolean>()
       val toolsByClassifier = linkedMapOf<String, List<TrailblazeToolYamlWrapper>>()
       for ((classifier, prompts) in perClassifier) {
         if (i < prompts.size) {
           val step = prompts[i]
           nlByClassifier[classifier] = step.prompt
+          verifyByClassifier[classifier] = step is VerificationStep
           val tools = step.recording?.tools.orEmpty()
           if (tools.isNotEmpty()) {
             toolsByClassifier[classifier] = tools
           }
         }
       }
-      val blazeNl: String? = if (i < blazePrompts.size) blazePrompts[i].prompt else null
+      val blazeStep: PromptStep? = blazePrompts.getOrNull(i)
+      val blazeNl: String? = blazeStep?.prompt
       if (nlByClassifier.isEmpty() && blazeNl == null) continue
 
       // Canonical NL preference: blaze.yaml (if present) > first platform's NL.
@@ -197,12 +224,25 @@ class UnifiedTrailMigrator(
         driftReports.add(DriftEntry(stepIndex = i, nlByClassifier = nlsForDrift))
       }
 
+      // Step kind (`step:` vs `verify:`) carries through with the same canonical preference as
+      // the NL. Files disagreeing on kind at the same index is an authoring bug (verify semantics
+      // are load-bearing at run time), so it's surfaced as drift — never silently flattened.
+      val kindsForDrift = buildMap<String, Boolean> {
+        if (blazeStep != null) put(BLAZE_KEY, blazeStep is VerificationStep)
+        putAll(verifyByClassifier)
+      }
+      val canonicalVerify = kindsForDrift.values.first()
+      if (kindsForDrift.values.toSet().size > 1) {
+        kindDriftReports.add(KindDriftEntry(stepIndex = i, verifyByClassifier = kindsForDrift))
+      }
+
       // recordable stays at its default (true): a step with no recording just runs via the
       // agent and can be recorded later. We deliberately do NOT emit `recordable: false` for
       // no-recording steps — that would mean "never record", which isn't the intent and is noise.
       steps.add(
         UnifiedTrailStep(
           step = canonicalNl,
+          verify = canonicalVerify,
           recordings = toolsByClassifier,
         ),
       )
@@ -247,10 +287,49 @@ class UnifiedTrailMigrator(
         platformFilesLoaded = platformFiles.map { it.name },
         drift = driftReports,
         memoryDrift = memoryDrift,
+        kindDrift = kindDriftReports,
+        configDrift = detectConfigDrift(configsBySource),
         familyCollapses = collapseReports,
         unrecordableSteps = collapsedSteps.withIndex().count { !it.value.recordable },
       ),
     )
+  }
+
+  /**
+   * Detect cross-file scalar-config drift: two files meaningfully declaring DIFFERENT values for
+   * the same device-agnostic scalar. The fold resolves these first-file-wins, which is silent —
+   * surface the disagreement like NL/memory/kind drift so a divergent title or priority isn't
+   * invisibly dropped during a bulk migration. "Meaningfully declared" matches the fold's absence
+   * rules (blank strings don't count). `metadata` is compared per-KEY (reported as
+   * `metadata.<key>`, e.g. `metadata.priority` for the bridged v1 field) to match its per-key
+   * merge — files contributing disjoint keys is a clean union, not drift. `memory` has its own
+   * dedicated drift pass; per-classifier `devices`/`skip` and the unioned `tags` diverge by
+   * design and are not scalars.
+   */
+  private fun detectConfigDrift(
+    configsBySource: Map<String, UnifiedTrailConfig>,
+  ): List<ConfigDriftEntry> {
+    val extractors: List<Pair<String, (UnifiedTrailConfig) -> String?>> = listOf(
+      "id" to { it.id?.takeUnless(String::isBlank) },
+      "target" to { it.target?.takeUnless(String::isBlank) },
+      "title" to { it.title?.takeUnless(String::isBlank) },
+      "description" to { it.description?.takeUnless(String::isBlank) },
+      "context" to { it.context?.takeUnless(String::isBlank) },
+    )
+    val fieldDrift = extractors.mapNotNull { (field, extract) ->
+      val valueBySource = configsBySource.mapNotNull { (source, cfg) ->
+        extract(cfg)?.let { source to it }
+      }.toMap()
+      if (valueBySource.values.toSet().size > 1) ConfigDriftEntry(field, valueBySource) else null
+    }
+    val metadataKeys = configsBySource.values.flatMap { it.metadata?.keys ?: emptySet() }.toSet()
+    val metadataDrift = metadataKeys.sorted().mapNotNull { key ->
+      val valueBySource = configsBySource.mapNotNull { (source, cfg) ->
+        cfg.metadata?.get(key)?.let { source to it }
+      }.toMap()
+      if (valueBySource.values.toSet().size > 1) ConfigDriftEntry("metadata.$key", valueBySource) else null
+    }
+    return fieldDrift + metadataDrift
   }
 
   /**
@@ -292,22 +371,24 @@ class UnifiedTrailMigrator(
     }
   }
 
+  // Identity fields come from the shared [UnifiedTrailAdapter.v1ConfigToUnifiedConfig] mapping (one
+  // source of truth with the recorder's first-write seed). `devices:` / `skip:` (per-classifier
+  // maps) and `tags:` (a trail-level union) are populated by the caller from every file — this
+  // single first-file config can't express them — so the helper leaves them null.
   private fun v1ConfigToUnified(v1: xyz.block.trailblaze.yaml.TrailConfig): UnifiedTrailConfig =
-    UnifiedTrailConfig(
-      id = v1.id,
-      target = v1.target,
-      // Preserve the human description — it's runtime-surfaced (a display label), so dropping
-      // it would be silent information loss.
-      description = v1.description,
-      // `devices:` / `skip:` (per-classifier maps) and `tags:` (a trail-level union) are all
-      // populated by the caller from every file — this single first-file config can't express them.
-      devices = null,
-      skip = null,
-      tags = null,
-      context = v1.context,
-      memory = v1.memory,
-      metadata = v1.metadata,
-    )
+    UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1)
+
+  // Fold [next] into the canonical config being accumulated: the first file to meaningfully
+  // declare a scalar wins, and files seen later only FILL fields the canonical still lacks
+  // (blank strings / empty placeholders don't shadow a later populated value; metadata — which
+  // carries the bridged v1 `priority:`/`source:` — merges per-key). Without the fill, a field
+  // present only in a later file — e.g. `source:` declared in `blaze.yaml` but not in the
+  // platform files — was silently dropped because the first config seen became canonical
+  // wholesale. The field list lives in the shared [UnifiedTrailAdapter.fillMissingConfigScalars];
+  // `devices` / `skip` / `tags` are per-classifier / union-merged by the caller and stay
+  // untouched (null) here.
+  private fun UnifiedTrailConfig?.foldConfig(next: UnifiedTrailConfig): UnifiedTrailConfig =
+    if (this == null) next else UnifiedTrailAdapter.fillMissingConfigScalars(this, next)
 
   /**
    * Group [classifiers] into families based on shared `<family>-<sub>` prefix.
@@ -407,12 +488,39 @@ class UnifiedTrailMigrator(
      * a memory block.
      */
     val memoryDrift: List<MemoryDriftEntry> = emptyList(),
+    /**
+     * Step-kind drift — one entry per step index where the files disagree on `step:` vs
+     * `verify:`. The canonical kind follows the same preference as NL (blaze.yaml when
+     * present, otherwise the first platform); the disagreement is surfaced here so it is
+     * never silently flattened (verify semantics are load-bearing at run time).
+     */
+    val kindDrift: List<KindDriftEntry> = emptyList(),
+    /**
+     * Scalar-config drift — one entry per device-agnostic scalar (`title`, `priority`, `source`,
+     * …) that two or more files meaningfully declare with different values. The fold resolves
+     * these first-file-wins; the losers are surfaced here so a divergent value is never
+     * invisibly dropped.
+     */
+    val configDrift: List<ConfigDriftEntry> = emptyList(),
+  )
+
+  data class ConfigDriftEntry(
+    /** The config field name (e.g. `title`, `priority`, `source`). */
+    val field: String,
+    /** Meaningfully-declared value keyed by source (classifier or `blaze.yaml`) — at least 2 that differ. */
+    val valueBySource: Map<String, String>,
   )
 
   data class DriftEntry(
     val stepIndex: Int,
     /** NL string keyed by classifier — at least 2 entries that differ. */
     val nlByClassifier: Map<String, String>,
+  )
+
+  data class KindDriftEntry(
+    val stepIndex: Int,
+    /** `true` = `verify:`, `false` = `step:`; keyed by classifier (plus `blaze.yaml` when present). */
+    val verifyByClassifier: Map<String, Boolean>,
   )
 
   data class MemoryDriftEntry(
@@ -440,20 +548,55 @@ class UnifiedTrailMigrator(
     private const val REASON_KEY = "reason"
 
     /** Build leading-comment lines summarizing drift for inclusion in the migrated file. */
-    fun driftComments(drift: List<DriftEntry>): List<String> {
-      if (drift.isEmpty()) return emptyList()
-      val lines = mutableListOf<String>()
-      lines += "WARNING: ${drift.size} step(s) had divergent NL across platforms during migration."
-      lines += "Canonical NL preference: blaze.yaml when present, otherwise the first platform. Review the diff:"
-      for (entry in drift.take(MAX_DRIFT_DETAIL_LINES)) {
-        lines += "  step ${entry.stepIndex + 1}:"
-        for ((classifier, nl) in entry.nlByClassifier) {
-          val snippet = nl.take(SNIPPET_MAX_LEN).replace('\n', ' ')
-          lines += "    $classifier: \"$snippet\""
+    fun driftComments(drift: List<DriftEntry>): List<String> = stepDriftComments(
+      entries = drift,
+      warning = "WARNING: ${drift.size} step(s) had divergent NL across platforms during migration.",
+      preference = "Canonical NL preference: blaze.yaml when present, otherwise the first platform. Review the diff:",
+      stepIndex = { it.stepIndex },
+      perClassifierLines = { entry ->
+        entry.nlByClassifier.map { (classifier, nl) ->
+          "    $classifier: \"${nl.take(SNIPPET_MAX_LEN).replace('\n', ' ')}\""
         }
+      },
+    )
+
+    /**
+     * Leading-comment lines summarizing step-kind drift (`step:` vs `verify:`). Kind drift is rarer
+     * but higher-stakes than NL drift — a step that runs as `step:` on one platform and `verify:`
+     * on another has different runtime semantics per device.
+     */
+    fun kindDriftComments(kindDrift: List<KindDriftEntry>): List<String> = stepDriftComments(
+      entries = kindDrift,
+      warning = "WARNING: ${kindDrift.size} step(s) had divergent step kinds (step: vs verify:) across platforms.",
+      preference = "Canonical kind preference: blaze.yaml when present, otherwise the first platform. Review the diff:",
+      stepIndex = { it.stepIndex },
+      perClassifierLines = { entry ->
+        entry.verifyByClassifier.map { (classifier, isVerify) ->
+          "    $classifier: ${if (isVerify) "verify" else "step"}"
+        }
+      },
+    )
+
+    /**
+     * Shared scaffold for the per-step drift comment blocks: warning header, canonical-preference
+     * line, up to [MAX_DRIFT_DETAIL_LINES] step entries, then an overflow tail — so the NL and
+     * kind variants can't drift apart in shape.
+     */
+    private fun <E> stepDriftComments(
+      entries: List<E>,
+      warning: String,
+      preference: String,
+      stepIndex: (E) -> Int,
+      perClassifierLines: (E) -> List<String>,
+    ): List<String> {
+      if (entries.isEmpty()) return emptyList()
+      val lines = mutableListOf(warning, preference)
+      for (entry in entries.take(MAX_DRIFT_DETAIL_LINES)) {
+        lines += "  step ${stepIndex(entry) + 1}:"
+        lines += perClassifierLines(entry)
       }
-      if (drift.size > MAX_DRIFT_DETAIL_LINES) {
-        lines += "  ... and ${drift.size - MAX_DRIFT_DETAIL_LINES} more"
+      if (entries.size > MAX_DRIFT_DETAIL_LINES) {
+        lines += "  ... and ${entries.size - MAX_DRIFT_DETAIL_LINES} more"
       }
       return lines
     }
@@ -462,19 +605,38 @@ class UnifiedTrailMigrator(
      * Leading-comment lines summarizing cross-file `config.memory:` drift. Same shape as
      * [driftComments] but for the memory block — surfaces every per-platform memory map
      * so the user can pick the right canonical set after migration (the migrator picks
-     * first-file-wins, which may not be what the user wants for memory).
+     * the first file to declare a memory block, which may not be what the user wants).
      */
     fun memoryDriftComments(memoryDrift: List<MemoryDriftEntry>): List<String> {
       if (memoryDrift.isEmpty()) return emptyList()
       val entry = memoryDrift.first()
       val lines = mutableListOf<String>()
       lines += "WARNING: per-platform v1 files declared divergent `config.memory:` blocks."
-      lines += "The first file's memory was used as canonical. Review and reconcile:"
+      lines += "The first file to declare a memory block was used as canonical. Review and reconcile:"
       for ((classifier, memory) in entry.memoryByClassifier) {
         val rendered = if (memory.isEmpty()) "{}" else memory.entries.joinToString(", ") {
           "${it.key}=${it.value.take(SNIPPET_MAX_LEN)}"
         }
         lines += "  $classifier: $rendered"
+      }
+      return lines
+    }
+
+    /**
+     * Leading-comment lines summarizing scalar-config drift — one block per diverging field,
+     * listing every file's declared value so the user can fix the canonical pick if the
+     * first-file-wins fold chose wrong.
+     */
+    fun configDriftComments(configDrift: List<ConfigDriftEntry>): List<String> {
+      if (configDrift.isEmpty()) return emptyList()
+      val lines = mutableListOf<String>()
+      lines += "WARNING: input files declared divergent config values; the first file to declare each field won."
+      lines += "Review the alternatives below and edit the migrated config if the canonical pick is wrong:"
+      for (entry in configDrift) {
+        lines += "  ${entry.field}:"
+        for ((source, value) in entry.valueBySource) {
+          lines += "    $source: \"${value.take(SNIPPET_MAX_LEN).replace('\n', ' ')}\""
+        }
       }
       return lines
     }

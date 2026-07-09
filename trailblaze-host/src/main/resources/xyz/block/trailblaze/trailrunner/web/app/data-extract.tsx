@@ -416,9 +416,9 @@ Object.assign(window, {
 
 window.TB = {
   useStatus, useTrails, useTools, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, useTrailDetail, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionAnalytics, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
-  addTrailRoot, removeTrailRoot, pickDirectoryViaShell, updateSetting, switchWorkspace, WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded, deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive, runIntegrationAction, fetchComponentSource, createTrailmapComponent,
+  addTrailRoot, removeTrailRoot, pickDirectoryViaShell, updateSetting, switchWorkspace, WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded, deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive, runIntegrationAction, fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   resolveRunDevice, connectDevice, fetchTrailYaml, dispatchRun, retrySession,
-  getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
+  getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   buildTrailTree, buildTrailBundleRows, countTrailBundles, fileUrl, summarizeAnalyticsProps, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
   recordPendingRun, getPendingRun, clearPendingRun, failPendingRun,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,

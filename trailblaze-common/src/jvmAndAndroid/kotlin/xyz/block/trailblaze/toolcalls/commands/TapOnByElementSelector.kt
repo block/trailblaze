@@ -1,11 +1,3 @@
-// The `selector` field on this tool is @Deprecated to focus the deprecation signal on
-// *external* construction sites that still pass legacy selectors. The class's own
-// internal logic (toMaestroCommands lowering, the desc fallback, dispatch in execute)
-// must continue to read `selector` until the migration completes — those internal
-// references are the legitimate handling for legacy recordings already on disk, not
-// new tech debt. Suppress at file scope so the warning signal stays focused.
-@file:Suppress("DEPRECATION")
-
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
@@ -13,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
@@ -42,37 +33,20 @@ import xyz.block.trailblaze.util.Console
  */
 data class TapOnByElementSelector(
   val reason: String? = null,
-  /**
-   * Legacy Maestro-shaped flat selector.
-   *
-   * **Deprecated** — new tool construction should use [nodeSelector] exclusively. This
-   * field remains nullable + serializable so older trail YAMLs (which carry a `selector:`
-   * block alongside `nodeSelector:` or solo) continue to load unchanged and the runtime
-   * dispatch logic in [execute] picks the right path per recording. The field will be
-   * removed once the remaining flat-selector inventory in committed trails reaches zero
-   * (tracked in the selector→nodeSelector migration workstream).
-   */
-  @Deprecated(
-    message = "Prefer `nodeSelector` for new construction; this field exists only to load " +
-      "legacy YAML recordings until the migration completes.",
-    level = DeprecationLevel.WARNING,
-  )
-  val selector: TrailblazeElementSelector? = null,
   val longPress: Boolean = false,
   /**
    * Rich driver-native selector generated from [TrailblazeNode] trees.
    *
-   * Set this for accessibility-driver recordings. When [selector] is also set, it acts as
-   * the legacy Maestro fallback for non-accessibility runtimes. When [selector] is null,
-   * this is the only way to identify the target — appropriate for Android post-cutover
-   * since Maestro/UiAutomator routing isn't used anymore.
+   * The only way to identify the tap target. When the runtime dispatch needs a Maestro
+   * command (non-accessibility drivers), [toMaestroCommands] lowers this to a Maestro-shaped
+   * selector via [lowerToMaestroSelector].
    *
    * Serialized in trail YAML files so recordings preserve the rich selector for playback.
    */
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    val maestroSelector = lowerToMaestroSelector(selector, nodeSelector) ?: return emptyList()
+    val maestroSelector = lowerToMaestroSelector(nodeSelector) ?: return emptyList()
     return listOf(
       TapOnElementCommand(
         selector = maestroSelector.toMaestroElementSelector(),
@@ -94,14 +68,14 @@ data class TapOnByElementSelector(
     // tree — shaped differently and producing different element matches — never the right
     // answer. Surface the failure rather than silently mis-targeting under fallback.
     //
-    // Cross-driver compatibility: existing recordings made under the Maestro/instrumentation
-    // driver carry BOTH a Maestro [selector] and an [androidAccessibility] nodeSelector for
-    // forward-portability. Under a non-accessibility runtime agent (e.g.
-    // [AndroidMaestroTrailblazeAgent] on the on-device test farm) those recordings should
-    // fall through to the regular PREFER_NODE_SELECTOR path, which itself falls back to the
-    // Maestro selector. Gating on [usesAccessibilityDriver] preserves the strict refusal for
-    // the host CLI / device-side accessibility path while keeping legacy recordings runnable
-    // under Maestro drivers.
+    // Cross-driver compatibility: some recordings carry an [androidAccessibility] nodeSelector
+    // for forward-portability even though they're replayed under a non-accessibility runtime
+    // agent (e.g. [AndroidMaestroTrailblazeAgent] on the on-device test farm). Those recordings
+    // fall through to the regular PREFER_NODE_SELECTOR path below, which lowers the nodeSelector
+    // to a Maestro selector — the recording's [containsChild]/[textRegex] shape resolves
+    // correctly under UiAutomator for cross-driver-recorded trails. Gating on
+    // [usesAccessibilityDriver] preserves the strict refusal for the host CLI / device-side
+    // accessibility path while keeping those recordings runnable under Maestro drivers.
     if (nodeSelector?.androidAccessibility != null) {
       if (agent == null) {
         val message = "Accessibility recording cannot replay: no on-device " +
@@ -129,8 +103,9 @@ data class TapOnByElementSelector(
       // accessibility-shaped nodeSelector for forward-portability, but at runtime we have no
       // accessibility-native dispatch path. Fall through to PREFER_NODE_SELECTOR below, which
       // either dispatches via the agent's nodeSelector path (returns null here) or falls back
-      // to the legacy Maestro [selector] — the recording's [containsChild]/[textRegex] shape
-      // resolves correctly under UiAutomator for cross-driver-recorded trails.
+      // to the Maestro path via [lowerToMaestroSelector] — the recording's
+      // [containsChild]/[textRegex] shape resolves correctly under UiAutomator for
+      // cross-driver-recorded trails.
     }
 
     when (mode) {
@@ -138,17 +113,13 @@ data class TapOnByElementSelector(
         return runMaestroFallbackOrFail(toolExecutionContext)
       }
       NodeSelectorMode.FORCE_NODE_SELECTOR -> {
-        if (agent != null) {
-          val effectiveNodeSelector = nodeSelector
-            ?: selector?.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
-          if (effectiveNodeSelector != null) {
-            val result = agent.executeNodeSelectorTap(
-              nodeSelector = effectiveNodeSelector,
-              longPress = longPress,
-              traceId = toolExecutionContext.traceId,
-            )
-            if (result != null) return result
-          }
+        if (nodeSelector != null && agent != null) {
+          val result = agent.executeNodeSelectorTap(
+            nodeSelector = nodeSelector,
+            longPress = longPress,
+            traceId = toolExecutionContext.traceId,
+          )
+          if (result != null) return result
         }
         return runMaestroFallbackOrFail(toolExecutionContext)
       }
@@ -167,18 +138,17 @@ data class TapOnByElementSelector(
   }
 
   /**
-   * Runs the Maestro command path via [super.execute]. When [selector] is set, that's the
-   * canonical projection; when only [nodeSelector] is set (post-migration recordings),
-   * [toMaestroCommands] lowers it through [TrailblazeNodeSelector.toTrailblazeElementSelector]
-   * so the same Maestro orchestra resolves it. Only when neither is set do we fail loudly —
-   * that combination is a malformed recording.
+   * Runs the Maestro command path via [super.execute]. [toMaestroCommands] lowers
+   * [nodeSelector] through [TrailblazeNodeSelector.toTrailblazeElementSelector] so the Maestro
+   * orchestra resolves it. Fails loudly when [nodeSelector] isn't set — that's a malformed
+   * recording.
    */
   private suspend fun runMaestroFallbackOrFail(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    if (selector == null && nodeSelector == null) {
-      val message = "tapOnElementBySelector: neither legacy `selector` nor `nodeSelector` " +
-        "is set on this recording. Cannot resolve a tap target."
+    if (nodeSelector == null) {
+      val message = "tapOnElementBySelector: `nodeSelector` is not set on this recording. " +
+        "Cannot resolve a tap target."
       Console.log("### tap (no fallback): $message")
       return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
     }

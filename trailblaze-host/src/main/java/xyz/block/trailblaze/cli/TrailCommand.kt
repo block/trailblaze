@@ -11,6 +11,8 @@ import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
+import xyz.block.trailblaze.devices.TrailDeviceSelection
+import xyz.block.trailblaze.devices.TrailDeviceSelector
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -35,6 +37,7 @@ import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
@@ -43,7 +46,10 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import java.io.File
 import java.nio.file.Paths
 import java.util.concurrent.Callable
@@ -128,9 +134,30 @@ open class TrailCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = [DEVICE_OPTION_DESCRIPTION]
+    paramLabel = "<device>",
+    split = ",",
+    description = [
+      "Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare " +
+        "instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices " +
+        "(`--device android,ios` → one run per device). When omitted, resolves to a pinned " +
+        "(`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ " +
+        "devices are connected and none is pinned, the run fails and asks you to pass this (or " +
+        "`--driver` / `--all-devices`). See also --all-devices.",
+    ],
   )
-  var device: String? = null
+  var devices: List<String> = emptyList()
+
+  @Option(
+    names = ["--all-devices"],
+    description = [
+      "Run each trail on EVERY connected device whose platform the trail supports (its " +
+        "`platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified " +
+        "format). The opt-in way to exercise a multi-target trail across platforms in one command. " +
+        "Mutually exclusive with `--device` (passing both is rejected). Connected devices that " +
+        "don't match any supported platform are skipped.",
+    ],
+  )
+  var allDevices: Boolean = false
 
   @Option(
     names = ["-a", "--agent"],
@@ -272,13 +299,31 @@ open class TrailCommand : Callable<Int> {
     description = [
       "Save the recording back to the trail source directory after a successful run. " +
         "Default: on. Use --no-save-recording to skip. " +
-        "Even when on, the recording is only saved when --self-heal was enabled OR no " +
-        "<deviceClassifiers>.trail.yaml exists yet next to the source — deterministic " +
-        "re-runs no-op the write so they can't clobber a hand-edited source."
+        "Even when on, the recording is only saved when --self-heal was enabled OR this device " +
+        "isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a " +
+        "hand-edited source. See --unified-recordings for the on-disk format."
     ],
     negatable = true,
   )
   var saveRecording: Boolean? = null
+
+  // Rollout gate for the unified-format recorder (tri-state like --save-recording): flag >
+  // TRAILBLAZE_UNIFIED_RECORDINGS env var > persisted `trailblaze config unified-recordings` >
+  // off. Resolved via [resolveEffectiveUnifiedRecordings]; while off, save-back behavior is
+  // byte-identical to the pre-unified recorder.
+  @Option(
+    names = ["--unified-recordings"],
+    description = [
+      "Save new recordings in the unified format: the device's slot is merged into the unified " +
+        "trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using " +
+        "them). Default: off while unified support rolls out — recordings save as legacy " +
+        "<classifier>.trail.yaml siblings, and nothing is written next to an existing unified " +
+        "trail.yaml. Also enabled via TRAILBLAZE_UNIFIED_RECORDINGS=1 or " +
+        "'trailblaze config unified-recordings true'."
+    ],
+    negatable = true,
+  )
+  var unifiedRecordings: Boolean? = null
 
   // Deprecated alias. Kept for one cycle so existing scripts that pass --no-record
   // keep working — but with a one-time stderr warning so users notice during the
@@ -504,6 +549,24 @@ open class TrailCommand : Callable<Int> {
       return TrailblazeExitCode.MISUSE.code
     }
 
+    // `--device` may name several (comma-split); non-blank entries only. One entry = a single run
+    // (as before); several = explicit fan-out (one run per device). Empty = resolve a default.
+    val explicitDevices = devices.map { it.trim() }.filter { it.isNotBlank() }
+
+    // `--device` and `--all-devices` are conflicting ways to say which devices to run on — reject
+    // the combination (an explicit list would otherwise silently win and no-op `--all-devices`).
+    // Validated here, before any `parent` access, so it exits MISUSE up front like the other
+    // argv guards above (and stays unit-testable through `call()`).
+    if (explicitDevices.isNotEmpty() && allDevices) {
+      reportCliError(
+        verb = "Trail run",
+        reason = "--device and --all-devices are mutually exclusive",
+        hint = "pass --all-devices to run on every supported connected device, OR --device to name " +
+          "specific one(s) — not both",
+      )
+      return TrailblazeExitCode.MISUSE.code
+    }
+
     // Resolve --device with a four-tier fallback that mirrors every other action command:
     //   1. Explicit `--device` flag (wins)
     //   2. TRAILBLAZE_DEVICE env var — pinned per-shell via
@@ -519,10 +582,12 @@ open class TrailCommand : Callable<Int> {
     // shell's bound one — but the *device-id* should resolve the same way regardless.
     //
     // We don't use the shared `resolveDeviceOrErrorBlocking` here because `trail` has a
-    // legitimate fourth tier (the persisted CLI config) the shared resolver doesn't know
-    // about, AND we want the existing downstream `resolveTargetDevice` error envelope to
-    // fire for the multi-device / no-device cases (its message lists available devices in
-    // the trail-runner-specific shape, which is more useful than the standard one here).
+    // legitimate fifth tier (the persisted CLI config) the shared resolver doesn't know about.
+    // When 2+ devices are connected and none is pinned, [resolveDevicesForFile] in the run loops
+    // fails loud (emits `emitMultipleDevicesEnvelope`, exits MISUSE) asking for `--device` — same
+    // as every other device command, instead of silently picking the first. It does NOT narrow by
+    // the trail's declared platforms (a trail can run as natural language on any device, so those
+    // aren't a hard target); only the explicit `--driver` / `--all-devices` signals narrow.
     //
     // The inlined tier order mirrors `resolveDeviceWithAutodetect`:
     //   1. `--device` flag (already handled above when non-blank)
@@ -540,17 +605,50 @@ open class TrailCommand : Callable<Int> {
     // would surface as a cryptic "Device '' not found" mid-pipeline. Same
     // treatment `resolveCliDevice` applies to the env var.
     val port = parent.getEffectivePort()
-    if (device.isNullOrBlank()) {
-      device = resolveCliDevice(null)
+
+    // Resolve a single DEFAULT device only when the user gave neither an explicit `--device` list
+    // nor `--all-devices`. Same tiers as before: env var, shell pin, autodetect (single connected
+    // device), persisted config. `Resolved` feeds the default; `Multiple` falls through so the
+    // per-file target-aware selection can narrow (or fail loud) in the run loops.
+    var autodetect: DeviceAutodetectResult? = null
+    var defaultDevice: String? = null
+    if (explicitDevices.isEmpty() && !allDevices) {
+      defaultDevice = resolveCliDevice(null)
         ?: readShellPinDevice(port)
         ?: run {
-          val autodetected = runBlocking { autodetectSingleConnectedDevice(port) }
-          if (autodetected is DeviceAutodetectResult.Resolved) {
-            reportAutodetectedDevice(autodetected.deviceSpec)
-            autodetected.deviceSpec
-          } else null
+          autodetect = runBlocking { autodetectSingleConnectedDevice(port) }
+          (autodetect as? DeviceAutodetectResult.Resolved)?.let {
+            reportAutodetectedDevice(it.deviceSpec)
+            it.deviceSpec
+          }
         }
         ?: CliConfigHelper.readConfig()?.cliDevicePlatform
+    }
+    // `--all-devices` needs the full connected list even when the tiers above didn't autodetect
+    // (e.g. a device is pinned). Enumerate it now if we haven't already.
+    if (allDevices && autodetect == null) {
+      autodetect = runBlocking { autodetectSingleConnectedDevice(port) }
+    }
+    // `--all-devices` derives its whole workload from that enumeration, so if it failed (daemon
+    // unreachable / list errored), fail as INFRA rather than letting it collapse to "no devices
+    // connected" below. The non-all-devices paths tolerate a null list (they defer to downstream
+    // device loading, which reports its own errors).
+    (autodetect as? DeviceAutodetectResult.DaemonUnreachable)?.let { unreachable ->
+      if (allDevices) {
+        if (!unreachable.alreadyReported) {
+          reportDaemonUnreachable("daemon device listing failed — cannot resolve --all-devices")
+        }
+        return TrailblazeExitCode.INFRA_FAILED.code
+      }
+    }
+
+    // The connected-device specs (fully-qualified), used by `--all-devices` fan-out and by the
+    // multi-device narrowing when no default was pinned. Captured once here so the in-process and
+    // daemon-delegated loops share the same list. See [resolveDevicesForFile].
+    val connectedSpecs: List<String>? = when (val a = autodetect) {
+      is DeviceAutodetectResult.Multiple -> a.specs
+      is DeviceAutodetectResult.Resolved -> listOf(a.deviceSpec)
+      else -> null
     }
 
     // Validate every argument: must exist and be either a recognized trail file
@@ -592,7 +690,7 @@ open class TrailCommand : Callable<Int> {
     val daemon = DaemonClient(port = daemonPort)
     if (!noDaemon) {
       if (daemon.isRunningBlocking()) {
-        return delegateToDaemon(daemon)
+        return delegateToDaemon(daemon, explicitDevices, defaultDevice, connectedSpecs)
       }
     } else if (daemon.isRunningBlocking()) {
       // Shut down existing daemon so this process can bind the port.
@@ -609,7 +707,16 @@ open class TrailCommand : Callable<Int> {
     // `--device ios/<UDID>` pointing at an iPhone sim yields `[ios, iphone]` and picks
     // `ios-iphone.trail.yaml` — closing the load-vs-save filename gap the runtime save
     // path has been writing recordings for.
-    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(device)
+    //
+    // The plan (directory expansion + skip/tags) resolves against a single representative device:
+    // the one target when there is exactly one (a single `--device` or the resolved default), else
+    // empty (a fan-out run is device-agnostic at plan time, same as today's multi-device case).
+    val planDevice: String? = when {
+      explicitDevices.size == 1 -> explicitDevices.single()
+      explicitDevices.isEmpty() -> defaultDevice
+      else -> null
+    }
+    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(planDevice)
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
@@ -667,31 +774,48 @@ open class TrailCommand : Callable<Int> {
           skipped++
         }
         is TrailExecutionItem.Run -> {
-          Console.info("\n[${index + 1}/$total] Running: ${item.file.name}")
-          Console.info(ITEM_DIVIDER)
-          val (exitCode, sessionIds) = runSingleTrailFile(item.file, app)
-          allNewSessionIds.addAll(sessionIds)
-          if (exitCode == TrailblazeExitCode.SUCCESS.code) {
-            passed++
-            // Save recording to trail source directory on success — gating delegated to
-            // shouldSaveRecording so all three call sites (this one, the daemon delegate
-            // below, and the in-process generation inside runSingleTrailFile) share one
-            // heuristic and can't drift.
-            if (sessionIds.isNotEmpty()) {
-              val logsRepo = app.deviceManager.logsRepo
-              for (sessionId in sessionIds) {
-                val classifiers = logsRepo.getSessionInfo(sessionId)
-                  ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-                if (shouldSaveRecording(item.file, classifiers)) {
-                  saveRecordingToTrailDirectory(item.file, sessionId, classifiers)
-                } else {
-                  logSkippedRecording(item.file, classifiers)
+          val deviceSpecs = resolveRunDeviceSpecsOrReport(
+            item.file, "${index + 1}/$total", explicitDevices, defaultDevice, connectedSpecs,
+          )
+          if (deviceSpecs == null) {
+            failed++
+            worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.MISUSE.code)
+            continue
+          }
+          // One run per resolved device (usually one; several with --device a,b / --all-devices).
+          for (deviceSpec in deviceSpecs) {
+            if (cancelled) break
+            val runLabel = if (deviceSpecs.size > 1) {
+              "${item.file.name} on ${deviceSpec ?: "default device"}"
+            } else {
+              item.file.name
+            }
+            Console.info("\n[${index + 1}/$total] Running: $runLabel")
+            Console.info(ITEM_DIVIDER)
+            val (exitCode, sessionIds) = runSingleTrailFile(item.file, deviceSpec, app)
+            allNewSessionIds.addAll(sessionIds)
+            if (exitCode == TrailblazeExitCode.SUCCESS.code) {
+              passed++
+              // Save recording to trail source directory on success — gating delegated to
+              // shouldSaveRecording so all three call sites (this one, the daemon delegate
+              // below, and the in-process generation inside runSingleTrailFile) share one
+              // heuristic and can't drift.
+              if (sessionIds.isNotEmpty()) {
+                val logsRepo = app.deviceManager.logsRepo
+                for (sessionId in sessionIds) {
+                  val classifiers = logsRepo.getSessionInfo(sessionId)
+                    ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
+                  if (shouldSaveRecording(item.file, classifiers)) {
+                    saveRecordingToTrailDirectory(item.file, sessionId, classifiers)
+                  } else {
+                    logSkippedRecording(item.file, classifiers)
+                  }
                 }
               }
+            } else {
+              failed++
+              worstExitCode = chooseWorseExitCode(worstExitCode, exitCode)
             }
-          } else {
-            failed++
-            worstExitCode = chooseWorseExitCode(worstExitCode, exitCode)
           }
         }
       }
@@ -699,7 +823,7 @@ open class TrailCommand : Callable<Int> {
 
     // Print summary
     Console.info("\n" + SECTION_DIVIDER)
-    Console.info("Results: $passed passed, $failed failed, $skipped skipped out of ${plan.items.size} total")
+    Console.info("Results: $passed passed, $failed failed, $skipped skipped (${passed + failed} run(s) across ${plan.items.size} trail file(s))")
 
     // Generate combined report
     if (!noReport && allNewSessionIds.isNotEmpty()) {
@@ -742,13 +866,27 @@ open class TrailCommand : Callable<Int> {
    *
    * This avoids starting a second Gradle JVM — the daemon already has device
    * discovery, LLM config, and the trail runner ready to go.
+   *
+   * [explicitDevices], [defaultDevice], and [connectedSpecs] are threaded from [call] so per-file
+   * device selection (incl. `--device a,b` / `--all-devices` fan-out) is identical to the
+   * in-process path.
    */
-  private fun delegateToDaemon(daemon: DaemonClient): Int {
+  private fun delegateToDaemon(
+    daemon: DaemonClient,
+    explicitDevices: List<String>,
+    defaultDevice: String?,
+    connectedSpecs: List<String>?,
+  ): Int {
     // Same plan-then-iterate shape as the in-process path so the daemon-delegated and
     // in-process flows produce identical headers, filter counts, and summaries. Device
     // discovery via xcrun/adb is read-only OS state — safe to run from this client
     // process even while the daemon is using the same devices for execution.
-    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(device)
+    val planDevice: String? = when {
+      explicitDevices.size == 1 -> explicitDevices.single()
+      explicitDevices.isEmpty() -> defaultDevice
+      else -> null
+    }
+    val deviceClassifiers = DeviceClassifierResolver.resolveFromSpec(planDevice)
     if (deviceClassifiers.isNotEmpty()) {
       Console.info("Device classifiers: ${deviceClassifiers.joinToString(", ") { it.classifier }}")
     }
@@ -804,86 +942,102 @@ open class TrailCommand : Callable<Int> {
         }
         is TrailExecutionItem.Run -> {
           val file = item.file
-          Console.info("\n[${index + 1}/$total] Running: ${file.name}")
-          Console.info(ITEM_DIVIDER)
-
-          val rawYaml = file.readText()
-          val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
-          val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
-
-          // Surface the effective replay-vs-AI mode to the user before the run kicks off.
-          // See [logReplayModeBanner] for the three-state rationale and wording.
-          val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
-          logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
-
-          val request = CliRunRequest(
-            yamlContent = yamlContent,
-            trailFilePath = file.absolutePath,
-            testName = testName,
-            driverType = driverType,
-            deviceId = device,
-            llmProvider = llmProvider,
-            llmModel = llmModel,
-            useRecordedSteps = effectiveUseRecordedSteps,
-            // --show-browser is the legacy flag; --headless is the new spelling. Either
-            // produces a visible browser when explicitly requested. Both are off by default.
-            showBrowser = showBrowser || !headless,
-            noLogging = noLogging,
-            agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
-            selfHeal = selfHeal,
-            captureVideo = captureVideo || captureAll,
-            captureLogcat = captureLogcat || captureAll,
-            captureIosLogs = captureIosLogs || captureAll,
-            // Tri-state: forward the explicit flag value when the user passed
-            // --capture-network / --no-capture-network, else null so the daemon inherits its
-            // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
-            // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
-            captureNetworkTraffic = if (captureAll) true else captureNetwork,
-            maxLlmCalls = resolveEffectiveMaxLlmCalls(),
-            initialMemorySeeds = parsedMemorySeeds(),
-            initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+          val deviceSpecs = resolveRunDeviceSpecsOrReport(
+            file, "${index + 1}/$total", explicitDevices, defaultDevice, connectedSpecs,
           )
-
-          var lastProgress: String? = null
-          val response = daemon.runSync(request) { progress ->
-            Console.info(progress)
-            lastProgress = progress
-          }
-
-          if (response.success) {
-            Console.info("✅ PASSED")
-            passed++
-            // Generate recording from session logs, then save to trail source directory —
-            // gating delegated to shouldSaveRecording. See the in-process loop above and
-            // the mirror site inside runSingleTrailFile below for the full heuristic.
-            val sid = response.sessionId
-            if (sid != null) {
-              if (shouldSaveRecording(file, response.deviceClassifiers)) {
-                val sessionId = SessionId(sid)
-                generateRecordingForSession(sessionId)
-                saveRecordingToTrailDirectory(
-                  file, sessionId, response.deviceClassifiers,
-                )
-              } else {
-                logSkippedRecording(file, response.deviceClassifiers)
-              }
-            }
-          } else {
-            val err = response.error ?: "Unknown error"
-            if (failureBodyAlreadyStreamed(lastProgress, err)) {
-              Console.error("❌ FAILED")
-            } else {
-              Console.error("❌ FAILED: $err")
-            }
+          if (deviceSpecs == null) {
             failed++
-            worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.ASSERTION_FAILED.code)
+            worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.MISUSE.code)
+            continue
+          }
+          // One daemon run per resolved device (usually one; several with --device a,b / --all-devices).
+          for (resolvedDeviceSpec in deviceSpecs) {
+            val runLabel = if (deviceSpecs.size > 1) {
+              "${file.name} on ${resolvedDeviceSpec ?: "default device"}"
+            } else {
+              file.name
+            }
+            Console.info("\n[${index + 1}/$total] Running: $runLabel")
+            Console.info(ITEM_DIVIDER)
+
+            val rawYaml = file.readText()
+            val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
+            val testName = testNameOverride?.trim()?.takeIf { it.isNotBlank() } ?: deriveTestName(file)
+
+            // Surface the effective replay-vs-AI mode to the user before the run kicks off.
+            // See [logReplayModeBanner] for the three-state rationale and wording.
+            val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
+            logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
+
+            val request = CliRunRequest(
+              yamlContent = yamlContent,
+              trailFilePath = file.absolutePath,
+              testName = testName,
+              driverType = driverType,
+              deviceId = resolvedDeviceSpec,
+              llmProvider = llmProvider,
+              llmModel = llmModel,
+              useRecordedSteps = effectiveUseRecordedSteps,
+              // --show-browser is the legacy flag; --headless is the new spelling. Either
+              // produces a visible browser when explicitly requested. Both are off by default.
+              showBrowser = showBrowser || !headless,
+              noLogging = noLogging,
+              agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
+              selfHeal = selfHeal,
+              captureVideo = captureVideo || captureAll,
+              captureLogcat = captureLogcat || captureAll,
+              captureIosLogs = captureIosLogs || captureAll,
+              // Tri-state: forward the explicit flag value when the user passed
+              // --capture-network / --no-capture-network, else null so the daemon inherits its
+              // saved "Capture Network Traffic" setting (TrailblazeDesktopApp resolves
+              // `request.captureNetworkTraffic ?: appConfig`). --capture-all forces it on.
+              captureNetworkTraffic = if (captureAll) true else captureNetwork,
+              maxLlmCalls = resolveEffectiveMaxLlmCalls(),
+              initialMemorySeeds = parsedMemorySeeds(),
+              initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+            )
+
+            var lastProgress: String? = null
+            val response = daemon.runSync(request) { progress ->
+              Console.info(progress)
+              lastProgress = progress
+            }
+
+            if (response.success) {
+              Console.info("✅ PASSED")
+              passed++
+              // Generate recording from session logs, then save to trail source directory —
+              // gating delegated to shouldSaveRecording. See the in-process loop above and
+              // the mirror site inside runSingleTrailFile below for the full heuristic.
+              val sid = response.sessionId
+              if (sid != null) {
+                if (shouldSaveRecording(file, response.deviceClassifiers)) {
+                  val sessionId = SessionId(sid)
+                  generateRecordingForSession(sessionId)
+                  saveRecordingToTrailDirectory(
+                    file, sessionId, response.deviceClassifiers,
+                  )
+                } else {
+                  logSkippedRecording(file, response.deviceClassifiers)
+                }
+              }
+            } else {
+              val err = response.error ?: "Unknown error"
+              if (failureBodyAlreadyStreamed(lastProgress, err)) {
+                Console.error("❌ FAILED")
+              } else {
+                Console.error("❌ FAILED: $err")
+              }
+              failed++
+              worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.ASSERTION_FAILED.code)
+            }
           }
         }
       }
     }
 
     Console.info("\n" + SECTION_DIVIDER)
-    Console.info("Results: $passed passed, $failed failed, $skipped skipped out of ${plan.items.size} total")
+    Console.info("Results: $passed passed, $failed failed, $skipped skipped (${passed + failed} run(s) across ${plan.items.size} trail file(s))")
     // Match the success marker emitted by the in-process path at the per-file `onComplete`
     // site, so `./trailblaze run <file>` prints the same phrase regardless of whether it
     // runs in-process or via the daemon. Suppress the marker when nothing actually ran
@@ -920,6 +1074,148 @@ open class TrailCommand : Callable<Int> {
     val trimmedError = error.trim()
     return trimmedError.isNotEmpty() && lastProgress.trim().endsWith(trimmedError)
   }
+
+  /**
+   * Resolve which device spec(s) a plan item runs on, handling the non-runnable outcomes inline so
+   * the in-process and daemon-delegated loops share identical fail-loud behavior: on
+   * [TrailDeviceSelection.Ambiguous] / [TrailDeviceSelection.NoDevices] it prints the item header
+   * plus the matching error envelope and returns `null` (the caller counts a MISUSE failure and
+   * skips the item). On success it returns the spec(s) to run — one per device (a `null` element
+   * means "let downstream device loading resolve it").
+   */
+  private fun resolveRunDeviceSpecsOrReport(
+    file: File,
+    indexLabel: String,
+    explicitDevices: List<String>,
+    defaultDevice: String?,
+    connectedSpecs: List<String>?,
+  ): List<String?>? =
+    when (
+      val selection =
+        resolveDevicesForFile(file, explicitDevices, allDevices, defaultDevice, driverType, connectedSpecs)
+    ) {
+      is TrailDeviceSelection.Resolved -> selection.deviceSpecs
+      is TrailDeviceSelection.Ambiguous -> {
+        Console.info("\n[$indexLabel] ${file.name}")
+        Console.info(ITEM_DIVIDER)
+        if (allDevices) {
+          // Under `--all-devices`, Ambiguous specifically means "none of the connected devices
+          // match the trail's supported platforms" (the zero-connected case is NoDevices). The
+          // "pick one of several" envelope would misdescribe that, so report the real reason.
+          reportCliError(
+            verb = "Trail run",
+            reason = "no connected device matches the trail's supported platforms",
+            hint = "connect a supported device, or pass `--device <spec>` to run one anyway " +
+              "(natural-language mode): ${selection.candidateSpecs.joinToString(", ")}",
+          )
+        } else {
+          emitMultipleDevicesEnvelope(verb = "Trail run", specs = selection.candidateSpecs)
+        }
+        null
+      }
+      TrailDeviceSelection.NoDevices -> {
+        Console.info("\n[$indexLabel] ${file.name}")
+        Console.info(ITEM_DIVIDER)
+        emitNoDevicesEnvelope(verb = "Trail run")
+        null
+      }
+    }
+
+  /**
+   * Per-file device selection for `run`, applied in both the in-process and daemon-delegated
+   * loops so they behave identically. Defers web/compose (virtual-device) trails to downstream
+   * routing, then — for real devices — resolves the platform filter from explicit signals only
+   * (`--driver`'s platform, or the trail's declared platforms under `--all-devices`) and delegates
+   * the actual choice to the pure [TrailDeviceSelector.selectDevicesToRun].
+   */
+  internal fun resolveDevicesForFile(
+    file: File,
+    explicitDevices: List<String>,
+    allDevices: Boolean,
+    defaultDevice: String?,
+    driverType: String?,
+    connectedSpecs: List<String>?,
+  ): TrailDeviceSelection {
+    val driverPlatform = driverType?.let { TrailblazeDriverType.fromString(it)?.platform }
+
+    // Read the trail's declared platforms whenever the choice depends on them: no `--device` /
+    // `--driver`, AND at least one autodetected real device (`connectedSpecs` non-empty). That
+    // covers (a) routing a web/compose trail to its virtual device regardless of the connected
+    // mobile devices — single OR several — and (b) narrowing an `--all-devices` fan-out. The
+    // 0-device and explicitly-pinned paths (`connectedSpecs == null`) skip the read: they defer
+    // downstream or honor the pin below. `--device` / `--driver` also skip it.
+    val needsTrailPlatforms = driverPlatform == null && explicitDevices.isEmpty() &&
+      !connectedSpecs.isNullOrEmpty()
+    val trailPlatforms: Set<TrailblazeDevicePlatform>? = if (needsTrailPlatforms) {
+      val yaml = runCatching {
+        TrailYamlTemplateResolver.resolve(file.readText(), file)
+      }.getOrNull()
+      // Unreadable trail with real devices attached → no basis to route/narrow → ask for --device.
+      if (yaml == null) {
+        Console.log(
+          "[device-select] couldn't read ${file.name} to determine supported platforms; " +
+            "asking for an explicit --device among $connectedSpecs",
+        )
+        return TrailDeviceSelection.Ambiguous(connectedSpecs!!)
+      }
+      supportedPlatformsForTrail(yaml)
+    } else {
+      null
+    }
+
+    // A web/compose trail runs on a virtual device that downstream device loading provisions on
+    // demand, independent of the connected real devices autodetect enumerates — mirroring
+    // `loadConnectedDevices`, which already ignores real devices for WEB/COMPOSE. So defer to
+    // downstream routing uniformly (whether 1 or several mobile devices are attached) rather than
+    // pinning the autodetected mobile device or failing on the device count.
+    if (trailPlatforms != null && trailPlatforms.isNotEmpty() &&
+      trailPlatforms.all { it.usesVirtualDevice }
+    ) {
+      Console.log(
+        "[device-select] ${file.name}: web/compose trail → deferring to downstream " +
+          "virtual-device routing (ignoring connected real devices $connectedSpecs)",
+      )
+      return TrailDeviceSelection.Resolved(listOf(null))
+    }
+
+    // The platform filter applied to the connected set comes ONLY from explicit signals:
+    //  - `--driver` forces a single platform → narrow the pick to it.
+    //  - `--all-devices` fans out across the trail's declared platforms.
+    // The bare default path deliberately does NOT narrow by the trail's declared platforms: a
+    // trail runs as natural language on any device where it has no recording, so those platforms
+    // aren't a hard target — merely where recordings exist. With 2+ devices connected and no
+    // explicit choice we therefore ask for `--device` (like `snapshot`/`tool`) rather than guess
+    // which device the author meant. Empty `supported` = "any", so the pure selector's single-vs-
+    // several check below becomes a strict connected-device-count check on the default path.
+    val supported: Set<TrailblazeDevicePlatform> = when {
+      driverPlatform != null -> setOf(driverPlatform)
+      allDevices -> trailPlatforms.orEmpty()
+      else -> emptySet()
+    }
+    val selection =
+      TrailDeviceSelector.selectDevicesToRun(explicitDevices, allDevices, defaultDevice, connectedSpecs, supported)
+    // Trace how a multi-device shell was resolved so a CI run's device choice is debuggable.
+    if (!connectedSpecs.isNullOrEmpty() && connectedSpecs.size > 1) {
+      when (selection) {
+        is TrailDeviceSelection.Resolved ->
+          Console.log(
+            "[device-select] ${file.name}: ${connectedSpecs.size} devices connected → running on " +
+              selection.deviceSpecs.joinToString(", ") { it ?: "<default>" },
+          )
+        is TrailDeviceSelection.Ambiguous ->
+          Console.log("[device-select] ${file.name}: ambiguous among ${selection.candidateSpecs}; asking for --device")
+        is TrailDeviceSelection.NoDevices -> Unit
+      }
+    }
+    return selection
+  }
+
+  /**
+   * The set of device platforms a trail declares support for. Delegates to the shared
+   * [TrailDeviceSelector.supportedPlatformsForTrail] with this process's full tool codec.
+   */
+  internal fun supportedPlatformsForTrail(yaml: String): Set<TrailblazeDevicePlatform> =
+    TrailDeviceSelector.supportedPlatformsForTrail(createTrailblazeYaml(), yaml)
 
   /** Moves a file, falling back to copy+delete when renameTo fails (e.g., cross-filesystem). */
   private fun moveFile(src: File, dest: File): Boolean {
@@ -987,82 +1283,30 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
-   * Resolves which device to run the trail on.
-   *
-   * Matches the `--device` CLI spec (supports "platform/instance-id", "platform",
-   * or raw "instance-id"), falls back to driver type, platform, or first available.
-   * Returns null (after printing an error) if no matching device is found.
+   * Resolves which device to run the trail on by delegating to [CliRunDeviceResolver] — the same
+   * concretization the daemon's `/cli/run` handler applies — so the in-process (`--no-daemon`) and
+   * daemon-delegated paths cannot drift. The trail's declared platforms come from the same
+   * version-aware [supportedPlatformsForTrail] read the daemon feeds the resolver, so a unified
+   * web trail (whose platform is derivable only from its recordings, not a v1 `platform:` field)
+   * routes to the browser here too; the read is folded in here so tests pin the
+   * YAML→platforms→device composition, not just the resolver policy. Notably that policy fails
+   * loud with [CliRunDeviceResolution.MultipleDevices] when several real devices could run and
+   * nothing picked one, instead of the old silent first-pick. Mostly a backstop here:
+   * [resolveDevicesForFile] already applied the same fail-loud policy upstream, so by this point
+   * [deviceSpec] is either concrete or a deliberate "defer to downstream" `null` (web/compose
+   * trails, zero autodetected devices).
    */
-  private fun resolveTargetDevice(
-    allDevices: List<TrailblazeConnectedDeviceSummary>,
+  internal fun resolveRunDevice(
+    yamlContent: String,
+    connectedDevices: List<TrailblazeConnectedDeviceSummary>,
     trailDriverType: TrailblazeDriverType?,
-    trailPlatform: TrailblazeDevicePlatform?,
     deviceSpec: String?,
-  ): TrailblazeConnectedDeviceSummary? {
-    if (deviceSpec != null) {
-      val parts = deviceSpec.split("/", limit = 2)
-      val specPlatform = TrailblazeDevicePlatform.fromString(parts[0])
-      val specInstanceId = if (specPlatform != null) parts.getOrNull(1) else deviceSpec
-
-      if (specInstanceId != null) {
-        val candidates = if (specPlatform != null) {
-          allDevices.filter { it.platform == specPlatform }
-        } else {
-          allDevices
-        }
-        // The same physical instanceId is listed once per driver variant (Android exposes
-        // ANDROID_ONDEVICE_INSTRUMENTATION and ANDROID_ONDEVICE_ACCESSIBILITY for one emulator).
-        // Match the instanceId first (exact, then substring), then — among those — prefer the
-        // variant whose driver matches the resolved [trailDriverType] (the trail's `devices:`
-        // pin / --driver / app-setting). Without the driver preference we'd return the first
-        // listed variant and silently ignore the pin.
-        val instanceMatches = candidates.filter { it.trailblazeDeviceId.instanceId == specInstanceId }
-          .ifEmpty { candidates.filter { it.trailblazeDeviceId.instanceId.contains(specInstanceId) } }
-        return (trailDriverType?.let { dt -> instanceMatches.find { it.trailblazeDriverType == dt } }
-          ?: instanceMatches.firstOrNull())
-          ?: run {
-            Console.error("Error: Device '${deviceSpec}' not found.")
-            printAvailableDevices(allDevices)
-            null
-          }
-      } else {
-        val platformDevices = allDevices.filter { it.platform == specPlatform }
-        return (platformDevices.find {
-          it.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE
-        } ?: platformDevices.firstOrNull())?.also {
-          Console.info("Auto-selected device for platform '${specPlatform}': ${it.trailblazeDeviceId.instanceId}")
-        } ?: run {
-          Console.error("Error: No device found for platform '${specPlatform}'.")
-          printAvailableDevices(allDevices)
-          null
-        }
-      }
-    }
-    if (trailDriverType != null) {
-      return allDevices.find { it.trailblazeDriverType == trailDriverType }?.also {
-        Console.info("Auto-selected device for driver '$trailDriverType': ${it.trailblazeDeviceId.instanceId}")
-      } ?: run {
-        Console.error("Error: Trail requires driver '$trailDriverType' but no matching device found.")
-        printAvailableDevices(allDevices)
-        null
-      }
-    }
-    if (trailPlatform != null) {
-      val platformDevices = allDevices.filter { it.platform == trailPlatform }
-      return (platformDevices.find {
-        it.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE
-      } ?: platformDevices.firstOrNull())?.also {
-        Console.info("Auto-selected device for platform '$trailPlatform': ${it.trailblazeDeviceId.instanceId}")
-      } ?: run {
-        Console.error("Error: Trail requires platform '$trailPlatform' but no matching device found.")
-        printAvailableDevices(allDevices)
-        null
-      }
-    }
-    return allDevices.first().also {
-      Console.info("Using first available device: ${it.trailblazeDeviceId.instanceId}")
-    }
-  }
+  ): CliRunDeviceResolution = CliRunDeviceResolver.resolve(
+    devices = connectedDevices,
+    requestedDeviceId = deviceSpec,
+    requestedDriverType = trailDriverType,
+    trailPlatforms = supportedPlatformsForTrail(yamlContent),
+  )
 
   private fun printAvailableDevices(devices: List<TrailblazeConnectedDeviceSummary>) {
     Console.error("Available devices:")
@@ -1117,9 +1361,15 @@ open class TrailCommand : Callable<Int> {
 
   /**
    * Runs a single .trail.yaml file and returns the exit code and any new session IDs created.
+   *
+   * [deviceSpec] is the device this file resolved to — an explicit `--device`/pin, the single
+   * connected device, or (on a multi-device shell) the one connected device whose platform the
+   * trail supports. `null` means "let downstream device loading resolve it" (e.g. web/compose
+   * trails that use virtual devices, or the no-devices error path).
    */
   private fun runSingleTrailFile(
     file: File,
+    deviceSpec: String?,
     app: TrailblazeDesktopApp,
   ): Pair<Int, List<SessionId>> {
     // Read the YAML file and resolve template variables (e.g., {{CWD}}, {{BASE_URL}})
@@ -1130,12 +1380,12 @@ open class TrailCommand : Callable<Int> {
       Console.log("YAML content (${yamlContent.length} bytes)")
     }
 
-    // Resolve the device's classifiers from the `--device` spec (cached; the plan step already
-    // warmed this) so a unified trail's per-classifier `devices:` driver pin resolves
+    // Resolve the device's classifiers from the resolved device spec (cached; the plan step
+    // already warmed this) so a unified trail's per-classifier `devices:` driver pin resolves
     // closest-wins BEFORE device selection. Without this, `extractTrailConfig` has no device to
     // resolve the map against, returns a null driver, and the trail silently runs on the
     // device's default driver instead of the one it pins (e.g. ANDROID_ONDEVICE_ACCESSIBILITY).
-    val deviceClassifiersForDriver = DeviceClassifierResolver.resolveFromSpec(device)
+    val deviceClassifiersForDriver = DeviceClassifierResolver.resolveFromSpec(deviceSpec)
 
     // Parse trail config to extract driver and platform hints (before device loading so we can
     // short-circuit for web/compose trails that don't need Android/iOS device discovery).
@@ -1173,14 +1423,41 @@ open class TrailCommand : Callable<Int> {
     val trailPlatform = trailDriverType?.platform
       ?: trailConfig?.platform?.let { TrailblazeDevicePlatform.fromString(it) }
 
-    val allDevices = loadConnectedDevices(trailDriverType, trailPlatform, app, composePort)
+    // Renamed from `allDevices` to avoid shadowing the `--all-devices` command field.
+    val connectedDevices = loadConnectedDevices(trailDriverType, trailPlatform, app, composePort)
       ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
 
-    val targetDevice = resolveTargetDevice(allDevices, trailDriverType, trailPlatform, device)
-      ?: return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
+    // Outcome mapping mirrors the daemon's `/cli/run` handler (TrailblazeDesktopApp) — same
+    // resolver, different presentation surface (envelopes + exit codes here, HTTP payload there).
+    val targetDevice = when (
+      val resolution = resolveRunDevice(yamlContent, connectedDevices, trailDriverType, deviceSpec)
+    ) {
+      is CliRunDeviceResolution.Selected -> resolution.device.also {
+        Console.log(
+          "[device-select] ${file.name}: deviceId=${deviceSpec ?: "<none>"} " +
+            "driver=${trailDriverType ?: "<none>"} → ${it.trailblazeDeviceId.toFullyQualifiedDeviceId()}",
+        )
+      }
+      is CliRunDeviceResolution.MultipleDevices -> {
+        emitMultipleDevicesEnvelope(
+          verb = "Trail run",
+          specs = resolution.candidates.map { it.trailblazeDeviceId.toFullyQualifiedDeviceId() },
+        )
+        return TrailblazeExitCode.MISUSE.code to emptyList()
+      }
+      is CliRunDeviceResolution.NoMatch -> {
+        reportCliError(
+          verb = "Trail run",
+          reason = resolution.reason,
+          hint = "connect a matching device, or pick one below with --device <platform>/<instance-id>",
+        )
+        printAvailableDevices(connectedDevices)
+        return TrailblazeExitCode.INFRA_FAILED.code to emptyList()
+      }
+    }
 
     Console.info("Target device: ${targetDevice.trailblazeDeviceId.instanceId} (${targetDevice.platform.displayName})")
-    Console.info("Driver: ${targetDevice.trailblazeDriverType}")
+    Console.info("Driver: ${trailDriverType ?: targetDevice.trailblazeDriverType}")
 
     // Parse agent implementation
     val agentImpl = try {
@@ -1505,21 +1782,7 @@ open class TrailCommand : Callable<Int> {
         .filterIsInstance<SessionStatus.Started>()
         .firstOrNull()
 
-      val sessionTrailConfig = startedStatus?.let { started ->
-        val originalConfig = started.trailConfig
-        TrailConfig(
-          id = originalConfig?.id,
-          title = originalConfig?.title,
-          description = originalConfig?.description,
-          priority = originalConfig?.priority,
-          context = originalConfig?.context,
-          source = originalConfig?.source,
-          metadata = originalConfig?.metadata,
-          target = originalConfig?.target,
-          driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
-          platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
-        )
-      }
+      val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
 
       // Include driver-specific tool classes so the YAML serializer recognizes
       // all tools that may appear in the session logs (e.g., Playwright tools are
@@ -1626,12 +1889,15 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
-   * Copies the session recording back to the trail source directory as a platform-specific
-   * recording file (e.g., `android.trail.yaml`, `ios-iphone.trail.yaml`).
+   * Saves the session recording back to the trail source directory. The on-disk format is chosen
+   * by [recordingSaveFormat]: a [RecordingSaveFormat.UNIFIED] target merges this device's classifier
+   * slot into the unified trail resolved by [unifiedRecordingTarget] (the executed unified file
+   * itself, or the directory's shared `trail.yaml`); a [RecordingSaveFormat.LEGACY] target writes a
+   * platform `<classifier>.trail.yaml` sibling (e.g. `android.trail.yaml`, `ios-iphone.trail.yaml`).
    *
    * @param trailFile The trail file or directory that was executed
    * @param sessionId The session ID from the completed run
-   * @param deviceClassifiers Device classifiers for computing the recording filename
+   * @param deviceClassifiers Device classifiers for the recorded slot / filename
    */
   private fun saveRecordingToTrailDirectory(
     trailFile: File,
@@ -1646,12 +1912,210 @@ open class TrailCommand : Callable<Int> {
         return
       }
 
-      val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
-      recordingFile.copyTo(targetFile, overwrite = true)
-      Console.info("Recording saved to: ${targetFile.absolutePath}")
+      when (recordingSaveFormat(trailFile, deviceClassifiers)) {
+        RecordingSaveFormat.LEGACY -> {
+          val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
+          recordingFile.copyTo(targetFile, overwrite = true)
+          Console.info("Recording saved to: ${targetFile.absolutePath}")
+        }
+        RecordingSaveFormat.UNIFIED -> saveRecordingAsUnified(trailFile, recordingFile, deviceClassifiers)
+      }
     } catch (e: Exception) {
       Console.error("Failed to save recording to trail directory: ${e.message}")
     }
+  }
+
+  /**
+   * Merge one device's freshly-recorded session into the unified trail resolved by
+   * [unifiedRecordingTarget] — the executed file itself when it is a unified document (bare or
+   * named), otherwise the directory's shared `trail.yaml`. Writes only this device's
+   * [deviceClassifiers] slot and preserves every other classifier already on disk. The recording
+   * is a v1 file (`recording.trail.yaml`); the merge primitive folds its steps/trailhead/driver
+   * into the (optional) existing unified trail. Creates the file on a first write.
+   *
+   * The fan-out run loop is sequential (one device at a time), so merging `ios` after `android` in
+   * the same `trailblaze run android,ios` reads the android-merged file and keeps both slots. Two
+   * SEPARATE processes recording the same trail concurrently could still race the read-modify-write;
+   * a cross-process file lock is deferred (see the unified-syntax devlog's concurrency note).
+   *
+   * `internal` so a temp-directory unit test can assert the write contract (fresh file created; an
+   * existing classifier slot preserved) without a device, daemon, or git root.
+   */
+  internal fun saveRecordingAsUnified(
+    trailFile: File,
+    recordingFile: File,
+    deviceClassifiers: List<String>,
+  ) {
+    val classifier = deviceClassifiers.joinToString("-")
+    val yaml = createTrailblazeYaml()
+    val recordedItems = yaml.decodeTrail(recordingFile.readText())
+
+    // The unified trailhead is one tool per classifier (UnifiedTrailEmitter enforces it with a hard
+    // require). A v1 recording can carry a MULTI-tool trailhead — its `tools:` list is every recordable
+    // tool captured in the trailhead window — which the unified format simply can't represent. Merging
+    // it anyway would build a UnifiedTrail that throws when encoded, and the recording would be silently
+    // lost. Preserve it as a legacy `<classifier>.trail.yaml` sibling instead so the recording stays on
+    // disk and runnable; migrating a multi-tool trailhead into the unified shape is a deliberate manual
+    // step (compose the bootstrap inside a single trailhead tool).
+    val recordedTrailheadTools = recordedItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .firstOrNull()?.trailhead?.tools.orEmpty()
+    if (recordedTrailheadTools.size > 1) {
+      val legacyTarget = computeRecordingTargetFile(trailFile, deviceClassifiers)
+      if (legacyTarget == null) {
+        Console.error(
+          "✗ Recording not saved: recorded trailhead has ${recordedTrailheadTools.size} tools, which the " +
+            "unified one-tool-per-classifier trailhead can't represent, and no legacy target path is available.\n" +
+            "  hint: this run's recording is preserved at ${recordingFile.absolutePath}",
+        )
+        return
+      }
+      recordingFile.copyTo(legacyTarget, overwrite = true)
+      Console.info(
+        "[unified-record] recorded trailhead has ${recordedTrailheadTools.size} tools; the unified format is " +
+          "one tool per classifier, so saved as legacy ${legacyTarget.absolutePath} instead of merging into the unified trail.",
+      )
+      return
+    }
+
+    val unifiedFile = unifiedRecordingTarget(trailFile) ?: return
+
+    // Read the existing unified file up front so a parse failure fails loud HERE rather than after
+    // we've decided to save. An unreadable trail.yaml must never be silently discarded or clobbered:
+    // surface it and leave both files untouched — the recording is preserved in logs/ for a retry.
+    val existing = if (unifiedFile.isFile) {
+      runCatching { yaml.decodeUnifiedTrail(unifiedFile.readText()) }.getOrElse { e ->
+        Console.error(
+          "✗ Recording not saved: existing unified trail is unreadable\n" +
+            "  file: ${unifiedFile.absolutePath}\n" +
+            "  reason: ${e.message}\n" +
+            "  hint: fix or delete that file, then re-run — this run's recording is preserved at " +
+            "${recordingFile.absolutePath}",
+        )
+        return
+      }
+    } else {
+      null
+    }
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recordedItems, classifier)
+    // A merge with no steps would emit an empty `trail:`, which the unified parser rejects — writing
+    // it would leave an unreadable file. Skip rather than corrupt (only reachable from a degenerate
+    // recording with no prompt steps and no existing trail to preserve).
+    if (merged.trail.isEmpty()) {
+      Console.log("[unified-record] recording for `$classifier` has no steps to merge; skipping unified write.")
+      return
+    }
+    // Write to a temp sibling then atomically rename, so a crash / disk-full mid-write can't truncate
+    // the single file that now holds every device's slot.
+    val rendered = yaml.encodeUnifiedTrailToString(merged)
+    writeFileAtomically(unifiedFile, rendered)
+    Console.info("Recording merged into ${unifiedFile.absolutePath} (classifier `$classifier`)")
+  }
+
+  /**
+   * Write [content] to [target] via a temp file in the same directory followed by an atomic rename,
+   * so a partial write never leaves a truncated (unreadable) file in place. Falls back to a plain
+   * replace if the filesystem doesn't support atomic moves.
+   */
+  private fun writeFileAtomically(target: File, content: String) {
+    val tmp = File.createTempFile(target.name, ".tmp", target.parentFile)
+    try {
+      tmp.writeText(content)
+      try {
+        java.nio.file.Files.move(
+          tmp.toPath(),
+          target.toPath(),
+          java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+        )
+      } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+        java.nio.file.Files.move(tmp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+      }
+    } finally {
+      tmp.delete() // no-op once the move succeeded; cleans up the temp on any failure
+    }
+  }
+
+  /** How a recording save-back should be written to the trail source directory. */
+  internal enum class RecordingSaveFormat { UNIFIED, LEGACY }
+
+  /**
+   * Decide whether a recording save-back for [trailFile] writes a unified trail (merging this
+   * device's classifier slot) or a legacy `<classifier>.trail.yaml` sibling:
+   *
+   *  - The executed file IS a unified trail — the bare `trail.yaml` by name, or a NAMED file
+   *    (e.g. `login.trail.yaml`) whose CONTENT is the unified format →
+   *    [RecordingSaveFormat.UNIFIED] (merge into the executed file itself). The content check
+   *    matters because the unified corpus is mostly named files sharing a directory with other
+   *    tests; keying on the filename alone would misroute them to a legacy sibling that shadows
+   *    resolution and doesn't identify which test it recorded.
+   *  - The target dir already has a bare `trail.yaml` → [RecordingSaveFormat.UNIFIED] (merge
+   *    into it — never drop a legacy sibling beside it).
+   *  - The dir already holds legacy `<classifier>.trail.yaml` sibling(s) and no unified file →
+   *    [RecordingSaveFormat.LEGACY] (don't fork a half-migrated directory; migrating those to
+   *    unified is a separate, deliberate step). A v1-content file named like a trail counts as
+   *    its own legacy sibling, so executing one keeps routing LEGACY.
+   *  - Greenfield (neither present) → [RecordingSaveFormat.UNIFIED] (new recordings default to
+   *    the unified format).
+   *  - Empty [deviceClassifiers] → [RecordingSaveFormat.LEGACY] (no classifier to key a unified
+   *    slot; falls back to the classifier-agnostic `recording.trail.yaml`).
+   *
+   * The unified file this decision writes/reads is resolved by [unifiedRecordingTarget] — the
+   * two must be consulted together so the router and the writer never disagree on the target.
+   *
+   * `internal` so unit tests can exercise each branch directly against a temp directory.
+   */
+  internal fun recordingSaveFormat(trailFile: File, deviceClassifiers: List<String>): RecordingSaveFormat {
+    // Rollout gate (see resolveEffectiveUnifiedRecordings): while off, every save-back stays on
+    // the legacy path. shouldSaveRecording separately restores the pre-unified refusal to write a
+    // legacy sibling next to — or in place of — a unified trail, so "off" never writes into or
+    // beside a unified file.
+    if (!resolveEffectiveUnifiedRecordings()) return RecordingSaveFormat.LEGACY
+    if (deviceClassifiers.isEmpty()) return RecordingSaveFormat.LEGACY
+    if (executedFileIsUnified(trailFile)) return RecordingSaveFormat.UNIFIED
+    val dir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return RecordingSaveFormat.LEGACY
+    if (File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return RecordingSaveFormat.UNIFIED
+    val hasLegacySibling = dir.listFiles { f ->
+      f.isFile &&
+        f.name.endsWith(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX) &&
+        !TrailRecordings.isUnifiedTrailFile(f.name)
+    }?.isNotEmpty() == true
+    return if (hasLegacySibling) RecordingSaveFormat.LEGACY else RecordingSaveFormat.UNIFIED
+  }
+
+  /**
+   * True when the executed [trailFile] is itself a unified trail: the bare `trail.yaml` by
+   * name, or any other file whose content parses as a unified document. `{{var}}` templates are
+   * resolved before parsing (mirroring the run path), so a unified file whose unquoted template
+   * is invalid as raw YAML — but which the runner resolves and executes — is still detected.
+   * Content detection is guard-safe — a v1 file, an unreadable file, or a directory returns
+   * false (the caller falls through to directory-based routing).
+   */
+  private fun executedFileIsUnified(trailFile: File): Boolean {
+    if (!trailFile.isFile) return false
+    if (TrailRecordings.isUnifiedTrailFile(trailFile.name)) return true
+    return runCatching {
+      val resolvedYaml = TrailYamlTemplateResolver.resolve(trailFile.readText(), trailFile)
+      createTrailblazeYaml().decodeTrailDocument(resolvedYaml)
+    }.getOrNull() is TrailDocument.Unified
+  }
+
+  /**
+   * The unified file a [RecordingSaveFormat.UNIFIED] save-back reads and writes for [trailFile]:
+   * the executed file itself when it is a unified document (bare `trail.yaml` by name, or a
+   * named unified file by content — returned as-is even for a parentless path), otherwise the
+   * directory's shared `trail.yaml`. Null only on the fall-through branch: the executed file is
+   * not itself unified and no directory resolves (orphan path with no parent).
+   *
+   * Single source of truth for the writer ([saveRecordingAsUnified]), the re-run skip guard
+   * ([unifiedClassifierAlreadyRecorded]), and the skip log — so the guard always reads the same
+   * file the writer targets.
+   */
+  internal fun unifiedRecordingTarget(trailFile: File): File? {
+    if (executedFileIsUnified(trailFile)) return trailFile
+    val dir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return null
+    return File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
   }
 
   /**
@@ -1702,21 +2166,71 @@ open class TrailCommand : Callable<Int> {
    */
   internal fun shouldSaveRecording(trailFile: File, deviceClassifiers: List<String>): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
-    // Never write a legacy `<classifier>.trail.yaml` next to a unified `trail.yaml`. The unified
-    // file carries its recordings inline and is the source of truth; the v1-style save-back here
-    // can't update it, so it would only drop a divergent legacy sibling into a (freshly-migrated)
-    // directory. Skip regardless of --self-heal. A unified-aware save-back is separate future work.
-    val sourceDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile
-    if (trailFile.isFile && TrailRecordings.isUnifiedTrailFile(trailFile.name)) return false
-    if (sourceDir != null && File(sourceDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return false
+    // Unified-recordings gate OFF → pre-unified behavior: never write a legacy
+    // `<classifier>.trail.yaml` next to a unified `trail.yaml` (the legacy save-back can't update
+    // it, so it would only drop a divergent sibling), regardless of --self-heal. The executed-file
+    // check is content-aware ([executedFileIsUnified]) — the one deliberate deviation from
+    // byte-identical-old: a NAMED unified file (e.g. `login.trail.yaml` in a shared multi-test
+    // directory) used to get a v1 sibling raw-copied beside it, which damages the shared directory
+    // rather than preserving anything. Refusing adds no new write path.
+    if (!resolveEffectiveUnifiedRecordings()) {
+      if (executedFileIsUnified(trailFile)) return false
+      val sourceDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile
+      if (sourceDir != null && File(sourceDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return false
+    }
     if (resolveEffectiveSelfHeal()) return true
-    val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
-    return !targetFile.exists()
+    // Deterministic re-run guard: skip when this device's recording already exists on disk, so a
+    // plain re-run never clobbers a (possibly hand-edited) source. "Already exists" is per-format:
+    //  - LEGACY: the `<classifier>.trail.yaml` sibling exists (also skip when no target resolves —
+    //    an orphan file with no parent — matching prior behavior).
+    //  - UNIFIED: this classifier's slot already carries a recording in the unified target file
+    //    ([unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
+    //    recorded yet" → save.
+    return when (recordingSaveFormat(trailFile, deviceClassifiers)) {
+      RecordingSaveFormat.LEGACY -> {
+        val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
+        !targetFile.exists()
+      }
+      RecordingSaveFormat.UNIFIED -> !unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers)
+    }
+  }
+
+  /**
+   * True when the unified trail this save-back would write ([unifiedRecordingTarget] — the
+   * executed unified file itself, or the dir's shared `trail.yaml`) already carries a non-empty
+   * recording for this device's classifier slot — so a non-self-heal re-run skips rather than
+   * replacing it. False when the file is absent (greenfield), unreadable, or the slot has no
+   * recording yet.
+   */
+  private fun unifiedClassifierAlreadyRecorded(trailFile: File, deviceClassifiers: List<String>): Boolean {
+    val unifiedFile = unifiedRecordingTarget(trailFile) ?: return false
+    if (!unifiedFile.isFile) return false
+    val classifier = deviceClassifiers.joinToString("-")
+    val unified = runCatching { createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()) }.getOrNull()
+      ?: return false
+    val stepHit = unified.trail.any { it.recordings[classifier]?.isNotEmpty() == true }
+    val trailheadHit = unified.trailhead?.recordings?.get(classifier)?.isNotEmpty() == true
+    return stepHit || trailheadHit
   }
 
   /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
    * Defaults to `true` (save by default) when the user didn't specify either form. */
   internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
+
+  /**
+   * Resolves the unified-recordings rollout gate, same precedence as self-heal:
+   *   1. `--[no-]unified-recordings` CLI flag (explicit per-run intent)
+   *   2. `TRAILBLAZE_UNIFIED_RECORDINGS` env var (CI / pipeline opt-in)
+   *   3. Persisted `trailblaze config unified-recordings` setting (user's local default)
+   *   4. Off — save-back stays byte-identical to the pre-unified recorder until the
+   *      surrounding tooling (validation, CI discovery, verify steps, MCP/desktop writers)
+   *      fully supports the unified format, at which point the default flips.
+   */
+  internal fun resolveEffectiveUnifiedRecordings(): Boolean =
+    unifiedRecordings
+      ?: System.getenv("TRAILBLAZE_UNIFIED_RECORDINGS")?.lowercase()?.toBooleanStrictOrNull()
+      ?: CliConfigHelper.readConfig()?.unifiedRecordingsEnabled
+      ?: false
 
   /**
    * Companion of [shouldSaveRecording]. Emits a single user-visible info line when a save
@@ -1731,13 +2245,23 @@ open class TrailCommand : Callable<Int> {
   private fun logSkippedRecording(trailFile: File, deviceClassifiers: List<String>) {
     if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
     if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
-    val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
-    if (!targetFile.exists()) return // not the "existing target" skip reason
+    val skippedTarget: String = when (recordingSaveFormat(trailFile, deviceClassifiers)) {
+      RecordingSaveFormat.LEGACY -> {
+        val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
+        if (!targetFile.exists()) return // not the "existing target" skip reason
+        targetFile.absolutePath
+      }
+      RecordingSaveFormat.UNIFIED -> {
+        if (!unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers)) return
+        val unifiedFile = unifiedRecordingTarget(trailFile) ?: return
+        "${unifiedFile.absolutePath} (classifier `${deviceClassifiers.joinToString("-")}`)"
+      }
+    }
     Console.info(
       "Recording not overwritten (target exists; pass --self-heal to regenerate, or " +
         "re-run with --use-recorded-steps to replay the recorded tools instead of " +
         "re-driving every step via the LLM): " +
-        targetFile.absolutePath,
+        skippedTarget,
     )
   }
 
@@ -2194,7 +2718,7 @@ open class TrailCommand : Callable<Int> {
               // and silent execution would be misleading. The warning scales to the count.
               // Routed via [Console.error] (stderr) so the warning survives `--quiet`/JSON
               // modes and matches the convention used by other warning/error messages in
-              // this file (`resolveTargetDevice` etc.).
+              // this file (the device-resolution error envelopes etc.).
               val candidates = byParent.getValue(dir).sortedBy { it.absolutePath }
               expanded += candidates.first()
               // Phrase the hint as "platform-prefixed `--device`" so users who already
@@ -2317,3 +2841,4 @@ internal data class TrailExecutionPlan(
   val items: List<TrailExecutionItem>,
   val filteredOutByTag: Int,
 )
+

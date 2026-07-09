@@ -61,6 +61,13 @@ data class GetToolUsagesRequest(val toolId: String) : RpcRequest<TrailIndexRespo
 data class GetDeviceAppsRequest(val platform: String, val id: String) : RpcRequest<DeviceAppsResponse>
 
 @Serializable
+data class GetInstalledAppsRequest(
+  val platform: String,
+  val id: String,
+  val includeSystemApps: Boolean = false,
+) : RpcRequest<InstalledAppsResponse>
+
+@Serializable
 data class GetRunToolsRequest(
   val target: String,
   val driver: String? = null,
@@ -238,6 +245,11 @@ internal class GetDeviceAppsHandler(private val deps: TrailRunnerDeps) :
   RpcHandler<GetDeviceAppsRequest, DeviceAppsResponse> {
   override suspend fun handle(request: GetDeviceAppsRequest): RpcResult<DeviceAppsResponse> =
     RpcResult.Success(buildDeviceAppsResponse(deps, request.platform, request.id))
+}
+
+internal class GetInstalledAppsHandler : RpcHandler<GetInstalledAppsRequest, InstalledAppsResponse> {
+  override suspend fun handle(request: GetInstalledAppsRequest): RpcResult<InstalledAppsResponse> =
+    RpcResult.Success(buildInstalledAppsResponse(request.platform, request.id, request.includeSystemApps))
 }
 
 internal class GetRunToolsHandler(private val deps: TrailRunnerDeps) :
@@ -424,6 +436,13 @@ internal class NewComponentHandler : RpcHandler<NewComponentRequest, NewComponen
     RpcResult.Success(buildNewComponentResponse(request).body)
 }
 
+internal class SaveTargetConfigHandler : RpcHandler<SaveTargetConfigRequest, SaveTargetConfigResponse> {
+  // ok=false rides in the response body (mirrors NewComponentHandler) so the UI's error message
+  // comes from the response itself, not a generic RPC failure string.
+  override suspend fun handle(request: SaveTargetConfigRequest): RpcResult<SaveTargetConfigResponse> =
+    RpcResult.Success(buildSaveTargetConfigResponse(request))
+}
+
 internal class SettingsPatchHandler(private val deps: TrailRunnerDeps) :
   RpcHandler<SettingsPatchRequest, SettingsDto> {
   // No settings repo wired → failure, which the UI's dataOrError surfaces as "settings not
@@ -477,6 +496,7 @@ internal fun Routing.trailRunnerRpcRoutes(deps: TrailRunnerDeps) {
   registerRpcHandler<ToolUsageCountsResponse, GetToolUsageCountsRequest>(GetToolUsageCountsHandler(deps))
   registerRpcHandler<TrailIndexResponse, GetToolUsagesRequest>(GetToolUsagesHandler(deps))
   registerRpcHandler<DeviceAppsResponse, GetDeviceAppsRequest>(GetDeviceAppsHandler(deps))
+  registerRpcHandler<InstalledAppsResponse, GetInstalledAppsRequest>(GetInstalledAppsHandler())
   registerRpcHandler<RunToolsResponse, GetRunToolsRequest>(GetRunToolsHandler(deps))
   registerRpcHandler<AnalyticsResponse, GetSessionAnalyticsRequest>(GetSessionAnalyticsHandler(deps))
   // Mutation / command endpoints.
@@ -500,6 +520,7 @@ internal fun Routing.trailRunnerRpcRoutes(deps: TrailRunnerDeps) {
   registerRpcHandler<OkResponse, RevealTrailsRootRequest>(RevealTrailsRootHandler(deps))
   registerRpcHandler<OkResponse, IntegrationActionRequest>(IntegrationActionHandler(deps))
   registerRpcHandler<NewComponentResponse, NewComponentRequest>(NewComponentHandler())
+  registerRpcHandler<SaveTargetConfigResponse, SaveTargetConfigRequest>(SaveTargetConfigHandler())
   registerRpcHandler<SettingsDto, SettingsPatchRequest>(SettingsPatchHandler(deps))
   registerRpcHandler<OkResponse, OpenSessionFileRequest>(OpenSessionFileHandler(deps))
   registerRpcHandler<SessionFilesResponse, GetSessionFilesRequest>(GetSessionFilesHandler(deps))

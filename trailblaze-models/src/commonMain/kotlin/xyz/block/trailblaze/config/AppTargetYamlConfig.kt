@@ -92,6 +92,18 @@ data class AppTargetYamlConfig(
    * subprocess speaks MCP STDIO back to the runner.
    */
   val tools: List<InlineScriptToolConfig>? = null,
+  /**
+   * Optional workspace-relative path to an icon rendered beside this target in the TrailRunner
+   * UI (Android launcher icon / web favicon). When null, the UI may fall back to a filename
+   * convention under the shared icons folder — see [TargetIconConvention]. An explicit value
+   * here overrides that convention.
+   *
+   * Authored on the trailmap `target:` block
+   * ([TrailmapTargetConfig.icon][xyz.block.trailblaze.config.project.TrailmapTargetConfig.icon])
+   * and threaded onto this resolved config by
+   * [TrailmapTargetConfig.toAppTargetYamlConfig][xyz.block.trailblaze.config.project.TrailmapTargetConfig.toAppTargetYamlConfig].
+   */
+  val icon: String? = null,
 )
 
 /**
@@ -107,6 +119,13 @@ data class PlatformConfig(
   val drivers: List<String>? = null,
   @SerialName("base_url") val baseUrl: String? = null,
   @SerialName("min_build_version") val minBuildVersion: String? = null,
+  /**
+   * Optional per-platform override for the icon shown in the TrailRunner UI, taking priority over
+   * the target-level [AppTargetYamlConfig.icon] and the [TargetIconConvention] filename convention
+   * for this platform only. Lets a target whose Android and iOS (or web) artwork genuinely differ
+   * show the right icon per device row instead of one icon for the whole target.
+   */
+  val icon: String? = null,
 ) {
 
   /**

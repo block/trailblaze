@@ -165,7 +165,7 @@ abstract class TrailblazeDesktopAppConfig(
   open val trailRunnerExtension: TrailRunnerExtension = DefaultTrailRunnerExtension
 
   /**
-   * The workspace `trails/config` directory, or null when none resolves on disk. Shared anchor for
+   * The workspace `trails/config` directory, or null when no workspace resolves. Shared anchor for
    * app-target discovery, the workspace-aware config resolver, and the target-drift check, so all
    * three follow the same workspace. `TRAILBLAZE_CONFIG_DIR` wins (CI / scripting / alternate
    * workspace launches) to match [TrailblazeWorkspaceConfigResolver]'s contract; otherwise it's the
@@ -173,6 +173,13 @@ abstract class TrailblazeDesktopAppConfig(
    * [xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder] at startup so the tool catalog, LSP
    * schema, and scripted-tool lookups follow the trails directory the user picks in settings
    * rather than whatever directory the daemon happened to launch from.
+   *
+   * The `config/` subdir itself is NOT required to exist: a brand-new workspace has nothing
+   * authored yet, and Trail Runner's Create Target flow must be able to scaffold
+   * `trails/config/trailmaps/<id>/` inside it (`ToolSourceFiles.newTrailmapBaseDir`). Only the
+   * trails directory itself must be real — a bogus/unset setting still resolves to null. Every
+   * read-side consumer of [WorkspaceConfigDirHolder] applies its own `isDirectory` /
+   * file-exists guard, so a not-yet-created dir degrades to the same empty results null did.
    */
   fun workspaceConfigDirOrNull(): File? {
     System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR)
@@ -183,7 +190,7 @@ abstract class TrailblazeDesktopAppConfig(
     val trailsDir = File(
       TrailblazeDesktopUtil.getEffectiveTrailsDirectory(trailblazeSettingsRepo.serverStateFlow.value.appConfig),
     )
-    return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR).takeIf { it.isDirectory }
+    return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR).takeIf { trailsDir.isDirectory }
   }
 
   abstract val defaultAppTarget: TrailblazeHostAppTarget

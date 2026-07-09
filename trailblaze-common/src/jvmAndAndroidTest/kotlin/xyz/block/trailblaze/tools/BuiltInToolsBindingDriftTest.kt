@@ -5,23 +5,33 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import org.junit.Test
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import xyz.block.trailblaze.toolcalls.HandCuratedRecordableTools
+import xyz.block.trailblaze.toolcalls.toScriptedToolDescriptor
+import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 
 /**
- * Drift check between the SDK's vendored built-in-tool TS bindings
- * (`sdks/typescript/src/built-in-tools.ts`) and the Kotlin
- * `@TrailblazeToolClass`-annotated classes that declare the runtime tool catalog.
+ * Guards the split between the SDK's vendored built-in-tool TS bindings
+ * (`sdks/typescript/src/built-in-tools.ts`) and the GENERATED recordable-tool surface that
+ * `PerTrailmapClientDtsEmitter` now derives from `@TrailblazeToolClass(isRecordable = true)` (see
+ * the devlog `2026-07-01-trail-recording-type-validation.md`). built-in-tools.ts is now the small
+ * RESIDUAL hand file — non-recordable author utilities plus the few recordable tools the generator
+ * can't model (`HAND_CURATED_RECORDABLE`). Two invariants:
  *
- * The TS file is hand-curated (the SDK's drift-policy kdoc explicitly says so) and the
- * source-of-truth for tool names is the Kotlin annotation. Without an automated check, a
- * Kotlin-side rename or deletion silently leaves the TS bindings advertising a name that
- * doesn't dispatch — strict types compile, the `callTool` HTTP request fails at runtime
- * with "unknown tool". This test catches the most common drift mode (deletes/renames) at
- * CI time. Arg-shape drift (a Kotlin field renamed without updating the TS interface) is
- * NOT covered — that's tracked alongside the auto-generation follow-up.
+ *  1. **No stale names.** Every name in built-in-tools.ts still maps to a `@TrailblazeToolClass`, so
+ *     a Kotlin rename/deletion doesn't leave the TS bindings advertising a name that doesn't
+ *     dispatch (strict types compile, but `callTool` fails at runtime with "unknown tool"). Covered
+ *     by a pure static-text scan (no reflection) so it works whether trailblaze-common is tested in
+ *     isolation or in a larger build.
+ *  2. **No collision with the generated surface.** built-in-tools.ts declares no recordable tool the
+ *     generated per-surface `.d.ts` ALSO emits — otherwise the two duplicate the same
+ *     `TrailblazeToolMap` key with (likely) different shapes and tsc fails with TS2717, breaking the
+ *     trail-recording validator for every trail. This second check IS reflective (it enumerates the
+ *     recordable registry the way the emitter does).
  *
- * **Method.** Pure static-text scan, no reflection. Avoids requiring the test to load the
- * full tool classpath (heavier dependency surface) and works the same way whether the
- * trailblaze-common module is being tested in isolation or as part of a larger build.
+ * Arg-shape drift within a single entry (a Kotlin field renamed without updating the TS interface)
+ * is not covered here — for the generated surface that's structurally impossible now; for the
+ * residual hand file it's caught by the validator's tsc pass.
  */
 class BuiltInToolsBindingDriftTest {
 
@@ -186,6 +196,92 @@ class BuiltInToolsBindingDriftTest {
         },
       )
     }
+  }
+
+  @Test
+  fun `built-in-tools_ts declares no recordable tool the generated surface already emits`() {
+    // Every RECORDABLE tool is now generated into each surface's `trailblaze-client.d.ts` by
+    // `PerTrailmapClientDtsEmitter`, derived from `isRecordable`. built-in-tools.ts is ALSO in scope
+    // for the validator's tsc compilation (via the SDK bundle), so if it declared one of those same
+    // tools the two would be duplicate `TrailblazeToolMap` keys → TS2717, breaking the whole gate.
+    // This asserts the two surfaces stay DISJOINT: the only recordable tools allowed to remain in the
+    // hand file are the ones the generator deliberately skips ([HandCuratedRecordableTools.NAMES]).
+    val tsNames = extractTsToolMapKeys(locateBuiltInToolsTs().readText())
+    assertTrue("Expected some names in built-in-tools.ts; got 0") { tsNames.isNotEmpty() }
+
+    val emitted = generatedRecordableToolNames()
+    // Guard against a false green: if classpath tool discovery came up short (missing resources),
+    // the intersection below would be trivially empty. The real recordable set is ~50 tools.
+    assertTrue(
+      "Reflective recordable-tool discovery returned only ${emitted.size} tools — the test " +
+        "classpath is probably missing the tool YAML resources, which would make this guard vacuous.",
+    ) { emitted.size >= 20 }
+
+    val collisions = (tsNames intersect emitted).sorted()
+    if (collisions.isNotEmpty()) {
+      fail(
+        buildString {
+          appendLine("built-in-tools.ts declares recordable tool(s) that the generated recordable")
+          appendLine("surface (PerTrailmapClientDtsEmitter) ALSO emits — duplicate TrailblazeToolMap")
+          appendLine("keys collide (TS2717) and break the trail-recording validator:")
+          appendLine()
+          collisions.forEach { appendLine("  - $it") }
+          appendLine()
+          append(
+            "Remove these from built-in-tools.ts (the generated surface owns them). If the generator " +
+              "genuinely can't model one (a serializer-transformed shape like mobile_maestro, or a " +
+              "rich result type worth preserving), add it to the single shared allowlist " +
+              "HandCuratedRecordableTools.NAMES (both the emitter and this test read it).",
+          )
+        },
+      )
+    }
+  }
+
+  /**
+   * Reflectively compute the set of tool names the generated recordable surface emits — the mirror of
+   * `PerTrailmapClientDtsEmitter.resolveKotlinToolDescriptorsForTrailmap`: every `isRecordable`
+   * class-backed tool the Koog descriptor path can lower, plus every recordable YAML-defined tool,
+   * MINUS [HandCuratedRecordableTools.NAMES] (which the emitter skips so they can stay hand-typed in
+   * built-in-tools.ts).
+   */
+  private fun generatedRecordableToolNames(): Set<String> {
+    val classBacked = TrailblazeSerializationInitializer.buildAllTools().values
+      .filter { it.trailblazeToolClassAnnotation().isRecordable }
+      // Only tools the descriptor path can lower are actually emitted; the rest are dropped (and
+      // typically live in HandCuratedRecordableTools.NAMES anyway).
+      .filter { it.toScriptedToolDescriptor() != null }
+      .map { it.trailblazeToolClassAnnotation().name }
+    val yamlDefined = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+      .filterValues { it.isRecordable != false }
+      .keys.map { it.toolName }
+    return (classBacked + yamlDefined).toSet() - HandCuratedRecordableTools.NAMES
+  }
+
+  @Test
+  fun `every HandCuratedRecordableTools name is a real recordable tool (allowlist can't rot)`() {
+    // The shared allowlist is the ONE place the emitter and this test agree to skip. If a listed tool
+    // is renamed or deleted, its name silently stops matching anything and the allowlist rots into a
+    // no-op. Assert every entry still resolves to a genuinely recordable tool (class-backed or
+    // YAML-defined) so that drift fails loudly here instead.
+    val recordableClassNames = TrailblazeSerializationInitializer.buildAllTools().values
+      .filter { it.trailblazeToolClassAnnotation().isRecordable }
+      .map { it.trailblazeToolClassAnnotation().name }
+      .toSet()
+    val recordableYamlNames = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+      .filterValues { it.isRecordable != false }
+      .keys.map { it.toolName }
+      .toSet()
+    val recordable = recordableClassNames + recordableYamlNames
+    // Same vacuity guard as the disjointness test — a short classpath would make this trivially pass.
+    assertTrue("Reflective recordable-tool discovery returned only ${recordable.size} tools") {
+      recordable.size >= 20
+    }
+    val stale = (HandCuratedRecordableTools.NAMES - recordable).sorted()
+    assertTrue(
+      "HandCuratedRecordableTools.NAMES lists name(s) that are no longer a recordable tool " +
+        "(renamed/deleted?): $stale. Remove them from the allowlist.",
+    ) { stale.isEmpty() }
   }
 
   /**

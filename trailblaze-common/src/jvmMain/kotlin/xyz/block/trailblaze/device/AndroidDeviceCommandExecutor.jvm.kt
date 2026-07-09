@@ -130,6 +130,35 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     }
   }
 
+  /**
+   * Host transport for [writeFileToImages]: `adb push` the bytes to `/sdcard/Pictures/<fileName>`
+   * (sync protocol, no shell), then trigger a MediaStore `scan_file` so an Images row is registered
+   * and the file is discoverable by a gallery / photo picker.
+   */
+  actual fun writeFileToImages(fileName: String, content: ByteArray, mimeType: String) {
+    val remotePath = "/sdcard/Pictures/$fileName"
+    // adb push does not reliably create missing parent dirs on a fresh device; ensure it exists.
+    shellCommand("mkdir", "-p", "/sdcard/Pictures")
+    shellCommand("rm", "-f", remotePath)
+    val tempFile = File.createTempFile("trailblaze-img-", ".tmp")
+    try {
+      tempFile.writeBytes(content)
+      val pushed = AndroidHostAdbUtils.pushFile(deviceId, tempFile, remotePath)
+      if (!pushed) {
+        error("Failed to push $fileName to $remotePath")
+      }
+      shellCommand(
+        "content", "call",
+        "--uri", "content://media",
+        "--method", "scan_file",
+        "--arg", remotePath,
+      )
+      Console.log("Wrote ${content.size} bytes to $remotePath via adb push and scanned into MediaStore")
+    } finally {
+      tempFile.delete()
+    }
+  }
+
   actual fun writeFileToDevice(devicePath: String, content: ByteArray) {
     // Stage the bytes in a host temp file and `adb push` them (sync protocol) — never through
     // the shell, so we avoid the stdin/EXIT-packet hang that piping a body to `adb shell` hits.

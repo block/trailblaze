@@ -9,7 +9,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.fail
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -20,6 +25,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.quickjs.tools.HostBinding
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolHost
 
 /**
@@ -121,6 +127,130 @@ class OkHttpFetchExtensionTest {
     assertEquals("POST", seenMethod.get())
     assertEquals("application/json", seenContentType.get())
     assertEquals("""{"flag":true}""", seenBody.get())
+  }
+
+  // ---- Regression coverage for the __trailblazeFetch asyncFunction -> function + runBlocking
+  // fix (block/trailblaze#194; same bug class as __trailblazeCall, see
+  // 2026-07-07-quickjs-async-host-binding-fix.md). The native crash needs real device I/O timing
+  // and full-daemon GC pressure to reproduce, so these pin the scenarios the fix must keep
+  // working instead: concurrency, coexistence with another synchronous binding on the same
+  // engine, and stability under repetition.
+
+  @Test
+  fun `a real transport failure surfaces promptly through the new binding, not hung or corrupted`() = runBlocking {
+    // executeFetch already wraps the actual HTTP call in its own try/catch (unrelated to this
+    // PR -- it never lets an exception escape), so this doesn't need the same
+    // hostCallErrorEnvelopeJson treatment __trailblazeCall got. But that internal handling was
+    // never exercised end-to-end through the NEW function+runBlocking binding specifically --
+    // only through business-logic error paths (allow-list denial) before. Point fetch at a
+    // closed local port so OkHttp throws a real ConnectException, confirming the new binding
+    // still surfaces it promptly as the normal `error` field the shim's catch produces, not a
+    // hang or a corrupted native-boundary exception.
+    val closedPortUrl = run {
+      val s = java.net.ServerSocket(0)
+      val port = s.localPort
+      s.close() // closed immediately -- nothing is listening, so connection is refused
+      "http://127.0.0.1:$port/unreachable"
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val result = withTimeoutOrNull(10_000) {
+      host.callTool("fetchProbe", buildJsonObject { put("url", closedPortUrl) })
+    } ?: fail("transport failure hung instead of surfacing promptly")
+    val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+    assertTrue(
+      probe["error"] != null,
+      "expected a connection-refused failure to surface via the error field; got: $probe",
+    )
+  }
+
+  @Test
+  fun `concurrent fetch calls from the same engine don't cross-talk`() = runBlocking {
+    // Many concurrent JS-side fetch() calls all dispatch through the same confined engine thread
+    // via runBlocking. Pins that results still attribute to the right call under concurrency --
+    // the same cross-talk class QuickJsToolHostTest's evalMutex tests guard for direct calls.
+    val baseUrl = startServer { exchange ->
+      val marker = exchange.requestURI.path.substringAfterLast("/")
+      val body = marker.toByteArray()
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.write(body)
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    val markers = (1..20).map { "m$it" }
+    val results = coroutineScope {
+      markers.map { m ->
+        async { host.callTool("fetchProbe", buildJsonObject { put("url", "$baseUrl/$m") }) }
+      }.awaitAll()
+    }
+    markers.zip(results).forEach { (marker, result) ->
+      val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+      assertEquals(
+        marker,
+        probe["body"]!!.jsonPrimitive.content,
+        "expected fetch result for $marker to not cross-talk with another concurrent call",
+      )
+    }
+  }
+
+  @Test
+  fun `fetch and a composed ctx tools call coexist on the same engine`() = runBlocking {
+    // __trailblazeCall and __trailblazeFetch got the identical asyncFunction -> function fix.
+    // This pins that an engine with BOTH synchronous bindings installed -- a scripted tool that
+    // both calls fetch() and composes another tool via ctx.tools -- still works, i.e. one
+    // binding's runBlocking call doesn't interfere with the other sharing the same confined
+    // thread.
+    val baseUrl = startServer { exchange ->
+      val body = "fetched".toByteArray()
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.write(body)
+    }
+    val binding = HostBinding { name, _ ->
+      assertEquals("companion", name)
+      """{"content":[{"type":"text","text":"composed"}]}"""
+    }
+    val host = QuickJsToolHost.connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["mixed"] = {
+        name: "mixed",
+        spec: {},
+        handler: async (args) => {
+          const res = await fetch(args.url);
+          const bodyText = await res.text();
+          const composedJson = await globalThis.__trailblazeCall("companion", "{}");
+          const composed = JSON.parse(composedJson);
+          return { content: [{ type: "text", text: bodyText + "+" + composed.content[0].text }] };
+        },
+      };
+      """.trimIndent(),
+      hostBinding = binding,
+      engineExtension = OkHttpFetchExtension(),
+    )
+    hosts.add(host)
+
+    val result = host.callTool("mixed", buildJsonObject { put("url", "$baseUrl/x") })
+    assertEquals("fetched+composed", textContent(result))
+  }
+
+  @Test
+  fun `many sequential fetch calls remain stable (soak)`() = runBlocking {
+    // Repeats a real fetch() call many times over the SAME engine to build confidence against
+    // subtle state leakage between calls, or the engine thread wedging after N dispatches --
+    // neither of which a single call would surface.
+    val baseUrl = startServer { exchange ->
+      val body = "ok".toByteArray()
+      exchange.sendResponseHeaders(200, body.size.toLong())
+      exchange.responseBody.write(body)
+    }
+    val host = connect(OkHttpFetchExtension())
+
+    repeat(50) { i ->
+      val result = host.callTool("fetchProbe", buildJsonObject { put("url", "$baseUrl/seq") })
+      val probe = Json.parseToJsonElement(textContent(result)).jsonObject
+      assertEquals(200, probe["status"]!!.jsonPrimitive.int, "iteration $i unexpectedly failed")
+      assertEquals("ok", probe["body"]!!.jsonPrimitive.content, "iteration $i unexpectedly failed")
+    }
   }
 
   @Test

@@ -228,6 +228,21 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain("badge selfheal");
   });
 
+  test("a run that captured the target app's version shows it in the header meta strip", () => {
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed", appId: "com.example.pos", appVersion: "5.58.0.0 (67500009)" }, trace: slim, llm: [], shots: {}, recordingYaml: null }],
+    });
+    expect(out).toContain("App version");
+    expect(out).toContain("5.58.0.0 (67500009)");
+    // A run without app info renders no empty App rows.
+    const bare = renderViewer({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null }],
+    });
+    expect(bare).not.toContain("App version");
+  });
+
   test("LLM session totals surface cached input tokens and average response time", () => {
     const out = renderViewer({
       generatedAt: "now",

@@ -1,7 +1,7 @@
 # Android World Benchmark: BluetoothTurnOff
 - config:
     id: android-world-benchmarks/system/bluetooth_turn_off
-    displayName: "System - Bluetooth Turn Off"
+    title: "System - Bluetooth Turn Off"
     description: "Turn bluetooth off."
 
 - tools:

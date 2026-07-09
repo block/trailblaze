@@ -143,7 +143,7 @@ function Select({ label, value, onChange, options, children, title, full, style,
   }, [options, children]);
   // Any rich item (icon, badges, secondary meta, or description) switches the popup into table rows
   // and widens it so the extra columns have room.
-  const anyRich = React.useMemo(() => items.some((it) => it.ico || it.badges || it.meta || it.desc), [items]);
+  const anyRich = React.useMemo(() => items.some((it) => it.ico || it.img || it.badges || it.meta || it.desc), [items]);
   // When searchable, the popup carries a filter box; the visible (filtered) list drives both the
   // rendered options and the keyboard nav so highlighting/Enter line up with what's shown. Search
   // spans the primary label, value, badge text, and any string meta/description.
@@ -285,9 +285,9 @@ function Select({ label, value, onChange, options, children, title, full, style,
           )}
           {visibleItems.map((it, i) => {
             const sel = isPicked(it.value);
-            if (it.ico || it.badges || it.meta || it.desc) {
+            if (it.ico || it.img || it.badges || it.meta || it.desc) {
               return (
-                <OptionRow key={String(it.value)} dense ico={it.ico} icoColor={it.icoColor}
+                <OptionRow key={String(it.value)} dense ico={it.ico} icoColor={it.icoColor} img={it.img}
                   name={it.label} badges={it.badges || []} meta={it.meta} desc={it.desc} trailing={it.trailing}
                   selected={sel} active={i === active}
                   onMouseEnter={() => setActive(i)} onClick={() => choose(it.value)} />
@@ -334,13 +334,22 @@ function Select({ label, value, onChange, options, children, title, full, style,
 // optional mono meta line (a selector strategy, a param signature) and a clamped description, with
 // a trailing slot (arg count) and a check when selected. Visual hierarchy (ch07): name dominant,
 // badges/meta subordinate, description quietest.
-function OptionRow({ ico, icoColor, name, badges = [], meta, desc, trailing, selected, active, dense, onClick, onMouseEnter, onKeyDown, tabIndex }) {
+function OptionRow({ ico, icoColor, img, name, badges = [], meta, desc, trailing, selected, active, dense, onClick, onMouseEnter, onKeyDown, tabIndex }) {
   useLucide();
+  // `img` (a URL) takes the icon slot when given — e.g. a real app icon; a load failure falls
+  // back to the glyph so a 404 never leaves a broken-image square in the row.
+  const [imgFailed, setImgFailed] = React.useState(false);
+  React.useEffect(() => { setImgFailed(false); }, [img]);
   return (
     <div role="option" aria-selected={!!selected} tabIndex={tabIndex}
       className={'tb-opt-row' + (selected ? ' sel' : '') + (active ? ' active' : '') + (dense ? ' dense' : '')}
       onClick={onClick} onMouseEnter={onMouseEnter} onKeyDown={onKeyDown}>
-      <span className="tb-opt-ico"><Ico n={ico || 'wrench'} s={15} c={icoColor || 'var(--text-subtle-variant)'} /></span>
+      <span className="tb-opt-ico">
+        {img && !imgFailed
+          ? <img src={img} alt="" width={15} height={15} onError={() => setImgFailed(true)}
+              style={{ width: 15, height: 15, borderRadius: 3, objectFit: 'cover', display: 'block' }} />
+          : <Ico n={ico || 'wrench'} s={15} c={icoColor || 'var(--text-subtle-variant)'} />}
+      </span>
       <div className="tb-opt-main">
         <div className="tb-opt-line">
           <span className="tb-opt-name tb-mono">{name}</span>
@@ -682,17 +691,38 @@ function SearchableText({ text = '', language, fontSize = 12, minHeight, backgro
   );
 }
 
-// The real app icon for a target, served by the daemon from the bundled
-// app_icon_<id>.png. Falls back to a generic glyph if the target has no icon or it fails
-// to load. Kept the same box size as the fallback so layouts don't shift.
-function AppIcon({ target, size = 18, radius = 5, fallback = 'package', fallbackColor }) {
+// The real app icon for a target, served by the daemon from a workspace-provided icon or the
+// bundled app_icon_<id>.png fallback. Falls back to a generic glyph if the target has no icon or
+// it fails to load. Kept the same box size as the fallback so layouts don't shift.
+//
+// `platform` (optional, e.g. "android"/"ios"/"web") scopes the request to that platform's icon —
+// see the backend's `?platform=` handling in RunToolsRoutes.kt — so a device row can show its own
+// icon when a target's platforms have genuinely different artwork configured. Omitting it
+// reproduces the target-level icon (unchanged existing behavior).
+//
+// `fallbackNode`, when given, replaces the default `Ico` glyph on no-target/load-failure — used by
+// device rows to fall back to their existing `PlatformGlyph` (Android/iOS/Web) instead of a generic
+// icon, so rows look exactly as before until a real per-platform icon is actually configured.
+//
+// `appId` (optional), when the target's android platform declares more than one `app_ids` entry
+// (e.g. prod vs. an internal/staging build), picks which declared id's convention icon to resolve
+// instead of always the first — see the backend's `?appId=` handling in RunToolsRoutes.kt. A device
+// row passes the exact package it found installed (`DeviceAppDto.appId`) so a prod build on one
+// device and an internal build on another show their own icon. Omitting it falls back to the first
+// declared id (unchanged existing behavior).
+//
+// `v`, when given, busts the browser's `<img>` cache (the response also carries a 24h
+// Cache-Control) — bump it after an Edit Target save so a changed icon shows up immediately.
+function AppIcon({ target, platform, appId, size = 18, radius = 5, fallback = 'package', fallbackColor, fallbackNode, v }) {
   const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => { setFailed(false); }, [target]);
+  React.useEffect(() => { setFailed(false); }, [target, platform, appId, v]);
   if (!target || failed) {
-    return <Ico n={fallback} s={size} c={fallbackColor || 'var(--text-subtle-variant)'} style={{ flex: '0 0 auto' }} />;
+    return fallbackNode || <Ico n={fallback} s={size} c={fallbackColor || 'var(--text-subtle-variant)'} style={{ flex: '0 0 auto' }} />;
   }
+  const params = [platform ? `platform=${encodeURIComponent(platform)}` : null, appId ? `appId=${encodeURIComponent(appId)}` : null, v ? `v=${encodeURIComponent(v)}` : null].filter(Boolean);
+  const src = `/trailrunner/api/app-icon/${encodeURIComponent(target)}` + (params.length ? `?${params.join('&')}` : '');
   return (
-    <img src={`/trailrunner/api/app-icon/${encodeURIComponent(target)}`} alt="" width={size} height={size}
+    <img src={src} alt="" width={size} height={size}
       onError={() => setFailed(true)}
       style={{ flex: '0 0 auto', width: size, height: size, borderRadius: radius, objectFit: 'cover', display: 'block' }} />
   );

@@ -1,7 +1,7 @@
 # Android World Benchmark: BrightnessMaxVerify
 - config:
     id: android-world-benchmarks/system/brightness_max_verify
-    displayName: "System - Brightness Max Verify"
+    title: "System - Brightness Max Verify"
     description: "Turn brightness to the max value."
 
 - tools:

@@ -15,6 +15,8 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
+import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -235,23 +237,29 @@ class CheckCommand : Callable<Int> {
       emitScriptedToolDefinitionsDebug(trailmapsToValidate, workspaceRoot = resolved.workspaceRoot)
     }
 
-    // Report-only: type-validate `.trail.yaml` recordings against each trailmap's typed surface.
-    // Runs by default (never influences the exit code — see [TrailTscValidator]); opt out with
-    // TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1. Strictly non-fatal.
-    if (!isTrailRecordingValidationDisabled()) {
+    // Type-validate `.trail.yaml` recordings against each trailmap's typed surface. Fails the build
+    // by default when a NON-exempt target has findings or can't be validated; per-target
+    // `trail_validation.exempt` (in trailmap.yaml) and a central transitional allow-list opt targets
+    // out. Opt out of the whole phase with TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1.
+    // Infrastructure problems inside the phase stay non-fatal (skip + log) — only genuine findings
+    // flip the exit code. See [TrailTscValidator].
+    val validationExit = if (isTrailRecordingValidationDisabled()) {
+      EXIT_OK
+    } else {
       runTrailRecordingValidationPhase(
         workspaceRoot = resolved.workspaceRoot,
         trailmaps = trailmapsToValidate,
-        // Only fold in the (large) classpath-bundled surfaces on an all-workspace run. A scoped
-        // run (`check <id>`, or from inside a trailmap dir) shouldn't pull the whole square /
-        // dashboardapp corpus into its report — that scale is what `--all` opts into.
+        // Only fold in the (large) classpath-bundled validation surfaces on an all-workspace run. A
+        // scoped run (`check <id>`, or from inside a trailmap dir) shouldn't pull the whole
+        // app-bundled corpus into its report — that scale is what `--all` opts into.
         allWorkspaceScope = dispatch.typecheckAll,
       )
     }
 
-    // Worst-of-two wins. Exit codes are ordered OK(0) < FAILURE(1) < USAGE(2), so max()
-    // surfaces operator-fixable preconditions over real failures over success.
-    return maxOf(typecheckExit, testExit)
+    // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
+    // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
+    // the phases over a plain success.
+    return maxOf(typecheckExit, testExit, validationExit)
   }
 
   /**
@@ -643,16 +651,25 @@ class CheckCommand : Callable<Int> {
   }
 
   /**
-   * Report-only trail-recording type-validation. Reuses the same workspace SDK + bundled tsc the
-   * typecheck phase set up, so this runs after [runTypecheckPhase]. Strictly non-fatal and never
-   * touches the exit code — it only prints a YAML-keyed findings report. See [TrailTscValidator].
+   * Trail-recording type-validation. Reuses the same workspace SDK + bundled tsc the typecheck phase
+   * set up, so this runs after [runTypecheckPhase]. Fails the build ([EXIT_TYPE_ERROR]) only when the
+   * validator reports a FATAL finding — a non-exempt target with type findings, or a non-exempt
+   * target that can't be validated at all. Everything else returns [EXIT_OK]:
+   *  - Findings on exempt targets, missing surfaces for exempt targets, and allow-listed unmodeled
+   *    tools are reported but non-fatal (the validator computes this).
+   *  - Infrastructure problems (bun/tsc missing) and any unexpected exception in the phase are
+   *    logged and treated as non-fatal, so a transient environment issue can't spuriously fail a
+   *    build — the typecheck phase already gated bun/tsc presence upstream.
+   *
+   * See [TrailTscValidator] for the exemption model and [buildExemptTargets] for how the set is
+   * assembled.
    */
   private fun runTrailRecordingValidationPhase(
     workspaceRoot: File,
     trailmaps: List<Path>,
     allWorkspaceScope: Boolean,
-  ) {
-    try {
+  ): Int {
+    return try {
       val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
       val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = trailsRoot)
       val jsRuntime = resolveJsRuntime()
@@ -661,7 +678,7 @@ class CheckCommand : Callable<Int> {
           "trailblaze check: trail-recording validation skipped — " +
             (if (jsRuntime == null) "bun not on PATH" else "bundled tsc payload missing") + ".",
         )
-        return
+        return EXIT_OK
       }
       // Fold in the validation surfaces the compile phase materialized for classpath-bundled
       // trailmaps (app-bundled targets like `square` that have no workspace `tools/` dir of their
@@ -684,15 +701,33 @@ class CheckCommand : Callable<Int> {
         trailmaps = trailmaps + classpathSurfaces,
         jsRuntime = jsRuntime,
         tscJs = tscJs,
+        exemptTargets = buildExemptTargets(trailmaps),
+        allowedUnmodeledTools = TrailTscValidator.DEFAULT_ALLOWED_UNMODELED_TOOLS,
+        // A missing surface is only a real "uncovered target" signal on an all-workspace run, which
+        // loads every surface. A scoped run (`check <id>` / cwd-scoped) still walks every trail under
+        // the workspace but only loaded the selected trailmap's surface, so the OTHER workspace
+        // targets legitimately have no surface here — treat those as out-of-scope skips, not defects.
+        failOnMissingSurface = allWorkspaceScope,
       )
       Console.log(TrailTscValidator.renderReport(report))
+      if (report.hasFatal()) {
+        Console.error(
+          "trailblaze check: trail-recording validation FAILED — see findings above. To exempt a " +
+            "not-yet-ready target, add `trail_validation.exempt: \"<reason>\"` to its trailmap.yaml.",
+        )
+        EXIT_TYPE_ERROR
+      } else {
+        EXIT_OK
+      }
     } catch (e: Exception) {
-      // Non-fatal: a problem in this report-only phase must never change `check`'s outcome. Catch
-      // Exception (not Throwable) so fatal VM errors — OOM, StackOverflow — still propagate.
+      // Non-fatal: an unexpected problem in this phase (a bug here, an IO hiccup) must not spuriously
+      // fail a build. Catch Exception (not Throwable) so fatal VM errors — OOM, StackOverflow — still
+      // propagate. Genuine type findings return through the normal path above, not here.
       Console.error(
         "trailblaze check: trail-recording validation phase failed (ignored): " +
           (e.message ?: e::class.simpleName),
       )
+      EXIT_OK
     }
   }
 
@@ -744,6 +779,80 @@ class CheckCommand : Callable<Int> {
         .sorted()
         .toList()
     }
+  }
+
+  /**
+   * Assemble the set of targets exempted from failing the trail-recording validation gate, keyed by
+   * `target:` value ([TrailTscValidator.NO_TARGET_KEY] for the no-`target:` case) with a reason.
+   *
+   * Two sources, unioned (later entries win, so a specific per-manifest reason overrides the generic
+   * transitional one):
+   *  1. [TRANSITIONAL_EXEMPT_TARGETS] — the central, explicitly-temporary allow-list for targets the
+   *     validator can't reach a manifest for yet (the placeholder / package-id targets used by
+   *     smoke/eval trails, and the no-`target:` case). This is what shrinks as the fidelity
+   *     follow-ups land.
+   *  2. Per-target `trail_validation.exempt` declared in any reachable `trailmap.yaml` — filesystem
+   *     workspace trailmaps AND classpath-bundled trailmaps. This is the durable, co-located
+   *     mechanism a target uses once its manifest is reachable but it's not yet clean.
+   */
+  private fun buildExemptTargets(trailmaps: List<Path>): Map<String, String> {
+    // Extract each reachable manifest's (id -> non-blank exempt reason). The pure merge with
+    // precedence rules lives in [assembleExemptTargets] so it can be unit-tested without disk IO.
+    fun exemptionOf(loaded: LoadedTrailblazeTrailmapManifest): Pair<String, String>? =
+      loaded.manifest.trailValidation?.exempt?.takeIf { it.isNotBlank() }?.let { loaded.manifest.id to it }
+
+    val workspaceIds = trailmaps.mapNotNull { it.fileName?.toString() }.toSet()
+    val workspaceExemptions = trailmaps.mapNotNull { dir ->
+      val manifestFile = dir.resolve(TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME).toFile()
+      if (!manifestFile.isFile) return@mapNotNull null
+      runCatching { TrailblazeTrailmapManifestLoader.load(manifestFile) }
+        .getOrNull()?.let(::exemptionOf)
+    }
+    // Classpath-bundled trailmap manifests (framework-bundled targets, plus any additional targets a
+    // consumer ships on the classpath). Discovery failure is non-fatal — the transitional list +
+    // workspace exemptions still apply — but log it so a manifest-loading regression is visible
+    // rather than silently dropping a bundled target's exemption.
+    val classpathExemptions =
+      runCatching { TrailblazeTrailmapManifestLoader.discoverAndLoadFromClasspath() }
+        .onFailure { e ->
+          Console.error(
+            "trailblaze check: classpath trailmap discovery failed while building the validation " +
+              "exemption set (continuing with workspace + transitional exemptions only): " +
+              (e.message ?: e::class.simpleName),
+          )
+        }
+        .getOrDefault(emptyList())
+        .mapNotNull(::exemptionOf)
+
+    return assembleExemptTargets(
+      transitional = TRANSITIONAL_EXEMPT_TARGETS,
+      workspaceExemptions = workspaceExemptions,
+      classpathExemptions = classpathExemptions,
+      workspaceIds = workspaceIds,
+    )
+  }
+
+  /**
+   * PURE. Merge the exemption sources into a single `target -> reason` map with two precedence rules:
+   *  - A per-manifest exemption overrides the generic [transitional] reason for the same id.
+   *  - Workspace-over-classpath: a classpath-bundled exemption is dropped when its id is a workspace
+   *    trailmap ([workspaceIds]) — the workspace manifest's decision (exempt or NOT) is authoritative,
+   *    so a local non-exempt shadow of a bundled target keeps its findings fatal rather than being
+   *    silently downgraded by the bundled manifest's exemption.
+   *
+   * Visible for testing so the precedence rules are pinned without staging manifests on disk.
+   */
+  internal fun assembleExemptTargets(
+    transitional: Map<String, String>,
+    workspaceExemptions: List<Pair<String, String>>,
+    classpathExemptions: List<Pair<String, String>>,
+    workspaceIds: Set<String>,
+  ): Map<String, String> {
+    val exempt = LinkedHashMap<String, String>()
+    exempt.putAll(transitional)
+    workspaceExemptions.forEach { (id, reason) -> exempt[id] = reason }
+    classpathExemptions.forEach { (id, reason) -> if (id !in workspaceIds) exempt[id] = reason }
+    return exempt
   }
 
   internal fun runTypecheckPhase(workspaceRoot: File, trailmaps: List<Path>): Int {
@@ -1323,6 +1432,39 @@ class CheckCommand : Callable<Int> {
      * other two exit codes.
      */
     const val EXIT_OPERATIONAL_ERROR = 3
+
+    /**
+     * Central, **explicitly transitional** allow-list of targets exempted from failing the
+     * trail-recording validation gate, keyed by `target:` value with a human-readable reason.
+     *
+     * This covers only targets that have **no trailmap manifest at all** — so they can't carry a
+     * per-target `trail_validation.exempt` (that's the durable mechanism a real target uses; a
+     * classpath-bundled target likewise declares it in its own bundled manifest, which
+     * [buildExemptTargets] reads). What's left here are placeholder / package-id targets used by
+     * smoke and eval trails, plus the no-`target:` case:
+     *  - **`default` / `trailrunner`** — placeholder targets used by CLI smoke / eval trails; no
+     *    trailmap manifest exists for them.
+     *  - **`xyz.block.trailblaze.examples.sampleapp`** — an eval trail that targets the sample app
+     *    by its package id; the matching trailmap lives in a separate example workspace, so there's
+     *    no surface for it in a workspace that only contains the eval trail.
+     *  - **[TrailTscValidator.NO_TARGET_KEY]** — trails that declare no `target:` (smoke / eval
+     *    fixtures), which have no surface to validate against.
+     *
+     * This is the target-name analogue of the tool-name allow-list
+     * ([TrailTscValidator.DEFAULT_ALLOWED_UNMODELED_TOOLS]); both shrink toward empty as fidelity
+     * improves. See docs/devlog/2026-07-01-trail-recording-type-validation.md.
+     */
+    internal val TRANSITIONAL_EXEMPT_TARGETS: Map<String, String> = mapOf(
+      "default" to
+        "Placeholder target used by cli-smoke / eval trails; no trailmap manifest to validate against.",
+      "trailrunner" to
+        "Placeholder target used by trailrunner-smoke trails; no trailmap manifest to validate against.",
+      "xyz.block.trailblaze.examples.sampleapp" to
+        "Eval trail targeting the sample app by package id; that trailmap lives in a separate " +
+        "example workspace, so it has no surface in a workspace that only holds the eval trail.",
+      TrailTscValidator.NO_TARGET_KEY to
+        "Trails that declare no target: (smoke / eval fixtures) have no surface to validate against.",
+    )
 
     /**
      * The sole JavaScript runtime Trailblaze runs against. A single-entry list

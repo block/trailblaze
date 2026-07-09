@@ -42,7 +42,6 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
-import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -106,15 +105,9 @@ class PlaywrightTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = null,
-      nestedToolExecutor = { nestedTool ->
-        runTrailblazeTools(
-          tools = listOf(nestedTool),
-          traceId = context.traceId,
-          screenState = context.screenState,
-          elementComparator = NoOpElementComparator,
-          screenStateProvider = context.screenStateProvider,
-        ).result
-      },
+      // See BaseTrailblazeAgent.nestedToolExecutorFor's kdoc for the full rationale (fixes the
+      // nested-composition counterpart of #4506's clipboard bug).
+      nestedToolExecutor = nestedToolExecutorFor { context },
       workingDirectory = workingDirectory,
       sessionDirProvider = sessionDirProvider,
       inflightRequestTracker = inflightRequestTracker,

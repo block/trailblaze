@@ -93,20 +93,21 @@ data class TapTrailblazeTool(
     //  1. **Single-format recording.** Accessibility recordings are forward-only by design.
     //     They route through the on-device [AccessibilityTrailblazeAgent.executeNodeSelectorTap],
     //     which resolves the [nodeSelector] against the live accessibility tree and
-    //     dispatches a coordinate gesture. The legacy `selector` would resolve against
-    //     UiAutomator's tree on Maestro fallback, which is shaped differently and can
-    //     silently mis-target — exactly what we want to forbid for accessibility.
+    //     dispatches a coordinate gesture. A Maestro-lowered fallback would resolve against
+    //     UiAutomator's tree instead, which is shaped differently and can silently
+    //     mis-target — exactly what we want to forbid for accessibility.
     //  2. **Dispatch isolation.** [TapOnByElementSelector.execute] refuses Maestro fallback
     //     when the selector carries an `androidAccessibility` shape; we never need the
-    //     legacy `selector` to be authoritative.
+    //     Maestro-lowered projection to be authoritative.
     //
     // The [hitTest] round-trip (preserved below for the legacy path) still applies here:
     // the same hit-test that OS routing would use picks the selector source, so resolve
     // selector → tap center → OS-route closes back to the same node. We deliberately keep
     // that semantics on the accessibility path; only the *recording shape* changes.
     //
-    // Maestro/instrumentation recordings still carry both the legacy `selector` and a
-    // Maestro-shaped `nodeSelector` (see the legacy branch below) — that path is unchanged.
+    // Maestro/instrumentation recordings carry a Maestro-shaped `nodeSelector` (see the
+    // legacy branch below, which lowers it to a Maestro selector at replay time) — that
+    // path is unchanged.
     if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) {
       // Use hitTest as the selector source so replay's OS-routing target matches the recorded
       // selector — same round-trip invariant we rely on for the legacy path. For the
@@ -276,12 +277,29 @@ data class TapTrailblazeTool(
       }
     }
 
+    // TapOnByElementSelector no longer carries the legacy TrailblazeElementSelector field, so
+    // TapSelectorV2's output is converted to nodeSelector shape before storage; replay lowers
+    // it back to a Maestro selector via `lowerToMaestroSelector`. The selector-source choice
+    // lives in [recordedNodeSelectorForMaestroPath] (shared with AssertVisibleTrailblazeTool).
+    // FORCE_LEGACY deliberately ignores the modern generator's `nodeSelector` on every
+    // platform, per its "always use TapSelectorV2" contract; FORCE_NODE_SELECTOR never
+    // reaches here (it early-returns above with the modern nodeSelector).
+    val legacyAsNodeSelector = selectorWithStrategy.selector.toTrailblazeNodeSelector(
+      screenState.trailblazeDevicePlatform,
+    )
     return listOf(
       TapOnByElementSelector(
         reason = reasoning,
-        selector = selectorWithStrategy.selector,
         longPress = longPress,
-        nodeSelector = if (mode == NodeSelectorMode.FORCE_LEGACY) null else nodeSelector,
+        nodeSelector = if (mode == NodeSelectorMode.FORCE_LEGACY) {
+          legacyAsNodeSelector
+        } else {
+          recordedNodeSelectorForMaestroPath(
+            platform = screenState.trailblazeDevicePlatform,
+            modernNodeSelector = nodeSelector,
+            legacyAsNodeSelector = legacyAsNodeSelector,
+          )
+        },
       ),
     )
   }

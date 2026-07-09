@@ -15,6 +15,20 @@ import xyz.block.trailblaze.util.Console
  * @param trailblazeYaml The YAML serializer instance to use for encoding.
  * @param sessionTrailConfig Optional trail config to include at the top of the recording.
  */
+/**
+ * The session's config as a recording save path should persist it: the original config carried
+ * wholesale (lossless — a hand-picked field list here silently dropped electron/tags/skip/memory)
+ * with only the session's runtime driver/platform overriding, plus an optional [titleOverride]
+ * (e.g. an MCP save tool's caller-supplied trail name). Started sites that don't apply
+ * `config.memory:` strip it before logging, so trusting the logged config is safe.
+ */
+fun SessionStatus.Started.toRecordingTrailConfig(titleOverride: String? = null): TrailConfig =
+  (trailConfig ?: TrailConfig()).copy(
+    title = titleOverride ?: trailConfig?.title,
+    driver = trailblazeDeviceInfo.trailblazeDriverType.name,
+    platform = trailblazeDeviceInfo.platform.name.lowercase(),
+  )
+
 fun List<TrailblazeLog>.generateRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
@@ -40,21 +54,13 @@ fun List<TrailblazeLog>.generateRecordedYaml(
 
     // Add config first if provided OR if we have a runtime driver to stamp (so a logs-only
     // call without source config still emits a config block carrying the driver marker).
+    // Carry the source config wholesale (copy, not a field list) so the saved recording is
+    // lossless — a rebuilt field list here silently dropped electron/tags/skip/memory before
+    // the save-back merge ever saw them.
     if (sessionTrailConfig != null || resolvedDriver != null) {
       items.add(
         TrailYamlItem.ConfigTrailItem(
-          TrailConfig(
-            context = sessionTrailConfig?.context,
-            id = sessionTrailConfig?.id,
-            title = sessionTrailConfig?.title,
-            source = sessionTrailConfig?.source,
-            description = sessionTrailConfig?.description,
-            priority = sessionTrailConfig?.priority,
-            metadata = sessionTrailConfig?.metadata,
-            target = sessionTrailConfig?.target,
-            driver = resolvedDriver,
-            platform = sessionTrailConfig?.platform,
-          ),
+          (sessionTrailConfig ?: TrailConfig()).copy(driver = resolvedDriver),
         ),
       )
     }
@@ -97,7 +103,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             .filter { it.isRecordable }
           val selectedToolLogs = toolLogsInWindow
             .filter { it.isTopLevelToolCall }
-            .ifEmpty { toolLogsInWindow }
+            .ifEmpty { dropNestedToolCalls(toolLogsInWindow) }
             .let { dedupeLayerDuplicates(it) }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
@@ -268,6 +274,38 @@ private fun fingerprintForDedup(
   }
   return wrapper.name + "||" +
     rawYaml.lines().filterNot { it.trimStart().startsWith("reason:") }.joinToString("\n")
+}
+
+/**
+ * Drops tool logs that are nested dispatches INSIDE another logged tool call — the `ctx.tools.*`
+ * sub-calls a composite (scripted) tool makes while it runs. Only the outermost call is the
+ * replayable recording: re-emitting the internals alongside it would replay every piece twice and
+ * couple the recording to the composite's implementation (the point of a one-call trailhead like
+ * `myapp_signedInToRoute` is that the trail sees ONE call).
+ *
+ * Detection is by execution-span containment ([TrailblazeLog.TrailblazeToolLog.timestamp] +
+ * `durationMs`): a nested call's span lies inside its parent's strictly-longer span. Span math is
+ * the signal because only the MCP step path stamps `isTopLevelToolCall` — runner/replay paths never
+ * set it (which is why this runs on the `ifEmpty` fallback), and it also holds for logs recorded
+ * before any emitter stamped the flag. The strictly-longer requirement means identical spans (layer
+ * duplicates, collapsed separately by [dedupeLayerDuplicates]) never drop each other.
+ *
+ * Order-preserving: returns the input list minus the contained entries, in input order.
+ */
+private fun dropNestedToolCalls(
+  logs: List<TrailblazeLog.TrailblazeToolLog>,
+): List<TrailblazeLog.TrailblazeToolLog> {
+  if (logs.size < 2) return logs
+  fun startMs(log: TrailblazeLog.TrailblazeToolLog): Long = log.timestamp.toEpochMilliseconds()
+  fun endMs(log: TrailblazeLog.TrailblazeToolLog): Long = startMs(log) + log.durationMs
+  return logs.filter { candidate ->
+    logs.none { container ->
+      container !== candidate &&
+        startMs(container) <= startMs(candidate) &&
+        endMs(container) >= endMs(candidate) &&
+        (endMs(container) - startMs(container)) > (endMs(candidate) - startMs(candidate))
+    }
+  }
 }
 
 /**

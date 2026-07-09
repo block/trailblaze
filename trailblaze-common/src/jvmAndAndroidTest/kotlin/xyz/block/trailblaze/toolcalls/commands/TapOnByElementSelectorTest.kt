@@ -3,15 +3,16 @@ package xyz.block.trailblaze.toolcalls.commands
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 /**
  * Sanity coverage for [TapOnByElementSelector.toMaestroCommands] after the removal of the
- * legacy `optional` propagation. Locks in that a basic `TrailblazeElementSelector` still
- * lowers to a single Maestro [TapOnElementCommand] with the expected matching predicate —
- * a regression in the lowering would otherwise only surface in integration runs.
+ * legacy `optional` propagation. Locks in that a basic `nodeSelector` still lowers to a
+ * single Maestro [TapOnElementCommand] with the expected matching predicate — a regression
+ * in the lowering would otherwise only surface in integration runs.
  */
 class TapOnByElementSelectorTest {
 
@@ -20,7 +21,7 @@ class TapOnByElementSelectorTest {
   @Test
   fun `basic textRegex selector lowers to a single TapOnElementCommand`() {
     val tap = TapOnByElementSelector(
-      selector = TrailblazeElementSelector(textRegex = "Login"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
     )
     val command = tap.toMaestroCommands(emptyMemory).single()
     assertIs<TapOnElementCommand>(command)
@@ -31,7 +32,7 @@ class TapOnByElementSelectorTest {
   @Test
   fun `longPress=true is propagated onto the Maestro command`() {
     val tap = TapOnByElementSelector(
-      selector = TrailblazeElementSelector(textRegex = "Edit"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Edit")),
       longPress = true,
     )
     val command = tap.toMaestroCommands(emptyMemory).single()
@@ -50,7 +51,7 @@ class TapOnByElementSelectorTest {
   @Test
   fun `lowering never sets optional=true on the Maestro command`() {
     val tap = TapOnByElementSelector(
-      selector = TrailblazeElementSelector(textRegex = "Allow"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Allow")),
     )
     val command = tap.toMaestroCommands(emptyMemory).single()
     assertIs<TapOnElementCommand>(command)
@@ -66,7 +67,9 @@ class TapOnByElementSelectorTest {
   @Test
   fun `idRegex-only selector lowers with idRegex propagated`() {
     val tap = TapOnByElementSelector(
-      selector = TrailblazeElementSelector(idRegex = "login_button"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "login_button"),
+      ),
     )
     val command = tap.toMaestroCommands(emptyMemory).single()
     assertIs<TapOnElementCommand>(command)

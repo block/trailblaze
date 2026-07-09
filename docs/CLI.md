@@ -294,7 +294,8 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
-| `-d`, `--device` | Device: platform (android, ios, web) or platform/id. Defaults to `$TRAILBLAZE_DEVICE` if set (manual override; rare), otherwise this terminal's pin (set by `trailblaze device connect`). In a fresh-shell harness (Claude Code, Cursor, Codex, CI), pass --device on every call. | - |
+| `-d`, `--device` | Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices (`--device android,ios` → one run per device). When omitted, resolves to a pinned (`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ devices are connected and none is pinned, the run fails and asks you to pass this (or `--driver` / `--all-devices`). See also --all-devices. | - |
+| `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
 | `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
@@ -308,7 +309,8 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--secret` | Pre-populate trail memory with a SENSITIVE KEY=VAL before any step runs. Same shape as --memory; the value is redacted in logs (via `rememberSensitive`), excluded from the scripting envelope, and omitted from the session-start snapshot. Only the KEY appears in `Started.sensitiveMemoryKeys` so replay knows it must re-supply the value. Repeatable. Use for passwords, tokens, API keys, PII. | - |
 | `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 50 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
-| `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR no <deviceClassifiers>.trail.yaml exists yet next to the source — deterministic re-runs no-op the write so they can't clobber a hand-edited source. | - |
+| `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. See --unified-recordings for the on-disk format. | - |
+| `--unified-recordings` | Save new recordings in the unified format: the device's slot is merged into the unified trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using them). Default: off while unified support rolls out — recordings save as legacy <classifier>.trail.yaml siblings, and nothing is written next to an existing unified trail.yaml. Also enabled via TRAILBLAZE_UNIFIED_RECORDINGS=1 or 'trailblaze config unified-recordings true'. | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
@@ -782,7 +784,7 @@ trailblaze waypoint suggest-selector [OPTIONS] [<<positionalLogFile>>]
 
 ### `trailblaze waypoint migrate-trail`
 
-Mechanically migrate legacy `selector` (Maestro-shape) → `nodeSelector` (accessibility shape) for every selector-bearing tool in a trail YAML, using the captured session logs to deterministically resolve each selector through the same matcher the runtime uses for taps. Defaults to dry-run (unified diff on stdout). Use `--write` to apply the migration in place. Pair with a recorded session log directory (`--session`) for the same trail.
+Mechanically migrate a trail's Maestro-shape selectors to accessibility shape. Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector` still carries androidMaestro matchers is rewritten to androidAccessibility shape, using the captured session logs to deterministically resolve each selector through the same matcher the runtime uses for taps. Defaults to dry-run (unified diff on stdout). Use `--write` to apply the migration in place. Pair with a recorded session log directory (`--session`) for the same trail.
 
 **Synopsis:**
 
@@ -800,7 +802,7 @@ trailblaze waypoint migrate-trail [OPTIONS] <<trailFile>>
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--session` | Session log directory containing *_TrailblazeLlmRequestLog.json files captured during a recorded run of this trail. The Nth selector-bearing tool in the YAML is paired with the Nth log step that carries both viewHierarchy and trailblazeNodeTree. | - |
+| `--session` | Session log directory from a dual-tree recorded run of this trail (trailblaze.captureSecondaryTree=true). Accepts *_TrailblazeLlmRequestLog.json, *_TrailblazeSnapshotLog.json, and *_AgentDriverLog.json files; only logs carrying viewHierarchy + trailblazeNodeTree + driverMigrationTreeNode are usable. | - |
 | `--write` | Overwrite the trail file in place with the migrated YAML. Default is dry-run: print a unified diff for review without changing the file. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -1099,6 +1101,7 @@ trailblaze config reset
 | `android-driver` | Android driver type | accessibility, instrumentation |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
+| `unified-recordings` | Save new recordings in the unified trail.yaml format instead of legacy <classifier>.trail.yaml siblings | true, false |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
 | `max-llm-calls` | Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent | positive integer, or 'unset' to clear |
 | `annotated-screenshots` | Save set-of-mark annotated screenshots to logs (LLM always receives annotated) | true, false |

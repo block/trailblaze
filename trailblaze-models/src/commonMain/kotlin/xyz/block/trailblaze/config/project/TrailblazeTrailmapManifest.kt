@@ -192,6 +192,50 @@ data class TrailblazeTrailmapManifest(
   @SerialName("waypoints") val waypoints: List<String> = emptyList(),
   /** Reserved schema slot — runtime loading deferred. */
   @SerialName("trails") val trails: List<String> = emptyList(),
+  /**
+   * Opt this target's `.trail.yaml` recordings OUT of the (default-fatal) trail-recording
+   * type-validation phase of `trailblaze check`. See [TrailValidationConfig].
+   *
+   * Mirrors [xyz.block.trailblaze.yaml.TrailConfig.skip]'s required-reason pattern: co-located
+   * with the target it exempts, reviewable in the same diff, and visibly shrinking as targets
+   * become clean. When [TrailValidationConfig.exempt] is a non-blank reason, findings on this
+   * target — and its inability to be validated when it has no generated typed surface — are
+   * reported but never fail the build. Leave the whole block absent for the steady state: a
+   * target with no exemption must type-validate cleanly or the build fails.
+   *
+   * Appended at the end of the data class so existing positional component accessors
+   * (component1..N) and binary-compatibility baselines for earlier fields stay stable.
+   */
+  @SerialName("trail_validation") val trailValidation: TrailValidationConfig? = null,
+)
+
+/**
+ * Per-target opt-out for the trail-recording type-validation phase of `trailblaze check`.
+ *
+ * The phase transpiles every recorded tool call in a target's `.trail.yaml` files into a
+ * throwaway TypeScript statement and compiles it against the target's generated typed tool
+ * surface (`tools/trailblaze-client.d.ts`), catching tools that don't exist for the target,
+ * wrong-typed args, and missing required args. It fails the build by default. A target that is
+ * not yet clean — or that has no generated surface to validate against — carries an [exempt]
+ * reason here so it is reported but non-fatal.
+ *
+ * This is the durable, co-located exemption mechanism: it lives in the target's own manifest,
+ * so it is reviewed in the same PR that touches the target and disappears from the diff the
+ * moment the target is brought to zero findings. It is honored for any manifest the validator
+ * can reach (filesystem workspace trailmaps and classpath-bundled trailmaps alike). Targets
+ * whose manifest the validator cannot reach at all (and the no-`target:` trails) are handled by
+ * a separate, explicitly-transitional central allow-list in the CLI — see `CheckCommand`.
+ */
+@Serializable
+data class TrailValidationConfig(
+  /**
+   * When non-blank, exempt this target from failing the trail-recording validation phase, with
+   * the given human-readable reason — typically an issue reference (e.g.
+   * `"Selector args not yet modeled on raw tools — see block/trailblaze#NNNN"`). An empty or
+   * blank string is treated as "not exempt" so an accidental `exempt: ""` can't silently
+   * disable the gate (same guard as [xyz.block.trailblaze.yaml.TrailConfig.skip]).
+   */
+  @SerialName("exempt") val exempt: String? = null,
 )
 
 /**
@@ -238,6 +282,15 @@ data class TrailmapTargetConfig(
    * resolve.
    */
   @SerialName("tools") val tools: List<String> = emptyList(),
+  /**
+   * Optional workspace-relative path to an icon shown beside this target in the TrailRunner UI
+   * (Android launcher icon / web favicon). Threaded onto the generated [AppTargetYamlConfig.icon]
+   * by [toAppTargetYamlConfig]. When absent, the UI may fall back to the filename convention in
+   * [xyz.block.trailblaze.config.TargetIconConvention] (`android_<app_id>.png` /
+   * `favicon_<host>.png` under the shared icons folder), so simply populating that folder fills the
+   * first-run target list without per-target authoring. An explicit value overrides the convention.
+   */
+  @SerialName("icon") val icon: String? = null,
 ) {
   fun toAppTargetYamlConfig(
     defaultId: String,
@@ -251,5 +304,6 @@ data class TrailmapTargetConfig(
       hasCustomIosDriver = hasCustomIosDriver,
       systemPrompt = resolvedSystemPrompt,
       tools = resolvedTools.takeIf { it.isNotEmpty() },
+      icon = icon,
     )
 }

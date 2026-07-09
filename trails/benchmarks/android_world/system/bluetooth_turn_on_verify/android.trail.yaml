@@ -1,7 +1,7 @@
 # Android World Benchmark: BluetoothTurnOnVerify
 - config:
     id: android-world-benchmarks/system/bluetooth_turn_on_verify
-    displayName: "System - Bluetooth Turn On Verify"
+    title: "System - Bluetooth Turn On Verify"
     description: "Turn bluetooth on."
 
 - tools:

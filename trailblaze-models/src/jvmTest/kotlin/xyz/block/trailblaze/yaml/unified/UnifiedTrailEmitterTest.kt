@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml.unified
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
@@ -209,6 +210,40 @@ class UnifiedTrailEmitterTest {
       emitted.contains("\n    maxRetries: 10\n"),
       "expected `    maxRetries: 10` line at step-key indent, got:\n$emitted",
     )
+  }
+
+  @Test
+  fun `a verify step emits as a verify list entry and round-trips`() {
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android-phone" to listOf(noopTool()))),
+        UnifiedTrailStep(
+          step = "The cart shows 2 items",
+          verify = true,
+          recordings = mapOf("android-phone" to listOf(noopTool())),
+          maxRetries = 5,
+        ),
+      ),
+    )
+    val emitted = yaml.encodeUnifiedTrailToString(trail)
+    assertTrue(
+      "- verify: \"The cart shows 2 items\"" in emitted,
+      "expected `- verify:` list entry, got:\n$emitted",
+    )
+    assertEquals(trail, yaml.decodeUnifiedTrail(emitted), "verify step must survive emit → decode")
+  }
+
+  @Test
+  fun `emitting a verify trailhead fails loud instead of flattening to step`() {
+    // A verify trailhead can't come from parsing (the parser rejects it) — only from code. The
+    // emitter must refuse rather than silently write it as `step:` and lose the kind.
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trailhead = UnifiedTrailStep(step = "Signed in", verify = true),
+      trail = listOf(UnifiedTrailStep(step = "hi")),
+    )
+    assertFailsWith<IllegalArgumentException> { yaml.encodeUnifiedTrailToString(trail) }
   }
 
   @Test

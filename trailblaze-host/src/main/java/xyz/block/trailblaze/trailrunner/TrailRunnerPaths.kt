@@ -137,6 +137,10 @@ internal fun toSessionSummary(info: SessionInfo): SessionSummary {
     device = device?.classifiers?.joinToString(" · ") { it.toString() }
       ?: device?.trailblazeDriverType?.name,
     target = info.trailConfig?.target,
+    appId = info.targetAppInfo?.appId,
+    appVersionName = info.targetAppInfo?.versionName,
+    appVersionCode = info.targetAppInfo?.versionCode,
+    appBuildNumber = info.targetAppInfo?.buildNumber,
     hasRecordedSteps = info.hasRecordedSteps,
     error = error,
   )

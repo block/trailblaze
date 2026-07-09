@@ -1,7 +1,7 @@
 # Android World Benchmark: WifiTurnOffVerify
 - config:
     id: android-world-benchmarks/system/wifi_turn_off_verify
-    displayName: "System - Wifi Turn Off Verify"
+    title: "System - Wifi Turn Off Verify"
     description: "Turn wifi off."
 
 - tools:

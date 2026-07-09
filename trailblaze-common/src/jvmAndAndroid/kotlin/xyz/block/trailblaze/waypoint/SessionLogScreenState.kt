@@ -132,9 +132,8 @@ object SessionLogScreenState {
    * of the document. Returns the raw ISO-8601 string for cheap chronological compare; null
    * if the field is missing or the file can't be read.
    *
-   * Regex on raw text rather than a typed projection is intentional — same approach used in
-   * `WaypointMigrateTrailCommand.readTimestamp`, kept consistent so a shared sort key does
-   * the same thing across both call sites.
+   * Regex on raw text rather than a typed projection is intentional — cheap chronological
+   * sorting shouldn't pay for a full deserialization pass.
    */
   fun readTimestamp(jsonFile: File): String? = try {
     val raw = jsonFile.readText()

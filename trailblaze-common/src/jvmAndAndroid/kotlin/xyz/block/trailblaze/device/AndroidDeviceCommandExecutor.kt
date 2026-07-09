@@ -425,6 +425,18 @@ expect class AndroidDeviceCommandExecutor(
   fun writeFileToDownloads(fileName: String, content: ByteArray)
 
   /**
+   * Writes an image into the device's public Pictures directory and registers it as a MediaStore
+   * Images row, so a gallery / photo picker finds it under scoped storage.
+   * On-device this does a `MediaStore.Images` `ContentResolver.insert` (scoped-storage-safe,
+   * auto-registered); from the host it `adb push`es the bytes then triggers a MediaStore `scan_file`.
+   *
+   * @param fileName The file name (not a full path) to write in the Pictures folder
+   * @param content The image content as a byte array
+   * @param mimeType The image MIME type (defaults to `image/png`)
+   */
+  fun writeFileToImages(fileName: String, content: ByteArray, mimeType: String = "image/png")
+
+  /**
    * Deletes a file from the device's public Downloads directory if it exists.
    *
    * @param fileName The file name (not a full path) to delete from the Downloads folder
@@ -561,4 +573,19 @@ expect class AndroidDeviceCommandExecutor(
     maxWaitMs: Long = 30_000,
     checkIntervalMs: Long = 200,
   ): Boolean
+}
+
+/**
+ * Raw-argv plan for [AndroidDeviceCommandExecutor.writeFileToDevice]'s on-device fallback:
+ * `mkdir -p <parent>`, then `cp <staging> <dest>`. Deliberately NO `shellEscape()` — the
+ * on-device transport (UiAutomation → `Runtime.exec`) has no shell, so quoted tokens pass
+ * literally and `cp` fails silently. Same rule as `android_adbShell`'s argv dispatch
+ * (devlog 2026-06-30).
+ */
+internal fun buildShellCpFallbackCommands(stagingPath: String, devicePath: String): List<List<String>> {
+  val parent = devicePath.substringBeforeLast('/', missingDelimiterValue = "")
+  return buildList {
+    if (parent.isNotEmpty()) add(listOf("mkdir", "-p", parent))
+    add(listOf("cp", stagingPath, devicePath))
+  }
 }

@@ -63,6 +63,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
@@ -505,6 +506,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
+        playwrightTest.loggingRule.captureFinalScreenshot(session, playwrightTest.browserManager::getScreenState)
         playwrightTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
@@ -641,6 +643,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
+        electronTest.loggingRule.captureFinalScreenshot(session, electronTest.browserManager::getScreenState)
         electronTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
@@ -846,6 +849,11 @@ object TrailblazeHostYamlRunner {
         loggingRule.session ?: error("Session not available - ensure test is running")
       },
       sessionUpdater = { loggingRule.setSession(it) },
+      // Shares one execution context + snapshot frame across the recording, matching the
+      // batching pattern elsewhere. Unlike the Android/host-Maestro wiring, this agent's
+      // buildExecutionContext doesn't cache per-call device state today, so the benefit here
+      // is reduced frame/ThreadLocal churn rather than a clipboard-style state-survival fix.
+      sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
@@ -975,6 +983,11 @@ object TrailblazeHostYamlRunner {
       val goldenPassed = goldenResult?.passed != false
 
       if (runYamlRequest.config.sendSessionEndLog) {
+        if (goldenPassed) {
+          loggingRule.captureFinalScreenshot(session, screenStateProvider)
+        } else {
+          loggingRule.captureFailureScreenshot(session, screenStateProvider)
+        }
         loggingRule.sessionManager.endSession(session, isSuccess = goldenPassed)
       }
 
@@ -1161,6 +1174,12 @@ object TrailblazeHostYamlRunner {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
         sessionUpdater = { loggingRule.setSession(it) },
+        // Shares one execution context + snapshot frame across the recording, matching the
+        // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
+        // device state today either (Revyl's device state lives in the cloud device, dispatched
+        // fresh per tool via cliClient) — the benefit here is reduced frame/ThreadLocal churn,
+        // not a clipboard-style state-survival fix.
+        sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
       )
 
       val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
@@ -1273,6 +1292,7 @@ object TrailblazeHostYamlRunner {
         onProgressMessage("Test execution completed successfully")
 
         if (runYamlRequest.config.sendSessionEndLog) {
+          loggingRule.captureFinalScreenshot(session, screenStateProvider)
           loggingRule.sessionManager.endSession(session, isSuccess = true)
         }
 
@@ -1474,6 +1494,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
+        hostTbRunner.loggingRule.captureFinalScreenshot(session, hostTbRunner.hostRunner.screenStateProvider)
         hostTbRunner.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
@@ -1735,6 +1756,14 @@ object TrailblazeHostYamlRunner {
               trailblazeDeviceId = trailblazeDeviceId,
               resolvedInitialMemory = resolvedInitialMemory,
               sensitiveMemoryKeys = sensitiveMemoryKeys,
+              // Reading the lazy here resolves the app id at session start (one `pm list
+              // packages` + one `dumpsys package`), so the recording carries the build under
+              // test. Later target-aware tool dispatches reuse the same resolved value.
+              targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
+                target = targetTestApp,
+                trailblazeDeviceId = trailblazeDeviceId,
+                resolvedAppId = appIdForSessionLazy.value,
+              ),
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),
@@ -1834,9 +1863,14 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         val sessionManager = loggingRule.sessionManager
+        val v3ScreenStateProvider = {
+          runBlocking { executor.captureScreenState() } ?: error("No screen state available")
+        }
         if (trailSuccess) {
+          loggingRule.captureFinalScreenshot(session, v3ScreenStateProvider)
           sessionManager.endSession(session, isSuccess = true)
         } else {
+          loggingRule.captureFailureScreenshot(session, v3ScreenStateProvider)
           sessionManager.endSession(
             session,
             isSuccess = false,
@@ -2068,10 +2102,10 @@ object TrailblazeHostYamlRunner {
       System.getenv("TRAILBLAZE_CAPTURE_SECONDARY_TREE")?.equals("true", ignoreCase = true) == true
     val onBeforeRecordedTool: (suspend (TrailblazeTool) -> Unit)? = if (migrationCaptureEnabled) {
       lambda@{ tool: TrailblazeTool ->
-        // Only fire the capture for the tools the migration rewrites. Recordings include
-        // launch / custom flow / verify tools that the migration pass doesn't touch — a
-        // snapshot per non-target tool would inflate session-log size for no benefit.
-        // Keep the filter in lockstep with classNameFromYamlToolName in WaypointMigrateTrailCommand.
+        // Only fire the capture for the selector-bearing tools a driver migration cares
+        // about. Recordings include launch / custom flow / verify tools that a migration
+        // pass doesn't touch — a snapshot per non-target tool would inflate session-log
+        // size for no benefit.
         val isMigrationTarget = tool is xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector ||
           tool is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
         if (!isMigrationTarget) return@lambda
@@ -2150,6 +2184,17 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
       onAfterRecordedTool = onAfterRecordedTool,
+      // Deliberately NOT wired here, unlike the other host runners in this file:
+      // 1. `agent.executeToolViaRpc` sends each recorded tool as its own single-tool
+      //    `RunYamlRequest`, so the on-device `AndroidDeviceCommandExecutor` (and its
+      //    clipboard cache) resets between tools on the DEVICE regardless of what this
+      //    host-side context shares — there's no cross-tool device state for this bracket
+      //    to preserve, unlike the in-process runners.
+      // 2. When `migrationCaptureEnabled`, `onBeforeRecordedTool`/`onAfterRecordedTool`
+      //    call `agent.captureScreenState()`, a suspend RPC call whose continuation is not
+      //    guaranteed to resume on the entering thread. `ToolBatchScope` is thread-scoped
+      //    (see its kdoc's THREAD_HOP note) and can't recover from that hop — it would leak
+      //    the pushed SnapshotCache frame / installed ThreadLocal on the original thread.
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
@@ -2200,6 +2245,11 @@ object TrailblazeHostYamlRunner {
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
+                target = targetTestApp,
+                trailblazeDeviceId = trailblazeDeviceId,
+                resolvedAppId = appIdForSession,
+              ),
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),
@@ -2270,6 +2320,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("TrailblazeRunner accessibility execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
+        loggingRule.captureFinalScreenshot(session, agent.screenStateProvider)
         loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
@@ -2444,22 +2495,7 @@ object TrailblazeHostYamlRunner {
         .filterIsInstance<xyz.block.trailblaze.logs.model.SessionStatus.Started>()
         .firstOrNull()
 
-      val sessionTrailConfig = startedStatus?.let { started ->
-        val originalConfig = started.trailConfig
-        // Merge original config with device/driver info from the session
-        xyz.block.trailblaze.yaml.TrailConfig(
-          id = originalConfig?.id,
-          title = originalConfig?.title,
-          description = originalConfig?.description,
-          priority = originalConfig?.priority,
-          context = originalConfig?.context,
-          source = originalConfig?.source,
-          metadata = originalConfig?.metadata,
-          target = originalConfig?.target,
-          driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
-          platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
-        )
-      }
+      val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
 
       val recordingYaml = logs.generateRecordedYaml(
         sessionTrailConfig = sessionTrailConfig,

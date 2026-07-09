@@ -36,6 +36,22 @@ data class SessionResult(
   /** Device classifier used */
   val device_classifier: String? = null,
 
+  // === App Under Test ===
+  // Captured from the device at session start (SessionStatus.Started.targetAppInfo). All four
+  // are null for legacy log archives predating the field, and for targets with no installable
+  // app (web, desktop).
+  /** Resolved package name (Android) / bundle identifier (iOS) of the app under test. */
+  val app_id: String? = null,
+
+  /** User-visible app version (Android versionName / iOS CFBundleShortVersionString). */
+  val app_version_name: String? = null,
+
+  /** Internal app version (Android versionCode / iOS CFBundleVersion). */
+  val app_version_code: String? = null,
+
+  /** iOS app-specific build number. */
+  val app_build_number: String? = null,
+
   /** Cost of LLM calls in USD */
   val llm_cost_usd: Double? = null,
 

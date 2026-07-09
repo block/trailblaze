@@ -1,11 +1,3 @@
-// The `selector` field on this tool is @Deprecated to focus the deprecation signal on
-// *external* construction sites that still pass legacy selectors. The class's own
-// internal logic (toMaestroCommands lowering, the desc fallback, dispatch in execute)
-// must continue to read `selector` until the migration completes — those internal
-// references are the legitimate handling for legacy recordings already on disk, not
-// new tech debt. Suppress at file scope so the warning signal stays focused.
-@file:Suppress("DEPRECATION")
-
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
@@ -15,7 +7,6 @@ import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeDetail
-import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
@@ -42,27 +33,10 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 data class AssertVisibleBySelectorTrailblazeTool(
   val reason: String? = null,
   /**
-   * Legacy Maestro-shape selector.
-   *
-   * **Deprecated** — new tool construction should use [nodeSelector] exclusively. This
-   * field remains nullable + serializable so older trail YAMLs (which carry a `selector:`
-   * block alongside `nodeSelector:` or solo) continue to load unchanged and the runtime
-   * dispatch logic in [execute] picks the right path per recording. The field will be
-   * removed once the remaining flat-selector inventory in committed trails reaches zero
-   * (tracked in the selector→nodeSelector migration workstream). At least one of
-   * [selector] and [nodeSelector] must be non-null at runtime — the [execute]
-   * function enforces this.
-   */
-  @Deprecated(
-    message = "Prefer `nodeSelector` for new construction; this field exists only to load " +
-      "legacy YAML recordings until the migration completes.",
-    level = DeprecationLevel.WARNING,
-  )
-  val selector: TrailblazeElementSelector? = null,
-  /**
-   * Rich driver-native selector generated from [TrailblazeNode] trees.
-   * When present, the agent will attempt to use this for richer element matching
-   * before falling back to the legacy Maestro command path via [selector].
+   * Rich driver-native selector generated from [TrailblazeNode] trees. Required — the
+   * [execute] function enforces non-null. When present, the agent will attempt to use this
+   * for richer element matching before falling back to the Maestro command path, which
+   * lowers this to a Maestro-shaped selector via [lowerToMaestroSelector].
    */
   val nodeSelector: TrailblazeNodeSelector? = null,
   /**
@@ -98,10 +72,10 @@ data class AssertVisibleBySelectorTrailblazeTool(
   val textMatchMode: TextMatchMode = TextMatchMode.EXACT,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    val maestroSelector = lowerToMaestroSelector(selector, nodeSelector)
+    val maestroSelector = lowerToMaestroSelector(nodeSelector)
       ?: error(
-        "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with neither " +
-          "`selector` nor `nodeSelector` set — malformed recording.",
+        "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with `nodeSelector` " +
+          "not set — malformed recording.",
       )
     // When expectedText is set on the legacy fallback path, narrow the Maestro selector to
     // also require that text — that's the closest analogue to selector-pinned text equality
@@ -121,9 +95,8 @@ data class AssertVisibleBySelectorTrailblazeTool(
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    require(selector != null || nodeSelector != null) {
-      "AssertVisibleBySelectorTrailblazeTool requires at least one of `selector` or " +
-        "`nodeSelector` to be non-null."
+    require(nodeSelector != null) {
+      "AssertVisibleBySelectorTrailblazeTool requires `nodeSelector` to be non-null."
     }
     val mode = toolExecutionContext.nodeSelectorMode
     val agent = toolExecutionContext.maestroTrailblazeAgent
@@ -132,11 +105,8 @@ data class AssertVisibleBySelectorTrailblazeTool(
       NodeSelectorMode.FORCE_LEGACY -> super.execute(toolExecutionContext)
       NodeSelectorMode.FORCE_NODE_SELECTOR -> {
         if (agent != null) {
-          val effectiveNodeSelector = nodeSelector
-            ?: selector?.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
-            ?: error("FORCE_NODE_SELECTOR with neither nodeSelector nor selector")
           agent.executeNodeSelectorAssertVisible(
-            nodeSelector = effectiveNodeSelector,
+            nodeSelector = nodeSelector,
             timeoutMs = timeoutMs,
             traceId = toolExecutionContext.traceId,
           ) ?: super.execute(toolExecutionContext)
@@ -157,28 +127,23 @@ data class AssertVisibleBySelectorTrailblazeTool(
       }
     }
     if (result.isSuccess()) {
-      // Prefer the original selector's text for a friendly message, but fall back to the
-      // nodeSelector's driver-specific text for post-migration recordings where the legacy
-      // `selector:` block is gone. Ordered by property tier (most → least human-readable),
-      // with drivers alphabetized within each tier:
-      //   1. Legacy `selector` (most direct authoring intent: textRegex → idRegex)
-      //   2. Driver-block textRegex (best for log readability)
-      //   3. Accessibility / content-description text (still human-readable)
-      //   4. Resource ID (last resort — typically opaque)
-      val desc = selector?.textRegex
-        ?: selector?.idRegex
-        // Tier: textRegex across all driver blocks
-        ?: nodeSelector?.androidAccessibility?.textRegex
-        ?: nodeSelector?.androidMaestro?.textRegex
-        ?: nodeSelector?.iosMaestro?.textRegex
+      // Prefer the nodeSelector's driver-specific text for a friendly message. Ordered by
+      // property tier (most → least human-readable), with drivers alphabetized within each
+      // tier:
+      //   1. Driver-block textRegex (best for log readability)
+      //   2. Accessibility / content-description text (still human-readable)
+      //   3. Resource ID (last resort — typically opaque)
+      val desc = nodeSelector.androidAccessibility?.textRegex
+        ?: nodeSelector.androidMaestro?.textRegex
+        ?: nodeSelector.iosMaestro?.textRegex
         // Tier: accessibility / content-description text
-        ?: nodeSelector?.androidAccessibility?.contentDescriptionRegex
-        ?: nodeSelector?.androidMaestro?.accessibilityTextRegex
-        ?: nodeSelector?.iosMaestro?.accessibilityTextRegex
+        ?: nodeSelector.androidAccessibility?.contentDescriptionRegex
+        ?: nodeSelector.androidMaestro?.accessibilityTextRegex
+        ?: nodeSelector.iosMaestro?.accessibilityTextRegex
         // Tier: resource ID
-        ?: nodeSelector?.androidAccessibility?.resourceIdRegex
-        ?: nodeSelector?.androidMaestro?.resourceIdRegex
-        ?: nodeSelector?.iosMaestro?.resourceIdRegex
+        ?: nodeSelector.androidAccessibility?.resourceIdRegex
+        ?: nodeSelector.androidMaestro?.resourceIdRegex
+        ?: nodeSelector.iosMaestro?.resourceIdRegex
         ?: "element"
       // When expectedText is set, the visibility check above only confirmed the element is
       // present. Now re-resolve against a fresh tree to read the matched element's text
@@ -207,9 +172,7 @@ data class AssertVisibleBySelectorTrailblazeTool(
   ): TrailblazeToolResult {
     val fresh = toolExecutionContext.screenStateProvider?.invoke() ?: toolExecutionContext.screenState
     val tree = fresh?.trailblazeNodeTree ?: return visibilityResult
-    val effective = nodeSelector
-      ?: selector?.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
-      ?: return visibilityResult
+    val effective = nodeSelector ?: return visibilityResult
 
     val matched = when (
       val r = TrailblazeNodeSelectorResolver.resolve(tree, effective)

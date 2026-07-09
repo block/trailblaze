@@ -1,7 +1,7 @@
 # Android World Benchmark: CopyToClipboard
 - config:
     id: android-world-benchmarks/system/copy_to_clipboard
-    displayName: "System - Copy To Clipboard"
+    title: "System - Copy To Clipboard"
     description: "Copy the following text to the clipboard: The quick brown fox jumps over the lazy dog"
 
 - tools: []

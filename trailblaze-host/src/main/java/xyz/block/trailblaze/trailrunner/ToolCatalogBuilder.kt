@@ -78,6 +78,19 @@ object ToolSourceFiles {
     return null
   }
 
+  // Where a NOT-yet-existing trailmap would live in the active workspace — the create-target
+  // counterpart to [trailmapBaseDir], which requires the directory to already exist. Returns the
+  // (possibly absent) `<workspace>/trailmaps/<id>` dir, or null when no workspace resolves or the
+  // id escapes the trailmaps root under the same canonical-containment check the read paths apply.
+  // Callers own the mkdirs.
+  fun newTrailmapBaseDir(id: String): File? {
+    val wsTrailmaps = WorkspaceConfigDirHolder.resolver()?.let { File(it, TRAILMAPS_SUBDIR) } ?: return null
+    val base = File(wsTrailmaps, id)
+    val wsCanon = runCatching { wsTrailmaps.canonicalPath }.getOrNull() ?: return null
+    val baseCanon = runCatching { base.canonicalPath }.getOrNull() ?: return null
+    return base.takeIf { baseCanon.startsWith(wsCanon + File.separator) }
+  }
+
   // The on-disk directory of a trailmap (e.g. <workspace>/trails/config/trailmaps/myapp). Used to
   // place newly-scaffolded files and to locate a trailmap's `tools/` dir for scripted-tool analysis.
   fun trailmapBaseDir(id: String): File? {

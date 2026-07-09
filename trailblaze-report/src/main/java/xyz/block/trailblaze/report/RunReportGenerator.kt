@@ -203,6 +203,18 @@ class RunReportGenerator(
       put("title", sessionInfo.displayName)
       put("status", statusLabel(status))
       sessionInfo.trailConfig?.target?.let { put("target", it) }
+      sessionInfo.targetAppInfo?.let { app ->
+        put("appId", app.appId)
+        // "5.58.0.0 (67500009)" — user-visible version first, internal build/version code in
+        // parens. Same display rule as the Trail Runner Info tab and share-export.tsx.
+        val build = app.buildNumber ?: app.versionCode
+        val display = when {
+          app.versionName != null && build != null -> "${app.versionName} ($build)"
+          app.versionName != null -> app.versionName
+          else -> build
+        }
+        display?.let { put("appVersion", it) }
+      }
       sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase()?.let { put("platform", it) }
       sessionInfo.trailblazeDeviceId?.instanceId?.let { put("device", it) }
       put("duration", formatDuration(sessionInfo.durationMs))

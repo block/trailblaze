@@ -7,10 +7,16 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isSameInstanceAs
+import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -49,6 +55,35 @@ class BaseTrailblazeAgentTest {
     override suspend fun execute(
       toolExecutionContext: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult = result
+  }
+
+  // ── Stub tool that records the context it saw (for shared-tool-batch assertions) ──
+
+  @Serializable
+  @TrailblazeToolClass("stub_recording")
+  private class RecordingStubTool(
+    @kotlinx.serialization.Transient
+    val onExecute: (TrailblazeToolExecutionContext) -> Unit = {},
+  ) : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      onExecute(toolExecutionContext)
+      return TrailblazeToolResult.Success()
+    }
+  }
+
+  // Minimal ScreenState fake carrying a label so a test can tell which capture a tool saw.
+  // Mirrors SnapshotCacheTest's FakeScreenState — the field values otherwise don't matter.
+  private class LabeledScreenState(val label: String) : ScreenState {
+    override val screenshotBytes: ByteArray? = null
+    override val deviceWidth: Int = 1080
+    override val deviceHeight: Int = 1920
+    override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
+    override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+    override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+    override val trailblazeNodeTree: TrailblazeNode? = null
+    override val annotationElements: List<AnnotationElement>? = null
   }
 
   // ── Stub delegating tool ──
@@ -149,6 +184,37 @@ class BaseTrailblazeAgentTest {
     }
   }
 
+  // Agent whose context threads through the `screenState` passed to `runTrailblazeTools`
+  // (TestAgent hardcodes null) and dispatches RecordingStubTool, so a test can observe exactly
+  // what `context.screenState` each dispatch saw.
+  private class ScreenStateThreadingTestAgent : TestAgent() {
+    override fun buildExecutionContext(
+      traceId: TraceId,
+      screenState: ScreenState?,
+      screenStateProvider: (() -> ScreenState)?,
+    ) = TrailblazeToolExecutionContext(
+      screenState = screenState,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      sessionProvider = sessionProvider,
+      screenStateProvider = screenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+    )
+
+    override fun executeTool(
+      tool: TrailblazeTool,
+      context: TrailblazeToolExecutionContext,
+      toolsExecuted: MutableList<TrailblazeTool>,
+    ): TrailblazeToolResult = when (tool) {
+      is RecordingStubTool -> {
+        toolsExecuted.add(tool)
+        runBlocking { tool.execute(context) }
+      }
+      else -> super.executeTool(tool, context, toolsExecuted)
+    }
+  }
+
   private val noOpComparator = object : ElementComparator {
     override fun getElementValue(prompt: String): String? = null
     override fun evaluateBoolean(statement: String) =
@@ -165,6 +231,65 @@ class BaseTrailblazeAgentTest {
     )
 
   // ── Tests ──
+
+  @Test
+  fun `shared tool batch shares context identity but refreshes screenState per dispatch`() = runBlocking {
+    // Regression test for a review-round finding on the shared-batch feature: reusing one
+    // execution context across a batch must NOT freeze `context.screenState` at the first
+    // dispatch — tools that read it directly (rather than re-capturing via
+    // `screenStateProvider`) need to see current UI on every dispatch, exactly like per-tool
+    // recorded replay did before batching existed.
+    val agent = ScreenStateThreadingTestAgent()
+    val seenScreenStates = mutableListOf<ScreenState?>()
+    val seenContexts = mutableListOf<TrailblazeToolExecutionContext>()
+    val recordingTool = RecordingStubTool(
+      onExecute = { ctx ->
+        seenScreenStates += ctx.screenState
+        seenContexts += ctx
+      },
+    )
+
+    agent.runInSharedToolBatch {
+      agent.runTrailblazeTools(
+        tools = listOf(recordingTool),
+        screenState = LabeledScreenState("first"),
+        elementComparator = noOpComparator,
+      )
+      agent.runTrailblazeTools(
+        tools = listOf(recordingTool),
+        screenState = LabeledScreenState("second"),
+        elementComparator = noOpComparator,
+      )
+    }
+
+    assertThat(seenContexts).hasSize(2)
+    // Same context/executor identity shared across the batch — the whole point of the feature.
+    assertThat(seenContexts[1]).isSameInstanceAs(seenContexts[0])
+    // But each dispatch saw ITS OWN fresh screen state, not the first tool's frozen snapshot.
+    assertThat((seenScreenStates[0] as LabeledScreenState).label).isEqualTo("first")
+    assertThat((seenScreenStates[1] as LabeledScreenState).label).isEqualTo("second")
+  }
+
+  @Test
+  fun `nested runInSharedToolBatch reuses the outer scope instead of re-entering`() = runBlocking {
+    val agent = TestAgent()
+    var innerRanWithActiveScope = false
+
+    agent.runInSharedToolBatch {
+      assertThat(xyz.block.trailblaze.toolcalls.ToolBatchScope.isActive()).isEqualTo(true)
+      // A nested call must pass through and reuse the outer scope rather than calling
+      // ToolBatchScope.enter() again, which would throw IllegalStateException on double-enter.
+      agent.runInSharedToolBatch {
+        innerRanWithActiveScope = xyz.block.trailblaze.toolcalls.ToolBatchScope.isActive()
+      }
+      // The outer scope is still open after the nested call returns — nesting doesn't
+      // prematurely tear it down.
+      assertThat(xyz.block.trailblaze.toolcalls.ToolBatchScope.isActive()).isEqualTo(true)
+    }
+
+    assertThat(innerRanWithActiveScope).isEqualTo(true)
+    assertThat(xyz.block.trailblaze.toolcalls.ToolBatchScope.isActive()).isEqualTo(false)
+  }
 
   @Test
   fun `executes tools sequentially and returns success`() {

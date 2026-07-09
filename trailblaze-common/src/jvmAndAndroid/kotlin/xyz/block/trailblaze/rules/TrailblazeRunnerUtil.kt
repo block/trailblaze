@@ -62,6 +62,23 @@ class TrailblazeRunnerUtil(
    * exceptions are caught by the runner; they must not abort the recording.
    */
   private val onAfterRecordedTool: (suspend (TrailblazeTool) -> Unit)? = null,
+  /**
+   * Optional bracket that runs a recording's per-tool replay loop inside a shared tool-batch
+   * scope, so the whole recording dispatches against ONE execution context + ONE snapshot frame
+   * (see [xyz.block.trailblaze.BaseTrailblazeAgent.runInSharedToolBatch]). Wired by the on-device
+   * Android rule to `agent::runInSharedToolBatch`.
+   *
+   * Load-bearing for cross-tool device state that lives on the execution context — most visibly
+   * the Android clipboard cache, so a `mobile_setClipboard` → `mobile_pasteClipboard` recording
+   * replays correctly instead of the paste reading an empty clipboard from a fresh context.
+   *
+   * When null, each recorded tool dispatches with its own context (the pre-batch behavior), so
+   * callers that don't wire it are unchanged. The per-tool loop — failure attribution, capture
+   * hooks, cancellation, per-tool logging — is identical either way; only the context/frame
+   * lifetime differs.
+   */
+  private val sharedToolBatch:
+    (suspend (block: suspend () -> PromptRecordingResult) -> PromptRecordingResult)? = null,
 ) {
   fun runPrompt(
     prompts: List<PromptStep>,
@@ -182,44 +199,51 @@ class TrailblazeRunnerUtil(
   private suspend fun runRecordedTools(
     tools: List<TrailblazeToolYamlWrapper>
   ): PromptRecordingResult {
-    val successfulTools = mutableListOf<TrailblazeToolYamlWrapper>()
-    for (tool in tools) {
-      // Long recordings should abort promptly on trail cancellation (timeout / user abort).
-      currentCoroutineContext().ensureActive()
-      // Pre-tool capture hook (off by default; flipped on for Maestro→accessibility migration
-      // captures via [InstrumentationArgUtil.shouldCaptureSecondaryTree]). Wrapped in
-      // try/catch so a hook failure can't sink the recording — the hook is logging-only.
-      // CancellationException is rethrown so trail timeout / user-abort still propagates
-      // through the hook layer — the catch is for observability bugs, not flow control.
-      try {
-        onBeforeRecordedTool?.invoke(tool.trailblazeTool)
-      } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-      } catch (e: Exception) {
-        // Swallow — hook is observational. Surface in logs, not in test results.
-        @Suppress("PrintStackTrace") e.printStackTrace()
+    // The per-tool loop is unchanged whether or not batching is wired — only the execution-context
+    // lifetime differs. When [sharedToolBatch] is wired, the whole loop runs inside one shared
+    // tool-batch scope so every `runTrailblazeTool(listOf(tool))` below reuses ONE context + ONE
+    // snapshot frame (see [sharedToolBatch]'s docs). When null, it runs as-is (per-tool contexts).
+    val replay: suspend () -> PromptRecordingResult = replay@{
+      val successfulTools = mutableListOf<TrailblazeToolYamlWrapper>()
+      for (tool in tools) {
+        // Long recordings should abort promptly on trail cancellation (timeout / user abort).
+        currentCoroutineContext().ensureActive()
+        // Pre-tool capture hook (off by default; flipped on for Maestro→accessibility migration
+        // captures via [InstrumentationArgUtil.shouldCaptureSecondaryTree]). Wrapped in
+        // try/catch so a hook failure can't sink the recording — the hook is logging-only.
+        // CancellationException is rethrown so trail timeout / user-abort still propagates
+        // through the hook layer — the catch is for observability bugs, not flow control.
+        try {
+          onBeforeRecordedTool?.invoke(tool.trailblazeTool)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          // Swallow — hook is observational. Surface in logs, not in test results.
+          @Suppress("PrintStackTrace") e.printStackTrace()
+        }
+        val result = runTrailblazeTool(listOf(tool.trailblazeTool))
+        if (result is TrailblazeToolResult.Error) {
+          return@replay PromptRecordingResult.Failure(
+            successfulTools = successfulTools,
+            failedTool = tool,
+            failureResult = result,
+          )
+        }
+        // Post-tool capture hook (success path only). Same try/catch shape as the pre-hook:
+        // hook is observational, must not abort the recording; cancellation propagates so
+        // outer trail-timeout / abort still works.
+        try {
+          onAfterRecordedTool?.invoke(tool.trailblazeTool)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          @Suppress("PrintStackTrace") e.printStackTrace()
+        }
+        successfulTools.add(tool)
       }
-      val result = runTrailblazeTool(listOf(tool.trailblazeTool))
-      if (result is TrailblazeToolResult.Error) {
-        return PromptRecordingResult.Failure(
-          successfulTools = successfulTools,
-          failedTool = tool,
-          failureResult = result,
-        )
-      }
-      // Post-tool capture hook (success path only). Same try/catch shape as the pre-hook:
-      // hook is observational, must not abort the recording; cancellation propagates so
-      // outer trail-timeout / abort still works.
-      try {
-        onAfterRecordedTool?.invoke(tool.trailblazeTool)
-      } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-      } catch (e: Exception) {
-        @Suppress("PrintStackTrace") e.printStackTrace()
-      }
-      successfulTools.add(tool)
+      PromptRecordingResult.Success(tools)
     }
-    return PromptRecordingResult.Success(tools)
+    return sharedToolBatch?.invoke(replay) ?: replay()
   }
 
   private fun emitObjectiveStart(step: PromptStep) {

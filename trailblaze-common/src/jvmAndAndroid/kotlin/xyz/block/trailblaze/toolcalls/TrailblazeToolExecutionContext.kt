@@ -25,7 +25,19 @@ import java.io.File
  * shared context would race on that field and mis-record tools.
  */
 class TrailblazeToolExecutionContext(
-  val screenState: ScreenState?,
+  /**
+   * `var`, not `val`: a shared tool-batch context (see
+   * [xyz.block.trailblaze.toolcalls.ToolBatchScope]) is built once for a whole recording but
+   * must still hand each dispatched tool a *current* screen state — tools like
+   * [xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool] and
+   * [xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool] read this field directly
+   * rather than re-capturing via [screenStateProvider], so a frozen-at-first-tool value would
+   * make every later tool in the batch act on stale (pre-action) UI.
+   * [xyz.block.trailblaze.BaseTrailblazeAgent.runTrailblazeTools] reassigns this before each
+   * dispatch into a shared batch, while reusing the same context instance (and therefore the
+   * same [androidDeviceCommandExecutor]) for the rest of the batch's lifetime.
+   */
+  var screenState: ScreenState?,
   val traceId: TraceId?,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo,
   val sessionProvider: TrailblazeSessionProvider,

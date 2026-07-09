@@ -1,217 +1,80 @@
-// Vendored bindings for Trailblaze framework built-in tools — augments [TrailblazeToolMap]
-// so authors get autocomplete on tool names and type-checking on args for the framework
-// toolset (mobile device control, basic verification) the moment they import anything from
-// `@trailblaze/scripting`. No `npm install` step on the consumer side; the SDK ships these.
+// Vendored bindings for the small RESIDUAL set of Trailblaze framework tools that the generated
+// recordable-tool surface can't own. Augments [TrailblazeToolMap] so authors get autocomplete +
+// type-checking the moment they import from `@trailblaze/scripting`. No `npm install` on the
+// consumer side; the SDK ships these.
 //
-// Pulled in by `index.ts` via a bare side-effect import. The file has no runtime exports —
-// only declaration-merging augmentations on the `@trailblaze/scripting` module — but it IS
-// a module (the `export {}` below) so TypeScript treats the `declare module` block as
-// augmentation rather than re-declaration.
+// ## Split with the generated recordable surface
 //
-// ## Drift policy
+// Every RECORDABLE framework tool (class-backed + YAML-defined) is generated into each trailmap's /
+// bundled target's `tools/trailblaze-client.d.ts` by `PerTrailmapClientDtsEmitter`, derived from the
+// `@TrailblazeToolClass(isRecordable = true)` source of truth (see the devlog
+// `2026-07-01-trail-recording-type-validation.md`). That generated surface is what the trail-recording
+// type-validator checks against — sourcing it from `isRecordable` means it can't drift or silently
+// miss a recordable tool (the failure mode this file used to have: a hand-added `tapOn` /
+// `assertVisibleBySelector` while `assertNotVisibleBySelector` was forgotten).
 //
-// This file is HAND-CURATED today. The upstream truth is the Kotlin `@TrailblazeToolClass`
-// data classes under
-//   `trailblaze-common/src/jvmAndAndroid/kotlin/.../toolcalls/commands/`
-// plus their `@Serializable` shapes. Auto-generation from the Kotlin reflection path
-// (`KClass.toKoogToolDescriptor()`) is tracked as a follow-up — when it lands, this file
-// becomes generated output and the curated section below is deleted.
+// This hand file keeps ONLY the tools the generator deliberately does NOT emit, so the two never
+// declare the same `TrailblazeToolMap` key (a duplicate key with a different shape is a TS2717 error
+// that would break the whole validation compilation):
 //
-// Until then: when adding/removing a built-in tool or changing its arg shape, update this
-// file alongside the Kotlin change. The JVM-side schema serves as the runtime contract;
-// these TS types are an authoring convenience that mirror it.
+//  - **Non-recordable author utilities** (`isRecordable = false`, never in a recording): the
+//    selector query tools `findMatches` / `waitUntilNotVisible` (rich `MatchDescriptor[]` / `boolean`
+//    results), plus the host/composition primitives `exec`, `android_writeBytesToFile`,
+//    `android_adbShell`, `android_sendBroadcast`, `android_writeFileToDownloads`.
+//  - **Recordable tools the generator can't fully model** — `mobile_maestro` (free-form Maestro
+//    commands the descriptor lowering can't express) and `mobile_listInstalledApps` /
+//    `mobile_listInstalledAppsDetailed` (structured result types). These are listed in
+//    `HandCuratedRecordableTools.NAMES` so the generator skips them;
+//    `BuiltInToolsBindingDriftTest` asserts the two sets stay disjoint.
 //
-// Coverage is intentionally a subset — common interaction tools that show up in tutorial
-// flows and demos. Tools not listed here are unreachable from a typed `.ts` author: the
-// public `TrailblazeClient` type omits `callTool`, so the only call path is
-// `client.tools.<name>(args)`, which requires a `TrailblazeToolMap` entry. Additional
-// framework tools (`android_adbShell`, `web_navigate`, etc.) land here as they're added to
-// the curated subset; trailmap-local scripted tools land in their trailmap's generated
-// `tools/trailblaze-client.d.ts` instead.
+// Result types: `result` is `string` unless the tool declares `@TrailblazeToolClass(resultType = ...)`
+// and populates `structuredContent`. `mobile_listInstalledApps[Detailed]` do — their result types
+// here are *generated* (imported below from `built-in-tool-results.js`, emitted by
+// `BuiltInToolResultTsBindings` in `trailblaze-common`), not hand-written, so this file and any
+// generated surface render the identical type from that one annotation.
 //
-// ## Entry shape: `{ args; result }`
+// Pulled in by `index.ts` via a bare side-effect import. The file has no runtime exports — only
+// declaration-merging augmentations on the `@trailblaze/scripting` module — but it IS a module (the
+// `export {}` below) so TypeScript treats the `declare module` block as augmentation rather than
+// re-declaration.
 //
-// Each entry is `{ args: <argsShape>; result: <resultShape> }`. The `args` half is the
-// JSON-Schema-shaped tool input (the same shape the Kotlin dispatcher validates against).
-// The `result` half is the static-typing-only return type — uniformly `result: string`
-// today, matching what `WorkspaceClientDtsGenerator` emits for every Kotlin/scripted tool
-// per trailmap. The two surfaces declaration-merge into the same `TrailblazeToolMap`
-// interface, so they MUST declare identical `result` types for any tool name that appears
-// in both files (`tapOnPoint`, `inputText`, `hideKeyboard`, etc.) — TypeScript errors on a
-// mismatch.
-//
-// The wire-side `structured_content` field and the SDK's `client.tools.<name>(args)` unwrap
-// are both in place — a producer that populates structured content flows it through the
-// proxy as the typed `result`. What's still uniform here is the `result: string` declaration
-// on every entry: `WorkspaceClientDtsGenerator` doesn't yet read per-tool typed-result
-// schemas (the analyzer-driven follow-up will), so every built-in advertises `result: string`
-// regardless of whether the underlying handler returns text or a structured payload. When
-// the descriptor side ships, the entries below can declare richer `result` types and
-// consumers will see the unwrapped typed value automatically. See the kdoc on
-// `TrailblazeToolMethods` in `client.ts` and the matching note in `ToolMapEntryRenderer.kt`.
-//
-// Source-of-truth files for each entry below are linked next to the type. Changes to those
-// Kotlin files MUST be reflected here.
+// When adding/removing an entry here or changing its arg shape, mirror the Kotlin change (the
+// `@Serializable` tool class is the runtime contract these TS types shadow). Each entry links its
+// source-of-truth Kotlin file.
 
-// Selector-grammar types — `TrailblazeNodeSelector`, the six `DriverNodeMatch*` interfaces,
-// `Bounds`, and `MatchDescriptor` — are generated from the Kotlin sealed-class hierarchy
-// by `:trailblaze-models:generateSelectorsTs` and re-exported from `index.ts`. The shapes
-// the `findMatches` tool entry below references resolve through that re-export; this file
-// just imports the type names locally for the declaration-merging block at the bottom.
+// Selector-grammar types — `TrailblazeNodeSelector` and `MatchDescriptor` — are generated from the
+// Kotlin sealed-class hierarchy by `:trailblaze-models:generateSelectorsTs` and re-exported from
+// `index.ts`. The `findMatches` / `waitUntilNotVisible` entries below reference them; this file
+// imports the type names locally for the declaration-merging block.
 import type {
   MatchDescriptor,
   TrailblazeNodeSelector,
 } from "./generated/selectors.js";
+// Generated from each tool's declared `resultType` by `BuiltInToolResultTsBindings`
+// (`:trailblaze-common:generateDtoTs`) — see `ListInstalledAppsTrailblazeTool.kt`.
+import type {
+  InstalledApp,
+  ListInstalledAppsDetailedResult,
+  ListInstalledAppsResult,
+} from "./generated/built-in-tool-results.js";
+
+// Pins the imported shapes so `tsc` catches drift. Needed because `bun:test` never type-checks
+// and `*.test.ts` is excluded from this SDK's tsconfig, so a test-file import wouldn't catch it.
+const _installedAppShape: InstalledApp = { appId: "com.example.app", isSystemApp: false };
+const _listResultShape: ListInstalledAppsResult = { appIds: [_installedAppShape.appId] };
+const _detailedResultShape: ListInstalledAppsDetailedResult = { apps: [_installedAppShape] };
 
 declare module "@trailblaze/scripting" {
   interface TrailblazeToolMap {
-    /**
-     * Tap or long-press at absolute device coordinates. The runtime upgrades the *recorded*
-     * step to a selector-based `tapOn` when the coordinates resolve to a unique element —
-     * the live tap still fires at the raw `(x, y)`.
-     *
-     * Source: `TapOnPointTrailblazeTool.kt`.
-     */
-    tapOnPoint: {
-      args: {
-        /** The center X coordinate for the clickable element. */
-        x: number;
-        /** The center Y coordinate for the clickable element. */
-        y: number;
-        /** Default `false` (standard tap). Pass `true` for a long press. */
-        longPress?: boolean;
-        /** Optional rationale logged alongside the tool call. */
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Tap on an element by visible text (substring match). DEPRECATED upstream in favor of
-     * `tapOn`/`TapOnByElementSelector` — included here because tutorials still reference it.
-     *
-     * Source: `TapOnElementWithTextTrailblazeTool.kt`.
-     */
-    tapOnElementWithText: {
-      args: {
-        /** Required. Text contained in the target element. */
-        text: string;
-        /** 0-based index of the view to select among matches. */
-        index?: number;
-        /** Regex for selecting by id when multiple elements share the text. */
-        id?: string;
-        enabled?: boolean;
-        selected?: boolean;
-      };
-      result: string;
-    };
-
-    /**
-     * Tap an Android accessibility node identified by its content description (plus optional
-     * className and resourceId tiebreakers). Use for canvas widgets whose interactive regions
-     * are virtual views of an `ExploreByTouchHelper` — PIN pads, drawing-app palettes,
-     * custom map markers, etc. — where the buttons have a `contentDescription` but no `text`,
-     * so `tapOnElementWithText` can't reach them.
-     *
-     * Routes through the same selector-resolved dispatch path the LLM `tap` tool uses, so
-     * the per-tap `ACTION_CLICK` routing (see `AccessibilityDeviceManager.kt`) applies.
-     *
-     * Source: `TapOnAccessibilityNodeTrailblazeTool.kt`.
-     */
-    tapOnAccessibilityNode: {
-      args: {
-        /** Required. Regex matched against the node's content description. */
-        contentDescriptionRegex: string;
-        /** Optional regex matched against the node's className. */
-        classNameRegex?: string;
-        /** Optional regex matched against the node's resourceId. */
-        resourceIdRegex?: string;
-        /** Set to true for a long press instead of a tap. */
-        longPress?: boolean;
-      };
-      result: string;
-    };
-
-    /**
-     * Type characters into the currently-focused text field. The runtime auto-hides the
-     * keyboard after typing on iOS so a follow-up screenshot isn't obscured.
-     *
-     * Source: `InputTextTrailblazeTool.kt`.
-     */
-    inputText: {
-      args: {
-        /** Required. Text to type into the focused field. */
-        text: string;
-        /** Optional rationale logged alongside the tool call. */
-        reasoning?: string;
-        /** Hide the soft keyboard after typing (default true). */
-        hideKeyboardAfter?: boolean;
-      };
-      result: string;
-    };
-
-    /**
-     * Dismiss the on-screen keyboard. No args (singleton tool object on the Kotlin side).
-     *
-     * Source: `HideKeyboardTrailblazeTool.kt`.
-     */
-    hideKeyboard: {
-      args: Record<string, never>;
-      result: string;
-    };
-
-    /**
-     * Press a hardware/system key.
-     *
-     * Source: `PressKeyTrailblazeTool.kt`.
-     */
-    pressKey: {
-      args: {
-        /** Required. One of the supported `PressKeyCode` values. */
-        keyCode: "BACK" | "ENTER" | "HOME";
-      };
-      result: string;
-    };
-
-    /**
-     * Swipe in a cardinal direction. Direction is the *finger* direction — to scroll the
-     * page DOWN (see content below), the finger swipes UP.
-     *
-     * Source: `SwipeTrailblazeTool.kt`.
-     */
-    swipe: {
-      args: {
-        /** Default `DOWN`. Direction of the finger gesture, not the scroll direction. */
-        direction?: "UP" | "DOWN" | "LEFT" | "RIGHT";
-        /** Element text to anchor the swipe on. Omit to swipe at screen center. */
-        swipeOnElementText?: string;
-        /** Optional rationale logged alongside the tool call. */
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Launch an app by id, with control over whether state is cleared and whether a running
-     * instance is forcibly stopped first.
-     *
-     * Source: `LaunchAppTrailblazeTool.kt`.
-     */
-    launchApp: {
-      args: {
-        /** Required. Package id (Android) or bundle id (iOS). */
-        appId: string;
-        /**
-         * Default `REINSTALL` (clean state). `RESUME` picks up an in-memory app; `FORCE_RESTART`
-         * stops then relaunches without clearing state. The runtime silently upgrades
-         * `REINSTALL` → `FORCE_RESTART` for iOS system apps (`com.apple.*`).
-         */
-        launchMode?: "REINSTALL" | "RESUME" | "FORCE_RESTART";
-        reasoning?: string;
-      };
-      result: string;
-    };
-
+    // MAINTAINER NOTE (contract): the Kotlin Koog/scripted-tool descriptor — generated by
+    // `TrailblazeKoogToolExt` — intentionally OMITS the selector types (`TrailblazeNodeSelector`
+    // and the legacy `TrailblazeElementSelector`, via its `excludedParameterTypes`) because
+    // reflecting their self-referencing fields (childOf / containsChild / …) overflows the stack
+    // during descriptor codegen. For RECORDABLE selector tools the generated recordable surface
+    // re-injects the selector arg via `selectorParamsForTs` — but `findMatches` / `waitUntilNotVisible`
+    // are `isRecordable = false` (never in a recording), so they aren't in the generated surface and
+    // THIS hand-curated `selector` / `nodeSelector` typing is their authoritative scripted-author
+    // surface. Keep it in sync with the Kotlin tool classes by hand.
     /**
      * Resolve a [TrailblazeNodeSelector] against the current view hierarchy and return
      * every match as a [MatchDescriptor] list. Read-only — never mutates the device.
@@ -277,10 +140,6 @@ declare module "@trailblaze/scripting" {
      * This tool waits for the live tree to lose the match. Routes through the driver-native
      * not-visible wait on the accessibility driver, Maestro `extendedWaitUntil` otherwise.
      *
-     * The `nodeSelector` arg shape mirrors `findMatches`/`tapOnElementBySelector` — see the
-     * MAINTAINER NOTE below for why the generated descriptor omits the selector type and this
-     * hand-curated typing is authoritative.
-     *
      * Source: `WaitUntilNotVisibleTrailblazeTool.kt` (`waitUntilNotVisible`).
      */
     waitUntilNotVisible: {
@@ -296,116 +155,18 @@ declare module "@trailblaze/scripting" {
       result: boolean;
     };
 
-    // MAINTAINER NOTE (contract): the Kotlin Koog/scripted-tool descriptor — generated by
-    // `TrailblazeKoogToolExt` — intentionally OMITS both selector types (`TrailblazeNodeSelector`
-    // and the legacy `TrailblazeElementSelector`, via its `excludedParameterTypes`) because
-    // reflecting their self-referencing fields (childOf / containsChild / …) overflows the stack
-    // during descriptor codegen. So for `tapOnElementBySelector` (and `waitUntilNotVisible`) the
-    // generated descriptor advertises NO selector arg, and THIS hand-curated `nodeSelector` typing
-    // is the authoritative scripted-author surface for it. Keep it in sync with
-    // `TapOnByElementSelector.kt` by hand (per the Drift policy at the top of this file).
-    /**
-     * Tap the element resolved by a [TrailblazeNodeSelector], using the runtime's
-     * selector-resolved tap routing (ACTION_CLICK on a qualifying interactive leaf, coordinate
-     * gesture otherwise — see `AccessibilityDeviceManager`) plus the usual animation settle.
-     *
-     * Prefer this over reading bounds from `findMatches` and tapping `tapOnPoint`: it preserves
-     * the routing that makes clickable *wrapper* rows (text on a child view) actually fire, which
-     * a raw coordinate tap can't guarantee. Pair with `findMatches({ selector, timeoutMs })` to
-     * wait for the element first.
-     *
-     * Source: `TapOnByElementSelector.kt` (`tapOnElementBySelector`).
-     */
-    tapOnElementBySelector: {
-      args: {
-        /** The node selector identifying the element to tap. */
-        nodeSelector: TrailblazeNodeSelector;
-        /** Set to true for a long press instead of a tap. Default false. */
-        longPress?: boolean;
-        /** Optional rationale logged alongside the tool call. */
-        reason?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Assert that the element resolved by a [TrailblazeNodeSelector] is visible (optionally
-     * matching its text via `expectedText`/`textMatchMode`), waiting up to `timeoutMs` for it to
-     * appear. This is the selector-resolved verification the migration pipeline records in place of
-     * an NL `assertVisible` — the deterministic executor dispatches it BY NAME at replay, so it
-     * shows up in recordings even though the LLM never picks it (it isn't in any `tool_sets:`).
-     * Like the other selector tools, the descriptor codegen can't lower the self-referential
-     * selector type, so this hand-curated typing is the authoritative surface. Every field is
-     * optional, mirroring `AssertVisibleBySelectorTrailblazeTool.kt` (keep in sync per the Drift
-     * policy at the top of this file).
-     *
-     * Source: `AssertVisibleBySelectorTrailblazeTool.kt` (`assertVisibleBySelector`).
-     */
-    assertVisibleBySelector: {
-      args: {
-        /** The node selector identifying the element to assert visible. */
-        nodeSelector?: TrailblazeNodeSelector;
-        /** Optional rationale logged alongside the assertion. */
-        reason?: string;
-        /** Optional text the resolved element must contain/equal (compared per `textMatchMode`). */
-        expectedText?: string;
-        /** How `expectedText` is compared (e.g. "EXACT", "CONTAINS"). */
-        textMatchMode?: string;
-        /** Max wait (ms) for the element to appear before the assertion fails. */
-        timeoutMs?: number;
-        /** Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`. Untyped here. */
-        selector?: unknown;
-      };
-      result: string;
-    };
-
-    /**
-     * Tap the element resolved by a [TrailblazeNodeSelector] (the raw selector tap the runtime
-     * dispatches; `tapOnElementBySelector` is the preferred authoring entry point — prefer it). The
-     * migration pipeline can record this directly, so it appears in recordings; curated here with
-     * the authoritative selector typing the descriptor codegen can't lower. Keep in sync with
-     * `TapOnTrailblazeTool.kt`.
-     *
-     * Source: `TapOnTrailblazeTool.kt` (`tapOn`).
-     */
-    tapOn: {
-      args: {
-        /** The node selector identifying the element to tap. */
-        selector: TrailblazeNodeSelector;
-        /** Optional relative point within the element to tap (e.g. "50%,50%"). */
-        relativePoint?: string;
-        /** Set to true for a long press instead of a tap. Default false. */
-        longPress?: boolean;
-        /** Optional rationale logged alongside the tool call. */
-        reasoning?: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Wait for on-screen animations to settle, up to the given number of seconds (it returns
-     * early once the UI is idle). Backed by Maestro's `WaitForAnimationToEnd` — use it to let a
-     * transition finish before a follow-up tap or assertion, the scripted-tool equivalent of the
-     * Kotlin agent's `WaitForAnimationToEndCommand` settle.
-     *
-     * Source: `WaitForIdleSyncTrailblazeTool.kt` (`wait`).
-     */
-    wait: {
-      args: {
-        /** Maximum seconds to wait for animations to settle. Default 5. */
-        timeToWaitInSeconds?: number;
-      };
-      result: string;
-    };
-
     /**
      * Execute raw Maestro commands directly — the escape hatch the Kotlin agent reaches via
      * `runMaestroCommands(...)`. Each entry in `commands` is one Maestro command map in the
      * documented YAML/JSON flow shape (e.g. `{ tapOn: { text: "Verify" } }`,
      * `{ inputText: "123456" }`, `{ extendedWaitUntil: { notVisible: "Loading", timeout: 45000 } }`,
-     * `{ assertVisible: { text: "0%", optional: true } }`). Prefer the specific typed tools above
-     * when one exists; this is for faithful 1:1 ports of Kotlin steps that built Maestro orchestra
-     * commands by hand (e.g. app launch / sign-in flows).
+     * `{ assertVisible: { text: "0%", optional: true } }`). Prefer the specific typed tools when one
+     * exists; this is for faithful 1:1 ports of Kotlin steps that built Maestro orchestra commands by
+     * hand (e.g. app launch / sign-in flows).
+     *
+     * Recordable, but hand-curated here (listed in `HandCuratedRecordableTools.NAMES`):
+     * the free-form `commands` list can't be lowered by the Koog descriptor path, so the generated
+     * recordable surface can't model it.
      *
      * Source: `MaestroTrailblazeTool.kt` (`mobile_maestro`). The Kotlin tool's custom serializer maps
      * the `{ commands: [...] }` payload onto a Maestro commands-list YAML before execution.
@@ -417,32 +178,6 @@ declare module "@trailblaze/scripting" {
       args: {
         /** Ordered list of Maestro command maps to run, in `MaestroYamlParser` flow shape. */
         commands: Array<Record<string, unknown>>;
-      };
-      result: string;
-    };
-
-    /**
-     * Low-level framework primitive: write raw bytes (supplied as a base64 string) to an absolute
-     * path on the Android device, creating parent dirs and overwriting any existing file. Use it
-     * to seed any file — text or binary — that the device shell can't move reliably (a file body
-     * hangs `adb shell` on the host, and a base64 argv hits ARG_MAX on-device; this uses
-     * `adb push` / a direct file write instead).
-     *
-     * Filesystem only: it does NOT register MediaStore or set a MIME type (base64 carries no MIME,
-     * and the filesystem has no MIME concept). To write UTF-8 text, base64-encode the string and
-     * pass it here. If a consumer must find the file via a MediaStore query, register it separately
-     * with `android_adbShell` (`cmd media_scanner scan <path>` / `content insert --bind mime_type:…`).
-     * That layering — and keeping perms/owner/MIME on `adbShell` rather than as params here — is the
-     * framework-provides-primitives decision (devlog 2026-06-22). Android-only.
-     *
-     * Source: `AndroidWriteBytesToFileTrailblazeTool.kt` (`android_writeBytesToFile`).
-     */
-    android_writeBytesToFile: {
-      args: {
-        /** Absolute destination path (must start with `/`), e.g. `/storage/emulated/0/Download/setup.json`. */
-        devicePath: string;
-        /** File content as a base64-encoded byte string; decoded to raw bytes before writing. */
-        base64Content: string;
       };
       result: string;
     };
@@ -477,40 +212,27 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Clear all data for an app, resetting it to a fresh-install state. Host-only
-     * (`requiresHost = true`), author-facing (`surfaceToLlm = false`). On Android delegates to
-     * `pm clear`; on iOS locates and empties the app's `simctl` data container. The escape hatch
-     * for a scripted launch step that needs the Kotlin `clearAppData` behavior (e.g. the Square
-     * iOS launch flow's data-clear prefix) without re-deriving the per-platform `simctl` / `adb`
-     * mechanics in TS.
+     * Low-level framework primitive: write raw bytes (supplied as a base64 string) to an absolute
+     * path on the Android device, creating parent dirs and overwriting any existing file. Use it
+     * to seed any file — text or binary — that the device shell can't move reliably (a file body
+     * hangs `adb shell` on the host, and a base64 argv hits ARG_MAX on-device; this uses
+     * `adb push` / a direct file write instead).
      *
-     * Source: `ClearAppDataTrailblazeTool.kt` (`mobile_clearAppData`).
-     */
-    mobile_clearAppData: {
-      args: {
-        /** App id to clear — Android package id or iOS bundle id (e.g. `com.squareup.square`). */
-        appId: string;
-      };
-      result: string;
-    };
-
-    /**
-     * Assert an element with the given accessibility text is visible. DEPRECATED upstream
-     * in favor of the unified `assertVisible` selector path — kept here because the
-     * recorded-trail format still emits this name.
+     * Filesystem only: it does NOT register MediaStore or set a MIME type (base64 carries no MIME,
+     * and the filesystem has no MIME concept). To write UTF-8 text, base64-encode the string and
+     * pass it here. If a consumer must find the file via a MediaStore query, register it separately
+     * with `android_adbShell` (`cmd media_scanner scan <path>` / `content insert --bind mime_type:…`).
+     * That layering — and keeping perms/owner/MIME on `adbShell` rather than as params here — is the
+     * framework-provides-primitives decision (devlog 2026-06-22). Android-only.
      *
-     * Source: `AssertVisibleWithAccessibilityTextTrailblazeTool.kt`.
+     * Source: `AndroidWriteBytesToFileTrailblazeTool.kt` (`android_writeBytesToFile`).
      */
-    assertVisibleWithAccessibilityText: {
+    android_writeBytesToFile: {
       args: {
-        /** Required. Accessibility text to assert is visible. */
-        accessibilityText: string;
-        /** Regex selector for disambiguating duplicates. */
-        id?: string;
-        /** 0-based index of the view to select among matches. */
-        index?: number;
-        enabled?: boolean;
-        selected?: boolean;
+        /** Absolute destination path (must start with `/`), e.g. `/storage/emulated/0/Download/setup.json`. */
+        devicePath: string;
+        /** File content as a base64-encoded byte string; decoded to raw bytes before writing. */
+        base64Content: string;
       };
       result: string;
     };
@@ -573,35 +295,23 @@ declare module "@trailblaze/scripting" {
     };
 
     /**
-     * Grant one or more dangerous runtime permissions to an app via `pm grant`, in a single call.
-     * A permission the target doesn't declare is a tolerated no-op (not a failure), so a
-     * conservative superset is fine; an empty list is a no-op; a single grant is a one-element
-     * array. For AppOps-class operations (`MANAGE_EXTERNAL_STORAGE`, …) use
-     * `android_grantAppOpsPermission` instead. Android-only.
+     * Write an image into the device's public Pictures directory and register it as a MediaStore
+     * Images row, so a gallery / photo picker finds it. On-device this does a `MediaStore.Images`
+     * `ContentResolver.insert` (scoped-storage-safe, auto-registered); from the host it `adb push`es
+     * to `/sdcard/Pictures` then triggers a MediaStore `scan_file`. Bytes are passed base64-encoded.
+     * Unlike `android_writeBytesToFile` (filesystem only), this produces an Images row in either
+     * execution mode. Android-only.
      *
-     * Source: `AndroidGrantPermissionsTrailblazeTool.kt` (`android_grantPermissions`).
+     * Source: `AndroidWriteImageToMediaStoreTrailblazeTool.kt` (`android_writeImageToMediaStore`).
      */
-    android_grantPermissions: {
+    android_writeImageToMediaStore: {
       args: {
-        /** App id (package) to grant to. */
-        appId: string;
-        /** Permission names, e.g. `["android.permission.CAMERA", "android.permission.RECORD_AUDIO"]`. */
-        permissions: string[];
-      };
-      result: string;
-    };
-
-    /**
-     * Grant an AppOps permission to an app via `appops set <op> allow`. Android-only.
-     *
-     * Source: `AndroidGrantAppOpsPermissionTrailblazeTool.kt` (`android_grantAppOpsPermission`).
-     */
-    android_grantAppOpsPermission: {
-      args: {
-        /** App id (package) to grant to. */
-        appId: string;
-        /** AppOps op, e.g. `MANAGE_EXTERNAL_STORAGE`. */
-        permission: string;
+        /** File name to create under Pictures, e.g. `photo.png`. */
+        fileName: string;
+        /** Image content as a base64-encoded byte string; decoded to raw bytes before writing. */
+        base64Content: string;
+        /** Image MIME type. Defaults to `image/png`. */
+        mimeType?: string;
       };
       result: string;
     };
@@ -612,6 +322,10 @@ declare module "@trailblaze/scripting" {
      * no `JSON.parse` needed. The Kotlin handler populates `structuredContent` with this shape; the
      * SDK proxy unwraps it automatically.
      *
+     * Recordable, but hand-curated here (listed in `HandCuratedRecordableTools.NAMES`)
+     * so the structured `{ appIds }` result type is preserved — the generated recordable surface would
+     * flatten it to `result: string`.
+     *
      * The lean, common-case utility. For each app's metadata (display name, system/user, version,
      * build number, install path) use `mobile_listInstalledAppsDetailed` instead.
      *
@@ -619,7 +333,7 @@ declare module "@trailblaze/scripting" {
      */
     mobile_listInstalledApps: {
       args: Record<string, never>;
-      result: { appIds: string[] };
+      result: ListInstalledAppsResult;
     };
 
     /**
@@ -627,6 +341,9 @@ declare module "@trailblaze/scripting" {
      * metadata. Returns the typed result directly (sorted by `appId`) — no `JSON.parse` needed. The
      * Kotlin handler populates `structuredContent` with this shape; the SDK proxy unwraps it
      * automatically.
+     *
+     * Recordable, but hand-curated here (see `mobile_listInstalledApps`) to preserve the structured
+     * result type.
      *
      * Pass `{ includeSystemApps: false }` to return only user-installed apps (drops OS apps). On the
      * Android host/adb path only `label` is absent (it needs on-device resource resolution);
@@ -640,16 +357,7 @@ declare module "@trailblaze/scripting" {
      */
     mobile_listInstalledAppsDetailed: {
       args: { includeSystemApps?: boolean };
-      result: {
-        apps: Array<{
-          appId: string;
-          isSystemApp: boolean;
-          label?: string;
-          version?: string;
-          buildNumber?: string;
-          installPath?: string;
-        }>;
-      };
+      result: ListInstalledAppsDetailedResult;
     };
   }
 }

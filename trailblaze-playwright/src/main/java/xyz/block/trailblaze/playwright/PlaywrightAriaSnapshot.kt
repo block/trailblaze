@@ -145,6 +145,58 @@ object PlaywrightAriaSnapshot {
   }
 
   /**
+   * A stable key for correlating the same accessibility-tree node across two independent
+   * ARIA snapshot captures (one `AriaSnapshotMode.DEFAULT`, one `AriaSnapshotMode.AI`) of
+   * the same page — see [buildAiRefsByRoleName].
+   */
+  internal fun roleNameCorrelationKey(role: String, name: String?): String =
+    if (name != null) "$role $name" else role
+
+  /**
+   * Builds a `(role, name) -> ordered [ref=eN] tokens` map from an `AriaSnapshotMode.AI`
+   * snapshot, in pre-order (first occurrence at index 0, second at index 1, ...).
+   *
+   * Why this indirection exists instead of resolving refs by absolute tree position:
+   * `AriaSnapshotMode.AI`'s tree is NOT always line-for-line identical to
+   * `AriaSnapshotMode.DEFAULT`'s. Playwright's generic-role normalization inserts extra
+   * unnamed `generic` wrapper nodes in AI mode (observed whenever a container has more
+   * than one meaningful child) that DEFAULT mode collapses away — confirmed empirically
+   * against a real Chromium instance across several page shapes while investigating
+   * https://github.com/block/trailblaze/issues/199. A positional (line-index or pre-order-index)
+   * zip between the two captures is therefore unsound in general.
+   *
+   * Matching by (role, name, nth) instead is safe here for a reason the OLD
+   * `BATCH_VIEWPORT_CHECK_JS` role/name matching wasn't: both snapshots use Playwright's
+   * own accessibility-tree computation for role and name (identical in both modes) — so a
+   * real element's role/name is never ambiguous or incomplete between the two captures
+   * (no client-side `computedRole`-unavailable fallback, no hand-rolled per-tag heuristic).
+   * Only a node's *absolute* tree position can shift due to synthetic wrapper insertion,
+   * and (role, name, nth) is immune to that: inserting an unnamed generic wrapper never
+   * reorders or duplicates a NAMED/non-generic node relative to its same-(role, name)
+   * siblings.
+   *
+   * Anonymous generic nodes (`role == "generic" && name == null`) are deliberately
+   * EXCLUDED from the map — those are exactly the shape of the synthetic wrapper AI mode
+   * inserts, so (role, name, nth) can't tell a real anonymous generic wrapper from a
+   * synthetic one. Callers must skip querying this map for such nodes too (see
+   * `PlaywrightScreenState`) and fall back to per-node locator resolution for them, the
+   * same as they already do today for any node the batch can't resolve.
+   */
+  fun buildAiRefsByRoleName(aiYaml: String): Map<String, List<String>> {
+    if (aiYaml.isBlank()) return emptyMap()
+    val result = mutableMapOf<String, MutableList<String>>()
+    for (line in aiYaml.lines()) {
+      if (line.isBlank()) continue
+      val ref = REF_PATTERN.find(line)?.groupValues?.get(1) ?: continue
+      val parsed = parseAriaLine(line)
+      if (parsed.role == "generic" && parsed.name == null) continue
+      val key = roleNameCorrelationKey(parsed.role, parsed.name)
+      result.getOrPut(key) { mutableListOf() }.add(ref)
+    }
+    return result
+  }
+
+  /**
    * Converts a string role name to Playwright's [AriaRole] enum.
    *
    * Uses dynamic enum lookup so all current and future AriaRole values are supported
@@ -293,7 +345,15 @@ object PlaywrightAriaSnapshot {
   private fun parseAriaLine(line: String): AriaLineParsed {
     val trimmed = line.trimStart(' ', '-').trim()
 
-    // Pattern: role "name" [attrs]
+    // Pattern: role "name" [attrs]. Tried on the RAW (unstripped) line: QUOTED_ROLE_PATTERN's
+    // trailing `.*$` already absorbs any bracket annotations after the closing quote
+    // (AriaSnapshotMode.AI's `[ref=eN]`/`[cursor=...]`/`[active]`, or DEFAULT mode's
+    // `[level=N]`), so no pre-stripping is needed here — which matters because stripping
+    // bracket-shaped substrings from the WHOLE line would also corrupt a real accessible
+    // name that happens to contain literal bracket text (e.g. a status badge whose name is
+    // literally `Status [active]`). COLON_ROLE_PATTERN and CONTAINER_ROLE_PATTERN below
+    // tolerate bracket annotations directly in their own pattern for the same reason —
+    // see their KDoc.
     QUOTED_ROLE_PATTERN.matchEntire(trimmed)?.let { match ->
       val role = match.groupValues[1]
       return AriaLineParsed(
@@ -340,11 +400,39 @@ object PlaywrightAriaSnapshot {
   /** Matches `role "name" [attrs]` in ARIA YAML lines, e.g. `heading "Welcome" [level=1]`. */
   private val QUOTED_ROLE_PATTERN = Regex("""^(\w+)\s+"(.+?)".*$""")
 
-  /** Matches `role: text content` lines, e.g. `text: Hello world`. */
-  private val COLON_ROLE_PATTERN = Regex("""^(\w+):\s*(.+)$""")
+  /**
+   * Matches `role [attrs]...: text content` lines, e.g. `text: Hello world` or (in
+   * `AriaSnapshotMode.AI`) `paragraph [ref=e8]: Some text.`. The optional
+   * `(?:\s*\[[^\]]*])*` group consumes any number of bracket annotations sitting between
+   * the role and the colon — needed because `[ref=eN]`/`[cursor=...]`/`[active]` (and any
+   * other Playwright ARIA state annotation: `[checked]`, `[expanded]`, `[level=N]`, etc.)
+   * can appear there in `AriaSnapshotMode.AI` output. Deliberately does NOT touch anything
+   * after the colon, so real content that happens to contain bracket-shaped text (e.g.
+   * `text: [DRAFT] Some content`) is captured into the name unchanged.
+   */
+  private val COLON_ROLE_PATTERN = Regex("""^(\w+)(?:\s*\[[^\]]*])*:\s*(.+)$""")
 
-  /** Matches container roles with optional colon, e.g. `navigation:` or `main`. */
-  private val CONTAINER_ROLE_PATTERN = Regex("""^(\w+):?\s*$""")
+  /**
+   * Matches container roles with optional bracket annotations and colon, e.g.
+   * `navigation:`, `main`, or (in `AriaSnapshotMode.AI`) `generic [active] [ref=e2]:`.
+   * See [COLON_ROLE_PATTERN]'s KDoc for why bracket annotations are tolerated inline
+   * rather than pre-stripped.
+   */
+  private val CONTAINER_ROLE_PATTERN = Regex("""^(\w+)(?:\s*\[[^\]]*])*:?\s*$""")
+
+  /**
+   * Matches an `AriaSnapshotMode.AI` ref annotation and captures its id, e.g. `e5` from
+   * `[ref=e5]`. Deliberately anchored to bare `e\d+` — NOT `\w+` — so it does not match
+   * frame-nested refs, which Playwright prefixes with the owning frame's sequence number
+   * (e.g. `f1e2` for the second ref inside the first iframe). AI-mode snapshots expand
+   * `<iframe>` content inline, but the default-mode snapshot used to build the compact
+   * list / viewHierarchy tree never descends into iframes (it shows a leaf `- iframe`
+   * node), so a frame-nested ref must never enter [buildAiRefsByRoleName]'s correlation
+   * map — if it did, an (role, name, nth) lookup could resolve into iframe content instead
+   * of the intended main-frame element. Don't loosen this pattern without also filtering
+   * frame-nested refs some other way.
+   */
+  private val REF_PATTERN = Regex("""\[ref=(e\d+)]""")
 
   // -- Compact ARIA element list for LLM consumption --
 

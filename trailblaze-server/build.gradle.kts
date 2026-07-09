@@ -87,6 +87,11 @@ tasks.register<Test>("integrationTest") {
   classpath = sourceSets.test.get().runtimeClasspath
   include("**/integration/**")
   include("**/HttpMcpToolExecutorTest*")
+  // This opt-in task deliberately drives a live daemon on the developer's machine — undo the
+  // repo-wide unit-test isolation applied to every Test task in the root build script.
+  environment("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART", "0")
+  environment("TRAILBLAZE_PORT", "52525")
+  systemProperty("user.home", System.getProperty("user.home"))
 }
 
 dependencyGuard {

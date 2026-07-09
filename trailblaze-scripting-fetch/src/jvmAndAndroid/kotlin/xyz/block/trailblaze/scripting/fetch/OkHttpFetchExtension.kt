@@ -1,9 +1,10 @@
 package xyz.block.trailblaze.scripting.fetch
 
 import com.dokar.quickjs.QuickJs
-import com.dokar.quickjs.binding.asyncFunction
+import com.dokar.quickjs.binding.function
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -22,12 +23,13 @@ import xyz.block.trailblaze.util.Console
  * `ctx.tools.exec` to reach an HTTP endpoint (e.g. a device bridge listening on `localhost:<port>`).
  *
  * **How it's wired.** Pass an instance to [xyz.block.trailblaze.quickjs.tools.QuickJsToolHost.connect]
- * `(engineExtension = …)`. [install] registers a native `__trailblazeFetch(requestJson)` async
- * function — the same `asyncFunction` idiom the host uses for `__trailblazeCall` — plus a small JS
- * shim that presents the `fetch(input, init) → Response` surface and marshals to/from that native
- * call. The native binding can only return data (not a live JS object with methods), so the shim
- * builds the `Response` (`.status` / `.ok` / `.headers.get()` / `.text()` / `.json()`) on the JS
- * side, exactly as the SDK shim wraps `__trailblazeCall`.
+ * `(engineExtension = …)`. [install] registers a native `__trailblazeFetch(requestJson)`
+ * function — the same synchronous-binding-plus-JS-shim idiom the host uses for `__trailblazeCall`
+ * (NOT `asyncFunction`; see the binding's install site for why) — plus a small JS shim that
+ * presents the `fetch(input, init) → Response` surface and marshals to/from that native call. The
+ * native binding can only return data (not a live JS object with methods), so the shim builds the
+ * `Response` (`.status` / `.ok` / `.headers.get()` / `.text()` / `.json()`) on the JS side, exactly
+ * as the SDK shim wraps `__trailblazeCall`.
  *
  * **Posture: author-only.** Like [xyz.block.trailblaze.quickjs.tools.HostBinding] and
  * `ctx.tools.exec`, this surfaces a capability to scripted-tool *authors*, never to the LLM.
@@ -109,12 +111,16 @@ class OkHttpFetchExtension(
       return
     }
     // Native side: takes the JS-stringified request, returns the JS-parseable response (or a
-    // `{ __fetchError }` envelope). Same `(string) -> string` async-binding shape as
-    // `__trailblazeCall`, so QuickJS can `await` it from the shim.
-    quickJs.asyncFunction(FETCH_BINDING_NAME) { args ->
+    // `{ __fetchError }` envelope). Same `(string) -> string` binding shape as `__trailblazeCall`,
+    // so QuickJS can `await` it from the shim. Synchronous binding, NOT asyncFunction — quickjs-kt
+    // 1.0.5's asyncFunction invoke path has a native JNI reference-lifecycle bug that crashes the
+    // JVM (block/trailblaze#194; see QuickJsToolHost's __trailblazeCall install site for the full
+    // rationale). runBlocking here blocks the confined engine thread only for the duration of the
+    // call; the actual HTTP request runs on Dispatchers.IO inside executeFetch, not on this thread.
+    quickJs.function(FETCH_BINDING_NAME) { args ->
       val requestJson = args.getOrNull(0) as? String
         ?: error("$FETCH_BINDING_NAME requires a request JSON string argument")
-      executeFetch(requestJson)
+      runBlocking { executeFetch(requestJson) }
     }
     // JS side: define `globalThis.fetch` wrapping the native binding with the WHATWG surface.
     quickJs.evaluate<Any?>(FETCH_SHIM_JS, "trailblaze-fetch-shim.js", false)

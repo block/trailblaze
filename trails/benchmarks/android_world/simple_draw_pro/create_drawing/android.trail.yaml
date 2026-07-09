@@ -1,7 +1,7 @@
 # Android World Benchmark: CreateDrawing
 - config:
     id: android-world-benchmarks/simple_draw_pro/create_drawing
-    displayName: "Simple Draw Pro - Create Drawing"
+    title: "Simple Draw Pro - Create Drawing"
     description: "Create a new drawing in Simple Draw Pro. Name it sunset_sketch.png. Save it in the Pictures folder within the sdk_gphone_x86_64 storage area."
 
 - tools:

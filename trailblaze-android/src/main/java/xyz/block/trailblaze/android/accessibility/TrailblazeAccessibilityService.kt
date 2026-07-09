@@ -1413,13 +1413,23 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * behavior. (This appends at the end; it does not honor a mid-field cursor position — the
      * common focus-then-type flow puts the caret at the end, and the reported divergence was
      * purely the clearing, not caret placement.)
+     *
+     * **Hint text is not content.** For an empty editable displaying its placeholder,
+     * `AccessibilityNodeInfo.getText()` returns the hint string itself while `isShowingHintText()`
+     * is true. Concatenating that would prepend the placeholder to the input (e.g. "Enter amount"
+     * + "1234"). [resolveExistingEditableText] gates the read on `isShowingHintText` so a
+     * hint-showing field reads as empty — we append to real content only.
      */
     private fun tryDispatchActionSetText(text: String): Boolean {
       val root = getApplicationWindowRoot() ?: return false
       return try {
         val editableNode = findFocusedEditableNode(root) ?: return false
         try {
-          val existing = editableNode.text?.toString().orEmpty()
+          val existing =
+            resolveExistingEditableText(
+              editableNode.text?.toString(),
+              editableNode.isShowingHintText,
+            )
           val args =
             Bundle().apply {
               putCharSequence(
@@ -1439,7 +1449,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     /**
      * Read-only access to the currently focused editable field's text. Returns null when no
      * focused editable exists in the application window. Returns "" for an empty/hint-state
-     * field — the caller distinguishes by treating the initial text as the baseline to compare
+     * field (via [resolveExistingEditableText], so a placeholder never leaks in as the baseline)
+     * — the caller distinguishes by treating the initial text as the baseline to compare
      * post-input.
      */
     private fun readFocusedEditableText(): String? {
@@ -1450,7 +1461,7 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       return try {
         val editableNode = findFocusedEditableNode(root) ?: return null
         try {
-          editableNode.text?.toString().orEmpty()
+          resolveExistingEditableText(editableNode.text?.toString(), editableNode.isShowingHintText)
         } finally {
           editableNode.recycle()
         }
@@ -1584,6 +1595,21 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
   override fun onInterrupt() {}
 }
+
+/**
+ * Resolves the existing content of a focused editable field for the additive `inputText` path,
+ * treating a hint-showing field as empty.
+ *
+ * For an empty editable displaying its placeholder, `AccessibilityNodeInfo.getText()` returns the
+ * hint string itself while `isShowingHintText()` is true. Callers that append onto this (the
+ * `ACTION_SET_TEXT` fast path, the change-verify baseline) must not treat the placeholder as real
+ * content, or they'd prepend it to the input (e.g. "Enter amount" + "1234"). When
+ * [isShowingHintText] is true we return "" so the field reads as empty; otherwise the raw text
+ * (null coalesced to ""). Side-effect-free so it is unit-testable without an
+ * `AccessibilityNodeInfo` (see [ResolveExistingEditableTextTest]).
+ */
+internal fun resolveExistingEditableText(rawText: String?, isShowingHintText: Boolean): String =
+  if (isShowingHintText) "" else rawText.orEmpty()
 
 private const val FNV_PRIME = 1099511628211L
 

@@ -11,6 +11,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-07-03 | [Batched tool-execution scope: one context + one snapshot frame per recording](2026-07-03-batched-tool-execution-scope.md) | Decision |
 | 2026-07-01 | [Type-checking trail recordings by transpiling them to TypeScript](2026-07-01-trail-recording-type-validation.md) | Decision |
 | 2026-06-30 | [assertWaypoint tool replaces the per-step postcondition field](2026-06-30-assertwaypoint-tool-replaces-postcondition-field.md) | Decision |
 | 2026-06-30 | [android_adbShell is transport-aware: raw argv on-device, shell string on host](2026-06-30-adbshell-transport-aware-dispatch.md) | Decision |

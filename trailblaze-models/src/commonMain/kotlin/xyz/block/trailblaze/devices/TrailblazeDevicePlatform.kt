@@ -31,6 +31,15 @@ enum class TrailblazeDevicePlatform(
   DESKTOP("Compose Desktop", hidden = true),
   ;
 
+  /**
+   * True for platforms whose device is a virtual one provisioned on demand by downstream device
+   * loading, rather than a physical/emulated device autodetect enumerates: [WEB] (Playwright
+   * browser) and [DESKTOP] (Compose). Device selection ([TrailDeviceSelector]) routes trails that
+   * only declare these platforms to that virtual device regardless of connected real devices.
+   */
+  val usesVirtualDevice: Boolean
+    get() = this == WEB || this == DESKTOP
+
   fun asTrailblazeDeviceClassifier(): TrailblazeDeviceClassifier = TrailblazeDeviceClassifier(this.name.lowercase())
 
   /**

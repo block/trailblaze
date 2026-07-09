@@ -1,0 +1,2 @@
+id: android_writeImageToMediaStore
+class: xyz.block.trailblaze.mobile.tools.AndroidWriteImageToMediaStoreTrailblazeTool

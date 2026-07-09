@@ -1116,9 +1116,19 @@ private fun ColumnScope.ScreenshotKeyframePanel(
           val imageAspect = if (dh > 0) dw.toFloat() / dh.toFloat() else DEFAULT_PHONE_ASPECT_RATIO
           val (renderedWidth, renderedHeight) = computeFitDimensions(imageAspect, maxWidth, maxHeight)
 
-          // Determine click coordinates for action overlay
-          val action = when (activeScreenshotLog) {
-            is TrailblazeLog.AgentDriverLog -> activeScreenshotLog.action
+          // Determine click coordinates for action overlay. Only shown while the scrub
+          // position is still within the driver action's own duration — once later,
+          // screenshot-less events (e.g. a batch of recording-replay assertVisibleBySelector
+          // calls sharing this same keyframe) become active, the marker would misleadingly
+          // point at this earlier action's location rather than theirs, so it's suppressed.
+          // durationMs == 0 is a sentinel for "point event with no real duration" (e.g.
+          // AssertionLogger's assertion visualizations, Playwright click/hover markers) —
+          // those are exempted from the window check so they still render at their own keyframe.
+          val action = when {
+            activeScreenshotLog is TrailblazeLog.AgentDriverLog &&
+              (activeScreenshotLog.durationMs <= 0 ||
+                (currentTimestamp - activeScreenshotLog.timestamp.toEpochMilliseconds()) <
+                activeScreenshotLog.durationMs) -> activeScreenshotLog.action
             else -> null
           }
           val clickCoords = action as? HasClickCoordinates

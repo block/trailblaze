@@ -91,6 +91,14 @@ object TrailblazeCli {
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
   ) {
+    // Every Trailblaze process is a macOS agent app (LSUIElement) unless it deliberately
+    // shows a window. Read at AWT initialization, so it must be set before ANY code path
+    // loads an AWT class: a CLI command or headless daemon that touches AWT would otherwise
+    // initialize as a regular GUI app, which macOS activates — stealing keyboard focus from
+    // whatever the user is typing. The one headed path (`trailblaze app` without --headless)
+    // clears this in MainTrailblazeApp before its first AWT touch.
+    System.setProperty(TrailblazeDesktopUtil.AWT_AGENT_APP_PROPERTY, "true")
+
     // Fail fast on Intel macOS / Windows with a clear "platform unsupported"
     // message — runs before any code path could touch Skiko's JNI loader and
     // surface a cryptic LibraryLoadException instead.
@@ -526,8 +534,9 @@ class TrailblazeCliCommand(
     // Note: "show window" is handled by AppCommand.launchInBackground() before this method
     // is called. This path runs in --foreground mode (background process or launcher-not-found
     // fallback), so just attach to an existing daemon if present.
-    val daemon = DaemonClient(port = getEffectivePort())
-    if (daemon.isRunningBlocking()) {
+    val daemonAlreadyRunning = DaemonClient(port = getEffectivePort()).use { daemon ->
+      if (!daemon.isRunningBlocking()) return@use false
+
       val response = daemon.showWindowBlocking()
       if (response.success) {
         Console.log("Window shown.")
@@ -538,6 +547,7 @@ class TrailblazeCliCommand(
       // Start the desktop GUI alongside the existing daemon — it will skip starting
       // a second HTTP server since the daemon is already handling that.
       Console.log("Trailblaze server is running. Starting desktop GUI...")
+      true
     }
 
     // Apply port overrides to settings if any non-default ports are active
@@ -546,8 +556,10 @@ class TrailblazeCliCommand(
       app.applyPortOverrides(httpPort = getEffectivePort(), httpsPort = getEffectiveHttpsPort())
     }
 
-    // Start the app (GUI or headless based on flag)
-    app.startTrailblazeDesktopApp(headless = effectiveHeadless)
+    // Start the app (GUI or headless based on flag). When no daemon was running above, this
+    // process must own the port — losing the bind race exits instead of leaving a duplicate
+    // tray icon.
+    app.startTrailblazeDesktopApp(headless = effectiveHeadless, daemonAlreadyRunning = daemonAlreadyRunning)
     return TrailblazeExitCode.SUCCESS.code
   }
 }

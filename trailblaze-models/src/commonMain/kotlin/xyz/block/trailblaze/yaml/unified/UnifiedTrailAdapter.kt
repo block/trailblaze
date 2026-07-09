@@ -6,9 +6,12 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailSource
+import xyz.block.trailblaze.yaml.TrailSourceType
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Lowers a [UnifiedTrail] document into the legacy v1 shape the runtime
@@ -81,12 +84,24 @@ object UnifiedTrailAdapter {
             "running it in LLM mode.",
         )
       }
-      DirectionStep(
-        step = step.step,
-        recordable = step.recordable,
-        recording = tools?.takeIf { it.isNotEmpty() }?.let { ToolRecording(tools = it) },
-        maxRetries = step.maxRetries,
-      )
+      val recording = tools?.takeIf { it.isNotEmpty() }?.let { ToolRecording(tools = it) }
+      // A `verify:` step lowers to the v1 VerificationStep so the runtime keeps verify semantics
+      // (assertion-scoped tool surface, auto-terminate + assertion ledger, never self-healed).
+      if (step.verify) {
+        VerificationStep(
+          verify = step.step,
+          recordable = step.recordable,
+          recording = recording,
+          maxRetries = step.maxRetries,
+        )
+      } else {
+        DirectionStep(
+          step = step.step,
+          recordable = step.recordable,
+          recording = recording,
+          maxRetries = step.maxRetries,
+        )
+      }
     }
     // The optional trailhead lowers to a TrailheadTrailItem between config and prompts — its
     // per-classifier tools resolve the same closest-wins way as a regular step's recordings.
@@ -120,9 +135,9 @@ object UnifiedTrailAdapter {
    * Lower a [UnifiedTrailConfig] to a v1 [TrailConfig], promoting the fields
    * v1 understands and collapsing the unified-only ones.
    *
-   * `platform:`, `title:` (retired in the unified format) are left null on the
-   * v1 side — the runtime resolves them from the device picker by the time the
-   * lowered trail reaches the executor. The unified config's per-classifier
+   * `platform:` (retired in the unified format) is left null on the v1 side —
+   * the runtime resolves it from the device picker by the time the lowered
+   * trail reaches the executor. The unified config's per-classifier
    * `devices:` map is NOT dropped: its keys aren't surfaced to v1 (the executor
    * doesn't need a support list), but the *driver value* for the device under
    * test is resolved closest-wins from that map and passed in as
@@ -138,17 +153,157 @@ object UnifiedTrailAdapter {
     unified: UnifiedTrailConfig,
     resolvedDriver: String? = null,
     resolvedSkip: String? = null,
-  ): TrailConfig = TrailConfig(
-    id = unified.id,
-    target = unified.target,
-    description = unified.description,
-    driver = resolvedDriver,
-    skip = resolvedSkip,
-    tags = unified.tags,
-    context = unified.context,
-    metadata = unified.metadata,
-    memory = unified.memory,
+  ): TrailConfig {
+    val (bridged, plainMetadata) = splitBridgedMetadata(unified.metadata)
+    return TrailConfig(
+      id = unified.id,
+      target = unified.target,
+      title = unified.title,
+      description = unified.description,
+      priority = bridged.priority,
+      source = bridged.source,
+      driver = resolvedDriver,
+      skip = resolvedSkip,
+      tags = unified.tags,
+      context = unified.context,
+      metadata = plainMetadata,
+      memory = unified.memory,
+    )
+  }
+
+  /**
+   * Seed a [UnifiedTrailConfig] from a v1 [TrailConfig], carrying every device-agnostic field:
+   * `id`, `target`, `title`, `description`, `context`, `memory`, `metadata` map one-to-one,
+   * while the informational `priority` / `source` are bridged into the unified `metadata` under
+   * the reserved keys (see [UnifiedTrailConfig.metadata]) — [lowerConfig] lifts them back, so
+   * v1 readers of `TrailConfig.priority`/`.source` see identical values from either format. The
+   * per-classifier maps (`devices`, `skip`) and the trail-level `tags` are left null for the
+   * caller to fill from every contributing file/recording — a single v1 config can't express
+   * them. v1's `platform` is dropped (retired — the device set derives from the classifier
+   * slots), and a v1 `electron:` block is REFUSED (fail loud, never silently dropped): it is
+   * driver-specific structured launch config with zero corpus usage, and its unified home
+   * (likely target-level, not per-trail) is deferred until a real Electron trail needs one.
+   *
+   * Single source of truth for the v1→unified identity mapping, shared by the recorder's
+   * [mergeRecordedClassifier] first-write seed and [xyz.block.trailblaze.migration.UnifiedTrailMigrator],
+   * so adding a config field can't silently drift the two apart.
+   */
+  fun v1ConfigToUnifiedConfig(v1: TrailConfig): UnifiedTrailConfig {
+    require(v1.electron == null) {
+      "Refusing to convert a v1 config with an `electron:` block to the unified format: the " +
+        "unified config deliberately has no electron field (driver-specific launch config, " +
+        "zero corpus usage — its home is deferred until a real Electron trail needs one). " +
+        "Silently dropping it would change how the trail launches. Keep this trail in the v1 " +
+        "format, or move the launch config out of the trail file."
+    }
+    return UnifiedTrailConfig(
+      id = v1.id,
+      target = v1.target,
+      title = v1.title,
+      description = v1.description,
+      context = v1.context,
+      memory = v1.memory,
+      metadata = bridgeMetadata(v1),
+    )
+  }
+
+  /**
+   * The unified `metadata` map for a v1 config: the v1 `metadata` entries (order preserved)
+   * plus the reserved bridge keys carrying `priority:` / `source:`. A bare `source: {}` marker
+   * bridges as an empty-string [UnifiedTrailConfig.METADATA_KEY_SOURCE] so it round-trips.
+   * On a key collision the first-class v1 field wins (none exist in the corpus).
+   */
+  private fun bridgeMetadata(v1: TrailConfig): Map<String, String>? {
+    val bridged = linkedMapOf<String, String>()
+    v1.metadata?.let { bridged.putAll(it) }
+    v1.priority?.let { bridged[UnifiedTrailConfig.METADATA_KEY_PRIORITY] = it }
+    v1.source?.let { source ->
+      bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE] = source.type?.name.orEmpty()
+      source.reason?.let { bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON] = it }
+    }
+    return bridged.ifEmpty { null }
+  }
+
+  private data class BridgedV1Fields(val priority: String?, val source: TrailSource?)
+
+  /**
+   * Inverse of [bridgeMetadata]: lift the reserved bridge keys back into the v1 fields and
+   * return the remaining plain metadata (null when emptied, so a v1 config that had no
+   * `metadata:` round-trips byte-equal). A [UnifiedTrailConfig.METADATA_KEY_SOURCE] value that
+   * is neither empty nor a known [TrailSourceType] name is NOT treated as a bridge — the key
+   * stays in metadata untouched rather than being destroyed by a failed parse.
+   */
+  private fun splitBridgedMetadata(
+    metadata: Map<String, String>?,
+  ): Pair<BridgedV1Fields, Map<String, String>?> {
+    if (metadata == null) return BridgedV1Fields(priority = null, source = null) to null
+    val priority = metadata[UnifiedTrailConfig.METADATA_KEY_PRIORITY]
+    val sourceTypeRaw = metadata[UnifiedTrailConfig.METADATA_KEY_SOURCE]
+    val parsedSourceType = sourceTypeRaw
+      ?.takeIf { it.isNotEmpty() }
+      ?.let { raw -> TrailSourceType.entries.firstOrNull { it.name == raw } }
+    val sourceBridges = sourceTypeRaw != null && (sourceTypeRaw.isEmpty() || parsedSourceType != null)
+    val source = if (sourceBridges) {
+      TrailSource(type = parsedSourceType, reason = metadata[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON])
+    } else {
+      null
+    }
+    val remaining = metadata
+      .minus(UnifiedTrailConfig.METADATA_KEY_PRIORITY)
+      .let { if (sourceBridges) it - UnifiedTrailConfig.METADATA_KEY_SOURCE - UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON else it }
+      .ifEmpty { null }
+    return BridgedV1Fields(priority = priority, source = source) to remaining
+  }
+
+  /**
+   * Fill the device-agnostic scalar fields [base] lacks from [fallback] — the merge primitive
+   * for folding multiple v1 configs into one canonical unified config (the migrator folds
+   * platform files in filename order, then `blaze.yaml`). [base]'s value wins whenever it is
+   * *meaningfully* declared; a field counts as absent when it is null, a blank string, or an
+   * empty map, so a placeholder in an earlier file never shadows a populated value in a later
+   * one. An empty marker is still kept when no file declares better.
+   * [UnifiedTrailConfig.metadata] merges per-key (see [mergeMetadata]). The per-classifier maps
+   * (`devices`, `skip`) and the trail-level `tags` are merged by the caller and left untouched
+   * here.
+   *
+   * Lives next to [v1ConfigToUnifiedConfig] so the scalar field list has one home — the
+   * round-trip completeness test covers both, so a new `TrailConfig` field can't be carried by
+   * one and silently dropped by the other.
+   */
+  fun fillMissingConfigScalars(
+    base: UnifiedTrailConfig,
+    fallback: UnifiedTrailConfig,
+  ): UnifiedTrailConfig = base.copy(
+    id = base.id.orIfAbsent(fallback.id),
+    target = base.target.orIfAbsent(fallback.target),
+    title = base.title.orIfAbsent(fallback.title),
+    description = base.description.orIfAbsent(fallback.description),
+    context = base.context.orIfAbsent(fallback.context),
+    memory = base.memory.orIfAbsent(fallback.memory),
+    metadata = mergeMetadata(base.metadata, fallback.metadata),
   )
+
+  /**
+   * Metadata merges per-KEY (union; [base]'s value wins on a shared key), unlike the other
+   * fields' whole-value fill: the reserved bridge keys mean one file's `priority:` and another
+   * file's `source:` land in the same map, and an atomic first-map-wins would re-drop whichever
+   * the first file lacked. `memory` deliberately stays whole-map — it is runtime-load-bearing,
+   * and unioning two platforms' seeds could fabricate a combination no file declared.
+   */
+  private fun mergeMetadata(
+    base: Map<String, String>?,
+    fallback: Map<String, String>?,
+  ): Map<String, String>? = when {
+    base.isNullOrEmpty() -> fallback ?: base
+    fallback.isNullOrEmpty() -> base
+    else -> fallback + base
+  }
+
+  private fun String?.orIfAbsent(fallback: String?): String? =
+    takeUnless { it.isNullOrBlank() } ?: fallback ?: this
+
+  private fun Map<String, String>?.orIfAbsent(fallback: Map<String, String>?): Map<String, String>? =
+    takeUnless { it.isNullOrEmpty() } ?: fallback ?: this
 
   /**
    * Resolve the skip reason a unified [config] declares for the device described by
@@ -222,4 +377,180 @@ object UnifiedTrailAdapter {
     }
     return null
   }
+
+  /**
+   * Fold a freshly-recorded single-device trail into an [existing] unified trail's per-classifier
+   * slots and return the merged [UnifiedTrail]. This is the recorder's write-back primitive: a
+   * session recorded on one device contributes ONLY its own [classifier]'s recordings and driver
+   * pin; every other classifier already in [existing] is preserved untouched, so re-recording on
+   * Android never disturbs the iOS slot.
+   *
+   * The recorded side is passed as the v1 [recordedItems] that [generateRecordedYaml] already
+   * produces (this keeps the recording-generation pipeline unchanged — merge just lowers its output
+   * into the unified file). The driver pin comes from the recorded config's `driver:`.
+   *
+   * **Replace, not append, per classifier.** This device's prior contribution (its recordings in
+   * every step + trailhead, and its `config.devices` driver pin) is stripped first, then the fresh
+   * recording is overlaid — so re-recording the same device on the same trail updates its slot in
+   * place instead of duplicating tools.
+   *
+   * **Step alignment is by index** (like [xyz.block.trailblaze.migration.UnifiedTrailMigrator]).
+   * Existing NL wins where a step already exists — it is the device-agnostic canonical intent, so a
+   * re-record on one device never rewrites the shared prose; a recorded NL that disagrees at the
+   * same index is logged as drift, not applied. Recorded steps beyond [existing]'s length are
+   * appended, carrying only this classifier's recording plus the recorded NL. A recorded step with
+   * no tools leaves this classifier ABSENT from that step's map (runs in LLM mode) rather than
+   * writing `classifier: []` (which the model reserves for a deliberate no-op).
+   *
+   * The step KIND (`step:` vs `verify:`) is preserved: an appended step takes `verify: true` when
+   * the recorded step is a [VerificationStep]; on merge into an existing step the EXISTING kind
+   * wins (it is device-agnostic canon, like the NL), with kind disagreement logged as drift.
+   *
+   * @param existing the current on-disk unified trail, or `null` for the first write of this trail.
+   * @param recordedItems the v1 items from [generateRecordedYaml] for this one device.
+   * @param classifier the recorded device's classifier slot (e.g. `android`, `ios-iphone`).
+   */
+  fun mergeRecordedClassifier(
+    existing: UnifiedTrail?,
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+  ): UnifiedTrail {
+    val recordedConfig = recordedItems
+      .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+      .firstOrNull()?.config
+    val recordedPrompts = recordedItems
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .flatMap { it.promptSteps }
+    val recordedTrailhead = recordedItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .firstOrNull()?.trailhead
+
+    // Base config: keep the existing file's config when merging; on a first write seed from the
+    // recording's own config. Carry every v1 field the unified config can model so the first write
+    // is lossless: the scalar fields via the shared seed helper (identity/title/context/memory/
+    // electron verbatim; priority/source bridged into metadata's reserved keys), trail-level `tags`
+    // verbatim, and the v1 scalar `skip` lifted into this classifier's slot of the per-classifier
+    // skip map (blank reasons dropped — v1 semantics). The driver is handled per-classifier just
+    // below. (v1 `platform` is the one field with no unified home and is not seeded here.)
+    val baseConfig = existing?.config
+      ?: recordedConfig?.let {
+        v1ConfigToUnifiedConfig(it).copy(
+          tags = it.tags,
+          skip = it.skip?.takeIf { reason -> reason.isNotBlank() }?.let { reason -> mapOf(classifier to reason) },
+        )
+      }
+      ?: UnifiedTrailConfig()
+
+    // Replace this classifier's driver pin: strip it, then re-add if the recording carried one.
+    // Collapse an emptied map back to null so an unpinned trail stays unpinned.
+    val devicesStripped = baseConfig.devices?.minus(classifier)?.ifEmpty { null }
+    val mergedDevices = recordedConfig?.driver
+      ?.let { (devicesStripped ?: emptyMap()) + (classifier to it) }
+      ?: devicesStripped
+    val mergedConfig = baseConfig.copy(devices = mergedDevices)
+
+    // Strip this classifier everywhere first (replace semantics), then overlay the recording.
+    val baseSteps = existing?.trail.orEmpty().map { it.withoutClassifier(classifier) }
+    val mergedSteps = (0 until maxOf(baseSteps.size, recordedPrompts.size)).mapNotNull { i ->
+      val base = baseSteps.getOrNull(i)
+      val recorded = recordedPrompts.getOrNull(i)
+      val recordedTools = recorded?.recording?.tools.orEmpty()
+      when {
+        base != null && recorded != null -> {
+          if (base.step.trim() != recorded.prompt.trim()) {
+            // info (not log): a re-record whose NL diverged from the on-disk step keeps the existing
+            // prose — the user should see that their recorded tools were bound to different wording,
+            // even on a normal (non-verbose) run where Console.log is suppressed.
+            Console.info(
+              "[unified-record] step ${i + 1} NL drift on classifier `$classifier`: keeping existing " +
+                "\"${base.step.take(60)}\" over recorded \"${recorded.prompt.take(60)}\".",
+            )
+          }
+          if (base.verify != (recorded is VerificationStep)) {
+            // Same policy as NL drift: the existing kind is device-agnostic canon and wins; the
+            // user should see that this device recorded the step under the other keyword.
+            Console.info(
+              "[unified-record] step ${i + 1} kind drift on classifier `$classifier`: keeping " +
+                "existing `${if (base.verify) "verify" else "step"}:` over recorded " +
+                "`${if (recorded is VerificationStep) "verify" else "step"}:`.",
+            )
+          }
+          // An always-LLM step (recordable:false) must never carry recordings — the two are
+          // mutually exclusive and the unified parser rejects the combination. Preserve the
+          // author's "never record" intent by dropping the recorded tools rather than corrupting
+          // the file.
+          if (recordedTools.isNotEmpty() && base.recordable) {
+            base.withClassifier(classifier, recordedTools)
+          } else {
+            if (recordedTools.isNotEmpty()) logDroppedRecordableFalse(i, classifier)
+            base
+          }
+        }
+        base != null -> base // existing step this device didn't reach — classifier already stripped
+        recorded != null -> {
+          // Same invariant on an appended step: a recordable:false step keeps no recordings.
+          val attach = recordedTools.isNotEmpty() && recorded.recordable
+          if (recordedTools.isNotEmpty() && !recorded.recordable) logDroppedRecordableFalse(i, classifier)
+          UnifiedTrailStep(
+            step = recorded.prompt,
+            verify = recorded is VerificationStep,
+            recordings = if (attach) mapOf(classifier to recordedTools) else emptyMap(),
+            recordable = recorded.recordable,
+            maxRetries = recorded.maxRetries,
+          )
+        }
+        else -> null
+      }
+    }
+
+    return UnifiedTrail(
+      config = mergedConfig,
+      trailhead = mergeRecordedTrailhead(existing?.trailhead?.withoutClassifier(classifier), recordedTrailhead, classifier),
+      trail = mergedSteps,
+    )
+  }
+
+  /**
+   * Merge one device's recorded [recorded] trailhead into the [base] trailhead (this classifier
+   * already stripped from [base]). A trailhead is one tool per platform, so this classifier's slot
+   * is the recorded trailhead's single tool list. Existing trailhead NL wins; falls back to the
+   * recorded NL, then to [TrailheadDefinition.DEFAULT_STEP] (the shorthand-trailhead placeholder) so
+   * the required `step:` is never blank. Returns [base] unchanged when the recording had no
+   * trailhead, and `null` only when neither side has one.
+   */
+  private fun mergeRecordedTrailhead(
+    base: UnifiedTrailStep?,
+    recorded: TrailheadDefinition?,
+    classifier: String,
+  ): UnifiedTrailStep? {
+    if (recorded == null) return base
+    val step = base?.step ?: recorded.step ?: TrailheadDefinition.DEFAULT_STEP
+    val recordings = if (recorded.tools.isNotEmpty()) {
+      (base?.recordings ?: emptyMap()) + (classifier to recorded.tools)
+    } else {
+      base?.recordings ?: emptyMap()
+    }
+    return UnifiedTrailStep(
+      step = step,
+      recordings = recordings,
+      maxRetries = base?.maxRetries ?: recorded.maxRetries,
+    )
+  }
+
+  private fun logDroppedRecordableFalse(stepIndex: Int, classifier: String) {
+    // info (not log): dropping recorded tools is a data-affecting decision the user should see even
+    // on a normal run, not just under --verbose.
+    Console.info(
+      "[unified-record] step ${stepIndex + 1} is recordable:false (always-LLM); dropping the recorded " +
+        "`$classifier` tools to preserve that intent (recordings and recordable:false are mutually exclusive).",
+    )
+  }
+
+  private fun UnifiedTrailStep.withoutClassifier(classifier: String): UnifiedTrailStep =
+    if (classifier in recordings) copy(recordings = recordings - classifier) else this
+
+  private fun UnifiedTrailStep.withClassifier(
+    classifier: String,
+    tools: List<TrailblazeToolYamlWrapper>,
+  ): UnifiedTrailStep = copy(recordings = recordings + (classifier to tools))
 }

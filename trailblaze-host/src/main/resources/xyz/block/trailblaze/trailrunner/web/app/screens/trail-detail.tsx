@@ -406,6 +406,16 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
     ...(hasVariants ? [['variants', `Variants · ${variants.length}`, 'layers']] : []),
   ];
   const isEdit = tab === 'edit';
+  // Keep the YAML editor (Monaco + a live language-server socket) ALIVE across tab switches once it's been
+  // opened, instead of unmounting it every time you leave the Edit tab — remounting rebuilt Monaco, respawned
+  // the language server, and refetched the schema on every Steps↔Edit toggle. Mount it LAZILY on first Edit
+  // open (so a trail you only browse in Steps never pays that cost), then just hide it with `display:none`.
+  const [editEverOpened, setEditEverOpened] = React.useState(isEdit);
+  React.useEffect(() => { if (isEdit) setEditEverOpened(true); }, [isEdit]);
+  // Identity of the trail/file the editor is showing. When it changes the editor resets to the new content
+  // even if there were unsaved edits (see TrailYamlEditor) — this replaces the `key={id}` remount that used
+  // to discard the prior trail's state on switch, without tearing down Monaco + the LSP socket.
+  const resetKey = (trail && trail.id) || currentId || null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div className="tb-tabs" style={{ flex: '0 0 auto' }}>
@@ -415,11 +425,21 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
           </div>
         ))}
       </div>
-      <div style={{ flex: 1, minHeight: 0, paddingTop: 16, overflowY: isEdit ? 'hidden' : 'auto', display: isEdit ? 'flex' : undefined, flexDirection: isEdit ? 'column' : undefined }}>
-        {tab === 'steps' && <StepsMode trail={configTrail || trail} configTrail={configTrail} yaml={yaml} go={go} />}
-        {tab === 'edit' && <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} />}
-        {tab === 'runs' && <RunsMode trail={trail} runs={runs} go={go} />}
-        {tab === 'variants' && hasVariants && <VariantsMode variants={variants} currentId={currentId} onSelect={onSelectVariant} openRun={openRun} />}
+      <div style={{ flex: 1, minHeight: 0, paddingTop: 16, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Non-edit tabs are cheap to remount; render them in their own scroll container, hidden while editing. */}
+        {!isEdit && (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            {tab === 'steps' && <StepsMode trail={configTrail || trail} configTrail={configTrail} yaml={yaml} go={go} />}
+            {tab === 'runs' && <RunsMode trail={trail} runs={runs} go={go} />}
+            {tab === 'variants' && hasVariants && <VariantsMode variants={variants} currentId={currentId} onSelect={onSelectVariant} openRun={openRun} />}
+          </div>
+        )}
+        {/* Editor stays mounted once opened; toggled via `display` so Monaco + the LSP socket survive switches. */}
+        {editEverOpened && (
+          <div style={{ flex: 1, minHeight: 0, display: isEdit ? 'flex' : 'none', flexDirection: 'column' }}>
+            <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} resetKey={resetKey} />
+          </div>
+        )}
       </div>
     </div>
   );

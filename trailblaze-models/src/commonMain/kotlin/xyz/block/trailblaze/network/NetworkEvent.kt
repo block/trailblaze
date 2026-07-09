@@ -55,7 +55,11 @@ const val REDACTED_VALUE: String = "***REDACTED***"
 @Serializable
 data class BodyRef(
   val sizeBytes: Long,
-  val contentType: String?,
+  // Defaulted (like the other nullable fields below) so a producer that omits the key when there's
+  // no Content-Type — e.g. the mitmproxy capture addon — still deserializes. Without a default,
+  // kotlinx treats a missing `contentType` as MissingFieldException and the whole NetworkEvent line
+  // is silently dropped by the lenient reader.
+  val contentType: String? = null,
   val inlineText: String? = null,
   val blobPath: String? = null,
   val truncated: Boolean = false,

@@ -6,7 +6,7 @@
 # - Validation: DeskClock activity is foreground, "Pause" and "Lap" buttons visible.
 - config:
     id: android-world-benchmarks/clock/stopwatch_running
-    displayName: "Clock - Stopwatch Running"
+    title: "Clock - Stopwatch Running"
     description: "Run the stopwatch."
 
 - tools:

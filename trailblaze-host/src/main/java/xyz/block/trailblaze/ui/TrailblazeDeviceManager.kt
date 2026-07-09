@@ -732,8 +732,13 @@ class TrailblazeDeviceManager(
    * stores the filtered list ([targetDeviceFilter] strips virtual devices when the user hasn't
    * set `testingEnvironment = WEB`), so returning it for a CLI caller that asked for everything
    * would silently drop PLAYWRIGHT_NATIVE etc. and surface as "No matching device found".
+   *
+   * Exposed as [allDiscoveredDevicesFlow] so the Run Configuration picker can list a virtual-only
+   * trail's virtual device even when [targetDeviceFilter] hides it (see `devicesForRunPicker`).
    */
-  @Volatile private var lastAllDevices: List<TrailblazeConnectedDeviceSummary> = emptyList()
+  private val _allDiscoveredDevicesFlow = MutableStateFlow<List<TrailblazeConnectedDeviceSummary>>(emptyList())
+  val allDiscoveredDevicesFlow: StateFlow<List<TrailblazeConnectedDeviceSummary>> =
+    _allDiscoveredDevicesFlow.asStateFlow()
 
   /**
    * Load available devices from the system (suspend version).
@@ -746,7 +751,7 @@ class TrailblazeDeviceManager(
       return if (applyDriverFilter) {
         deviceStateFlow.value.devices.values.map { it.device }
       } else {
-        lastAllDevices
+        _allDiscoveredDevicesFlow.value
       }
     }
 
@@ -928,8 +933,8 @@ class TrailblazeDeviceManager(
       Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
 
       // Cache the unfiltered list so concurrent callers who coalesce on loadDevicesMutex with
-      // applyDriverFilter=false still see virtual devices (see [lastAllDevices]).
-      lastAllDevices = allDevices
+      // applyDriverFilter=false still see virtual devices (see [allDiscoveredDevicesFlow]).
+      _allDiscoveredDevicesFlow.value = allDevices
 
       // Always filter for device state — Android driver variants share the same
       // TrailblazeDeviceId key (instanceId + platform), so unfiltered results would let

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -908,7 +909,13 @@ class DesktopYamlRunner(
     targetAppId: String?,
     onProgressMessage: (String) -> Unit,
   ): String? {
-    if (!runYamlRequest.config.captureNetworkTraffic) return null
+    // The Android proxy-capture env var is a SELF-CONTAINED opt-in: setting
+    // TRAILBLAZE_ANDROID_PROXY_CAPTURE turns capture on for this Android run without also needing
+    // --capture-network, so `TRAILBLAZE_ANDROID_PROXY_CAPTURE=1 trailblaze run <trail>` just works.
+    // (--capture-network / the desktop "Capture Network Traffic" toggle still work too — that's the
+    // path for web + the internal in-app capturer.)
+    val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
+    if (!runYamlRequest.config.captureNetworkTraffic && !androidProxyOptIn) return null
     if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
     val activator = AndroidNetworkCaptureRegistry.activator ?: return null
     val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionIdOverride)

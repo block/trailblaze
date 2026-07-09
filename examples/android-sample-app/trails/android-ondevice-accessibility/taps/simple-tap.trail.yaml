@@ -1,0 +1,22 @@
+config:
+  id: sample-app/taps/simple-tap
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Tap the \"Tap Me\" button once"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The objective is to tap the 'Tap Me' button. Node 6 is the clickable container for the 'Tap Me' text.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Tap Me

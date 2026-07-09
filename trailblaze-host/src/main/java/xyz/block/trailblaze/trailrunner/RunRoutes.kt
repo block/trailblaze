@@ -10,6 +10,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
@@ -64,6 +65,51 @@ internal suspend fun buildDeviceAppsResponse(
     }
   }
 }
+
+/**
+ * Every installed app on a device, unfiltered by declared targets — the source for the Create
+ * Target form's "Browse installed apps" picker (`GetInstalledAppsRequest`). Same benign-empty
+ * contract as [buildDeviceAppsResponse]: an unparseable/absent platform, blank id, web/desktop
+ * device (no installable inventory), or a probe failure all return an empty list.
+ *
+ * [includeSystemApps] defaults to excluding OS/preinstalled packages — the common case is
+ * targeting a user/sideloaded install, and the ~200 system packages on a stock image would bury
+ * it. Pass true to reach a preinstalled app (e.g. the device's own browser or calculator) as a
+ * target — that's a legitimate thing to want to drive, not an edge case to hide.
+ *
+ * Android's host/adb inventory (`dumpsys package packages`) carries no human label — those rows
+ * fall back to showing the app id in the picker; iOS (`simctl listapps`) has display names.
+ */
+internal suspend fun buildInstalledAppsResponse(platform: String?, id: String?, includeSystemApps: Boolean = false): InstalledAppsResponse {
+  val resolvedPlatform = platform?.let { TrailblazeDevicePlatform.fromString(it) }
+  if (resolvedPlatform == null || id.isNullOrBlank()) return InstalledAppsResponse(apps = emptyList())
+  return withContext(Dispatchers.IO) {
+    runCatching {
+      val apps = MobileDeviceUtils.listInstalledAppsDetailed(TrailblazeDeviceId(id, resolvedPlatform))
+      // Memoize for the per-app badge endpoints (they need installPath/version without re-probing),
+      // and let warm-cached labels (from a previous badge extraction) ride the list itself.
+      InstalledAppBadges.rememberInventory(resolvedPlatform, id, apps)
+      val labeled = apps.map { app -> app.label?.let { app } ?: app.copy(label = InstalledAppBadges.peekLabel(resolvedPlatform, app)) }
+      InstalledAppsResponse(apps = toInstalledAppPickerDtos(labeled, includeSystemApps))
+    }.getOrElse { e ->
+      // Name the device: a broken adb/simctl otherwise reads as "no apps" with nothing to go on.
+      Console.log("[TrailRunnerEndpoint] installed apps query failed for $platform/$id: ${e.message}")
+      InstalledAppsResponse(apps = emptyList())
+    }
+  }
+}
+
+/**
+ * Shapes a raw device inventory for the Create Target picker: system apps dropped unless
+ * [includeSystemApps], sorted by label (falling back to app id), then app id as a tiebreaker —
+ * two builds of the same app (prod vs. debug/internal) commonly share a label, and without the
+ * tiebreaker their relative order would depend on probe order rather than being deterministic.
+ * Pure for unit-testing without a device.
+ */
+internal fun toInstalledAppPickerDtos(apps: List<InstalledApp>, includeSystemApps: Boolean = false): List<InstalledAppDto> = apps
+  .filter { includeSystemApps || !it.isSystemApp }
+  .map { InstalledAppDto(appId = it.appId, label = it.label, version = it.version) }
+  .sortedWith(compareBy({ (it.label ?: it.appId).lowercase() }, { it.appId }))
 
 /**
  * The outcome of a run-dispatch: an [RunResponse] once the run is kicked off (its `success=false`

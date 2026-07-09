@@ -17,6 +17,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.io.File
@@ -375,22 +376,8 @@ class SessionToolSet(
     }
 
     val startedStatus = logs.getSessionStartedInfo()
-    val sessionTrailConfig = startedStatus?.let { started ->
-      val originalConfig = started.trailConfig
-      TrailConfig(
-        id = originalConfig?.id,
-        title = trailName,
-        description = originalConfig?.description,
-        priority = originalConfig?.priority,
-        context = originalConfig?.context,
-        source = originalConfig?.source,
-        metadata = originalConfig?.metadata,
-        target = originalConfig?.target,
-        electron = originalConfig?.electron,
-        driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
-        platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
-      )
-    } ?: TrailConfig(title = trailName, platform = platform?.name?.lowercase())
+    val sessionTrailConfig = startedStatus?.toRecordingTrailConfig(titleOverride = trailName)
+      ?: TrailConfig(title = trailName, platform = platform?.name?.lowercase())
 
     val yamlContent = try {
       logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
@@ -462,20 +449,11 @@ class SessionToolSet(
     }
 
     val startedStatus = logs.getSessionStartedInfo()
+    // Session title from the live context is only a fallback — a title the trail itself declared
+    // wins (toRecordingTrailConfig keeps the original title when the override is null).
     val sessionTrailConfig = startedStatus?.let { started ->
-      val originalConfig = started.trailConfig
-      TrailConfig(
-        id = originalConfig?.id,
-        title = originalConfig?.title ?: sessionContext?.sessionTitle,
-        description = originalConfig?.description,
-        priority = originalConfig?.priority,
-        context = originalConfig?.context,
-        source = originalConfig?.source,
-        metadata = originalConfig?.metadata,
-        target = originalConfig?.target,
-        electron = originalConfig?.electron,
-        driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
-        platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
+      started.toRecordingTrailConfig(
+        titleOverride = started.trailConfig?.title ?: sessionContext?.sessionTitle,
       )
     }
 

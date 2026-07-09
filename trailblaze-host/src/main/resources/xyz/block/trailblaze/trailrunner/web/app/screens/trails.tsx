@@ -444,12 +444,12 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 )}
               />
             </div>
-            {/* Single-trail detail (Steps · Edit · Runs · Variants). Keyed by id so switching trails
-                remounts it — otherwise the YAML editor keeps the prior trail's content (it seeds once),
-                which read as "switching trails doesn't update the detail unless you're on the first tab". */}
+            {/* Single-trail detail (Steps · Edit · Runs · Variants). NOT keyed by id: switching trails keeps
+                the view mounted so the Edit tab's Monaco editor + language-server socket are reused instead of
+                rebuilt on every switch. TrailDetailView resets the editor to the new trail's content on switch
+                (via its `resetKey`); the Steps/Runs panes are prop-driven and re-render on their own. */}
             <div style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column' }}>
               <TrailDetailView
-                key={current.id}
                 trail={current}
                 configTrail={current}
                 yaml={detail.data ? (detail.data.yaml || '') : null}

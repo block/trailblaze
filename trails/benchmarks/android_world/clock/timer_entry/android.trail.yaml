@@ -6,7 +6,7 @@
 # - Validation: DeskClock activity is foreground, timer shows "02h 30m 45s" text.
 - config:
     id: android-world-benchmarks/clock/timer_entry
-    displayName: "Clock - Timer Entry"
+    title: "Clock - Timer Entry"
     description: "Create a timer with 2 hours, 30 minutes, and 45 seconds. Do not start the timer."
 
 - tools:

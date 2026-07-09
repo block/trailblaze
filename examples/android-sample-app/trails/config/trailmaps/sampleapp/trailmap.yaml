@@ -1,4 +1,11 @@
 id: sampleapp
+# Opt this target out of failing `trailblaze check`'s trail-recording type-validation. The
+# mcp-tools-demo trail deliberately records MCP-server-provided tools (`generateTestUser`,
+# `currentEpochMillis`, from ../../config/mcp/tools.ts) that are registered dynamically at session
+# start from a subprocess — they are intentionally NOT part of the generated typed tool surface, so
+# a type-check against it reports them as unknown. Findings on this target are reported but non-fatal.
+trail_validation:
+  exempt: "mcp-tools-demo records MCP-subprocess tools not present in the generated typed surface"
 target:
   display_name: Trailblaze Sample App
   platforms:

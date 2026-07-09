@@ -1313,6 +1313,14 @@ class CliMcpClient(
      * Centralized here (next to [parseDeviceList]) so the CLI and MCP-proxy
      * autodetect paths stay in lock-step. Adding a new virtual entry in the
      * future means one edit, not two.
+     *
+     * Deliberately NARROWER than run concretization's real-device predicate
+     * ([TrailblazeDevicePlatform.usesVirtualDevice], used by [CliRunDeviceResolver]),
+     * which excludes every WEB/DESKTOP entry: `device list` can contain web sessions
+     * the user deliberately created (`trailblaze device create web`), and autodetect
+     * SHOULD bind to one of those when it's the only entry. Only the ever-present
+     * noise entry is dropped here. See [CliRunDeviceResolver]'s KDoc for the
+     * mirror-image note.
      */
     internal fun List<DeviceListEntry>.filterRealDevices(): List<DeviceListEntry> =
       filterNot {

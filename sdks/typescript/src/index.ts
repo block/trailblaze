@@ -66,6 +66,16 @@ export {
 // etc.) the moment they import anything from `@trailblaze/scripting`. The imported file is
 // pure declaration merging on `TrailblazeToolMap`; no runtime values are added.
 import "./built-in-tools.js";
+// Named result types for the installed-apps built-ins — generated from the Kotlin
+// @Serializable classes by `:trailblaze-common:generateDtoTs` (BuiltInToolResultTsBindings),
+// re-exported the same way as the selector-grammar types above, so a consumer can
+// `import type { InstalledApp } from "@trailblaze/scripting"` instead of re-deriving the shape
+// from the tool map entry.
+export type {
+  InstalledApp,
+  ListInstalledAppsDetailedResult,
+  ListInstalledAppsResult,
+} from "./generated/built-in-tool-results.js";
 export type {
   RunOptions,
   TrailblazeToolHandler,

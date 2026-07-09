@@ -25,9 +25,9 @@ import java.util.concurrent.Callable
     WaypointSuggestSelectorCommand::class,
     // Mechanical Maestro→accessibility selector migration. Walks a trail YAML, pairs each
     // selector-bearing tool with the corresponding session log step, runs the deterministic
-    // two-tree resolution (Maestro selector → coordinate → accessibility selector via
-    // findBestSelector), and emits an updated YAML with `nodeSelector:` populated. Replaces
-    // the LLM-driven migration pattern from #2673.
+    // two-tree resolution (Maestro-shape selector → coordinate → accessibility selector via
+    // findBestSelector), and rewrites each `nodeSelector:` from androidMaestro shape to
+    // androidAccessibility shape. Replaces the LLM-driven migration pattern from #2673.
     WaypointMigrateTrailCommand::class,
     // Segments are derived from waypoints — running the matcher against a session log
     // and emitting the observed transitions between matched waypoints. Lives under

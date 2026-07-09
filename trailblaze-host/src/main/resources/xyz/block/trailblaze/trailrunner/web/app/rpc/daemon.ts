@@ -24,6 +24,7 @@ import {
   type DeviceAppsResponse,
   type EditedTrailsResponse,
   type FavoritesResponse,
+  type InstalledAppsResponse,
   type IntegrationsResponse,
   type NewComponentRequest,
   type NewComponentResponse,
@@ -31,6 +32,8 @@ import {
   type RebuildDaemonResponse,
   type RunRequest,
   type RunToolsResponse,
+  type SaveTargetConfigRequest,
+  type SaveTargetConfigResponse,
   type SaveTrailResponse,
   type SessionFilesResponse,
   type SessionsResponse,
@@ -146,6 +149,9 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
     /** GetDeviceAppsRequest → response (or null). Used by useDeviceApps + fetchDeviceApps. */
     getDeviceApps: (platform: string, id: string): Promise<DeviceAppsResponse | null> =>
       dataOrNull(trailRunner.getDeviceApps({ platform, id })),
+    /** GetInstalledAppsRequest → response (or null). Used by fetchInstalledApps (Create Target). */
+    getInstalledApps: (platform: string, id: string, includeSystemApps?: boolean): Promise<InstalledAppsResponse | null> =>
+      dataOrNull(trailRunner.getInstalledApps({ platform, id, includeSystemApps })),
     /** GetRunToolsRequest → response (or null). Used by useRunTools. */
     getRunTools: (
       target: string,
@@ -244,6 +250,9 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
     /** NewComponentRequest → response (or null). Used by createTrailmapComponent. */
     createTrailmapComponent: (req: NewComponentRequest): Promise<NewComponentResponse | null> =>
       dataOrNull(trailRunner.newComponent(req)),
+    /** SaveTargetConfigRequest → response (or null). Used by saveTargetConfig (Edit Target). */
+    saveTargetConfig: (req: SaveTargetConfigRequest): Promise<SaveTargetConfigResponse | null> =>
+      dataOrNull(trailRunner.saveTargetConfig(req)),
     /** SettingsPatchRequest → updated settings (or the error message). Used by updateSetting. */
     updateSetting: (
       patch: SettingsPatchRequest,

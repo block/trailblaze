@@ -1,10 +1,11 @@
 package xyz.block.trailblaze.quickjs.tools
 
 import com.dokar.quickjs.QuickJs
-import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.function
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -12,7 +13,11 @@ import java.util.concurrent.Executors
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Evaluates a `@trailblaze/scripting` JS bundle in a QuickJS engine and exposes the registered
@@ -62,32 +67,63 @@ class QuickJsToolHost internal constructor(
   private val isShutdown = java.util.concurrent.atomic.AtomicBoolean(false)
 
   /**
+   * Set to the OS thread currently inside the [HOST_CALL_BINDING] `runBlocking` dispatch (see
+   * [connect]'s install site), `null` otherwise. Checked at the top of [callTool]/[listTools]
+   * so a [HostBinding] that synchronously calls back into THIS SAME host — which would
+   * otherwise deadlock, since [evalMutex] is non-reentrant and the holder is blocked inside that
+   * exact `runBlocking` call — fails fast with a clear error instead of hanging the engine
+   * thread (and everything else waiting on [evalMutex]) forever.
+   *
+   * Thread-identity-based, not a plain "is any call in flight" flag, so a genuinely concurrent
+   * (unrelated) call from a different thread is never misdetected as reentrant — it just waits
+   * on [evalMutex] normally. Catches the common case (a [HostBinding] that recurses without
+   * first hopping to a different dispatcher); doesn't guarantee detection if a binding
+   * deliberately dispatches elsewhere before recursing, but that's an intentionally cheap
+   * tripwire, not a formal deadlock detector.
+   */
+  private val hostCallThread = java.util.concurrent.atomic.AtomicReference<Thread?>(null)
+
+  /** See [hostCallThread]. Shared by [callTool] and [listTools]; [caller] is just for the message. */
+  private fun checkNotReentrant(caller: String) {
+    check(hostCallThread.get() !== Thread.currentThread()) {
+      "QuickJsToolHost.$caller() was called reentrantly from inside a host-call dispatch on " +
+        "this same engine's thread. A HostBinding must not call back into the SAME " +
+        "QuickJsToolHost it was invoked from -- evalMutex is non-reentrant, so this would " +
+        "deadlock the engine thread (and everything else waiting on evalMutex) instead of " +
+        "returning. Composition must cross into a different QuickJsToolHost."
+    }
+  }
+
+  /**
    * List the tools the bundle registered. Reads `globalThis.__trailblazeTools` and serializes
    * per-tool spec to a [RegisteredToolSpec]. Returns an empty list when the bundle didn't
    * register anything (legitimate — the bundle might be a no-op fixture).
    */
-  suspend fun listTools(): List<RegisteredToolSpec> = evalMutex.withLock {
-    withContext(engineDispatcher) {
-      val specsJson = quickJs.evaluate<String>(
-        // Reads the registry, projects each entry to `{name, spec}`, JSON-stringifies. The
-        // `|| {}` fallback means an empty registry returns `[]` rather than crashing on `Object.keys(undefined)`.
-        """
-        JSON.stringify(
-          Object.entries(globalThis.__trailblazeTools || {}).map(([name, t]) => ({
-            name,
-            spec: t.spec || {}
-          }))
+  suspend fun listTools(): List<RegisteredToolSpec> {
+    checkNotReentrant("listTools")
+    return evalMutex.withLock {
+      withContext(engineDispatcher) {
+        val specsJson = quickJs.evaluate<String>(
+          // Reads the registry, projects each entry to `{name, spec}`, JSON-stringifies. The
+          // `|| {}` fallback means an empty registry returns `[]` rather than crashing on `Object.keys(undefined)`.
+          """
+          JSON.stringify(
+            Object.entries(globalThis.__trailblazeTools || {}).map(([name, t]) => ({
+              name,
+              spec: t.spec || {}
+            }))
+          )
+          """.trimIndent(),
+          "list-tools.js",
+          false,
         )
-        """.trimIndent(),
-        "list-tools.js",
-        false,
-      )
-      val parsed = JSON.parseToJsonElement(specsJson) as kotlinx.serialization.json.JsonArray
-      parsed.map { entry ->
-        val obj = entry.jsonObject
-        val name = (obj["name"] as kotlinx.serialization.json.JsonPrimitive).content
-        val spec = obj["spec"]?.jsonObject ?: JsonObject(emptyMap())
-        RegisteredToolSpec(name = name, spec = spec)
+        val parsed = JSON.parseToJsonElement(specsJson) as kotlinx.serialization.json.JsonArray
+        parsed.map { entry ->
+          val obj = entry.jsonObject
+          val name = (obj["name"] as kotlinx.serialization.json.JsonPrimitive).content
+          val spec = obj["spec"]?.jsonObject ?: JsonObject(emptyMap())
+          RegisteredToolSpec(name = name, spec = spec)
+        }
       }
     }
   }
@@ -101,7 +137,8 @@ class QuickJsToolHost internal constructor(
    *   Pass `null` to send `undefined` to the handler — useful for ad-hoc invocations outside
    *   a session.
    */
-  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject =
+  suspend fun callTool(name: String, args: JsonObject, ctx: JsonObject? = null): JsonObject = run {
+    checkNotReentrant("callTool")
     evalMutex.withLock {
       withContext(engineDispatcher) {
         // Encode args/ctx as JS string literals + `JSON.parse(...)` inside the module rather than
@@ -282,6 +319,7 @@ class QuickJsToolHost internal constructor(
         JSON.parseToJsonElement(resultJson).jsonObject
       }
     }
+  }
 
   /**
    * Free the QuickJS engine. Idempotent; safe to call multiple times. The native free runs on
@@ -364,16 +402,41 @@ class QuickJsToolHost internal constructor(
           // try (as an earlier version of this function did) leaks the dedicated thread on that
           // failure, since nothing downstream would ever call engineDispatcher.close().
           val quickJs = QuickJs.create(engineDispatcher)
+          // Constructed here (before any binding installs) rather than at the end of this
+          // function so the HOST_CALL_BINDING closure below can reach `host.hostCallThread` --
+          // the reentrancy tripwire that closure sets/clears needs the SAME instance `callTool`/
+          // `listTools` check against.
+          val host = QuickJsToolHost(quickJs, engineDispatcher)
           try {
             if (hostBinding != null) {
-              // Async binding so JS can `await __trailblazeCall(name, argsJson)`. Returns the
-              // result-JSON string the SDK shim will JSON.parse on the JS side.
-              quickJs.asyncFunction(HOST_CALL_BINDING) { args ->
+              // Synchronous binding, NOT asyncFunction -- quickjs-kt 1.0.5's asyncFunction
+              // invoke path has a native JNI bug that crashes the JVM regardless of thread
+              // confinement (block/trailblaze#194). Full incident writeup, the reentrancy
+              // tripwire (`host.hostCallThread`/`checkNotReentrant`), and the known
+              // no-cancellation-propagation limitation (tracked in #4551) are all in
+              // docs/internal/devlog/2026-07-07-quickjs-async-host-binding-fix.md.
+              quickJs.function(HOST_CALL_BINDING) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_CALL_BINDING called without a tool name string")
                 val argsJson = args.getOrNull(1) as? String
                   ?: error("$HOST_CALL_BINDING called without an argsJson string")
-                hostBinding.callFromBundle(name, argsJson)
+                host.hostCallThread.set(Thread.currentThread())
+                try {
+                  runBlocking {
+                    try {
+                      hostBinding.callFromBundle(name, argsJson)
+                    } catch (e: CancellationException) {
+                      throw e
+                    } catch (e: Throwable) {
+                      // Never let an arbitrary exception cross this native binding boundary
+                      // uncaught -- see hostCallErrorEnvelopeJson's kdoc for why that corrupts
+                      // the dispatch script's own error tracking instead of surfacing cleanly.
+                      hostCallErrorEnvelopeJson(name, e)
+                    }
+                  }
+                } finally {
+                  host.hostCallThread.set(null)
+                }
               }
             }
             // `console.log`/`error`/`warn`/`info` shim — author code from any Node-flavored
@@ -420,7 +483,7 @@ class QuickJsToolHost internal constructor(
             // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
             // here as a side effect.
             quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)
-            QuickJsToolHost(quickJs, engineDispatcher)
+            host
           } catch (t: Throwable) {
             // Runs on engineDispatcher (still inside the outer withContext) — freeing the
             // native engine from any other thread is the same cross-thread hazard `evaluate`
@@ -480,10 +543,19 @@ fun interface HostBinding {
  * the analogue of the optional [HostBinding], but for arbitrary engine setup rather than the
  * `trailblaze.call(...)` round-trip specifically.
  *
- * Implementations receive the live [com.dokar.quickjs.QuickJs] and typically register an
- * `asyncFunction` plus a small JS shim (the same idiom [QuickJsToolHost.connect] uses for
- * `__trailblazeCall` and `console`). The reference implementation is
- * `OkHttpFetchExtension` in `:trailblaze-scripting-fetch`.
+ * Implementations receive the live [com.dokar.quickjs.QuickJs] and typically register a native
+ * binding plus a small JS shim — the same host-binding-plus-JS-shim idiom [QuickJsToolHost.connect]
+ * uses for `__trailblazeCall` and `console`. The reference implementation is `OkHttpFetchExtension`
+ * in `:trailblaze-scripting-fetch`.
+ *
+ * **Do not use `asyncFunction` for the native binding**, even though quickjs-kt's API makes it
+ * look like the natural fit for a suspend host call. quickjs-kt 1.0.5's `asyncFunction` invoke
+ * path has a native JNI reference-lifecycle bug that crashes the JVM independent of thread
+ * confinement (block/trailblaze#194) — `__trailblazeCall` and `OkHttpFetchExtension`'s `fetch()`
+ * binding both hit this crash in production before being switched to a synchronous `function`
+ * binding + `runBlocking` (see the `__trailblazeCall` install site above, and the devlog entry
+ * `2026-07-07-quickjs-async-host-binding-fix.md`). Any new extension bridging a suspend host call
+ * must use that same synchronous-binding-plus-runBlocking pattern, not `asyncFunction`.
  *
  * Author-only by posture: an extension surfaces capabilities to scripted-tool authors, never to
  * the LLM (same as [HostBinding] and `ctx.tools.exec`). Install is [suspend] because engine
@@ -522,3 +594,33 @@ private fun jsString(s: String): String =
   JSON.encodeToString(String.serializer(), s)
     .replace("\u2028", "\\u2028")
     .replace("\u2029", "\\u2029")
+
+/**
+ * Builds a `{isError: true, content: [...]}` envelope \u2014 the same shape [QuickJsToolHost]'s own
+ * `callTool` dispatch script produces for a thrown handler \u2014 for a [HostBinding] that threw
+ * instead of returning normally. Used at the [QuickJsToolHost.HOST_CALL_BINDING] install site so
+ * that failure never crosses the native binding boundary as a raw, uncaught exception: letting
+ * one escape does NOT surface as a normal JS-level throw the composing tool's `await` can catch \u2014
+ * empirically, it aborts `quickJs.evaluate()` outright and corrupts the dispatch script's own
+ * error-tracking state (`QuickJsException: ReferenceError: __dispatchError is not initialized`),
+ * losing the real failure message entirely. Converting to this envelope here keeps the composing
+ * tool's error handling consistent with every other tool-failure path.
+ */
+private fun hostCallErrorEnvelopeJson(toolName: String, error: Throwable): String {
+  val message = "${error::class.simpleName ?: "Error"}: ${error.message ?: error.toString()}"
+  val envelope = buildJsonObject {
+    put("isError", true)
+    put(
+      "content",
+      buildJsonArray {
+        add(
+          buildJsonObject {
+            put("type", "text")
+            put("text", "Composed call to '$toolName' failed: $message")
+          },
+        )
+      },
+    )
+  }
+  return JSON.encodeToString(JsonObject.serializer(), envelope)
+}

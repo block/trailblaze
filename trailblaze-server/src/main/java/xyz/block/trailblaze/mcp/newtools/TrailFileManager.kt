@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.newtools
 
 import xyz.block.trailblaze.config.project.TrailDiscovery
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
@@ -187,9 +188,16 @@ class TrailFileManager(
    * Loads a trail from a file path.
    *
    * @param filePath Path to the trail YAML file
+   * @param deviceClassifiers The bound device's classifiers, used to lower a unified trail's
+   *   per-classifier recordings (v1 trails ignore the list). Callers loading for EXECUTION must
+   *   pass the session device's classifiers — see [deviceClassifiersFor] for the semantics
+   *   (platform-only limitation, and why empty means "refuse a unified-with-recordings trail").
    * @return LoadResult with parsed trail data
    */
-  fun loadTrail(filePath: String): LoadResult {
+  fun loadTrail(
+    filePath: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  ): LoadResult {
     val file = try {
       validateWithinTrailsDir(File(filePath), filePath)
     } catch (e: IllegalArgumentException) {
@@ -201,7 +209,7 @@ class TrailFileManager(
 
     return try {
       val yamlContent = file.readText()
-      val trailItems = trailblazeYaml.decodeTrail(yamlContent)
+      val trailItems = trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = deviceClassifiers)
       val config = trailblazeYaml.extractTrailConfig(trailItems)
 
       // Extract prompt steps from the trail
@@ -215,6 +223,17 @@ class TrailFileManager(
         config = config,
         promptSteps = promptSteps,
         filePath = filePath,
+      )
+    } catch (e: IllegalStateException) {
+      // decodeTrail's unified-with-recordings guard: the trail needs device classifiers to lower
+      // its per-classifier recordings, and this call had none. Surface an actionable message on
+      // the reachable path (previously the raw guard text leaked through the generic catch below).
+      Console.log("[TrailFileManager] Unified trail loaded without device classifiers: ${e.message}")
+      LoadResult(
+        success = false,
+        error = "This is a unified (per-classifier) trail with recordings; loading it requires " +
+          "the bound device's classifiers. Bind a device first (e.g. via the `device` tool), " +
+          "then retry. Underlying error: ${e.message}",
       )
     } catch (e: Exception) {
       Console.log("[TrailFileManager] Error loading trail: ${e.message}")

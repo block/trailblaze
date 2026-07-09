@@ -590,13 +590,29 @@ Soft warnings by default. Teams that want hard-fail can opt in with
 
 ## Open questions for follow-up
 
-1. **Recorder UX for the unified file.** When a recording session runs
-   against a specific device, the recorder needs to write into the
-   appropriate `<classifier>:` slot in the unified file rather than create
-   a sibling file. Concurrent recording sessions for different device
-   classes against the same file need a conflict-resolution strategy
-   (file lock, append-and-merge, separate scratch files reconciled at
-   commit time).
+1. **Recorder UX for the unified file.** *(Largely resolved — `trailblaze run`
+   save-back can write the unified format, behind an opt-in rollout gate.)* On a
+   successful run the recorder merges the device's `<classifier>:` slot into the
+   directory's `trail.yaml` (`UnifiedTrailAdapter.mergeRecordedClassifier`),
+   preserving every other device already recorded there, instead of dropping a
+   legacy sibling. A greenfield trail (authored from an NL definition, no
+   `*.trail.yaml` yet) writes unified; a directory that still holds legacy
+   `<classifier>.trail.yaml` siblings stays legacy so re-recording never forks a
+   half-migrated directory (migration is a separate, deliberate step).
+   **Rollout gate:** unified save-back is opt-in while the surrounding tooling
+   (recording type-validation, CI trail discovery, `verify:` steps, the
+   MCP/desktop writers) catches up — enable per run with `--unified-recordings`,
+   per environment with `TRAILBLAZE_UNIFIED_RECORDINGS=1`, or persistently with
+   `trailblaze config unified-recordings true` (flag > env > config, mirroring
+   self-heal). While off, save-back is byte-identical to the pre-unified
+   recorder, including its refusal to write a legacy sibling next to a unified
+   `trail.yaml`. The default flips to on once that tooling wave lands.
+   The fan-out run loop is sequential, so `--device android,ios` merges each
+   device in turn with no in-process race. **Remaining:** two *separate*
+   processes recording the same trail concurrently could still race the
+   read-modify-write — a cross-process file lock (or append-and-merge / scratch
+   reconcile) is the outstanding piece. The MCP authoring and desktop recording
+   surfaces still write v1 siblings and are a follow-up.
 2. **`trailblaze show <test> --device=<X>`** — a CLI rendering of the
    resolved-view-for-a-given-device, computing the closest-wins lookups
    and presenting the test as if it were a single-device run. Useful for
@@ -774,3 +790,38 @@ filter for unified trails exactly as they did for v1.
 
 Both are additive optional fields on `UnifiedTrailConfig`; absent from a file they default to null
 and nothing changes.
+
+## Revision — 2026-07-08: `verify:` steps
+
+The unified format initially modeled only `- step:`, but ~80% of checked-in v1 trails use
+`- verify:` steps, and verify semantics are load-bearing at run time: a verify step advertises only
+assertion tools (the agent can't tap/scroll mid-assertion), auto-terminates with an assertion
+ledger, and is never self-healed. Lowering `verify:` to `step:` silently discards all of that, so
+the unified format now mirrors v1 exactly:
+
+```yaml
+trail:
+  - step: Open the cart
+  - verify: The cart shows 2 items
+    recording:
+      android-phone:
+        - assertVisibleWithText:
+            text: 2 items
+```
+
+- A step is authored as exactly one of `- step:` / `- verify:` (both or neither is a parse error),
+  with the same optional sibling keys (`recording:`, `recordable:`, `maxRetries:`).
+- A `verify:` step lowers to the v1 `VerificationStep` (a `step:` still lowers to `DirectionStep`),
+  so the runtime's verify handling is unchanged.
+- The **trailhead stays step-only** — it is a deterministic bootstrap, not an assertion; `verify:`
+  there is a parse error.
+- The recorder merge preserves kind: an appended step takes `verify:` when the recorded step was a
+  verification step; on a re-record into an existing step the existing kind wins, with kind
+  disagreement logged as drift (same policy as NL drift).
+- The migrator carries each step's kind through (canonical preference mirrors NL: blaze.yaml when
+  present, otherwise the first platform) and surfaces cross-platform kind disagreement as a
+  leading-comment drift warning — never silently flattened.
+
+Rollout note: a unified file containing `verify:` is a hard parse error (unexpected step-level
+key) on Trailblaze binaries that predate this revision — on a mixed-version fleet, upgrade the
+readers before checking in verify-step unified trails.

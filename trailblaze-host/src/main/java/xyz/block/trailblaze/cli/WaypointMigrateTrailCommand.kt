@@ -9,6 +9,7 @@ import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.util.Console
@@ -25,9 +26,10 @@ import java.io.File
 import java.util.concurrent.Callable
 
 /**
- * Mechanically migrate a trail file's legacy [TrailblazeElementSelector] selectors
- * (Maestro-shape) into rich [TrailblazeNodeSelector]s (accessibility-shape) by replaying
- * the deterministic two-tree resolution against captured session logs.
+ * Mechanically migrate a trail file's Maestro-shape selectors
+ * ([DriverNodeMatch.AndroidMaestro] leaves on `nodeSelector:`) into accessibility-shape
+ * selectors ([DriverNodeMatch.AndroidAccessibility]) by replaying the deterministic
+ * two-tree resolution against captured session logs.
  *
  * ## Why mechanical
  *
@@ -38,19 +40,21 @@ import java.util.concurrent.Callable
  * bottom-nav waypoints to the *currently active* tab. Re-running the migration mechanically
  * removes the LLM from the loop entirely:
  *
- *  1. The legacy Maestro selector is resolved against the captured `viewHierarchy` (Maestro
- *     tree) using the same matcher the runtime uses for taps. This yields the SAME on-screen
- *     coordinate the legacy runtime would have tapped.
- *  2. That coordinate is hit-tested against the captured `trailblazeNodeTree` (accessibility
- *     tree). The result is the accessibility node a runtime tap at the same coordinate would
- *     have hit.
+ *  1. The Maestro-shape selector is lowered to a [TrailblazeElementSelector] (via
+ *     [TrailblazeNodeSelector.toTrailblazeElementSelector]) and resolved against the captured
+ *     `viewHierarchy` (Maestro tree) using the same matcher the runtime uses for taps. This
+ *     yields the SAME on-screen coordinate the instrumentation-driver runtime would have tapped.
+ *  2. That coordinate is hit-tested against the captured accessibility tree. The result is the
+ *     accessibility node a runtime tap at the same coordinate would have hit.
  *  3. [TrailblazeNodeSelectorGenerator.findBestSelector] picks the cleanest selector for that
  *     node — typically a resource-id match, falling back to text/content-description, and
  *     finally to spatial/structural anchors when nothing identifying is available.
  *
- * The output is a YAML where every selector-bearing tool now carries a `nodeSelector` field
- * derived from the SAME on-screen element the legacy `selector` resolved to, with no LLM
- * interpretation in the loop.
+ * The output is a YAML where every selector-bearing tool's `nodeSelector` is now
+ * accessibility-shape, derived from the SAME on-screen element the Maestro-shape selector
+ * resolved to, with no LLM interpretation in the loop. The generated selector REPLACES the
+ * whole Maestro-shape selector tree (leaf and combinators) — leaving a mixed-shape selector
+ * behind would make it ambiguous which driver owns resolution at runtime.
  *
  * ## Pairing tools to session logs
  *
@@ -85,10 +89,11 @@ import java.util.concurrent.Callable
   name = "migrate-trail",
   mixinStandardHelpOptions = true,
   description = [
-    "Mechanically migrate legacy `selector` (Maestro-shape) → `nodeSelector` (accessibility",
-    "shape) for every selector-bearing tool in a trail YAML, using the captured session",
-    "logs to deterministically resolve each selector through the same matcher the runtime",
-    "uses for taps.",
+    "Mechanically migrate a trail's Maestro-shape selectors to accessibility shape.",
+    "Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector` still",
+    "carries androidMaestro matchers is rewritten to androidAccessibility shape, using the",
+    "captured session logs to deterministically resolve each selector through the same",
+    "matcher the runtime uses for taps.",
     "Defaults to dry-run (unified diff on stdout). Use `--write` to apply the migration in",
     "place. Pair with a recorded session log directory (`--session`) for the same trail.",
   ],
@@ -104,10 +109,10 @@ class WaypointMigrateTrailCommand : Callable<Int> {
   @Option(
     names = ["--session"],
     description = [
-      "Session log directory containing *_TrailblazeLlmRequestLog.json files captured",
-      "during a recorded run of this trail. The Nth selector-bearing tool in the YAML",
-      "is paired with the Nth log step that carries both viewHierarchy and",
-      "trailblazeNodeTree.",
+      "Session log directory from a dual-tree recorded run of this trail",
+      "(trailblaze.captureSecondaryTree=true). Accepts *_TrailblazeLlmRequestLog.json,",
+      "*_TrailblazeSnapshotLog.json, and *_AgentDriverLog.json files; only logs carrying",
+      "viewHierarchy + trailblazeNodeTree + driverMigrationTreeNode are usable.",
     ],
     required = true,
   )
@@ -145,11 +150,27 @@ class WaypointMigrateTrailCommand : Callable<Int> {
       return TrailblazeExitCode.INFRA_FAILED.code
     }
 
-    // Pass 1 — collect the legacy Maestro selectors in YAML order. The list index doubles
+    // Not-visible asserts can't go through the two-tree resolution — the asserted element
+    // is absent from the captured screen, so there is no coordinate to hit-test. They're
+    // surfaced loudly instead of silently left behind: an androidMaestro selector on the
+    // accessibility driver never matches anything, which would make assertNotVisible pass
+    // VACUOUSLY (a silent false green) after a driver-marker flip.
+    val unmigratableNotVisible = countUnmigratableNotVisible(items)
+    if (unmigratableNotVisible > 0) {
+      Console.log(
+        "# WARNING: $unmigratableNotVisible assertNotVisibleBySelector tool(s) still carry " +
+          "Maestro-shape selectors. The two-tree resolution can't migrate not-visible asserts " +
+          "(the target element is absent from the capture) — hand-author their " +
+          "androidAccessibility selectors before flipping the driver marker, or the asserts " +
+          "will pass vacuously on the accessibility driver.",
+      )
+    }
+
+    // Pass 1 — collect the Maestro-shape selectors in YAML order. The list index doubles
     // as the alignment key against the session-log list in pass 2 / 3.
     val maestroSelectors = collectMaestroSelectors(items)
     if (maestroSelectors.isEmpty()) {
-      Console.log("# No selector-bearing tools found in ${trailFile.name}; nothing to migrate.")
+      Console.log("# No Maestro-shape selector-bearing tools found in ${trailFile.name}; nothing to migrate.")
       return TrailblazeExitCode.SUCCESS.code
     }
 
@@ -162,8 +183,8 @@ class WaypointMigrateTrailCommand : Callable<Int> {
       reportCliError(
         verb = "Trail migrate",
         target = sessionDir.absolutePath,
-        reason = "no usable session logs in the directory — need *_TrailblazeLlmRequestLog.json or *_TrailblazeSnapshotLog.json files containing both `viewHierarchy` and `trailblazeNodeTree`",
-        hint = "rerun the trail with `-e trailblaze.captureSecondaryTree true` to capture the snapshot logs the migrator needs",
+        reason = "no usable session logs in the directory — need *_TrailblazeLlmRequestLog.json, *_TrailblazeSnapshotLog.json, or *_AgentDriverLog.json files carrying `viewHierarchy`, `trailblazeNodeTree`, AND the `driverMigrationTreeNode` migration side-channel",
+        hint = "rerun the trail with `-e trailblaze.captureSecondaryTree true` (TRAILBLAZE_CAPTURE_SECONDARY_TREE=true on the host) so migration-mode logs are captured",
       )
       return TrailblazeExitCode.MISUSE.code
     }
@@ -194,6 +215,10 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // different screens (rare in practice) may bind to the same fallback log; the operator
     // sees this as an obviously-wrong nodeSelector in the diff and can re-run that trail
     // with the dual-tree flag to get distinct preTool snapshots per tool.
+    // displayName is read once per file up front — the per-selector loop below probes it
+    // twice per (phase, selector) pair, which on a large session would re-read and
+    // regex-scan the same JSON files hundreds of times.
+    val displayNames: Map<File, String?> = logs.associateWith { readDisplayName(it) }
     val migrations: Map<Int, TrailblazeNodeSelector> = buildMap {
       val usedLogs = mutableSetOf<File>()
       var fallbackCursor = 0
@@ -215,12 +240,12 @@ class WaypointMigrateTrailCommand : Callable<Int> {
         }
         val matchedPhase: String? = phasePreference.firstOrNull { phase ->
           logs.any { f ->
-            f !in usedLogs && readDisplayName(f)?.startsWith("$phase: $toolClassName") == true
+            f !in usedLogs && displayNames[f]?.startsWith("$phase: $toolClassName") == true
           }
         }
         val matchingSnapshot = matchedPhase?.let { phase ->
           logs.firstOrNull { f ->
-            f !in usedLogs && readDisplayName(f)?.startsWith("$phase: $toolClassName") == true
+            f !in usedLogs && displayNames[f]?.startsWith("$phase: $toolClassName") == true
           }
         }
         if (matchingSnapshot != null) {
@@ -263,7 +288,16 @@ class WaypointMigrateTrailCommand : Callable<Int> {
             shortDescribeSelector(hit.nodeSelector),
         )
         put(idx, hit.nodeSelector)
-        fallbackCursor = hit.logIdx
+        // LlmRequestLogs capture one LLM round that may produce several same-screen tools,
+        // so the cursor stays ON the hit to allow reuse. SnapshotLog / AgentDriverLog files
+        // are one-per-tool/action by construction — reuse there would let a later selector
+        // (e.g. the second of two `^Next$` taps) re-bind to an earlier screen, so the
+        // cursor advances past them.
+        fallbackCursor = if (hit.logFile.name.endsWith("_TrailblazeLlmRequestLog.json")) {
+          hit.logIdx
+        } else {
+          hit.logIdx + 1
+        }
       }
     }
 
@@ -283,6 +317,9 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     Console.log("# Selector-bearing tools: ${maestroSelectors.size}")
     Console.log("# Migrated:               $migratedCount")
     Console.log("# Skipped:                $skippedCount")
+    if (unmigratableNotVisible > 0) {
+      Console.log("# Unmigratable (assertNotVisibleBySelector, hand-author): $unmigratableNotVisible")
+    }
 
     if (write) {
       if (originalYaml == migratedYaml) {
@@ -309,17 +346,76 @@ class WaypointMigrateTrailCommand : Callable<Int> {
 
   // ----- Pass 1: enumerate selector-bearing tools in YAML order -------------------
 
+  /**
+   * True when [selector] is a migration target: its tree carries at least one
+   * [DriverNodeMatch.AndroidMaestro] leaf and zero [DriverNodeMatch.AndroidAccessibility]
+   * leaves. Already-migrated selectors (accessibility leaves present) and non-Android
+   * selectors pass through untouched, and the collect/migrate cursor walks stay in sync
+   * because both gate on this same predicate.
+   */
+  internal fun needsMigration(selector: TrailblazeNodeSelector?): Boolean = selector != null &&
+    hasLeaf(selector) { it.androidMaestro != null } &&
+    !hasLeaf(selector) { it.androidAccessibility != null }
+
+  private fun hasLeaf(
+    selector: TrailblazeNodeSelector,
+    predicate: (TrailblazeNodeSelector) -> Boolean,
+  ): Boolean {
+    if (predicate(selector)) return true
+    val children = listOfNotNull(
+      selector.below,
+      selector.above,
+      selector.leftOf,
+      selector.rightOf,
+      selector.childOf,
+      selector.containsChild,
+    ) + selector.containsDescendants.orEmpty()
+    return children.any { hasLeaf(it, predicate) }
+  }
+
+  /**
+   * Count `assertNotVisibleBySelector` tools still carrying Maestro-shape selectors. These
+   * are NOT migration targets — the two-tree resolution needs the element on screen to
+   * hit-test a coordinate, and a passing not-visible assert's capture has it absent by
+   * definition. They must be hand-authored; the caller reports them loudly so a trail
+   * isn't treated as fully migrated when Maestro-shape content remains.
+   */
+  internal fun countUnmigratableNotVisible(items: List<TrailYamlItem>): Int {
+    var count = 0
+    fun visit(wrapper: TrailblazeToolYamlWrapper) {
+      val tool = wrapper.trailblazeTool
+      if (tool is AssertNotVisibleBySelectorTrailblazeTool && needsMigration(tool.nodeSelector)) {
+        count++
+      }
+    }
+    items.forEach { item ->
+      when (item) {
+        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.forEach { step ->
+          step.recording?.tools?.forEach { visit(it) }
+        }
+        is TrailYamlItem.ToolTrailItem -> item.tools.forEach { visit(it) }
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { visit(it) }
+        is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
+      }
+    }
+    return count
+  }
+
   internal fun collectMaestroSelectors(items: List<TrailYamlItem>): List<MaestroSelectorAtIndex> {
     val out = mutableListOf<MaestroSelectorAtIndex>()
     fun visit(wrapper: TrailblazeToolYamlWrapper) {
       when (val tool = wrapper.trailblazeTool) {
         is TapOnByElementSelector ->
-          tool.selector?.let { out += MaestroSelectorAtIndex(it, wrapper.name) }
+          tool.nodeSelector?.takeIf { needsMigration(it) }?.let {
+            out += MaestroSelectorAtIndex(it.toTrailblazeElementSelector(), wrapper.name)
+          }
         is AssertVisibleBySelectorTrailblazeTool ->
-          // Skip already-migrated tools (selector dropped, only nodeSelector remains).
-          // Cursor positioning is consistent across walks because every selector-bearing
-          // tool — migrated or not — flows through here only when `selector` is present.
-          tool.selector?.let { out += MaestroSelectorAtIndex(it, wrapper.name) }
+          // Skip already-migrated tools (accessibility-shape nodeSelector). Cursor
+          // positioning is consistent across walks because every selector-bearing tool —
+          // migrated or not — flows through here only when [needsMigration] holds.
+          tool.nodeSelector?.takeIf { needsMigration(it) }?.let {
+            out += MaestroSelectorAtIndex(it.toTrailblazeElementSelector(), wrapper.name)
+          }
         else -> { /* not a migration target */ }
       }
     }
@@ -377,26 +473,27 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     cursor: IndexedCursor,
   ): TrailblazeToolYamlWrapper {
     val tool = wrapper.trailblazeTool
-    // When a migration succeeds for a tool, the legacy `selector:` is REPLACED
-    // wholesale by the new `nodeSelector:`. The goal of migrate-trail is to leave
-    // ZERO Maestro-shape selectors on migrated tools — having both fields is a smell
-    // (which is the source-of-truth at runtime?). Tools whose migration didn't
-    // resolve keep their original selector intact and pass through unchanged.
+    // When a migration succeeds for a tool, the Maestro-shape `nodeSelector:` is REPLACED
+    // wholesale by the generated accessibility-shape one — leaf AND combinators. The goal
+    // of migrate-trail is to leave ZERO Maestro-shape matchers on migrated tools: a mixed
+    // selector tree is a smell (which driver owns resolution at runtime?). Tools whose
+    // migration didn't resolve keep their original selector intact and pass through
+    // unchanged.
     val updatedTool: xyz.block.trailblaze.toolcalls.TrailblazeTool? = when (tool) {
       is TapOnByElementSelector -> {
-        if (tool.selector != null) {
+        if (needsMigration(tool.nodeSelector)) {
           val idx = cursor.index++
-          migrations[idx]?.let { tool.copy(selector = null, nodeSelector = it) }
+          migrations[idx]?.let { tool.copy(nodeSelector = it) }
         } else {
           null
         }
       }
       is AssertVisibleBySelectorTrailblazeTool -> {
-        // Skip already-migrated tools (selector already null) so the cursor stays in
-        // sync with [collectMaestroSelectors], which also skips those.
-        if (tool.selector != null) {
+        // Skip already-migrated tools so the cursor stays in sync with
+        // [collectMaestroSelectors], which also skips those.
+        if (needsMigration(tool.nodeSelector)) {
           val idx = cursor.index++
-          migrations[idx]?.let { tool.copy(selector = null, nodeSelector = it) }
+          migrations[idx]?.let { tool.copy(nodeSelector = it) }
         } else {
           null
         }
@@ -510,7 +607,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // Anchor refinement: hit-test routinely lands on a parent click container that wraps
     // multiple labeled descendants (the canonical case is a tab View wrapping both the
     // tab label "Orders" and a notification badge "3"). Or it lands on one of two
-    // sibling TextViews that share a resourceId (Square's `checkout_button_title` is
+    // sibling TextViews that share a resourceId (a `checkout_button_title` id can be
     // labeled "Review sale" on one screen view and "Charge $X.XX" on another, both
     // overlapping the tap). When the hit node alone doesn't carry the original
     // selector's text/id intent, [findBestSelector] picks an arbitrary node nearby —

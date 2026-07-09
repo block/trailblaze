@@ -5,16 +5,18 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze run [-hvV] [--capture-all] [--[no-]capture-ios-logs] [--[no-]
-                      capture-logcat] [--[no-]capture-network] [--[no-]
-                      capture-video] [--[no-]headless] [--markdown]
-                      [--no-daemon] [--no-logging] [--no-report] [--[no-]
-                      save-recording] [--self-heal] [--[no-]use-recorded-steps]
-                      [-a=<agent>] [--compose-port=<composePort>] [-d=<device>]
+Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
+                      capture-ios-logs] [--[no-]capture-logcat] [--[no-]
+                      capture-network] [--[no-]capture-video] [--[no-]headless]
+                      [--markdown] [--no-daemon] [--no-logging] [--no-report]
+                      [--[no-]save-recording] [--self-heal] [--[no-]
+                      unified-recordings] [--[no-]use-recorded-steps]
+                      [-a=<agent>] [--compose-port=<composePort>]
                       [--driver=<driverType>] [--llm=<llm>]
                       [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
-                      [--test-name=<testNameOverride>] [--memory=KEY=VAL]...
+                      [--test-name=<testNameOverride>] [-d=<device>[,
+                      <device>...]]... [--memory=KEY=VAL]...
                       [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
                       [<trailFile>...]
 Run a trail file (.trail.yaml) — execute a scripted test on a device.
@@ -43,6 +45,15 @@ removed in a future release.
                                directory.
   -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
                                TRAILBLAZE_RUNNER
+      --all-devices          Run each trail on EVERY connected device whose
+                               platform the trail supports (its `platform:
+                               `/`driver:` for v1, or its `devices:`/recording
+                               classifiers for the unified format). The opt-in
+                               way to exercise a multi-target trail across
+                               platforms in one command. Mutually exclusive
+                               with `--device` (passing both is rejected).
+                               Connected devices that don't match any supported
+                               platform are skipped.
       --capture-all          Enable all capture streams: video, logcat, iOS
                                logs, network (local dev mode)
       --[no-]capture-ios-logs
@@ -69,13 +80,18 @@ removed in a future release.
       --compose-port=<composePort>
                              RPC port for Compose driver connections (default:
                                52600)
-  -d, --device=<device>      Device: platform (android, ios, web) or
-                               platform/id. Defaults to `$TRAILBLAZE_DEVICE` if
-                               set (manual override; rare), otherwise this
-                               terminal's pin (set by `trailblaze device
-                               connect`). In a fresh-shell harness (Claude
-                               Code, Cursor, Codex, CI), pass --device on every
-                               call.
+  -d, --device=<device>[,<device>...]
+                             Device(s) to run on: `<platform>` (e.g. android),
+                               `<platform>/<instanceId>`, or a bare instanceId.
+                               Comma-separated or repeatable to run each trail
+                               on SEVERAL devices (`--device android,ios` → one
+                               run per device). When omitted, resolves to a
+                               pinned (`trailblaze device connect` /
+                               `TRAILBLAZE_DEVICE`) or single connected device;
+                               when 2+ devices are connected and none is
+                               pinned, the run fails and asks you to pass this
+                               (or `--driver` / `--all-devices`). See also
+                               --all-devices.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
                                driver from trail config.
@@ -120,10 +136,10 @@ removed in a future release.
                                directory after a successful run. Default: on.
                                Use --no-save-recording to skip. Even when on,
                                the recording is only saved when --self-heal was
-                               enabled OR no <deviceClassifiers>.trail.yaml
-                               exists yet next to the source — deterministic
-                               re-runs no-op the write so they can't clobber a
-                               hand-edited source.
+                               enabled OR this device isn't recorded yet —
+                               deterministic re-runs no-op the write so they
+                               can't clobber a hand-edited source. See
+                               --unified-recordings for the on-disk format.
       --secret=KEY=VAL       Pre-populate trail memory with a SENSITIVE KEY=VAL
                                before any step runs. Same shape as --memory;
                                the value is redacted in logs (via
@@ -152,6 +168,17 @@ removed in a future release.
                                environments where the caller can supply a
                                richer identifier (e.g. including
                                suite/section/case context).
+      --[no-]unified-recordings
+                             Save new recordings in the unified format: the
+                               device's slot is merged into the unified trail.
+                               yaml (a directory that still has legacy
+                               <classifier>.trail.yaml files keeps using them).
+                               Default: off while unified support rolls out —
+                               recordings save as legacy <classifier>.trail.
+                               yaml siblings, and nothing is written next to an
+                               existing unified trail.yaml. Also enabled via
+                               TRAILBLAZE_UNIFIED_RECORDINGS=1 or 'trailblaze
+                               config unified-recordings true'.
       --[no-]use-recorded-steps
                              Three-way switch for replay vs. AI-driven
                                execution:

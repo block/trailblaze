@@ -5,12 +5,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.cli.CliReportGenerator
+import xyz.block.trailblaze.cli.CliRunDeviceResolution
+import xyz.block.trailblaze.cli.CliRunDeviceResolver
 import xyz.block.trailblaze.cli.DaemonClient
 import xyz.block.trailblaze.cli.DaemonSettingsBridge
 import xyz.block.trailblaze.cli.TrailblazeCli
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
-import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailDeviceSelector
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -30,6 +31,7 @@ import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.util.concurrent.CountDownLatch
 
@@ -46,7 +48,16 @@ abstract class TrailblazeDesktopApp(
 
   abstract val deviceManager: TrailblazeDeviceManager
 
-  abstract fun startTrailblazeDesktopApp(headless: Boolean = false)
+  /**
+   * Starts the desktop app (Compose UI / tray icon) and, unless [daemonAlreadyRunning], the
+   * daemon HTTP server.
+   *
+   * @param daemonAlreadyRunning true when the daemon for this port is already running — owned by
+   *   another process this instance attaches to, or started in-process before the UI (the
+   *   `trailblaze mcp` legacy STDIO path). When false, this process must win the port bind or
+   *   exit instead of lingering as a duplicate tray icon.
+   */
+  abstract fun startTrailblazeDesktopApp(headless: Boolean = false, daemonAlreadyRunning: Boolean = false)
 
   /**
    * Creates the CLI report generator used by `trailblaze run`.
@@ -96,15 +107,25 @@ abstract class TrailblazeDesktopApp(
 
     Console.log("Starting Trailblaze server...")
     installRunHandler()
-    runBlocking {
-      trailblazeMcpServer.startStreamableHttpMcpServer(
-        port = serverPort,
-        httpsPort = serverHttpsPort,
-        wait = false,
-        additionalRouteRegistration = {
-          xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
-        },
-      )
+    try {
+      runBlocking {
+        trailblazeMcpServer.startStreamableHttpMcpServer(
+          port = serverPort,
+          httpsPort = serverHttpsPort,
+          wait = false,
+          additionalRouteRegistration = {
+            xyz.block.trailblaze.health.DeviceHealthEndpoint.register(routing = this)
+          },
+        )
+      }
+    } catch (e: Exception) {
+      // Lost the bind race with another process between the isRunning check and the bind.
+      // If a rival daemon answers, this is the documented "another process owns it" outcome.
+      if (daemon.waitForDaemon(maxWaitMs = RIVAL_DAEMON_WAIT_MS)) {
+        Console.log("Daemon already running on port $serverPort — attaching to it.")
+        return false
+      }
+      throw e
     }
     // Advertise the live daemon URL to subprocess MCP plumbing so session spawns can
     // populate `_meta.trailblaze.baseUrl`. Set AFTER the server binds so the URL is
@@ -159,16 +180,20 @@ abstract class TrailblazeDesktopApp(
       ?: request.runYamlRequest?.yaml
       ?: return@withContext CliRunResponse(success = false, error = "No YAML content provided")
 
+    // Resolve templates up front (no-op when the caller already resolved them, as the CLI does)
+    // so device selection and execution read the same trail content.
+    val resolvedYaml = request.trailFilePath?.let { path ->
+      TrailYamlTemplateResolver.resolve(yamlContent, File(path))
+    } ?: yamlContent
+
     // Resolve driver type from request or trail config
     val trailConfig = try {
-      TrailblazeYaml().extractTrailConfig(yamlContent)
+      TrailblazeYaml().extractTrailConfig(resolvedYaml)
     } catch (_: Exception) {
       null
     }
     val driverString = request.driverType ?: request.runYamlRequest?.driverType?.name ?: trailConfig?.driver
     val trailDriverType = driverString?.let { TrailblazeDriverType.fromString(it) }
-    val trailPlatform = trailDriverType?.platform
-      ?: trailConfig?.platform?.let { TrailblazeDevicePlatform.fromString(it) }
 
     // Resolve device
     val resolvedRunRequest = request.runYamlRequest
@@ -179,9 +204,41 @@ abstract class TrailblazeDesktopApp(
         ?: devices.firstOrNull()
         ?: return@withContext CliRunResponse(success = false, error = "No devices connected")
     } else {
+      // Version-aware read of the trail's declared platforms (v1 `platform:`/`driver:` AND
+      // unified classifier slots) — so a unified web trail routes to the browser here the same
+      // way the CLI routes it, instead of landing on whatever device happens to be listed first.
+      val trailPlatforms = TrailDeviceSelector.supportedPlatformsForTrail(createTrailblazeYaml(), resolvedYaml)
       val devices = deviceManager.loadDevicesSuspend(applyDriverFilter = false)
-      resolveDevice(devices, request.deviceId, trailDriverType, trailPlatform)
-        ?: return@withContext CliRunResponse(success = false, error = "No matching device found")
+      val requestedDeviceId = request.deviceId?.takeIf { it.isNotBlank() }
+      when (
+        val resolution = CliRunDeviceResolver.resolve(devices, requestedDeviceId, trailDriverType, trailPlatforms)
+      ) {
+        is CliRunDeviceResolution.Selected -> {
+          // Trace the pick like the CLI's [device-select] lines — this default path is hit by
+          // callers that did NOT pre-resolve a device (deferred CLI runs, MCP/HTTP clients), so
+          // the daemon log is the only place "which device ran this and why" is answerable.
+          Console.log(
+            "[device-select] /cli/run: deviceId=${requestedDeviceId ?: "<none>"} " +
+              "driver=${trailDriverType ?: "<none>"} trailPlatforms=$trailPlatforms → " +
+              resolution.device.platform.toFullyQualifiedDeviceId(resolution.device.instanceId),
+          )
+          resolution.device
+        }
+        is CliRunDeviceResolution.MultipleDevices -> {
+          // Same fail-loud contract as the CLI: never silently pick one of several devices.
+          val specs = resolution.candidates.map { it.platform.toFullyQualifiedDeviceId(it.instanceId) }
+          Console.log("[device-select] /cli/run: ambiguous among $specs; requiring an explicit device")
+          return@withContext CliRunResponse(
+            success = false,
+            error = "Multiple devices connected: ${specs.joinToString(", ")}. " +
+              "Specify which device to run on (e.g. --device ${specs.first()} from the CLI).",
+          )
+        }
+        is CliRunDeviceResolution.NoMatch -> {
+          Console.log("[device-select] /cli/run: no device (${resolution.reason})")
+          return@withContext CliRunResponse(success = false, error = resolution.reason)
+        }
+      }
     }
 
     // Resolve LLM model
@@ -202,11 +259,6 @@ abstract class TrailblazeDesktopApp(
       ?: resolvedRunRequest?.testName
       ?: request.trailFilePath?.let { File(it).parentFile?.name }
       ?: "daemon-run"
-
-    // Build the RunYamlRequest
-    val resolvedYaml = request.trailFilePath?.let { path ->
-      TrailYamlTemplateResolver.resolve(yamlContent, File(path))
-    } ?: yamlContent
 
     // Three-way: caller can force replay (`true`), force AI (`false`), or send `null`
     // to defer to daemon-side auto-detect via `hasRecordedSteps`. CLI's
@@ -366,45 +418,4 @@ abstract class TrailblazeDesktopApp(
     )
   }
 
-  /**
-   * Resolves a target device from the available list.
-   *
-   * [deviceId] supports three formats (matching the CLI `--device` flag):
-   *   - `"platform/instance-id"` (e.g., `"android/emulator-5554"`)
-   *   - `"platform"` (e.g., `"android"`, `"ios"`, `"web"`)
-   *   - raw instance ID (e.g., `"emulator-5554"`)
-   */
-  private fun resolveDevice(
-    devices: List<TrailblazeConnectedDeviceSummary>,
-    deviceId: String?,
-    driverType: TrailblazeDriverType?,
-    platform: TrailblazeDevicePlatform?,
-  ): TrailblazeConnectedDeviceSummary? {
-    if (deviceId != null) {
-      val parts = deviceId.split("/", limit = 2)
-      val specPlatform = TrailblazeDevicePlatform.fromString(parts[0])
-      val specInstanceId = if (specPlatform != null) parts.getOrNull(1) else deviceId
-
-      if (specInstanceId != null) {
-        val candidates = if (specPlatform != null) devices.filter { it.platform == specPlatform } else devices
-        return candidates.find { it.trailblazeDeviceId.instanceId == specInstanceId }
-          ?: candidates.find { it.trailblazeDeviceId.instanceId.contains(specInstanceId) }
-      }
-      // Platform only — auto-select
-      if (specPlatform != null) {
-        val platformDevices = devices.filter { it.platform == specPlatform }
-        return platformDevices.find { it.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE }
-          ?: platformDevices.firstOrNull()
-      }
-    }
-    if (driverType != null) {
-      return devices.find { it.trailblazeDriverType == driverType }
-    }
-    if (platform != null) {
-      val platformDevices = devices.filter { it.platform == platform }
-      return platformDevices.find { it.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE }
-        ?: platformDevices.firstOrNull()
-    }
-    return devices.firstOrNull()
-  }
 }

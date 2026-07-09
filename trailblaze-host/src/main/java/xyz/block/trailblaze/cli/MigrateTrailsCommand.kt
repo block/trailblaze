@@ -79,7 +79,9 @@ class MigrateTrailsCommand : Callable<Int> {
     }
 
     val drift = UnifiedTrailMigrator.driftComments(result.report.drift) +
-      UnifiedTrailMigrator.memoryDriftComments(result.report.memoryDrift)
+      UnifiedTrailMigrator.kindDriftComments(result.report.kindDrift) +
+      UnifiedTrailMigrator.memoryDriftComments(result.report.memoryDrift) +
+      UnifiedTrailMigrator.configDriftComments(result.report.configDrift)
     val yamlText = TrailblazeYaml.Default.encodeUnifiedTrailToString(
       trail = result.trail,
       leadingComments = drift,
@@ -117,6 +119,9 @@ class MigrateTrailsCommand : Callable<Int> {
     Console.log("Output: ${output.absolutePath}")
     Console.log("Steps: ${result.trail.trail.size}")
     Console.log("Drift warnings: ${result.report.drift.size}")
+    if (result.report.kindDrift.isNotEmpty()) {
+      Console.log("Kind drift warnings (step: vs verify:): ${result.report.kindDrift.size}")
+    }
     if (result.report.familyCollapses.isNotEmpty()) {
       val summary = result.report.familyCollapses.groupBy { it.family }.map { (family, entries) ->
         val collapsed = entries.count { !it.diverged }

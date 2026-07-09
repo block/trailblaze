@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -43,6 +44,10 @@ import xyz.block.trailblaze.util.Console
  */
 @Serializable
 @TrailblazeToolClass("tapOn", surfaceToLlm = false)
+@LLMDescription(
+  "Tap (or long-press) the element resolved by a node selector, optionally at a percent-offset " +
+    "within its bounds.",
+)
 data class TapOnTrailblazeTool(
   val selector: TrailblazeNodeSelector,
   val relativePoint: String? = null,

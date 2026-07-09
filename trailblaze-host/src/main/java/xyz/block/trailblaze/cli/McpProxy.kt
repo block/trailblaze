@@ -272,6 +272,18 @@ class McpProxy(
       return
     }
 
+    // With auto-start disabled, no daemon will ever appear on its own — polling the full
+    // DAEMON_WAIT_TIMEOUT_SECONDS window would just hang the MCP client. Fail fast so the
+    // first forwarded request returns the "daemon unavailable" JSON-RPC error immediately.
+    if (isDaemonAutoStartDisabled()) {
+      log(
+        "Daemon auto-start is disabled (TRAILBLAZE_DISABLE_DAEMON_AUTOSTART) and no daemon " +
+          "is reachable — failing fast instead of waiting. Start one with: trailblaze app",
+      )
+      daemonStartupFailed.set(true)
+      return
+    }
+
     log("Daemon not running -- attempting to start...")
     startDaemon(log)
 
@@ -326,6 +338,10 @@ class McpProxy(
    * Skips if a previously launched daemon process is still alive.
    */
   private fun startDaemon(log: (String) -> Unit) {
+    if (isDaemonAutoStartDisabled()) {
+      log("Daemon auto-start disabled via TRAILBLAZE_DISABLE_DAEMON_AUTOSTART. Start it manually with: trailblaze app")
+      return
+    }
     val existing = daemonProcess.get()
     if (existing != null && existing.isAlive) {
       log("Daemon process still starting -- skipping duplicate launch.")
@@ -347,11 +363,14 @@ class McpProxy(
       if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
         pb.environment()["TRAILBLAZE_PORT"] = port.toString()
       }
-      pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
-      pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+      // Append (not DISCARD) so a spawned daemon that exits — e.g. losing the port-bind race
+      // to a concurrent launch — leaves its exit reason recoverable from the daemon log.
+      val daemonLogFile = xyz.block.trailblaze.ui.TrailblazeDesktopUtil.getDaemonLogFile()
+      pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
+      pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
       val process = pb.start()
       daemonProcess.set(process)
-      log("Daemon process launched.")
+      log("Daemon process launched. Log: ${daemonLogFile.absolutePath}")
     } catch (e: Exception) {
       log("Failed to start daemon: ${e.message}")
     }
@@ -1145,6 +1164,23 @@ internal fun findOnPath(name: String): File? {
     null
   }
 }
+
+/**
+ * Kill-switch for daemon auto-start (`cliTryStartDaemon`, the MCP proxy's re-launch). When set,
+ * "daemon not running" becomes a hard failure instead of spawning a detached daemon process.
+ *
+ * Wired into every Gradle `Test` task so unit tests can never launch the machine-global
+ * `trailblaze` from PATH — the launcher walk in [findTrailblazeLauncher] otherwise resolves a
+ * Homebrew/installed CLI from a test worker and leaves orphaned daemon JVMs on the default port.
+ * Read per call. `1`/`true` (case-insensitive) disables; anything else — including the `"0"` that
+ * `:trailblaze-server:integrationTest` uses to opt back out — leaves auto-start on.
+ *
+ * [flag] is injectable so the parse contract is unit-testable ([DaemonAutoStartFlagTest]);
+ * production callers use the default env read.
+ */
+internal fun isDaemonAutoStartDisabled(
+  flag: String? = System.getenv("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART"),
+): Boolean = flag != null && (flag == "1" || flag.equals("true", ignoreCase = true))
 
 /**
  * Find the trailblaze launcher executable.

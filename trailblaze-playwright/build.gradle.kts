@@ -22,7 +22,17 @@ dependencies {
   testImplementation(libs.assertk)
 }
 
-tasks.test { useJUnit() }
+tasks.test {
+  useJUnit()
+  // Forwarded into the forked test JVM so `-Dtrailblaze.playwright.runBenchmarks=true` on the
+  // Gradle command line actually reaches PlaywrightBoundsEnrichmentBenchmarkTest's Assume gate.
+  val runBenchmarks = System.getProperty("trailblaze.playwright.runBenchmarks") ?: "false"
+  systemProperty("trailblaze.playwright.runBenchmarks", runBenchmarks)
+  // Only stream stdout/stderr when benchmarks are explicitly enabled — the benchmark test's
+  // println output is the point of running it, but forcing this on for every plain
+  // `./gradlew :trailblaze-playwright:test` run would make normal CI/local logs noisy.
+  testLogging.showStandardStreams = runBenchmarks == "true"
+}
 
 // Don't run tests as part of "check" — only when explicitly requested via "test"
 project.tasks.named("check") { dependsOn.removeIf { it.toString().contains("test") } }

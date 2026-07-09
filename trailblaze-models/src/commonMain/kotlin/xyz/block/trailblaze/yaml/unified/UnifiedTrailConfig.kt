@@ -6,13 +6,19 @@ import kotlinx.serialization.Serializable
  * Unified-format `config:` block — identity, target, optional per-classifier
  * driver pins, and free-form context/memory/metadata.
  *
- * Retired from the legacy per-platform format: `platform:` (the supported
- * device set is now derived from the steps' recorded classifiers), `title:`
- * (use `metadata.title` if needed).
- *
- * [description] is deliberately kept (not retired): it's a first-class,
- * runtime-surfaced human summary that round-trips losslessly to/from the v1
- * `TrailConfig.description`.
+ * Converting a v1 trail to this format never silently drops config. Two v1
+ * fields deliberately have no unified home: `platform:` is retired (the
+ * supported device set derives from the steps' recorded classifiers and the
+ * [devices] keys), and `electron:` is refused — conversion fails loud on it
+ * (see [UnifiedTrailAdapter.v1ConfigToUnifiedConfig]) because it is
+ * driver-specific structured launch config with zero corpus usage; its
+ * unified home (likely target-level, not per-trail) is deferred until a real
+ * Electron trail needs one. Everything else carries: the runtime-surfaced
+ * scalars ([title], [description]) round-trip verbatim as fields, the
+ * informational v1 `priority:` / `source:` ride in [metadata] under the
+ * reserved bridge keys (see the [metadata] kdoc), and the two per-platform v1
+ * scalars (`driver:`, `skip:`) become the per-classifier [devices] / [skip]
+ * maps.
  *
  * [devices] is an **optional, per-classifier** map: keys are the device
  * classifiers this trail targets (`android`, `android-tablet`, `ios-iphone`, …)
@@ -75,6 +81,34 @@ data class UnifiedTrailConfig(
   val context: String? = null,
   /** Pre-seeded variables for `{{name}}` interpolation in NL and tool params. */
   val memory: Map<String, String>? = null,
-  /** Informational only — never read at runtime. Used for traceability. */
+  /**
+   * Informational only — never read at runtime. Used for traceability.
+   *
+   * Three keys are **reserved bridge keys** for the v1 fields that are metadata by nature but
+   * that internal tooling still reads as first-class `TrailConfig` fields:
+   * [METADATA_KEY_PRIORITY] (v1 `priority:`), [METADATA_KEY_SOURCE] (v1 `source.type`, empty
+   * string for a bare `source: {}` marker), and [METADATA_KEY_SOURCE_REASON] (v1
+   * `source.reason`). Conversion writes them here and lowering lifts them back onto
+   * `TrailConfig.priority` / `TrailConfig.source`, so both formats read identically.
+   */
   val metadata: Map<String, String>? = null,
-)
+  /**
+   * Human-readable test title (e.g. the source test-case title), surfaced as the trail name in
+   * reports and session lists. Trail-level like the v1 `TrailConfig.title` it round-trips with.
+   */
+  val title: String? = null,
+) {
+  companion object {
+    /** Reserved [metadata] key bridging the v1 `priority:` scalar (e.g. `P1`). */
+    const val METADATA_KEY_PRIORITY: String = "priority"
+
+    /**
+     * Reserved [metadata] key bridging v1 `source.type` (a `TrailSourceType` name; empty string
+     * for a bare `source: {}` marker). An unrecognized value is left in metadata untouched.
+     */
+    const val METADATA_KEY_SOURCE: String = "source"
+
+    /** Reserved [metadata] key bridging v1 `source.reason` (typically an issue URL). */
+    const val METADATA_KEY_SOURCE_REASON: String = "sourceReason"
+  }
+}

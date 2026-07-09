@@ -13,6 +13,13 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  *   recordable: false   # mutually exclusive with non-empty recordings
  * ```
  *
+ * A step may be authored as `- verify: <NL>` instead of `- step: <NL>` (exactly
+ * one of the two, same optional sibling keys). A verify step is an assertion:
+ * at run time it lowers to the v1 `VerificationStep`, which the runtime treats
+ * differently from a direction step (verify-scoped tool surface, auto-terminate
+ * + assertion ledger, never self-healed). The NL text lands in [step] either
+ * way; [verify] records which keyword it was authored under.
+ *
  * `step` is the canonical NL — exactly one prose string per step across all
  * devices, and it is **required** (natural language is forced so every step
  * carries its intent and a trail stays legible / self-healing). Per-classifier
@@ -54,4 +61,16 @@ data class UnifiedTrailStep(
    * came in via the unified or legacy format.
    */
   val maxRetries: Int? = null,
+  /**
+   * True when this step was authored as `- verify:` rather than `- step:`. Lowers to the v1
+   * [xyz.block.trailblaze.yaml.VerificationStep] so verify semantics (assertion-only tool
+   * surface, auto-terminate, no self-heal) survive the unified format. Never true on a
+   * trailhead (a trailhead is a deterministic bootstrap, not an assertion).
+   *
+   * Declared last so positional Kotlin callers and `componentN` destructuring keep their
+   * pre-verify meaning (source-compatible). Binary compatibility is NOT preserved — the data
+   * class's 4-arg constructor is replaced by a 5-arg one in the ABI — an accepted break under
+   * this repo's hard-cut policy (the .api baselines record it).
+   */
+  val verify: Boolean = false,
 )

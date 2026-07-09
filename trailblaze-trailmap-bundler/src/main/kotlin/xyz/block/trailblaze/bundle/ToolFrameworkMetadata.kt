@@ -26,10 +26,21 @@ package xyz.block.trailblaze.bundle
  * stays annotation-agnostic — adapters (e.g. `PerTrailmapClientDtsEmitter`) project
  * annotation values into this shape at the module boundary, and the renderer downstream
  * doesn't depend on the reflective surface.
+ *
+ * **`resultTsType` is not a JSDoc tag like the other fields** — it flows into
+ * [xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator]'s `ToolEntry.resultTsType` and
+ * renders as the tool's `result:` type literal instead of the `string` fallback. Null (the
+ * default) means the tool's `@TrailblazeToolClass` didn't declare a `resultType` — the
+ * renderer's existing `entry.resultTsType ?: "string"` fallback applies unchanged. Populated by
+ * `PerTrailmapClientDtsEmitter` via the same `SerialDescriptorTsCodegen` walk
+ * `BuiltInToolResultTsBindings` uses for the hand-curated SDK surface's built-ins, so a Kotlin
+ * tool with a declared `resultType` renders identically on both sides — see the "MUST declare
+ * identical result types" note in `built-in-tools.ts`.
  */
 data class ToolFrameworkMetadata(
   val surfaceToLlm: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   val trailheadTo: String = "",
+  val resultTsType: String? = null,
 )

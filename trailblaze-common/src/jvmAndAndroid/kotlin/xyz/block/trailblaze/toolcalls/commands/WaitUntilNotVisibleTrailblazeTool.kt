@@ -83,7 +83,7 @@ data class WaitUntilNotVisibleTrailblazeTool(
 ) : MapsToMaestroCommands() {
 
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    val maestroSelector = lowerToMaestroSelector(selector = null, nodeSelector = nodeSelector)
+    val maestroSelector = lowerToMaestroSelector(nodeSelector = nodeSelector)
       ?: error(
         "waitUntilNotVisible: nodeSelector is required and must lower to a Maestro selector for " +
           "the non-accessibility fallback path.",

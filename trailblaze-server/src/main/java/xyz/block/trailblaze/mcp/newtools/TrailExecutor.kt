@@ -8,6 +8,8 @@ import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -113,6 +115,20 @@ interface TrailExecutor {
 }
 
 /**
+ * Platform-level device classifiers for the MCP session's associated device, used to lower a
+ * unified trail's per-classifier recordings. Only the device's platform is known here (not its
+ * phone/tablet sub-category), so this yields e.g. `[android]` — enough for platform-keyed
+ * recordings (`android:`/`ios:`/`web:`). A step recorded ONLY under a more specific sub-category
+ * key (e.g. `android-phone:`) won't resolve from a platform-only chain: it lowers with no
+ * recording, and the deterministic MCP executor — which has no LLM fallback — fails that step.
+ * Empty when no device is associated, which makes `decodeTrail` refuse a
+ * unified-with-recordings trail (surfaced as a "bind a device" error rather than a silent
+ * lowering whose recorded steps would all fail).
+ */
+internal fun deviceClassifiersFor(deviceId: TrailblazeDeviceId?): List<TrailblazeDeviceClassifier> =
+  deviceId?.trailblazeDevicePlatform?.asTrailblazeDeviceClassifier()?.let { listOf(it) } ?: emptyList()
+
+/**
  * Default implementation of TrailExecutor.
  *
  * Executes trails by:
@@ -149,22 +165,23 @@ class TrailExecutorImpl(
 
     onProgress?.invoke("Loading trail: ${file.name}")
 
-    // Parse YAML. The MCP path doesn't have a resolved device at trail-load
-    // time, so we can't pass classifiers — but decodeTrail's guard refuses to
-    // silently lower a v3 trail with recordings under those conditions. For
-    // now MCP only supports v1 trails through this entry point; a v3 trail
-    // surfaces a clear "use the device runner instead" error.
+    // Resolve the trail with the MCP session's associated-device classifiers so a unified trail
+    // lowers to the right per-classifier recording (v1 trails ignore the list). See
+    // [deviceClassifiersFor] for the platform-only limitation and the empty-list guard semantics —
+    // the guard is surfaced below as a clear "bind a device first" error.
+    val deviceClassifiers = deviceClassifiersFor(sessionContext?.associatedDeviceId)
     val trailItems = try {
       val yamlContent = file.readText()
-      trailblazeYaml.decodeTrail(yamlContent)
+      trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = deviceClassifiers)
     } catch (e: IllegalStateException) {
       return TrailExecutionResult(
         passed = false,
         stepsExecuted = 0,
         durationMs = (Clock.System.now() - startTime).inWholeMilliseconds,
-        failureReason = "MCP cannot execute Trail YAML v3 directly — v3 trails need a " +
-          "device-aware runner to resolve per-classifier recordings. Use `trailblaze run` " +
-          "with `--device` instead, or migrate the trail to v1. Underlying error: ${e.message}",
+        failureReason = "This is a unified (per-classifier) trail, but no device is associated " +
+          "with this MCP session to resolve its recordings. Bind a device first (e.g. via the " +
+          "`device` tool), then retry — or run it with `trailblaze run --device`. Underlying " +
+          "error: ${e.message}",
       )
     } catch (e: Exception) {
       return TrailExecutionResult(

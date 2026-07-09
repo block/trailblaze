@@ -643,6 +643,32 @@ class CheckCommandTest {
   }
 
   @Test
+  fun `assembleExemptTargets lets a per-manifest reason override the transitional reason`() {
+    val merged = CheckCommand().assembleExemptTargets(
+      transitional = mapOf("alpha" to "transitional reason"),
+      workspaceExemptions = listOf("alpha" to "workspace reason"),
+      classpathExemptions = emptyList(),
+      workspaceIds = setOf("alpha"),
+    )
+    assertEquals("workspace reason", merged["alpha"], "per-manifest reason must override the transitional one")
+  }
+
+  @Test
+  fun `assembleExemptTargets drops a classpath exemption shadowed by a workspace trailmap`() {
+    // A workspace trailmap of the same id is authoritative — even when it did NOT declare an
+    // exemption — so a bundled manifest's exemption must not silently downgrade a local non-exempt
+    // shadow of that target.
+    val merged = CheckCommand().assembleExemptTargets(
+      transitional = emptyMap(),
+      workspaceExemptions = emptyList(), // `square` shadowed locally but NOT exempt
+      classpathExemptions = listOf("square" to "bundled exemption", "widgets" to "bundled exemption"),
+      workspaceIds = setOf("square"),
+    )
+    assertNull(merged["square"], "classpath exemption for a workspace-shadowed id must be dropped")
+    assertEquals("bundled exemption", merged["widgets"], "non-shadowed classpath exemption is kept")
+  }
+
+  @Test
   fun `discoverClasspathValidationSurfaces returns only dirs carrying BOTH tsconfig and client d ts`() {
     val trailsRoot = File(workDir, "trails").apply { mkdirs() }.toPath()
     val base = TrailTscValidator.classpathValidationSurfacesBaseDir(trailsRoot)

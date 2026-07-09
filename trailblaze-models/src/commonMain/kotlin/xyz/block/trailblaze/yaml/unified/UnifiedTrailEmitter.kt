@@ -4,6 +4,11 @@ import com.charleskorn.kaml.Yaml
 import kotlinx.serialization.builtins.ListSerializer
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer.Companion.KEY_MAX_RETRIES
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer.Companion.KEY_RECORDABLE
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer.Companion.KEY_RECORDING
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer.Companion.KEY_STEP
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer.Companion.KEY_VERIFY
 
 /**
  * Hand-rolled YAML emitter for [UnifiedTrail]. The surrounding mapping/list
@@ -66,16 +71,19 @@ internal class UnifiedTrailEmitter(
    * [INDENT_2], classifiers at [INDENT_4], tool lists at [INDENT_6].
    */
   private fun appendTrailhead(sb: StringBuilder, step: UnifiedTrailStep) {
-    sb.append(INDENT_2).append("step: ")
+    require(!step.verify) {
+      "A trailhead cannot be a verify step — it is a deterministic bootstrap, not an assertion."
+    }
+    sb.append(INDENT_2).append("$KEY_STEP: ")
     appendScalar(sb, step.step, blockIndent = INDENT_4)
     if (step.recordings.isNotEmpty()) {
-      sb.append(INDENT_2).append("recording:\n")
+      sb.append(INDENT_2).append("$KEY_RECORDING:\n")
       appendTrailheadClassifierMap(sb, step.recordings, classifierIndent = INDENT_4, toolIndent = INDENT_6)
     }
     if (!step.recordable) {
-      sb.append(INDENT_2).append("recordable: false\n")
+      sb.append(INDENT_2).append("$KEY_RECORDABLE: false\n")
     }
-    step.maxRetries?.let { sb.append(INDENT_2).append("maxRetries: ").append(it).append('\n') }
+    step.maxRetries?.let { sb.append(INDENT_2).append("$KEY_MAX_RETRIES: ").append(it).append('\n') }
   }
 
   /**
@@ -101,16 +109,16 @@ internal class UnifiedTrailEmitter(
   }
 
   private fun appendStep(sb: StringBuilder, step: UnifiedTrailStep) {
-    sb.append(INDENT_2).append("- step: ")
+    sb.append(INDENT_2).append(if (step.verify) "- $KEY_VERIFY: " else "- $KEY_STEP: ")
     appendScalar(sb, step.step, blockIndent = INDENT_6)
     if (step.recordings.isNotEmpty()) {
-      sb.append(INDENT_4).append("recording:\n")
+      sb.append(INDENT_4).append("$KEY_RECORDING:\n")
       appendClassifierMap(sb, step.recordings, classifierIndent = INDENT_6, toolIndent = INDENT_8)
     }
     if (!step.recordable) {
-      sb.append(INDENT_4).append("recordable: false\n")
+      sb.append(INDENT_4).append("$KEY_RECORDABLE: false\n")
     }
-    step.maxRetries?.let { sb.append(INDENT_4).append("maxRetries: ").append(it).append('\n') }
+    step.maxRetries?.let { sb.append(INDENT_4).append("$KEY_MAX_RETRIES: ").append(it).append('\n') }
   }
 
   /** Emit a `recording:` map body: one `<classifier>:` key per device, each a tool list (or `[]`). */

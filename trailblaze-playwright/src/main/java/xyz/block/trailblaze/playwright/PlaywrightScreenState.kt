@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.playwright
 
+import com.microsoft.playwright.ElementHandle
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
+import com.microsoft.playwright.options.AriaSnapshotMode
 import com.microsoft.playwright.options.ScreenshotAnimations
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.DeviceInfoPrefix
@@ -69,6 +71,45 @@ class PlaywrightScreenState(
   /** Compact ARIA elements with ID mapping, built lazily from the ARIA snapshot. */
   private val compactAriaElements: PlaywrightAriaSnapshot.CompactAriaElements by lazy {
     PlaywrightAriaSnapshot.buildCompactElementList(ariaSnapshotYaml)
+  }
+
+  /**
+   * ARIA snapshot captured with [AriaSnapshotMode.AI], which mints a stable `[ref=eN]`
+   * per node via Playwright's own accessibility-tree computation — not a client-side
+   * role/name reimplementation. Captured separately from [ariaSnapshotYaml] (default
+   * mode, used everywhere else in this class) and consumed only by
+   * [computeElementVisibility] and [computeViewHierarchyBoundsBatched], via
+   * [aiRefsByRoleName]. See [BATCH_VIEWPORT_CHECK_JS]'s KDoc for why bounds/visibility
+   * resolution moved to this mechanism (https://github.com/block/trailblaze/issues/199).
+   */
+  private val aiAriaSnapshotYaml: String by lazy {
+    TrailblazeTracer.trace("aiAriaSnapshot", "screenState") {
+      try {
+        // Mirrors PlaywrightAriaSnapshot.captureAriaSnapshot's timeout handling: only set an
+        // explicit timeout when positive. ARIA_SNAPSHOT_TIMEOUT_MS defaults to 0.0, and
+        // Locator.AriaSnapshotOptions.setTimeout(0) means "disable the timeout" in Playwright
+        // (not "use the default") — passing it unconditionally would let a stalled AI-mode
+        // snapshot on a DOM-heavy or mutating page block forever instead of hitting
+        // Playwright's own 30s default and falling through to the catch block below.
+        val options = Locator.AriaSnapshotOptions().setMode(AriaSnapshotMode.AI)
+        if (ARIA_SNAPSHOT_TIMEOUT_MS > 0) {
+          options.setTimeout(ARIA_SNAPSHOT_TIMEOUT_MS)
+        }
+        page.locator(":root").ariaSnapshot(options)
+      } catch (e: Exception) {
+        Console.log(
+          "[PlaywrightScreenState] AI-mode ariaSnapshot capture failed " +
+            "(${e::class.simpleName}: ${e.message}); bounds/visibility enrichment will fall " +
+            "back to per-node locator resolution.",
+        )
+        ""
+      }
+    }
+  }
+
+  /** See [PlaywrightAriaSnapshot.buildAiRefsByRoleName]. */
+  private val aiRefsByRoleName: Map<String, List<String>> by lazy {
+    PlaywrightAriaSnapshot.buildAiRefsByRoleName(aiAriaSnapshotYaml)
   }
 
   /**
@@ -380,9 +421,10 @@ class PlaywrightScreenState(
    * - **Both requested**: every element line is kept with the appropriate
    *   annotation.
    *
-   * Elements whose visibility can't be determined (role/name mismatch between
-   * Playwright's ARIA snapshot and the simplified JS DOM walk) are left unchanged
-   * — the safe default, since the LLM can still see them in the screenshot.
+   * Elements whose visibility can't be determined (no AI-mode ref correlation for
+   * that node — see [PlaywrightAriaSnapshot.buildAiRefsByRoleName] — or the
+   * resolution budget ran out) are left unchanged — the safe default, since the LLM
+   * can still see them in the screenshot.
    */
   private fun handleHiddenElements(
     text: String,
@@ -478,34 +520,182 @@ class PlaywrightScreenState(
     computeElementVisibility(compactAriaElements)
   }
 
+  /**
+   * Resolves each `(id, ref)` pair to a live [ElementHandle] via Playwright's `aria-ref=`
+   * selector engine — an O(1) server-side map lookup keyed by the exact ref Playwright
+   * itself minted, not a role/name/nth DOM rescan. One round-trip per ref (Playwright
+   * doesn't expose a way to batch-resolve many `aria-ref=` selectors in one call — see
+   * https://github.com/block/trailblaze/issues/199 investigation notes), but each round-trip is
+   * cheap and, unlike the pre-batching per-node fallback this replaces, never ambiguous.
+   *
+   * Bounded by [deadlineMs] so a pathological page with tens of thousands of nodes
+   * degrades to partial results instead of hanging, same spirit as [ENRICHMENT_BUDGET_MS].
+   * A ref that fails to resolve within the budget or throws is simply dropped — the
+   * caller treats a missing id exactly like an unmatched candidate always has: no bounds,
+   * fall back to whatever the existing per-node locator fallback already does.
+   *
+   * Returns parallel (ids, handles) lists, safe to feed straight into
+   * [BATCH_VIEWPORT_CHECK_JS] as its `elements`/`ids` arguments.
+   */
+  private fun resolveElementHandles(
+    idsToRefs: List<Pair<String, String>>,
+    deadlineMs: Long,
+  ): Pair<List<String>, List<ElementHandle>> {
+    val ids = mutableListOf<String>()
+    val handles = mutableListOf<ElementHandle>()
+    for ((id, ref) in idsToRefs) {
+      if (System.currentTimeMillis() > deadlineMs) break
+      try {
+        val handle = page.locator("aria-ref=$ref").elementHandle(
+          Locator.ElementHandleOptions().setTimeout(captureTimeoutMs),
+        )
+        if (handle != null) {
+          ids.add(id)
+          handles.add(handle)
+        }
+      } catch (_: Exception) {
+        // Unresolved within this pass — dropped, same as an unmatched candidate today.
+      }
+    }
+    return ids to handles
+  }
+
+  /**
+   * Runs [BATCH_VIEWPORT_CHECK_JS] over already-resolved [handles], then disposes every
+   * handle regardless of outcome. An [ElementHandle] pins its remote DOM node alive in the
+   * browser process until disposed — leaving them undisposed across repeated screen
+   * captures on a long-running session would leak memory in the browser process. Disposal
+   * failures are swallowed (best-effort cleanup; the page may already be navigating away).
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun runBatchViewportCheck(
+    ids: List<String>,
+    handles: List<ElementHandle>,
+  ): Map<String, Any?>? {
+    try {
+      return page.evaluate(
+        BATCH_VIEWPORT_CHECK_JS,
+        mapOf("elements" to handles, "ids" to ids, "vw" to viewportWidth, "vh" to viewportHeight),
+      ) as? Map<String, Any?>
+    } finally {
+      handles.forEach { handle ->
+        try {
+          handle.dispose()
+        } catch (_: Exception) {
+        }
+      }
+    }
+  }
+
+  /** A (role, name, nth) candidate for [fastMatchWithCardinalityGate], keyed by caller-chosen [id]. */
+  private data class FastMatchCandidate(val id: String, val role: String, val name: String?, val nth: Int)
+
+  /**
+   * Runs [FAST_ROLE_NAME_MATCH_JS] — the pre-#4513 role/name DOM-walk, restored as a
+   * latency shortcut — and returns which candidates it's safe to TRUST its verdict for,
+   * alongside the raw result map.
+   *
+   * A candidate is trusted only when the walk found a bound for it AND the number of live
+   * elements it found for that (role, name) key agrees with [aiRefsByRoleName]'s
+   * independently-computed count (from Playwright's own accessibility-tree computation,
+   * not this reimplementation) for the same key. See [FAST_ROLE_NAME_MATCH_JS]'s KDoc for
+   * why cardinality agreement is the right bar and what it does and doesn't guarantee.
+   *
+   * Untrusted candidates (not returned in the trusted set) MUST be resolved via the
+   * exhaustive ref-based path ([resolveElementHandles] + [BATCH_VIEWPORT_CHECK_JS]) —
+   * this function never asserts a verdict it can't corroborate.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun fastMatchWithCardinalityGate(
+    candidates: List<FastMatchCandidate>,
+  ): Pair<Set<String>, Map<String, Any?>> {
+    if (candidates.isEmpty()) return emptySet<String>() to emptyMap()
+    val payload = candidates.map { c ->
+      mapOf("id" to c.id, "role" to c.role, "name" to c.name, "nth" to c.nth)
+    }
+    val result = try {
+      page.evaluate(
+        FAST_ROLE_NAME_MATCH_JS,
+        mapOf("elements" to payload, "vw" to viewportWidth, "vh" to viewportHeight),
+      ) as? Map<String, Any?> ?: return emptySet<String>() to emptyMap()
+    } catch (e: Exception) {
+      Console.log(
+        "[PlaywrightScreenState] fast role/name pass failed (${e::class.simpleName}: ${e.message}); " +
+          "all candidates will resolve via the exhaustive ref-based path",
+      )
+      return emptySet<String>() to emptyMap()
+    }
+
+    val matchCounts = result["matchCounts"] as? Map<String, Any?> ?: emptyMap()
+    val boundsFound = (result["bounds"] as? Map<String, Any?>)?.keys ?: emptySet()
+
+    val trusted = candidates.mapNotNull { c ->
+      if (c.id !in boundsFound) return@mapNotNull null
+      val expected = aiRefsByRoleName[PlaywrightAriaSnapshot.roleNameCorrelationKey(c.role, c.name)]?.size ?: 0
+      val actual = (matchCounts[c.id] as? Number)?.toInt() ?: -1
+      if (actual == expected) c.id else null
+    }.toSet()
+
+    return trusted to result
+  }
+
   @Suppress("UNCHECKED_CAST")
   private fun computeElementVisibility(
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
   ): ElementVisibility = TrailblazeTracer.trace("computeElementVisibility", "screenState") {
     if (compact.elementIdMapping.isEmpty()) return@trace ElementVisibility.EMPTY
     try {
-      val elements = compact.elementIdMapping.map { (id, ref) ->
+      val refsByRoleName = aiRefsByRoleName
+      if (refsByRoleName.isEmpty()) return@trace ElementVisibility.EMPTY
+
+      val candidates = compact.elementIdMapping.map { (id, ref) ->
         val (role, name) = parseAriaDescriptor(ref.descriptor)
-        mapOf("id" to id, "role" to role, "name" to name, "nth" to ref.nthIndex)
+        FastMatchCandidate(id, role, name, ref.nthIndex)
       }
-      val result = page.evaluate(
-        BATCH_VIEWPORT_CHECK_JS,
-        mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
-      ) as? Map<String, Any?> ?: return@trace ElementVisibility.EMPTY
+      val (trustedIds, fastResult) = fastMatchWithCardinalityGate(candidates)
+
+      val fastRawBounds = fastResult["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
+      val fastBounds = fastRawBounds.filterKeys { it in trustedIds }
+        .mapNotNull { (id, b) -> b.toBoundsOrNull()?.let { id to it } }.toMap()
+      val fastOffscreen = (fastResult["offscreen"] as? List<String>)?.filter { it in trustedIds }?.toSet() ?: emptySet()
+      val fastOccluded = (fastResult["occluded"] as? List<String>)?.filter { it in trustedIds }?.toSet() ?: emptySet()
+
+      val untrusted = candidates.filterNot { it.id in trustedIds }
+      val idsToRefs = untrusted.mapNotNull { c ->
+        if (c.role == "generic" && c.name == null) return@mapNotNull null
+        val key = PlaywrightAriaSnapshot.roleNameCorrelationKey(c.role, c.name)
+        refsByRoleName[key]?.getOrNull(c.nth)?.let { aiRef -> c.id to aiRef }
+      }
+      if (idsToRefs.isEmpty()) {
+        return@trace ElementVisibility(offscreen = fastOffscreen, occluded = fastOccluded, bounds = fastBounds)
+      }
+
+      val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
+      val (ids, handles) = resolveElementHandles(idsToRefs, deadlineMs)
+      if (ids.isEmpty()) {
+        return@trace ElementVisibility(offscreen = fastOffscreen, occluded = fastOccluded, bounds = fastBounds)
+      }
+
+      val result = runBatchViewportCheck(ids, handles)
+        ?: return@trace ElementVisibility(offscreen = fastOffscreen, occluded = fastOccluded, bounds = fastBounds)
 
       val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
-      val bounds = rawBounds.mapNotNull { (id, b) ->
+      val slowBounds = rawBounds.mapNotNull { (id, b) ->
         val boundsObj = b.toBoundsOrNull() ?: return@mapNotNull null
         id to boundsObj
       }.toMap()
-      val offscreen = (result["offscreen"] as? List<String>)?.toSet() ?: emptySet()
-      val occluded = (result["occluded"] as? List<String>)?.toSet() ?: emptySet()
+      val slowOffscreen = (result["offscreen"] as? List<String>)?.toSet() ?: emptySet()
+      val slowOccluded = (result["occluded"] as? List<String>)?.toSet() ?: emptySet()
       val skipped = (result["skipped"] as? List<String>) ?: emptyList()
       if (skipped.isNotEmpty()) {
         Console.log("[PlaywrightScreenState] computeElementVisibility skipped ${skipped.size} candidate(s): $skipped")
       }
 
-      ElementVisibility(offscreen = offscreen, occluded = occluded, bounds = bounds)
+      ElementVisibility(
+        offscreen = fastOffscreen + slowOffscreen,
+        occluded = fastOccluded + slowOccluded,
+        bounds = fastBounds + slowBounds,
+      )
     } catch (e: Exception) {
       // Don't swallow silently — observability for "filtering quietly off" failure modes.
       // Emit a discrete trace span so the failure is visible in trace.json artifacts
@@ -892,11 +1082,11 @@ class PlaywrightScreenState(
    * [e5], [e6], [e7]" in text — the two never line up, so the model can't reliably
    * map a label to an element.
    *
-   * Bounds are read out of [elementVisibility], the same batched JS call that powers
-   * offscreen + occlusion detection — so this previously made N CDP round-trips
-   * (one per imageAnnotatable element), and now makes 0. For elements the batched
-   * call couldn't match (role/name mismatch on Compose Web Wasm and friends), we
-   * fall back to per-element `locator.boundingBox()` so the overlay still renders
+   * Bounds are read out of [elementVisibility], which powers offscreen + occlusion
+   * detection too — so this doesn't pay its own per-element round-trips. For elements
+   * [elementVisibility] couldn't resolve (no AI-mode ref correlation — see
+   * [PlaywrightAriaSnapshot.buildAiRefsByRoleName] — or the resolution budget ran out),
+   * we fall back to per-element `locator.boundingBox()` so the overlay still renders
    * via Playwright's accessibility-aware locator path.
    *
    * Filtered to [PlaywrightAriaSnapshot.ElementRef.imageAnnotatable] elements only,
@@ -916,9 +1106,9 @@ class PlaywrightScreenState(
       if (id in visibility.occluded) continue
 
       val bounds = visibility.bounds[id] ?: run {
-        // Batched check didn't match this element (role/name mismatch, common on
-        // Compose Web Wasm where overlay elements may not expose computedRole).
-        // Fall back to the locator-based path — accessibility-aware bbox.
+        // Ref-based resolution didn't cover this element (no AI-mode ref correlation,
+        // or the resolution budget ran out). Fall back to the locator-based path —
+        // accessibility-aware bbox.
         try {
           val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
           val box = locator.boundingBox(
@@ -1080,11 +1270,15 @@ class PlaywrightScreenState(
   private fun enrichViewHierarchyWithBounds(
     tree: ViewHierarchyTreeNode,
   ): ViewHierarchyTreeNode {
-    val batchedBounds = computeViewHierarchyBoundsBatched(tree)
-    // Build ARIA descriptor occurrence counts to disambiguate duplicate elements for the
-    // fallback locator path, and share one wall-clock budget across all fallback RPCs.
-    val descriptorOccurrences = mutableMapOf<String, Int>()
+    // One shared wall-clock budget for BOTH the ref-resolution phase inside
+    // computeViewHierarchyBoundsBatched and the per-node locator fallback below — computed
+    // once, up front, so the two phases can't stack into up to 2x ENRICHMENT_BUDGET_MS
+    // worst-case latency on a pathologically large page.
     val deadlineMs = System.currentTimeMillis() + ENRICHMENT_BUDGET_MS
+    val batchedBounds = computeViewHierarchyBoundsBatched(tree, deadlineMs)
+    // Build ARIA descriptor occurrence counts to disambiguate duplicate elements for the
+    // fallback locator path.
+    val descriptorOccurrences = mutableMapOf<String, Int>()
     val nextIndex = intArrayOf(0)
     return enrichNodeWithBounds(tree, batchedBounds, descriptorOccurrences, deadlineMs, nextIndex)
   }
@@ -1120,68 +1314,92 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Resolves bounds for every node in [tree] in ONE `page.evaluate`, reusing
-   * [BATCH_VIEWPORT_CHECK_JS]'s role/name/nth → element resolution (the same batched
-   * resolver that powers [computeElementVisibility]). Returns a map from pre-order node
-   * index to bounds; nodes the batch couldn't resolve — or whose DOM rect was zero-size
-   * (dropped by [toBoundsOrNull]) — are simply absent, and the caller falls back to a
-   * per-node locator lookup for those.
+   * Resolves bounds for every node in [tree] via a fast role/name pass
+   * ([fastMatchWithCardinalityGate]) for whatever it can corroborate, then
+   * [aiRefsByRoleName] + one batched `page.evaluate` over resolved element handles (see
+   * [BATCH_VIEWPORT_CHECK_JS]) for the rest. Returns a map from pre-order node index to
+   * bounds; nodes neither path resolved, or whose DOM rect was zero-size (dropped by
+   * [toBoundsOrNull]), are simply absent, and the caller falls back to a per-node locator
+   * lookup for those — same contract as before this function's internals changed.
    *
    * The pre-order (role, name, nth) numbering here mirrors [enrichNodeWithBounds] exactly
    * (both are pure pre-order DFS over the same immutable tree), so the integer keys line
-   * up between the two passes.
+   * up between the two passes. Nodes with `role == "generic" && name == null` are skipped
+   * for the same reason [computeElementVisibility] skips them — see
+   * [PlaywrightAriaSnapshot.buildAiRefsByRoleName]'s KDoc.
    */
   @Suppress("UNCHECKED_CAST")
   private fun computeViewHierarchyBoundsBatched(
     tree: ViewHierarchyTreeNode,
+    deadlineMs: Long,
   ): Map<Int, TrailblazeNode.Bounds> = TrailblazeTracer.trace(
     "computeViewHierarchyBoundsBatched",
     "screenState",
   ) {
+    val refsByRoleName = aiRefsByRoleName
+    if (refsByRoleName.isEmpty()) return@trace emptyMap()
+
     val descriptorOccurrences = mutableMapOf<String, Int>()
-    val elements = mutableListOf<Map<String, Any?>>()
+    val candidates = mutableListOf<FastMatchCandidate>()
     var index = 0
     fun collect(node: ViewHierarchyTreeNode) {
       // `className` is null only for malformed/non-Playwright-sourced nodes — a real ARIA
-      // snapshot never emits a roleless entry, so this "generic" fallback is expected to
-      // never actually match BATCH_VIEWPORT_CHECK_JS's roleNameMap (which excludes
-      // computedRole == 'generic'). Such a node always resolves via the per-node locator
-      // fallback below instead, same as before this batching pass existed.
+      // snapshot never emits a roleless entry, so this "generic" fallback below always
+      // falls into the excluded generic-anonymous case and resolves via the per-node
+      // locator fallback instead, same as before this batching pass existed.
       val role = node.className ?: "generic"
       val name = node.text
-      val descriptor = boundsDescriptorFor(role, name)
-      val nth = descriptorOccurrences.nextOccurrence(descriptor)
-      elements.add(mapOf("id" to index.toString(), "role" to role, "name" to name, "nth" to nth))
+      if (!(role == "generic" && name == null)) {
+        val key = PlaywrightAriaSnapshot.roleNameCorrelationKey(role, name)
+        val nth = descriptorOccurrences.nextOccurrence(key)
+        candidates.add(FastMatchCandidate(index.toString(), role, name, nth))
+      }
       index++
       node.children.forEach { collect(it) }
     }
     collect(tree)
-    if (elements.isEmpty()) return@trace emptyMap()
+    if (candidates.isEmpty()) return@trace emptyMap()
+
+    val (trustedIds, fastResult) = fastMatchWithCardinalityGate(candidates)
+    val fastRawBounds = fastResult["bounds"] as? Map<String, Map<String, Any?>> ?: emptyMap()
+    val fastBounds = fastRawBounds.filterKeys { it in trustedIds }.mapNotNull { (id, b) ->
+      val idx = id.toIntOrNull() ?: return@mapNotNull null
+      b.toBoundsOrNull()?.let { idx to it }
+    }.toMap()
+
+    val untrusted = candidates.filterNot { it.id in trustedIds }
+    val idsToRefs = untrusted.mapNotNull { c ->
+      val key = PlaywrightAriaSnapshot.roleNameCorrelationKey(c.role, c.name)
+      refsByRoleName[key]?.getOrNull(c.nth)?.let { ref -> c.id to ref }
+    }
+    if (idsToRefs.isEmpty()) return@trace fastBounds
 
     try {
-      val result = page.evaluate(
-        BATCH_VIEWPORT_CHECK_JS,
-        mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
-      ) as? Map<String, Any?> ?: return@trace emptyMap()
-      val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: return@trace emptyMap()
-      val resolved = rawBounds.mapNotNull { (id, b) ->
+      val (ids, handles) = resolveElementHandles(idsToRefs, deadlineMs)
+      if (ids.isEmpty()) return@trace fastBounds
+
+      val result = runBatchViewportCheck(ids, handles) ?: return@trace fastBounds
+      val rawBounds = result["bounds"] as? Map<String, Map<String, Any?>> ?: return@trace fastBounds
+      val slowResolved = rawBounds.mapNotNull { (id, b) ->
         val idx = id.toIntOrNull() ?: return@mapNotNull null
         val bounds = b.toBoundsOrNull() ?: return@mapNotNull null
         idx to bounds
       }.toMap()
-      if (resolved.size < elements.size) {
+      val merged = fastBounds + slowResolved
+      if (merged.size < candidates.size) {
         Console.log(
-          "[PlaywrightScreenState] batch resolved ${resolved.size}/${elements.size} " +
-            "viewHierarchy node(s); falling back to per-node locator bounds for the remainder",
+          "[PlaywrightScreenState] batch resolved ${merged.size}/${candidates.size} " +
+            "viewHierarchy node(s) (${fastBounds.size} fast, ${slowResolved.size} ref-based); " +
+            "falling back to per-node locator bounds for the remainder",
         )
       }
-      resolved
+      merged
     } catch (e: Exception) {
       Console.log(
-        "[PlaywrightScreenState] batched viewHierarchy bounds failed for ${elements.size} node(s) " +
-          "(${e::class.simpleName}: ${e.message}); falling back to per-node locator bounds",
+        "[PlaywrightScreenState] ref-based viewHierarchy bounds failed for ${idsToRefs.size} node(s) " +
+          "(${e::class.simpleName}: ${e.message}); falling back to per-node locator bounds for those",
       )
-      emptyMap()
+      fastBounds
     }
   }
 
@@ -1348,34 +1566,29 @@ class PlaywrightScreenState(
     private const val MAX_HIDDEN_CSS_ELEMENTS = 50
 
     /**
-     * Wall-clock cap on the per-node locator FALLBACK during `viewHierarchy` enrichment.
+     * Wall-clock cap on the per-ref [ElementHandle] resolution phase (see
+     * [resolveElementHandles]) shared by [computeElementVisibility] and
+     * [computeViewHierarchyBoundsBatched], plus the legacy per-node locator FALLBACK
+     * those two fall back to for whatever a ref couldn't resolve.
      *
-     * `enrichViewHierarchyWithBounds` now resolves the whole tree's bounds in a single
-     * batched `page.evaluate` (`computeViewHierarchyBoundsBatched`) — one browser
-     * round-trip regardless of tree size. Only nodes the batch can't resolve (unmatched
-     * role/name, or zero-size DOM rects such as Compose-Web-Wasm overlay elements) fall
-     * back to a per-node `Locator.count()` + `boundingBox()` RPC. This budget bounds that
-     * residual fallback fan-out.
+     * Before batching (https://github.com/block/trailblaze/issues/199), a role/name `Locator` lookup ran
+     * for EVERY node: on a typical app page (a few hundred nodes at ~100 ms/RPC) it
+     * finished in a few seconds, but on a content-heavy page (Wikipedia article,
+     * ~thousands of nodes) the serial RPC traffic stretched into many minutes and wedged
+     * the next tool's pre-action diagnostic log path — a Wikipedia trail hung for 10+
+     * minutes on every CI run, with the thread dump pinned inside `LocatorImpl.count()`.
      *
-     * Before batching, the per-node path ran for EVERY node: on a typical app page (a few
-     * hundred nodes at ~100 ms/RPC) it finished in a few seconds, but on a content-heavy
-     * page (Wikipedia article, ~thousands of nodes) the serial RPC traffic stretched into
-     * many minutes and wedged the next tool's pre-action diagnostic log path — a Wikipedia
-     * trail hung for 10+ minutes on every CI run, with the thread dump pinned inside
-     * `LocatorImpl.count()` (https://github.com/block/trailblaze/issues/199). Batching removes
-     * that as the common case; the budget survives as a backstop for pages with an unusually
-     * large unmatched-node set.
+     * The current design resolves each node's [ElementHandle] via Playwright's
+     * `aria-ref=` selector engine — an O(1) server-side map lookup, not a role/name DOM
+     * rescan — which is dramatically cheaper per round-trip than the original path, but
+     * it's still one round-trip per node (Playwright doesn't expose a way to batch-resolve
+     * many `aria-ref=` selectors in a single call). This budget is the backstop for a
+     * page with an unusually large node count: it ships partial bounds rather than
+     * locking the agent loop. Downstream consumers already tolerate `bounds == null`, so
+     * the contract is preserved.
      *
-     * 5 s comfortably covers the normal case; a page whose fallback set blows the budget
-     * ships partial bounds rather than locking the agent loop. Downstream consumers already
-     * tolerate `bounds == null`, so the contract is preserved.
-     *
-     * Left at 5 s rather than tightened after batching landed: the fallback set is *usually*
-     * tiny now, but its size still depends on how much of a given page's accessibility tree
-     * the batch's role/name matching misses, which varies by app (e.g. more on pages heavy
-     * with Compose-Web-Wasm overlays). 5 s is cheap insurance against a worse case we haven't
-     * measured yet; revisit with production fallback-set-size data (see the size-mismatch log
-     * in `computeViewHierarchyBoundsBatched`) before tightening it.
+     * 5 s comfortably covers realistic pages; revisit with production data (see the
+     * size-mismatch log in [computeViewHierarchyBoundsBatched]) before tightening it.
      */
     private const val ENRICHMENT_BUDGET_MS = 5_000L
 
@@ -1388,19 +1601,39 @@ class PlaywrightScreenState(
     )
 
     /**
-     * JavaScript function that classifies each ARIA-tree candidate as offscreen,
+     * JavaScript function that classifies each already-resolved element as offscreen,
      * occluded, or visible — in one page evaluation.
      *
-     * Receives `{elements: [{id, role, name, nth}], vw, vh}` (where `elements`
-     * enumerates the candidates the LLM cares about) and returns:
+     * Receives `{elements: [ElementHandle, ...], ids: [id, ...], vw, vh}` — `elements[i]`
+     * is the live DOM element already resolved host-side for `ids[i]` (see
+     * [resolveElementHandles]) — and returns:
      * ```
      * {
-     *   bounds:    { id: {x,y,w,h}, ... },   // every matched candidate's bbox
+     *   bounds:    { id: {x,y,w,h}, ... },   // every candidate's bbox
      *   offscreen: [id, ...],                // bbox outside viewport / zero-size
      *   occluded:  [id, ...],                // in viewport but covered per Playwright's hit-test
      *   skipped:   [id, ...]                 // threw during classification — fail-open (treated as visible)
      * }
      * ```
+     *
+     * **Identification vs. classification.** This script used to ALSO find the candidate
+     * elements itself, via a client-side role/name computation (`el.computedRole`, or a
+     * ~20-tag fallback heuristic when that Chromium feature wasn't enabled) matched
+     * against role/name/nth tuples. That mechanism was the root cause of
+     * https://github.com/block/trailblaze/issues/199 follow-up investigation findings: `computedRole` was never
+     * actually available in this repo's Chromium launch config, so the incomplete
+     * fallback heuristic was silently the ONLY path that ever ran, and it had no entry
+     * for common tags (`<p>`, `<li>`, `<td>`, `<article>`, ...) — any node using one
+     * always fell through to the slow per-node locator fallback. Identification now
+     * happens BEFORE this script runs, via `AriaSnapshotMode.AI`'s `[ref=eN]` identity —
+     * the exact same accessibility-tree computation Playwright already uses to build the
+     * ARIA snapshot everywhere else in this class — resolved through Playwright's
+     * `aria-ref=` selector engine (an O(1) exact lookup, never ambiguous). See
+     * [PlaywrightScreenState.aiRefsByRoleName] and
+     * [PlaywrightAriaSnapshot.buildAiRefsByRoleName] for how a ref is found for a given
+     * node, and [resolveElementHandles] for how it's turned into the `elements` this
+     * script receives. This script now ONLY does geometry/hit-testing — no role/name
+     * computation, no DOM walk, no shadow-root traversal for identification purposes.
      *
      * The occlusion algorithm is a 1:1 port of Playwright's `expectHitTarget`
      * (the actionability check that produces `<el> intercepts pointer events`
@@ -1439,168 +1672,9 @@ class PlaywrightScreenState(
      * elements (tall sections, large tables, edge-clipped content) hit-test
      * at a point inside the viewport. Don't "fix" this back to the geometric
      * center without understanding why — see the clamp at the call site.
-     *
-     * **Aria-hidden filter** (role/name map only): elements with
-     * `aria-hidden="true"` and elements with `display: none` / `visibility:
-     * hidden` are excluded when building the role/name map (so candidate
-     * nth-indices align with Playwright's `ariaSnapshot()`), but NOT when
-     * doing the hit-test. Visual occlusion is about pixels, and aria-hidden
-     * elements still paint.
      */
     private val BATCH_VIEWPORT_CHECK_JS = """(args) => {
-      const { elements, vw, vh } = args;
-
-      // Feature-detect Chromium's computed accessibility properties.
-      // These match what Playwright's ariaSnapshot() reads from the accessibility tree.
-      const testEl = document.createElement('div');
-      const hasComputedAccess = 'computedRole' in testEl;
-
-      // Fallback: manual implicit role mapping (only used if computedRole unavailable)
-      function getFallbackRole(el) {
-        const explicit = el.getAttribute('role');
-        if (explicit) return explicit.toLowerCase();
-        const tag = el.tagName;
-        if (tag === 'A') return el.hasAttribute('href') ? 'link' : null;
-        if (tag === 'AREA') return el.hasAttribute('href') ? 'link' : null;
-        if (tag === 'BUTTON' || tag === 'SUMMARY') return 'button';
-        if (tag === 'INPUT') {
-          const type = (el.type || 'text').toLowerCase();
-          if (type === 'checkbox') return 'checkbox';
-          if (type === 'radio') return 'radio';
-          if (type === 'range') return 'slider';
-          if (type === 'number') return 'spinbutton';
-          if (type === 'search') return 'searchbox';
-          if (type === 'hidden') return null;
-          if (['submit', 'reset', 'button', 'image'].includes(type)) return 'button';
-          return 'textbox';
-        }
-        if (tag === 'SELECT') return el.multiple ? 'listbox' : 'combobox';
-        if (tag === 'TEXTAREA') return 'textbox';
-        if (/^H[1-6]${'$'}/.test(tag)) return 'heading';
-        if (tag === 'IMG') return 'img';
-        if (tag === 'NAV') return 'navigation';
-        if (tag === 'MAIN') return 'main';
-        if (tag === 'ASIDE') return 'complementary';
-        if (tag === 'FORM') return 'form';
-        if (tag === 'DIALOG') return 'dialog';
-        if (tag === 'TABLE') return 'table';
-        if (tag === 'UL' || tag === 'OL') return 'list';
-        if (tag === 'OPTION') return 'option';
-        if (tag === 'PROGRESS') return 'progressbar';
-        if (tag === 'OUTPUT') return 'status';
-        if (tag === 'METER') return 'meter';
-        if (tag === 'DETAILS') return 'group';
-        if (tag === 'HEADER') return el.closest('article, aside, main, nav, section') ? null : 'banner';
-        if (tag === 'FOOTER') return el.closest('article, aside, main, nav, section') ? null : 'contentinfo';
-        return null;
-      }
-
-      // Fallback: simplified accessible name (only used if computedName unavailable)
-      function getFallbackName(el, role) {
-        const ariaLabel = el.getAttribute('aria-label');
-        if (ariaLabel) return ariaLabel;
-        const labelledBy = el.getAttribute('aria-labelledby');
-        if (labelledBy) {
-          const parts = labelledBy.split(/\s+/)
-            .map(id => document.getElementById(id))
-            .filter(Boolean)
-            .map(ref => (ref.innerText || ref.textContent || '').trim());
-          if (parts.length) return parts.join(' ');
-        }
-        if (el.tagName === 'IMG') return el.alt || null;
-        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-          if (el.labels && el.labels.length) {
-            return (el.labels[0].innerText || el.labels[0].textContent || '').trim() || null;
-          }
-          if (el.placeholder) return el.placeholder;
-          if (el.title) return el.title;
-          return null;
-        }
-        if (el.tagName === 'TABLE') {
-          const caption = el.querySelector('caption');
-          if (caption) return caption.textContent.trim() || null;
-        }
-        const textRoles = ['link', 'button', 'heading', 'tab', 'menuitem', 'option',
-          'cell', 'columnheader', 'rowheader', 'treeitem', 'switch'];
-        if (textRoles.includes(role)) {
-          const text = (el.innerText || el.textContent || '').trim();
-          return text || null;
-        }
-        if (el.title) return el.title;
-        return null;
-      }
-
-      function getRole(el) {
-        if (hasComputedAccess) {
-          const r = el.computedRole;
-          return (r && r !== 'generic' && r !== 'none' && r !== 'presentation') ? r : null;
-        }
-        return getFallbackRole(el);
-      }
-
-      function getName(el, role) {
-        if (hasComputedAccess) {
-          const n = el.computedName;
-          return n || null;
-        }
-        return getFallbackName(el, role);
-      }
-
-      // Check if an element is hidden from the accessibility tree.
-      // The ARIA snapshot (and compact element list) only includes elements visible
-      // to the accessibility tree, so we must skip hidden elements to keep nth-indices
-      // aligned. Without this, an aria-hidden duplicate would shift all subsequent
-      // nth-indices and cause mismatches.
-      function isHiddenFromAccessibilityTree(el) {
-        // aria-hidden="true" hides the entire subtree
-        if (el.closest('[aria-hidden="true"]')) return true;
-        // display:none / visibility:hidden are not in the accessibility tree
-        const style = window.getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden') return true;
-        return false;
-      }
-
-      // Recursive descent that pierces open shadow roots. Real production
-      // dashboards (Square Dashboard, GitHub, modern enterprise UIs) wrap most
-      // interactive content in Web Components with shadow DOM — `<market-button>`,
-      // `<market-tile>`, `<sl-button>`, etc. `document.querySelectorAll('*')`
-      // returns the shadow HOST but stops at the shadow boundary, so the
-      // role/name map ends up missing ~87% of the candidates that Playwright's
-      // accessibility-tree-aware `ariaSnapshot()` does see (those traverse the
-      // shadow tree). Walking shadow roots here brings the map back in sync.
-      //
-      // Order matters for nth-index alignment with Playwright's `ariaSnapshot()`:
-      // host element first, then its shadow children in document order, then
-      // its light-DOM children. Closed shadow roots are inaccessible by design;
-      // only `mode: 'open'` shadow roots are traversed.
-      function* walkAllInclShadow(root) {
-        if (!root || root.nodeType !== 1) return;
-        yield root;
-        const sr = root.shadowRoot;
-        if (sr) {
-          for (const c of sr.children) {
-            yield* walkAllInclShadow(c);
-          }
-        }
-        for (const c of root.children) {
-          yield* walkAllInclShadow(c);
-        }
-      }
-
-      // Walk DOM in document order (matching the accessibility tree traversal),
-      // build lookup: "role\nname" -> [el, el, ...]
-      // Skips elements hidden from the accessibility tree to keep nth-indices aligned
-      // with Playwright's ariaSnapshot() output.
-      const roleNameMap = {};
-      for (const el of walkAllInclShadow(document.documentElement)) {
-        if (isHiddenFromAccessibilityTree(el)) continue;
-        const role = getRole(el);
-        if (!role) continue;
-        const name = getName(el, role);
-        const key = name != null ? role + '\n' + name : role;
-        if (!roleNameMap[key]) roleNameMap[key] = [];
-        roleNameMap[key].push(el);
-      }
+      const { elements, ids, vw, vh } = args;
 
       // ---- Direct port of Playwright's expectHitTarget composed-tree algorithm ----
       // Pinned to Playwright v1.59.0 (commit 01b2b153) — the version in libs.versions.toml.
@@ -1680,15 +1754,13 @@ class PlaywrightScreenState(
       const occluded = [];
       const skipped = [];
 
-      for (const elem of elements) {
+      for (let i = 0; i < elements.length; i++) {
+        const id = ids[i];
+        const el = elements[i];
         try {
-          const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
-          const matches = roleNameMap[key];
-          if (!matches || elem.nth >= matches.length) continue;
-          const el = matches[elem.nth];
           const rect = el.getBoundingClientRect();
 
-          bounds[elem.id] = {
+          bounds[id] = {
             x: Math.round(rect.x),
             y: Math.round(rect.y),
             w: Math.round(rect.width),
@@ -1703,7 +1775,7 @@ class PlaywrightScreenState(
             && rect.right > 0 && rect.left < vw
             && rect.width > 0 && rect.height > 0;
           if (!inViewport) {
-            offscreen.push(elem.id);
+            offscreen.push(id);
             continue;
           }
 
@@ -1720,17 +1792,284 @@ class PlaywrightScreenState(
           const cx = (ix0 + ix1) / 2;
           const cy = (iy0 + iy1) / 2;
           if (!isHitTargetReached({ x: cx, y: cy }, el)) {
-            occluded.push(elem.id);
+            occluded.push(id);
           }
         } catch (_) {
           // A single bad candidate (detached during snapshot, getBoundingClientRect
           // throws on a non-Element-shaped match, etc.) must not zero out
           // visibility for the rest of the batch. Skip it and continue.
-          skipped.push(elem.id);
+          skipped.push(id);
         }
       }
 
       return { bounds, offscreen, occluded, skipped };
+    }"""
+
+    /**
+     * Fast, single-round-trip identification + classification shortcut used by
+     * [fastMatchWithCardinalityGate], the reason being purely latency: resolving every
+     * candidate via [BATCH_VIEWPORT_CHECK_JS]'s ref-based path costs one round-trip per
+     * element (Playwright has no batch-resolve API for `aria-ref=` selectors), which is
+     * measurably slower than a single DOM walk on pages with hundreds of elements using
+     * tags this walk already covers correctly (link, button, heading, textbox, ...) — see
+     * the PR discussion for concrete before/after numbers on link-heavy pages.
+     *
+     * This is a restored, unmodified copy of the role/name DOM-walk `BATCH_VIEWPORT_CHECK_JS`
+     * used before https://github.com/block/trailblaze/issues/199's follow-up fix — same
+     * `computedRole`-or-fallback-heuristic identification, same shadow-DOM walk, same
+     * aria-hidden filtering, same hit-test port — with ONE addition: `matchCounts`, the
+     * number of live elements this walk found for each candidate's (role, name) key.
+     * [fastMatchWithCardinalityGate] cross-checks that count against
+     * [PlaywrightScreenState.aiRefsByRoleName]'s independently-computed count (from
+     * Playwright's OWN accessibility-tree computation, not this reimplementation) for the
+     * same key, and only trusts this walk's verdict for a candidate when the two agree.
+     * Candidates it can't corroborate this way — an uncommon tag this walk's fallback
+     * table doesn't cover, or a genuine disagreement between the two computations — are
+     * left for the caller to resolve via the exhaustive ref-based path instead. This is
+     * what keeps the shortcut from reintroducing the original bug: it never gets to
+     * unilaterally decide a bound/offscreen/occluded verdict is correct, only to skip
+     * the expensive path when a second, independent source agrees with it.
+     *
+     * Receives `{elements: [{id, role, name, nth}], vw, vh}` and returns the same shape as
+     * [BATCH_VIEWPORT_CHECK_JS] plus `matchCounts: {id: count}`.
+     */
+    private val FAST_ROLE_NAME_MATCH_JS = """(args) => {
+      const { elements, vw, vh } = args;
+
+      const testEl = document.createElement('div');
+      const hasComputedAccess = 'computedRole' in testEl;
+
+      function getFallbackRole(el) {
+        const explicit = el.getAttribute('role');
+        if (explicit) return explicit.toLowerCase();
+        const tag = el.tagName;
+        if (tag === 'A') return el.hasAttribute('href') ? 'link' : null;
+        if (tag === 'AREA') return el.hasAttribute('href') ? 'link' : null;
+        if (tag === 'BUTTON' || tag === 'SUMMARY') return 'button';
+        if (tag === 'INPUT') {
+          const type = (el.type || 'text').toLowerCase();
+          if (type === 'checkbox') return 'checkbox';
+          if (type === 'radio') return 'radio';
+          if (type === 'range') return 'slider';
+          if (type === 'number') return 'spinbutton';
+          if (type === 'search') return 'searchbox';
+          if (type === 'hidden') return null;
+          if (['submit', 'reset', 'button', 'image'].includes(type)) return 'button';
+          return 'textbox';
+        }
+        if (tag === 'SELECT') return el.multiple ? 'listbox' : 'combobox';
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (/^H[1-6]${'$'}/.test(tag)) return 'heading';
+        if (tag === 'IMG') return 'img';
+        if (tag === 'NAV') return 'navigation';
+        if (tag === 'MAIN') return 'main';
+        if (tag === 'ASIDE') return 'complementary';
+        if (tag === 'FORM') return 'form';
+        if (tag === 'DIALOG') return 'dialog';
+        if (tag === 'TABLE') return 'table';
+        if (tag === 'UL' || tag === 'OL') return 'list';
+        if (tag === 'OPTION') return 'option';
+        if (tag === 'PROGRESS') return 'progressbar';
+        if (tag === 'OUTPUT') return 'status';
+        if (tag === 'METER') return 'meter';
+        if (tag === 'DETAILS') return 'group';
+        if (tag === 'HEADER') return el.closest('article, aside, main, nav, section') ? null : 'banner';
+        if (tag === 'FOOTER') return el.closest('article, aside, main, nav, section') ? null : 'contentinfo';
+        return null;
+      }
+
+      function getFallbackName(el, role) {
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) return ariaLabel;
+        const labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {
+          const parts = labelledBy.split(/\s+/)
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(ref => (ref.innerText || ref.textContent || '').trim());
+          if (parts.length) return parts.join(' ');
+        }
+        if (el.tagName === 'IMG') return el.alt || null;
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+          if (el.labels && el.labels.length) {
+            return (el.labels[0].innerText || el.labels[0].textContent || '').trim() || null;
+          }
+          if (el.placeholder) return el.placeholder;
+          if (el.title) return el.title;
+          return null;
+        }
+        if (el.tagName === 'TABLE') {
+          const caption = el.querySelector('caption');
+          if (caption) return caption.textContent.trim() || null;
+        }
+        const textRoles = ['link', 'button', 'heading', 'tab', 'menuitem', 'option',
+          'cell', 'columnheader', 'rowheader', 'treeitem', 'switch'];
+        if (textRoles.includes(role)) {
+          const text = (el.innerText || el.textContent || '').trim();
+          return text || null;
+        }
+        if (el.title) return el.title;
+        return null;
+      }
+
+      function getRole(el) {
+        if (hasComputedAccess) {
+          const r = el.computedRole;
+          return (r && r !== 'generic' && r !== 'none' && r !== 'presentation') ? r : null;
+        }
+        return getFallbackRole(el);
+      }
+
+      function getName(el, role) {
+        if (hasComputedAccess) {
+          const n = el.computedName;
+          return n || null;
+        }
+        return getFallbackName(el, role);
+      }
+
+      function isHiddenFromAccessibilityTree(el) {
+        if (el.closest('[aria-hidden="true"]')) return true;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return true;
+        return false;
+      }
+
+      function* walkAllInclShadow(root) {
+        if (!root || root.nodeType !== 1) return;
+        yield root;
+        const sr = root.shadowRoot;
+        if (sr) {
+          for (const c of sr.children) {
+            yield* walkAllInclShadow(c);
+          }
+        }
+        for (const c of root.children) {
+          yield* walkAllInclShadow(c);
+        }
+      }
+
+      const roleNameMap = {};
+      for (const el of walkAllInclShadow(document.documentElement)) {
+        if (isHiddenFromAccessibilityTree(el)) continue;
+        const role = getRole(el);
+        if (!role) continue;
+        const name = getName(el, role);
+        const key = name != null ? role + '\n' + name : role;
+        if (!roleNameMap[key]) roleNameMap[key] = [];
+        roleNameMap[key].push(el);
+      }
+
+      // ---- Direct port of Playwright's expectHitTarget composed-tree algorithm ----
+      // Kept in sync manually with the identical port in BATCH_VIEWPORT_CHECK_JS —
+      // pinned to Playwright v1.59.0 (commit 01b2b153); see that script's KDoc for
+      // upstream source links. Two script blobs can't share JS functions across separate
+      // page.evaluate calls, hence the duplication.
+
+      function parentElementOrShadowHost(element) {
+        if (element.parentElement) return element.parentElement;
+        if (!element.parentNode) return null;
+        if (element.parentNode.nodeType === 11 /* DOCUMENT_FRAGMENT_NODE */
+            && element.parentNode.host) {
+          return element.parentNode.host;
+        }
+        return null;
+      }
+
+      function enclosingShadowRootOrDocument(element) {
+        let node = element;
+        while (node.parentNode) node = node.parentNode;
+        if (node.nodeType === 11 /* DOCUMENT_FRAGMENT_NODE */
+            || node.nodeType === 9 /* DOCUMENT_NODE */) {
+          return node;
+        }
+        return null;
+      }
+
+      function isHitTargetReached(hitPoint, targetElement) {
+        const roots = [];
+        let parentElement = targetElement;
+        while (parentElement) {
+          const root = enclosingShadowRootOrDocument(parentElement);
+          if (!root) break;
+          roots.push(root);
+          if (root.nodeType === 9 /* DOCUMENT_NODE */) break;
+          parentElement = root.host;
+        }
+        let hitElement;
+        for (let index = roots.length - 1; index >= 0; index--) {
+          const root = roots[index];
+          const els = root.elementsFromPoint(hitPoint.x, hitPoint.y);
+          const single = root.elementFromPoint(hitPoint.x, hitPoint.y);
+          if (single && els[0] && parentElementOrShadowHost(single) === els[0]) {
+            const style = window.getComputedStyle(single);
+            if (style && style.display === 'contents') {
+              els.unshift(single);
+            }
+          }
+          if (els[0] && els[0].shadowRoot === root && els[1] === single) {
+            els.shift();
+          }
+          const innerElement = els[0];
+          if (!innerElement) break;
+          hitElement = innerElement;
+          if (index && innerElement !== roots[index - 1].host) break;
+        }
+        while (hitElement && hitElement !== targetElement) {
+          hitElement = hitElement.assignedSlot != null
+            ? hitElement.assignedSlot
+            : parentElementOrShadowHost(hitElement);
+        }
+        return hitElement === targetElement;
+      }
+
+      // ---- End Playwright port ----
+
+      const bounds = {};
+      const offscreen = [];
+      const occluded = [];
+      const skipped = [];
+      const matchCounts = {};
+
+      for (const elem of elements) {
+        const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
+        const matches = roleNameMap[key];
+        matchCounts[elem.id] = matches ? matches.length : 0;
+        if (!matches || elem.nth >= matches.length) continue;
+        try {
+          const el = matches[elem.nth];
+          const rect = el.getBoundingClientRect();
+
+          bounds[elem.id] = {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          };
+
+          const inViewport = rect.bottom > 0 && rect.top < vh
+            && rect.right > 0 && rect.left < vw
+            && rect.width > 0 && rect.height > 0;
+          if (!inViewport) {
+            offscreen.push(elem.id);
+            continue;
+          }
+
+          const ix0 = Math.max(rect.left, 0);
+          const iy0 = Math.max(rect.top, 0);
+          const ix1 = Math.min(rect.right, vw);
+          const iy1 = Math.min(rect.bottom, vh);
+          const cx = (ix0 + ix1) / 2;
+          const cy = (iy0 + iy1) / 2;
+          if (!isHitTargetReached({ x: cx, y: cy }, el)) {
+            occluded.push(elem.id);
+          }
+        } catch (_) {
+          skipped.push(elem.id);
+        }
+      }
+
+      return { bounds, offscreen, occluded, skipped, matchCounts };
     }"""
 
     /**

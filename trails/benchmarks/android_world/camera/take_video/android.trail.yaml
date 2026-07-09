@@ -1,7 +1,7 @@
 # Android World Benchmark: TakeVideo
 - config:
     id: android-world-benchmarks/camera/take_video
-    displayName: "Camera - Take Video"
+    title: "Camera - Take Video"
     description: "Take one video."
 
 - tools:

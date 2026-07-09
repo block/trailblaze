@@ -1,7 +1,7 @@
 # Android World Benchmark: BrightnessMin
 - config:
     id: android-world-benchmarks/system/brightness_min
-    displayName: "System - Brightness Min"
+    title: "System - Brightness Min"
     description: "Turn brightness to the min value."
 
 - tools:

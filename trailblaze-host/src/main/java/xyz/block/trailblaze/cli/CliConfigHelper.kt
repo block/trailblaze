@@ -162,6 +162,18 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
+    // Rollout gate for the unified-format recorder. Off (default) keeps the legacy
+    // per-classifier save-back byte-identical; on, new recordings merge into the unified
+    // trail.yaml. The default flips once the surrounding tooling fully supports unified.
+    name = "unified-recordings",
+    description = "Save new recordings in the unified trail.yaml format instead of legacy <classifier>.trail.yaml siblings",
+    validValues = "true, false",
+    get = { config -> config.unifiedRecordingsEnabled.toString() },
+    set = { config, value ->
+      value.toBooleanStrictOrNull()?.let { config.copy(unifiedRecordingsEnabled = it) }
+    },
+  ),
+  ConfigKey(
     // Per-step natural-language description is what self-heal retries against
     // when a recorded selector goes stale. Permissive default keeps ad-hoc
     // tire-kicking unblocked; flip to true for serious authoring so every

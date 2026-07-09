@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.tabs.session
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.network.BodyRef
 import xyz.block.trailblaze.network.NetworkEvent
 import xyz.block.trailblaze.network.Phase
 import xyz.block.trailblaze.network.REDACTED_VALUE
@@ -10,6 +11,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class NetworkLogSourceTest {
 
@@ -92,6 +94,40 @@ class NetworkLogSourceTest {
     )
     val parsed = NetworkLogSource.parse(encode(event))
     assertEquals("POST 204 [90ms] /v1/cdp/batch", parsed.lines.single().content)
+  }
+
+  @Test
+  fun `multi-host capture shows host and path so domains are distinguishable`() {
+    // Full-system / multi-domain capture: the bare path is ambiguous across domains, so each line
+    // carries the full host+path (query stripped).
+    val a = baseResponse(statusCode = 200) // https://api.example.com/v1/cdp/batch
+    val b = a.copy(id = "b", url = "https://cdn.other.com/lib.js?v=2", urlPath = "/lib.js")
+    val contents = NetworkLogSource.parse("${encode(a)}\n${encode(b)}").lines.map { it.content }
+    assertTrue(contents.any { it.contains("https://api.example.com/v1/cdp/batch") }, "got: $contents")
+    assertTrue(contents.any { it.contains("https://cdn.other.com/lib.js") }, "got: $contents")
+    assertFalse(contents.any { it.contains("?v=2") }, "query should be stripped: $contents")
+  }
+
+  @Test
+  fun `body ref without a content type still decodes and is not dropped`() {
+    // Regression guard: BodyRef.contentType must be optional so a producer that omits the key when
+    // the response had no Content-Type (the mitmproxy capture addon does) doesn't get its whole
+    // NetworkEvent line silently dropped by the lenient decoder.
+    val event = baseResponse(statusCode = 200).copy(
+      responseBodyRef = BodyRef(sizeBytes = 2, inlineText = "hi"),
+    )
+    val parsed = NetworkLogSource.parse(encode(event))
+    assertEquals(1, parsed.lines.size)
+  }
+
+  @Test
+  fun `single-host capture shows path only with the domain omitted`() {
+    // Single-endpoint site/app: the domain is implied, so lines stay compact with just the path.
+    val a = baseResponse(statusCode = 200)
+    val b = a.copy(id = "b", urlPath = "/v2/ping") // same host, different path
+    val contents = NetworkLogSource.parse("${encode(a)}\n${encode(b)}").lines.map { it.content }
+    assertTrue(contents.none { it.contains("api.example.com") }, "domain should be omitted: $contents")
+    assertTrue(contents.any { it.endsWith("/v2/ping") }, "got: $contents")
   }
 
   @Test

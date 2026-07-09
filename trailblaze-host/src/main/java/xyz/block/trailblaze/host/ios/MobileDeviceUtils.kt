@@ -6,7 +6,9 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
@@ -64,6 +66,27 @@ object MobileDeviceUtils {
   }
 
   /**
+   * The full per-app inventory (label / system flag / version) counterpart of [getInstalledAppIds]
+   * — same cross-platform dispatch, same "web/desktop have no installable inventory" shape. On the
+   * Android host/adb path only `label` is null (dumpsys limitation; see
+   * [AndroidHostAdbUtils.listInstalledAppsDetailed]); iOS via `simctl listapps` has everything.
+   */
+  fun listInstalledAppsDetailed(trailblazeDeviceId: TrailblazeDeviceId): List<xyz.block.trailblaze.device.InstalledApp> {
+    return when (trailblazeDeviceId.trailblazeDevicePlatform) {
+      TrailblazeDevicePlatform.ANDROID -> AndroidHostAdbUtils.listInstalledAppsDetailed(
+        deviceId = trailblazeDeviceId,
+      )
+
+      TrailblazeDevicePlatform.IOS -> IosHostSimctlUtils.listInstalledAppsDetailed(
+        deviceId = trailblazeDeviceId.instanceId,
+      )
+
+      TrailblazeDevicePlatform.WEB -> emptyList()
+      TrailblazeDevicePlatform.DESKTOP -> emptyList()
+    }
+  }
+
+  /**
    * Resolves the app id this [target] has installed on [trailblazeDeviceId] — picks the first
    * entry from `target.getPossibleAppIdsForPlatform(deviceId.platform)` that's actually present
    * on the device. Cross-platform via [getInstalledAppIds]: iOS routes through `simctl listapps`,
@@ -117,6 +140,34 @@ object MobileDeviceUtils {
     throw IllegalStateException(
       "${e.message} (device='${trailblazeDeviceId.instanceId}')",
       e,
+    )
+  }
+
+  /**
+   * Best-effort snapshot of the app under test for the session-start log: resolves which of
+   * [target]'s declared app ids is installed on [trailblazeDeviceId] (unless the caller already
+   * resolved one and passes [resolvedAppId]), then probes its version via [getAppVersionInfo].
+   *
+   * Never throws — a probe failure (unreachable device, app not installed, web/desktop platform)
+   * returns null so capturing app info can never block a session from starting.
+   */
+  fun resolveTargetAppInfo(
+    target: TrailblazeHostAppTarget?,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    resolvedAppId: String? = null,
+  ): TrailblazeTargetAppInfo? {
+    val appId = resolvedAppId ?: runCatching {
+      target?.getAppIdIfInstalled(
+        platform = trailblazeDeviceId.trailblazeDevicePlatform,
+        installedAppIds = getInstalledAppIds(trailblazeDeviceId),
+      )
+    }.getOrNull() ?: return null
+    val version = runCatching { getAppVersionInfo(trailblazeDeviceId, appId) }.getOrNull()
+    return TrailblazeTargetAppInfo(
+      appId = appId,
+      versionName = version?.versionName,
+      versionCode = version?.versionCode,
+      buildNumber = version?.buildNumber,
     )
   }
 

@@ -903,7 +903,7 @@ function RUN_REPORT_VIEWER(): void {
 
   const renderInfo = () => {
     const m = D.meta;
-    const rows = [['Target', m.target], ['Device', m.device], ['Platform', m.platform], ['Trail', m.trailId], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt], ['Duration', m.duration]]
+    const rows = [['Target', m.target], ['App', m.appId], ['App version', m.appVersion], ['Device', m.device], ['Platform', m.platform], ['Trail', m.trailId], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt], ['Duration', m.duration]]
       .filter(([, v]) => v).map(([k, v]) => `<div class="r"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join('');
     return `<div>
       ${m.cmd ? `<div class="eyebrow">Rerun this in the CLI</div><div class="cmd"><pre class="mono" id="cmd">${esc(m.cmd)}</pre><button class="btn" id="copycmd">Copy</button></div>` : ''}
@@ -978,7 +978,7 @@ function RUN_REPORT_VIEWER(): void {
       : st.tab === 'network' ? renderNetwork()
       : st.tab === 'events' ? renderEvents()
       : renderInfo();
-    const metaItems = [['Target', m.target], ['Device', m.device], ['Duration', m.duration], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt]]
+    const metaItems = [['Target', m.target], ['App version', m.appVersion], ['Device', m.device], ['Duration', m.duration], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt]]
       .filter(([, v]) => v).map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
     root.innerHTML = `
       <header>

@@ -30,6 +30,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
@@ -182,6 +183,67 @@ class GenerateTestResultsCliCommandTest {
       val result = report.results.single()
       assertEquals(selfHealSessionId, result.session_id)
       assertEquals(Outcome.PASSED, result.outcome)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `session-start targetAppInfo is carried into the per-session app fields`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_07_06_app_info_session")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/app-info.trail.yaml",
+            hasRecordedSteps = true,
+            testMethodName = "appInfoTest",
+            testClassName = "AppInfoTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+            targetAppInfo = TrailblazeTargetAppInfo(
+              appId = "com.example.pos",
+              versionName = "6.53.2",
+              versionCode = "6532000",
+              buildNumber = "6515",
+            ),
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-06T07:53:39Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-06T07:53:44Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val result = report.results.single()
+      assertEquals("com.example.pos", result.app_id)
+      assertEquals("6.53.2", result.app_version_name)
+      assertEquals("6532000", result.app_version_code)
+      assertEquals("6515", result.app_build_number)
     } finally {
       logsDir.deleteRecursively()
     }

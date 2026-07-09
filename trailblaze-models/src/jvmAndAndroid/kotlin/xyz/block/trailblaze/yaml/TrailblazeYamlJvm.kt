@@ -18,11 +18,13 @@ import kotlin.reflect.KClass
  * [TrailblazeYaml.Default] or register any globals. Callers that just want the shared default
  * should read [TrailblazeYaml.Default] directly.
  */
+@JvmOverloads
 fun createTrailblazeYaml(
   customTrailblazeToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+  strict: Boolean = false,
 ): TrailblazeYaml {
   val allDiscovered = TrailblazeSerializationInitializer.buildAllTools().values.toSet()
-  return createTrailblazeYamlFromAllTools(allDiscovered + customTrailblazeToolClasses)
+  return createTrailblazeYamlFromAllTools(allDiscovered + customTrailblazeToolClasses, strict)
 }
 
 /**
@@ -32,8 +34,10 @@ fun createTrailblazeYaml(
  * `buildTrailblazeYamlDefault()`.
  */
 @OptIn(InternalSerializationApi::class)
+@JvmOverloads
 fun createTrailblazeYamlFromAllTools(
   allToolClasses: Set<KClass<out TrailblazeTool>>,
+  strict: Boolean = false,
 ): TrailblazeYaml {
   val classBacked = buildToolSerializerMap(allToolClasses)
   val yamlDefined = TrailblazeSerializationInitializer
@@ -41,6 +45,7 @@ fun createTrailblazeYamlFromAllTools(
     .mapKeys { it.key.toolName }
   return TrailblazeYaml(
     toolSerializersByName = classBacked + yamlDefined,
+    strict = strict,
   )
 }
 

@@ -231,6 +231,11 @@ open class BasePlaywrightNativeTest(
     trailblazeLogger = loggingRule.logger,
     sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     sessionUpdater = { loggingRule.setSession(it) },
+    // Shares one execution context + snapshot frame across the recording, matching the
+    // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
+    // device state today, so the benefit here is reduced frame/ThreadLocal churn rather than
+    // a clipboard-style state-survival fix.
+    sharedToolBatch = { block -> playwrightAgent.runInSharedToolBatch(block) },
   )
 
   private val trailblazeRunnerUtil by lazy { runnerUtilFor(trailblazeRunner) }

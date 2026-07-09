@@ -113,12 +113,13 @@ internal fun Route.lspRoutes(deps: TrailRunnerDeps) {
   // serve the static envelope schema (empty catalog) so validation degrades to structure-only.
   get("$PATH_BASE/api/lsp/tool-schema.json") {
     val trailmap = call.request.queryParameters["trailmap"]?.takeIf { it.isNotBlank() }
-    // Build the catalog fresh per fetch — yaml-language-server fetches the schema once per editor open,
-    // so the cost (a tool-catalog build) is paid rarely; if it ever shows up, cache per-trailmap. On a
-    // build failure we serve the envelope-only schema (empty catalog) so YAML validation degrades to
-    // structure-only rather than erroring — but LOG it, or a "no YAML completions" report is untraceable.
+    // Catalog comes from [ToolCatalogCache], which rebuilds only when a workspace tool source changed —
+    // yaml-language-server refetches the schema on every editor open (every Steps↔Edit toggle, every trail
+    // switch), so a fresh recursive build each time was the dominant open cost. On a build failure we serve
+    // the envelope-only schema (empty catalog) so YAML validation degrades to structure-only rather than
+    // erroring — but LOG it, or a "no YAML completions" report is untraceable.
     val catalog = withContext(Dispatchers.IO) {
-      runCatching { ToolCatalogBuilder.build() }
+      runCatching { ToolCatalogCache.get() }
         .onFailure { Console.log("[LspRoutes] tool-schema catalog build failed; serving envelope-only schema: ${it.message}") }
         .getOrDefault(emptyList())
     }
@@ -140,7 +141,7 @@ internal fun Route.lspRoutes(deps: TrailRunnerDeps) {
     val platform = call.request.queryParameters["platform"]?.trim().orEmpty()
     val driver = call.request.queryParameters["driver"]?.trim().orEmpty()
     val (catalog, targetToolNames) = withContext(Dispatchers.IO) {
-      val cat = runCatching { ToolCatalogBuilder.build() }
+      val cat = runCatching { ToolCatalogCache.get() }
         .onFailure { Console.log("[LspRoutes] trail-schema catalog build failed; serving structure-only schema: ${it.message}") }
         .getOrDefault(emptyList())
       // Resolve the target's registered tool names; null when the target/driver can't be resolved so

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml.unified
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -11,8 +12,14 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.ElectronAppConfig
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailSource
+import xyz.block.trailblaze.yaml.TrailSourceType
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Pins the the unified format → v1 lowering used by the runtime: closest-wins classifier
@@ -143,15 +150,21 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
-  fun `config lowering drops devices and keeps id target description context memory metadata`() {
+  fun `config lowering drops devices and keeps every device-agnostic scalar field`() {
     val unifiedConfig = UnifiedTrailConfig(
       id = "myapp/checkout",
       target = "myapp",
+      title = "Checkout with a saved card",
       description = "Open the checkout flow and pay.",
       devices = mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
       context = "Test context",
       memory = mapOf("email" to "tb+test@example.com"),
-      metadata = mapOf("jira" to "PROJ-123"),
+      metadata = mapOf(
+        "jira" to "PROJ-123",
+        UnifiedTrailConfig.METADATA_KEY_PRIORITY to "P1",
+        UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN",
+        UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON to "authored by hand",
+      ),
     )
     val v1 = UnifiedTrailAdapter.lowerConfig(unifiedConfig)
     assertEquals("myapp/checkout", v1.id)
@@ -159,15 +172,162 @@ class UnifiedTrailAdapterTest {
     // description is runtime-surfaced; it must round-trip back to v1, not be dropped.
     assertEquals("Open the checkout flow and pay.", v1.description)
     assertEquals("Test context", v1.context)
-    assertEquals(mapOf("jira" to "PROJ-123"), v1.metadata)
     // memory flows through so the v3 runner can pre-seed AgentMemory before the first step.
     // Without this, `config.memory:` in v3 YAMLs would parse but never reach the runner.
     assertEquals(mapOf("email" to "tb+test@example.com"), v1.memory)
+    assertEquals("Checkout with a saved card", v1.title)
+    // priority/source are metadata by nature in the unified format (reserved bridge keys), but
+    // internal tooling reads them as first-class v1 fields — lowering lifts the bridge keys back
+    // onto TrailConfig.priority/.source and strips them from the plain metadata map.
+    assertEquals("P1", v1.priority)
+    assertEquals(TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"), v1.source)
+    assertEquals(mapOf("jira" to "PROJ-123"), v1.metadata)
     // driver is resolved per-device at lowerToTrailItems time, not by lowerConfig alone.
     assertNull(v1.driver, "lowerConfig without a resolved driver leaves v1.driver null")
-    // unified-only fields that the v1 executor doesn't model are dropped.
+    // platform is the one retired field — derived from the classifier slots, never lowered.
     assertNull(v1.platform, "the unified format has no platform field — must lower as null")
-    assertNull(v1.title, "the unified format has no title field — must lower as null")
+  }
+
+  @Test
+  fun `an unrecognized metadata source value is not destroyed by the bridge`() {
+    // `metadata.source` only bridges to TrailConfig.source when it is empty (bare `source: {}`
+    // marker) or a known TrailSourceType name — anything else is the author's own metadata and
+    // must stay in the map untouched instead of being consumed by a failed parse.
+    val v1 = UnifiedTrailAdapter.lowerConfig(
+      UnifiedTrailConfig(metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system")),
+    )
+    assertNull(v1.source)
+    assertEquals(mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "some-other-system"), v1.metadata)
+  }
+
+  /**
+   * A v1 config with every convertible field set — the round-trip test's completeness guard
+   * walks the serial descriptor to enforce that, so a future `TrailConfig` field must be added
+   * here (and thereby to every conversion covered below) before it can ship. Two fields are
+   * deliberately absent: `platform` (retired — derived from classifier slots) and `electron`
+   * (refused by [UnifiedTrailAdapter.v1ConfigToUnifiedConfig] — fail loud, never silently drop).
+   */
+  private fun fullV1Config() = TrailConfig(
+    context = "Extra LLM context",
+    id = "app/checkout",
+    title = "Checkout with a saved card",
+    description = "Open the checkout flow and pay.",
+    priority = "P1",
+    source = TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"),
+    metadata = mapOf("case" to "C123"),
+    target = "app",
+    driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
+    tags = listOf("smoke"),
+    skip = "blocked on #123",
+    memory = mapOf("email" to "tb+test@example.com"),
+  )
+
+  @Test
+  fun `every v1 config field round-trips v1 to unified to v1 losslessly`() {
+    // One fixture with EVERY v1 TrailConfig field set (the guard below enforces completeness),
+    // pushed through the same conversion the migrator and recorder first-write use, then lowered
+    // back for the recording device. Field-by-field equality plus byte-equal re-encoding: no v1
+    // config field may be silently dropped by the unified format.
+    val v1 = fullV1Config()
+
+    // Fixture-completeness guard: every TrailConfig field must be set above, except the two
+    // with an explicit no-home decision — `platform` (retired: the device set derives from the
+    // classifier slots) and `electron` (refused: conversion fails loud on it, tested below).
+    // encodeDefaults=false omits unset fields, so a newly added v1 field that this fixture
+    // doesn't cover fails here — forcing it into the round-trip (or an explicit decision)
+    // instead of being silently dropped by conversion.
+    val encodedV1 = TrailblazeYaml.defaultYamlInstance.encodeToString(TrailConfig.serializer(), v1)
+    val descriptor = TrailConfig.serializer().descriptor
+    val fieldNames = (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
+    for (field in fieldNames) {
+      if (field == "platform" || field == "electron") continue
+      assertTrue(
+        encodedV1.lineSequence().any { it.startsWith("$field:") },
+        "fixture must set v1 `$field:` so the round-trip covers it — a new TrailConfig field " +
+          "needs a unified home (or an explicit decision like `platform`/`electron`)",
+      )
+    }
+
+    // v1 → unified, seeded the way the migrator and recorder first-write do: device-agnostic
+    // scalars via the shared helper, the two per-platform v1 scalars keyed under the recording
+    // device's classifier, tags verbatim.
+    val unified = UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1).copy(
+      devices = mapOf("android" to v1.driver!!),
+      skip = mapOf("android" to v1.skip!!),
+      tags = v1.tags,
+    )
+    // Pin the unified representation: priority/source are NOT unified fields — they ride in
+    // metadata under the reserved bridge keys (the same shape #4507's hand-migrated trails use).
+    assertEquals("P1", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_PRIORITY))
+    assertEquals("HANDWRITTEN", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("authored by hand", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
+
+    // unified → v1 for an android device (chain [android-phone, android]).
+    val device = listOf(classifier("android"), classifier("phone"))
+    val lowered = UnifiedTrailAdapter.lowerConfig(
+      unified,
+      resolvedDriver = UnifiedTrailAdapter.resolveDriver(unified, device),
+      resolvedSkip = UnifiedTrailAdapter.resolveSkip(unified, device),
+    )
+    assertEquals(v1, lowered, "every v1 config field must survive v1 → unified → v1")
+    assertEquals(
+      encodedV1,
+      TrailblazeYaml.defaultYamlInstance.encodeToString(TrailConfig.serializer(), lowered),
+      "the round-tripped config must re-encode byte-equal to the original",
+    )
+  }
+
+  @Test
+  fun `fillMissingConfigScalars carries every scalar the base lacks`() {
+    // Chained to the same descriptor-guarded fixture as the round-trip test: the guard forces
+    // every v1 field into fullV1Config, v1ConfigToUnifiedConfig must carry it (or the round-trip
+    // fails), and this assertion then fails if the fill helper misses it — so the migrator's
+    // fold can't silently drop a future config field that only a later file declares.
+    val scalarSeed = UnifiedTrailAdapter.v1ConfigToUnifiedConfig(fullV1Config())
+    assertEquals(
+      scalarSeed,
+      UnifiedTrailAdapter.fillMissingConfigScalars(UnifiedTrailConfig(), scalarSeed),
+      "an empty base filled from a fully-populated fallback must equal the fallback's scalars",
+    )
+  }
+
+  @Test
+  fun `fillMissingConfigScalars treats placeholders as absent but keeps them when nothing better exists`() {
+    // A first file's blank title must not shadow a later file's populated value…
+    val placeholder = UnifiedTrailConfig(title = "  ")
+    val filled = UnifiedTrailAdapter.fillMissingConfigScalars(placeholder, UnifiedTrailConfig(title = "Real title"))
+    assertEquals("Real title", filled.title)
+    // …but a placeholder survives when no file declares better.
+    val kept = UnifiedTrailAdapter.fillMissingConfigScalars(placeholder, UnifiedTrailConfig())
+    assertEquals("  ", kept.title)
+  }
+
+  @Test
+  fun `a v1 config with an electron block is refused, never silently dropped`() {
+    // The unified config deliberately has no electron field (driver-specific launch config,
+    // zero corpus usage) — conversion must fail loud rather than change how the trail launches.
+    val v1 = TrailConfig(id = "app/x", electron = ElectronAppConfig(command = "/opt/app/electron-app"))
+    val error = assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1)
+    }
+    assertTrue("electron" in error.message.orEmpty())
+  }
+
+  @Test
+  fun `fillMissingConfigScalars merges metadata per key — first file wins a shared key, later files fill new keys`() {
+    // Per-key (not whole-map) merge is what keeps the bridged priority/source lossless: one
+    // file's `priority:` and another file's `source:` both land in metadata, and an atomic
+    // first-map-wins would re-drop whichever the first file lacked.
+    val base = UnifiedTrailConfig(
+      metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_PRIORITY to "P1", "jira" to "PROJ-1"),
+    )
+    val fallback = UnifiedTrailConfig(
+      metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN", "jira" to "PROJ-2"),
+    )
+    val merged = UnifiedTrailAdapter.fillMissingConfigScalars(base, fallback)
+    assertEquals("P1", merged.metadata?.get(UnifiedTrailConfig.METADATA_KEY_PRIORITY))
+    assertEquals("HANDWRITTEN", merged.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
+    assertEquals("PROJ-1", merged.metadata?.get("jira"), "base wins a shared key")
   }
 
   @Test
@@ -361,6 +521,52 @@ class UnifiedTrailAdapterTest {
     val step = prompts.promptSteps.single() as DirectionStep
     assertNotNull(step.step)
     assertNull(step.recording, "empty classifiers → no closest-wins match → no recording")
+  }
+
+  @Test
+  fun `a verify step lowers to a v1 VerificationStep with its recording and overrides`() {
+    // Verify semantics are load-bearing at run time (assertion-scoped tool surface,
+    // auto-terminate, never self-healed) — the lowering must produce a VerificationStep,
+    // not silently downgrade to a DirectionStep.
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart"),
+        UnifiedTrailStep(
+          step = "The cart shows 2 items",
+          verify = true,
+          recordings = mapOf("android" to listOf(toolNamed("assert-items"))),
+          maxRetries = 5,
+        ),
+      ),
+    )
+    val steps = UnifiedTrailAdapter.lowerToTrailItems(
+      unified,
+      classifiers = listOf(classifier("android"), classifier("phone")),
+    ).filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps
+
+    assertTrue(steps[0] is DirectionStep, "a plain step lowers to DirectionStep")
+    val verify = steps[1] as VerificationStep
+    assertEquals("The cart shows 2 items", verify.prompt)
+    assertEquals(listOf("assert-items"), verify.recording?.tools?.map { it.name })
+    assertEquals(5, verify.maxRetries)
+    assertTrue(verify.recordable)
+  }
+
+  @Test
+  fun `an always-LLM verify step lowers to a recordable-false VerificationStep`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "The receipt banner is correct", verify = true, recordable = false),
+      ),
+    )
+    val step = UnifiedTrailAdapter.lowerToTrailItems(
+      unified,
+      classifiers = listOf(classifier("android"), classifier("phone")),
+    ).filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single() as VerificationStep
+    assertFalse(step.recordable, "recordable: false must survive lowering on a verify step")
+    assertNull(step.recording)
   }
 
   @Test

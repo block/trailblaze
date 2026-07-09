@@ -7,13 +7,14 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint migrate-trail [-hV] [--write] --session=<sessionDir>
        <trailFile>
-Mechanically migrate legacy `selector` (Maestro-shape) → `nodeSelector`
-(accessibility
-shape) for every selector-bearing tool in a trail YAML, using the captured
-session
-logs to deterministically resolve each selector through the same matcher the
-runtime
-uses for taps.
+Mechanically migrate a trail's Maestro-shape selectors to accessibility shape.
+Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector`
+still
+carries androidMaestro matchers is rewritten to androidAccessibility shape,
+using the
+captured session logs to deterministically resolve each selector through the
+same
+matcher the runtime uses for taps.
 Defaults to dry-run (unified diff on stdout). Use `--write` to apply the
 migration in
 place. Pair with a recorded session log directory (`--session`) for the same
@@ -21,13 +22,14 @@ trail.
       <trailFile>   Path to the trail YAML file to migrate.
   -h, --help        Show this help message and exit.
       --session=<sessionDir>
-                    Session log directory containing *_TrailblazeLlmRequestLog.
-                      json files captured
-                    during a recorded run of this trail. The Nth
-                      selector-bearing tool in the YAML
-                    is paired with the Nth log step that carries both
-                      viewHierarchy and
-                    trailblazeNodeTree.
+                    Session log directory from a dual-tree recorded run of this
+                      trail
+                    (trailblaze.captureSecondaryTree=true). Accepts
+                      *_TrailblazeLlmRequestLog.json,
+                    *_TrailblazeSnapshotLog.json, and *_AgentDriverLog.json
+                      files; only logs carrying
+                    viewHierarchy + trailblazeNodeTree +
+                      driverMigrationTreeNode are usable.
   -V, --version     Print version information and exit.
       --write       Overwrite the trail file in place with the migrated YAML.
                       Default is dry-run:

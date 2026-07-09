@@ -1,7 +1,7 @@
 # Android World Benchmark: WifiTurnOn
 - config:
     id: android-world-benchmarks/system/wifi_turn_on
-    displayName: "System - Wifi Turn On"
+    title: "System - Wifi Turn On"
     description: "Turn wifi on."
 
 - tools:

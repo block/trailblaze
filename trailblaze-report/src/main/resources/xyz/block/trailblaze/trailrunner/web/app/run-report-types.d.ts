@@ -14,6 +14,10 @@ interface RunMeta {
   /** Badge class: passed | failed | cancelled | running | unknown (see RunReportGenerator.statusLabel). */
   status?: string;
   target?: string;
+  /** Resolved package name (Android) / bundle id (iOS) of the app under test. */
+  appId?: string;
+  /** Display version of the app under test, e.g. "5.58.0.0 (67500009)". */
+  appVersion?: string;
   device?: string;
   platform?: string;
   trailId?: string;

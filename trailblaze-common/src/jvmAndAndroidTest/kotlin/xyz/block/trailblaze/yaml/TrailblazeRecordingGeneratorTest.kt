@@ -17,7 +17,8 @@ import kotlinx.serialization.json.putJsonObject
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
-import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -94,14 +95,16 @@ class TrailblazeRecordingGeneratorTest {
     isRecordable: Boolean = true,
     isTopLevelToolCall: Boolean = false,
     isVerification: Boolean = false,
+    timestamp: kotlinx.datetime.Instant = now,
+    durationMs: Long = 100,
   ) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = tool.toLogPayload(),
     toolName = toolName,
     successful = true,
     traceId = null,
-    durationMs = 100,
+    durationMs = durationMs,
     session = testSession,
-    timestamp = now,
+    timestamp = timestamp,
     isRecordable = isRecordable,
     isTopLevelToolCall = isTopLevelToolCall,
     isVerification = isVerification,
@@ -224,7 +227,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap the login button",
-          selector = TrailblazeElementSelector(textRegex = "Login"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
         ),
         "tapOnElementBySelector",
       ),
@@ -278,7 +281,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap sign-in-with-email row",
-          selector = TrailblazeElementSelector(textRegex = "Sign in with email"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Sign in with email")),
         ),
         "tapOnElementBySelector",
         isTopLevelToolCall = false,
@@ -339,7 +342,7 @@ class TrailblazeRecordingGeneratorTest {
     val step = DirectionStep(step = "Tap element")
     val selectorTool = TapOnByElementSelector(
       reason = "Tap login",
-      selector = TrailblazeElementSelector(textRegex = "Login"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
     )
     val logs = listOf(
       objectiveStart(step),
@@ -393,7 +396,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap button",
-          selector = TrailblazeElementSelector(textRegex = "Button"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Button")),
         ),
         "tapOnElementBySelector",
       ),
@@ -453,6 +456,34 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(yaml).contains("id: test/case_123")
     assertThat(yaml).contains("title: Login test")
     assertThat(yaml).contains("Test account: user@test.com")
+  }
+
+  @Test
+  fun configCarriesEveryFieldIntoTheSavedRecording() {
+    // The generator must carry the session config wholesale — a rebuilt field list here
+    // silently dropped electron/tags/skip/memory before any save-back merge saw them, so a
+    // re-recorded trail lost its memory seed / tags / Electron launch config on save.
+    val config = TrailConfig(
+      id = "test/case_123",
+      title = "Login test",
+      priority = "P1",
+      source = TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"),
+      tags = listOf("smoke"),
+      skip = "blocked on #123",
+      memory = mapOf("email" to "tb+test@example.com"),
+      electron = ElectronAppConfig(command = "/opt/app/electron-app"),
+    )
+    val step = DirectionStep(step = "Enter text")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml, sessionTrailConfig = config)
+
+    val savedConfig = trailblazeYaml.extractTrailConfig(yaml)
+    assertThat(savedConfig).isEqualTo(config)
   }
 
   @Test
@@ -542,8 +573,9 @@ class TrailblazeRecordingGeneratorTest {
       |      tools:
       |      - tapOnElementBySelector:
       |          reason: Tap the login button
-      |          selector:
-      |            textRegex: Login
+      |          nodeSelector:
+      |            androidAccessibility:
+      |              textRegex: Login
     """.trimMargin()
 
     val trailItems = trailblazeYaml.decodeTrail(originalYaml)
@@ -744,7 +776,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap login",
-          selector = TrailblazeElementSelector(textRegex = "Login"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
         ),
         "tapOnElementBySelector",
       ),
@@ -782,7 +814,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap login button",
-          selector = TrailblazeElementSelector(textRegex = "Login"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
         ),
         "tapOnElementBySelector",
       ),
@@ -855,7 +887,7 @@ class TrailblazeRecordingGeneratorTest {
       TrailblazeLog.TrailblazeToolLog(
         trailblazeTool = TapOnByElementSelector(
           reason = "Tap button",
-          selector = TrailblazeElementSelector(textRegex = "Submit"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Submit")),
         ).toLogPayload(),
         toolName = "tapOnElementBySelector",
         successful = false,
@@ -887,7 +919,7 @@ class TrailblazeRecordingGeneratorTest {
     val step = DirectionStep(step = "Tap on the login button")
     val selectorTool = TapOnByElementSelector(
       reason = "Tap login",
-      selector = TrailblazeElementSelector(textRegex = "Login"),
+      nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
     )
     val logs = listOf(
       objectiveStart(step),
@@ -1089,14 +1121,14 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(
         TapOnByElementSelector(
           reason = "Tap element",
-          selector = TrailblazeElementSelector(textRegex = "OK"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "OK")),
         ),
         "tapOnElementBySelector",
       ),
       toolLog(
         AssertVisibleBySelectorTrailblazeTool(
           reason = "Check visible",
-          selector = TrailblazeElementSelector(textRegex = "Success"),
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Success")),
         ),
         "assertVisibleBySelector",
       ),
@@ -1126,16 +1158,16 @@ class TrailblazeRecordingGeneratorTest {
     // assertions collapse to one (verifications are idempotent); the taps preserve both
     // (entering "11" needs both presses).
     val step = VerificationStep(verify = "Confirm key '1' is visible")
-    val keySelector = TrailblazeElementSelector(textRegex = "1")
+    val keySelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "1"))
     val assertWithReason = { reason: String ->
       toolLog(
-        AssertVisibleBySelectorTrailblazeTool(reason = reason, selector = keySelector),
+        AssertVisibleBySelectorTrailblazeTool(reason = reason, nodeSelector = keySelector),
         "assertVisibleBySelector",
         isVerification = true,
       )
     }
     val tapKey = toolLog(
-      TapOnByElementSelector(reason = "Press 1", selector = keySelector),
+      TapOnByElementSelector(reason = "Press 1", nodeSelector = keySelector),
       "tapOnElementBySelector",
     )
     val logs = listOf(
@@ -1288,5 +1320,62 @@ class TrailblazeRecordingGeneratorTest {
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
     assertThat(th.tools.single().name).isEqualTo("launchApp")
+  }
+
+  @Test
+  fun nestedDispatchesInsideACompositeAreDroppedFromTheRecording() {
+    // A composite (scripted) tool runs its internals via `ctx.tools.*`, and each nested dispatch
+    // emits its own recordable TrailblazeToolLog whose execution span lies inside the composite's.
+    // Only the composite is the replayable call — a trailhead recorded as one composite sign-in tool
+    // must come back out as that ONE call, not the composite plus its flattened internals.
+    val trailheadStep = TrailheadDefinition(
+      step = "Sign in via the trailhead",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val base = now.toEpochMilliseconds()
+    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      // Nested dispatches log as they complete — BEFORE the composite's own log lands — and their
+      // spans sit inside the composite's. Emission order mirrors the real runner.
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText", timestamp = at(1_000), durationMs = 500),
+      toolLog(InputTextTrailblazeTool(text = "123123"), "inputText", timestamp = at(2_000), durationMs = 500),
+      // The composite: starts at the window's start, spans every nested dispatch.
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", timestamp = at(0), durationMs = 60_000),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.tools.single().name).isEqualTo("launchApp")
+  }
+
+  @Test
+  fun sequentialSiblingToolsAreAllKeptInTheRecording() {
+    // Non-overlapping siblings (a step that legitimately recorded several tools in sequence) must
+    // all survive the nested-dispatch filter.
+    val step = DirectionStep(step = "Type and tap")
+    val base = now.toEpochMilliseconds()
+    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText", timestamp = at(0), durationMs = 500),
+      toolLog(InputTextTrailblazeTool(text = "world"), "inputText", timestamp = at(1_000), durationMs = 500),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val recorded = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.name }
+    assertThat(recorded).isEqualTo(listOf("inputText", "inputText"))
   }
 }

@@ -1,0 +1,44 @@
+config:
+  id: sample-app/swipe/swipe-directions
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Navigate to the \"Swipe\" tab and verify \"Page 1 of 5\" is shown"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: To navigate to the 'Swipe' tab, I need to tap on the tab labeled 'Swipe'. The corresponding nodeId is 49.
+            nodeSelector:
+              androidAccessibility:
+                classNameRegex: android.view.View
+                collectionItemRowIndex: 0
+                collectionItemColumnIndex: 3
+
+  - step: "Swipe forward to page 3, then swipe back to page 2"
+    recording:
+      android-phone:
+        - swipe:
+            direction: LEFT
+        - swipe:
+            direction: LEFT
+        - swipe:
+            direction: RIGHT
+
+  - step: "Verify \"Page 2 of 5\" is displayed"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: Verify the page-body label (set imperatively by SwipePageFragment via TextView.setText) shows "Page 2" — proves the ViewPager has settled on page 2. We intentionally do NOT assert on the header "Page 2 of 5" here even though it visually updates, because that header is a Compose `Text` whose state-driven recomposition doesn't reliably fire an accessibility-cache-invalidating event on the accessibility driver's read path (the post-#3237 fresh-Compose behavior applies only to the instrumentation
+              driver). The body label is a plain Android TextView in a fragment that's swapped on page change, so its accessibility node is naturally fresh on every read.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Page 2

@@ -70,6 +70,7 @@ internal fun filterInstalledApps(apps: List<InstalledApp>, includeSystemApps: Bo
 @TrailblazeToolClass(
   name = "mobile_listInstalledAppsDetailed",
   surfaceToLlm = false,
+  resultType = ListInstalledAppsDetailedResult::class,
 )
 @LLMDescription(
   "Returns a JSON object ({\"apps\":[{\"appId\":…,\"isSystemApp\":…,\"label\":…,\"version\":…,\"buildNumber\":…,\"installPath\":…}, …]}) " +

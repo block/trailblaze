@@ -27,18 +27,45 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailEmitter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer
 
-class TrailblazeYaml(
-  toolSerializersByName: Map<String, KSerializer<out TrailblazeTool>> = emptyMap(),
+class TrailblazeYaml internal constructor(
+  toolSerializersByName: Map<String, KSerializer<out TrailblazeTool>>,
+  /**
+   * When true, unknown YAML keys in closed shapes (config blocks, class-backed tool args,
+   * selectors) fail the decode with kaml's `UnknownPropertyException` instead of being silently
+   * dropped. Off by default: runtime decoding stays lenient so an older binary can still run
+   * trail files that carry newer schema fields it doesn't know about. Lint/validation surfaces
+   * opt in via `createTrailblazeYaml(strict = true)` to catch typo'd or stale keys; no runtime
+   * path enables it today.
+   */
+  private val strict: Boolean,
 ) {
 
+  /** Preserves the pre-strict no-arg binary signature `TrailblazeYaml()`. */
+  constructor() : this(emptyMap(), strict = false)
+
+  /**
+   * Preserves the pre-strict `TrailblazeYaml(Map)` binary signature; strict parsing is opt-in
+   * through the `createTrailblazeYaml` factories, which call the `internal` primary. These
+   * overloads are written out explicitly rather than via `@JvmOverloads` because `TrailblazeYaml`
+   * lives in commonMain and `kotlin.jvm.JvmOverloads` isn't available on the wasmJs target — the
+   * explicit form is multiplatform-safe (same pattern as
+   * [xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver]). They carry no default arg so they
+   * don't collide with the primary under Kotlin overload resolution.
+   */
+  constructor(
+    toolSerializersByName: Map<String, KSerializer<out TrailblazeTool>>,
+  ) : this(toolSerializersByName, strict = false)
+
   companion object {
-    val yamlConfiguration = YamlConfiguration(
+    val yamlConfiguration = yamlConfigurationWithStrictness(strict = false)
+
+    private fun yamlConfigurationWithStrictness(strict: Boolean) = YamlConfiguration(
       encodeDefaults = false,
       breakScalarsAt = 500,
       yamlNamingStrategy = YamlNamingStrategy.CamelCase,
       multiLineStringStyle = MultiLineStringStyle.Literal,
       singleLineStringStyle = SingleLineStringStyle.PlainExceptAmbiguous,
-      strictMode = false,
+      strictMode = strict,
     )
 
     val defaultYamlInstance = Yaml(
@@ -185,7 +212,7 @@ class TrailblazeYaml(
     unifiedTrailStepSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer)
     unifiedTrailheadSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer, isTrailhead = true)
     yamlInstance = Yaml(
-      configuration = yamlConfiguration,
+      configuration = yamlConfigurationWithStrictness(strict),
       serializersModule = SerializersModule {
         contextual(TrailYamlItem::class, trailYamlItemSerializer)
         contextual(TrailblazeToolYamlWrapper::class, trailblazeToolYamlWrapperSerializer)

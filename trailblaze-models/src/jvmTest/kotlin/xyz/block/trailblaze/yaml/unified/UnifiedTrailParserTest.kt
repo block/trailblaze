@@ -149,8 +149,8 @@ class UnifiedTrailParserTest {
 
   @Test
   fun `a device classifier at the step level (not under recording) is a parse error`() {
-    // Device classifiers must nest under `recording:`; a bare classifier key at the step level — or
-    // any other unexpected key like the retired `verify:` — is rejected.
+    // Device classifiers must nest under `recording:`; a bare classifier key at the step level is
+    // rejected.
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
@@ -159,13 +159,88 @@ class UnifiedTrailParserTest {
           target: x
         trail:
           - step: hi
-            verify: should not parse here
+            android-phone: []
         """.trimIndent(),
       )
     }
     assertTrue(
       ex.message?.contains("Unexpected step-level key") == true,
       "expected unexpected-step-key error, got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `a verify step parses with the NL text and the same optional keys as a step`() {
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        id: x
+        target: x
+      trail:
+        - step: Open the cart
+        - verify: The cart shows 2 items
+          recording:
+            android-phone:
+              - assertVisibleWithText:
+                  text: 2 items
+          maxRetries: 5
+        - verify: The LLM checks the receipt banner
+          recordable: false
+      """.trimIndent(),
+    )
+    val direction = parsed.trail[0]
+    assertTrue(!direction.verify, "a `step:` step must not be marked verify")
+    val verify = parsed.trail[1]
+    assertTrue(verify.verify, "a `verify:` step must be marked verify")
+    assertEquals("The cart shows 2 items", verify.step, "verify NL lands in the shared step field")
+    assertEquals(setOf("android-phone"), verify.recordings.keys)
+    assertEquals(5, verify.maxRetries)
+    val llmVerify = parsed.trail[2]
+    assertTrue(llmVerify.verify && !llmVerify.recordable, "verify combines with recordable: false")
+  }
+
+  @Test
+  fun `a step with both step and verify keys is rejected`() {
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          id: x
+          target: x
+        trail:
+          - step: hi
+            verify: also hi
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      ex.message?.contains("mutually exclusive") == true,
+      "expected step/verify mutual-exclusion error, got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `verify on the trailhead is rejected — a trailhead is a bootstrap, not an assertion`() {
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          id: x
+          target: x
+        trailhead:
+          verify: signed in
+          recording:
+            android:
+              launchApp:
+                appId: com.example.myapp
+        trail:
+          - step: hi
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      ex.message?.contains("trailhead does not support `verify:`") == true,
+      "expected trailhead-verify rejection, got: ${ex.message}",
     )
   }
 

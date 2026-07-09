@@ -1,24 +1,35 @@
 package xyz.block.trailblaze.host
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
+import xyz.block.trailblaze.toolcalls.HandCuratedRecordableTools
+import xyz.block.trailblaze.toolcalls.SelectorParamTs
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.selectorParamsForTs
 import xyz.block.trailblaze.toolcalls.toScriptedToolDescriptor
 import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 import xyz.block.trailblaze.util.Console
@@ -135,6 +146,7 @@ object PerTrailmapClientDtsEmitter {
         scriptedTools = scriptedTools,
         typedToolOverrides = typedOverrides,
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
+        extraParamsByToolName = kotlinTools.selectorParamsByName,
       )
     }
   }
@@ -222,6 +234,7 @@ object PerTrailmapClientDtsEmitter {
           scriptedTools = scriptedTools,
           typedToolOverrides = emptyMap(),
           frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
+          extraParamsByToolName = kotlinTools.selectorParamsByName,
         )
       } catch (e: Exception) {
         Console.error(
@@ -398,76 +411,155 @@ object PerTrailmapClientDtsEmitter {
     )
 
   /**
-   * Walks [trailmap]'s OWN per-platform `tool_sets:` declarations (top-level [platforms] on
-   * library trailmaps; [target].platforms on target trailmaps) and resolves each toolset name
-   * through [TrailblazeToolSetCatalog.resolve]. Returns one [ToolDescriptor] per class-backed
-   * tool reachable from the union. Every class-backed tool is surfaced to scripted-tool authors
-   * — there is no scripted-surface visibility gate; the LLM agent toolbox gate
-   * ([TrailblazeToolClass.surfaceToLlm]) is separate and does not affect this codegen.
+   * Resolve the class-backed + YAML-defined tool surface for [trailmap], DERIVED FROM `isRecordable`
+   * so the trail-recording validator can type-check every recordable tool. Three sources, merged
+   * first-write-wins (a `tool_sets:` entry wins over the same tool in the recordable union — richer,
+   * authoritative — and a name-colliding YAML tool loses to either):
    *
-   * Trailmap-local — never reads dependencies'. The runtime registry (transitive union) is a
-   * separate layer; the typed surface deliberately reflects ONLY what an author wrote into
-   * THIS trailmap's manifest plus the explicit `exports:` channel from deps.
+   *  1. **The trailmap's OWN `tool_sets:` tools** (via [TrailblazeToolSetCatalog.resolve]) — the
+   *     authoring surface; every class-backed tool the trailmap declares, recordable or not, so a
+   *     `.ts` author reaches the same set as before. Trailmap-local (never reads dependencies').
+   *  2. **Every recordable framework tool** ([TrailblazeSerializationInitializer.buildAllTools]
+   *     filtered to `isRecordable`), REGARDLESS of `tool_sets:`. This is the durable fix for the
+   *     validator false-positive class: the selector-migration pipeline records tools the LLM never
+   *     picks (`assertVisibleBySelector`, `tapOn`, …) that live in no `tool_sets:`, and hand-adding
+   *     each to `built-in-tools.ts` inevitably drifts (it missed `assertNotVisibleBySelector`).
+   *     Sourcing from the recordable registry — the same set replay decodes against — means the
+   *     surface can't silently miss a recordable tool.
+   *  3. **YAML-defined (`tools:` mode) recordable tools** ([TrailblazeSerializationInitializer.buildYamlDefinedTools],
+   *     e.g. `eraseText` / `pressBack`) — no Kotlin class, so params come straight from the config.
    *
-   * YAML-defined-only tools (toolset entries without a backing KClass — e.g. `pressBack` in
-   * the `navigation` toolset) are NOT included today. Matches the parity with the previous
-   * per-target emitter; YAML-only inclusion is a future expansion.
+   * **Selector args re-injected.** [selectorParamsForTs] recovers the `TrailblazeNodeSelector` /
+   * legacy `selector` params that [toScriptedToolDescriptor] strips (they overflow Koog's lowering),
+   * typed against the generated selector grammar — otherwise every recorded selector call reads as an
+   * "unexpected property." Returned as [KotlinToolResolution.selectorParamsByName] for the generator
+   * to append. [HAND_CURATED_RECORDABLE] tools are skipped (they stay hand-typed in the SDK file).
    *
-   * **Failure posture: skip-and-log per tool, never throw.** [toScriptedToolDescriptor] catches
-   * descriptor-build failures internally (unsupported parameter shapes, missing
-   * `@LLMDescription`, null parameter names) and returns `null` with a `Console.log` breadcrumb.
-   * This function honors that contract via `return@forEach`, dropping the affected tool from
-   * BOTH the descriptors list AND the metadata map in lockstep — so a malformed tool never
-   * surfaces a metadata entry with no matching descriptor (or vice versa). Mirrors
-   * [analyzeTrailmapToolsDir]'s explicit catch-all posture: one broken tool must not abort
-   * codegen for the whole trailmap.
+   * **Failure posture: skip-and-log per tool, never throw.** [toScriptedToolDescriptor] returns
+   * null for a tool it can't lower; the entry is dropped from descriptors + metadata + selector
+   * params in lockstep so a malformed tool never surfaces a half-populated entry.
    */
   private fun resolveKotlinToolDescriptorsForTrailmap(
     trailmap: ResolvedTrailmap,
-    catalog: List<xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry>,
+    catalog: List<ToolSetCatalogEntry>,
   ): KotlinToolResolution {
-    val ownToolSetNames = collectOwnToolSetNames(trailmap)
-    if (ownToolSetNames.isEmpty()) return KotlinToolResolution.EMPTY
-    val resolved = TrailblazeToolSetCatalog.resolve(
-      requestedIds = ownToolSetNames.toList(),
-      catalog = catalog,
-    )
-    val descriptors = mutableListOf<ai.koog.agents.core.tools.ToolDescriptor>()
+    val descriptors = mutableListOf<ToolDescriptor>()
     val metadataByName = mutableMapOf<String, ToolFrameworkMetadata>()
-    resolved.toolClasses.forEach { kClass ->
-      val descriptor = kClass.toScriptedToolDescriptor() ?: return@forEach
+    val selectorParamsByName = mutableMapOf<String, List<WorkspaceClientDtsGenerator.ToolParam>>()
+
+    // First-write-wins across the three sources: once a name has a metadata entry it's skipped.
+    fun addClassTool(kClass: KClass<out TrailblazeTool>) {
+      val descriptor = kClass.toScriptedToolDescriptor() ?: return
+      if (descriptor.name in HandCuratedRecordableTools.NAMES) return
+      if (metadataByName.containsKey(descriptor.name)) return
       descriptors += descriptor
-      // Reading the annotation here (not at descriptor-build time) keeps the projection at
-      // the codegen boundary — `ToolFrameworkMetadata` is a bundler concern, the
-      // descriptor build is a koog-runtime concern. Same `KClass` so no re-walking the
-      // catalog.
+      // Reading the annotation here (not at descriptor-build time) keeps the projection at the
+      // codegen boundary — `ToolFrameworkMetadata` is a bundler concern, the descriptor build is a
+      // koog-runtime concern. Same `KClass` so no re-walking the catalog.
       val annotation = kClass.trailblazeToolClassAnnotation()
-      val projected = ToolFrameworkMetadata(
+      metadataByName[descriptor.name] = ToolFrameworkMetadata(
         surfaceToLlm = annotation.surfaceToLlm,
         isRecordable = annotation.isRecordable,
         requiresHost = annotation.requiresHost,
         trailheadTo = annotation.trailheadTo,
+        // Bare reference to the SAME named type `built-in-tools.ts` imports from the generated
+        // `BuiltInToolResultTsBindings` output — see ToolFrameworkMetadata.resultTsType's kdoc.
+        // `simpleName` (not a full SerialDescriptorTsCodegen walk) is enough: it's exactly what
+        // that generator's `tsName()` would derive too, absent an `@SerialName` override on the
+        // result class — neither of today's `resultType` classes has one. If that ever changes,
+        // this would need to walk the descriptor's serialName instead of trusting `simpleName`.
+        resultTsType = annotation.resultType.takeIf { it != Unit::class }?.simpleName,
       )
-      metadataByName[descriptor.name] = projected
+      val selectorParams = kClass.selectorParamsForTs()
+      if (selectorParams.isNotEmpty()) {
+        selectorParamsByName[descriptor.name] = selectorParams.map { it.toGeneratorParam() }
+      }
     }
-    return KotlinToolResolution(descriptors = descriptors, frameworkMetadataByName = metadataByName)
+
+    // 1. The trailmap's own tool_sets tools (authoritative; also the authoring surface).
+    val ownToolSetNames = collectOwnToolSetNames(trailmap)
+    if (ownToolSetNames.isNotEmpty()) {
+      TrailblazeToolSetCatalog.resolve(requestedIds = ownToolSetNames.toList(), catalog = catalog)
+        .toolClasses.forEach(::addClassTool)
+    }
+
+    // 2. Every recordable framework tool, regardless of tool_sets — the isRecordable-derived surface.
+    TrailblazeSerializationInitializer.buildAllTools().values
+      .filter { it.trailblazeToolClassAnnotation().isRecordable }
+      .forEach(::addClassTool)
+
+    // 3. YAML-defined recordable tools (`tools:` mode, e.g. eraseText / pressBack).
+    TrailblazeSerializationInitializer.buildYamlDefinedTools().forEach { (toolName, config) ->
+      val name = toolName.toolName
+      if (config.isRecordable == false) return@forEach
+      if (name in HandCuratedRecordableTools.NAMES || metadataByName.containsKey(name)) return@forEach
+      descriptors += config.toRecordableToolDescriptor()
+      metadataByName[name] = ToolFrameworkMetadata(
+        surfaceToLlm = config.surfaceToLlm ?: true,
+        isRecordable = true,
+        requiresHost = config.requiresHost ?: false,
+      )
+    }
+
+    return KotlinToolResolution(
+      descriptors = descriptors,
+      frameworkMetadataByName = metadataByName,
+      selectorParamsByName = selectorParamsByName,
+    )
+  }
+
+  private fun SelectorParamTs.toGeneratorParam(): WorkspaceClientDtsGenerator.ToolParam =
+    WorkspaceClientDtsGenerator.ToolParam(
+      name = name,
+      tsType = tsType,
+      description = description,
+      optional = optional,
+    )
+
+  /**
+   * Build a koog [ToolDescriptor] for a YAML-defined (`tools:` mode) recordable tool from its
+   * declared [TrailblazeToolParameterConfig]s. The validator only needs the arg shape (name / type /
+   * required), so the composition body (`tools:`) is irrelevant here.
+   */
+  private fun ToolYamlConfig.toRecordableToolDescriptor(): ToolDescriptor {
+    fun TrailblazeToolParameterConfig.toParamDescriptor() = ToolParameterDescriptor(
+      name = name,
+      description = description?.trim().orEmpty(),
+      type = yamlParamTypeToToolParameterType(type),
+    )
+    return ToolDescriptor(
+      name = id,
+      description = description?.trim().orEmpty(),
+      requiredParameters = parameters.filter { it.required }.map { it.toParamDescriptor() },
+      optionalParameters = parameters.filterNot { it.required }.map { it.toParamDescriptor() },
+    )
   }
 
   /**
-   * Bundles the two parallel outputs of the Kotlin-tool resolution pass — the koog
-   * [ai.koog.agents.core.tools.ToolDescriptor] list (consumed by codegen for args/result
-   * shape) and the per-tool [ToolFrameworkMetadata] map (consumed for JSDoc tag emission).
-   * Both come from walking the same resolved tool-class set, so producing them in one pass
-   * avoids re-resolving the catalog.
+   * Map a YAML parameter `type:` string to a koog [ToolParameterType] for descriptor building.
+   * Covers the scalar types YAML-defined recordable tools use today; anything else degrades to
+   * `String` (the validator still checks the arg's presence + name, just not its exact scalar type).
+   */
+  private fun yamlParamTypeToToolParameterType(type: String): ToolParameterType =
+    when (type.trim().lowercase()) {
+      "string" -> ToolParameterType.String
+      "integer", "int", "long" -> ToolParameterType.Integer
+      "number", "float", "double" -> ToolParameterType.Float
+      "boolean", "bool" -> ToolParameterType.Boolean
+      else -> ToolParameterType.String
+    }
+
+  /**
+   * Bundles the outputs of the tool-resolution pass — the koog [ToolDescriptor] list (args/result
+   * shape), the per-tool [ToolFrameworkMetadata] map (JSDoc tags), and the re-injected selector
+   * params ([selectorParamsForTs] output) keyed by tool name (appended by the generator). All come
+   * from one walk of the resolved + recordable tool set, so producing them together avoids re-work.
    */
   private data class KotlinToolResolution(
-    val descriptors: List<ai.koog.agents.core.tools.ToolDescriptor>,
+    val descriptors: List<ToolDescriptor>,
     val frameworkMetadataByName: Map<String, ToolFrameworkMetadata>,
-  ) {
-    companion object {
-      val EMPTY = KotlinToolResolution(emptyList(), emptyMap())
-    }
-  }
+    val selectorParamsByName: Map<String, List<WorkspaceClientDtsGenerator.ToolParam>> = emptyMap(),
+  )
 
   /**
    * Union of every trailmap-local `tool_sets:` list across every platform the trailmap declares.

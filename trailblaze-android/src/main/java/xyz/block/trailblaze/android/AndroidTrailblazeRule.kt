@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.android
 
 import ai.koog.prompt.executor.clients.LLMClient
+import android.os.Build
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -46,6 +48,7 @@ import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.model.toTrailblazeToolRepo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
@@ -239,6 +242,31 @@ open class AndroidTrailblazeRule(
         )
       }
       .getOrNull()
+  }
+
+  /**
+   * Identity + version of the app under test for the session-start log — [appIdForSession]
+   * paired with the versions PackageManager reports for that package (the instrumentation APK
+   * holds `QUERY_ALL_PACKAGES`, so any installed target is visible). Lazy for the same reason
+   * as [appIdForSession]; soft-fails to null so a probe failure never blocks the session.
+   */
+  private val targetAppInfoForSession: TrailblazeTargetAppInfo? by lazy {
+    val appId = appIdForSession ?: return@lazy null
+    runCatching {
+      val packageInfo = InstrumentationRegistry.getInstrumentation().context.packageManager
+        .getPackageInfo(appId, 0)
+      val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode
+      } else {
+        @Suppress("DEPRECATION")
+        packageInfo.versionCode.toLong()
+      }
+      TrailblazeTargetAppInfo(
+        appId = appId,
+        versionName = packageInfo.versionName,
+        versionCode = versionCode.toString(),
+      )
+    }.getOrNull()
   }
 
   /**
@@ -514,10 +542,9 @@ open class AndroidTrailblazeRule(
     val onBeforeRecordedTool: (suspend (xyz.block.trailblaze.toolcalls.TrailblazeTool) -> Unit)? =
       if (migrationCaptureEnabled) {
         { tool: xyz.block.trailblaze.toolcalls.TrailblazeTool ->
-          // Only fire the capture for the tools the migration actually rewrites. The
-          // recording playback fires many non-selector tools (launchApp, custom flow tools)
-          // for which a pre-fire snapshot would be wasted I/O + log size. Keep the filter
-          // in lockstep with classNameFromYamlToolName in WaypointMigrateTrailCommand.
+          // Only fire the capture for the selector-bearing tools a driver migration cares
+          // about. The recording playback fires many non-selector tools (launchApp, custom
+          // flow tools) for which a pre-fire snapshot would be wasted I/O + log size.
           val isMigrationTarget = tool is xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector ||
             tool is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
           if (isMigrationTarget) {
@@ -545,6 +572,10 @@ open class AndroidTrailblazeRule(
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
       onBeforeRecordedTool = onBeforeRecordedTool,
+      // Replay each step's recorded tools inside one shared execution context + snapshot frame, so
+      // cross-tool device state (e.g. the in-process clipboard cache on the per-context device
+      // executor) survives across the recording — matching the legacy single-`- tools:`-block batch.
+      sharedToolBatch = { block -> trailblazeAgent.runInSharedToolBatch(block) },
     )
   }
 
@@ -598,6 +629,7 @@ open class AndroidTrailblazeRule(
             rawYaml = testYaml,
             hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
             trailblazeDeviceId = trailblazeDeviceId,
+            targetAppInfo = targetAppInfoForSession,
           ),
           session = currentSession.sessionId,
           timestamp = Clock.System.now(),
@@ -743,6 +775,11 @@ open class AndroidTrailblazeRule(
   private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult =
     trailblazeAgent.runTrailblazeTools(
       tools = trailblazeTools,
+      // Always capture fresh, per dispatch — matches what per-tool recorded replay did before
+      // shared tool-batch scopes existed. Inside a batch, `BaseTrailblazeAgent.runTrailblazeTools`
+      // reuses the shared context/executor IDENTITY but still reassigns this fresh capture onto it
+      // before each tool runs, so tools reading `context.screenState` directly (not via
+      // `screenStateProvider`) see current UI rather than the batch's first-tool snapshot.
       screenState = screenStateProvider(),
       elementComparator = elementComparator,
       screenStateProvider = screenStateProvider,

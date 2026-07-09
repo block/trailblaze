@@ -1,7 +1,7 @@
 # Android World Benchmark: BluetoothTurnOffVerify
 - config:
     id: android-world-benchmarks/system/bluetooth_turn_off_verify
-    displayName: "System - Bluetooth Turn Off Verify"
+    title: "System - Bluetooth Turn Off Verify"
     description: "Turn bluetooth off."
 
 - tools:

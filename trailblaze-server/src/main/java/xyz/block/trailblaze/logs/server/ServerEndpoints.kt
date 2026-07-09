@@ -52,8 +52,12 @@ data class CliEndpointCallbacks(
   val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
   /** Called when CLI requests shutdown */
   val onShutdownRequest: () -> Unit,
-  /** Called when CLI requests to show the window */
-  val onShowWindowRequest: () -> Unit,
+  /**
+   * Called when CLI requests to show the window. Returns `true` when a window handler ran,
+   * `false` when this daemon has no window to show (headless server, or the desktop UI hasn't
+   * installed its callback yet) — callers branch on the resulting `success` flag.
+   */
+  val onShowWindowRequest: () -> Boolean,
   /** Provides current daemon status */
   val statusProvider: () -> CliStatusResponse,
   /**

@@ -1,7 +1,7 @@
 # Android World Benchmark: RecordAudioWithFilename
 - config:
     id: android-world-benchmarks/audio_recorder/record_audio_with_filename
-    displayName: "Audio Recorder - Record Audio With Filename"
+    title: "Audio Recorder - Record Audio With Filename"
     description: "Record an audio clip and save it with name \"meeting_notes\" using Audio Recorder app."
 
 - tools:

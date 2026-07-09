@@ -104,6 +104,80 @@ private val excludedParameterTypes = setOf(
 )
 
 /**
+ * A selector-typed constructor parameter that [buildToolDescriptorIgnoringSurface] STRIPS (via
+ * [excludedParameterTypes]), re-surfaced with a hand-picked TypeScript type so the trail-recording
+ * type-validation surface can model it. See [selectorParamsForTs].
+ *
+ * @property name the constructor parameter name (also the recorded arg key), e.g. `nodeSelector`.
+ * @property tsType the TypeScript type to emit — `"TrailblazeNodeSelector"` for the rich
+ *   [TrailblazeNodeSelector] grammar (the generated `selectors.ts` type, re-exported by the SDK
+ *   bundle), or `"unknown"` for the deprecated Maestro-shaped [TrailblazeElementSelector] (which has
+ *   no generated TS type; a loose `unknown` accepts legacy recordings without a false positive).
+ * @property optional whether the param is TS-optional (`?`) — true when it has a default or is
+ *   nullable in Kotlin.
+ * @property description the param's `@LLMDescription`, surfaced as JSDoc on the emitted field.
+ */
+data class SelectorParamTs(
+  val name: String,
+  val tsType: String,
+  val optional: Boolean,
+  val description: String?,
+)
+
+/**
+ * The selector-typed primary-constructor params of a [TrailblazeTool] class, re-surfaced for the
+ * trail-recording type-validation codegen.
+ *
+ * [buildToolDescriptorIgnoringSurface] deliberately drops these ([excludedParameterTypes]) because
+ * the self-referential [TrailblazeNodeSelector] / [TrailblazeElementSelector] grammar overflows
+ * Koog's descriptor lowering. But a *recorded* trail call to a selector-bearing tool (`tapOn`,
+ * `assertVisibleBySelector`, `assertNotVisibleBySelector`, `tapOnElementBySelector`, …) carries
+ * exactly those args — so the generated typed surface must model them or every such recording reads
+ * as a spurious "unexpected property" finding. This returns the stripped params with a concrete TS
+ * type ([TrailblazeNodeSelector] → the generated `TrailblazeNodeSelector` type; the deprecated
+ * [TrailblazeElementSelector] → loose `unknown`) so the codegen can re-inject them. Non-selector
+ * params keep flowing through the normal descriptor path.
+ *
+ * Empty for the vast majority of tools (no selector param). Ordered by declaration.
+ */
+fun KClass<out TrailblazeTool>.selectorParamsForTs(): List<SelectorParamTs> {
+  val nodeSelectorType = TrailblazeNodeSelector::class.qualifiedName
+  val elementSelectorType = TrailblazeElementSelector::class.qualifiedName
+  return primaryConstructor?.parameters.orEmpty().mapNotNull { param ->
+    val typeName = (param.type.classifier as? KClass<*>)?.qualifiedName
+    if (typeName !in excludedParameterTypes) return@mapNotNull null
+    // Guard the empty string too (not just null): an empty name would render `"": …;` — a TS
+    // syntax error in the generated surface. Reflection normally never yields one, but cheap to pin.
+    val name = param.name?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+    // trimIndent() BEFORE trim(): trimming the first line first would corrupt trimIndent()'s
+    // common-indent detection on multi-line descriptions. Matches the object-property path above.
+    val llmDescription = param.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim()
+    val optional = param.isOptional || param.type.isMarkedNullable
+    when (typeName) {
+      nodeSelectorType -> SelectorParamTs(
+        name = name,
+        // Must match the `TrailblazeNodeSelector` export in the generated `selectors.ts` and
+        // `WorkspaceClientDtsGenerator.NODE_SELECTOR_TS_TYPE` (which emits the matching `import type`).
+        // Codegen-boundary coupling with no static check — keep the three in sync if the export renames.
+        tsType = "TrailblazeNodeSelector",
+        optional = optional,
+        description = llmDescription,
+      )
+      elementSelectorType -> SelectorParamTs(
+        name = name,
+        // No generated TS type for the deprecated Maestro-shaped selector; `unknown` accepts a
+        // legacy `selector:` block in an old recording without a false positive.
+        tsType = "unknown",
+        optional = true,
+        description = llmDescription
+          ?: "Deprecated legacy Maestro-shaped selector; prefer `nodeSelector`.",
+      )
+      else -> null
+    }
+  }
+}
+
+/**
  * Builds a [ToolDescriptor] from a [TrailblazeTool] class, ignoring any surface-visibility
  * gate. Throws when the class can't be descriptor-ized — [asToolType] throws
  * `IllegalArgumentException` for unsupported parameter shapes (e.g. `Map<...>`); missing
@@ -126,7 +200,9 @@ fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescrip
 
   fun KParameter.toKoogToolParameterDescriptors(): ToolParameterDescriptor = ToolParameterDescriptor(
     name = this.name?.trim() ?: error("Parameter name cannot be null"),
-    description = this.findAnnotation<LLMDescription>()?.value?.trim()?.trimIndent() ?: "",
+    // trimIndent() BEFORE trim() so a multi-line @LLMDescription keeps correct common-indent
+    // detection (trimming the first line first would corrupt it). Matches [selectorParamsForTs].
+    description = this.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim() ?: "",
     type = this.type.asToolType(),
   )
 
@@ -143,7 +219,7 @@ fun KClass<out TrailblazeTool>.buildToolDescriptorIgnoringSurface(): ToolDescrip
 
   return ToolDescriptor(
     name = trailblazeToolClassAnnotation.name.trim(),
-    description = kClass.findAnnotation<LLMDescription>()?.value?.trim()?.trimIndent()
+    description = kClass.findAnnotation<LLMDescription>()?.value?.trimIndent()?.trim()
       ?: error("Please add @LLMDescription to $kClass"),
     requiredParameters = requiredParams,
     optionalParameters = optionalParams,

@@ -129,10 +129,13 @@ class AssertVisibleTrailblazeToolTest {
     assertEquals(1, executables.size)
     val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(executables.single())
     assertEquals("verify the submit button", delegated.reason)
-    assertEquals("Submit", delegated.selector?.textRegex)
+    val textRegex = delegated.nodeSelector?.androidMaestro?.textRegex
+      ?: delegated.nodeSelector?.androidAccessibility?.textRegex
+    assertEquals("Submit", textRegex)
     // nodeSelector is generated inside a try/catch that silently nulls on failure; a
-    // regression in TrailblazeNodeSelectorGenerator would still produce a passing legacy
-    // selector but strip the richer on-device playback path. Assert it survives.
+    // regression in TrailblazeNodeSelectorGenerator would still produce a passing
+    // TapSelectorV2-converted nodeSelector but strip the richer on-device playback path.
+    // Assert it survives.
     assertNotNull(delegated.nodeSelector)
   }
 
@@ -207,12 +210,11 @@ class AssertVisibleTrailblazeToolTest {
       ).toExecutableTrailblazeTools(context).single(),
     )
     assertEquals("Active", delegated.expectedText)
-    assertEquals(null, delegated.selector)
     assertNotNull(delegated.nodeSelector)
   }
 
   @Test
-  fun `accessibility driver emits nodeSelector-only with no legacy selector`() {
+  fun `accessibility driver emits an accessibility-shaped nodeSelector`() {
     val trailblazeTree = TrailblazeNode(
       nodeId = 1,
       bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
@@ -236,8 +238,87 @@ class AssertVisibleTrailblazeToolTest {
     assertEquals(1, executables.size)
     val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(executables.single())
     assertEquals("accessibility driver path", delegated.reason)
-    assertEquals(null, delegated.selector)
     assertNotNull(delegated.nodeSelector)
+  }
+
+  @Test
+  fun `android maestro assert on list row records the row's selector, not the scrollable container`() {
+    // Regression companion to the tap mis-target after #4538: the TrailblazeNode hitTest
+    // at the row's center climbs to the nearest interactive node — the scrollable list
+    // container — so the modern generator describes the container (resourceId only). That
+    // lowers to a non-blank Maestro selector, and asserting on the container is vacuously
+    // true whenever the list is on screen. On ANDROID the recorded nodeSelector must carry
+    // the target row's identity (its text), never just the container's.
+    val bagelRow = TrailblazeNode(
+      nodeId = 4,
+      ref = "b1",
+      bounds = TrailblazeNode.Bounds(0, 600, 1000, 800),
+      driverDetail = DriverNodeDetail.AndroidMaestro(text = "Bagel"),
+    )
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.AndroidMaestro(),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          bounds = TrailblazeNode.Bounds(0, 200, 1000, 900),
+          driverDetail = DriverNodeDetail.AndroidMaestro(
+            resourceId = "com.example:id/library_list_recycler_view",
+            className = "androidx.recyclerview.widget.RecyclerView",
+            scrollable = true,
+          ),
+          children = listOf(
+            TrailblazeNode(
+              nodeId = 3,
+              bounds = TrailblazeNode.Bounds(0, 200, 1000, 400),
+              driverDetail = DriverNodeDetail.AndroidMaestro(text = "Beer (Bulk)"),
+            ),
+            bagelRow,
+          ),
+        ),
+      ),
+    )
+    val viewHierarchy = ViewHierarchyTreeNode(
+      nodeId = 1,
+      x1 = 0, y1 = 0, x2 = 1000, y2 = 1000,
+      centerPoint = "500,500",
+      children = listOf(
+        ViewHierarchyTreeNode(
+          nodeId = 2,
+          resourceId = "com.example:id/library_list_recycler_view",
+          className = "androidx.recyclerview.widget.RecyclerView",
+          scrollable = true,
+          x1 = 0, y1 = 200, x2 = 1000, y2 = 900,
+          centerPoint = "500,550",
+          children = listOf(
+            ViewHierarchyTreeNode(
+              nodeId = 3,
+              text = "Beer (Bulk)",
+              x1 = 0, y1 = 200, x2 = 1000, y2 = 400,
+              centerPoint = "500,300",
+            ),
+            ViewHierarchyTreeNode(
+              nodeId = 4,
+              text = "Bagel",
+              x1 = 0, y1 = 600, x2 = 1000, y2 = 800,
+              centerPoint = "500,700",
+            ),
+          ),
+        ),
+      ),
+    )
+    val context = contextWithTree(
+      trailblazeNodeTree = trailblazeTree,
+      viewHierarchy = viewHierarchy,
+    )
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(ref = "b1").toExecutableTrailblazeTools(context).single(),
+    )
+    val lowered = delegated.nodeSelector?.toTrailblazeElementSelector()
+    assertEquals("Bagel", lowered?.textRegex)
+    assertEquals(null, lowered?.idRegex)
   }
 
   // region helpers

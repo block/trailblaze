@@ -120,6 +120,16 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     )
   }
 
+  actual fun writeFileToImages(fileName: String, content: ByteArray, mimeType: String) {
+    val context = InstrumentationRegistry.getInstrumentation().context
+    FileReadWriteUtil.writeToImagesFile(
+      context = context,
+      fileName = fileName,
+      contentBytes = content,
+      mimeType = mimeType,
+    )
+  }
+
   actual fun deleteFileFromDownloads(fileName: String) {
     val context = InstrumentationRegistry.getInstrumentation().context
     FileReadWriteUtil.deleteFromDownloadsIfExists(context, fileName)
@@ -128,22 +138,39 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   actual fun writeFileToDevice(devicePath: String, content: ByteArray) {
     val destFile = File(devicePath)
     try {
-      // Direct file write — works for app-writable paths. The bytes never transit a shell
-      // argument, so there's no ARG_MAX ceiling regardless of payload size.
+      // Direct write for paths our UID can reach. Bytes never transit a shell argument (no
+      // ARG_MAX ceiling).
       destFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
       FileOutputStream(destFile).use { it.write(content) }
     } catch (_: Exception) {
-      // Fallback for paths that need the `shell` UID (e.g. public storage on scoped-storage
-      // devices): stage the bytes in our own cache dir (direct I/O, no size limit), then `cp`
-      // into place via the shell. `cp` reads the file rather than taking the body as an
-      // argument, so this also stays clear of ARG_MAX. Paths are single-quote-escaped.
-      val tempFile = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, destFile.name)
-      FileOutputStream(tempFile).use { it.write(content) }
-      destFile.parentFile?.let { parent ->
-        executeShellCommand("mkdir -p ${parent.absolutePath.shellEscape()}")
+      // Public storage denies our UID's direct write (API < 29: storage gid fixed at fork;
+      // 30+: no MANAGE_EXTERNAL_STORAGE on the runner) — stage in the app-EXTERNAL files dir
+      // (shell-readable, unlike the 0700 private cacheDir) and `cp` into place as the shell UID,
+      // via raw argv only: this transport has no shell, so quoted paths silently break (see
+      // buildShellCpFallbackCommands). Validated on-device on API 28 + 36.
+      val stagingDir = InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null)
+        ?: error(
+          "writeFileToDevice: cannot write $devicePath directly and no app-external files dir " +
+            "is available to stage the shell-cp fallback.",
+        )
+      val tempFile = File(stagingDir, destFile.name)
+      try {
+        FileOutputStream(tempFile).use { it.write(content) }
+        buildShellCpFallbackCommands(tempFile.absolutePath, devicePath).forEach { argv ->
+          executeShellCommandArgs(*argv.toTypedArray())
+        }
+        // No exit-code channel on this transport — verify the file landed (`ls` prints the path
+        // on stdout only when it exists).
+        val listed = executeShellCommandArgs("ls", devicePath)
+        if (!listed.contains(devicePath)) {
+          error(
+            "writeFileToDevice: shell-cp fallback did not produce $devicePath " +
+              "(ls output: '${listed.trim()}').",
+          )
+        }
+      } finally {
+        tempFile.delete()
       }
-      executeShellCommand("cp ${tempFile.absolutePath.shellEscape()} ${devicePath.shellEscape()}")
-      tempFile.delete()
     }
   }
 
@@ -269,18 +296,27 @@ actual class AndroidDeviceCommandExecutor actual constructor(
         }
       }
     } catch (_: Exception) {
-      // Fallback: write to app-accessible temp dir, then shell cp
-      val tempFile = File(instrumentation.targetContext.cacheDir, destFile.name)
-      instrumentation.context.assets.open(resourcePath).use { input ->
-        FileOutputStream(tempFile).use { output ->
-          input.copyTo(output)
+      // Fallback: stage where the shell UID can read (app-EXTERNAL files dir, not the 0700
+      // app-private cacheDir), then raw-argv `cp` — same two transport constraints as
+      // writeFileToDevice's fallback above; see the comment there.
+      val stagingDir = instrumentation.targetContext.getExternalFilesDir(null)
+        ?: error(
+          "copyTestResourceToDevice: cannot write $devicePath directly and no app-external " +
+            "files dir is available to stage the shell-cp fallback.",
+        )
+      val tempFile = File(stagingDir, destFile.name)
+      try {
+        instrumentation.context.assets.open(resourcePath).use { input ->
+          FileOutputStream(tempFile).use { output ->
+            input.copyTo(output)
+          }
         }
+        buildShellCpFallbackCommands(tempFile.absolutePath, devicePath).forEach { argv ->
+          executeShellCommandArgs(*argv.toTypedArray())
+        }
+      } finally {
+        tempFile.delete()
       }
-      destFile.parentFile?.let { parent ->
-        executeShellCommand("mkdir -p ${parent.absolutePath.shellEscape()}")
-      }
-      executeShellCommand("cp ${tempFile.absolutePath.shellEscape()} ${devicePath.shellEscape()}")
-      tempFile.delete()
     }
   }
 

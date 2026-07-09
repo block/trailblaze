@@ -1,7 +1,7 @@
 # Android World Benchmark: AddContact
 - config:
     id: android-world-benchmarks/contacts/add_contact
-    displayName: "Contacts - Add Contact"
+    title: "Contacts - Add Contact"
     description: "Create a new contact for Alice Johnson. Their number is 555-123-4567."
 
 - tools:

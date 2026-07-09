@@ -21,7 +21,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
-import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -234,15 +233,9 @@ abstract class MaestroTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = this,
-      nestedToolExecutor = { nestedTool ->
-        runTrailblazeTools(
-          tools = listOf(nestedTool),
-          traceId = context.traceId,
-          screenState = context.screenState,
-          elementComparator = NoOpElementComparator,
-          screenStateProvider = context.screenStateProvider,
-        ).result
-      },
+      // See BaseTrailblazeAgent.nestedToolExecutorFor's kdoc for the full rationale (fixes the
+      // nested-composition counterpart of #4506's clipboard bug).
+      nestedToolExecutor = nestedToolExecutorFor { context },
       // Threads the agent's tool repo through so Kotlin tools composing framework
       // tools via `ctx.invokeFrameworkTool(...)` can resolve them by name. Without
       // this, the bridge throws "toolRepo not wired" on every Kotlin-side call site

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.logs.model
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.yaml.TrailConfig
 
 @Serializable
@@ -40,6 +41,12 @@ sealed interface SessionStatus {
      * [resolvedInitialMemory] by construction.
      */
     val sensitiveMemoryKeys: Set<String> = emptySet(),
+    /**
+     * Identity + version of the app under test, resolved from the device at session start.
+     * Best-effort: null when no target app applies (web, desktop) or the probe failed —
+     * never blocks the session from starting.
+     */
+    val targetAppInfo: TrailblazeTargetAppInfo? = null,
   ) : SessionStatus
 
   @Serializable

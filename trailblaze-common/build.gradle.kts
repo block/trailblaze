@@ -254,6 +254,23 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.dagp)
+  // Registers `generateDtoTs`/`verifyDtoTs` for BuiltInToolResultTsBindings — the TypeScript
+  // result types for framework built-in tools, derived from their Kotlin @Serializable shapes.
+  // See the `trailblazeDtoTsCodegen { ... }` block below.
+  id("trailblaze.dto-ts-codegen")
+}
+
+trailblazeDtoTsCodegen {
+  mainClass.set("xyz.block.trailblaze.codegen.BuiltInToolResultTsBindingsKt")
+  // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
+  // after this extension block, so resolve the compilation lazily at execution time.
+  codegenClasspath.from(
+    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
+    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
+  )
+  generatedTsFile.set(
+    layout.projectDirectory.file("../sdks/typescript/src/generated/built-in-tool-results.ts"),
+  )
 }
 
 android {

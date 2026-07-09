@@ -66,6 +66,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.devices.TrailDeviceSelector
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -83,6 +84,7 @@ import xyz.block.trailblaze.ui.tabs.trails.TrailVariant
 import xyz.block.trailblaze.ui.tabs.trails.TrailYamlEditorModal
 import xyz.block.trailblaze.ui.tabs.trails.TrailsDirectoryScanner
 import xyz.block.trailblaze.yaml.TrailSourceType
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.nio.file.Paths
 import javax.swing.JFileChooser
@@ -127,6 +129,12 @@ fun TrailsBrowserTabComposable(
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
   var trailNameToRun by remember { mutableStateOf<String?>(null) }
   var yamlContentToRun by remember { mutableStateOf<String?>(null) }
+  // The trail-to-run's declared platforms, so the device picker can route a web/compose trail
+  // to its virtual device (see initialRunDeviceSelection). Derived once when Run is clicked;
+  // recomputing per composition would re-parse the YAML with the full tool codec.
+  val trailPlatformsToRun = remember(yamlContentToRun) {
+    yamlContentToRun?.let { TrailDeviceSelector.supportedPlatformsForTrail(createTrailblazeYaml(), it) }
+  }
 
   // Progress state for trail execution
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -962,6 +970,7 @@ fun TrailsBrowserTabComposable(
     DeviceSelectionDialog(
       deviceManager = deviceManager,
       settingsRepo = trailblazeSettingsRepo,
+      trailPlatforms = trailPlatformsToRun,
       onSelectionChanged = { selectedDeviceInstanceIds ->
         trailblazeSettingsRepo.updateAppConfig { appConfig ->
           appConfig.copy(

@@ -60,6 +60,7 @@ private fun List<String>.toSuccessResult(): TrailblazeToolResult.Success = Trail
 @Serializable
 @TrailblazeToolClass(
   name = "mobile_listInstalledApps",
+  resultType = ListInstalledAppsResult::class,
 )
 @LLMDescription("Returns a JSON object ({\"appIds\":[...]}) listing the app ids/bundle ids installed on the current mobile device. Works on Android and iOS.")
 data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool {

@@ -55,8 +55,10 @@ void client.tools.inputText({ tex: "wrong key" });
 // @ts-expect-error missing required arg via tools.* namespace
 void client.tools.inputText({});
 
-// @ts-expect-error value outside the enum union via tools.* namespace
-void client.tools.pressKey({ keyCode: "TAB" });
+// @ts-expect-error value outside the enum union via tools.* namespace ("NOPE" is not a PressKeyCode;
+// the real union — BACK | ENTER | HOME | BACKSPACE | TAB | ESCAPE — is now generated from the Kotlin
+// enum, so pick a value that can't drift into it rather than one the enum happens to omit today)
+void client.tools.pressKey({ keyCode: "NOPE" });
 
 // @ts-expect-error wrong-keyed args on a trailmap-scripted tool via tools.* namespace (single-line: `@ts-expect-error` only covers the next line)
 void client.tools.playwrightSample_web_openFixtureAndVerifyText({ releativePath: "typo", text: "y" });
