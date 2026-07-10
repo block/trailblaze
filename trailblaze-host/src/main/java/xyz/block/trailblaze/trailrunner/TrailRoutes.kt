@@ -12,6 +12,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -110,7 +111,11 @@ internal suspend fun buildEditedTrailsResponse(deps: TrailRunnerDeps): EditedTra
       out.lineSequence().mapNotNull { line ->
         if (line.length < 4) return@mapNotNull null
         val p = line.substring(3).substringAfter(" -> ").trim().removeSurrounding("\"")
-        if (!p.endsWith(".trail.yaml") && !p.endsWith("blaze.yaml")) return@mapNotNull null
+        // Keep only trail-shaped files, via the shared recording-layer predicate: `*.trail.yaml`,
+        // the NL definitions `blaze.yaml`/`trailblaze.yaml`, AND the bare unified `trail.yaml`.
+        // Keying on the basename is what lets a migrated `.../trail.yaml` show up under edited-only
+        // filtering — the previous `endsWith(".trail.yaml")` missed the bare unified file.
+        if (!TrailRecordings.isTrailFile(p.substringAfterLast('/'))) return@mapNotNull null
         val abs = File(top, p).canonicalFile
         val rel = runCatching { abs.relativeTo(primaryCanon).invariantSeparatorsPath }.getOrNull()
         rel?.takeIf { !it.startsWith("..") }

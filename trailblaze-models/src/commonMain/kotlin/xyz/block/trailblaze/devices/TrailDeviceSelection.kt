@@ -4,6 +4,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 
 /**
  * Outcome of selecting which device(s) a single trail runs on — the device spec(s) to run, or a
@@ -124,20 +125,9 @@ object TrailDeviceSelector {
           config?.driver?.let { TrailblazeDriverType.fromString(it)?.platform?.let(::add) }
         }
       }
-      is TrailDocument.Unified -> {
-        val classifiers = buildSet {
-          doc.trail.config.devices?.keys?.let { addAll(it) }
-          doc.trail.trail.forEach { addAll(it.recordings.keys) }
-          doc.trail.trailhead?.recordings?.keys?.let { addAll(it) }
-        }
-        buildSet {
-          classifiers.forEach { classifier ->
-            // A unified classifier is `<platform>[-<category>]` (e.g. `android`, `android-tablet`,
-            // `ios-iphone`); the platform is the segment before the first `-`.
-            TrailblazeDevicePlatform.fromString(classifier.substringBefore('-'))?.let(::add)
-          }
-        }
-      }
+      // Fold the trail's declared classifiers (`config.devices` keys + every step/trailhead
+      // `recording:` key) up to platforms — the same coverage the desktop Trails browser displays.
+      is TrailDocument.Unified -> UnifiedTrailTargets.declaredPlatforms(doc.trail)
     }
   } catch (t: Throwable) {
     // Never fail device selection over an unparseable trail — treat as "declares no platforms"

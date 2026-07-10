@@ -9,9 +9,13 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.ui.recordings.ExistingTrail
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
 internal fun buildObjectiveProgress(logs: List<TrailblazeLog>): List<ObjectiveProgress> {
   val objectives = mutableListOf<ObjectiveProgress>()
@@ -587,16 +591,41 @@ internal fun extractPlannedPrompts(logs: List<TrailblazeLog>): List<String> {
       .firstOrNull()
       ?: return emptyList()
   val rawYaml = startedStatus.rawYaml ?: return emptyList()
-  return try {
-    TrailblazeYaml.Default
-      .decodeTrail(rawYaml)
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
-      .flatMap { it.promptSteps }
-      .map { it.prompt }
-  } catch (_: Exception) {
-    emptyList()
-  }
+  return plannedPromptsFromRawYaml(rawYaml)
 }
+
+/**
+ * The ordered planned-prompt objectives for a trail's raw YAML, for both formats. A unified
+ * single-file trail is a `config:`/`trail:` mapping the v1 list-shaped `decodeTrail` can't parse
+ * (it would throw and lose the whole preview), so lower a unified doc to the same v1 items the
+ * runtime executes — with no device classifiers, since the planned-prompt NL is device-independent
+ * — and pull the prompt steps the same way for both. Returns empty on any parse failure.
+ */
+internal fun plannedPromptsFromRawYaml(rawYaml: String): List<String> = try {
+  val items = when (val doc = TrailblazeYaml.Default.decodeTrailDocument(rawYaml)) {
+    is TrailDocument.V1 -> doc.items
+    is TrailDocument.Unified -> UnifiedTrailAdapter.lowerToTrailItems(doc.trail, emptyList())
+  }
+  items
+    .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+    .flatMap { it.promptSteps }
+    .map { it.prompt }
+} catch (t: Throwable) {
+  // Best-effort preview: `decodeTrailDocument` can throw a non-Exception Throwable (an unknown-tool
+  // failure surfaces as one), so widen to keep the session view rendering rather than crash it.
+  Console.log("[SessionProgress] planned-prompt preview unavailable (unparseable trail YAML): ${t.message}")
+  emptyList()
+}
+
+/**
+ * Whether a recording for this device is already on disk, deciding the "Save" vs "Update" label. A
+ * per-device recording matches by its `<classifiers>.trail.yaml` filename; a unified single-file
+ * trail (bare `trail.yaml` OR a named `*.trail.yaml` whose content is unified) is also a match
+ * because saving merges the device into it (UnifiedRecordingWriter.mergeIntoUnified) rather than
+ * writing a new file — so a unified file present means the action updates, not creates.
+ */
+internal fun isAlreadyRecorded(existing: List<ExistingTrail>, expectedFileName: String): Boolean =
+  existing.any { it.fileName == expectedFileName || it.isUnified }
 
 /**
  * Appends grayed-out "Pending" objectives for planned prompts that haven't started yet.

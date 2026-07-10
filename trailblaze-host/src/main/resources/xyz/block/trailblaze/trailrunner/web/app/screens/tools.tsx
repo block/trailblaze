@@ -204,8 +204,13 @@ function ToolSourceEditor({ initial, mode, target, caveat, rebuildable, onSaved,
     setBusy(true); setNote(null);
     const r = await TB.updateToolSource(target, text);
     setBusy(false);
-    if (r.success) { setBaseline(text); setNote({ ok: true, msg: 'Saved ' + (r.savedPath || '') }); if (onSaved) onSaved(); }
-    else setNote({ ok: false, msg: r.error || 'Save failed' });
+    if (r.success) {
+      setBaseline(text); setNote({ ok: true, msg: 'Saved ' + (r.savedPath || '') });
+      // An edited tool source can change its params/description — drop the session-shared catalog
+      // so the unified board's arg editor doesn't keep serving the stale schema until reload.
+      TB.invalidateToolCatalog();
+      if (onSaved) onSaved();
+    } else setNote({ ok: false, msg: r.error || 'Save failed' });
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 }}>
@@ -570,7 +575,7 @@ function ToolsScreen({ initTool, go }) {
           kind="tools"
           trailmaps={((tmAll.data && tmAll.data.length ? tmAll.data.map((t) => t.id) : [...new Set(all.map((t) => t.trailmap))])).sort()}
           onClose={() => setShowNew(false)}
-          onCreated={(rel) => { const id = (rel.split('/').pop() || '').replace(/\.ts$/, ''); setShowNew(false); setPendingSelect(id); toolsResult.reload(); }}
+          onCreated={(rel) => { const id = (rel.split('/').pop() || '').replace(/\.ts$/, ''); setShowNew(false); setPendingSelect(id); toolsResult.reload(); TB.invalidateToolCatalog(); }}
         />
       )}
     </div>

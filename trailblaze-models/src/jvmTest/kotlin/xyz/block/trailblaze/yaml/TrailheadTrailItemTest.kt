@@ -3,6 +3,7 @@ package xyz.block.trailblaze.yaml
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
@@ -36,8 +37,8 @@ class TrailheadTrailItemTest {
     )
     val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertNull(th.step)
-    assertEquals(1, th.tools.size)
-    assertEquals("myapp_android_freshInstall", th.tools.single().name)
+    assertEquals(1, th.tools?.size)
+    assertEquals("myapp_android_freshInstall", th.tools?.single()?.name)
   }
 
   @Test
@@ -59,11 +60,11 @@ class TrailheadTrailItemTest {
     )
     val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Sign in fresh and land on the payment pad", th.step)
-    assertEquals(listOf("myapp_android_signInViaUI", "myapp_launchClientRoute"), th.tools.map { it.name })
+    assertEquals(listOf("myapp_android_signInViaUI", "myapp_launchClientRoute"), th.tools?.map { it.name })
   }
 
   @Test
-  fun `v1 NL-only trailhead decodes with a step and no tools`() {
+  fun `v1 NL-only trailhead decodes with a step and no tools declared`() {
     val items = yaml.decodeTrail(
       """
       - config:
@@ -77,11 +78,13 @@ class TrailheadTrailItemTest {
     )
     val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Sign in as the standard account", th.step)
-    assertTrue(th.tools.isEmpty())
+    // No `tools:` key at all → null (blaze via AI), distinct from an explicit `tools: []`
+    // (a deterministic no-op) — see ToolRecording's 3-state doc.
+    assertNull(th.tools)
   }
 
   @Test
-  fun `v1 trailhead round-trips through encode then decode`() {
+  fun `v1 trailhead with explicit empty tools round-trips as a deterministic no-op`() {
     val original = listOf(
       TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "myapp")),
       TrailYamlItem.TrailheadTrailItem(
@@ -92,7 +95,9 @@ class TrailheadTrailItemTest {
     val decoded = yaml.decodeTrail(yaml.encodeToString(original))
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Sign in fresh", th.step)
-    assertTrue(th.tools.isEmpty())
+    // The explicit `tools = emptyList()` must round-trip as declared-empty, not collapse to null.
+    assertNotNull(th.tools)
+    assertTrue(th.tools!!.isEmpty())
   }
 
   @Test
@@ -218,8 +223,59 @@ class TrailheadTrailItemTest {
     assertTrue(items[0] is TrailYamlItem.ConfigTrailItem)
     val th = (items[1] as TrailYamlItem.TrailheadTrailItem).trailhead
     assertEquals("Sign in fresh", th.step)
-    assertEquals(listOf("myapp_android_signInViaUI"), th.tools.map { it.name })
+    assertEquals(listOf("myapp_android_signInViaUI"), th.tools?.map { it.name })
     assertTrue(items[2] is TrailYamlItem.PromptsTrailItem)
+  }
+
+  @Test
+  fun `unified trailhead can declare a real bootstrap on one platform and an explicit no-op on another`() {
+    // Motivating scenario: android needs a trailhead to reach its starting state; ios is already
+    // there and should explicitly do nothing — NOT fall through to AI to figure it out.
+    val items = yaml.decodeTrail(
+      """
+      config:
+        id: x
+        target: myapp
+      trailhead:
+        step: Reach the starting state
+        recording:
+          android-phone:
+            myapp_android_signInViaUI: {}
+          ios: {}
+      trail:
+        - step: Tap Pay
+      """.trimIndent(),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
+    )
+    val androidTh = (items[1] as TrailYamlItem.TrailheadTrailItem).trailhead
+    assertEquals(listOf("myapp_android_signInViaUI"), androidTh.tools?.map { it.name })
+    val androidStep0 = androidTh.toPromptStep() as DirectionStep
+    assertEquals(1, androidStep0.recording?.tools?.size)
+
+    val iosItems = yaml.decodeTrail(
+      """
+      config:
+        id: x
+        target: myapp
+      trailhead:
+        step: Reach the starting state
+        recording:
+          android-phone:
+            myapp_android_signInViaUI: {}
+          ios: {}
+      trail:
+        - step: Tap Pay
+      """.trimIndent(),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("iphone")),
+    )
+    val iosTh = (iosItems[1] as TrailYamlItem.TrailheadTrailItem).trailhead
+    // Declared-empty (not absent) — an explicit no-op, distinct from "no classifier matched."
+    assertNotNull(iosTh.tools)
+    assertTrue(iosTh.tools!!.isEmpty())
+    val iosStep0 = iosTh.toPromptStep() as DirectionStep
+    // A non-null, zero-tool recording: replays zero tools and succeeds without calling AI.
+    assertNotNull(iosStep0.recording)
+    assertTrue(iosStep0.recording!!.tools.isEmpty())
   }
 
   @Test
@@ -406,7 +462,7 @@ class TrailheadTrailItemTest {
     assertTrue(items[0] is TrailYamlItem.ConfigTrailItem)
     val th = (items[1] as TrailYamlItem.TrailheadTrailItem).trailhead
     assertEquals("Sign in fresh", th.step)
-    assertEquals(listOf("myapp_android_signInViaUI"), th.tools.map { it.name })
+    assertEquals(listOf("myapp_android_signInViaUI"), th.tools?.map { it.name })
     assertTrue(items[2] is TrailYamlItem.PromptsTrailItem)
     // The lowered step 0 is a replayable recording — what the runners actually execute first.
     val step0 = th.toPromptStep() as DirectionStep

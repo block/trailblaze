@@ -105,7 +105,7 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
-  fun `explicit empty list is treated as no recording — explicit no-op for this device`() {
+  fun `explicit empty list lowers to a declared zero-tool recording — deterministic no-op`() {
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
       trail = listOf(
@@ -124,11 +124,11 @@ class UnifiedTrailAdapterTest {
     )
     val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single() as DirectionStep
-    assertNull(
-      step.recording,
-      "explicit empty classifier list lowers to a null recording — closest-wins matched, " +
-        "but the matched list is empty, so the executor runs no tools",
-    )
+    // Closest-wins matched `android-tablet`, and the matched list is empty — that's a DECLARED
+    // no-op (non-null recording, zero tools), not the same as no classifier matching at all. The
+    // executor runs zero tools and succeeds without falling through to AI.
+    assertNotNull(step.recording)
+    assertTrue(step.recording!!.tools.isEmpty())
   }
 
   @Test
@@ -156,12 +156,12 @@ class UnifiedTrailAdapterTest {
       target = "myapp",
       title = "Checkout with a saved card",
       description = "Open the checkout flow and pay.",
+      priority = "P1",
       devices = mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
       context = "Test context",
       memory = mapOf("email" to "tb+test@example.com"),
       metadata = mapOf(
         "jira" to "PROJ-123",
-        UnifiedTrailConfig.METADATA_KEY_PRIORITY to "P1",
         UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN",
         UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON to "authored by hand",
       ),
@@ -176,9 +176,10 @@ class UnifiedTrailAdapterTest {
     // Without this, `config.memory:` in v3 YAMLs would parse but never reach the runner.
     assertEquals(mapOf("email" to "tb+test@example.com"), v1.memory)
     assertEquals("Checkout with a saved card", v1.title)
-    // priority/source are metadata by nature in the unified format (reserved bridge keys), but
-    // internal tooling reads them as first-class v1 fields — lowering lifts the bridge keys back
-    // onto TrailConfig.priority/.source and strips them from the plain metadata map.
+    // priority is a first-class unified field and lowers verbatim; source is metadata by nature
+    // in the unified format (reserved bridge keys), but internal tooling reads it as a
+    // first-class v1 field — lowering lifts the bridge keys back onto TrailConfig.source and
+    // strips them from the plain metadata map.
     assertEquals("P1", v1.priority)
     assertEquals(TrailSource(type = TrailSourceType.HANDWRITTEN, reason = "authored by hand"), v1.source)
     assertEquals(mapOf("jira" to "PROJ-123"), v1.metadata)
@@ -256,9 +257,9 @@ class UnifiedTrailAdapterTest {
       skip = mapOf("android" to v1.skip!!),
       tags = v1.tags,
     )
-    // Pin the unified representation: priority/source are NOT unified fields — they ride in
-    // metadata under the reserved bridge keys (the same shape #4507's hand-migrated trails use).
-    assertEquals("P1", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_PRIORITY))
+    // Pin the unified representation: priority is a top-level unified field; source is NOT — it
+    // rides in metadata under the reserved bridge keys.
+    assertEquals("P1", unified.priority)
     assertEquals("HANDWRITTEN", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
     assertEquals("authored by hand", unified.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
 
@@ -315,17 +316,17 @@ class UnifiedTrailAdapterTest {
 
   @Test
   fun `fillMissingConfigScalars merges metadata per key — first file wins a shared key, later files fill new keys`() {
-    // Per-key (not whole-map) merge is what keeps the bridged priority/source lossless: one
-    // file's `priority:` and another file's `source:` both land in metadata, and an atomic
+    // Per-key (not whole-map) merge is what keeps the bridged source lossless: one file's
+    // `source:` and another file's plain metadata both land in the same map, and an atomic
     // first-map-wins would re-drop whichever the first file lacked.
     val base = UnifiedTrailConfig(
-      metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_PRIORITY to "P1", "jira" to "PROJ-1"),
+      metadata = mapOf("case" to "C123", "jira" to "PROJ-1"),
     )
     val fallback = UnifiedTrailConfig(
       metadata = mapOf(UnifiedTrailConfig.METADATA_KEY_SOURCE to "HANDWRITTEN", "jira" to "PROJ-2"),
     )
     val merged = UnifiedTrailAdapter.fillMissingConfigScalars(base, fallback)
-    assertEquals("P1", merged.metadata?.get(UnifiedTrailConfig.METADATA_KEY_PRIORITY))
+    assertEquals("C123", merged.metadata?.get("case"))
     assertEquals("HANDWRITTEN", merged.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
     assertEquals("PROJ-1", merged.metadata?.get("jira"), "base wins a shared key")
   }
@@ -587,6 +588,111 @@ class UnifiedTrailAdapterTest {
     val steps = prompts.promptSteps.map { it as DirectionStep }
     assertEquals(10, steps[0].maxRetries, "explicit maxRetries must propagate to lowered step")
     assertNull(steps[1].maxRetries, "absent maxRetries must lower to null (use trail-wide default)")
+  }
+
+  @Test
+  fun `hasRecordingForDevice — android-only recording counts for android but not ios`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to listOf(toolNamed("t")))),
+      ),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+    )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("ios"), classifier("iphone")),
+      ),
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — family android recording covers phone and tablet`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to listOf(toolNamed("t")))),
+      ),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("tablet")),
+      ),
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — matched empty list counts as a deterministic recording`() {
+    // A matched `android: []` lowers to a NON-NULL zero-tool ToolRecording (a deterministic no-op,
+    // not LLM mode) in lowerToTrailItems, and hasRecordedSteps counts it — so the gate counts it too.
+    // Only an UNMATCHED chain (null resolution) is "no recording".
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("android" to emptyList())),
+      ),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+      "a matched android:[] is a deterministic recording for android",
+    )
+    // …but the same `android: []` does NOT match an ios device's chain, so it is not a recording
+    // there (the entry is declared for android only).
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("ios"), classifier("iphone")),
+      ),
+      "android:[] must not count for ios (no android in the ios chain)",
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — a recorded trailhead counts even when no step is recorded`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trailhead = UnifiedTrailStep(
+        step = "Launch",
+        recordings = mapOf("android" to listOf(toolNamed("launch"))),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "LLM only")),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+    )
+  }
+
+  @Test
+  fun `hasRecordingForDevice — no recordings at all is false`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(UnifiedTrailStep(step = "LLM only")),
+    )
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("android"), classifier("phone")),
+      ),
+    )
   }
 
   private fun classifier(value: String) = TrailblazeDeviceClassifier(value)

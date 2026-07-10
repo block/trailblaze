@@ -139,6 +139,26 @@ data class TrailIndexEntry(
   val folder: String,
   val rootIdx: Int = 0,
   val kind: String = "trail",
+  /** On-disk YAML shape: "unified" (single-file `config:`+`trail:` mapping) or "v1" (legacy list). */
+  val format: String = "v1",
+  /** The trail's declared `config.id`. Per-platform variants of one logical trail share it. */
+  val configId: String? = null,
+)
+
+/** Result of migrating a legacy per-platform bundle folder to a single unified `.trail.yaml`. */
+@Serializable
+data class MigrateFolderResponse(
+  val success: Boolean,
+  /** Name of the unified file written into the folder, on success. */
+  val outputName: String? = null,
+  val steps: Int = 0,
+  val driftCount: Int = 0,
+  /** NL / memory drift warnings surfaced by the migrator (also leading comments in the file). */
+  val drift: List<String> = emptyList(),
+  /** Per-platform input files (+ `blaze.yaml`) that were deleted. */
+  val removed: List<String> = emptyList(),
+  /** Human-readable reason on failure (e.g. the migrator refused a trailhead / top-level tools). */
+  val error: String? = null,
 )
 
 @Serializable
@@ -606,6 +626,10 @@ data class SaveTargetConfigResponse(
   // Non-fatal problem alongside ok=true — e.g. the trailmap was created but the workspace
   // `targets:` list couldn't be updated, so the user must register the id by hand.
   val warning: String? = null,
+  // True when the newly-created target was registered into the running daemon's live target set,
+  // so it's immediately selectable/runnable without a restart. When true the UI skips the
+  // "restart to load app targets" banner (raised by [created]) and just refetches the target list.
+  val registeredLive: Boolean = false,
 )
 
 // The toolsets (and their tools) that actually register for a run against a given

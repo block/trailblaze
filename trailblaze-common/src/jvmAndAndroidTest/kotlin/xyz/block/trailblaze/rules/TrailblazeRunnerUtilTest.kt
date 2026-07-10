@@ -35,7 +35,8 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  *
  * Covers the per-tool replay loop, the `selfHeal = false` failure path (throws with context),
  * the `selfHeal = true` recovery path (delegates to [TestAgentRunner.recover]), and the
- * tightened recording gate (empty tool list falls through to AI).
+ * recording gate: `recording == null` falls through to AI, while a declared-but-empty
+ * recording (an explicit no-op) replays zero tools and succeeds without calling AI.
  */
 class TrailblazeRunnerUtilTest {
 
@@ -65,6 +66,33 @@ class TrailblazeRunnerUtilTest {
     assertTrue(callbackInvocations.all { it.size == 1 })
     assertTrue(runner.recoverCalls.isEmpty())
     assertTrue(runner.runSuspendCalls.isEmpty())
+  }
+
+  @Test
+  fun `declared-empty recording replays zero tools and succeeds without calling AI`() = runBlocking {
+    val callbackInvocations = mutableListOf<List<TrailblazeTool>>()
+    val runner = FakeTestAgentRunner()
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          callbackInvocations += tools
+          TrailblazeToolResult.Success()
+        },
+        trailblazeRunner = runner,
+      )
+    val step = DirectionStep(step = "Nothing needed here", recordable = true, recording = ToolRecording(tools = emptyList()))
+
+    val result =
+      util.runPromptSuspend(
+        prompts = listOf(step),
+        useRecordedSteps = true,
+        selfHeal = false,
+      )
+
+    assertTrue(result is TrailblazeToolResult.Success)
+    assertTrue(callbackInvocations.isEmpty(), "an explicit no-op recording must dispatch zero tools")
+    assertTrue(runner.runSuspendCalls.isEmpty(), "an explicit no-op recording must not fall through to AI")
+    assertTrue(runner.recoverCalls.isEmpty())
   }
 
   @Test

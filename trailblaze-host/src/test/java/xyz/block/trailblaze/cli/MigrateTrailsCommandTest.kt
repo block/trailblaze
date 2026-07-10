@@ -78,6 +78,99 @@ class MigrateTrailsCommandTest {
   }
 
   @Test
+  fun `writes dropped-content warnings into the migrated file when an input drops a key`() {
+    // End-to-end proof the CLI wires TrailRoundTripDropDetector's findings into the file it writes.
+    // The input carries a dedented `below:` anchor at the tool-item level, which the tool decoder
+    // silently drops; the migrated trail.yaml must lead with a DROPPED warning naming that key so a
+    // reviewer sees it in the artifact (not just the transient console line). Still a success exit —
+    // the warning is diagnostic, not a failure.
+    val dir = File(workDir, "case").apply { mkdirs() }
+    File(dir, "android-phone.trail.yaml").writeText(
+      """
+      - config: {id: x, target: x, platform: android}
+      - prompts:
+        - step: Verify the total row
+          recording:
+            tools:
+            - assertVisibleBySelector:
+                nodeSelector:
+                  androidAccessibility:
+                    textRegex: Total
+              below:
+                androidAccessibility:
+                  textRegex: Subtotal
+      """.trimIndent(),
+    )
+    val exit = CommandLine(MigrateTrailsCommand()).execute(dir.absolutePath)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "dropped content is diagnostic, not a failure")
+    val text = File(dir, "trail.yaml").readText()
+    assertTrue("DROPPED" in text, "migrated file must carry the dropped-content warning; got:\n$text")
+    assertTrue("below" in text, "the warning must name the dropped key; got:\n$text")
+  }
+
+  @Test
+  fun `--fail-on-dropped-content turns a lossy migration into a non-zero exit`() {
+    // Same dropped-content input as the diagnostic case above, but with the opt-in gate on: the
+    // migration is lossy (the tool-item-level `below:` anchor is dropped), so the command must exit
+    // ASSERTION_FAILED instead of SUCCESS — the signal a chained `migrate-trails && commit` needs.
+    // The usable file is STILL written with its DROPPED warning; only the exit code changes.
+    val dir = File(workDir, "case").apply { mkdirs() }
+    File(dir, "android-phone.trail.yaml").writeText(
+      """
+      - config: {id: x, target: x, platform: android}
+      - prompts:
+        - step: Verify the total row
+          recording:
+            tools:
+            - assertVisibleBySelector:
+                nodeSelector:
+                  androidAccessibility:
+                    textRegex: Total
+              below:
+                androidAccessibility:
+                  textRegex: Subtotal
+      """.trimIndent(),
+    )
+    val exit = CommandLine(MigrateTrailsCommand()).execute(
+      dir.absolutePath,
+      "--fail-on-dropped-content",
+    )
+    assertEquals(
+      TrailblazeExitCode.ASSERTION_FAILED.code,
+      exit,
+      "expected ASSERTION_FAILED when dropped content exists and the gate is on",
+    )
+    val out = File(dir, "trail.yaml")
+    assertTrue(out.isFile, "the usable file must still be written even when the gate fails the exit code")
+    assertTrue("DROPPED" in out.readText(), "the written file must still carry the dropped-content warning")
+  }
+
+  @Test
+  fun `--fail-on-dropped-content on a clean migration still exits SUCCESS`() {
+    // The gate must not fire spuriously: a clean input (nothing dropped) exits 0 even with the flag on.
+    val dir = File(workDir, "case").apply { mkdirs() }
+    File(dir, "android-phone.trail.yaml").writeText(
+      """
+      - config: {id: x, target: x, platform: android}
+      - prompts:
+        - step: Open the app
+          recording:
+            tools:
+            - tapOnPoint: {x: 1, y: 2}
+      """.trimIndent(),
+    )
+    val exit = CommandLine(MigrateTrailsCommand()).execute(
+      dir.absolutePath,
+      "--fail-on-dropped-content",
+    )
+    assertEquals(
+      TrailblazeExitCode.SUCCESS.code,
+      exit,
+      "a clean migration exits SUCCESS regardless of the gate",
+    )
+  }
+
+  @Test
   fun `--output that points at an input file is refused with EXIT_USAGE`() {
     // Guard against data loss: if the user accidentally passes one of the
     // input *.trail.yaml files as --output, the migration would silently
@@ -106,6 +199,56 @@ class MigrateTrailsCommandTest {
       sourceFile.readText(),
       "the source file must not be modified when the guard fires",
     )
+  }
+
+  @Test
+  fun `--output blaze_yaml on a blaze-only migration is refused with EXIT_USAGE`() {
+    // The overwrite guard must also protect a blaze-only migration's single source: on such a
+    // directory `blaze.yaml` is the input, so `--output <dir>/blaze.yaml` would destroy it. The
+    // guard now folds blaze.yaml into the input set (report.blazeLoaded), so this is refused.
+    val dir = File(workDir, "case").apply { mkdirs() }
+    val blazeFile = File(dir, "blaze.yaml").apply {
+      writeText(
+        """
+        - config: {id: x/y, title: A prose-only case}
+        - prompts:
+          - step: Open the app
+        """.trimIndent(),
+      )
+    }
+    val originalContent = blazeFile.readText()
+    val exit = CommandLine(MigrateTrailsCommand()).execute(
+      dir.absolutePath,
+      "--output", blazeFile.absolutePath,
+    )
+    assertEquals(TrailblazeExitCode.MISUSE.code, exit, "expected MISUSE when --output points at the blaze.yaml input")
+    assertEquals(
+      originalContent,
+      blazeFile.readText(),
+      "the blaze.yaml source must not be modified when the guard fires",
+    )
+  }
+
+  @Test
+  fun `blaze-only directory migrates to trail_yaml by default`() {
+    // A prose-only case (blaze.yaml and nothing else) migrates through the CLI to a unified
+    // trail.yaml in the input dir — the migrator accepts a recording-less blaze-only directory.
+    val dir = File(workDir, "case").apply { mkdirs() }
+    File(dir, "blaze.yaml").writeText(
+      """
+      - config: {id: x/y, title: A prose-only case}
+      - prompts:
+        - step: Open the app
+        - verify: The home screen displays
+      """.trimIndent(),
+    )
+    val exit = CommandLine(MigrateTrailsCommand()).execute(dir.absolutePath)
+    assertEquals(TrailblazeExitCode.SUCCESS.code, exit, "expected success migrating a blaze-only directory")
+    val out = File(dir, "trail.yaml")
+    assertTrue(out.isFile, "expected trail.yaml under the input dir; got: ${dir.list()?.toList()}")
+    val text = out.readText()
+    assertTrue("config:" in text, "expected unified `config:` block in output")
+    assertTrue("trail:" in text, "expected unified `trail:` block in output")
   }
 
   @Test

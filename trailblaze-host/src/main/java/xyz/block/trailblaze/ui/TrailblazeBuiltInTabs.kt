@@ -133,10 +133,12 @@ object TrailblazeBuiltInTabs {
     content = {
       val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
       val effectiveTrailsDir = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+      // Collect the live target set so a live-registered target appears without a daemon restart.
+      val availableTargets by deviceManager.availableAppTargetsFlow.collectAsState()
       WaypointsTabComposable(
         initialRootPath = effectiveTrailsDir,
         logsRepo = logsRepo,
-        availableTargets = deviceManager.availableAppTargets,
+        availableTargets = availableTargets,
         appIconProvider = deviceManager.appIconProvider,
         // The Map view lives in the browser (rendered by React Flow against the
         // daemon's `/waypoints/graph` endpoint). The tab's "Open Map view →"

@@ -54,7 +54,11 @@ class AssertToolNodeSelectorTest {
     assertNotNull(captured, "Agent.executeNodeSelectorAssertNotVisible should have been called")
 
     val match = assertIs<DriverNodeMatch.AndroidAccessibility>(captured.driverMatch)
-    assertEquals("Loading", match.textRegex)
+    // The text arg is dispatched through the lenient transform (case-insensitive, literal
+    // reading honored) — assert the dispatched pattern's behavior, not its string shape.
+    val dispatched = assertNotNull(match.textRegex)
+    assertTrue(Regex(dispatched).matches("Loading"))
+    assertTrue(Regex(dispatched).matches("LOADING"))
     assertEquals("com\\.example:id/spinner", match.resourceIdRegex)
     assertEquals(true, match.isEnabled)
     assertEquals(false, match.isSelected)
@@ -93,7 +97,11 @@ class AssertToolNodeSelectorTest {
     val captured = agent.capturedAssertNotVisible
     assertNotNull(captured)
     val match = assertIs<DriverNodeMatch.AndroidAccessibility>(captured.driverMatch)
-    assertEquals("\$5.00", match.textRegex)
+    // Interpolation ran ("${amount}" -> "$5.00") before the lenient transform: the dispatched
+    // pattern matches the interpolated value via its literal reading.
+    val dispatched = assertNotNull(match.textRegex)
+    assertTrue(Regex(dispatched).matches("\$5.00"))
+    assertTrue(!Regex(dispatched).matches("\$4.00"))
   }
 
   @Test

@@ -87,6 +87,9 @@ class UnifiedTrailMigratorTest {
     assertEquals(setOf("android-phone", "ios-iphone"), result.trail.trail[0].recordings.keys)
     assertEquals("x/y", result.trail.config.id)
     assertEquals("x", result.trail.config.target)
+    // No blaze.yaml in this directory → the report says blaze did not contribute (the false case,
+    // complementing the blaze-only test that asserts it true).
+    assertFalse(result.report.blazeLoaded)
   }
 
   @Test
@@ -362,6 +365,145 @@ class UnifiedTrailMigratorTest {
     assertTrue(result.trail.trail[2].recordable, "step 2 not yet recorded — still recordable")
     assertEquals("Not-yet-recorded step", result.trail.trail[1].step)
     assertEquals("Another not-yet-recorded step", result.trail.trail[2].step)
+  }
+
+  @Test
+  fun `migrates a blaze_yaml-only directory into a recording-less unified trail`() {
+    // blaze.yaml is a v1 trail file with the same schema as a `<classifier>.trail.yaml` — just
+    // device-agnostic and recording-less. A directory with only blaze.yaml (a prose-only trail
+    // with no device recording) must migrate, not refuse: NL, step-kind, and config carry through
+    // verbatim, with no per-classifier devices map and empty per-step recordings.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            title: A prose-only case
+            priority: P0
+            metadata:
+              exampleFlag: "on"
+        - prompts:
+          - step: Log into an account.
+          - step: Tap on "More".
+          - verify: The More menu displays.
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    assertEquals(3, result.trail.trail.size)
+    assertEquals("x/y", result.trail.config.id)
+    assertEquals("A prose-only case", result.trail.config.title)
+    assertEquals("P0", result.trail.config.priority)
+    // Arbitrary config metadata is carried through untouched.
+    assertEquals("on", result.trail.config.metadata?.get("exampleFlag"))
+    // No platform files → no device pins and no recordings on any step.
+    assertNull(result.trail.config.devices)
+    assertTrue(result.trail.trail.all { it.recordings.isEmpty() })
+    // NL and step-kind carried through verbatim.
+    assertEquals("Log into an account.", result.trail.trail[0].step)
+    assertFalse(result.trail.trail[0].verify)
+    assertEquals("The More menu displays.", result.trail.trail[2].step)
+    assertTrue(result.trail.trail[2].verify)
+    // The report attributes the migration to blaze.yaml, with zero platform files.
+    assertTrue(result.report.platformFilesLoaded.isEmpty())
+    assertTrue(result.report.blazeLoaded)
+    // Output must round-trip through the unified parser (same gate as the other migration tests).
+    val reparsed = yaml.decodeUnifiedTrail(yaml.encodeUnifiedTrailToString(result.trail))
+    assertEquals(result.trail.config, reparsed.config)
+    assertEquals(result.trail.trail.size, reparsed.trail.size)
+  }
+
+  @Test
+  fun `refuses a blaze_yaml-only directory that declares a skip`() {
+    // A device-agnostic blaze.yaml `skip:` means "skip everywhere", but unified `skip:` is a
+    // per-classifier map with no universal-wildcard key. With no platform file there's no
+    // classifier to key it onto, so the skip would be silently lost and the trail would run.
+    // Refuse rather than drop it (fail-fast is the migrator's contract for unrepresentable input).
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            skip: "flaky — see #123"
+        - prompts:
+          - step: Log into an account.
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { migrator.migrate(dir) }
+    assertTrue(ex.message!!.contains("skip"))
+  }
+
+  @Test
+  fun `refuses a blaze_yaml-only directory that pins a driver`() {
+    // Same reasoning as the skip case: a blaze.yaml `driver:` has no classifier to key onto in a
+    // recording-less unified trail, so it would be dropped and the driver resolved at runtime.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            driver: ANDROID_ONDEVICE_INSTRUMENTATION
+        - prompts:
+          - step: Log into an account.
+      """.trimIndent(),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { migrator.migrate(dir) }
+    assertTrue(ex.message!!.contains("driver"))
+  }
+
+  @Test
+  fun `a blaze skip is preserved when a platform file is present — the guard is blaze-only`() {
+    // The refusal above is scoped to the classifier-less (blaze-only) case. When a platform file
+    // is present, blaze.yaml's device-agnostic skip propagates onto that present classifier (the
+    // existing blaze-skip behavior), so migration succeeds and the skip is carried, not lost.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            skip: "flaky — see #123"
+        - prompts:
+          - step: Log into an account.
+      """.trimIndent(),
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Log into an account.
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    assertEquals(mapOf("android-phone" to "flaky — see #123"), result.trail.config.skip)
+  }
+
+  @Test
+  fun `refuses a directory with no platform files and no blaze_yaml`() {
+    // The relaxed guard accepts platform files OR a blaze.yaml; with neither there is no v1 source
+    // to migrate, so it must still fail fast (the false branch of the widened require).
+    val dir = makeDir(
+      "notes.txt" to "not a trail file",
+    )
+    assertFailsWith<IllegalArgumentException> { migrator.migrate(dir) }
+  }
+
+  @Test
+  fun `migrates a blaze_yaml-only directory whose skip is blank — blank is not-skipped, not refused`() {
+    // The blaze-only refusal keys on a NON-blank skip (`isNullOrBlank`, not `!= null`). A blank
+    // `skip: ""` is v1 for "not skipped", so it must migrate cleanly with no skip map — the refusal
+    // must not fire on it.
+    val dir = makeDir(
+      "blaze.yaml" to """
+        - config:
+            id: x/y
+            skip: ""
+        - prompts:
+          - step: Log into an account.
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    assertEquals(1, result.trail.trail.size)
+    assertNull(result.trail.config.skip)
+    assertTrue(result.report.blazeLoaded)
   }
 
   @Test
@@ -1182,9 +1324,9 @@ class UnifiedTrailMigratorTest {
     )
     val result = migrator.migrate(dir)
     assertEquals("Checkout with a saved card", result.trail.config.title)
-    // priority/source are metadata by nature in the unified format — migration bridges them
-    // into the reserved metadata keys (the shape #4507's hand-migrated trails already use).
-    assertEquals("P1", result.trail.config.metadata?.get("priority"))
+    // priority is a top-level unified field; source is metadata by nature — migration bridges
+    // it into the reserved metadata keys.
+    assertEquals("P1", result.trail.config.priority)
     assertEquals("HANDWRITTEN", result.trail.config.metadata?.get("source"))
     assertEquals("authored by hand", result.trail.config.metadata?.get("sourceReason"))
 
@@ -1232,7 +1374,7 @@ class UnifiedTrailMigratorTest {
     val result = migrator.migrate(dir)
     // Scalars both sides declare: the platform file (read first) stays canonical.
     assertEquals("Library tab UI display", result.trail.config.title)
-    assertEquals("P2", result.trail.config.metadata?.get("priority"))
+    assertEquals("P2", result.trail.config.priority)
     // Fields only blaze.yaml declares are filled, not dropped (source rides metadata's
     // reserved bridge key; description is a first-class scalar).
     assertEquals("HANDWRITTEN", result.trail.config.metadata?.get("source"))
@@ -1293,6 +1435,214 @@ class UnifiedTrailMigratorTest {
     assertTrue(
       result.report.configDrift.isEmpty(),
       "identical titles + a single-file priority are not drift, got: ${result.report.configDrift}",
+    )
+  }
+
+  @Test
+  fun `malformed positional anchors that the decode drops surface as a dropped-content warning`() {
+    // The exact hazard from PR #4641 / case_4837682: hand-authored positional anchors written in a
+    // shape the schema can't carry are silently discarded on decode. (i) a `below:` at the TOOL
+    // level — a sibling of `nodeSelector`, which `assertVisibleBySelector` has no field for; and
+    // (ii) a nested `rightOf: {textRegex: ...}` whose bare `textRegex` isn't a field on
+    // `TrailblazeNodeSelector` (its matchers are dialect-scoped, e.g. `androidAccessibility`).
+    // Both vanish with zero signal today; the migrator must now WARN, naming each dropped anchor.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+        - prompts:
+          - step: Verify the total row
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Total
+                  below:
+                    androidAccessibility:
+                      textRegex: Subtotal
+          - step: Verify the confirm button
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Confirm
+                    rightOf:
+                      textRegex: Cancel
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    // The lenient decode still migrates the clean parts — this is purely an added diagnostic.
+    assertEquals(2, result.trail.trail.size)
+
+    val dropped = result.report.droppedContent
+    assertTrue(
+      dropped.any { it.key == "below" && it.path.contains("below") },
+      "expected the tool-level `below` anchor flagged as dropped, got: $dropped",
+    )
+    assertTrue(
+      dropped.any { it.key == "textRegex" && it.path.contains("rightOf") },
+      "expected the bare `rightOf: {textRegex}` anchor flagged as dropped, got: $dropped",
+    )
+
+    // The warning must ride into the migrated file as leading comments, naming both anchors so a
+    // reviewer can re-author them.
+    val comments = UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent)
+    assertTrue(comments.any { it.contains("below") }, "warning must name `below`, got: $comments")
+    assertTrue(comments.any { it.contains("rightOf") }, "warning must name `rightOf`, got: $comments")
+
+    val emitted = yaml.encodeUnifiedTrailToString(result.trail, leadingComments = comments)
+    assertTrue(emitted.contains("DROPPED"), "migrated file must carry the DROPPED warning header:\n$emitted")
+    assertTrue(emitted.contains("android-phone.trail.yaml"), "warning must name the source file:\n$emitted")
+    assertTrue(emitted.contains("below") && emitted.contains("rightOf"), "warning must name both anchors:\n$emitted")
+  }
+
+  @Test
+  fun `a sibling key dedented out of a tool's args surfaces as a dropped-content warning`() {
+    // TrailblazeToolYamlWrapperSerializer decodes only the FIRST key of each tool-list item, so a
+    // sibling key at the item level (here `below`, a positional anchor the author meant to nest under
+    // the selector but dedented one level) is silently dropped — and strict decode can't see it
+    // either, because the serializer never hands the extra key to a decoder. The structural pre-scan
+    // must still flag it so the migrated file warns instead of silently losing the assertion.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Verify the total row
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Total
+                below:
+                  androidAccessibility:
+                    textRegex: Subtotal
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+    assertEquals(1, result.trail.trail.size)
+    assertTrue(
+      result.report.droppedContent.any { it.key == "below" && it.path.endsWith("tools[0].below") },
+      "expected the dedented sibling `below` flagged, got: ${result.report.droppedContent}",
+    )
+
+    val comments = UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent)
+    val emitted = yaml.encodeUnifiedTrailToString(result.trail, leadingComments = comments)
+    assertTrue(
+      emitted.contains("DROPPED") && emitted.contains("below"),
+      "migrated file must warn about the dropped sibling anchor:\n$emitted",
+    )
+  }
+
+  @Test
+  fun `a clean input produces no dropped-content warning`() {
+    // Every key here is schema-recognized (config scalars, a `tapOnPoint`, and a well-formed
+    // `assertVisibleBySelector` whose anchor lives correctly on the nested selector). Nothing is
+    // dropped, so the added diagnostic must stay silent — clean inputs are unchanged.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config:
+            id: x/y
+            target: x
+            platform: android
+        - prompts:
+          - step: Open the app
+            recording:
+              tools:
+              - tapOnPoint:
+                  x: 1
+                  y: 2
+          - step: Verify the confirm button is right of cancel
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Confirm
+                    rightOf:
+                      androidAccessibility:
+                        textRegex: Cancel
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    assertTrue(
+      result.report.droppedContent.isEmpty(),
+      "clean input must not report dropped content, got: ${result.report.droppedContent}",
+    )
+    assertEquals(
+      emptyList(),
+      UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent),
+      "clean input must emit no dropped-content comments",
+    )
+  }
+
+  @Test
+  fun `dropped content from multiple platform files is attributed to each source file`() {
+    // A bundle migrates several per-platform inputs at once; each carries its OWN dropped anchor.
+    // The report must attribute every drop to the file it came from, and the warning comment must
+    // group them under separate per-file headers — so a reviewer knows which platform to fix.
+    val dir = makeDir(
+      "android-phone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: android}
+        - prompts:
+          - step: Verify the total row
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Total
+                  below:
+                    androidAccessibility:
+                      textRegex: Subtotal
+      """.trimIndent(),
+      "ios-iphone.trail.yaml" to """
+        - config: {id: x/y, target: x, platform: ios}
+        - prompts:
+          - step: Verify the total row
+            recording:
+              tools:
+              - assertVisibleBySelector:
+                  nodeSelector:
+                    iosAccessibility:
+                      textRegex: Total
+                  above:
+                    iosAccessibility:
+                      textRegex: Header
+      """.trimIndent(),
+    )
+
+    val result = migrator.migrate(dir)
+
+    val byFile = result.report.droppedContent.groupBy { it.file }
+    assertEquals(
+      setOf("android-phone.trail.yaml", "ios-iphone.trail.yaml"),
+      byFile.keys,
+      "each platform file with a dropped key must be attributed, got: ${result.report.droppedContent}",
+    )
+    assertTrue(
+      byFile["android-phone.trail.yaml"]!!.any { it.key == "below" },
+      "android's `below` must be attributed to android-phone, got: ${byFile["android-phone.trail.yaml"]}",
+    )
+    assertTrue(
+      byFile["ios-iphone.trail.yaml"]!!.any { it.key == "above" },
+      "ios's `above` must be attributed to ios-iphone, got: ${byFile["ios-iphone.trail.yaml"]}",
+    )
+
+    val comments = UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent)
+    assertTrue(
+      comments.any { it.contains("android-phone.trail.yaml") } &&
+        comments.any { it.contains("ios-iphone.trail.yaml") },
+      "warning must name both source files under their own headers, got: $comments",
     )
   }
 

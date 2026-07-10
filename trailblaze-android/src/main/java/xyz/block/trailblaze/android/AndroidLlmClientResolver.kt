@@ -211,8 +211,8 @@ object AndroidLlmClientResolver {
         )
       }
 
-      // openai_compatible providers (custom base_url from instrumentation args)
-      val providerId = model.trailblazeLlmProvider.id
+      // Custom providers with a base_url but no explicit `type:` in trailblaze.yaml
+      // (PROVIDER_TYPE_ARG absent, so the openai_compatible factory below bows out).
       val koogProvider = model.trailblazeLlmProvider.toKoogLlmProvider()
       if (!containsKey(koogProvider)) {
         getToken(model.trailblazeLlmProvider)?.let { key ->
@@ -230,6 +230,16 @@ object AndroidLlmClientResolver {
           }
         }
       }
+
+      // Custom openai_compatible providers from the workspace `trailblaze.yaml` arrive via
+      // instrumentation args and are rebuilt on-device by [OnDeviceOpenAICompatibleLlmClientFactory].
+      // The host only emits PROVIDER_TYPE_ARG=openai_compatible for the *currently selected*
+      // provider, so reaching a non-null result here means the user explicitly configured this
+      // provider as openai_compatible — register/replace under the active provider id even when
+      // it collides with a built-in (e.g. redefining `providers.anthropic` with a custom base_url).
+      OnDeviceOpenAICompatibleLlmClientFactory
+        .createOrNull(model, httpClient)
+        ?.let { customClient -> put(koogProvider, customClient) }
     }
 
     return DefaultDynamicLlmClient(

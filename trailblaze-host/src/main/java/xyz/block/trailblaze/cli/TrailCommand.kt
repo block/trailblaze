@@ -8,6 +8,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
@@ -35,6 +36,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
@@ -48,9 +50,8 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.unified.TrailDocument
-import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
@@ -59,8 +60,8 @@ import kotlin.system.exitProcess
 /**
  * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
  * Accepts explicit file arguments, shell globs, and directory arguments (directories are
- * expanded recursively to one trail per containing directory, with the platform-specific
- * recording preferred over the NL `blaze.yaml` when both are present).
+ * expanded recursively to every named unified trail plus one pick per legacy trail — the
+ * platform-specific recording preferred over the NL `blaze.yaml` when both are present).
  */
 @Command(
   name = "run",
@@ -70,7 +71,8 @@ import kotlin.system.exitProcess
     "Run a trail file (.trail.yaml) — execute a scripted test on a device.",
     "",
     "Accepts files, shell globs, or directories. Directory arguments expand recursively to " +
-      "one trail per containing directory (recording preferred over NL when both are present).",
+      "every named unified trail (`<scenario>.trail.yaml`), plus one pick per legacy trail " +
+      "(recording preferred over NL when both are present).",
     "",
     "Trail-level metadata honored by the runner:",
     "  - `tags:` (list of strings) — filtered via --tags.",
@@ -112,10 +114,10 @@ open class TrailCommand : Callable<Int> {
     paramLabel = "<trailFile>",
     description = [
       "Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories " +
-        "expand recursively to one trail per containing directory (recording preferred over " +
-        "NL when both are present). Bare `trailblaze run` with no arguments is rejected " +
-        "as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to " +
-        "fan out under a workspace's trails directory.",
+        "expand recursively to every named unified trail, plus one pick per legacy trail " +
+        "(recording preferred over NL when both are present). Bare `trailblaze run` with no " +
+        "arguments is rejected as a misuse — pass a `.trail.yaml` path or name a directory " +
+        "(e.g. `trails/`) to fan out under a workspace's trails directory.",
     ],
   )
   var trailFiles: List<File> = emptyList()
@@ -1891,7 +1893,7 @@ open class TrailCommand : Callable<Int> {
   /**
    * Saves the session recording back to the trail source directory. The on-disk format is chosen
    * by [recordingSaveFormat]: a [RecordingSaveFormat.UNIFIED] target merges this device's classifier
-   * slot into the unified trail resolved by [unifiedRecordingTarget] (the executed unified file
+   * slot into the unified trail resolved by [UnifiedRecordingWriter.unifiedRecordingTarget] (the executed unified file
    * itself, or the directory's shared `trail.yaml`); a [RecordingSaveFormat.LEGACY] target writes a
    * platform `<classifier>.trail.yaml` sibling (e.g. `android.trail.yaml`, `ios-iphone.trail.yaml`).
    *
@@ -1927,7 +1929,7 @@ open class TrailCommand : Callable<Int> {
 
   /**
    * Merge one device's freshly-recorded session into the unified trail resolved by
-   * [unifiedRecordingTarget] — the executed file itself when it is a unified document (bare or
+   * [UnifiedRecordingWriter.unifiedRecordingTarget] — the executed file itself when it is a unified document (bare or
    * named), otherwise the directory's shared `trail.yaml`. Writes only this device's
    * [deviceClassifiers] slot and preserves every other classifier already on disk. The recording
    * is a v1 file (`recording.trail.yaml`); the merge primitive folds its steps/trailhead/driver
@@ -1947,93 +1949,51 @@ open class TrailCommand : Callable<Int> {
     deviceClassifiers: List<String>,
   ) {
     val classifier = deviceClassifiers.joinToString("-")
-    val yaml = createTrailblazeYaml()
-    val recordedItems = yaml.decodeTrail(recordingFile.readText())
+    val recordedItems = createTrailblazeYaml().decodeTrail(recordingFile.readText())
+    when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailFile, recordedItems, classifier)) {
+      is UnifiedRecordingWriter.MergeOutcome.Merged ->
+        Console.info("Recording merged into ${outcome.target.absolutePath} (classifier `$classifier`)")
 
-    // The unified trailhead is one tool per classifier (UnifiedTrailEmitter enforces it with a hard
-    // require). A v1 recording can carry a MULTI-tool trailhead — its `tools:` list is every recordable
-    // tool captured in the trailhead window — which the unified format simply can't represent. Merging
-    // it anyway would build a UnifiedTrail that throws when encoded, and the recording would be silently
-    // lost. Preserve it as a legacy `<classifier>.trail.yaml` sibling instead so the recording stays on
-    // disk and runnable; migrating a multi-tool trailhead into the unified shape is a deliberate manual
-    // step (compose the bootstrap inside a single trailhead tool).
-    val recordedTrailheadTools = recordedItems
-      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
-      .firstOrNull()?.trailhead?.tools.orEmpty()
-    if (recordedTrailheadTools.size > 1) {
-      val legacyTarget = computeRecordingTargetFile(trailFile, deviceClassifiers)
-      if (legacyTarget == null) {
-        Console.error(
-          "✗ Recording not saved: recorded trailhead has ${recordedTrailheadTools.size} tools, which the " +
-            "unified one-tool-per-classifier trailhead can't represent, and no legacy target path is available.\n" +
-            "  hint: this run's recording is preserved at ${recordingFile.absolutePath}",
+      is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported -> {
+        // The unified trailhead is one tool per classifier; a v1 recording whose trailhead captured
+        // more than one tool has no unified representation. Preserve it as a legacy
+        // `<classifier>.trail.yaml` sibling so it stays on disk and runnable rather than being lost —
+        // but NOT when a unified trail already exists here, since that sibling would shadow it. In
+        // that case refuse and leave the recording in logs/ for a manual migration.
+        val legacyTarget = computeRecordingTargetFile(trailFile, deviceClassifiers)
+        if (legacyTarget == null || UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
+          Console.error(
+            "✗ Recording not saved: recorded trailhead has ${outcome.toolCount} tools, which the " +
+              "unified one-tool-per-classifier trailhead can't represent, and a legacy sibling would " +
+              "shadow the unified trail (or no legacy target path is available).\n" +
+              "  hint: migrate the multi-tool trailhead by hand — this run's recording is preserved at " +
+              "${recordingFile.absolutePath}",
+          )
+          return
+        }
+        recordingFile.copyTo(legacyTarget, overwrite = true)
+        Console.info(
+          "[unified-record] recorded trailhead has ${outcome.toolCount} tools; the unified format is " +
+            "one tool per classifier, so saved as legacy ${legacyTarget.absolutePath} instead of merging into the unified trail.",
         )
-        return
       }
-      recordingFile.copyTo(legacyTarget, overwrite = true)
-      Console.info(
-        "[unified-record] recorded trailhead has ${recordedTrailheadTools.size} tools; the unified format is " +
-          "one tool per classifier, so saved as legacy ${legacyTarget.absolutePath} instead of merging into the unified trail.",
-      )
-      return
-    }
 
-    val unifiedFile = unifiedRecordingTarget(trailFile) ?: return
-
-    // Read the existing unified file up front so a parse failure fails loud HERE rather than after
-    // we've decided to save. An unreadable trail.yaml must never be silently discarded or clobbered:
-    // surface it and leave both files untouched — the recording is preserved in logs/ for a retry.
-    val existing = if (unifiedFile.isFile) {
-      runCatching { yaml.decodeUnifiedTrail(unifiedFile.readText()) }.getOrElse { e ->
+      is UnifiedRecordingWriter.MergeOutcome.RefusedCorrupt ->
         Console.error(
           "✗ Recording not saved: existing unified trail is unreadable\n" +
-            "  file: ${unifiedFile.absolutePath}\n" +
-            "  reason: ${e.message}\n" +
+            "  file: ${outcome.target.absolutePath}\n" +
+            "  reason: ${outcome.reason}\n" +
             "  hint: fix or delete that file, then re-run — this run's recording is preserved at " +
             "${recordingFile.absolutePath}",
         )
-        return
-      }
-    } else {
-      null
-    }
 
-    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recordedItems, classifier)
-    // A merge with no steps would emit an empty `trail:`, which the unified parser rejects — writing
-    // it would leave an unreadable file. Skip rather than corrupt (only reachable from a degenerate
-    // recording with no prompt steps and no existing trail to preserve).
-    if (merged.trail.isEmpty()) {
-      Console.log("[unified-record] recording for `$classifier` has no steps to merge; skipping unified write.")
-      return
-    }
-    // Write to a temp sibling then atomically rename, so a crash / disk-full mid-write can't truncate
-    // the single file that now holds every device's slot.
-    val rendered = yaml.encodeUnifiedTrailToString(merged)
-    writeFileAtomically(unifiedFile, rendered)
-    Console.info("Recording merged into ${unifiedFile.absolutePath} (classifier `$classifier`)")
-  }
+      is UnifiedRecordingWriter.MergeOutcome.SkippedEmpty ->
+        Console.log("[unified-record] recording for `$classifier` has no steps to merge; skipping unified write.")
 
-  /**
-   * Write [content] to [target] via a temp file in the same directory followed by an atomic rename,
-   * so a partial write never leaves a truncated (unreadable) file in place. Falls back to a plain
-   * replace if the filesystem doesn't support atomic moves.
-   */
-  private fun writeFileAtomically(target: File, content: String) {
-    val tmp = File.createTempFile(target.name, ".tmp", target.parentFile)
-    try {
-      tmp.writeText(content)
-      try {
-        java.nio.file.Files.move(
-          tmp.toPath(),
-          target.toPath(),
-          java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-        )
-      } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-        java.nio.file.Files.move(tmp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-      }
-    } finally {
-      tmp.delete() // no-op once the move succeeded; cleans up the temp on any failure
+      is UnifiedRecordingWriter.MergeOutcome.NoTarget ->
+        // Only reachable for an orphan path with no directory (routing sends those to LEGACY, so this
+        // is defensive) — log rather than dropping the recording silently.
+        Console.log("[unified-record] no unified target resolved for ${trailFile.path}; recording left at ${recordingFile.absolutePath}.")
     }
   }
 
@@ -2061,62 +2021,26 @@ open class TrailCommand : Callable<Int> {
    *  - Empty [deviceClassifiers] → [RecordingSaveFormat.LEGACY] (no classifier to key a unified
    *    slot; falls back to the classifier-agnostic `recording.trail.yaml`).
    *
-   * The unified file this decision writes/reads is resolved by [unifiedRecordingTarget] — the
+   * The unified file this decision writes/reads is resolved by [UnifiedRecordingWriter.unifiedRecordingTarget] — the
    * two must be consulted together so the router and the writer never disagree on the target.
    *
    * `internal` so unit tests can exercise each branch directly against a temp directory.
    */
-  internal fun recordingSaveFormat(trailFile: File, deviceClassifiers: List<String>): RecordingSaveFormat {
-    // Rollout gate (see resolveEffectiveUnifiedRecordings): while off, every save-back stays on
-    // the legacy path. shouldSaveRecording separately restores the pre-unified refusal to write a
-    // legacy sibling next to — or in place of — a unified trail, so "off" never writes into or
-    // beside a unified file.
-    if (!resolveEffectiveUnifiedRecordings()) return RecordingSaveFormat.LEGACY
-    if (deviceClassifiers.isEmpty()) return RecordingSaveFormat.LEGACY
-    if (executedFileIsUnified(trailFile)) return RecordingSaveFormat.UNIFIED
-    val dir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return RecordingSaveFormat.LEGACY
-    if (File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return RecordingSaveFormat.UNIFIED
-    val hasLegacySibling = dir.listFiles { f ->
-      f.isFile &&
-        f.name.endsWith(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX) &&
-        !TrailRecordings.isUnifiedTrailFile(f.name)
-    }?.isNotEmpty() == true
-    return if (hasLegacySibling) RecordingSaveFormat.LEGACY else RecordingSaveFormat.UNIFIED
-  }
-
-  /**
-   * True when the executed [trailFile] is itself a unified trail: the bare `trail.yaml` by
-   * name, or any other file whose content parses as a unified document. `{{var}}` templates are
-   * resolved before parsing (mirroring the run path), so a unified file whose unquoted template
-   * is invalid as raw YAML — but which the runner resolves and executes — is still detected.
-   * Content detection is guard-safe — a v1 file, an unreadable file, or a directory returns
-   * false (the caller falls through to directory-based routing).
-   */
-  private fun executedFileIsUnified(trailFile: File): Boolean {
-    if (!trailFile.isFile) return false
-    if (TrailRecordings.isUnifiedTrailFile(trailFile.name)) return true
-    return runCatching {
-      val resolvedYaml = TrailYamlTemplateResolver.resolve(trailFile.readText(), trailFile)
-      createTrailblazeYaml().decodeTrailDocument(resolvedYaml)
-    }.getOrNull() is TrailDocument.Unified
-  }
-
-  /**
-   * The unified file a [RecordingSaveFormat.UNIFIED] save-back reads and writes for [trailFile]:
-   * the executed file itself when it is a unified document (bare `trail.yaml` by name, or a
-   * named unified file by content — returned as-is even for a parentless path), otherwise the
-   * directory's shared `trail.yaml`. Null only on the fall-through branch: the executed file is
-   * not itself unified and no directory resolves (orphan path with no parent).
-   *
-   * Single source of truth for the writer ([saveRecordingAsUnified]), the re-run skip guard
-   * ([unifiedClassifierAlreadyRecorded]), and the skip log — so the guard always reads the same
-   * file the writer targets.
-   */
-  internal fun unifiedRecordingTarget(trailFile: File): File? {
-    if (executedFileIsUnified(trailFile)) return trailFile
-    val dir = if (trailFile.isDirectory) trailFile else trailFile.parentFile ?: return null
-    return File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
-  }
+  internal fun recordingSaveFormat(trailFile: File, deviceClassifiers: List<String>): RecordingSaveFormat =
+    // Routing (incl. the rollout gate and empty-classifier / legacy-sibling / greenfield branches)
+    // lives in the shared writer so the CLI, MCP, and desktop surfaces can't diverge. The CLI keeps
+    // its own enum; shouldSaveRecording separately restores the pre-unified refusal to write a
+    // legacy sibling next to — or in place of — a unified trail.
+    if (UnifiedRecordingWriter.shouldRouteUnified(
+        trailFile,
+        deviceClassifiers.joinToString("-"),
+        resolveEffectiveUnifiedRecordings(),
+      )
+    ) {
+      RecordingSaveFormat.UNIFIED
+    } else {
+      RecordingSaveFormat.LEGACY
+    }
 
   /**
    * Computes the target path where a recording would land for the given trail + classifiers,
@@ -2169,14 +2093,12 @@ open class TrailCommand : Callable<Int> {
     // Unified-recordings gate OFF → pre-unified behavior: never write a legacy
     // `<classifier>.trail.yaml` next to a unified `trail.yaml` (the legacy save-back can't update
     // it, so it would only drop a divergent sibling), regardless of --self-heal. The executed-file
-    // check is content-aware ([executedFileIsUnified]) — the one deliberate deviation from
+    // check is content-aware ([UnifiedRecordingWriter.executedFileIsUnified]) — the one deliberate deviation from
     // byte-identical-old: a NAMED unified file (e.g. `login.trail.yaml` in a shared multi-test
     // directory) used to get a v1 sibling raw-copied beside it, which damages the shared directory
     // rather than preserving anything. Refusing adds no new write path.
-    if (!resolveEffectiveUnifiedRecordings()) {
-      if (executedFileIsUnified(trailFile)) return false
-      val sourceDir = if (trailFile.isDirectory) trailFile else trailFile.parentFile
-      if (sourceDir != null && File(sourceDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return false
+    if (!resolveEffectiveUnifiedRecordings() && UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
+      return false
     }
     if (resolveEffectiveSelfHeal()) return true
     // Deterministic re-run guard: skip when this device's recording already exists on disk, so a
@@ -2184,33 +2106,16 @@ open class TrailCommand : Callable<Int> {
     //  - LEGACY: the `<classifier>.trail.yaml` sibling exists (also skip when no target resolves —
     //    an orphan file with no parent — matching prior behavior).
     //  - UNIFIED: this classifier's slot already carries a recording in the unified target file
-    //    ([unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
+    //    ([UnifiedRecordingWriter.unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
     //    recorded yet" → save.
     return when (recordingSaveFormat(trailFile, deviceClassifiers)) {
       RecordingSaveFormat.LEGACY -> {
         val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
         !targetFile.exists()
       }
-      RecordingSaveFormat.UNIFIED -> !unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers)
+      RecordingSaveFormat.UNIFIED ->
+        !UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers.joinToString("-"))
     }
-  }
-
-  /**
-   * True when the unified trail this save-back would write ([unifiedRecordingTarget] — the
-   * executed unified file itself, or the dir's shared `trail.yaml`) already carries a non-empty
-   * recording for this device's classifier slot — so a non-self-heal re-run skips rather than
-   * replacing it. False when the file is absent (greenfield), unreadable, or the slot has no
-   * recording yet.
-   */
-  private fun unifiedClassifierAlreadyRecorded(trailFile: File, deviceClassifiers: List<String>): Boolean {
-    val unifiedFile = unifiedRecordingTarget(trailFile) ?: return false
-    if (!unifiedFile.isFile) return false
-    val classifier = deviceClassifiers.joinToString("-")
-    val unified = runCatching { createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()) }.getOrNull()
-      ?: return false
-    val stepHit = unified.trail.any { it.recordings[classifier]?.isNotEmpty() == true }
-    val trailheadHit = unified.trailhead?.recordings?.get(classifier)?.isNotEmpty() == true
-    return stepHit || trailheadHit
   }
 
   /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
@@ -2227,10 +2132,9 @@ open class TrailCommand : Callable<Int> {
    *      fully supports the unified format, at which point the default flips.
    */
   internal fun resolveEffectiveUnifiedRecordings(): Boolean =
-    unifiedRecordings
-      ?: System.getenv("TRAILBLAZE_UNIFIED_RECORDINGS")?.lowercase()?.toBooleanStrictOrNull()
-      ?: CliConfigHelper.readConfig()?.unifiedRecordingsEnabled
-      ?: false
+    // The CLI is the only surface with a flag tier; the shared host helper layers it over
+    // env > persisted config (MCP/desktop pass no flag).
+    CliConfigHelper.resolveUnifiedRecordingsGate(flagOverride = unifiedRecordings)
 
   /**
    * Companion of [shouldSaveRecording]. Emits a single user-visible info line when a save
@@ -2244,6 +2148,19 @@ open class TrailCommand : Callable<Int> {
    */
   private fun logSkippedRecording(trailFile: File, deviceClassifiers: List<String>) {
     if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
+    // Gate-off refusal next to a unified trail: the legacy save-back can't update `trail.yaml`, so
+    // the save is refused rather than dropping a shadowing sibling. Surface it — the MCP/desktop
+    // surfaces return an explicit error here, so the CLI shouldn't silently drop the recording.
+    // Checked before the self-heal short-circuit to match shouldSaveRecording's guard order (the
+    // refusal fires regardless of self-heal).
+    if (!resolveEffectiveUnifiedRecordings() && UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
+      Console.info(
+        "Recording not saved: this directory has a unified trail.yaml and the legacy save-back can't " +
+          "update it. Enable unified recordings (--unified-recordings, TRAILBLAZE_UNIFIED_RECORDINGS=1, " +
+          "or `trailblaze config unified-recordings true`) to merge this device's slot instead.",
+      )
+      return
+    }
     if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
     val skippedTarget: String = when (recordingSaveFormat(trailFile, deviceClassifiers)) {
       RecordingSaveFormat.LEGACY -> {
@@ -2252,9 +2169,10 @@ open class TrailCommand : Callable<Int> {
         targetFile.absolutePath
       }
       RecordingSaveFormat.UNIFIED -> {
-        if (!unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers)) return
-        val unifiedFile = unifiedRecordingTarget(trailFile) ?: return
-        "${unifiedFile.absolutePath} (classifier `${deviceClassifiers.joinToString("-")}`)"
+        val classifier = deviceClassifiers.joinToString("-")
+        if (!UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, classifier)) return
+        val unifiedFile = UnifiedRecordingWriter.unifiedRecordingTarget(trailFile) ?: return
+        "${unifiedFile.absolutePath} (classifier `$classifier`)"
       }
     }
     Console.info(
@@ -2601,16 +2519,26 @@ open class TrailCommand : Callable<Int> {
      * Expands directory arguments to their contained trail files (`*.trail.yaml` + `blaze.yaml`)
      * recursively. Plain file arguments pass through unchanged.
      *
-     * **Trail directory = trail identity.** By convention each containing directory holds at
-     * most one trail, expressed either as a `blaze.yaml` (NL source of truth) or as one or
-     * more platform-specific recordings (`<classifiers>.trail.yaml`). Walking recursively and
-     * returning *every* file would double-bill a directory containing both — the NL file gets
-     * an AI run, then the recording gets a deterministic replay. Instead, for each containing
-     * directory we delegate to [TrailRecordings.findBestTrailResourcePath] — the same resolver
+     * **One pick per distinct trail, not per directory.** A directory can hold either
+     * (a) several DISTINCT scenarios, each a self-contained unified `<scenario>.trail.yaml`
+     * carrying its own `config.id` (the canonical named-file layout — e.g. `catalog/` holding
+     * `conditional-item.trail.yaml`, `multiple-items.trail.yaml`, `overlay-tap.trail.yaml`), or
+     * (b) the classifier variants of a SINGLE trail — a `blaze.yaml` (NL source of truth)
+     * plus one or more platform-specific recordings (`<classifiers>.trail.yaml`) that share one
+     * identity. Case (a) must expand to EVERY scenario; case (b) must collapse to one pick
+     * (returning every file would double-bill — the NL file gets an AI run, then the recording
+     * gets a deterministic replay).
+     *
+     * We distinguish the two per file by content (see [isDistinctNamedScenario]): a file whose
+     * content is unified-format — and isn't the bare `trail.yaml` — is a self-contained
+     * named trail, and every one expands. Everything else — the bare `trail.yaml`, NL definitions,
+     * and the v1 `<classifier>.trail.yaml` recordings — collapses into one legacy bucket for the
+     * directory, from which [resolveSingleTrail] delegates to
+     * [TrailRecordings.findBestTrailResourcePath] — the same resolver
      * `BaseHostTrailblazeTest.runFromResource` and the eval harnesses use — so the
      * classifier-priority order (e.g. `web.trail.yaml` &gt; `blaze.yaml` when `--device web`) is
-     * picked exactly once. Nested directories are still walked, so a workspace `trails/`
-     * directory with N test directories expands to N trails, not 2·N.
+     * picked exactly once. Nested directories are still walked, so a workspace `trails/` directory
+     * expands to one file per distinct trail, never 2·N.
      *
      * [deviceClassifiers] threads through from the resolved `--device` so the resolver picks
      * a classifier-matched recording when one exists. Production callers use
@@ -2622,11 +2550,27 @@ open class TrailCommand : Callable<Int> {
      * fallback contract.
      *
      * When [deviceClassifiers] is empty (no `--device`, or a device spec we can't parse), the
-     * resolver only matches `blaze.yaml` / `trailblaze.yaml`. If a directory has *only*
+     * resolver only matches `blaze.yaml` / `trailblaze.yaml`. If the legacy bucket has *only*
      * platform-specific recordings in that case, we fall back to the first alphabetically and
      * emit a one-line warning — naming the recordings that were skipped if there's more than
      * one, or noting that the lone recording is being run regardless of device classifiers if
-     * there's only one. Pass `--device` to pick the right one.
+     * there's only one. Pass `--device` to pick the right one. Named-scenario groups (case (a))
+     * never warn: a unified file resolves its own per-classifier recording internally, and its
+     * `<scenario>.trail.yaml` name is not classifier-derived, so the resolver legitimately finds
+     * no classifier match and we just run the file.
+     *
+     * The walk itself is [TrailDiscovery.discoverTrailFiles] — the same discovery the desktop
+     * scanner, MCP trail listing, and `trailblaze check` use — so directory expansion inherits
+     * its exclude set ([TrailDiscovery.DEFAULT_EXCLUDED_DIRS]: `build/`, `.gradle/`, `.git/`,
+     * `node_modules/`, `.trailblaze/`, `.claude/`) and its no-follow symlink policy. Two
+     * consequences worth calling out: a trail sitting under an excluded directory (a stale
+     * copy in `build/`, a sibling agent's WIP in `.claude/worktrees/`) is not expanded, and
+     * an in-tree symlinked directory is not traversed (intentional — see the [TrailDiscovery]
+     * KDoc). A directory the user names *explicitly* is always scanned, whatever it's called:
+     * the exclude set only prunes subdirectories, and a symlinked argument is canonicalized
+     * before the walk so it still resolves — with results mapped back into the argument's
+     * own path frame, so de-duplication against overlapping file arguments and reported
+     * paths stay in the frame the user typed.
      *
      * Results are sorted by absolute path for stable run order and de-duplicated so passing
      * both a directory and a file under it (or two overlapping globs) doesn't run the same
@@ -2639,107 +2583,65 @@ open class TrailCommand : Callable<Int> {
       val expanded = mutableListOf<File>()
       for (arg in files) {
         if (arg.isDirectory) {
-          val byParent: Map<File, List<File>> = arg.walkTopDown()
-            .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
-            // `TrailRecordings.isTrailFile` matches `trailblaze.yaml` because that name is
-            // also used as an alias for `blaze.yaml` in the NL-definition list. When walking
-            // a workspace `trails/` directory the convention puts the workspace *config* at
-            // `trails/config/trailblaze.yaml` — picking that up as a runnable trail would
-            // mis-execute the config file. Exclude the canonical workspace-config path
-            // specifically; other `trailblaze.yaml` files (e.g. NL definitions outside a
-            // `config/` directory) pass through unchanged.
+          // [TrailDiscovery]'s walk refuses to descend through a symlinked *root* (its
+          // no-follow policy reads the root's own attributes too). `arg.isDirectory` above
+          // follows links, so an explicitly-passed symlinked directory lands here —
+          // canonicalize it for the walk; only in-tree symlinks stay untraversed. If both
+          // canonicalization attempts fail (a race with deletion, permission revocation),
+          // warn instead of silently expanding to nothing — the un-canonicalized root
+          // yields an empty walk under TrailDiscovery's symlinked-root policy.
+          val argPath = arg.toPath()
+          val walkRoot = if (Files.isSymbolicLink(argPath)) {
+            runCatching { argPath.toRealPath() }
+              .recoverCatching { arg.canonicalFile.toPath() }
+              .getOrElse {
+                Console.error(
+                  "Warning: cannot resolve symlinked directory ${arg.path}; trail discovery " +
+                    "does not follow symlinked roots, so no trails will be expanded from it.",
+                )
+                argPath
+              }
+          } else {
+            argPath
+          }
+          val discovered = TrailDiscovery.discoverTrailFiles(walkRoot)
+          // Map results back into the argument's own path frame (`trails-link/foo` instead
+          // of the resolved real path) so the final `distinctBy { it.absoluteFile }` still
+          // collapses an overlapping file argument passed through the same symlink, and
+          // reported paths stay consistent with what the user typed.
+          val inArgFrame = if (walkRoot == argPath) {
+            discovered
+          } else {
+            discovered.map { argPath.resolve(walkRoot.relativize(it.toPath())).toFile() }
+          }
+          val byParent: Map<File, List<File>> = inArgFrame
+            // [TrailDiscovery] matches `trailblaze.yaml` because that name is also used as
+            // an alias for `blaze.yaml` in the NL-definition list, and its own anchor rule
+            // only excludes the single workspace config resolved via `findWorkspaceRoot`.
+            // The CLI is stricter: a `trailblaze.yaml` under ANY `config/` directory is
+            // treated as workspace config, never a runnable trail — scratch directories
+            // (no `trails/config/` anchor) hold config files too. Other `trailblaze.yaml`
+            // files (e.g. NL definitions outside a `config/` directory) pass through
+            // unchanged.
             .filterNot { it.parentFile?.name == "config" && it.name == "trailblaze.yaml" }
-            // `parentFile` is non-null here: the walk root is a directory (`arg.isDirectory`
-            // above) and the `it.isFile` filter rules out the walk root itself, so every
-            // surviving entry has a directory parent.
+            // `parentFile` is non-null here: the walk root is a directory, and discovery
+            // only emits regular files strictly below it, so every entry has a directory
+            // parent.
             .groupBy { it.parentFile.absoluteFile }
           val sortedDirs = byParent.keys.sortedBy { it.absolutePath }
           for (dir in sortedDirs) {
-            // Gate the resolver's filesystem probe on the post-filter file set. Without this,
-            // a `config/` directory holding both the workspace config (`trailblaze.yaml`) and
-            // a sibling recording would let [findBestTrailResourcePath] probe the
-            // pre-filtered-out `trailblaze.yaml` on disk and resurrect it as a runnable
-            // trail — defeating the `filterNot` above. By constraining `doesResourceExist`
-            // to filenames that survived the walk, the exclusion stays authoritative even if
-            // the resolver's candidate list expands in the future.
-            val allowedNames = byParent.getValue(dir).map { it.name }.toSet()
-            val picked = TrailRecordings.findBestTrailResourcePath(
-              path = dir.absolutePath,
-              deviceClassifiers = deviceClassifiers,
-              doesResourceExist = { File(it).name in allowedNames && File(it).exists() },
-            )
-            // Workaround for the CLI's single-classifier limitation (see
-            // [parseDeviceClassifiersFromSpec]'s KDoc). The resolver's candidate list is
-            // `[<platform>.trail.yaml, blaze.yaml, trailblaze.yaml]` for a single-classifier
-            // spec, which can't match a multi-segment recording filename. The host driver
-            // saves recordings using the device's *full* classifier list — e.g. an iOS run
-            // on a booted iPhone writes `ios-iphone.trail.yaml`, not `ios.trail.yaml`.
-            // Without this fallback, `./trailblaze run <dir> --device ios/<udid>` silently
-            // picks `blaze.yaml` (the NL fallback that DID match), and `--use-recorded-steps`
-            // has no effect — the loud warning at the run-time site catches the confusion,
-            // but the right behavior is to find the recording in the first place.
-            //
-            // Strategy: if the resolver returned an NL fallback, scan the directory for any
-            // `<platform>-*.trail.yaml` and prefer the most-specific one. "Most specific" is
-            // approximated by longest filename (more classifier segments hyphenated into the
-            // name) — so `ios-iphone.trail.yaml` wins over `ios-ipad.trail.yaml`. Stable
-            // tiebreaker on equal length is alphabetical, so two captures of the same
-            // device-class width coexisting in one directory pick deterministically — e.g.
-            // `ios-iphone.trail.yaml` wins over `ios-iwatch.trail.yaml` (both 21 chars) by
-            // alphabetical order. An author who ships multiple device-class captures in one
-            // dir is implicitly saying any is a valid answer for `--device <platform>`
-            // without further qualification.
-            val finalPicked: String? = if (
-              picked != null &&
-              deviceClassifiers.isNotEmpty() &&
-              TrailRecordings.isNlDefinitionFile(File(picked).name)
-            ) {
-              val platform = deviceClassifiers.first().classifier
-              val platformPrefix = "$platform-"
-              val platformRecording = byParent.getValue(dir)
-                .asSequence()
-                .filter { TrailRecordings.isRecordingFile(it.name) }
-                .filter { it.name.startsWith(platformPrefix) }
-                .sortedWith(compareByDescending<File> { it.name.length }.thenBy { it.name })
-                .firstOrNull()
-              platformRecording?.absolutePath ?: picked
-            } else {
-              picked
-            }
-            if (finalPicked != null) {
-              expanded += File(finalPicked)
-            } else {
-              // No NL definition and no classifier-matched recording — the directory still
-              // contains *some* trail file (groupBy yielded the dir, so the list is non-empty).
-              // Sort by absolute path (all candidates share this parent dir, so this is
-              // equivalent to alphabetical by name) and run the first one so the CLI surface
-              // stays usable. Always warn here — even with a single non-matching recording,
-              // the user is running a recording for a *different* device than they asked for,
-              // and silent execution would be misleading. The warning scales to the count.
-              // Routed via [Console.error] (stderr) so the warning survives `--quiet`/JSON
-              // modes and matches the convention used by other warning/error messages in
-              // this file (the device-resolution error envelopes etc.).
-              val candidates = byParent.getValue(dir).sortedBy { it.absolutePath }
-              expanded += candidates.first()
-              // Phrase the hint as "platform-prefixed `--device`" so users who already
-              // passed `--device <instance-id>` (no platform prefix) understand that the
-              // platform segment is what disambiguates here — see
-              // [parseDeviceClassifiersFromSpec] for why a raw instance-id yields empty
-              // classifiers at expansion time.
-              val hint = "Pass a platform-prefixed `--device <platform>` (e.g. `--device android`) " +
-                "to pick the right one."
-              if (candidates.size > 1) {
-                Console.error(
-                  "Warning: ${dir.absolutePath} contains multiple recordings and no `blaze.yaml`; " +
-                    "running ${candidates.first().name} and skipping " +
-                    "${candidates.drop(1).joinToString(", ") { it.name }}. $hint",
-                )
-              } else {
-                Console.error(
-                  "Warning: ${dir.absolutePath} contains only ${candidates.first().name} and no " +
-                    "`blaze.yaml`; running it regardless of the requested device classifiers. $hint",
-                )
-              }
+            // Split the directory's files into distinct named scenarios vs the legacy
+            // single-trail bucket (see [isDistinctNamedScenario]). Named scenarios each expand;
+            // the legacy bucket — NL definitions, the unified `trail.yaml`, and classifier-variant
+            // recordings of ONE trail — collapses to a single classifier-priority pick.
+            val (namedScenarioFiles, legacyFiles) = byParent.getValue(dir)
+              .partition { isDistinctNamedScenario(it) }
+            // Each named scenario is a self-contained trail; run every one (sorted for stable
+            // order). No classifier resolution or device-mismatch warning: a unified file lowers
+            // its own per-classifier recording at run time, and its name is not classifier-derived.
+            namedScenarioFiles.sortedBy { it.absolutePath }.forEach { expanded += it }
+            if (legacyFiles.isNotEmpty()) {
+              resolveSingleTrail(dir, legacyFiles, deviceClassifiers)?.let { expanded += it }
             }
           }
         } else {
@@ -2747,6 +2649,124 @@ open class TrailCommand : Callable<Int> {
         }
       }
       return expanded.distinctBy { it.absoluteFile }
+    }
+
+    /**
+     * True when [file] is a **named unified trail**: its content is unified-format
+     * ([TrailRecordings.isUnifiedTrailContent] — the shared discriminator the requireRecordings
+     * gate and the coverage scripts also use) AND its name is not the bare
+     * [TrailRecordings.UNIFIED_TRAIL_FILENAME] (`trail.yaml`). Several such files can share one
+     * directory — the sample-app `catalog/` holds `conditional-item.trail.yaml`,
+     * `multiple-items.trail.yaml`, …; the eval suite holds `tenKey.trail.yaml`, `openUrl.trail.yaml`,
+     * … — and each is its own runnable trail, so directory expansion must yield every one.
+     *
+     * Everything else is a single-trail representative that collapses into the directory's legacy
+     * bucket: the bare `trail.yaml` (a directory's canonical unified trail), NL definitions
+     * (`blaze.yaml` / `trailblaze.yaml`), and the v1 `<classifier>.trail.yaml` recordings the legacy
+     * save path emits — v1 documents are root-level *lists* and never carry the column-0 `trail:`
+     * key, so the two shapes never collide. Detecting by content rather than by filename or
+     * `config.id` is deliberate — it expands named unified trails that carry no id (the eval suite)
+     * that a filename/id heuristic would miss, and never splits a trail's v1 classifier variants
+     * apart even when they were stamped with mutually inconsistent ids.
+     *
+     * The line scan needs no `{{var}}` template resolution (the `trail:` key is structural, not a
+     * templated value), so a unified file whose unquoted template is invalid as raw YAML still
+     * expands. A file that scans as unified but fails to *decode* also expands on its own — the
+     * runner then surfaces the decode error against that file, rather than the expander silently
+     * folding it into the legacy bucket. Unreadable files fall through to the legacy bucket.
+     */
+    private fun isDistinctNamedScenario(file: File): Boolean {
+      // NL definitions are guarded by name as well as the bare `trail.yaml`: both are
+      // single-trail representatives whatever their content, so neither may bypass the
+      // legacy bucket's classifier resolution (an NL file that somehow carried a root
+      // `trail:` key would otherwise expand AND remain the bucket's NL fallback —
+      // double-billing the trail).
+      if (TrailRecordings.isUnifiedTrailFile(file.name)) return false
+      if (TrailRecordings.isNlDefinitionFile(file.name)) return false
+      return runCatching { TrailRecordings.isUnifiedTrailContent(file.readText()) }
+        .getOrDefault(false)
+    }
+
+    /**
+     * Resolves ONE runnable trail file for the legacy single-trail bucket of a directory — the
+     * classifier-variant recordings plus any NL definition (`blaze.yaml` / `trailblaze.yaml`) /
+     * unified `trail.yaml` that all represent the same trail. Named scenarios are handled directly
+     * in [expandTrailFiles] and never reach here.
+     *
+     * Delegates to [TrailRecordings.findBestTrailResourcePath] (classifier-priority order), with
+     * [doesResourceExist] gated on the bucket's own filenames. Without that gate, a `config/`
+     * directory holding both the workspace config (`trailblaze.yaml`) and a sibling recording
+     * would let the resolver probe the pre-filtered-out `trailblaze.yaml` on disk and resurrect
+     * it — so constraining the probe to files that survived the walk keeps the exclusion
+     * authoritative even if the resolver's candidate list widens in the future.
+     *
+     * When the resolver returns an NL fallback despite a `<platform>-*.trail.yaml` being present,
+     * we prefer the platform-prefixed recording — a workaround for the CLI's single-classifier
+     * limitation (see [parseDeviceClassifiersFromSpec]). The host driver saves recordings using
+     * the device's *full* classifier list (an iPhone run writes `ios-iphone.trail.yaml`, not
+     * `ios.trail.yaml`), but the CLI computes `[ios]` at plan time, so the resolver's candidate
+     * list (`[ios.trail.yaml, trail.yaml, blaze.yaml, …]`) can't match the multi-segment name.
+     * "Most specific" is approximated by longest filename (more hyphenated classifier segments),
+     * tie-broken alphabetically so multiple same-width captures in one dir pick deterministically.
+     *
+     * If nothing matches, we still return the alphabetically-first file so the CLI surface stays
+     * usable, and warn on stderr that the requested `--device` was ignored (a recording for a
+     * different device is running).
+     */
+    private fun resolveSingleTrail(
+      dir: File,
+      bucketFiles: List<File>,
+      deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    ): File? {
+      if (bucketFiles.isEmpty()) return null
+      val allowedNames = bucketFiles.map { it.name }.toSet()
+      val picked = TrailRecordings.findBestTrailResourcePath(
+        path = dir.absolutePath,
+        deviceClassifiers = deviceClassifiers,
+        doesResourceExist = { File(it).name in allowedNames && File(it).exists() },
+      )
+      val finalPicked: String? = if (
+        picked != null &&
+        deviceClassifiers.isNotEmpty() &&
+        TrailRecordings.isNlDefinitionFile(File(picked).name)
+      ) {
+        val platformPrefix = "${deviceClassifiers.first().classifier}-"
+        val platformRecording = bucketFiles
+          .asSequence()
+          .filter { TrailRecordings.isRecordingFile(it.name) }
+          .filter { it.name.startsWith(platformPrefix) }
+          .sortedWith(compareByDescending<File> { it.name.length }.thenBy { it.name })
+          .firstOrNull()
+        platformRecording?.absolutePath ?: picked
+      } else {
+        picked
+      }
+      if (finalPicked != null) return File(finalPicked)
+
+      // No NL definition and no classifier-matched recording in this bucket. Run the
+      // alphabetically-first file (all share this parent dir, so absolute-path order equals
+      // name order) so the CLI surface stays usable, and warn that the requested device was
+      // silently ignored. Route via [Console.error] (stderr) so the warning survives
+      // `--quiet`/JSON modes, matching the device-resolution error envelopes elsewhere in this
+      // file. Phrase the hint as a "platform-prefixed `--device`" so a user who passed
+      // `--device <instance-id>` (no platform prefix) understands the platform segment is what
+      // disambiguates here.
+      val candidates = bucketFiles.sortedBy { it.absolutePath }
+      val hint = "Pass a platform-prefixed `--device <platform>` (e.g. `--device android`) " +
+        "to pick the right one."
+      if (candidates.size > 1) {
+        Console.error(
+          "Warning: ${dir.absolutePath} contains multiple recordings and no `blaze.yaml`; " +
+            "running ${candidates.first().name} and skipping " +
+            "${candidates.drop(1).joinToString(", ") { it.name }}. $hint",
+        )
+      } else {
+        Console.error(
+          "Warning: ${dir.absolutePath} contains only ${candidates.first().name} and no " +
+            "`blaze.yaml`; running it regardless of the requested device classifiers. $hint",
+        )
+      }
+      return candidates.first()
     }
 
     /**

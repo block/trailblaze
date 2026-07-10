@@ -324,9 +324,10 @@ class TrailExecutorImpl(
       is VerificationStep -> "verify"
     }
 
-    // Check for recording. ToolRecording's `init` already rejects empty `tools`, so a present
-    // recording always carries at least one tool here. A missing `recording:` block (null) means
-    // the step was never recorded — deterministic execution can't run it.
+    // Check for recording. A present-but-empty recording (an explicit deterministic no-op — see
+    // ToolRecording's 3-state doc) counts as present and simply executes zero tools below. A
+    // missing `recording:` block (null) means the step was never recorded — deterministic
+    // execution can't run it.
     val recording = promptStep.recording
     if (recording == null) {
       return StepExecutionResult(

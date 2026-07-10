@@ -83,8 +83,9 @@ class DeterministicTrailExecutor(
   suspend fun execute(steps: List<PromptStep>): TrailResult {
     val startTime = System.currentTimeMillis()
 
-    // Validate all steps have recordings. ToolRecording's `init` already rejects empty `tools`
-    // at construction, so a present recording always carries at least one tool here.
+    // Validate all steps have recordings. A present-but-empty recording (an explicit
+    // deterministic no-op — see ToolRecording's 3-state doc) counts as present: the loop below
+    // over `recording.tools` simply runs zero tools and the step succeeds.
     val missingRecordings = steps.mapIndexedNotNull { index, step ->
       if (step.recording == null) index else null
     }

@@ -181,6 +181,27 @@ object TrailRecordings {
   fun isUnifiedTrailFile(fileName: String): Boolean = fileName == UNIFIED_TRAIL_FILENAME
 
   /**
+   * Content-level (not filename) detection of a unified-format trail: `true` if [yaml] has a
+   * root-level `trail:` key. The canonical unified layout uses NAMED files (`<case>.trail.yaml`)
+   * as well as the bare [UNIFIED_TRAIL_FILENAME], so a named unified file is indistinguishable from
+   * a legacy per-device recording by filename alone — the content is the only reliable
+   * discriminator.
+   *
+   * A v1 trail is a YAML *list* (`- config:` … at the root) and never carries a column-0 `trail:`
+   * key; the unified format is a mapping whose required `trail:` key sits at column 0. This mirrors
+   * the discriminator the coverage scripts use (`generate_testcase_coverage_summary_doc.sh` greps
+   * `^trail:`; `scripts/dashboard-coverage/merge.py` uses `line.startswith("trail:")`) so CI
+   * selection, the coverage reports, and the runtime agree on what "unified" means.
+   *
+   * Cheap by design — a line scan, no YAML parse — so a caller can classify a large corpus without
+   * paying a full decode for the (currently dominant) legacy files.
+   */
+  fun isUnifiedTrailContent(yaml: String): Boolean =
+    // The required root key is `trail:` at column 0 (`trailhead:` starts with "trail" but not
+    // "trail:", so it never matches).
+    yaml.lineSequence().any { it.startsWith("trail:") }
+
+  /**
    * Returns `true` if [fileName] is a platform-specific legacy recording file —
    * ends with `.trail.yaml`, is not the NL definition, and is not the unified
    * file (`trail.yaml` happens to end with `.trail.yaml`).

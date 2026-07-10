@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.message.MessagePart
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.elementNames
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.config.YamlDefinedToolSerializer
 import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
@@ -304,7 +305,9 @@ class TrailblazeToolRepo(
     //    Checked first so authors can override Kotlin-backed defaults if needed (the
     //    collision guard in [addDynamicTools] prevents accidental shadowing). Koog hands us
     //    the tool name as a raw String, so wrap it once for the typed map lookup.
-    snapshot.dynamic[ToolName(toolName)]?.let { return it.decodeToolCall(toolContent) }
+    snapshot.dynamic[ToolName(toolName)]?.let {
+      return it.decodeToolCall(coerceScriptedArgsToDescriptor(toolContent, it.trailblazeDescriptor))
+    }
 
     // 2. Class-backed path — look up by the @TrailblazeToolClass(name=...) value, not by the
     //    Koog descriptor name. Descriptor lookup misses any tool with surfaceToLlm = false (e.g.
@@ -752,3 +755,37 @@ class TrailblazeToolRepo(
     is VerificationStep -> verifyStepToolDescriptors()
   }
 }
+
+/**
+ * Re-align a scripted tool-call's arguments to the types its [descriptor] declares before the
+ * dynamic source decodes them. Runs on every dynamic dispatch (recorded replay AND live/agent
+ * calls), but is a no-op — returns [argumentsJson] verbatim — whenever every value already matches
+ * its declared type, which is the norm for freshly-generated agent calls. It exists for recorded
+ * replay: the YAML→JSON decode of a `.trail.yaml` step guesses a scalar's type from its content
+ * (kaml discards the source quote style), so a quoted passcode `'12345678'` or flag value `'true'`
+ * arrives as a JSON number/boolean and the JS handler crashes on the first string op.
+ * [coerceArgsToDescriptorTypes] is the single, tool-agnostic replacement for the per-tool
+ * `String(x)` casts. Non-fatal by construction: any parse hiccup falls back to the raw argument
+ * JSON unchanged.
+ *
+ * Set [SCRIPTED_ARG_TYPE_COERCION_DISABLE_ENV]=1 to bypass (returns [argumentsJson] verbatim).
+ */
+private fun coerceScriptedArgsToDescriptor(
+  argumentsJson: String,
+  descriptor: TrailblazeToolDescriptor,
+): String {
+  if (scriptedArgTypeCoercionDisabled()) return argumentsJson
+  return try {
+    val obj = TrailblazeJsonInstance.parseToJsonElement(argumentsJson) as? JsonObject ?: return argumentsJson
+    val coerced = coerceArgsToDescriptorTypes(obj, descriptor)
+    if (coerced === obj) argumentsJson else TrailblazeJsonInstance.encodeToString(JsonObject.serializer(), coerced)
+  } catch (t: Throwable) {
+    Console.log("[scripted-arg-coerce] skipped for ${descriptor.name}: ${t.message}")
+    argumentsJson
+  }
+}
+
+private const val SCRIPTED_ARG_TYPE_COERCION_DISABLE_ENV = "TRAILBLAZE_DISABLE_SCRIPTED_ARG_TYPE_COERCION"
+
+private fun scriptedArgTypeCoercionDisabled(): Boolean =
+  System.getenv(SCRIPTED_ARG_TYPE_COERCION_DISABLE_ENV)?.trim()?.lowercase().let { it == "1" || it == "true" }

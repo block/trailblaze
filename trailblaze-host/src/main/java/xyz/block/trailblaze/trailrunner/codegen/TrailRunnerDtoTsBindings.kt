@@ -37,6 +37,7 @@ import xyz.block.trailblaze.trailrunner.GetTrailsRequest
 import xyz.block.trailblaze.trailrunner.IntegrationActionRequest
 import xyz.block.trailblaze.trailrunner.IntegrationsResponse
 import xyz.block.trailblaze.trailrunner.LlmSettingsDto
+import xyz.block.trailblaze.trailrunner.MigrateFolderResponse
 import xyz.block.trailblaze.trailrunner.NewComponentRequest
 import xyz.block.trailblaze.trailrunner.NewComponentResponse
 import xyz.block.trailblaze.trailrunner.OkResponse
@@ -110,6 +111,7 @@ internal object TrailRunnerDtoTsBindings {
     FavoritesResponse.serializer().descriptor,
     IntegrationsResponse.serializer().descriptor,
     LlmSettingsDto.serializer().descriptor,
+    MigrateFolderResponse.serializer().descriptor,
     NewComponentRequest.serializer().descriptor,
     NewComponentResponse.serializer().descriptor,
     OkResponse.serializer().descriptor,

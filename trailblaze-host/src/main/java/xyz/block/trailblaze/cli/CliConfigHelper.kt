@@ -9,6 +9,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
@@ -452,6 +453,16 @@ object CliConfigHelper {
     )
   }
   
+  /**
+   * Resolves the unified-recordings rollout gate for a host surface. Layers an optional CLI
+   * [flagOverride] on top of the shared env > persisted tiers (see [UnifiedRecordingWriter.resolveGate]).
+   * The CLI passes its `--[no-]unified-recordings` value; the desktop recording tab and the daemon's
+   * MCP wiring pass null (no flag). Centralizes the persisted-config read so those host sites can't
+   * drift on tier order or config source.
+   */
+  fun resolveUnifiedRecordingsGate(flagOverride: Boolean? = null): Boolean =
+    UnifiedRecordingWriter.resolveGate(flagOverride, readConfig()?.unifiedRecordingsEnabled)
+
   /**
    * Resolves the effective HTTP port using CLI settings.
    */

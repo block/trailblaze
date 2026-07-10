@@ -436,11 +436,19 @@ internal class NewComponentHandler : RpcHandler<NewComponentRequest, NewComponen
     RpcResult.Success(buildNewComponentResponse(request).body)
 }
 
-internal class SaveTargetConfigHandler : RpcHandler<SaveTargetConfigRequest, SaveTargetConfigResponse> {
+internal class SaveTargetConfigHandler(private val deps: TrailRunnerDeps) :
+  RpcHandler<SaveTargetConfigRequest, SaveTargetConfigResponse> {
   // ok=false rides in the response body (mirrors NewComponentHandler) so the UI's error message
   // comes from the response itself, not a generic RPC failure string.
   override suspend fun handle(request: SaveTargetConfigRequest): RpcResult<SaveTargetConfigResponse> =
-    RpcResult.Success(buildSaveTargetConfigResponse(request))
+    RpcResult.Success(
+      buildSaveTargetConfigResponse(
+        request,
+        // A non-null registerNewTarget result means the id resolved into the live target set
+        // (freshly appended, or already present) — selectable now, no restart needed.
+        registerLiveTarget = deps.deviceManager?.let { dm -> { id -> dm.registerNewTarget(id) != null } },
+      ),
+    )
 }
 
 internal class SettingsPatchHandler(private val deps: TrailRunnerDeps) :
@@ -520,7 +528,7 @@ internal fun Routing.trailRunnerRpcRoutes(deps: TrailRunnerDeps) {
   registerRpcHandler<OkResponse, RevealTrailsRootRequest>(RevealTrailsRootHandler(deps))
   registerRpcHandler<OkResponse, IntegrationActionRequest>(IntegrationActionHandler(deps))
   registerRpcHandler<NewComponentResponse, NewComponentRequest>(NewComponentHandler())
-  registerRpcHandler<SaveTargetConfigResponse, SaveTargetConfigRequest>(SaveTargetConfigHandler())
+  registerRpcHandler<SaveTargetConfigResponse, SaveTargetConfigRequest>(SaveTargetConfigHandler(deps))
   registerRpcHandler<SettingsDto, SettingsPatchRequest>(SettingsPatchHandler(deps))
   registerRpcHandler<OkResponse, OpenSessionFileRequest>(OpenSessionFileHandler(deps))
   registerRpcHandler<SessionFilesResponse, GetSessionFilesRequest>(GetSessionFilesHandler(deps))

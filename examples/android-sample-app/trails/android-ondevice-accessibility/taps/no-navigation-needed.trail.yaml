@@ -1,0 +1,36 @@
+config:
+  id: sample-app/taps/no-navigation-needed
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+
+trail:
+  - step: "Navigate to the \"Taps\" tab"
+    # Verified live: the app always lands on the Taps tab immediately after launch (the
+    # bottom-nav "Taps" item is already [selected]). Declaring the recording as an explicit,
+    # deterministic no-op here means replay runs zero tools and never asks the AI to
+    # rediscover the same fact every run — the alternative (omitting `recording:` entirely)
+    # would pay an LLM round-trip just to conclude there's nothing to do.
+    recording:
+      android-phone: []
+
+  - step: "Verify the \"Tap Me\" button and a tap count of 0 are visible, confirming we're on the Taps tab"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: The 'Tap Me' button is only shown on the Taps tab.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Tap Me
+        - assertVisibleBySelector:
+            reason: A fresh launch always starts at a tap count of 0, confirming a clean session on the Taps tab.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 'Tap Count: 0'

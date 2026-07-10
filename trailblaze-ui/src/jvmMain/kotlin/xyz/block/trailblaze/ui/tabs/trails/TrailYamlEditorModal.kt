@@ -16,11 +16,9 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,17 +52,14 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ProgressMessagesPanel
 import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
-import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
-import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
-import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 import java.io.File
 
 /**
- * Full-screen modal for editing trail YAML files.
- * Supports both text-based and visual editing modes, matching the functionality
- * of the YAML tab in the sessions panel.
+ * Full-screen modal for editing a trail YAML file as text. Every trail format (legacy v1 and the
+ * unified single-file trail) is edited the same way — raw YAML with syntax highlighting and
+ * validation — so there's no format-specific editor to keep in sync with the schema.
  *
  * @param variant The trail variant being edited
  * @param initialContent The initial YAML content
@@ -90,12 +85,7 @@ fun TrailYamlEditorModal(
   var saveSuccess by remember { mutableStateOf(false) }
   var saveError by remember { mutableStateOf<String?>(null) }
   var showCloseConfirmation by remember { mutableStateOf(false) }
-  var showDeviceMenu by remember { mutableStateOf(false) }
 
-  // Editor mode state - Visual is the default (matches YAML tab)
-  var editorMode by remember { mutableStateOf(YamlEditorMode.VISUAL) }
-  var visualEditorView by remember { mutableStateOf(YamlVisualEditorView.STEPS) }
-  
   val hasUnsavedChanges = localContent != initialContent
   
   // Debounced validation
@@ -156,12 +146,9 @@ fun TrailYamlEditorModal(
         .fillMaxSize()
         .padding(24.dp)
     ) {
-      // Header with editor mode toggle
       TrailEditorHeader(
         variant = variant,
         relativePath = relativePath,
-        editorMode = editorMode,
-        onYamlEditorModeChange = { editorMode = it },
         hasUnsavedChanges = hasUnsavedChanges,
         validationError = validationError,
         saveSuccess = saveSuccess,
@@ -178,30 +165,16 @@ fun TrailYamlEditorModal(
       )
       
       HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-      
-      // Editor area - switches between text and visual modes
-      when (editorMode) {
-        YamlEditorMode.TEXT -> {
-          YamlTextEditor(
-            yamlContent = localContent,
-            onYamlContentChange = { localContent = it },
-            validationError = validationError,
-            isValidating = isValidating,
-            enabled = true,
-            showTitle = false,
-            modifier = Modifier.weight(1f)
-          )
-        }
-        YamlEditorMode.VISUAL -> {
-          YamlVisualEditor(
-            yamlContent = localContent,
-            onYamlContentChange = { localContent = it },
-            visualEditorView = visualEditorView,
-            onVisualEditorViewChange = { visualEditorView = it },
-            modifier = Modifier.weight(1f)
-          )
-        }
-      }
+
+      YamlTextEditor(
+        yamlContent = localContent,
+        onYamlContentChange = { localContent = it },
+        validationError = validationError,
+        isValidating = isValidating,
+        enabled = true,
+        showTitle = false,
+        modifier = Modifier.weight(1f)
+      )
 
       // Progress Messages Panel
       if (progressMessages.isNotEmpty()) {
@@ -252,8 +225,6 @@ fun TrailYamlEditorModal(
 private fun TrailEditorHeader(
   variant: TrailVariant,
   relativePath: String?,
-  editorMode: YamlEditorMode,
-  onYamlEditorModeChange: (YamlEditorMode) -> Unit,
   hasUnsavedChanges: Boolean,
   validationError: String?,
   saveSuccess: Boolean,
@@ -350,39 +321,11 @@ private fun TrailEditorHeader(
       }
     }
     
-    // Right side: Editor mode toggle and actions
+    // Right side: actions
     Row(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // Editor mode toggle
-      FilterChip(
-        selected = editorMode == YamlEditorMode.VISUAL,
-        onClick = { onYamlEditorModeChange(YamlEditorMode.VISUAL) },
-        label = { Text("Visual") },
-        leadingIcon = {
-          Icon(
-            Icons.Filled.ViewModule,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp)
-          )
-        }
-      )
-      FilterChip(
-        selected = editorMode == YamlEditorMode.TEXT,
-        onClick = { onYamlEditorModeChange(YamlEditorMode.TEXT) },
-        label = { Text("Text") },
-        leadingIcon = {
-          Icon(
-            Icons.Filled.Code,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp)
-          )
-        }
-      )
-      
-      Spacer(modifier = Modifier.width(8.dp))
-
       // Run button - only shown when onRun callback is provided
       if (onRun != null) {
         Button(

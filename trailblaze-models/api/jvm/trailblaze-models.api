@@ -7750,6 +7750,8 @@ public final class xyz/block/trailblaze/llm/config/BuiltInLlmModelRegistry {
 	public final fun configForProvider (Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;)Lxyz/block/trailblaze/llm/config/BuiltInProviderConfig;
 	public final fun defaultModelForProvider (Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;)Ljava/lang/String;
 	public final fun find (Ljava/lang/String;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
+	public final fun koogModelVersionsMap (Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;Ljava/util/List;)Ljava/util/Map;
+	public static synthetic fun koogModelVersionsMap$default (Lxyz/block/trailblaze/llm/config/BuiltInLlmModelRegistry;Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;Ljava/util/List;ILjava/lang/Object;)Ljava/util/Map;
 	public final fun modelListForProvider (Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;)Lxyz/block/trailblaze/llm/TrailblazeLlmModelList;
 	public final fun require (Ljava/lang/String;)Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 }
@@ -11363,6 +11365,7 @@ public final class xyz/block/trailblaze/recordings/TrailRecordings {
 	public final fun isNlDefinitionFile (Ljava/lang/String;)Z
 	public final fun isRecordingFile (Ljava/lang/String;)Z
 	public final fun isTrailFile (Ljava/lang/String;)Z
+	public final fun isUnifiedTrailContent (Ljava/lang/String;)Z
 	public final fun isUnifiedTrailFile (Ljava/lang/String;)Z
 	public final fun shortTrailName (Ljava/lang/String;)Ljava/lang/String;
 }
@@ -11524,6 +11527,10 @@ public final class xyz/block/trailblaze/toolcalls/ResolvedTargetToolDetailRender
 	public fun getName ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class xyz/block/trailblaze/toolcalls/ScriptedToolArgTypeCoercionKt {
+	public static final fun coerceArgsToDescriptorTypes (Lkotlinx/serialization/json/JsonObject;Lxyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor;)Lkotlinx/serialization/json/JsonObject;
 }
 
 public final class xyz/block/trailblaze/toolcalls/SelectorParamTs {
@@ -12335,6 +12342,7 @@ public final class xyz/block/trailblaze/util/SelectorEscapeKt {
 	public static final fun escapeForSelector (Ljava/lang/String;)Ljava/lang/String;
 	public static final fun getIDENTIFIER_REGEX_METACHARACTERS ()Ljava/util/Set;
 	public static final fun getREGEX_METACHARACTERS ()Ljava/util/Set;
+	public static final fun unescapeForSelector (Ljava/lang/String;)Ljava/lang/String;
 }
 
 public final class xyz/block/trailblaze/viewhierarchy/AndroidViewHierarchyFilter : xyz/block/trailblaze/viewhierarchy/ViewHierarchyFilter {
@@ -12567,9 +12575,7 @@ public final class xyz/block/trailblaze/yaml/PromptStepKt {
 
 public final class xyz/block/trailblaze/yaml/ToolRecording {
 	public static final field Companion Lxyz/block/trailblaze/yaml/ToolRecording$Companion;
-	public fun <init> ()V
 	public fun <init> (Ljava/util/List;)V
-	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/util/List;
 	public final fun copy (Ljava/util/List;)Lxyz/block/trailblaze/yaml/ToolRecording;
 	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/ToolRecording;Ljava/util/List;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/ToolRecording;
@@ -13063,6 +13069,7 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrail$Companion {
 public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter {
 	public static final field INSTANCE Lxyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter;
 	public final fun fillMissingConfigScalars (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
+	public final fun hasRecordingForDevice (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;)Z
 	public final fun lowerConfig (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;)Lxyz/block/trailblaze/yaml/TrailConfig;
 	public static synthetic fun lowerConfig$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter;Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/TrailConfig;
 	public final fun lowerToTrailItems (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;Ljava/util/List;)Ljava/util/List;
@@ -13074,24 +13081,24 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailAdapter {
 
 public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailConfig {
 	public static final field Companion Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig$Companion;
-	public static final field METADATA_KEY_PRIORITY Ljava/lang/String;
 	public static final field METADATA_KEY_SOURCE Ljava/lang/String;
 	public static final field METADATA_KEY_SOURCE_REASON Ljava/lang/String;
 	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun component10 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/util/Map;
+	public final fun component11 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()Ljava/util/Map;
+	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Ljava/util/Map;
-	public final fun component6 ()Ljava/util/List;
-	public final fun component7 ()Ljava/lang/String;
-	public final fun component8 ()Ljava/util/Map;
+	public final fun component6 ()Ljava/util/Map;
+	public final fun component7 ()Ljava/util/List;
+	public final fun component8 ()Ljava/lang/String;
 	public final fun component9 ()Ljava/util/Map;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/util/List;Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/yaml/unified/UnifiedTrailConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getContext ()Ljava/lang/String;
 	public final fun getDescription ()Ljava/lang/String;
@@ -13099,6 +13106,7 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailConfig {
 	public final fun getId ()Ljava/lang/String;
 	public final fun getMemory ()Ljava/util/Map;
 	public final fun getMetadata ()Ljava/util/Map;
+	public final fun getPriority ()Ljava/lang/String;
 	public final fun getSkip ()Ljava/util/Map;
 	public final fun getTags ()Ljava/util/List;
 	public final fun getTarget ()Ljava/lang/String;
@@ -13159,5 +13167,13 @@ public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailStepSerializer 
 }
 
 public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailStepSerializer$Companion {
+}
+
+public final class xyz/block/trailblaze/yaml/unified/UnifiedTrailTargets {
+	public static final field INSTANCE Lxyz/block/trailblaze/yaml/unified/UnifiedTrailTargets;
+	public final fun declaredClassifiers (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;)Ljava/util/Set;
+	public final fun declaredPlatforms (Lxyz/block/trailblaze/yaml/unified/UnifiedTrail;)Ljava/util/Set;
+	public final fun platformFor (Ljava/lang/String;)Lxyz/block/trailblaze/devices/TrailblazeDevicePlatform;
+	public final fun platformsOf (Ljava/util/Collection;)Ljava/util/Set;
 }
 

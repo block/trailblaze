@@ -4,12 +4,17 @@
 
 # `scrollUntilTextIsVisible`
 
-Scrolls the screen in the specified direction until an element containing the provided text becomes visible
-in the view hierarchy. The text does not need to be an exact match - it will find elements where the 
-provided text appears anywhere within the element's text.
+Scrolls the screen in the specified direction until a target element becomes visible in the view hierarchy.
 
-The text argument is required. Only provide additional fields if multiple elements contain the same text.
-In this case the additional fields will be used to identify the specific view to expect to be visible while scrolling.
+Provide EXACTLY ONE target:
+- 'text' — substring match: finds elements where this text appears anywhere within the element's text.
+- 'textRegex' — anchored full-match regex, used verbatim (the same semantics selector tools use), so
+  'Loyalty' matches only "Loyalty" and not "Loyalty Enroll". Use this when you need an exact match.
+- (or 'id' alone) — scroll until the element with this id is visible.
+
+At least one of 'text', 'textRegex', or 'id' is required; a call with none is rejected (it would match
+every element). If both 'text' and 'textRegex' are given, 'textRegex' takes precedence. Only provide the
+additional disambiguation fields (e.g. 'index') when multiple elements match the same target.
 
 ## Source
 
@@ -24,15 +29,14 @@ In this case the additional fields will be used to identify the specific view to
 
 ## Input schema
 
-### Required parameters
-
-- `text` — `String`
-  Text to search for while scrolling.
-
 ### Optional parameters
 
+- `text` — `String`
+  Text to search for while scrolling (substring match). Provide this OR 'textRegex'.
+- `textRegex` — `String`
+  Full-match regex to scroll until visible, used verbatim (anchored, like selector tools). Use instead of 'text' for an exact match, e.g. 'Loyalty' won't match 'Loyalty Enroll'.
 - `id` — `String`
-  The element id to scroll until. REQUIRED: 'text' and/or 'id' parameter.
+  The element id to scroll until. At least one of 'text', 'textRegex', or 'id' is required.
 - `index` — `Integer`
   A 0-based index to disambiguate multiple views with the same text. Default is '0'.
 - `direction` — `ToolParameterType.Enum(

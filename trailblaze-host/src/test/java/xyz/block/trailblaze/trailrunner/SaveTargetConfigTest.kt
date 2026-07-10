@@ -402,6 +402,100 @@ class SaveTargetConfigTest {
     }
   }
 
+  // registerLiveTarget — the injected live-registration callback (Block 3): a genuine create that
+  // registers live reports registeredLive=true so the UI skips its "restart to activate" banner.
+
+  @Test
+  fun `createIfMissing reports registeredLive when the live registration succeeds`() = runBlocking {
+    withWorkspace { configDir ->
+      val registered = mutableListOf<String>()
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
+        registerLiveTarget = { id -> registered.add(id); true },
+      )
+      assertTrue(response.ok)
+      assertTrue(response.created)
+      assertTrue(response.registeredLive)
+      assertEquals(listOf("myapp"), registered)
+    }
+  }
+
+  @Test
+  fun `createIfMissing reports registeredLive false when the target is not in the live set`() = runBlocking {
+    withWorkspace { configDir ->
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
+        // Registration ran but the id didn't resolve into the live set (NotDiscovered) → false.
+        registerLiveTarget = { false },
+      )
+      assertTrue(response.ok)
+      assertTrue(response.created)
+      assertFalse(response.registeredLive)
+    }
+  }
+
+  @Test
+  fun `createIfMissing without a registration callback reports registeredLive false`() = runBlocking {
+    withWorkspace { configDir ->
+      // No device manager (the callback is null) → the create still succeeds but falls back to the
+      // restart flow: registeredLive stays false.
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
+      )
+      assertTrue(response.ok)
+      assertTrue(response.created)
+      assertFalse(response.registeredLive)
+    }
+  }
+
+  @Test
+  fun `an edit-path save never attempts live registration`() = runBlocking {
+    withWorkspace { configDir ->
+      writeManifest(configDir, "demo", "id: demo\ntarget:\n  display_name: Demo\n")
+      var called = false
+      val response = buildSaveTargetConfigResponse(
+        // createIfMissing = false → the edit path, which must not touch the live target set.
+        SaveTargetConfigRequest(trailmapId = "demo", displayName = "Demo Renamed"),
+        registerLiveTarget = { called = true; true },
+      )
+      assertTrue(response.ok)
+      assertFalse(called)
+      assertFalse(response.registeredLive)
+    }
+  }
+
+  @Test
+  fun `live registration is skipped when the workspace targets list could not be updated`() = runBlocking {
+    withWorkspace { configDir ->
+      // Malformed workspace config → warning != null; discovery can't see the id, so we don't even
+      // attempt live registration (it would only ever return NotDiscovered).
+      File(configDir, "trailblaze.yaml").writeText("targets: [")
+      var called = false
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
+        registerLiveTarget = { called = true; true },
+      )
+      assertTrue(response.ok)
+      assertTrue(response.warning.orEmpty().contains("trailblaze.yaml"))
+      assertFalse(called)
+      assertFalse(response.registeredLive)
+    }
+  }
+
+  @Test
+  fun `a throwing live registration leaves the create successful and registeredLive false`() = runBlocking {
+    withWorkspace { configDir ->
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
+        registerLiveTarget = { error("device manager blew up") },
+      )
+      // Best-effort: the trailmap was already created, so a registration failure is not an error.
+      assertTrue(response.ok)
+      assertTrue(response.created)
+      assertFalse(response.registeredLive)
+    }
+  }
+
   // computePlatformsWithChangedIconInputs — the icon-extraction trigger's change-detection logic,
   // extracted pure so it's testable with plain maps rather than by asserting on log output (this
   // codebase's testing philosophy explicitly disallows pinning tests to internal log lines).

@@ -392,6 +392,116 @@ class WaypointMigrateTrailCommandTest {
     assertNull(cmd.readDisplayName(log))
   }
 
+  // ----- readActionCoordinate -----------------------------------------------------
+  //
+  // On-device instrumentation captures (AgentDriverLog) have no `displayName`, so precise
+  // pairing degrades to a forward-cursor fallback that can drift past a selector's screen
+  // — and even on the right frame the Maestro-tree resolver can miss a concatenated summary
+  // row (e.g. "-$5.00" or a payment-method label that only exists as a substring of a
+  // container's text in the UiAutomator tree). The recorded `action` coordinate is the seed
+  // that lets [tryResolveInLog] recover in both cases. These pin the parse contract.
+
+  @Test
+  fun `readActionCoordinate parses a TapPoint action coordinate`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    val log = File(dir, "abc_AgentDriverLog.json").apply {
+      writeText(
+        """{"class":"...","action":{"class":"xyz.block.trailblaze.api.AgentDriverAction.TapPoint","x":326,"y":2277},"driverMigrationTreeNode":{}}""",
+      )
+    }
+    assertEquals(326 to 2277, cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate parses an AssertCondition coordinate past a brace-bearing description`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // The description precedes x/y AND contains `{`/`}` — a brace-bounded regex slice of the
+    // action object would truncate at the stray brace and miss x/y. Structural parsing must
+    // still pick x/y from inside the action object, not from an outer field.
+    val log = File(dir, "def_AgentDriverLog.json").apply {
+      writeText(
+        """{"deviceWidth":1080,"action":{"class":"xyz.block.trailblaze.api.AgentDriverAction.AssertCondition","conditionDescription":"\"Refund {amount}\" is visible","x":540,"y":1170,"isVisible":true}}""",
+      )
+    }
+    assertEquals(540 to 1170, cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate returns null for a coordinate-less action`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // EnterText carries no x/y — the fallback must decline so the forward scan continues.
+    val log = File(dir, "ghi_AgentDriverLog.json").apply {
+      writeText(
+        """{"action":{"class":"xyz.block.trailblaze.api.AgentDriverAction.EnterText","text":"5.00"}}""",
+      )
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate returns null when there is no action block`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    val log = File(dir, "jkl_TrailblazeSnapshotLog.json").apply {
+      writeText("""{"displayName":"preTool: TapOnByElementSelector","viewHierarchy":{}}""")
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate returns null when the action has x but no y`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // A partial coordinate can't seed a hit-test — the fallback must decline, not guess.
+    val log = File(dir, "mno_AgentDriverLog.json").apply {
+      writeText("""{"action":{"class":"...TapPoint","x":326}}""")
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate rejects a not-visible assertion coordinate`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // A not-visible assert records screen-center coordinates, not a real target — a later
+    // selector must not bind off this log during the forward-cursor scan.
+    val log = File(dir, "nv_AgentDriverLog.json").apply {
+      writeText(
+        """{"action":{"class":"...AssertCondition","conditionDescription":"\"Search\" is not visible","x":540,"y":1170,"isVisible":false,"succeeded":true}}""",
+      )
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate rejects a failed visible assertion coordinate`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // A failed visible assert records (0,0) — reject so the fallback never seeds a hit-test
+    // at the origin.
+    val log = File(dir, "fa_AgentDriverLog.json").apply {
+      writeText(
+        """{"action":{"class":"...AssertCondition","conditionDescription":"\"Total\" is visible","x":0,"y":0,"isVisible":true,"succeeded":false}}""",
+      )
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
+  @Test
+  fun `readActionCoordinate returns null for unparseable JSON`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    // A truncated/corrupt log must be swallowed as "no coordinate here" so the forward scan
+    // continues, never abort the batch migration.
+    val log = File(dir, "pqr_AgentDriverLog.json").apply {
+      writeText("""{"action":{"class":"...TapPoint","x":326,""")
+    }
+    assertNull(cmd.readActionCoordinate(log))
+  }
+
   // ----- listSnapshotLogs ---------------------------------------------------------
 
   @Test

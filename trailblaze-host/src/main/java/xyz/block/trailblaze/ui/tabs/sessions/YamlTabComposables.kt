@@ -15,14 +15,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,17 +52,13 @@ import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.ConnectionStatusPanel
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.composables.ProgressMessagesPanel
-import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
-import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
-import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 
 /**
- * Main YAML Tab composable that provides a combined text and visual editor for Trailblaze YAML files.
- * 
+ * Main YAML Tab composable for editing Trailblaze YAML files as raw text.
+ *
  * This composable orchestrates:
- * - Editor mode switching (Text vs Visual)
  * - YAML content persistence and validation
  * - Test execution on connected devices
  * - Progress and connection status display
@@ -79,21 +72,13 @@ fun YamlTabComposable(
 ) {
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val savedYamlContent = serverState.appConfig.yamlContent
-  val savedEditorMode = serverState.appConfig.yamlEditorMode
-  val savedVisualEditorView = serverState.appConfig.yamlVisualEditorView
 
   var isRunning by remember { mutableStateOf(false) }
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
   var connectionStatus by remember { mutableStateOf<DeviceConnectionStatus?>(null) }
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
-  
-  // Editor mode state
-  var editorMode by rememberSaveable { mutableStateOf(savedEditorMode) }
 
-  // Visual editor sub-view state
-  var visualEditorView by rememberSaveable { mutableStateOf(savedVisualEditorView) }
-
-  // Local state for YAML content - shared between text and visual editors
+  // Local state for YAML content
   var localYamlContent by rememberSaveable { mutableStateOf(savedYamlContent) }
 
   // YAML validation state
@@ -103,17 +88,9 @@ fun YamlTabComposable(
   val coroutineScope = rememberCoroutineScope()
 
   // Function to save changes
-  fun saveChanges(
-    yamlContent: String = localYamlContent,
-    yamlEditorMode: YamlEditorMode = editorMode,
-    yamlVisualEditorView: YamlVisualEditorView = visualEditorView,
-  ) {
+  fun saveChanges(yamlContent: String = localYamlContent) {
     trailblazeSettingsRepo.updateAppConfig { appConfig ->
-      appConfig.copy(
-        yamlContent = yamlContent,
-        yamlEditorMode = yamlEditorMode,
-        yamlVisualEditorView = yamlVisualEditorView,
-      )
+      appConfig.copy(yamlContent = yamlContent)
     }
   }
 
@@ -132,39 +109,11 @@ fun YamlTabComposable(
     }
   }
 
-  // Keep editor mode in sync with what's saved on disk
-  LaunchedEffect(savedEditorMode) {
-    if (savedEditorMode != editorMode) {
-      editorMode = savedEditorMode
-    }
-  }
-
-  // Keep visual editor view in sync with what's saved on disk
-  LaunchedEffect(savedVisualEditorView) {
-    if (savedVisualEditorView != visualEditorView) {
-      visualEditorView = savedVisualEditorView
-    }
-  }
-
   // Auto-persist YAML edits with a debounce so switching tabs doesn't lose work
   LaunchedEffect(localYamlContent) {
     delay(300)
     if (localYamlContent != savedYamlContent) {
       saveChanges(yamlContent = localYamlContent)
-    }
-  }
-
-  // Auto-persist editor mode changes with a debounce so switching tabs doesn't lose state
-  LaunchedEffect(editorMode) {
-    if (editorMode != savedEditorMode) {
-      saveChanges(yamlEditorMode = editorMode)
-    }
-  }
-
-  // Auto-persist visual editor view changes
-  LaunchedEffect(visualEditorView) {
-    if (visualEditorView != savedVisualEditorView) {
-      saveChanges(yamlVisualEditorView = visualEditorView)
     }
   }
 
@@ -182,36 +131,18 @@ fun YamlTabComposable(
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-      // Header row with title and editor mode toggle
-      YamlEditorHeader(
-        editorMode = editorMode,
-        onEditorModeChange = { editorMode = it },
-      )
+      YamlEditorHeader()
 
       HorizontalDivider()
 
-      // Editor area - switches between text and visual modes
-      when (editorMode) {
-        YamlEditorMode.TEXT -> {
-          YamlTextEditor(
-            yamlContent = localYamlContent,
-            onYamlContentChange = { localYamlContent = it },
-            isRunning = isRunning,
-            validationError = validationError,
-            isValidating = isValidating,
-            modifier = Modifier.weight(1f)
-          )
-        }
-        YamlEditorMode.VISUAL -> {
-          YamlVisualEditor(
-            yamlContent = localYamlContent,
-            onYamlContentChange = { localYamlContent = it },
-            visualEditorView = visualEditorView,
-            onVisualEditorViewChange = { visualEditorView = it },
-            modifier = Modifier.weight(1f)
-          )
-        }
-      }
+      YamlTextEditor(
+        yamlContent = localYamlContent,
+        onYamlContentChange = { localYamlContent = it },
+        isRunning = isRunning,
+        validationError = validationError,
+        isValidating = isValidating,
+        modifier = Modifier.weight(1f)
+      )
 
       // Progress Messages Panel
       if (progressMessages.isNotEmpty()) {
@@ -324,60 +255,20 @@ fun YamlTabComposable(
 }
 
 /**
- * Header row with title and editor mode toggle.
+ * Header row with the editor title.
  */
 @Composable
-private fun YamlEditorHeader(
-  editorMode: YamlEditorMode,
-  onEditorModeChange: (YamlEditorMode) -> Unit,
-) {
+private fun YamlEditorHeader() {
   Row(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.SpaceBetween,
     verticalAlignment = Alignment.CenterVertically
   ) {
-    Row(
-      horizontalArrangement = Arrangement.spacedBy(16.dp),
-      verticalAlignment = Alignment.CenterVertically
-    ) {
-      Text(
-        text = "YAML Editor",
-        style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
-      )
-      
-    }
-    
-    // Editor mode toggle
-    Row(
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically
-    ) {
-      FilterChip(
-        selected = editorMode == YamlEditorMode.TEXT,
-        onClick = { onEditorModeChange(YamlEditorMode.TEXT) },
-        label = { Text("Text") },
-        leadingIcon = {
-          Icon(
-            Icons.Filled.Code,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp)
-          )
-        }
-      )
-      FilterChip(
-        selected = editorMode == YamlEditorMode.VISUAL,
-        onClick = { onEditorModeChange(YamlEditorMode.VISUAL) },
-        label = { Text("Visual") },
-        leadingIcon = {
-          Icon(
-            Icons.Filled.ViewModule,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp)
-          )
-        }
-      )
-    }
+    Text(
+      text = "YAML Editor",
+      style = MaterialTheme.typography.headlineMedium,
+      fontWeight = FontWeight.Bold
+    )
   }
 }
 

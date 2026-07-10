@@ -256,11 +256,13 @@ object TrailblazeNodeSelectorResolver {
     detail: DriverNodeDetail.AndroidMaestro,
     match: DriverNodeMatch.AndroidMaestro,
   ): Boolean {
-    if (!requirePattern(match.textRegex, detail.resolveText())) return false
-    if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
-    if (!requirePattern(match.accessibilityTextRegex, detail.accessibilityText)) return false
-    if (!requirePattern(match.classNameRegex, detail.className)) return false
-    if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
+    // Maestro-shape selectors keep the semantics Maestro's Orchestra evaluated them with.
+    val dialect = MatchDialect.MAESTRO
+    if (!requirePattern(match.textRegex, detail.resolveText(), dialect)) return false
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId, dialect)) return false
+    if (!requirePattern(match.accessibilityTextRegex, detail.accessibilityText, dialect)) return false
+    if (!requirePattern(match.classNameRegex, detail.className, dialect)) return false
+    if (!requirePattern(match.hintTextRegex, detail.hintText, dialect)) return false
     if (!requireEqual(match.clickable, detail.clickable)) return false
     if (!requireEqual(match.enabled, detail.enabled)) return false
     if (!requireEqual(match.focused, detail.focused)) return false
@@ -304,11 +306,13 @@ object TrailblazeNodeSelectorResolver {
     detail: DriverNodeDetail.IosMaestro,
     match: DriverNodeMatch.IosMaestro,
   ): Boolean {
-    if (!requirePattern(match.textRegex, detail.resolveText())) return false
-    if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
-    if (!requirePattern(match.accessibilityTextRegex, detail.accessibilityText)) return false
-    if (!requirePattern(match.classNameRegex, detail.className)) return false
-    if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
+    // Maestro-shape selectors keep the semantics Maestro's Orchestra evaluated them with.
+    val dialect = MatchDialect.MAESTRO
+    if (!requirePattern(match.textRegex, detail.resolveText(), dialect)) return false
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId, dialect)) return false
+    if (!requirePattern(match.accessibilityTextRegex, detail.accessibilityText, dialect)) return false
+    if (!requirePattern(match.classNameRegex, detail.className, dialect)) return false
+    if (!requirePattern(match.hintTextRegex, detail.hintText, dialect)) return false
     if (!requireEqual(match.focused, detail.focused)) return false
     if (!requireEqual(match.selected, detail.selected)) return false
     return true
@@ -339,28 +343,77 @@ object TrailblazeNodeSelectorResolver {
     expected == null || expected == actual
 
   /**
-   * Returns true if [pattern] is null (no constraint) or [text] matches it.
-   * When pattern is set but text is null, the match fails (element lacks the property).
+   * The matching semantics a selector shape carries. A selector means what it meant under the
+   * driver dialect it was authored for, everywhere it is evaluated — so the Maestro-shape
+   * branches ([DriverNodeMatch.AndroidMaestro], [DriverNodeMatch.IosMaestro]) keep the lenient
+   * semantics Maestro's Orchestra compiled them with, while native shapes stay strict.
+   *
+   * Deliberately no runtime kill-switch: the MAESTRO dialect is strictly loosening (it can only
+   * add matches, never remove one), a per-selector escape exists (leading `(?-i)` / `(?-s)`),
+   * and this common code also targets Wasm where env vars don't exist. A match that succeeds
+   * only via the lenient dialect is not separately logged; to debug a surprising match, re-test
+   * the pattern with a `(?-i)` prefix.
    */
-  private fun requirePattern(pattern: String?, text: String?): Boolean {
-    if (pattern == null) return true
-    if (text == null) return false
-    return matchesPattern(pattern, text)
+  private enum class MatchDialect {
+    /** Strict: no implicit regex options; case-sensitive; `.` does not cross newlines. */
+    NATIVE,
+
+    /**
+     * Maestro-compatible: `IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE` (Orchestra's
+     * `REGEX_OPTIONS`), and an invalid pattern degrades to an escaped literal compiled with the
+     * same options (Maestro's `toRegexSafe`) — i.e. a case-insensitive literal.
+     */
+    MAESTRO,
   }
 
   /**
-   * Matches a regex pattern against the full text. Falls back to exact case-insensitive
-   * comparison if the pattern is not valid regex (e.g., "$3.00" where $ is a currency symbol).
+   * Returns true if [pattern] is null (no constraint) or [text] matches it.
+   * When pattern is set but text is null, the match fails (element lacks the property).
+   */
+  private fun requirePattern(pattern: String?, text: String?, dialect: MatchDialect = MatchDialect.NATIVE): Boolean {
+    if (pattern == null) return true
+    if (text == null) return false
+    return matchesPattern(pattern, text, dialect)
+  }
+
+  /**
+   * Matches a regex pattern against the full text, then falls back to literal string equality
+   * when the pattern doesn't match as a regex. The fallback covers both an unmatchable-but-valid
+   * pattern (e.g. "$3.00", where a bare `$` is an end-of-input anchor so nothing can follow it —
+   * it compiles fine but can never regex-match) and a pattern that fails to compile at all. This
+   * mirrors Maestro's `Filters.textMatches` (`regex.matches(value) || regex.pattern == value`),
+   * so a natural-language value like a price matches identically on the Maestro and accessibility
+   * drivers without hand-escaping the metacharacters.
    *
    * Uses full-string matching (not substring) to prevent false positives when element text
    * contains the pattern as a substring (e.g., pattern "ok" should not match "book").
+   *
+   * [MatchDialect.MAESTRO] additionally compiles with Orchestra's `REGEX_OPTIONS` and degrades an
+   * invalid pattern to an escaped literal with the same options (`toRegexSafe`), so a Maestro-shape
+   * selector matches here exactly as it did under Maestro. Case-sensitivity escape hatch inside a
+   * Maestro-shape pattern: a leading `(?-i)`. [MatchDialect.NATIVE] is strict; opt into
+   * case-insensitivity with a leading `(?i)`.
+   *
+   * The behavioral contract is locked by the shared cross-language fixture
+   * `sdks/typescript/src/matcher/matcher-parity-fixtures.json`, consumed by both this
+   * implementation's [MatcherParityFixturesTest] and the TS mirror's `matcher-parity.test.ts`.
+   * Semantics changes must update the fixture and both implementations together.
    */
-  private fun matchesPattern(pattern: String, text: String): Boolean {
-    val regex = try {
-      Regex(pattern)
-    } catch (_: IllegalArgumentException) {
-      null
+  private fun matchesPattern(pattern: String, text: String, dialect: MatchDialect = MatchDialect.NATIVE): Boolean {
+    val options = when (dialect) {
+      MatchDialect.NATIVE -> emptySet()
+      MatchDialect.MAESTRO -> MAESTRO_REGEX_OPTIONS
     }
-    return regex?.matches(text) ?: text.equals(pattern, ignoreCase = true)
+    val regex = try {
+      Regex(pattern, options)
+    } catch (_: IllegalArgumentException) {
+      when (dialect) {
+        MatchDialect.NATIVE -> null
+        // Maestro's StringUtils.toRegexSafe: invalid regex → escaped literal, same options.
+        MatchDialect.MAESTRO -> Regex(Regex.escape(pattern), options)
+      }
+    }
+    if (regex != null && regex.matches(text)) return true
+    return text == pattern
   }
 }

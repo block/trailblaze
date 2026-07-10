@@ -16,9 +16,10 @@ import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
- * Validates YAML content.
- * This does a "soft" validation that checks YAML syntax but doesn't fail on unknown tools
- * since the actual runner will have app-specific custom tools registered.
+ * Validates YAML content for the editor's Run/Save gate. A "soft" validation: it checks that the
+ * file parses, but does NOT fail on unknown/app-specific tools — the decoder tolerates those (an
+ * unregistered tool name decodes into a pass-through OtherTrailblazeTool), and the runner registers
+ * the real tool at run time. Returns null when valid, or an error message to surface otherwise.
  */
 fun validateYaml(content: String): String? {
   if (content.isBlank()) {
@@ -32,22 +33,18 @@ fun validateYaml(content: String): String? {
   }
 
   return try {
-    // Try to parse with default tools
+    // Version-aware parse — validates both legacy v1 (list) and unified (mapping) shapes. Uses
+    // decodeTrailDocument, NOT decodeTrail: the latter throws for a unified file that carries
+    // recordings when no device classifiers are supplied (it would silently drop them at run time),
+    // which is a runtime guard, not a syntax error. Validation only cares that the file parses.
     val trailblazeYaml = createTrailblazeYaml()
-    trailblazeYaml.decodeTrail(content)
+    trailblazeYaml.decodeTrailDocument(content)
     null // No error
-  } catch (e: Exception) {
-    val message = e.message ?: "Invalid YAML format"
-    // Only ignore errors that are specifically about unknown/unregistered tools
-    // The exact error format is: "TrailblazeYaml could not TrailblazeTool found with name: X. Did you register it?"
-    val isUnknownToolError = message.contains("TrailblazeYaml could not TrailblazeTool found with name:")
-
-    if (isUnknownToolError) {
-      null // Allow unknown tools - they'll be registered when the test runs
-    } else {
-      // Return all other errors including syntax, structure issues
-      message
-    }
+  } catch (e: Throwable) {
+    // Unknown tools don't reach here (the decoder tolerates them), so a throw is a genuine
+    // syntax/structure problem worth surfacing. Catch Throwable — decodeTrailDocument can throw a
+    // non-Exception (e.g. from a require/check in the schema).
+    e.message ?: "Invalid YAML format"
   }
 }
 

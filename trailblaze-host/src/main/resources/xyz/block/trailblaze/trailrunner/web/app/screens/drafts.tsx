@@ -393,6 +393,7 @@ function DraftDetail({ id, go, active, viewRun, onViewRun, onCloseRun, onChanged
   // subset. Edits happen in the blaze.yaml editor. Declared before the `!d` guard so the hook count
   // stays constant across the loading/loaded renders (null-safe on d).
   const blazeConfigRows = React.useMemo(() => flattenObject(parseTrailYaml((d && d.blazeYaml) || '').config || {}, { joinArray: (a) => a.join(', ') }), [d && d.blazeYaml]);
+  const blazeTrailhead = React.useMemo(() => parseTrailYaml((d && d.blazeYaml) || '').trailhead, [d && d.blazeYaml]);
 
   if (!d) return <div className="tb-sub" style={{ padding: 36 }}>Loading…</div>;
 
@@ -760,7 +761,7 @@ function DraftDetail({ id, go, active, viewRun, onViewRun, onCloseRun, onChanged
           owns its view-local state; this screen supplies the draft data + the /api/draft/* I/O. */}
       <StepsBoard
         steps={steps || []} onStepsChange={setSteps} dirty={dirty} onSaveSteps={saveSteps}
-        variants={variants} variantDocs={variantDocs} blazeConfigRows={blazeConfigRows}
+        variants={variants} variantDocs={variantDocs} blazeConfigRows={blazeConfigRows} blazeTrailhead={blazeTrailhead}
         deviceList={deviceList} linkedSessions={draftSessions}
         home={d.home} blazeName="blaze.yaml" target={cfg && cfg.target} canRecord
         onOpenFile={openFile} dispatchRecord={dispatchRecord} dispatchPlay={dispatchPlay}

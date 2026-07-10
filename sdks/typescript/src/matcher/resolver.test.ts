@@ -5,8 +5,12 @@
 // Each test mirrors a named case in the Kotlin source. The test names match exactly
 // (kebab-cased only where required by `describe`/`test` ergonomics) so a parity-test
 // audit can map each Kotlin test to its TS counterpart by name. New cases added here
-// must land in the Kotlin file too (and vice versa) — drift will be caught by the
-// JVM-side `MatcherParityTest` (lands in a follow-up PR).
+// must land in the Kotlin file too (and vice versa).
+//
+// Text-pattern matching semantics are additionally locked by a shared cross-language
+// contract: `matcher-parity-fixtures.json`, consumed by `matcher-parity.test.ts` here
+// and by `MatcherParityFixturesTest` on the Kotlin side. Semantics changes go in the
+// fixture (plus both implementations), not in only one language's tests.
 //
 // Templating tests from the Kotlin suite (`resolver expands target appId placeholder`
 // + friends) are NOT ported — see `resolver.ts` file header for rationale (templating
@@ -185,7 +189,7 @@ describe("resolve — regex semantics", () => {
     expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
   });
 
-  test("invalid regex falls back to case-insensitive literal", () => {
+  test("invalid regex falls back to literal", () => {
     resetIds();
     const target = aaNode({ text: "[unclosed" });
     const root = aaNode({}, { children: [target] });
@@ -194,6 +198,95 @@ describe("resolve — regex semantics", () => {
       selectors.androidAccessibility({ textRegex: "[unclosed" }),
     );
     expect(result.kind).toBe("singleMatch");
+  });
+
+  test("unescaped currency regex falls back to literal", () => {
+    // "$3.00" compiles as a valid regex but can never match (the bare `$` is an
+    // end-of-input anchor). The literal fallback matches it against the element's
+    // actual text, so an unescaped price authored as natural-language text resolves.
+    resetIds();
+    const target = aaNode({ text: "$3.00" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "$3.00" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("literal fallback is case-sensitive (valid regex miss)", () => {
+    // "abc" is a valid regex that doesn't match "ABC", and the literal fallback
+    // ("ABC" === "abc") also fails — so this must NOT match, mirroring Maestro.
+    resetIds();
+    const target = aaNode({ text: "ABC" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(root, selectors.androidAccessibility({ textRegex: "abc" }));
+    expect(result.kind).toBe("noMatch");
+  });
+
+  test("Java \\Q...\\E quote section matches its literal content", () => {
+    // Kotlin's Regex.escape() emits `\Q$3.00\E`, which java.util.regex matches
+    // literally. In JS, `\Q` is an identity escape (literal `Q`), so without
+    // translation the pattern silently never matches. The translator rewrites
+    // the quoted section to JS-escaped literals.
+    resetIds();
+    const target = aaNode({ text: "$3.00" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "\\Q$3.00\\E" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("\\Q...\\E mixed with regex parts outside the quote", () => {
+    // Regex parts outside the quoted section keep their regex meaning.
+    resetIds();
+    const target = aaNode({ text: "Charge $12.50" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "Charge \\Q$\\E\\d+\\.\\d{2}" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("unterminated \\Q quotes to end of pattern (Java semantics)", () => {
+    resetIds();
+    const target = aaNode({ text: "$5.00" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "\\Q$5.00" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("escaped backslash before Q is not a quote start", () => {
+    // `\\Q` in the pattern source is an escaped backslash followed by literal Q —
+    // Java does NOT open a quote section there. Text "\Qa.b" (literal backslash-Q)
+    // must match pattern `\\Qa\.b`.
+    resetIds();
+    const target = aaNode({ text: "\\Qa.b" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "\\\\Qa\\.b" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("literal fallback is case-sensitive (compile failure)", () => {
+    // "[unclosed" fails to compile as a regex; the literal fallback is case-sensitive,
+    // so a case-different value ("[UNCLOSED") must NOT match.
+    resetIds();
+    const target = aaNode({ text: "[UNCLOSED" });
+    const root = aaNode({}, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.androidAccessibility({ textRegex: "[unclosed" }),
+    );
+    expect(result.kind).toBe("noMatch");
   });
 
   test("full-string match: pattern 'ok' does NOT match text 'book'", () => {
@@ -210,8 +303,8 @@ describe("resolve — regex semantics", () => {
   test("inline (?i) flag translates to case-insensitive RegExp", () => {
     // Kotlin's java.util.regex supports `(?i)foo` as a leading inline flag.
     // ECMAScript regex treats `(?i)` as a syntax error. Without translation,
-    // the matcher falls back to case-insensitive LITERAL equality, which
-    // matches `(?i)Submit` only against the literal text `(?i)Submit` — wrong.
+    // the matcher falls back to LITERAL equality, which matches `(?i)Submit`
+    // only against the literal text `(?i)Submit` — wrong.
     // With translation, `(?i)Submit` compiles to `new RegExp("^(?:Submit)$", "i")`
     // and matches "submit" / "SUBMIT" / etc. case-insensitively.
     resetIds();

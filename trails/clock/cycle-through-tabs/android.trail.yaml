@@ -7,8 +7,11 @@
     target: clock
     description: "Launch Clock via the custom scripted tool, then visit each tab."
 
-- tools:
-    - clock_android_launchApp: {}
+- prompts:
+  - step: Launch the Clock app via the custom scripted tool
+    recording:
+      tools:
+      - clock_android_launchApp: {}
 
 - prompts:
     - step: Tap the Alarm tab.

@@ -44,7 +44,7 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  *
  * The phase **fails the build by default**: a finding on a non-exempt target, or a non-exempt
  * target that couldn't be validated at all (no generated typed surface), is fatal. This keeps a
- * new uncovered target from silently slipping in. Two escape hatches keep it honest while the
+ * new uncovered target from silently slipping in. One escape hatch keeps it honest while the
  * corpus is brought to zero:
  *
  * - **Per-target exemption** — a target's `trail_validation.exempt: "<reason>"` in its
@@ -53,15 +53,12 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  *   durable, co-located mechanism, honored via [validate]'s `exemptTargets`. Targets whose manifest
  *   the validator can't reach yet (classpath-bundled targets, and the no-`target:` trails) are
  *   exempted through the same map from a central, explicitly-transitional allow-list in `CheckCommand`.
- * - **Framework-surface allow-list** — [DEFAULT_ALLOWED_UNMODELED_TOOLS] downgrades findings for
- *   recordable tools the generated surface doesn't model yet (a framework gap, not a per-target
- *   defect).
  *
  * The emitted `trailblaze-client.d.ts` is the FULL, ungated tool surface — every class-backed tool a
- * trailmap resolves is typed there. Validation is bounded by how *faithfully* that surface models a
- * recorded call; the two allow-lists above absorb the residual fidelity gaps (filtered selector
- * args on selector-backed tools; recordable tools no toolset surfaces) until the emitter follow-ups
- * close them, at which point the corresponding exemptions shrink away.
+ * trailmap resolves is typed there, and the emitter re-injects selector args and surfaces every
+ * recordable tool (class- and YAML-defined), so a faithfully-recorded call type-checks cleanly.
+ * Validation is bounded by how *faithfully* that surface models a recorded call; a residual
+ * per-target fidelity gap is absorbed by the exemption above until the surface closes it.
  *
  * Runs by default on every `trailblaze check`. Set `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1`
  * to skip the phase entirely.
@@ -105,19 +102,6 @@ object TrailTscValidator {
 
   /** [Report.skippedNoSurface] / [exemptTargets] key for a trail that declares no `target:`. */
   const val NO_TARGET_KEY: String = "<no target:>"
-
-  /**
-   * Recordable tools the generated typed surface doesn't model yet, so a recorded call to one
-   * reads as a spurious "does not exist" finding rather than a real per-target defect. Findings
-   * for these tool names are downgraded to non-fatal by default (still reported).
-   *
-   * This is the framework-surface allow-list the phase carries centrally (by tool name, not by
-   * target). It shrinks as the emitter learns to surface these tools:
-   *  - `eraseText` / `pressBack` — YAML-defined recordable tools; `built-in-tools.ts` can only
-   *    curate `@TrailblazeToolClass`-backed tools (enforced by `BuiltInToolsBindingDriftTest`),
-   *    so a YAML-defined tool can't be added there until the emitter surfaces YAML-defined tools.
-   */
-  val DEFAULT_ALLOWED_UNMODELED_TOOLS: Set<String> = setOf("eraseText", "pressBack")
 
   /** A single recorded tool call, flattened to the shape codegen needs. */
   data class RecordedCall(
@@ -167,8 +151,8 @@ object TrailTscValidator {
     val skippedNoRecording: Int,
     val errors: List<String>,
     /**
-     * Findings that FAIL the build: on a non-exempt target and not attributable to a tool on the
-     * framework-surface allow-list. Empty when the gate is satisfied. A subset of [findings].
+     * Findings that FAIL the build: on a non-exempt target. Empty when the gate is satisfied.
+     * A subset of [findings].
      */
     val fatalFindings: List<Finding> = emptyList(),
     /**
@@ -178,11 +162,6 @@ object TrailTscValidator {
      * silently. A subset of [skippedNoSurface].
      */
     val fatalMissingSurfaceTargets: Map<String, Int> = emptyMap(),
-    /**
-     * Findings suppressed because their tool is on the framework-surface allow-list (a recordable
-     * tool the generated surface doesn't model yet). Reported for visibility; never fatal.
-     */
-    val allowlistedToolFindings: List<Finding> = emptyList(),
   ) {
     /** True when the default-strict gate should fail the build. */
     fun hasFatal(): Boolean = fatalFindings.isNotEmpty() || fatalMissingSurfaceTargets.isNotEmpty()
@@ -336,11 +315,6 @@ object TrailTscValidator {
      */
     exemptTargets: Map<String, String> = emptyMap(),
     /**
-     * Tool names whose findings are downgraded to non-fatal — recordable tools the generated
-     * typed surface doesn't model yet (framework-surface gaps, not per-target defects).
-     */
-    allowedUnmodeledTools: Set<String> = emptySet(),
-    /**
      * When false (a scoped run), a non-exempt target with no loaded surface is reported as skipped
      * but is NOT fatal — see [classify]. Only an all-workspace pass loads every surface and can
      * treat a missing surface as an uncovered target.
@@ -429,7 +403,7 @@ object TrailTscValidator {
     }
 
     val classification =
-      classify(findings, skippedNoSurface, exemptTargets, allowedUnmodeledTools, failOnMissingSurface)
+      classify(findings, skippedNoSurface, exemptTargets, failOnMissingSurface)
 
     return Report(
       trailsDiscovered = discovered,
@@ -441,22 +415,19 @@ object TrailTscValidator {
       errors = errors,
       fatalFindings = classification.fatalFindings,
       fatalMissingSurfaceTargets = classification.fatalMissingSurfaceTargets,
-      allowlistedToolFindings = classification.allowlistedToolFindings,
     )
   }
 
   /** The fatal/non-fatal split of a validation pass — the output of [classify]. */
   data class Classification(
     val fatalFindings: List<Finding>,
-    val allowlistedToolFindings: List<Finding>,
     val fatalMissingSurfaceTargets: Map<String, Int>,
   )
 
   /**
    * PURE. Apply the exemption rules to split findings and no-surface targets into fatal vs
-   * non-fatal buckets. A finding is fatal unless its tool is on the framework-surface allow-list or
-   * its target is exempt; a no-surface target is fatal unless it's exempt — and only when
-   * [failOnMissingSurface] is set (see below).
+   * non-fatal buckets. A finding is fatal unless its target is exempt; a no-surface target is fatal
+   * unless it's exempt — and only when [failOnMissingSurface] is set (see below).
    *
    * A finding's `target` is always a validatable target in practice (findings only come from
    * trailmaps with a generated surface), so `target == null` shouldn't occur — but it's treated
@@ -473,27 +444,17 @@ object TrailTscValidator {
     findings: List<Finding>,
     skippedNoSurface: Map<String, Int>,
     exemptTargets: Map<String, String>,
-    allowedUnmodeledTools: Set<String>,
     failOnMissingSurface: Boolean = true,
   ): Classification {
-    val fatalFindings = mutableListOf<Finding>()
-    val allowlistedToolFindings = mutableListOf<Finding>()
-    for (f in findings) {
-      when {
-        // Allow-listed tools are non-fatal on ANY target — checked first so the allow-listed tally
-        // stays accurate even for a finding that also sits on an exempt target (otherwise it would
-        // be silently absorbed into the generic exempt-target count in the report).
-        f.toolName in allowedUnmodeledTools -> allowlistedToolFindings.add(f)
-        f.target != null && exemptTargets.containsKey(f.target) -> Unit // exempt: reported, non-fatal
-        else -> fatalFindings.add(f)
-      }
+    val fatalFindings = findings.filterNot { f ->
+      f.target != null && exemptTargets.containsKey(f.target) // exempt: reported, non-fatal
     }
     // A non-exempt target we couldn't validate at all (no generated surface) is a build failure ON AN
     // ALL-WORKSPACE PASS — it prevents a new uncovered target from slipping in unnoticed. On a scoped
     // pass we can't draw that conclusion (only the selected surface was loaded), so it's non-fatal.
     val fatalMissingSurfaceTargets =
       if (failOnMissingSurface) skippedNoSurface.filterKeys { it !in exemptTargets } else emptyMap()
-    return Classification(fatalFindings, allowlistedToolFindings, fatalMissingSurfaceTargets)
+    return Classification(fatalFindings, fatalMissingSurfaceTargets)
   }
 
   // Tool names that are valid JS identifiers can be emitted as `client.tools.<name>`; any other
@@ -539,7 +500,7 @@ object TrailTscValidator {
           // Top-level `tools:` blocks have no prompt step; key them to step 0 with a generic label.
           calls.add(wrapper.toRecordedCall(stepIndex = 0, label = "tools block"))
         }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { wrapper ->
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { wrapper ->
           // The trailhead is the deterministic step 0; type-check its bootstrap tool calls too.
           calls.add(wrapper.toRecordedCall(stepIndex = 0, label = item.trailhead.step ?: "trailhead"))
         }
@@ -638,11 +599,7 @@ object TrailTscValidator {
     if (exemptMissing.isNotEmpty()) {
       appendLine("Exempt (no surface, non-fatal): $exemptMissing")
     }
-    if (report.allowlistedToolFindings.isNotEmpty()) {
-      val byTool = report.allowlistedToolFindings.groupingBy { it.toolName }.eachCount()
-      appendLine("Allow-listed unmodeled-tool findings (non-fatal): $byTool")
-    }
-    val exemptTargetFindings = report.findings.size - report.fatalFindings.size - report.allowlistedToolFindings.size
+    val exemptTargetFindings = report.findings.size - report.fatalFindings.size
     if (exemptTargetFindings > 0) {
       appendLine("Exempt-target findings (non-fatal): $exemptTargetFindings")
     }

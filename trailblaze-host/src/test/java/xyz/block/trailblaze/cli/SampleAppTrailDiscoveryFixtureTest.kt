@@ -120,9 +120,11 @@ class SampleAppTrailDiscoveryFixtureTest {
     // fails this test with a clear "known trail missing" error rather than just a
     // count mismatch.
     val expected = setOf(
+      // The MCP-tools demo trail (now unified, like every other sample-app trail); pinned so a
+      // silent discovery drift that drops it fails here with a clear "known trail missing".
       "trails/mcp-tools-demo/mcp-tools-demo.trail.yaml",
-      "trails/catalog/overlay-tap/blaze.yaml",
-      "trails/android-ondevice-instrumentation/forms/text-input/android-phone.trail.yaml",
+      "trails/catalog/overlay-tap.trail.yaml",
+      "trails/android-ondevice-instrumentation/forms/text-input.trail.yaml",
     )
 
     val discovered = TrailDiscovery.discoverTrailFiles(sampleAppRoot.toPath())

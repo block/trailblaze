@@ -11,6 +11,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,9 @@ fun TargetAppConfigRow(
   modifier: Modifier = Modifier,
 ) {
   var expanded by remember { mutableStateOf(false) }
+  // Collect the live target set so a live-registered target (Create Target flow) appears in
+  // the dropdown without a daemon restart.
+  val availableAppTargets by deviceManager.availableAppTargetsFlow.collectAsState()
 
   Column(modifier = modifier) {
     // Target App Dropdown
@@ -67,7 +71,7 @@ fun TargetAppConfigRow(
           expanded = false
         }
       ) {
-        deviceManager.availableAppTargets.forEach { selectedTargetApp ->
+        availableAppTargets.forEach { selectedTargetApp ->
           DropdownMenuItem(
             leadingIcon = {
               deviceManager.appIconProvider.getIcon(selectedTargetApp)

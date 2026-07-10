@@ -9,8 +9,6 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.SELF_HEAL_DEFAULT
-import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
-import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 
 @Serializable
@@ -55,9 +53,6 @@ data class TrailblazeServerState(
 - prompts:
     - step: click back
 """.trimIndent(), // Default YAML content
-    // YAML editor UI preferences
-    val yamlEditorMode: YamlEditorMode = YamlEditorMode.VISUAL,
-    val yamlVisualEditorView: YamlVisualEditorView = YamlVisualEditorView.STEPS,
     // Session detail UI preferences
     val sessionDetailZoomOffset: Int = 0, // Zoom offset for card size
     val sessionDetailFontScale: Float = 1f, // Font size scale

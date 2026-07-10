@@ -425,11 +425,16 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   const handleRef = React.useRef(null);
   const flashedRef = React.useRef(null);
   const [failed, setFailed] = React.useState(false);
+  // Monaco mounts asynchronously (module load + editor create); until it resolves the host div is
+  // empty, which read as "nothing shows up for a while" on switching to Edit. Track readiness so we
+  // can show a loading placeholder over the empty host instead of a blank pane.
+  const [ready, setReady] = React.useState(false);
   const cbRef = React.useRef({ onChange, onSave });
   cbRef.current = { onChange, onSave };
   React.useEffect(() => {
     let disposed = false;
     setFailed(false);
+    setReady(false);
     window.TBMonaco.mountTrailYaml({
       host: hostRef.current,
       value: value != null ? value : '',
@@ -439,6 +444,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
     }).then((h) => {
       if (disposed) { h.dispose(); return; }
       handleRef.current = h;
+      setReady(true);
       if (apiRef) {
         apiRef.current = {
           insert: (text) => h.insertAtCursor(text),
@@ -492,7 +498,16 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
     if (range) h.revealAndFlashLines(range.start0, Math.min(range.end0, range.start0 + 10));
   }, [highlight, value]);
   if (failed) return <CodeEditor value={value} onChange={onChange} onSave={onSave} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={readOnly} wrap={wrap} apiRef={apiRef} highlight={highlight} />;
-  return <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />;
+  return (
+    <div style={{ position: 'relative', height: '100%', minHeight: 0 }}>
+      <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />
+      {!ready && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--text-subtle)', fontSize: 13, pointerEvents: 'none' }}>
+          <Ico n="loader-2" s={16} spin /> Loading editor…
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey }) {
@@ -550,14 +565,18 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 10px', flex: '0 0 auto' }}>
-        {editable && (dirty ? <Chip tone="amber">Unsaved</Chip> : <Chip>Saved</Chip>)}
-        {note && <span style={{ fontSize: 12, color: note.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)' }}>{note.msg}</span>}
+        {/* save state lives entirely in the button on the right; only surface a hard error here */}
+        {note && !note.ok && <span style={{ fontSize: 12, color: 'var(--tb-danger-text)' }}>{note.msg}</span>}
         <span style={{ flex: 1 }} />
         <span role="button" data-testid="wrap-toggle" title={wrap ? 'Wrap long lines: on' : 'Wrap long lines: off'} onClick={() => setWrap((w) => !w)}
           style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '4px 6px', borderRadius: 7, border: '1px solid ' + (wrap ? 'rgba(94,155,255,.5)' : 'var(--tb-hairline)'), background: wrap ? 'rgba(94,155,255,.12)' : 'transparent', color: wrap ? 'var(--tb-running)' : 'var(--text-subtle)' }}>
           <Ico n="wrap-text" s={15} />
         </span>
-        {editable && <Btn sm kind="primary" ico={busy ? 'loader-2' : 'save'} spin={busy} onClick={save} disabled={!dirty || busy}>Save</Btn>}
+        {editable && (
+          <Btn sm kind={dirty ? 'primary' : 'ghost'} ico={busy ? 'loader-2' : (dirty ? 'save' : 'check')} spin={busy} onClick={save} disabled={!dirty || busy}>
+            {busy ? 'Saving…' : (dirty ? 'Save' : 'Saved')}
+          </Btn>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', border: '1px solid var(--tb-hairline)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-standard)' }}>
         <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 0, border: 'none', borderRadius: 0 }}>

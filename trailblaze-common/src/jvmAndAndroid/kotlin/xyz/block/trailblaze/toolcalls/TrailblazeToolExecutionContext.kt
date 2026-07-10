@@ -12,6 +12,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.network.InflightRequestTracker
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Context for handling Trailblaze tools.
@@ -175,6 +176,57 @@ class TrailblazeToolExecutionContext(
    * Null when the invoked tool form should be recorded as-is.
    */
   var recordedToolOverride: TrailblazeTool? = null
+
+  /**
+   * Depth of the current `ctx.tools.X()` nested-dispatch stack. Zero while a top-level tool runs;
+   * `> 0` while a composite (scripted) tool's under-the-hood sub-calls run, because
+   * [xyz.block.trailblaze.BaseTrailblazeAgent.nestedToolExecutorFor] bumps it around each nested
+   * [xyz.block.trailblaze.BaseTrailblazeAgent] dispatch and restores it afterward.
+   *
+   * A tool's log is stamped `isRecordable = false` whenever this is `> 0` (see
+   * [xyz.block.trailblaze.logToolExecution]), so a composite's internals never enter a recording:
+   * a one-call trailhead like `myapp_launchAppSignedIn` records as that single call, not as the
+   * `mobile_maestro` / `tapOn` / `inputText` internals it happens to run — deterministically,
+   * regardless of how the parent's logged span lines up with its children's (the fragile signal the
+   * generator's span-containment heuristic relied on, which drifts across drivers and the
+   * shared-execution batch).
+   *
+   * ### Scope — which drivers this covers
+   * Only drivers that route nested dispatch through
+   * [xyz.block.trailblaze.BaseTrailblazeAgent.nestedToolExecutorFor] bump this counter: Maestro
+   * (Android on-device instrumentation/accessibility, iOS host) and Playwright. Two paths do NOT
+   * and still rely on the generator's `dropNestedToolCalls` span heuristic as the fallback, so that
+   * heuristic is **load-bearing, not redundant**: (1) Compose RPC — `ComposeRpcTrailblazeAgent`
+   * deliberately wires its own `nestedToolExecutor` (to keep its post-batch screenshot) that never
+   * touches this field, and logs via the [TraceId]-only `logToolExecution` overload, which has no
+   * context to read; (2) device-routed nesting on `HostOnDeviceRpcTrailblazeAgent` — this counter is
+   * in-process and can't cross the RPC boundary. Extending the deterministic filter to those paths
+   * (thread depth into the [TraceId] overload / propagate a non-recordable flag over RPC) is a
+   * follow-up.
+   *
+   * A depth counter, not a boolean: nesting is N-deep (e.g. `launchAppSignedIn` →
+   * `clearLaunchAndSignIn` → `mobile_maestro`), so unwinding one level must not un-mark the level
+   * still running above it.
+   *
+   * [AtomicInteger], not a plain `Int`: a single composite tool can issue **parallel** nested
+   * callbacks that share this one context — e.g. a scripted tool doing
+   * `Promise.all([ctx.tools.a(), ctx.tools.b()])`, whose callbacks arrive as concurrent
+   * `/scripting/callback` dispatches all resolving the same invocation's `executionContext`. A plain
+   * `++`/`--` would lose updates across those (both read 0, both write 1; the first to finish
+   * decrements to 0 while the second is still running, so its nested log would mis-record as
+   * top-level). Atomic inc/dec keeps the invariant "depth > 0 while any nested dispatch is in
+   * flight", so every nested log emitted during that window sees `> 0`. Note the sibling
+   * [recordedToolOverride] stays a plain `var` and DOES race on this same concurrent path — that's
+   * benign here because a nested dispatch's log is dropped from the recording regardless of which
+   * override it happened to read; the class-level "not thread-safe" caveat still governs it.
+   *
+   * Precondition: assumes composites **await** their nested calls before returning from `execute()`
+   * (the callback dispatcher does — it awaits each `/scripting/callback` round-trip). A
+   * fire-and-forget nested call still in flight when the parent's own log emits would read `> 0` and
+   * wrongly stamp the real top-level step non-recordable; that's a pathological authoring shape, not
+   * a supported one.
+   */
+  val nestedDispatchDepth: AtomicInteger = AtomicInteger(0)
 
   @Deprecated("Use maestroTrailblazeAgent, trailblazeLogger, or memory directly")
   val trailblazeAgent: MaestroTrailblazeAgent

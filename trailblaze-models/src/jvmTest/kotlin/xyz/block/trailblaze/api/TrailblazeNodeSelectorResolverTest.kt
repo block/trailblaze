@@ -159,10 +159,10 @@ class TrailblazeNodeSelectorResolverTest {
     assertEquals(target.nodeId, result.node.nodeId)
   }
 
-  // -- Invalid regex fallback --
+  // -- Literal fallback --
 
   @Test
-  fun `invalid regex falls back to case-insensitive literal`() {
+  fun `invalid regex falls back to literal`() {
     nextId = 1L
     // Text with characters that form an invalid regex when unescaped
     val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "[unclosed"))
@@ -173,6 +173,51 @@ class TrailblazeNodeSelectorResolverTest {
     )
     val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+  }
+
+  @Test
+  fun `unescaped currency regex falls back to literal`() {
+    nextId = 1L
+    // "$3.00" compiles as a valid regex but can never match (the bare `$` is an end-of-input
+    // anchor). The literal fallback matches it against the element's actual text, so an
+    // unescaped price authored as natural-language text still resolves.
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "\$3.00"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch( DriverNodeMatch.AndroidAccessibility(textRegex = "\$3.00"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `literal fallback is case-sensitive`() {
+    nextId = 1L
+    // "abc" is a valid regex that doesn't match "ABC" (case-sensitive), and the literal
+    // fallback ("ABC" == "abc") also fails — so this must NOT match, mirroring Maestro.
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "ABC"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch( DriverNodeMatch.AndroidAccessibility(textRegex = "abc"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
+
+  @Test
+  fun `literal fallback is case-sensitive on the compile-failure path`() {
+    nextId = 1L
+    // "[unclosed" fails to compile as a regex; the literal fallback is case-sensitive,
+    // so a case-different value ("[UNCLOSED") must NOT match. Locks in that both fallback
+    // paths (valid-but-unmatchable regex above, and compile failure here) are case-sensitive.
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "[UNCLOSED"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch( DriverNodeMatch.AndroidAccessibility(textRegex = "[unclosed"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
   }
 
   // -- below predicate --

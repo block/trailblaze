@@ -328,9 +328,10 @@ class UnifiedTrailMergeTest {
     val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing = null, recordedItems = recorded, classifier = "android")
 
     assertEquals("Checkout with a saved card", merged.config.title)
-    // priority/source are metadata by nature: the first write bridges them into the reserved
-    // metadata keys (lowering lifts them back onto the v1 fields internal tooling reads).
-    assertEquals("P2", merged.config.metadata?.get(UnifiedTrailConfig.METADATA_KEY_PRIORITY))
+    // priority is a top-level unified field; source is metadata by nature — the first write
+    // bridges it into the reserved metadata keys (lowering lifts it back onto the v1 field
+    // internal tooling reads).
+    assertEquals("P2", merged.config.priority)
     assertEquals("HANDWRITTEN", merged.config.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE))
     assertEquals("authored by hand", merged.config.metadata?.get(UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON))
     // And the carried fields survive the emit → decode round-trip of the saved file.

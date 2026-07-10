@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -76,10 +77,16 @@ internal fun validateTrailNameSlug(slug: String): String? = when {
  * - Trail YAML format (for persistence)
  *
  * @param trailsDirectory Base directory for trail files
+ * @param unifiedRecordingsEnabled Resolves the unified-recordings rollout gate for this surface.
+ *   MCP has no CLI flag, so it resolves env > persisted config only (the persisted tier is wired in
+ *   by the host that constructs the daemon — see [xyz.block.trailblaze.recordings.UnifiedRecordingWriter.resolveGate]).
+ *   When off (default), a save keeps writing a legacy `<platform>.trail.yaml` BUT refuses to shadow a
+ *   unified `trail.yaml`; when on, the platform's slot merges into the unified trail.
  */
 class TrailFileManager(
   private val trailsDirectory: String,
   private val trailblazeYaml: TrailblazeYaml = TrailblazeYaml.Default,
+  private val unifiedRecordingsEnabled: () -> Boolean = { UnifiedRecordingWriter.resolveGate(null, null) },
 ) {
 
   /**
@@ -138,50 +145,144 @@ class TrailFileManager(
     if (steps.isEmpty()) {
       return SaveResult(success = false, error = "No steps to save")
     }
+    val trailItems = buildTrailYamlItems(name, steps, platform, metadata)
+    return writeRoutedTrail(
+      name = name,
+      platform = platform,
+      // The recorded-step path already has the items in hand — re-encode for the legacy write, and
+      // reuse the SAME items for the unified merge (no decode round-trip).
+      yamlContentProvider = { trailblazeYaml.encodeToString(trailItems) },
+      trailItemsForMerge = { trailItems },
+    )
+  }
 
-    try {
-      // Validate trail name: empty (blank-after-slug) AND path-traversal cases
-      // both share the same guard so a `' - '`-only title can't land at the
-      // trails root and clobber a sibling file.
+  /**
+   * Saves an already-generated v1 trail YAML string (the log-backed MCP save path produces this via
+   * `generateRecordedYaml`) through the same gate/routing as [saveTrail]. On the legacy path the
+   * [yamlContent] is written verbatim (byte-identical to the pre-unified writers); the unified path
+   * decodes it to merge this device's classifier slot into the unified trail.
+   *
+   * @param name Trail name (used for the directory slug)
+   * @param yamlContent The pre-generated v1 trail YAML
+   * @param platform Optional platform for the classifier / legacy filename
+   */
+  fun saveTrailYaml(
+    name: String,
+    yamlContent: String,
+    platform: TrailblazeDevicePlatform? = null,
+  ): SaveResult = writeRoutedTrail(
+    name = name,
+    platform = platform,
+    yamlContentProvider = { yamlContent },
+    // Decoded ONLY when the save routes unified, so a gate-off legacy write stays a verbatim
+    // string write and never depends on the recording being re-parseable.
+    trailItemsForMerge = { trailblazeYaml.decodeTrail(yamlContent) },
+  )
+
+  /**
+   * Shared save-back routing for both the recorded-step ([saveTrail]) and log-backed
+   * ([saveTrailYaml]) MCP paths. Validates the name slug, then routes through the shared
+   * [UnifiedRecordingWriter]: gate-on merges [trailItemsForMerge] into the directory's unified
+   * `trail.yaml` under the platform's classifier slot; gate-off writes the legacy
+   * `<platform>.trail.yaml` but refuses to shadow an existing unified trail.
+   */
+  private fun writeRoutedTrail(
+    name: String,
+    platform: TrailblazeDevicePlatform?,
+    yamlContentProvider: () -> String,
+    trailItemsForMerge: () -> List<TrailYamlItem>,
+  ): SaveResult {
+    return try {
+      // Validate trail name: empty (blank-after-slug) AND path-traversal cases both share the same
+      // guard so a `' - '`-only title can't land at the trails root and clobber a sibling file.
       val sanitizedName = trailNameToDirSlug(name)
       validateTrailNameSlug(sanitizedName)?.let { err ->
         return SaveResult(success = false, error = err)
       }
 
-      // Ensure directory exists
       val dir = File(trailsDirectory)
-      if (!dir.exists()) {
-        dir.mkdirs()
-      }
-
-      // Build trail YAML items
-      val trailItems = buildTrailYamlItems(name, steps, platform, metadata)
-
-      // Encode to YAML
-      val yamlContent = trailblazeYaml.encodeToString(trailItems)
-
-      // Determine filename based on platform
-      val fileName = if (platform != null) {
-        "${platform.name.lowercase()}.trail.yaml"
-      } else {
-        "trail.yaml"
-      }
-
-      // Create subdirectory for the trail
+      if (!dir.exists()) dir.mkdirs()
       val trailDir = File(dir, sanitizedName)
-      if (!trailDir.exists()) {
-        trailDir.mkdirs()
+      if (!trailDir.exists()) trailDir.mkdirs()
+
+      // Legacy filename based on platform; the classifier is the platform name (e.g. `android`).
+      // A null platform yields a blank classifier, which the router treats as "no unified slot" (it
+      // always takes the legacy path). Its legacy write must NOT reuse the reserved unified
+      // `trail.yaml` name: a v1 file named `trail.yaml` masquerades as unified (detection is
+      // by-name), so a later save-back would refuse or try to merge against it and corrupt the
+      // directory. Use the classifier-agnostic `recording.trail.yaml` (matching the CLI's
+      // no-classifier fallback) instead.
+      val classifier = platform?.name?.lowercase().orEmpty()
+      val fileName = if (platform != null) "${platform.name.lowercase()}.trail.yaml" else "recording.trail.yaml"
+
+      val yamlContent = yamlContentProvider()
+
+      if (UnifiedRecordingWriter.shouldRouteUnified(trailDir, classifier, unifiedRecordingsEnabled())) {
+        return saveTrailAsUnified(trailDir, trailItemsForMerge(), classifier, yamlContent, fileName)
+      }
+
+      // Legacy write. Refuse to drop a legacy sibling into (or overwrite a `trail.yaml` in) a
+      // migrated directory — the legacy write can't update the unified file, so it would only shadow
+      // it. Mirrors the CLI's gate-off guard; a legacy directory has no unified file, so this never
+      // changes byte-for-byte behavior there.
+      if (UnifiedRecordingWriter.unifiedTrailPresent(trailDir)) {
+        return SaveResult(
+          success = false,
+          error = UnifiedRecordingWriter.legacyShadowRefusalMessage(fileName, trailDir),
+        )
       }
 
       val filePath = File(trailDir, fileName)
       filePath.writeText(yamlContent)
 
       Console.log("[TrailFileManager] Saved trail to: ${filePath.absolutePath}")
-      return SaveResult(success = true, filePath = filePath.absolutePath)
+      SaveResult(success = true, filePath = filePath.absolutePath)
     } catch (e: Exception) {
       Console.log("[TrailFileManager] Error saving trail: ${e.message}")
-      return SaveResult(success = false, error = "Failed to save trail: ${e.message}")
+      SaveResult(success = false, error = "Failed to save trail: ${e.message}")
     }
+  }
+
+  /**
+   * Merge the just-authored trail into the directory's unified `trail.yaml` under [classifier]'s
+   * slot, preserving every other classifier already on disk. Falls back to a legacy sibling only for
+   * the shapes the unified format can't hold (a multi-tool trailhead — never produced by the MCP
+   * authoring path, handled defensively) and refuses a corrupt existing trail rather than clobbering
+   * it. [yamlContent]/[legacyFileName] back the legacy fallback writes.
+   */
+  private fun saveTrailAsUnified(
+    trailDir: File,
+    trailItems: List<TrailYamlItem>,
+    classifier: String,
+    yamlContent: String,
+    legacyFileName: String,
+  ): SaveResult = when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, trailItems, classifier)) {
+    is UnifiedRecordingWriter.MergeOutcome.Merged -> {
+      Console.log("[TrailFileManager] Merged trail into: ${outcome.target.absolutePath} (classifier `$classifier`)")
+      SaveResult(success = true, filePath = outcome.target.absolutePath)
+    }
+
+    is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported,
+    is UnifiedRecordingWriter.MergeOutcome.NoTarget -> {
+      // The unified format can't hold this recording (e.g. a multi-tool trailhead). Preserve it as a
+      // legacy sibling ONLY when that won't shadow an existing unified trail; otherwise refuse, so we
+      // never drop a legacy file beside a migrated `trail.yaml`. (Unreachable on the MCP authoring
+      // path — which never builds a multi-tool trailhead — but kept correct defensively.)
+      if (UnifiedRecordingWriter.unifiedTrailPresent(trailDir)) {
+        SaveResult(success = false, error = UnifiedRecordingWriter.legacyShadowRefusalMessage(legacyFileName, trailDir))
+      } else {
+        val legacyFile = File(trailDir, legacyFileName)
+        legacyFile.writeText(yamlContent)
+        Console.log("[TrailFileManager] Saved trail to: ${legacyFile.absolutePath}")
+        SaveResult(success = true, filePath = legacyFile.absolutePath)
+      }
+    }
+
+    is UnifiedRecordingWriter.MergeOutcome.RefusedCorrupt ->
+      SaveResult(success = false, error = UnifiedRecordingWriter.corruptRefusalMessage(outcome.target, outcome.reason))
+
+    is UnifiedRecordingWriter.MergeOutcome.SkippedEmpty ->
+      SaveResult(success = false, error = UnifiedRecordingWriter.EMPTY_MERGE_MESSAGE)
   }
 
   /**

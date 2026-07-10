@@ -92,10 +92,17 @@ function mergeBlazeYaml(existingYaml, fields) {
   const f = fields || {};
   if (!window.jsyaml) return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
   let config = {};
+  // The new format carries a leading `- trailhead:` item (the deterministic step 0); preserve it
+  // verbatim across a structured save, exactly like config — the step editor doesn't model it, so
+  // rebuilding [{config},{prompts}] alone would silently drop it.
+  let trailhead = null;
   try {
     const doc = window.jsyaml.load(existingYaml);
     const items = Array.isArray(doc) ? doc : doc ? [doc] : [];
-    for (const it of items) if (it && it.config) config = { ...it.config };
+    for (const it of items) {
+      if (it && it.config) config = { ...it.config };
+      if (it && it.trailhead != null) trailhead = it.trailhead;
+    }
   } catch (e) {
     return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
   }
@@ -109,8 +116,11 @@ function mergeBlazeYaml(existingYaml, fields) {
   if (f.destination) meta.destination = f.destination; else delete meta.destination;
   if (Object.keys(meta).length) config.metadata = meta; else delete config.metadata;
   const prompts = (f.steps || []).filter((s) => s.text.trim()).map((s) => ({ [s.kind === 'verify' ? 'verify' : 'step']: s.text }));
+  const out = [{ config }];
+  if (trailhead != null) out.push({ trailhead });
+  out.push({ prompts });
   try {
-    return window.jsyaml.dump([{ config }, { prompts }], { lineWidth: -1, noRefs: true }).trimEnd();
+    return window.jsyaml.dump(out, { lineWidth: -1, noRefs: true }).trimEnd();
   } catch (e) {
     return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
   }
@@ -188,11 +198,37 @@ function isDeviceVariantStem(stem) {
 function isVariantBundle(children) {
   if (!children || !children.length) return false;
   if (children.some((c) => (c.kind || 'trail') === 'blaze')) return true;
+  const nonBlaze = children.filter((c) => (c.kind || 'trail') !== 'blaze');
+  // Unified single-file trails are self-contained — never collapse a folder of them into one row.
+  if (nonBlaze.length && nonBlaze.every((c) => c.format === 'unified')) return false;
+  // The robust signal: per-platform variants of ONE logical trail (2+ files) all declare the same
+  // `config.id` (the shared case id). This collapses variant sets whose filenames aren't plain
+  // device tokens (e.g. a hardware-classifier variant like `<classifier>-t2`), which the stem
+  // heuristic below misses. A flat suite of independent tests has distinct ids, so it stays as
+  // separate rows. A single file is never grouped here — it's a leaf, not a bundle-of-one (the
+  // device-stem path below still collapses a lone `android-phone.trail.yaml`, as before).
+  const ids = new Set(nonBlaze.map((c) => c.configId).filter(Boolean));
+  if (nonBlaze.length > 1 && ids.size === 1 && nonBlaze.every((c) => c.configId)) return true;
   return children.every((c) => {
     if ((c.kind || 'trail') === 'blaze') return true;
     const stem = (c.path || c.id || '').split('/').pop().replace(/\.trail\.yaml$/, '');
     return isDeviceVariantStem(stem);
   });
+}
+
+// Classify every trail by its ACTUAL on-disk YAML shape (from the backend's `format` field, decoded
+// via TrailDocument) for the format filter + list badges: 'unified' = a single-file `config:`+`trail:`
+// mapping (every platform's recording inline); 'bundle' = the legacy v1 list format (`- config:` /
+// `- prompts:` items — whether standalone or one of a folder's per-platform variants); 'blaze' = a
+// plain-language spec. Classifying per file, not by folder shape, is what makes the badge honest: a
+// legacy list file reads 'bundle' even when it sits in a folder our stem heuristic doesn't recognize
+// as a variant set. Returns a Map keyed by trail id.
+function trailFormatMap(trails) {
+  const m = new Map();
+  for (const t of (trails || [])) {
+    m.set(t.id, t.kind === 'blaze' ? 'blaze' : (t.format === 'unified' ? 'unified' : 'bundle'));
+  }
+  return m;
 }
 
 // Count of selectable trail units, matching what the folder-mode list shows: each variant
@@ -281,8 +317,8 @@ function buildTrailTree(trails, extraFolders) {
 
   const rows = [];
   const trailRow = (tr, depth, acc, variant, prefix) => ({
-    t: 'trail', id: tr.id, name: tr.title || tr.id, path: tr.path, depth, acc,
-    status: 'unknown', kind: tr.kind || 'trail', platform: tr.platform || derivePlatformFromTrail(tr),
+    t: 'trail', id: tr.id, name: tr.title || tr.id, path: tr.path, rootIdx: tr.rootIdx, depth, acc,
+    status: 'unknown', kind: tr.kind || 'trail', format: tr.format || 'v1', platform: tr.platform || derivePlatformFromTrail(tr),
     variant, prefix: prefix || '',
   });
   const renderEntry = (entry, depth, prefixSegs) => {
@@ -328,8 +364,8 @@ function buildTrailBundleRows(trails, sortBy) {
     byFolder.get(f).push(t);
   }
   const trailRow = (tr, depth, acc, variant, flat) => ({
-    t: 'trail', id: tr.id, name: tr.title || tr.id, path: tr.path, depth, acc,
-    status: 'unknown', kind: tr.kind || 'trail', variant, flat,
+    t: 'trail', id: tr.id, name: tr.title || tr.id, path: tr.path, rootIdx: tr.rootIdx, depth, acc,
+    status: 'unknown', kind: tr.kind || 'trail', format: tr.format || 'v1', variant, flat,
     platform: tr.platform || derivePlatformFromTrail(tr), prefix: '',
   });
   const units = [];
@@ -411,19 +447,19 @@ function flattenObject(obj, { joinArray = (a) => a.join(', '), skip, prefix } = 
 Object.assign(window, {
   flattenObject,
   summarizeAnalyticsProps, derivePlatformFromTrail, buildPromptTrailYaml,
-  formatDuration, formatAgo, buildTrailTree, buildTrailBundleRows, countTrailBundles, humanizeTarget, targetLabel, scopeTrailmaps,
+  formatDuration, formatAgo, buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, humanizeTarget, targetLabel, scopeTrailmaps,
 });
 
 window.TB = {
-  useStatus, useTrails, useTools, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, useTrailDetail, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionAnalytics, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
+  useStatus, useTrails, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, useTrailDetail, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionAnalytics, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
   addTrailRoot, removeTrailRoot, pickDirectoryViaShell, updateSetting, switchWorkspace, WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded, deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive, runIntegrationAction, fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   resolveRunDevice, connectDevice, fetchTrailYaml, dispatchRun, retrySession,
   getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
-  buildTrailTree, buildTrailBundleRows, countTrailBundles, fileUrl, summarizeAnalyticsProps, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
+  buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, fileUrl, summarizeAnalyticsProps, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
   recordPendingRun, getPendingRun, clearPendingRun, failPendingRun,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
   buildBlazeYaml, mergeBlazeYaml, proposeSteps, createDraft, fetchDraftDetail, fetchDraftFile, updateDraftBlaze, updateDraftFile, deleteDraftFile, saveDraftTo, deleteDraft, revealDraft, recordDraft,
-  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
+  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, migrateTrailFolder,
   useDrafts, useDraftDetail,
   recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordToolParams, scriptedToolParams,
 };

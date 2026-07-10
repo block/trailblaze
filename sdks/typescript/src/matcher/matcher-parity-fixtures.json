@@ -1,0 +1,320 @@
+{
+  "_comment": "Shared behavioral contract for text-pattern matching in the node-selector resolvers. ONE source of truth for expected behavior, consumed by BOTH implementations' test suites: Kotlin `TrailblazeNodeSelectorResolver.matchesPattern` (via MatcherParityFixturesTest in trailblaze-models jvmTest) and the TS mirror `resolver.ts` (via matcher-parity.test.ts). Every case runs through the REAL resolver in BOTH dialects: `nativeMatches` is asserted via native selector shapes (androidAccessibility), `maestroMatches` via Maestro shapes (androidMaestro), which carry Maestro's Orchestra semantics (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE + toRegexSafe invalid-regex escape). If either implementation drifts, that side's suite fails. Add a case here whenever matching semantics change - never encode new semantics in only one language's tests.",
+  "cases": [
+    {
+      "name": "exact literal text matches",
+      "pattern": "Submit",
+      "text": "Submit",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "full-string match, not substring: 'ok' does not match 'book'",
+      "pattern": "ok",
+      "text": "book",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "regex semantics apply when the pattern matches as a regex",
+      "pattern": ".*Charge.*",
+      "text": "Charge $5.00",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "digit classes and bounded quantifiers",
+      "pattern": "\\d+\\.\\d{2}",
+      "text": "12.50",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "alternation",
+      "pattern": "Yes|No",
+      "text": "No",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "regex matching is case-sensitive by default",
+      "pattern": "submit",
+      "text": "SUBMIT",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "explicit anchors are permitted inside the pattern",
+      "pattern": "^Charge \\$5$",
+      "text": "Charge $5",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "valid-but-unmatchable currency pattern rescued by literal fallback",
+      "pattern": "$3.00",
+      "text": "$3.00",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "literal fallback requires exact equality, not similarity",
+      "pattern": "$3.00",
+      "text": "$4.00",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "literal fallback is full-string, not substring",
+      "pattern": "$3.00",
+      "text": "Charge $3.00",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "zero-amount currency literal",
+      "pattern": "$0.00",
+      "text": "$0.00",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "currency with thousands separator",
+      "pattern": "$1,000",
+      "text": "$1,000",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "long natural-language value with parens and dollar sign",
+      "pattern": "$5.00 off entire sale (100 ABCDEFGHIJKLMNOPQRSTUVWXY)",
+      "text": "$5.00 off entire sale (100 ABCDEFGHIJKLMNOPQRSTUVWXY)",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "literal fallback is case-sensitive (valid regex miss)",
+      "pattern": "abc",
+      "text": "ABC",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "invalid regex falls back to literal equality",
+      "pattern": "[unclosed",
+      "text": "[unclosed",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "literal fallback is case-sensitive (compile failure)",
+      "pattern": "[unclosed",
+      "text": "[UNCLOSED",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "corpus: leading + is not a valid quantifier target, literal rescue",
+      "pattern": "+47 Points",
+      "text": "+47 Points",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "corpus: modifier row with (+$1.00), literal rescue",
+      "pattern": "Poutine, Large, Olives (+$1.00) ($1.00)",
+      "text": "Poutine, Large, Olives (+$1.00) ($1.00)",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "corpus: un-interpolated template placeholder self-matches literally",
+      "pattern": "${ticketName}",
+      "text": "${ticketName}",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "Java quote section \\Q...\\E matches its literal content",
+      "pattern": "\\Q$3.00\\E",
+      "text": "$3.00",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "quote section does not match different content",
+      "pattern": "\\Q$3.00\\E",
+      "text": "$4.00",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "regex parts outside a quote section keep regex meaning",
+      "pattern": "Charge \\Q$\\E\\d+\\.\\d{2}",
+      "text": "Charge $12.50",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "unterminated \\Q quotes to end of pattern (Java semantics)",
+      "pattern": "\\Q$5.00",
+      "text": "$5.00",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "escaped backslash before Q is not a quote start",
+      "pattern": "\\\\Qa\\.b",
+      "text": "\\Qa.b",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "quote-section pattern also literal-matches its own raw source",
+      "pattern": "\\Q$3.00\\E",
+      "text": "\\Q$3.00\\E",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "inline (?i) flag: case-insensitive match",
+      "pattern": "(?i)submit",
+      "text": "SUBMIT",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "inline (?s) flag: dot matches newline",
+      "pattern": "(?s).+",
+      "text": "line1\nline2",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "combined (?is) flags",
+      "pattern": "(?is)a.b",
+      "text": "A\nB",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "without (?s), dot does not cross newlines",
+      "pattern": ".+",
+      "text": "line1\nline2",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "empty pattern matches empty text",
+      "pattern": "",
+      "text": "",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "empty pattern does not match non-empty text",
+      "pattern": "",
+      "text": "x",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "non-ASCII text matches literally",
+      "pattern": "Café",
+      "text": "Café",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "symbols and emoji match literally",
+      "pattern": "✓ Done",
+      "text": "✓ Done",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "maestro dialect is case-insensitive by default",
+      "pattern": "pizza",
+      "text": "Pizza",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "leading (?-i) forces case-sensitivity (matching case)",
+      "pattern": "(?-i)Pizza",
+      "text": "Pizza",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "leading (?-i) forces case-sensitivity (wrong case rejected in both dialects)",
+      "pattern": "(?-i)Pizza",
+      "text": "PIZZA",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "native opts into case-insensitivity with leading (?i)",
+      "pattern": "(?i)pizza",
+      "text": "PIZZA",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "maestro dotall+multiline: inner anchors match per line, dot crosses newlines",
+      "pattern": ".*^line2$",
+      "text": "line1\nline2",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "full-input matching stays absolute under the m flag",
+      "pattern": "ok",
+      "text": "book\nok",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "inline (?m) alone does not turn full-input matching into per-line matching",
+      "pattern": "(?m)^ok$",
+      "text": "book\nok",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "maestro invalid-regex literal rescue is case-insensitive (toRegexSafe)",
+      "pattern": "+47 points",
+      "text": "+47 POINTS",
+      "nativeMatches": false,
+      "maestroMatches": true
+    },
+    {
+      "name": "scoped inline group (?i:...) is honored",
+      "pattern": "(?i:pizza)",
+      "text": "PIZZA",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "combined leading (?s-i): dotall added, case-sensitivity restored (matching case)",
+      "pattern": "(?s-i)a.b",
+      "text": "a\nb",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "combined leading (?s-i): wrong case rejected in both dialects",
+      "pattern": "(?s-i)a.b",
+      "text": "A\nB",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "unsupported leading flag (?x) is dropped harmlessly for plain patterns",
+      "pattern": "(?x)abc",
+      "text": "abc",
+      "nativeMatches": true,
+      "maestroMatches": true
+    }
+  ]
+}

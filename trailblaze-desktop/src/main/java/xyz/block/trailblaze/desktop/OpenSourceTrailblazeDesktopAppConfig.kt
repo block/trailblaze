@@ -82,11 +82,12 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   // resolver used by both LLM config loading and target discovery. Discovery runs on first
   // access and caches. See `AppTargetDiscovery` — same helper `BlockAppTargets` uses, just
   // with opensource defaults (no companions, DefaultTrailblazeHostAppTarget fallback).
-  override val availableAppTargets: Set<TrailblazeHostAppTarget> by lazy {
+  override val availableAppTargets: Set<TrailblazeHostAppTarget> by lazy { rediscoverAppTargets() }
+
+  override fun rediscoverAppTargets(): Set<TrailblazeHostAppTarget> =
     xyz.block.trailblaze.host.AppTargetDiscovery.discover(
       logPrefix = "[OpenSourceAppTargets]",
     )
-  }
   override val logsDir = File(
     TrailblazeDesktopUtil.getEffectiveLogsDirectory(
       trailblazeSettingsRepo.serverStateFlow.value.appConfig,

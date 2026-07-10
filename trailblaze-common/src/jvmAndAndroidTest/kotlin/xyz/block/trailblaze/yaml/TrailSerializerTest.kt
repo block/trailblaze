@@ -240,6 +240,6 @@ class TrailSerializerTest {
     val decoded = trailblazeYamlInstance.decodeFromString(ListSerializer(itemSerializer), yaml)
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Launch the app signed in", th.step)
-    assertEquals(1, th.tools.size)
+    assertEquals(1, th.tools?.size)
   }
 }

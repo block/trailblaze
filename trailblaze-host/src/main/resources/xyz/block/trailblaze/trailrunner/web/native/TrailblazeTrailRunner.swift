@@ -134,6 +134,22 @@ final class DirectoryPickerHandler: NSObject, WKScriptMessageHandler {
 }
 let directoryPickerHandler = DirectoryPickerHandler()
 
+// Reveal a file/folder in Finder from the GUI shell. The daemon runs headless + detached, so its
+// `open -R` can't reliably reach Finder (same reason directory picking is native above) — reveal
+// belongs here, where NSWorkspace has the Aqua session. Body: { path: "<absolute path>" }.
+final class RevealHandler: NSObject, WKScriptMessageHandler {
+  func userContentController(
+    _ userContentController: WKUserContentController,
+    didReceive message: WKScriptMessage
+  ) {
+    guard let path = (message.body as? [String: Any])?["path"] as? String, !path.isEmpty else { return }
+    DispatchQueue.main.async {
+      NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+  }
+}
+let revealHandler = RevealHandler()
+
 func offlineHTML(_ target: URL) -> String {
   let shown = target.absoluteString
   return """
@@ -239,6 +255,7 @@ webConfig.websiteDataStore = WKWebsiteDataStore.default()
 
 webConfig.userContentController.add(directoryPickerHandler, name: "pickDirectory")
 webConfig.userContentController.add(shellController, name: "reconnect")
+webConfig.userContentController.add(revealHandler, name: "revealPath")
 
 let pickerShimSource = """
 // Mark the document as running inside the native shell so the web layer reserves
@@ -266,6 +283,16 @@ window.trailblazePickDirectory = function(initialDir) {
       window.__trailblazeOnDirectoryPicked(p || '');
     }
   });
+};
+// Reveal an absolute path in Finder via the native handler. Returns true when it dispatched to the
+// shell (so the web layer knows not to fall back to the daemon's headless reveal); false in a plain
+// browser where this bridge isn't present.
+window.trailblazeRevealPath = function(path) {
+  if (path && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.revealPath) {
+    window.webkit.messageHandlers.revealPath.postMessage({ path: path });
+    return true;
+  }
+  return false;
 };
 """
 let pickerShim = WKUserScript(

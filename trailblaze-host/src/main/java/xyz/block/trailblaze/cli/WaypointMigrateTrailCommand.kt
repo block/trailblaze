@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.cli
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -9,6 +12,7 @@ import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
@@ -394,7 +398,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
           step.recording?.tools?.forEach { visit(it) }
         }
         is TrailYamlItem.ToolTrailItem -> item.tools.forEach { visit(it) }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { visit(it) }
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { visit(it) }
         is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
       }
     }
@@ -425,7 +429,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
           step.recording?.tools?.forEach { visit(it) }
         }
         is TrailYamlItem.ToolTrailItem -> item.tools.forEach { visit(it) }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.forEach { visit(it) }
+        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { visit(it) }
         is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
       }
     }
@@ -446,7 +450,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     is TrailYamlItem.TrailheadTrailItem ->
       item.copy(
         trailhead = item.trailhead.copy(
-          tools = item.trailhead.tools.map { migrateWrapper(it, migrations, cursor) },
+          tools = item.trailhead.tools?.map { migrateWrapper(it, migrations, cursor) },
         ),
       )
     is TrailYamlItem.ConfigTrailItem -> item
@@ -590,7 +594,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // return below — we don't want to swallow real bugs in OUR code, but we DO need
     // to swallow Maestro's reflection-driven exception path during a forward scan.
     val tResolve = System.currentTimeMillis()
-    val center = try {
+    val maestroCenter = try {
       TapSelectorV2.findNodeCenterUsingSelector(
         root = screen.viewHierarchy,
         selector = maestroSelector,
@@ -599,8 +603,24 @@ class WaypointMigrateTrailCommand : Callable<Int> {
         heightPixels = screen.deviceHeight,
       )
     } catch (e: Exception) {
+      // Matcher threw (malformed selector, or a Maestro reflection corner case). Skip this
+      // log so the forward-cursor scan continues — deliberately WITHOUT the coordinate
+      // fallback below. An exception signals a real matcher failure we'd rather surface as a
+      // skip than mask by migrating off the recorded coordinate alone; the fallback is only
+      // for the "matcher ran fine but resolved to nothing" case (a null return).
       return null
-    } ?: return null
+    }
+    // On-device instrumentation captures (AgentDriverLog) record the EXACT coordinate the
+    // recorded tap/assert resolved to at run time in their `action` block. When the
+    // Maestro-tree resolver runs cleanly but resolves to nothing — the common case is a
+    // summary row whose visible text (e.g. "-$5.00", a payment-method label) is a substring
+    // of a concatenated container text, so the anchored Maestro `textRegex` full-match misses
+    // even though the accessibility tree has a clean leaf for it — fall back to the recorded
+    // coordinate. The anchor-refinement below still searches the WHOLE accessibility tree for
+    // a node carrying the selector's text/id intent (the coordinate is only a proximity
+    // tiebreaker), so a log that lacks the anchor still won't resolve — correctness is
+    // preserved, only the coordinate source changes.
+    val center = maestroCenter ?: readActionCoordinate(logFile) ?: return null
     val resolveMs = System.currentTimeMillis() - tResolve
     val (cx, cy) = center
     val hitNode = tree.hitTest(cx, cy) ?: return null
@@ -896,6 +916,49 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     val raw = logFile.readText()
     val match = Regex("""\"displayName\"\s*:\s*\"([^\"]*)\"""").find(raw) ?: return null
     return match.groupValues[1]
+  }
+
+  /**
+   * Read the recorded device coordinate from an on-device capture's `action` block, but only
+   * when that coordinate points at a real on-screen target. The `AgentDriverLog.action` sealed
+   * value (`TapPoint{x,y}`, `AssertCondition{...,x,y,isVisible,succeeded}`, etc.) carries the
+   * EXACT coordinate the recorded tool resolved to at capture time — a ground-truth hit-test
+   * seed that survives even when the Maestro-tree resolver can't reproduce it (concatenated
+   * summary rows, off-by-a-frame captures). Used only as a fallback in [tryResolveInLog] after
+   * the Maestro resolver returns null.
+   *
+   * Returns null unless the coordinate is trustworthy:
+   *  - Tap coordinates (`TapPoint`/`LongPressPoint`, no `isVisible` field) are always a real
+   *    tap target — accepted.
+   *  - An `AssertCondition` is accepted only when it's a SUCCESSFUL VISIBLE assertion. A
+   *    not-visible assert (`isVisible=false`) records screen-center coordinates and a failed
+   *    assert (`succeeded=false`) records (0,0); either would seed the hit-test with a bogus
+   *    proximity point that could mis-rank the anchor-refinement among multiple matches during
+   *    the forward-cursor scan. So a later selector never binds off a not-visible/failed
+   *    assert's log.
+   *
+   * Also returns null when there's no action object or it carries no numeric x/y (e.g. an
+   * EnterText action). Parses the JSON structurally (rather than regex-slicing the `action`
+   * object) so a string field carrying `{`/`}` — or a future nested-object action shape —
+   * can't truncate the slice and reintroduce the very selector drops this fallback prevents.
+   */
+  internal fun readActionCoordinate(logFile: File): Pair<Int, Int>? {
+    val root = try {
+      TrailblazeJson.defaultWithoutToolsInstance.parseToJsonElement(logFile.readText())
+    } catch (e: Exception) {
+      return null
+    }
+    val action = (root as? JsonObject)?.get("action") as? JsonObject ?: return null
+    // `isVisible` is present only on AssertCondition — its presence identifies an assert.
+    val isVisible = (action["isVisible"] as? JsonPrimitive)?.booleanOrNull
+    if (isVisible != null) {
+      if (!isVisible) return null // not-visible assert → screen-center coords, not a target
+      val succeeded = (action["succeeded"] as? JsonPrimitive)?.booleanOrNull ?: true
+      if (!succeeded) return null // failed assert → (0,0), not a target
+    }
+    val x = (action["x"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return null
+    val y = (action["y"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return null
+    return x to y
   }
 
   /**

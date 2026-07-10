@@ -1,0 +1,60 @@
+config:
+  id: sample-app/lists/scroll-and-navigate
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: REINSTALL
+
+trail:
+  - step: "Navigate to the \"Lists\" tab"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The user requested to navigate to the 'Lists' tab, and the element with nodeId 88 contains the 'Lists' text and is clickable, indicating it is the navigation tab.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Lists
+
+  - step: "Scroll down to \"Item 25\" and tap it"
+    recording:
+      android-phone:
+        - scrollUntilTextIsVisible:
+            text: Item 25
+        - tapOnElementBySelector:
+            reason: '"Item 25" is now visible and clickable, fulfilling the objective requirement to tap it.'
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Item 25
+
+  - step: "Verify \"Detail for Item 25\" is shown, then go back to the list"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: The objective requires verifying that the detail view for 'Item 25' is shown, and the TextView with this text confirms the correct screen is displayed.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Detail for Item 25
+        - tapOnElementBySelector:
+            reason: The detail view for 'Item 25' is shown. The next step is to go back to the list by tapping the back arrow at the top left (nodeId 56).
+            nodeSelector:
+              androidAccessibility:
+                contentDescriptionRegex: Back
+
+  - step: "Scroll down to \"Item 50\" and verify it is visible"
+    recording:
+      android-phone:
+        - scrollUntilTextIsVisible:
+            text: Item 50
+        - assertVisibleBySelector:
+            reason: '''Item 50'' is specifically mentioned in the objective as the verification target and is clearly listed in the current view hierarchy.'
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Item 50

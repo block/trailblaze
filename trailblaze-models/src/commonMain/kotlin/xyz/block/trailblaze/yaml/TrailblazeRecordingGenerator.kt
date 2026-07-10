@@ -110,8 +110,10 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           val toolWrappers = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
 
           // Zero recordable tools in this objective window → emit no recording at all (null).
-          // At replay time the step will fall through to AI rather than ghost-passing. Empty
-          // `ToolRecording` instances are now rejected at construction (see ToolRecording).
+          // At replay time the step will fall through to AI. A live session capturing zero tools
+          // means "not recorded," never "author declared a no-op" — that empty-but-declared state
+          // (see ToolRecording's 3-state doc) is reserved for deliberate, hand-authored
+          // declarations, so this generator must never manufacture it on its own.
           val recording = if (toolWrappers.isNotEmpty()) {
             ToolRecording(tools = toolWrappers)
           } else {
@@ -124,8 +126,10 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             // keeps its trailhead. A bare-string-shorthand trailhead carries no authored step text
             // (DEFAULT_STEP stands in), so drop it back to null to round-trip cleanly.
             val trailheadStep = promptStep.prompt.takeIf { it != TrailheadDefinition.DEFAULT_STEP }
-            val trailheadTools = recording?.tools ?: emptyList()
-            if (trailheadStep != null || trailheadTools.isNotEmpty()) {
+            // Keep null (not `?: emptyList()`) — a session that captured zero trailhead tools is
+            // "not recorded," not a declared no-op (same reasoning as `recording` above).
+            val trailheadTools = recording?.tools
+            if (trailheadStep != null || !trailheadTools.isNullOrEmpty()) {
               items.add(
                 TrailYamlItem.TrailheadTrailItem(
                   TrailheadDefinition(

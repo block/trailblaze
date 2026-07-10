@@ -20,21 +20,24 @@ const RUN_STATUS_DOT = {
   running: ['loader-2', 'var(--tb-running)'],
 };
 
-// Parse a trail/blaze yaml into { config, prompts }. The top-level doc is a list whose items carry
-// either a `config:` or a `prompts:` key.
+// Parse a trail/blaze yaml into { config, prompts, trailhead }. The top-level doc is a list whose
+// items carry a `config:`, `prompts:`, or (new format) `trailhead:` key — the trailhead is the
+// deterministic step 0 the flow launches from.
 function parseTrailYaml(content) {
   try {
     const doc = window.jsyaml ? window.jsyaml.load(content) : null;
     let config = {};
     let prompts = [];
+    let trailhead = null;
     const items = Array.isArray(doc) ? doc : doc ? [doc] : [];
     for (const it of items) {
       if (it && it.config) config = it.config;
       if (it && it.prompts) prompts = it.prompts;
+      if (it && it.trailhead != null) trailhead = it.trailhead;
     }
-    return { ok: true, config, prompts };
+    return { ok: true, config, prompts, trailhead };
   } catch (e) {
-    return { ok: false, error: String(e && e.message ? e.message : e), config: {}, prompts: [] };
+    return { ok: false, error: String(e && e.message ? e.message : e), config: {}, prompts: [], trailhead: null };
   }
 }
 
@@ -235,19 +238,27 @@ function HighlightedYamlField({ value, onChange, onFocus, onBlur, placeholder })
   );
 }
 
-function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClose }) {
+// `singleTool`: cap the cell at ONE tool call (a unified trailhead classifier must be exactly one
+// tool map — the Kotlin parser rejects a list or a multi-key map there).
+function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClose, onRunTools, runDevices = [], singleTool = false }) {
   useLucide();
   // Docs come from the FULL catalog (allTools) so an already-recorded tool that isn't in this target's
   // scoped autocomplete list (e.g. a sign-in/trailhead tool) still shows its docs. Autocomplete options
   // stay scoped to `tools`.
   const findDoc = (id) => (allTools || []).find((t) => t.id === id) || (tools || []).find((t) => t.id === id) || null;
+  // Faithful display of whatever body the file carries (the model preserves scalar/list bodies for
+  // losslessness) — only the canonical no-args forms (`null` / `{}`) show as blank. Blanking a scalar
+  // would make Save silently replace it with `{}`.
   const bodyToYaml = (body) => {
-    const b = body && typeof body === 'object' ? body : {};
-    if (!Object.keys(b).length) return '';
-    try { return window.jsyaml.dump(b, { lineWidth: -1, noRefs: true }).trimEnd(); } catch (e) { return ''; }
+    if (body == null) return '';
+    if (typeof body === 'object' && !Array.isArray(body) && !Object.keys(body).length) return '';
+    try { return window.jsyaml.dump(body, { lineWidth: -1, noRefs: true }).trimEnd(); } catch (e) { return ''; }
   };
   const [rows, setRows] = React.useState(() => (calls || []).map((c) => ({ name: c.name, argsYaml: bodyToYaml(c.body) })));
   const [err, setErr] = React.useState(null);
+  const [running, setRunning] = React.useState(false);
+  const [runResult, setRunResult] = React.useState(null); // { ok, text } from a live device run
+  const [runDeviceId, setRunDeviceId] = React.useState(''); // chosen Play device; '' → first available
   // While a row's args are being edited, its tool docs show in a panel to the LEFT of the popover.
   const popRef = React.useRef(null);
   const [focusedRow, setFocusedRow] = React.useState(-1);
@@ -260,19 +271,39 @@ function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClos
   const setRow = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const delRow = (i) => { setRows((rs) => rs.filter((_, j) => j !== i)); setErr(null); };
   const addRow = () => { setRows((rs) => [...rs, { name: (tools && tools[0] && tools[0].id) || '', argsYaml: '' }]); setErr(null); };
-  const save = () => {
+  // Parse the edited rows into the [{ [toolName]: body }] wire shape, or null (with an error set) if
+  // any row is malformed. Shared by Save and the live Play run.
+  const buildOut = () => {
     const out = [];
     for (const r of rows) {
-      if (!r.name) { setErr('Every tool call needs a tool selected.'); return; }
+      if (!r.name) { setErr('Every tool call needs a tool selected.'); return null; }
       let body = {};
       if (r.argsYaml.trim()) {
         try { body = window.jsyaml.load(r.argsYaml); }
-        catch (e) { setErr(`“${r.name}” args aren’t valid YAML: ${e && e.message ? e.message : e}`); return; }
-        if (body == null || typeof body !== 'object' || Array.isArray(body)) { setErr(`“${r.name}” args must be key: value pairs.`); return; }
+        catch (e) { setErr(`“${r.name}” args aren’t valid YAML: ${e && e.message ? e.message : e}`); return null; }
+        if (body == null || typeof body !== 'object' || Array.isArray(body)) { setErr(`“${r.name}” args must be key: value pairs.`); return null; }
       }
       out.push({ [r.name]: body });
     }
-    onSave(out);
+    if (singleTool && out.length > 1) {
+      setErr('A trailhead is exactly one tool per platform — compose multiple actions inside that tool.');
+      return null;
+    }
+    return out;
+  };
+  const save = () => { const out = buildOut(); if (out) onSave(out); };
+  // The Play device: the chosen one if still connected, else the first available.
+  const runDeviceEff = (runDevices.find((d) => d.id === runDeviceId) ? runDeviceId : (runDevices[0] && runDevices[0].id)) || '';
+  // Play — dispatch the current (possibly unsaved) tool calls to the SELECTED device, like Run YAML.
+  const run = async () => {
+    if (!onRunTools || running || !runDevices.length) return;
+    setErr(null); setRunResult(null);
+    const out = buildOut();
+    if (!out || !out.length) { if (out && !out.length) setErr('Add a tool call to run.'); return; }
+    setRunning(true);
+    const r = await onRunTools(out, runDeviceEff || undefined);
+    setRunResult(r || { ok: false, text: 'No result returned.' });
+    setRunning(false);
   };
   // Anchor beside the cell, clamped/flipped so the popover always stays fully on screen — open upward
   // when there's more room above than below (the fix for a bottom-row cell pushing it off the page).
@@ -320,12 +351,30 @@ function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClos
               </div>
             );
           })}
-          <span role="button" onClick={addRow} style={{ alignSelf: 'flex-start', color: 'var(--tb-pass)', fontSize: 12.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Ico n="plus" s={14} /> Add tool call
-          </span>
+          {!(singleTool && rows.length >= 1) && (
+            <span role="button" onClick={addRow} style={{ alignSelf: 'flex-start', color: 'var(--tb-pass)', fontSize: 12.5, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Ico n="plus" s={14} /> Add tool call
+            </span>
+          )}
           {err && <span style={{ fontSize: 11.5, color: 'var(--tb-fail)' }}>{err}</span>}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, padding: '10px 13px', borderTop: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
+        {onRunTools && (
+          <div style={{ flex: '0 0 auto', padding: '9px 13px', borderTop: '1px solid var(--tb-hairline)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {runDevices.length > 0
+              ? <Select value={runDeviceEff} onChange={(e) => setRunDeviceId(e.target.value)} title="Device to run on"
+                  options={runDevices.map((d) => [d.id, d.name])} style={{ maxWidth: 220 }} />
+              : <span className="tb-sub" style={{ fontSize: 12 }}>No device connected</span>}
+            <Btn sm kind="ghost" ico={running ? 'loader-2' : 'play'} spin={running} disabled={running || busy || !runDevices.length} onClick={run}
+              title={runDevices.length ? 'Run these tool calls on the selected device' : 'Connect a device to run'}>Play</Btn>
+            {runResult && (
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: runResult.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)', minWidth: 0, maxWidth: 180, overflow: 'hidden' }} title={runResult.text}>
+                <Ico n={runResult.ok ? 'check' : 'x'} s={12} /> <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{runResult.text}</span>
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderTop: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
+          <span style={{ flex: 1 }} />
           <Btn sm kind="ghost" onClick={onClose}>Cancel</Btn>
           <Btn sm kind="primary" ico={busy ? 'loader-2' : 'save'} spin={busy} disabled={busy} onClick={save}>Save tool calls</Btn>
         </div>
@@ -384,7 +433,7 @@ const PLATFORM_LABEL = { android: 'Android', ios: 'iOS', web: 'Web' };
 //     variant's inline raw-YAML editor (replaces the old slide-in push view).
 function StepsBoard({
   steps, onStepsChange, dirty, onSaveSteps,
-  variants = [], variantDocs = {}, blazeConfigRows = [],
+  variants = [], variantDocs = {}, blazeConfigRows = [], blazeTrailhead = null,
   deviceList = [], linkedSessions = [],
   home, blazeName = 'blaze.yaml', target, canRecord = true,
   onOpenFile, dispatchRecord, dispatchPlay, onConfigureRun, onDeleteFile, onViewRun, onError, boardRef, onSaveVariantTools, onSaveVariantYaml, onFetchVariantYaml,
@@ -856,19 +905,22 @@ function StepsBoard({
             })}
 
             {/* trailhead row — the deterministic step 0 that runs before the steps (clear data /
-                launch / sign in into a known account state). It is PER-PLATFORM: a trailhead's
-                launch/sign-in tool is platform-specific, so each device column picks its own, scoped
-                to that platform's trailheads, baked into that platform's recording. The blaze (left)
-                carries no trailhead — it's the cross-platform spec. */}
+                launch / sign in into a known account state). The new format authors it once on the
+                blaze (left, the cross-platform spec) as `trailhead: { step }`; shown here as the spec
+                text. The per-device Selects (right) are the legacy sidecar-trailhead picker, kept for
+                targets still on that model — a trailhead's launch/sign-in tool is platform-specific. */}
             {(() => {
               // Condense the trailhead band to one quiet line when no column has a trailhead set or
               // available — it's an opt-in field and shouldn't carry a full row of "None" controls.
               const anyTh = gridColumns.some((c) => (c.trailheadOpts || []).length || colTrailheads[c.platform]);
+              const specTrailhead = blazeTrailhead && blazeTrailhead.step ? String(blazeTrailhead.step) : null;
               return (
                 <React.Fragment>
                   <div className="tb-board-pin" style={{ borderTop: '1px solid var(--tb-hairline)', padding: '8px 12px', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '.05em', opacity: 0.7 }}>Trailhead</span>
-                    <span className="tb-sub" style={{ fontSize: 11.5 }}>{anyTh ? 'chosen per device' : 'none'}</span>
+                    {specTrailhead
+                      ? <span data-selectable style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-standard)' }}>{specTrailhead}</span>
+                      : <span className="tb-sub" style={{ fontSize: 11.5 }}>{anyTh ? 'chosen per device' : 'none'}</span>}
                   </div>
                   {gridColumns.length > 0 && !anyTh && (
                     <div style={{ gridColumn: 'span ' + gridColumns.length, borderTop: '1px solid var(--tb-hairline)', borderLeft: '1px solid var(--tb-hairline)', padding: '8px 12px', display: 'flex', alignItems: 'center' }}>
@@ -1206,6 +1258,6 @@ function RecordConfigDialog({ devices, draftTarget, busy, trailheads, defaultTra
 }
 
 Object.assign(window, {
-  RUN_STATUS_DOT, parseTrailYaml, patchVariantRecording, promptEntry, stepToolCount, fileToolCount,
+  RUN_STATUS_DOT, DEFAULT_DRIVER, parseTrailYaml, patchVariantRecording, promptEntry, stepToolCount, fileToolCount,
   SelectorLine, RecordingCell, ToolCallsPopover, editorToolsFor, StepsBoard, RecordConfigDialog,
 });

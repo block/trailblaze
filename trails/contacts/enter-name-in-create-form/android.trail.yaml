@@ -7,8 +7,11 @@
     target: contacts
     description: "Launch Contacts via the custom scripted tool, then enter a name in the create-contact form."
 
-- tools:
-    - contacts_android_launchApp: {}
+- prompts:
+  - step: Launch the Contacts app via the custom scripted tool
+    recording:
+      tools:
+      - contacts_android_launchApp: {}
 
 - prompts:
     - step: If a sign-in / account-setup interstitial appears (e.g. a "Sign in" or "Skip" button), tap "Skip".

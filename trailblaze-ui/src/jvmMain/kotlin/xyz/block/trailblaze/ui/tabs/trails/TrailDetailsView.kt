@@ -125,6 +125,12 @@ fun TrailDetailsView(
             DetailRow(label = "Platforms", value = trail.platforms.joinToString(", ") { it.displayName })
           }
 
+          // Targets — for a unified single-file trail, the device classifiers it covers
+          // (derived from its recordings + config.devices), which the filename no longer encodes.
+          if (trail.unifiedTargets.isNotEmpty()) {
+            DetailRow(label = "Targets", value = trail.unifiedTargets.joinToString(", "))
+          }
+
           // Variant count
           DetailRow(label = "Variants", value = "${trail.variants.size}")
         }
@@ -146,6 +152,24 @@ fun TrailDetailsView(
         )
       }
       
+      // Drivers (unified) — the per-device driver pins from config.devices, when present.
+      if (trail.unifiedDevices.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = "Drivers",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        SelectionContainer {
+          Column {
+            trail.unifiedDevices.toSortedMap().forEach { (device, driver) ->
+              DetailRow(label = device, value = driver, isMonospace = true)
+            }
+          }
+        }
+      }
+
       // Metadata (from config)
       if (trail.metadata.isNotEmpty()) {
         Spacer(modifier = Modifier.height(12.dp))
@@ -193,17 +217,23 @@ fun TrailDetailsView(
       
       Spacer(modifier = Modifier.height(8.dp))
       
-      // Variant list grouped by platform/first classifier
+      // Variant list grouped by platform/first classifier. A unified single-file trail encodes no
+      // classifier in its filename, so it gets its own "unified" group rather than a bogus one.
       val groupedVariants = trail.variants.groupBy { variant ->
-        variant.classifiers.firstOrNull()?.classifier?.lowercase() ?: "default"
+        when {
+          variant.isDefault -> "default"
+          variant.isUnified -> "unified"
+          else -> variant.classifiers.firstOrNull()?.classifier?.lowercase() ?: "default"
+        }
       }.toSortedMap(compareBy { groupKey ->
-        // Sort order: default first, then known platforms alphabetically, then others
+        // Sort order: default/unified first, then known platforms alphabetically, then others
         when (groupKey) {
           "default" -> "0_default"
-          "android" -> "1_android"
-          "ios" -> "2_ios"
-          "web" -> "3_web"
-          else -> "4_$groupKey"
+          "unified" -> "1_unified"
+          "android" -> "2_android"
+          "ios" -> "3_ios"
+          "web" -> "4_web"
+          else -> "5_$groupKey"
         }
       })
       

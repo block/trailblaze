@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.api
 
-import xyz.block.trailblaze.util.escapeForSelector
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -227,7 +226,7 @@ class TrailblazeNodeSelectorGeneratorEnumerationTest : TrailblazeNodeSelectorGen
       .mapNotNull { it.selector.iosMaestro?.accessibilityTextRegex }
 
     assertTrue(
-      texts.contains(escapeForSelector("Balance: \$0.00")),
+      texts.contains("Balance: \$0.00"),
       "Expected the literal text option; got $texts",
     )
     assertTrue(

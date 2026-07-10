@@ -22,10 +22,11 @@ val installSampleAppMcpTools =
 //
 //  1) Instrumentation trails under
 // `../android-sample-app/trails/android-ondevice-instrumentation/`,
-//     where each scenario lives at `<category>/<scenario>/android-phone.trail.yaml`. The Copy's
-//     `eachFile` flattens that to `<scenarioCamel>.trail.yaml` (e.g. `text-input/android-phone…`
+//     where each scenario is a named unified file `<category>/<scenario>.trail.yaml`. The Copy's
+//     `eachFile` flattens that to `<scenarioCamel>.trail.yaml` (e.g. `forms/text-input.trail.yaml`
 //     → `textInput.trail.yaml`) so a single `GeneratedSampleAppTests` class collects every
-//     scenario as a `@Test fun <scenarioCamel>()`.
+//     scenario as a `@Test fun <scenarioCamel>()`. (Non-`.trail.yaml` files like the NL-only
+//     `mcp-tools/…/blaze.yaml` are copied verbatim and never become generated tests.)
 //
 //  2) Repo-root sample-app evals under `trails/eval/android/sample-app/<basename>.trail.yaml`
 //     (e.g. `clipboard-round-trip.trail.yaml`). Each file's basename is camel-cased the same way
@@ -56,24 +57,22 @@ val stageSampleAppTrails =
         .mapIndexed { i, s -> if (i == 0) s else s.replaceFirstChar { c -> c.uppercase() } }
         .joinToString("")
     }
-    // Instrumentation trails: `<cat>/<scenario>/android-phone.trail.yaml` →
-    // `trails/GeneratedSampleAppTests/<scenarioCamel>.trail.yaml`.
+    // Instrumentation trails: named unified `<cat>/<scenario>.trail.yaml` →
+    // `trails/GeneratedSampleAppTests/<scenarioCamel>.trail.yaml`. The scenario name is the
+    // file's basename (the pre-unified layout put it in the parent dir; the camel-cased result
+    // is identical either way, so generated test-method names are unchanged).
     from("../android-sample-app/trails/android-ondevice-instrumentation") {
       exclude("**/node_modules/**", "**/install/**")
       eachFile {
-        val segments = relativePath.segments
-        if (segments.isNotEmpty() && segments.last().endsWith(".trail.yaml")) {
-          require(segments.size >= 2) {
-            "Unexpected sample-app trail path: ${relativePath.pathString}"
-          }
-          // Second-to-last segment is the scenario dir (e.g. `text-input`).
-          val scenarioDir = segments[segments.size - 2]
+        val fileName = relativePath.lastName
+        if (fileName.endsWith(".trail.yaml")) {
+          val scenario = fileName.removeSuffix(".trail.yaml")
           relativePath =
             org.gradle.api.file.RelativePath(
               true,
               "trails",
               "GeneratedSampleAppTests",
-              "${dashedToCamel(scenarioDir)}.trail.yaml",
+              "${dashedToCamel(scenario)}.trail.yaml",
             )
         }
       }

@@ -87,7 +87,14 @@ class TrailblazeDeviceManager(
   val settingsRepo: TrailblazeSettingsRepo,
   val defaultHostAppTarget: TrailblazeHostAppTarget,
   val currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
-  val availableAppTargets: Set<TrailblazeHostAppTarget>,
+  initialAppTargets: Set<TrailblazeHostAppTarget>,
+  /**
+   * Re-runs full app-target discovery against the current workspace on disk — the same pass
+   * that produced [initialAppTargets] at startup. Consumed only by [registerNewTarget];
+   * when null (tests, embedders that don't support live registration), live registration is
+   * unavailable and callers fall back to the restart-required flow.
+   */
+  private val freshAppTargetsProvider: (() -> Set<TrailblazeHostAppTarget>)? = null,
   val appIconProvider: AppIconProvider,
   val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
@@ -96,6 +103,90 @@ class TrailblazeDeviceManager(
   val onDeviceInstrumentationArgsProvider: () -> Map<String, String>,
   private val trailblazeAnalytics: TrailblazeAnalytics,
 ) {
+
+  /**
+   * Atomic holder AND observable source of the live app-target set. A [MutableStateFlow] rather
+   * than a plain [AtomicReference] so desktop Compose read sites can [collectAsState] and
+   * recompose when [registerNewTarget] appends a target — its [MutableStateFlow.compareAndSet]
+   * is the additive-append arbiter, and its `value` backs the [availableAppTargets] snapshot
+   * getter, so the flow and the getter can never drift (single holder).
+   */
+  private val _availableAppTargetsFlow: MutableStateFlow<Set<TrailblazeHostAppTarget>> =
+    MutableStateFlow(initialAppTargets)
+
+  /**
+   * Observable live view of the app-target set for desktop Compose. Emits a new complete
+   * immutable snapshot whenever [registerNewTarget] appends a target; collect it (rather than
+   * reading [availableAppTargets] directly) anywhere a composable must recompose on a live
+   * append. Trail Runner (web) doesn't consume this — it refetches the target list over RPC.
+   */
+  val availableAppTargetsFlow: StateFlow<Set<TrailblazeHostAppTarget>> =
+    _availableAppTargetsFlow.asStateFlow()
+
+  /**
+   * Live view of the app-target set. Seeded from startup discovery and grown ADDITIVELY by
+   * [registerNewTarget] — existing target objects are never replaced or removed for the JVM's
+   * lifetime, so a run that captured its resolved target at run start stays consistent.
+   * Every read sees a complete immutable snapshot (old or new, never partial); edits, renames,
+   * and removals of existing targets still require a daemon restart (flagged by the
+   * `target-drift` endpoint).
+   *
+   * This is a point-in-time snapshot getter — desktop composables that must recompose on a
+   * live append should collect [availableAppTargetsFlow] instead.
+   */
+  val availableAppTargets: Set<TrailblazeHostAppTarget>
+    get() = _availableAppTargetsFlow.value
+
+  init {
+    // The settings repo predates this manager (it feeds the config's startup discovery), so its
+    // constructor-injected target provider reads the startup-frozen set. Re-point it at the live
+    // set so a target appended by [registerNewTarget] also resolves through
+    // [TrailblazeSettingsRepo.getCurrentSelectedTargetApp] (GetTargetApps, recording tool
+    // discovery, run dispatch) — not just through direct reads of [availableAppTargets].
+    settingsRepo.bindLiveTargetProvider { availableAppTargets }
+  }
+
+  /**
+   * Additive-only live registration of a newly-created app target (Trail Runner's Create
+   * Target flow), so it becomes selectable without a daemon restart.
+   *
+   * Re-runs full workspace discovery via [freshAppTargetsProvider] rather than resolving the
+   * single target in isolation: the discovery pass's workspace tool/toolset overlay
+   * registrations (idempotent, replace-not-append — see `AppTargetDiscovery`) are what make a
+   * new target's custom `*.tool.yaml` / toolset files dispatchable, not just listable. Only
+   * the target matching [targetId] is then appended to the live set; fresh instances of
+   * already-registered ids are discarded so existing object identity is preserved.
+   *
+   * Returns the resolved target when it is (or is now) live — a net-new append OR an id that
+   * was already registered (idempotent: a double-submit or a concurrent caller that won the
+   * append still gets the target back, not a spurious null that would trigger the restart
+   * banner). Returns null only when the target genuinely can't be made live: no provider
+   * wired, discovery threw, or discovery ran but didn't surface the id. Every non-append
+   * outcome logs why, so a "target didn't appear" report is diagnosable from the daemon log
+   * without a restart — the whole point of the flow.
+   */
+  fun registerNewTarget(targetId: String): TrailblazeHostAppTarget? {
+    val provider = freshAppTargetsProvider ?: run {
+      Console.log(
+        "[TrailblazeDeviceManager] Live target registration for '$targetId' skipped: " +
+          "no fresh-discovery provider wired (falling back to restart-required flow)",
+      )
+      return null
+    }
+    val fresh = try {
+      provider()
+    } catch (e: Exception) {
+      Console.error(
+        "[TrailblazeDeviceManager] Live target registration for '$targetId' failed during discovery: " +
+          "${e::class.simpleName}: ${e.message}\n${e.stackTraceToString()}",
+      )
+      return null
+    }
+    // The live set IS the StateFlow's value, so the CAS append emits to every desktop
+    // composable collecting [availableAppTargetsFlow] — that's what makes the new target
+    // appear in the picker without a restart.
+    return casAppendNewTarget(_availableAppTargetsFlow, fresh, targetId)
+  }
 
   /**
    * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
@@ -1289,7 +1380,85 @@ class TrailblazeDeviceManager(
       )
   }
 
+  /** Outcome of the pure [appendNewTarget] decision — one variant per caller-observable branch. */
+  internal sealed interface AppendDecision {
+    /** [targetId] is net-new: [updatedTargets] is [newTarget] appended to the current set. */
+    data class Appended(
+      val newTarget: TrailblazeHostAppTarget,
+      val updatedTargets: Set<TrailblazeHostAppTarget>,
+    ) : AppendDecision
+
+    /** [targetId] is already in the current set; [existing] is that target (idempotent success). */
+    data class AlreadyPresent(val existing: TrailblazeHostAppTarget) : AppendDecision
+
+    /** [targetId] is neither current nor in fresh discovery — nothing to append. */
+    data object NotDiscovered : AppendDecision
+  }
+
   companion object {
+
+    /**
+     * Pure decision for additive-only registration. Total function (no null): returns
+     * [AppendDecision.AlreadyPresent] when [targetId] is already in [current] (idempotent),
+     * [AppendDecision.Appended] when it's net-new (present in [fresh], absent from [current]),
+     * or [AppendDecision.NotDiscovered] otherwise. Never touches [current]'s entries — they all
+     * survive by identity, which is what keeps a live append safe for in-flight runs holding a
+     * reference to their already-resolved target.
+     */
+    internal fun appendNewTarget(
+      current: Set<TrailblazeHostAppTarget>,
+      fresh: Set<TrailblazeHostAppTarget>,
+      targetId: String,
+    ): AppendDecision {
+      current.firstOrNull { it.id == targetId }?.let { return AppendDecision.AlreadyPresent(it) }
+      val newTarget = fresh.firstOrNull { it.id == targetId } ?: return AppendDecision.NotDiscovered
+      return AppendDecision.Appended(newTarget = newTarget, updatedTargets = current + newTarget)
+    }
+
+    /**
+     * Runs the additive CAS-append loop against [holder] (the manager's live-target
+     * [MutableStateFlow]): re-decides via [appendNewTarget], retries on a lost race, and on a
+     * net-new [AppendDecision.Appended] swaps [holder]'s value — which emits to every collector
+     * of [availableAppTargetsFlow]. Returns the resolved target (net-new append, or the existing
+     * instance for an idempotent [AppendDecision.AlreadyPresent]) or null for
+     * [AppendDecision.NotDiscovered]. Extracted from [registerNewTarget] so the emission is
+     * unit-testable against a real [MutableStateFlow] without constructing the manager (its ~14
+     * constructor dependencies make direct construction impractical — same rationale as
+     * [appendNewTarget]).
+     */
+    internal fun casAppendNewTarget(
+      holder: MutableStateFlow<Set<TrailblazeHostAppTarget>>,
+      fresh: Set<TrailblazeHostAppTarget>,
+      targetId: String,
+    ): TrailblazeHostAppTarget? {
+      while (true) {
+        val current = holder.value
+        when (val decision = appendNewTarget(current = current, fresh = fresh, targetId = targetId)) {
+          is AppendDecision.AlreadyPresent -> {
+            Console.log("[TrailblazeDeviceManager] Target '$targetId' is already registered; nothing to do")
+            return decision.existing
+          }
+          AppendDecision.NotDiscovered -> {
+            Console.error(
+              "[TrailblazeDeviceManager] Live target registration for '$targetId' failed: id not found in " +
+                "fresh discovery (${fresh.size} targets: ${fresh.map { it.id }.sorted()}). The target's " +
+                "config may not be on disk yet, or discovery filtered it out.",
+            )
+            return null
+          }
+          is AppendDecision.Appended ->
+            if (holder.compareAndSet(current, decision.updatedTargets)) {
+              Console.log(
+                "[TrailblazeDeviceManager] Live-registered app target '$targetId' " +
+                  "(${decision.updatedTargets.size} targets now available)",
+              )
+              return decision.newTarget
+            }
+          // CAS lost to a concurrent mutation — loop and re-decide against the new current set.
+        }
+      }
+    }
+
     const val PLAYWRIGHT_NATIVE_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_NATIVE
     const val PLAYWRIGHT_ELECTRON_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_ELECTRON
 

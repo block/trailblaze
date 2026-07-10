@@ -3,6 +3,7 @@ package xyz.block.trailblaze.util
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -262,5 +263,58 @@ class SelectorEscapeTest {
     // escapeForIdentifier returns as-is — dot is accepted wildcard for identifier fields
     assertEquals(dotString, identifierResult, "escapeForIdentifier should leave dots unescaped")
     assertTrue(Regex(identifierResult).matches("v1x2"), "identifier: dot matches any char")
+  }
+
+  // ---------------------------------------------------------------------------
+  // unescapeForSelector — the inverse used by the minimizer to prettify selectors
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `unescapeForSelector - round-trips escapeForSelector for metacharacter literals`() {
+    // The whole point of the helper: recover the human-readable literal that
+    // escapeForSelector wrapped, so the minimizer can emit it bare when it still
+    // resolves uniquely.
+    for (literal in listOf("\$15.00", "Current sale (1)", "Debit|Credit", "v1.2", "Dr. Smith")) {
+      val escaped = escapeForSelector(literal)
+      assertFalse(escaped == literal, "precondition: '\$literal' must actually be wrapped")
+      assertEquals(literal, unescapeForSelector(escaped), "must recover the original literal")
+    }
+  }
+
+  @Test
+  fun `unescapeForSelector - returns null for a plain non-wrapped value (nothing to do)`() {
+    // A bare regex or plain label isn't a `\Q...\E` block; the helper signals
+    // "no rewrite" with null so the caller keeps the field unchanged.
+    assertNull(unescapeForSelector("Review sale"))
+    assertNull(unescapeForSelector(".*Inbox.*"))
+    assertNull(unescapeForSelector("Inbox \\d+"))
+  }
+
+  @Test
+  fun `unescapeForSelector - returns null for null input`() {
+    assertNull(unescapeForSelector(null))
+  }
+
+  @Test
+  fun `unescapeForSelector - returns null for an empty quote block`() {
+    // `\Q\E` carries no literal; unwrapping to "" would be a meaningless selector.
+    assertNull(unescapeForSelector("\\Q\\E"))
+  }
+
+  @Test
+  fun `unescapeForSelector - refuses a multi-segment quote block (inner contains backslash-E)`() {
+    // When the original text itself contains `\E`, Regex.escape splits it into
+    // multiple `\Q...\E` segments. Naively stripping the outer `\Q`/`\E` would
+    // corrupt it, so the helper must decline (return null) and leave it escaped.
+    val escaped = escapeForSelector("foo\\Ebar")
+    assertTrue(escaped.startsWith("\\Q") && escaped.endsWith("\\E"), "precondition: outer wrapping")
+    assertTrue(escaped.substring(2, escaped.length - 2).contains("\\E"), "precondition: split segments")
+    assertNull(unescapeForSelector(escaped))
+  }
+
+  @Test
+  fun `unescapeForSelector - returns null when only one delimiter is present`() {
+    assertNull(unescapeForSelector("\\Qfoo"))
+    assertNull(unescapeForSelector("foo\\E"))
   }
 }

@@ -7,6 +7,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.util.escapeForIdentifier
+import xyz.block.trailblaze.api.MigrationScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -192,7 +193,21 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
   override fun call(): Int {
     val logFile = resolveLogFile() ?: return TrailblazeExitCode.MISUSE.code
     val screen = SessionLogScreenState.loadStep(logFile)
-    val tree = screen.trailblazeNodeTree ?: run {
+    // Prefer the dedicated migration tree from migration-mode captures
+    // (`trailblaze.captureSecondaryTree=true`) — that's always accessibility-shape
+    // regardless of which driver actually ran the test (mirrors
+    // WaypointMigrateTrailCommand.tryResolveInLog). Without this, a dual-tree capture
+    // recorded on the Maestro/instrumentation driver would resolve --at / --maestro-selector
+    // against the Maestro-shaped `trailblazeNodeTree`, defeating the migration use case.
+    //
+    // --ref is the exception: refs are assigned only onto `trailblazeNodeTree` (via
+    // `CompactScreenElements.applyRefsToTree`, the same pass that backs `snapshot --all`'s
+    // ref list) — the raw tree `MigrationTreeCapture` logs never gets refs applied. Preferring
+    // it for `--ref` would make every ref copied from snapshot/session output report "not
+    // found" on a dual-tree migration log, so `--ref` always resolves against the primary tree.
+    val migrationTree = (screen as? MigrationScreenState)?.driverMigrationTreeNode
+    val tree = selectResolutionTree(migrationTree, screen.trailblazeNodeTree, refRequested = ref != null)
+      ?: run {
       reportCliError(
         verb = "Suggest selector",
         target = logFile.name,
@@ -575,3 +590,19 @@ private fun TrailblazeNode.findFirstByRef(ref: String): TrailblazeNode? {
   }
   return null
 }
+
+/**
+ * Picks which captured tree `--ref` / `--at` / `--maestro-selector` resolve against.
+ *
+ * [migrationTree] (`MigrationScreenState.driverMigrationTreeNode`) is always accessibility-shape
+ * regardless of which driver actually ran the test, so it's preferred for `--at` /
+ * `--maestro-selector` on a dual-tree migration capture. `--ref` is the exception: refs are
+ * assigned only onto [primaryTree] (`ScreenState.trailblazeNodeTree`, via
+ * `CompactScreenElements.applyRefsToTree`) — the raw [migrationTree] never gets refs applied, so
+ * resolving a ref against it always misses. [refRequested] routes around that.
+ */
+internal fun selectResolutionTree(
+  migrationTree: TrailblazeNode?,
+  primaryTree: TrailblazeNode?,
+  refRequested: Boolean,
+): TrailblazeNode? = migrationTree.takeIf { !refRequested } ?: primaryTree

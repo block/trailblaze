@@ -278,6 +278,9 @@ class TrailblazeYaml internal constructor(
     is TrailDocument.V1 -> doc.items
     is TrailDocument.Unified -> {
       if (deviceClassifiers.isEmpty()) {
+        // A classifier declared as explicitly empty (`classifier: []`, a deterministic no-op —
+        // see ToolRecording's 3-state doc) has no tool calls to drop either way, so it doesn't
+        // trip this guard — only a classifier with real tool calls does.
         val hasRecordings = doc.trail.trail.any { step ->
           step.recordings.values.any { it.isNotEmpty() }
         } || doc.trail.trailhead?.recordings?.values?.any { it.isNotEmpty() } == true
@@ -430,7 +433,10 @@ class TrailblazeYaml internal constructor(
       is TrailYamlItem.PromptsTrailItem -> {
         item.promptSteps.any { promptStep -> promptStep.recording != null }
       }
-      is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools.isNotEmpty()
+      // A declared-but-empty trailhead (`tools = emptyList()`, an explicit no-op) still counts:
+      // it replays deterministically (zero tools, no AI), same as a step whose `recording` is a
+      // non-null empty ToolRecording just above. Only `tools == null` (never declared) is excluded.
+      is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools != null
       is TrailYamlItem.ConfigTrailItem,
       is TrailYamlItem.ToolTrailItem -> false
     }
@@ -438,17 +444,22 @@ class TrailblazeYaml internal constructor(
 
   /**
    * Version-aware "does this trail contain ANY recordings?" check, used by
-   * pre-execution paths (e.g. the desktop app's auto-detect) that don't yet
-   * know which device will run the trail. For v1, looks for any non-null
-   * `recording:`. For the unified format, looks for any classifier with a
-   * non-empty tool list. Never throws — malformed input returns false.
+   * pre-execution paths (e.g. the desktop app's auto-detect, and
+   * [xyz.block.trailblaze.cli.TrailCommand.resolveUseRecordedSteps]'s CLI
+   * auto mode) that don't yet know which device will run the trail. For v1,
+   * looks for any non-null `recording:`. For the unified format, looks for
+   * any DECLARED classifier — including an explicit `classifier: []` /
+   * `classifier: {}` no-op, which replays deterministically (zero tools, no
+   * AI) same as a non-empty recording, and must not be treated as "no
+   * recordings" here or auto mode would route it through pure AI execution
+   * instead. Never throws — malformed input returns false.
    */
   fun hasRecordedSteps(yaml: String): Boolean = try {
     when (val doc = decodeTrailDocument(yaml)) {
       is TrailDocument.V1 -> hasRecordedSteps(doc.items)
       is TrailDocument.Unified -> doc.trail.trail.any { step ->
-        step.recordings.values.any { it.isNotEmpty() }
-      } || doc.trail.trailhead?.recordings?.values?.any { it.isNotEmpty() } == true
+        step.recordings.isNotEmpty()
+      } || doc.trail.trailhead?.recordings?.isNotEmpty() == true
     }
   } catch (_: Throwable) {
     false

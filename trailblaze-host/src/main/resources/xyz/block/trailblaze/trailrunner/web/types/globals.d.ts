@@ -99,6 +99,21 @@ declare global {
   function slimLlmForShare(llmLogs: any): any;
   function truncate(text: string, max: number): string;
 
+  // ─── trail-model.js (pure step-matrix model; classic <script>, also require()'d by bun test) ────
+  // Parses a UNIFIED single-file trail into an editable StepMatrix and serializes it back, round-trip
+  // stable. Referenced via `window.TM` from trail-detail.tsx.
+  interface TMTool { name: string; body: unknown }
+  interface TMStep { kind: "trailhead" | "step" | "verify"; text: string; recording: Record<string, TMTool[]>; extra: Record<string, unknown> }
+  interface TMStepMatrix { config: Record<string, unknown>; platforms: string[]; trailhead: TMStep | null; steps: TMStep[] }
+  interface TMApi {
+    recToTools(rec: unknown): TMTool[];
+    toolsToRec(tools: TMTool[], trailheadForm?: boolean): unknown;
+    /** null when `doc` isn't the unified `config`/`trail` mapping shape. */
+    unifiedDocToMatrix(doc: unknown): TMStepMatrix | null;
+    matrixToUnifiedDoc(model: TMStepMatrix): Record<string, unknown>;
+  }
+  const TM: TMApi;
+
   interface Window {
     TbRpc: TbRpcApi;
     TB: typeof TB;
@@ -108,6 +123,7 @@ declare global {
     // The CDN globals above are also referenced via `window.X` in several files (not just bare) —
     // `const X` alone only makes `X` resolve as a bare identifier, not as a `window` member.
     jsyaml: typeof jsyaml;
+    TM: typeof TM;
     CodeMirror: typeof CodeMirror;
     lucide: typeof lucide;
     hljs: typeof hljs;

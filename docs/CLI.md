@@ -275,7 +275,7 @@ trailblaze toolbox [OPTIONS] [<ROLE>]
 
 ### `trailblaze run`
 
-Run a trail file (.trail.yaml) — execute a scripted test on a device.  Accepts files, shell globs, or directories. Directory arguments expand recursively to one trail per containing directory (recording preferred over NL when both are present).  Trail-level metadata honored by the runner:   - `tags:` (list of strings) — filtered via --tags.   - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the `N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:` line.  Note: `trailblaze trail` is a deprecated alias for `trailblaze run` and will be removed in a future release.
+Run a trail file (.trail.yaml) — execute a scripted test on a device.  Accepts files, shell globs, or directories. Directory arguments expand recursively to every named unified trail (`<scenario>.trail.yaml`), plus one pick per legacy trail (recording preferred over NL when both are present).  Trail-level metadata honored by the runner:   - `tags:` (list of strings) — filtered via --tags.   - `skip:` (reason string)   — reported as skipped (reason printed, contributes to the `N skipped` summary tally) and exits 0 for that file's slot. Blank/whitespace `skip:` is ignored. To run a skipped trail, remove its `skip:` line.  Note: `trailblaze trail` is a deprecated alias for `trailblaze run` and will be removed in a future release.
 
 **Synopsis:**
 
@@ -287,7 +287,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to one trail per containing directory (recording preferred over NL when both are present). Bare `trailblaze run` with no arguments is rejected as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to fan out under a workspace's trails directory. | No |
+| `<<trailFile>>` | Trail files (.trail.yaml or blaze.yaml), shell globs, or directories. Directories expand recursively to every named unified trail, plus one pick per legacy trail (recording preferred over NL when both are present). Bare `trailblaze run` with no arguments is rejected as a misuse — pass a `.trail.yaml` path or name a directory (e.g. `trails/`) to fan out under a workspace's trails directory. | No |
 
 **Options:**
 

@@ -100,6 +100,95 @@ describe("extractTrace", () => {
     // Each row carries a 1-based ordinal.
     expect(trace[0].i).toBe(1);
   });
+
+  test("renders a terminal snapshot (final_screenshot) as its own trailing cell", () => {
+    // captureFinalScreenshot logs a TrailblazeSnapshotLog carrying only a screenshotFile +
+    // displayName (no tool/action/prompt). It must still produce a cell so the state after the
+    // last action is shown; otherwise it falls through every branch and is silently dropped.
+    const logs = [
+      ...sampleLogs,
+      {
+        class: `${T}.TrailblazeSnapshotLog`,
+        displayName: "final_screenshot",
+        screenshotFile: "final.png",
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const trace = core.extractTrace(logs);
+    const last = trace[trace.length - 1];
+    expect(last.screenshotFile).toBe("final.png");
+    expect(String(last.label)).toContain("Final");
+  });
+});
+
+describe("shotForStep (timeline preview image)", () => {
+  // Two steps, each with its own screenshot. A later step's header should preview that step's
+  // OWN first screen (what it's about to do), not the previous step's trailing frame.
+  const twoStepLogs = [
+    { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step one" }, timestamp: "2024-01-01T00:00:00Z" },
+    { class: `${T}.TrailblazeToolLog`, toolName: "tapA", traceId: "t1", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:01Z" },
+    { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 1 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a1.png", timestamp: "2024-01-01T00:00:01.100Z" },
+    { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step two" }, timestamp: "2024-01-01T00:00:02Z" },
+    { class: `${T}.TrailblazeToolLog`, toolName: "tapB", traceId: "t2", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:03Z" },
+    { class: `${T}.MaestroDriverLog`, traceId: "t2", action: { class: "xyz.AgentDriverAction.TapPoint", x: 2, y: 2 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a2.png", timestamp: "2024-01-01T00:00:03.100Z" },
+  ];
+
+  test("a later step header previews its own step's first screen, not the previous step's frame", () => {
+    const trace = core.extractTrace(twoStepLogs);
+    const stepTwo = trace.find((r) => r.objective === true && String(r.label).includes("Step two"));
+    expect(stepTwo).toBeTruthy();
+    const html = core.buildRunReportHtml({
+      meta: { title: "R", status: "passed" },
+      trace,
+      llmLogs: [],
+      shots: { "a1.png": "data:img,A1", "a2.png": "data:img,A2" },
+    });
+    const out = renderViewer(payloadOf(html), { step: Number(stepTwo!.i) });
+    const shot = out.match(/id="shot" src="([^"]*)"/);
+    expect(shot).not.toBeNull();
+    expect(shot![1]).toBe("data:img,A2");
+  });
+
+  test("a frameless middle step's header does NOT preview the next objective's frame", () => {
+    // Step two captures nothing; its forward scan must stop at Step three's header and fall back to
+    // the nearest earlier frame (Step one), never crossing into a future step's screen.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step one" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapA", traceId: "t1", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 1 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a1.png", timestamp: "2024-01-01T00:00:01.100Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step two (no capture)" }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step three" }, timestamp: "2024-01-01T00:00:03Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapC", traceId: "t3", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:04Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t3", action: { class: "xyz.AgentDriverAction.TapPoint", x: 3, y: 3 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a3.png", timestamp: "2024-01-01T00:00:04.100Z" },
+    ];
+    const trace = core.extractTrace(logs);
+    const mid = trace.find((r) => r.objective === true && String(r.label).includes("Step two"));
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace, llmLogs: [], shots: { "a1.png": "data:img,A1", "a3.png": "data:img,A3" } });
+    const out = renderViewer(payloadOf(html), { step: Number(mid!.i) });
+    const shot = out.match(/id="shot" src="([^"]*)"/);
+    expect(shot).not.toBeNull();
+    expect(shot![1]).toBe("data:img,A1"); // nearest earlier frame — NOT step three's a3
+  });
+
+  test("falls back to an earlier frame when the forward candidate's screenshot didn't inline", () => {
+    // Step two's only forward frame (gone.png) failed to inline (absent from shots). The scan must
+    // skip it and fall back to Step one's a1, not render an empty pane.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step one" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapA", traceId: "t1", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 1 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a1.png", timestamp: "2024-01-01T00:00:01.100Z" },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Step two" }, timestamp: "2024-01-01T00:00:02Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapB", traceId: "t2", trailblazeTool: { raw: {} }, successful: true, durationMs: 10, timestamp: "2024-01-01T00:00:03Z" },
+      { class: `${T}.MaestroDriverLog`, traceId: "t2", action: { class: "xyz.AgentDriverAction.TapPoint", x: 2, y: 2 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "gone.png", timestamp: "2024-01-01T00:00:03.100Z" },
+    ];
+    const trace = core.extractTrace(logs);
+    const stepTwo = trace.find((r) => r.objective === true && String(r.label).includes("Step two"));
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace, llmLogs: [], shots: { "a1.png": "data:img,A1" } });
+    const out = renderViewer(payloadOf(html), { step: Number(stepTwo!.i) });
+    const shot = out.match(/id="shot" src="([^"]*)"/);
+    expect(shot).not.toBeNull();
+    expect(shot![1]).toBe("data:img,A1"); // not an empty pane on the missing gone.png
+  });
 });
 
 describe("buildRunReportHtml (single run)", () => {

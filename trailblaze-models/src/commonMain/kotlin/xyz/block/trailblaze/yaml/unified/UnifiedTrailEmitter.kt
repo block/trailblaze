@@ -87,9 +87,11 @@ internal class UnifiedTrailEmitter(
   }
 
   /**
-   * Emit a trailhead `recording:` body: one `<classifier>:` key per device, each a **single tool
-   * call** (a map, no `- ` list prefix) — a trailhead is one tool per platform. The internal model
-   * stores that tool as a 1-element list, so assert exactly one before emitting the map form.
+   * Emit a trailhead `recording:` body: one `<classifier>:` key per device, each either a
+   * **single tool call** (a map, no `- ` list prefix — a trailhead is at most one tool per
+   * platform) or an explicit empty map (`{}`, a deterministic no-op — see ToolRecording's
+   * 3-state doc). The internal model stores that as a 0- or 1-element list, so assert at most
+   * one before emitting.
    */
   private fun appendTrailheadClassifierMap(
     sb: StringBuilder,
@@ -98,13 +100,18 @@ internal class UnifiedTrailEmitter(
     toolIndent: String,
   ) {
     for ((classifier, tools) in recordings) {
-      require(tools.size == 1) {
-        "A trailhead is one tool per platform, but classifier `$classifier` has ${tools.size} tools. " +
-          "Compose multi-step bootstraps inside the trailhead tool's own definition instead."
+      require(tools.size <= 1) {
+        "A trailhead is at most one tool per platform, but classifier `$classifier` has ${tools.size} " +
+          "tools. Compose multi-step bootstraps inside the trailhead tool's own definition instead."
       }
-      sb.append(classifierIndent).append(classifier).append(":\n")
-      val toolYaml = yamlInstance.encodeToString(toolWrapperSerializer, tools.single())
-      appendIndented(sb, toolYaml, indent = toolIndent)
+      sb.append(classifierIndent).append(classifier).append(":")
+      if (tools.isEmpty()) {
+        sb.append(" {}\n")
+      } else {
+        sb.append("\n")
+        val toolYaml = yamlInstance.encodeToString(toolWrapperSerializer, tools.single())
+        appendIndented(sb, toolYaml, indent = toolIndent)
+      }
     }
   }
 

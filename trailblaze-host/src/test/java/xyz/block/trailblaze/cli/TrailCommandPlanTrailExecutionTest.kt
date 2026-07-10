@@ -11,6 +11,7 @@ import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.recordings.TrailRecordings
 
 /**
  * Pins the contract of [TrailCommand.planTrailExecution] and [TrailCommand.expandTrailFiles].
@@ -30,6 +31,7 @@ class TrailCommandPlanTrailExecutionTest {
     title: String = name,
     tags: List<String>? = null,
     skip: String? = null,
+    id: String? = null,
   ): File {
     dir.mkdirs()
     val file = File(dir, name)
@@ -37,12 +39,43 @@ class TrailCommandPlanTrailExecutionTest {
       appendLine("- config:")
       appendLine("    title: $title")
       appendLine("    platform: android")
+      if (id != null) appendLine("    id: $id")
       if (tags != null) appendLine("    tags: [${tags.joinToString(", ")}]")
       if (skip != null) appendLine("    skip: \"$skip\"")
       appendLine("- tools:")
       appendLine("  - pressBack: {}")
     }
     file.writeText(configLines)
+    return file
+  }
+
+  /**
+   * Writes a unified-format trail file (`config:`-map document) — the canonical named-scenario
+   * shape, one self-contained `<scenario>.trail.yaml` per distinct trail. Several of these in one
+   * directory each expand, because [expandTrailFiles] recognizes them by unified *content* (unlike
+   * the v1 `- config:`-list recordings that [writeTrail] produces, which collapse to one pick per
+   * directory). [id] is optional on purpose: some real named unified trails carry no `config.id`
+   * (the eval suite), and content detection must still expand them.
+   */
+  private fun writeUnifiedTrail(
+    name: String,
+    dir: File,
+    id: String? = null,
+  ): File {
+    dir.mkdirs()
+    val file = File(dir, name)
+    file.writeText(
+      buildString {
+        appendLine("config:")
+        if (id != null) appendLine("  id: $id")
+        appendLine("  target: sample")
+        appendLine("trail:")
+        appendLine("  - step: Do the thing")
+        appendLine("    recording:")
+        appendLine("      android:")
+        appendLine("        - pressBack: {}")
+      },
+    )
     return file
   }
 
@@ -60,6 +93,21 @@ class TrailCommandPlanTrailExecutionTest {
 
     val names = expanded.map { it.name }.sorted()
     assertEquals(listOf("blaze.yaml", "nested.trail.yaml", "top.trail.yaml"), names)
+  }
+
+  @Test
+  fun `expandTrailFiles resolves a directory holding only a bare unified trail_yaml`() {
+    // A migrated unified trail is a BARE `trail.yaml` (no `<device>` prefix, so it does NOT end
+    // in `.trail.yaml`). It collapses into the directory's single-trail bucket —
+    // `TrailRecordings.UNIFIED_TRAIL_FILENAME` is a resolver candidate — so a directory holding
+    // only it expands to exactly that file rather than to nothing.
+    val trailDir = File(tempFolder.root, "case_5374124").apply { mkdirs() }
+    val bare = writeUnifiedTrail(TrailRecordings.UNIFIED_TRAIL_FILENAME, trailDir, id = "case_5374124")
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(trailDir))
+
+    assertEquals(1, expanded.size)
+    assertEquals(bare.canonicalPath, expanded.single().canonicalPath)
   }
 
   @Test
@@ -125,6 +173,129 @@ class TrailCommandPlanTrailExecutionTest {
       expanded.single().canonicalPath,
       "config/trailblaze.yaml must stay excluded; the sibling real.trail.yaml is the only " +
         "runnable trail in this directory",
+    )
+  }
+
+  @Test
+  fun `trails under excluded directories like build and claude worktrees are not expanded`() {
+    // Directory expansion walks via [TrailDiscovery], inheriting its exclude set. Pre-fix,
+    // `walkTopDown` descended into `build/`, `node_modules/`, `.claude/worktrees/`, etc., so
+    // `trailblaze run .` picked up stale build-output copies of trails and sibling agents'
+    // WIP trails — and since named unified trails each expand to their own run, every stray
+    // copy became its own execution. Pin that only the real trail survives.
+    val realDir = File(tempFolder.root, "checkout").apply { mkdirs() }
+    val realTrail = writeUnifiedTrail("checkout-flow.trail.yaml", realDir, id = "sample/checkout-flow")
+    writeUnifiedTrail(
+      "checkout-flow.trail.yaml",
+      File(tempFolder.root, "build/resources/trails"),
+      id = "sample/checkout-flow",
+    )
+    writeUnifiedTrail("dep-fixture.trail.yaml", File(tempFolder.root, "node_modules/some-pkg"))
+    writeUnifiedTrail(
+      "wip-scenario.trail.yaml",
+      File(tempFolder.root, ".claude/worktrees/agent-abc123/trails/wip"),
+      id = "sample/wip-scenario",
+    )
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(tempFolder.root))
+
+    assertEquals(
+      listOf(realTrail.canonicalPath),
+      expanded.map { it.canonicalPath },
+      "trails under excluded directories must not expand into the run",
+    )
+  }
+
+  @Test
+  fun `in-tree symlinked directories are not traversed`() {
+    // Deliberate behavior change from the `walkTopDown` era: [TrailDiscovery]'s walk does not
+    // follow symlinks, so a symlink INSIDE the walked tree no longer pulls external trails
+    // into the run (following links without cycle detection is a DoS/path-traversal footgun —
+    // see the TrailDiscovery KDoc). Users who symlinked a shared trails directory into their
+    // workspace must pass the real path (or the symlink itself — see the next test) explicitly.
+    val outside = File(tempFolder.root, "outside-tree").apply { mkdirs() }
+    writeUnifiedTrail("shared-scenario.trail.yaml", outside, id = "shared/shared-scenario")
+    val walkRoot = File(tempFolder.root, "workspace").apply { mkdirs() }
+    val realTrail = writeUnifiedTrail("local-scenario.trail.yaml", walkRoot, id = "ws/local-scenario")
+    val linkCreated = runCatching {
+      java.nio.file.Files.createSymbolicLink(
+        File(walkRoot, "shared").toPath(),
+        outside.toPath(),
+      )
+    }.isSuccess
+    org.junit.Assume.assumeTrue("cannot create symlinks on this platform/user; skipping", linkCreated)
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(walkRoot))
+
+    assertEquals(
+      listOf(realTrail.canonicalPath),
+      expanded.map { it.canonicalPath },
+      "an in-tree symlinked directory must not be traversed during expansion",
+    )
+  }
+
+  @Test
+  fun `an explicitly-passed symlinked directory still expands its trails`() {
+    // The no-follow policy applies to the walked TREE, not to the user's explicit argument:
+    // `trailblaze run <symlink-to-dir>` names that directory on purpose, so the expander
+    // canonicalizes the root before walking (TrailDiscovery refuses to descend through a
+    // symlinked root otherwise, which would silently expand to nothing).
+    val realDir = File(tempFolder.root, "real-trails").apply { mkdirs() }
+    val trail = writeUnifiedTrail("linked-scenario.trail.yaml", realDir, id = "real/linked-scenario")
+    val link = File(tempFolder.root, "trails-link")
+    val linkCreated = runCatching {
+      java.nio.file.Files.createSymbolicLink(link.toPath(), realDir.toPath())
+    }.isSuccess
+    org.junit.Assume.assumeTrue("cannot create symlinks on this platform/user; skipping", linkCreated)
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(link))
+
+    assertEquals(
+      listOf(trail.canonicalPath),
+      expanded.map { it.canonicalPath },
+      "a symlinked directory passed explicitly must expand via its canonical path",
+    )
+  }
+
+  @Test
+  fun `overlapping symlinked directory and file arguments still dedupe to one run`() {
+    // The symlinked-root canonicalization is walk-only: results are mapped back into the
+    // argument's path frame. Without that mapping, `trailblaze run trails-link
+    // trails-link/foo.trail.yaml` would emit the directory expansion in the REAL path frame
+    // while the explicit file argument stays in the symlink frame — two different absolute
+    // paths for one physical trail, defeating the `distinctBy { it.absoluteFile }` contract.
+    val realDir = File(tempFolder.root, "real-overlap").apply { mkdirs() }
+    val trail = writeUnifiedTrail("overlap-scenario.trail.yaml", realDir, id = "real/overlap-scenario")
+    val link = File(tempFolder.root, "overlap-link")
+    val linkCreated = runCatching {
+      java.nio.file.Files.createSymbolicLink(link.toPath(), realDir.toPath())
+    }.isSuccess
+    org.junit.Assume.assumeTrue("cannot create symlinks on this platform/user; skipping", linkCreated)
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(link, File(link, trail.name)))
+
+    assertEquals(1, expanded.size, "one physical trail passed via two frames must run once")
+    assertEquals(trail.canonicalPath, expanded.single().canonicalPath)
+    assertTrue(
+      expanded.single().absolutePath.startsWith(link.absolutePath),
+      "expansion must stay in the symlink path frame the user typed; got ${expanded.single()}",
+    )
+  }
+
+  @Test
+  fun `an explicitly-passed directory with an excluded name is still scanned`() {
+    // The exclude set only prunes SUBdirectories of the walk. A user running
+    // `trailblaze run build/generated-trails` named that directory explicitly — refusing to
+    // scan it because of its name would be baffling.
+    val buildDir = File(tempFolder.root, "build").apply { mkdirs() }
+    val trail = writeUnifiedTrail("generated-scenario.trail.yaml", buildDir, id = "gen/generated-scenario")
+
+    val expanded = TrailCommand.expandTrailFiles(listOf(buildDir))
+
+    assertEquals(
+      listOf(trail.canonicalPath),
+      expanded.map { it.canonicalPath },
+      "an explicitly-named directory is scanned regardless of the exclude list",
     )
   }
 
@@ -317,6 +488,305 @@ class TrailCommandPlanTrailExecutionTest {
 
     assertEquals(1, expanded.size)
     assertEquals(exactRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `directory of distinct named scenarios expands to every scenario, not just the first`() {
+    // Canonical unified named-file layout: one category directory holds several DISTINCT
+    // scenarios, each a self-contained `<scenario>.trail.yaml` with its own `config.id`.
+    // Pre-fix, directory mode grouped only by parent dir and picked the alphabetically-first
+    // file (`findBestTrailResourcePath` collapses one dir to one trail), silently skipping the
+    // rest. Content detection recognizes each unified file as its own scenario so all of them run.
+    val catalog = File(tempFolder.root, "catalog").apply { mkdirs() }
+    val conditional =
+      writeUnifiedTrail("conditional-item.trail.yaml", catalog, id = "sample/catalog/conditional-item")
+    val multiple =
+      writeUnifiedTrail("multiple-items.trail.yaml", catalog, id = "sample/catalog/multiple-items")
+    val overlay = writeUnifiedTrail("overlay-tap.trail.yaml", catalog, id = "sample/catalog/overlay-tap")
+
+    val capturedErr = ByteArrayOutputStream()
+    val expanded = withCapturedStderr(capturedErr) {
+      TrailCommand.expandTrailFiles(
+        files = listOf(catalog),
+        deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+      )
+    }
+
+    assertEquals(
+      listOf(conditional, multiple, overlay).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "every distinct named scenario in the directory should expand, not just the first",
+    )
+    // A named scenario's filename is not classifier-derived, so the resolver legitimately finds
+    // no `<platform>.trail.yaml` match — but running the self-contained unified file is exactly
+    // right, so no device-mismatch warning should fire (that warning is legacy-bucket only).
+    val stderrText = capturedErr.toString(StandardCharsets.UTF_8)
+    assertTrue(
+      !stderrText.contains("Warning:"),
+      "named-scenario expansion must not emit a device-mismatch warning; got stderr=\n$stderrText",
+    )
+  }
+
+  @Test
+  fun `directory with blaze and a lone id-less recording still collapses to one run`() {
+    // Legacy layout: a single trail expressed as `blaze.yaml` (NL) plus one classifier-variant
+    // recording, neither carrying a `config.id`. Sub-grouping must keep these id-less siblings
+    // in one identity bucket so the directory still collapses to a single pick — the recording,
+    // matched against `--device android` — rather than running both as if distinct scenarios.
+    val trailDir = File(tempFolder.root, "legacy-trail").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = trailDir)
+    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(1, expanded.size)
+    assertEquals(androidRecording.canonicalPath, expanded.single().canonicalPath)
+  }
+
+  @Test
+  fun `mixed directory expands named scenarios and collapses the legacy trail`() {
+    // A directory holding BOTH distinct named scenarios (unified, each with a `config.id`) AND
+    // a legacy id-less `blaze.yaml` + recording pair. The named scenarios each expand; the
+    // id-less pair collapses to one pick (the classifier-matched recording). Net: 2 + 1 = 3.
+    val mixed = File(tempFolder.root, "mixed").apply { mkdirs() }
+    val scenarioA = writeUnifiedTrail("scenario-a.trail.yaml", mixed, id = "sample/mixed/scenario-a")
+    val scenarioB = writeUnifiedTrail("scenario-b.trail.yaml", mixed, id = "sample/mixed/scenario-b")
+    writeTrail("blaze.yaml", dir = mixed)
+    val legacyAndroid = writeTrail("android.trail.yaml", dir = mixed)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(mixed),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(scenarioA, scenarioB, legacyAndroid).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "named scenarios each expand; the id-less blaze+recording pair collapses to the recording",
+    )
+  }
+
+  @Test
+  fun `directory of id-less unified scenarios still expands to every scenario`() {
+    // The eval suite (`trails/eval/android/`) holds several distinct unified scenarios in ONE
+    // directory, none carrying a `config.id`. Content detection expands each; a `config.id`-based
+    // grouping would collapse them all into a single pick and silently skip the rest — this pins
+    // that expansion keys off unified *content*, not the presence of an id.
+    val evalDir = File(tempFolder.root, "eval").apply { mkdirs() }
+    val tenKey = writeUnifiedTrail("tenKey.trail.yaml", evalDir)
+    val openUrl = writeUnifiedTrail("openUrl.trail.yaml", evalDir)
+    val goOffline = writeUnifiedTrail("goOffline.trail.yaml", evalDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(evalDir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(tenKey, openUrl, goOffline).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "every id-less unified scenario should expand, not just one",
+    )
+  }
+
+  @Test
+  fun `named scenarios expand without a device spec too`() {
+    // Bare `trailblaze run <dir>` — no `--device`, so deviceClassifiers is empty — is the most
+    // common interactive invocation. Named-scenario expansion must not depend on classifier
+    // resolution: every unified file still expands and no device-mismatch warning fires.
+    val dir = File(tempFolder.root, "no-device").apply { mkdirs() }
+    val first = writeUnifiedTrail("first-scenario.trail.yaml", dir)
+    val second = writeUnifiedTrail("second-scenario.trail.yaml", dir)
+
+    val capturedErr = ByteArrayOutputStream()
+    val expanded = withCapturedStderr(capturedErr) {
+      TrailCommand.expandTrailFiles(files = listOf(dir), deviceClassifiers = emptyList())
+    }
+
+    assertEquals(
+      listOf(first, second).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+    )
+    val stderrText = capturedErr.toString(StandardCharsets.UTF_8)
+    assertTrue(
+      !stderrText.contains("Warning:"),
+      "named-scenario expansion without --device must not warn; got stderr=\n$stderrText",
+    )
+  }
+
+  @Test
+  fun `sibling subdirectories partition independently in one walk`() {
+    // One walk root holding a named-scenario dir AND a legacy blaze+recording dir. Each
+    // directory's partition is independent: the named dir expands both scenarios, the legacy
+    // dir collapses to its classifier-matched recording. Net: 2 + 1 = 3.
+    val root = File(tempFolder.root, "tree").apply { mkdirs() }
+    val namedDir = File(root, "named").apply { mkdirs() }
+    val scenarioA = writeUnifiedTrail("scenario-a.trail.yaml", namedDir, id = "tree/scenario-a")
+    val scenarioB = writeUnifiedTrail("scenario-b.trail.yaml", namedDir, id = "tree/scenario-b")
+    val legacyDir = File(root, "legacy").apply { mkdirs() }
+    writeTrail("blaze.yaml", dir = legacyDir)
+    val legacyRecording = writeTrail("android.trail.yaml", dir = legacyDir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(root),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(scenarioA, scenarioB, legacyRecording).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "each subdirectory must partition independently: named dir expands all, legacy dir collapses",
+    )
+  }
+
+  @Test
+  fun `an NL definition file never expands as a named scenario whatever its content`() {
+    // `blaze.yaml` / `trailblaze.yaml` are single-trail representatives by convention. Even if
+    // one carried unified-shaped content (a root-level `trail:` key), it must stay in the legacy
+    // bucket — expanding it as a named scenario while it also serves as the bucket's NL fallback
+    // would run the same trail twice.
+    val dir = File(tempFolder.root, "nl-unified-shaped").apply { mkdirs() }
+    val blaze = writeUnifiedTrail("blaze.yaml", dir)
+
+    val expanded = TrailCommand.expandTrailFiles(files = listOf(dir))
+
+    assertEquals(
+      listOf(blaze.canonicalPath),
+      expanded.map { it.canonicalPath },
+      "a unified-shaped blaze.yaml must resolve once via the legacy bucket, not twice",
+    )
+  }
+
+  @Test
+  fun `unreadable trail file falls into the legacy bucket instead of crashing expansion`() {
+    // Defensive branch: the walk filters `isFile`, so an unreadable file is only reachable when
+    // permissions deny the read. Expansion must not crash; the file lands in the legacy bucket
+    // and resolves like any recording (here: the dir's only file, picked with a warning).
+    val dir = File(tempFolder.root, "unreadable").apply { mkdirs() }
+    val locked = writeUnifiedTrail("locked-scenario.trail.yaml", dir)
+    org.junit.Assume.assumeTrue(
+      "cannot revoke read permission on this platform/user; skipping",
+      locked.setReadable(false) && !locked.canRead(),
+    )
+    try {
+      val capturedErr = ByteArrayOutputStream()
+      val expanded = withCapturedStderr(capturedErr) {
+        TrailCommand.expandTrailFiles(files = listOf(dir))
+      }
+      assertEquals(listOf(locked.canonicalPath), expanded.map { it.canonicalPath })
+    } finally {
+      locked.setReadable(true)
+    }
+  }
+
+  @Test
+  fun `named unified scenario with an unquoted template still expands`() {
+    // Unified trails may carry `{{var}}` templates that are invalid as raw YAML until resolved
+    // (an unquoted `{{VAR}}` reads as a flow mapping). Content detection must classify such a
+    // file as a named scenario anyway — the run path resolves the template before decoding, so
+    // the file is perfectly runnable and skipping it (or folding it into the legacy bucket)
+    // would silently drop a real scenario.
+    val dir = File(tempFolder.root, "templated").apply { mkdirs() }
+    val templated = File(dir, "templated-scenario.trail.yaml")
+    templated.writeText(
+      buildString {
+        appendLine("config:")
+        appendLine("  target: sample")
+        appendLine("trail:")
+        appendLine("  - step: Enter the code")
+        appendLine("    recording:")
+        appendLine("      android:")
+        appendLine("        - inputText:")
+        appendLine("            text: {{TRAILBLAZE_CODE}}")
+      },
+    )
+    val plain = writeUnifiedTrail("plain-scenario.trail.yaml", dir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(dir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(templated, plain).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "a template-bearing unified scenario must expand alongside its plain sibling",
+    )
+  }
+
+  @Test
+  fun `undecodable unified-shaped file still expands on its own so the runner surfaces the error`() {
+    // A file that is unified by content shape (root-level `trail:`) but fails to decode must
+    // expand as its own entry rather than fall into the legacy bucket: the runner then reports
+    // the decode error against that file, and the healthy sibling scenarios are unaffected.
+    val dir = File(tempFolder.root, "broken").apply { mkdirs() }
+    val broken = File(dir, "broken-scenario.trail.yaml")
+    broken.writeText("config:\n  target: sample\ntrail:\n  - step: [unclosed\n")
+    val healthy = writeUnifiedTrail("healthy-scenario.trail.yaml", dir)
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(dir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(broken, healthy).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "an undecodable unified-shaped file must still expand as its own entry",
+    )
+  }
+
+  @Test
+  fun `mid-migration directory runs the bare trail yaml and every named sibling`() {
+    // A directory can transiently hold the bare `trail.yaml` (the directory's canonical unified
+    // trail — identity comes from the directory) AND named unified siblings. The bare file is a
+    // single-trail representative resolved through the legacy bucket; the named siblings each
+    // expand. Net: N named + 1 bare.
+    val dir = File(tempFolder.root, "mid-migration").apply { mkdirs() }
+    val bare = writeUnifiedTrail("trail.yaml", dir)
+    val named = writeUnifiedTrail("extra-scenario.trail.yaml", dir, id = "sample/extra-scenario")
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(dir),
+      deviceClassifiers = TrailCommand.parseDeviceClassifiersFromSpec("android"),
+    )
+
+    assertEquals(
+      listOf(bare, named).map { it.canonicalPath }.sorted(),
+      expanded.map { it.canonicalPath }.sorted(),
+      "the bare trail.yaml resolves via the legacy bucket while named siblings expand",
+    )
+  }
+
+  @Test
+  fun `v1 classifier-variant recordings with inconsistent config ids still collapse to one run`() {
+    // Regression guard for the real-world layout where a single trail's v1 classifier-variant
+    // recordings carry MUTUALLY INCONSISTENT config.ids — one capture batch stamped a `generated/…`
+    // id, another a plain id (observed on a real generated trail). These are v1 documents, so
+    // content detection keeps every one in the legacy bucket and the directory collapses to a
+    // single classifier-priority pick. Pins that expansion deliberately does NOT group by
+    // config.id — which would wrongly split the inconsistent-id variants into separate runs.
+    val trailDir = File(tempFolder.root, "multi-device-trail").apply { mkdirs() }
+    val androidPhone =
+      writeTrail("android-phone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
+    writeTrail("android-tablet.trail.yaml", dir = trailDir, id = "checkout-flow")
+    writeTrail("ios-iphone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
+    writeTrail("ios-ipad.trail.yaml", dir = trailDir, id = "checkout-flow")
+
+    val expanded = TrailCommand.expandTrailFiles(
+      files = listOf(trailDir),
+      deviceClassifiers = listOf(
+        TrailblazeDeviceClassifier("android"),
+        TrailblazeDeviceClassifier("phone"),
+      ),
+    )
+
+    // `[android, phone]` → candidate `android-phone.trail.yaml` matches → exactly that one file.
+    assertEquals(1, expanded.size)
+    assertEquals(androidPhone.canonicalPath, expanded.single().canonicalPath)
   }
 
   @Test

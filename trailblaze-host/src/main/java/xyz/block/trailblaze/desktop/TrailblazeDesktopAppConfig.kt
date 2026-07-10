@@ -195,7 +195,20 @@ abstract class TrailblazeDesktopAppConfig(
 
   abstract val defaultAppTarget: TrailblazeHostAppTarget
 
+  /**
+   * The app-target set as of daemon startup — the once-per-JVM `by lazy` seed of
+   * [rediscoverAppTargets]. Frozen for the process lifetime; the live-registration path
+   * ([xyz.block.trailblaze.ui.TrailblazeDeviceManager.registerNewTarget]) grows it additively.
+   */
   abstract val availableAppTargets: Set<TrailblazeHostAppTarget>
+
+  /**
+   * Runs full workspace app-target discovery against the CURRENT on-disk config. This is the
+   * single source of truth for discovery: [availableAppTargets] is a `by lazy` over it, and the
+   * device manager's live-registration path re-invokes it to pick up a newly-created target — so
+   * the startup set and the live-discovered set are computed by identical code and can't drift.
+   */
+  abstract fun rediscoverAppTargets(): Set<TrailblazeHostAppTarget>
 
   abstract fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String>
 

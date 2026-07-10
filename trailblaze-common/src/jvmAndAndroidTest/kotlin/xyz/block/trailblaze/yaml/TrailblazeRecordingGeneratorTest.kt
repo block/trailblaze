@@ -21,6 +21,7 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
@@ -1291,7 +1292,7 @@ class TrailblazeRecordingGeneratorTest {
     val th = trailblazeYaml.decodeTrail(yaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Sign in fresh")
-    assertThat(th.tools.single().name).isEqualTo("launchApp")
+    assertThat(th.tools!!.single().name).isEqualTo("launchApp")
   }
 
   @Test
@@ -1319,7 +1320,7 @@ class TrailblazeRecordingGeneratorTest {
     val th = trailblazeYaml.decodeTrail(yaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
-    assertThat(th.tools.single().name).isEqualTo("launchApp")
+    assertThat(th.tools!!.single().name).isEqualTo("launchApp")
   }
 
   @Test
@@ -1354,7 +1355,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val th = trailblazeYaml.decodeTrail(yaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
-    assertThat(th.tools.single().name).isEqualTo("launchApp")
+    assertThat(th.tools!!.single().name).isEqualTo("launchApp")
   }
 
   @Test
@@ -1377,5 +1378,64 @@ class TrailblazeRecordingGeneratorTest {
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     assertThat(recorded).isEqualTo(listOf("inputText", "inputText"))
+  }
+
+  @Test
+  fun compositeInternalsStampedNonRecordableAreDroppedRegardlessOfSpan() {
+    // Regression for the recording-generation leak: regenerating a recordable
+    // launch/sign-in orchestrator emitted the parent call AND its `mobile_maestro` internals. The
+    // runtime now stamps nested `ctx.tools.*` dispatches `isRecordable = false`, so the generator's
+    // `isRecordable` filter drops them. This models that log shape with SPAN-DEFEATING timing: the
+    // nested `mobile_maestro` spans are LARGER than and CONTAIN the parent `myapp_launchAppSignedIn`
+    // span, so the old span-containment heuristic would have inverted — kept the internals, dropped
+    // the parent. The `isRecordable = false` stamp makes the outcome independent of span math.
+    val step = DirectionStep(step = "Launch the app signed in")
+    val base = now.toEpochMilliseconds()
+    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
+    val logs = listOf(
+      objectiveStart(step),
+      // Recordable top-level parents (disjoint spans → both survive the sibling filter).
+      toolLog(OtherTrailblazeTool("mobile_listInstalledApps"), "mobile_listInstalledApps", timestamp = at(0), durationMs = 100),
+      toolLog(OtherTrailblazeTool("myapp_launchAppSignedIn"), "myapp_launchAppSignedIn", timestamp = at(200), durationMs = 2_000),
+      // Nested internals: non-recordable, and deliberately given spans that CONTAIN the parent's
+      // (200..2200 ⊂ 200..5200 / 300..60300) so span-containment alone would drop the wrong rows.
+      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(200), durationMs = 5_000),
+      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(300), durationMs = 60_000),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val recorded = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.name }
+    assertThat(recorded).isEqualTo(listOf("mobile_listInstalledApps", "myapp_launchAppSignedIn"))
+  }
+
+  @Test
+  fun orphanedNonRecordableInternalsDoNotLeakIntoThePrecedingStep() {
+    // The orphaned-log path (a tool log landing outside any objective window in the sorted log list)
+    // attaches to the last prompt step's recording. Before the fix it applied NO nested filter, so
+    // a composite's `mobile_maestro` internals that sorted after the objective window leaked into the
+    // step. They're now stamped `isRecordable = false`, and the orphaned path already honors that —
+    // proving the deterministic stamp closes the orphaned hole, not just the in-window path.
+    val step = DirectionStep(step = "Launch the app signed in")
+    val base = now.toEpochMilliseconds()
+    fun at(offsetMs: Long) = kotlinx.datetime.Instant.fromEpochMilliseconds(base + offsetMs)
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(OtherTrailblazeTool("myapp_launchAppSignedIn"), "myapp_launchAppSignedIn", timestamp = at(0), durationMs = 2_000),
+      objectiveComplete(step),
+      // Orphaned internals, after the window: non-recordable, must not attach to the step.
+      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(2_100), durationMs = 500),
+      toolLog(OtherTrailblazeTool("mobile_maestro"), "mobile_maestro", isRecordable = false, timestamp = at(2_700), durationMs = 500),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val recorded = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.name }
+    assertThat(recorded).isEqualTo(listOf("myapp_launchAppSignedIn"))
   }
 }

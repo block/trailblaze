@@ -215,6 +215,16 @@ dependencyGuard {
   configuration("jvmMainRuntimeClasspath")
 }
 
+// MatcherParityFixturesTest reads the shared cross-language matcher fixture that lives in the
+// TS SDK tree (single source of truth for matching semantics, also consumed by the TS suite's
+// matcher-parity.test.ts). Declare it as a test input so editing the fixture re-runs jvmTest
+// instead of hitting a stale UP-TO-DATE.
+tasks.named<Test>("jvmTest") {
+  inputs.file(layout.projectDirectory.file("../sdks/typescript/src/matcher/matcher-parity-fixtures.json"))
+    .withPropertyName("matcherParityFixtures")
+    .withPathSensitivity(PathSensitivity.NONE)
+}
+
 // Compile bundled framework trailmaps (clock, contacts, wikipedia) into materialized flat
 // `targets/<id>.yaml` files at build time. Library trailmaps (`trailblaze`, no `target:`)
 // contribute defaults but produce no target output. The generated targets are checked in

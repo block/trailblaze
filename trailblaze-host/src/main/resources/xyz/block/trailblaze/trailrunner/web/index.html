@@ -48,6 +48,10 @@
      editor falls back to CodeMirror. lsp-convert.js (shared, unit-tested conversions) loads first. -->
 <script src="./app/editor/lsp-convert.js"></script>
 <script src="./app/editor/monaco-lsp.js"></script>
+<!-- Pure trail step-matrix model (window.TM): normalizes both the unified single-file format and
+     legacy per-platform folders into one shape. Plain JS (no JSX/bundler), unit-tested in
+     app/screens/trail-model.test.ts; loaded before the babel screens so trail-detail.tsx sees it. -->
+<script src="./app/screens/trail-model.js"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/ui.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/data-core.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/data-hooks.tsx"></script>

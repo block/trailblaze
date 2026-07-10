@@ -32,18 +32,28 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("scrollUntilTextIsVisible")
 @LLMDescription(
   """
-Scrolls the screen in the specified direction until an element containing the provided text becomes visible
-in the view hierarchy. The text does not need to be an exact match - it will find elements where the 
-provided text appears anywhere within the element's text.
+Scrolls the screen in the specified direction until a target element becomes visible in the view hierarchy.
 
-The text argument is required. Only provide additional fields if multiple elements contain the same text.
-In this case the additional fields will be used to identify the specific view to expect to be visible while scrolling.
+Provide EXACTLY ONE target:
+- 'text' — substring match: finds elements where this text appears anywhere within the element's text.
+- 'textRegex' — anchored full-match regex, used verbatim (the same semantics selector tools use), so
+  'Loyalty' matches only "Loyalty" and not "Loyalty Enroll". Use this when you need an exact match.
+- (or 'id' alone) — scroll until the element with this id is visible.
+
+At least one of 'text', 'textRegex', or 'id' is required; a call with none is rejected (it would match
+every element). If both 'text' and 'textRegex' are given, 'textRegex' takes precedence. Only provide the
+additional disambiguation fields (e.g. 'index') when multiple elements match the same target.
 """,
 )
 class ScrollUntilTextIsVisibleTrailblazeTool(
-  @param:LLMDescription("Text to search for while scrolling.")
-  val text: String,
-  @param:LLMDescription("The element id to scroll until. REQUIRED: 'text' and/or 'id' parameter.")
+  @param:LLMDescription("Text to search for while scrolling (substring match). Provide this OR 'textRegex'.")
+  val text: String = "",
+  @param:LLMDescription(
+    "Full-match regex to scroll until visible, used verbatim (anchored, like selector tools). " +
+      "Use instead of 'text' for an exact match, e.g. 'Loyalty' won't match 'Loyalty Enroll'.",
+  )
+  val textRegex: String? = null,
+  @param:LLMDescription("The element id to scroll until. At least one of 'text', 'textRegex', or 'id' is required.")
   val id: String? = null,
   @param:LLMDescription("A 0-based index to disambiguate multiple views with the same text. Default is '0'.")
   val index: Int = 0,
@@ -64,11 +74,28 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
     val scrollDuration = scrollDurationFor(trailblazeDriverType)
 
+    val interpolatedText = memory.interpolateVariables(text)
+    val interpolatedTextRegex = textRegex?.let { memory.interpolateVariables(it) }
+    // Require an actual target. `text` defaults to "" (so `textRegex` can be used instead), but a
+    // call that supplies none of text/textRegex/id would otherwise build `.*\Q\E.*` — a match-all
+    // that stops on the first text-bearing element and reports a false "scrolled to it" success.
+    // Fail loudly instead. (Validated on the INTERPOLATED values so a variable that resolves to
+    // blank is also caught.)
+    require(hasScrollTarget(interpolatedText, interpolatedTextRegex, id)) {
+      "scrollUntilTextIsVisible requires a target: provide 'text' (substring match), " +
+        "'textRegex' (anchored full-match), or 'id'."
+    }
+
     val trailblazeElementSelector = TrailblazeElementSelector(
-      textRegex = ".*${Regex.escape(memory.interpolateVariables(text))}.*",
+      textRegex = buildTargetTextRegex(
+        text = interpolatedText,
+        textRegex = interpolatedTextRegex,
+      ),
       idRegex = id,
       index = if (index == 0) null else index.toString(),
     )
+    // Label used only for human-readable success messages. Prefer the anchored regex when set.
+    val targetLabel = interpolatedTextRegex?.takeIf { it.isNotBlank() } ?: interpolatedText
     val scrollCommand = ScrollUntilVisibleCommand(
       selector = trailblazeElementSelector.toMaestroElementSelector(),
       /** Maestro's default was 40ms which caused a "fling" behavior and scrolled past elements. */
@@ -94,7 +121,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
       )
       if (result.isSuccess()) {
         TrailblazeToolResult.Success(
-          message = "Scrolled ${direction.name} until '$text' visible",
+          message = "Scrolled ${direction.name} until '$targetLabel' visible",
         )
       } else {
         result
@@ -105,6 +132,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
         trailblazeElementSelector = trailblazeElementSelector,
         maestroCommand = scrollCommand,
         scrollStartPosition = scrollStartPosition,
+        targetLabel = targetLabel,
       )
     }
   }
@@ -115,6 +143,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
     trailblazeElementSelector: TrailblazeElementSelector,
     maestroCommand: ScrollUntilVisibleCommand,
     scrollStartPosition: TrailblazeScrollStartPosition,
+    targetLabel: String,
   ): TrailblazeToolResult {
     var screenState = requireNotNull(toolExecutionContext.screenState) {
       "Screen state must be available before scrolling."
@@ -172,13 +201,13 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
           if (maestroCommand.centerElement && visibility > 0.1 && retryCenterCount <= maxRetryCenterCount) {
             if (maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)) {
               return TrailblazeToolResult.Success(
-                message = "Scrolled ${direction.name} until '$text' visible",
+                message = "Scrolled ${direction.name} until '$targetLabel' visible",
               )
             }
             retryCenterCount++
           } else if (visibility >= maestroCommand.visibilityPercentageNormalized) {
             return TrailblazeToolResult.Success(
-              message = "Scrolled ${direction.name} until '$text' visible",
+              message = "Scrolled ${direction.name} until '$targetLabel' visible",
             )
           }
         }
@@ -227,6 +256,34 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   }
 
   companion object {
+    /**
+     * Resolves the effective full-match regex the scroll loop searches for. Extracted as a pure
+     * function so the substring-vs-anchored contract is unit-testable without a Maestro driver or
+     * agent memory (callers interpolate memory variables BEFORE calling this).
+     *
+     * - [textRegex] (non-blank): used verbatim, giving the same full (anchored) match that selector
+     *   tools like `tapOnElementBySelector` get from Maestro — `Loyalty` matches only "Loyalty", not
+     *   "Loyalty Enroll".
+     * - [text] otherwise: regex-escaped and wrapped in `.*…*.` for a substring (contains) match,
+     *   preserving the historical behavior for every existing caller.
+     */
+    internal fun buildTargetTextRegex(text: String, textRegex: String?): String =
+      if (!textRegex.isNullOrBlank()) {
+        textRegex
+      } else {
+        ".*${Regex.escape(text)}.*"
+      }
+
+    /**
+     * True when the call carries a real scroll target — at least one of [text] (substring),
+     * [textRegex] (anchored), or [id] is non-blank. Extracted as a pure predicate so the
+     * "reject match-all / empty-target calls" guard is unit-testable without a device (mirrors
+     * [buildTargetTextRegex] / [pollForConsecutiveStable]). Callers should pass INTERPOLATED
+     * values so a `{{var}}` that resolves to blank is also rejected.
+     */
+    internal fun hasScrollTarget(text: String, textRegex: String?, id: String?): Boolean =
+      text.isNotBlank() || !textRegex.isNullOrBlank() || !id.isNullOrBlank()
+
     /**
      * Builds the failure message for the scroll-until-visible loop. Extracted into a pure
      * function so unit tests can lock in the LLM-facing wording (the leading "could not

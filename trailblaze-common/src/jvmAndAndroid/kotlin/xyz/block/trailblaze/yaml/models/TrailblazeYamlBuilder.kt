@@ -61,7 +61,9 @@ class TrailblazeYamlBuilder {
       TrailYamlItem.TrailheadTrailItem(
         TrailheadDefinition(
           step = step,
-          tools = tools?.map { fromTrailblazeTool(it) } ?: emptyList(),
+          // Keep null when the caller passes null — that means "no tools declared" (blaze via
+          // AI), distinct from an explicit `tools = emptyList()` (a deterministic no-op).
+          tools = tools?.map { fromTrailblazeTool(it) },
         ),
       ),
     )

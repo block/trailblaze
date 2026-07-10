@@ -168,8 +168,11 @@ fun RecordingTabComposable(
   // writes go through the shared `settingsRepo`, so a change here propagates to the rest of
   // the app (Sessions tab Rerun, MCP, etc.) — that's the intended cross-tab behavior, not a leak.
   val serverState by deviceManager.settingsRepo.serverStateFlow.collectAsState()
-  val selectedTargetApp = remember(serverState.appConfig.selectedTargetAppId, deviceManager.availableAppTargets) {
-    deviceManager.availableAppTargets.firstOrNull {
+  // Collect the live target set so a live-registered target (Create Target flow) shows up in
+  // the target selector without a daemon restart.
+  val availableAppTargets by deviceManager.availableAppTargetsFlow.collectAsState()
+  val selectedTargetApp = remember(serverState.appConfig.selectedTargetAppId, availableAppTargets) {
+    availableAppTargets.firstOrNull {
       it.id == serverState.appConfig.selectedTargetAppId
     }
   }
@@ -227,7 +230,7 @@ fun RecordingTabComposable(
         text = "Target:",
         style = MaterialTheme.typography.titleSmall,
       )
-      if (deviceManager.availableAppTargets.isEmpty()) {
+      if (availableAppTargets.isEmpty()) {
         Text(
           text = "No target apps configured.",
           style = MaterialTheme.typography.bodyMedium,
@@ -235,7 +238,7 @@ fun RecordingTabComposable(
         )
       } else {
         TargetDropdown(
-          targets = deviceManager.availableAppTargets.toList(),
+          targets = availableAppTargets.toList(),
           selectedTarget = selectedTargetApp,
           onTargetSelected = { target ->
             // Push to the shared settings repo. No connection teardown — the target only

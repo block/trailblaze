@@ -84,7 +84,10 @@ object UnifiedTrailAdapter {
             "running it in LLM mode.",
         )
       }
-      val recording = tools?.takeIf { it.isNotEmpty() }?.let { ToolRecording(tools = it) }
+      // `tools == null` means no classifier in the chain matched — blaze via AI. A matched-but-empty
+      // list (an explicit `classifier: []` no-op) must NOT collapse into that same null — it carries
+      // forward as a zero-tool ToolRecording, a deterministic no-op (see ToolRecording's 3-state doc).
+      val recording = tools?.let { ToolRecording(tools = it) }
       // A `verify:` step lowers to the v1 VerificationStep so the runtime keeps verify semantics
       // (assertion-scoped tool surface, auto-terminate + assertion ledger, never self-healed).
       if (step.verify) {
@@ -119,7 +122,10 @@ object UnifiedTrailAdapter {
       TrailYamlItem.TrailheadTrailItem(
         trailhead = TrailheadDefinition(
           step = th.step,
-          tools = trailheadTools.orEmpty(),
+          // Pass the resolution through as-is (null vs empty are both meaningful — see
+          // ToolRecording's 3-state doc); collapsing to `.orEmpty()` here would turn "no
+          // classifier matched" into "explicitly declared zero tools."
+          tools = trailheadTools,
           maxRetries = th.maxRetries,
         ),
       )
@@ -129,6 +135,42 @@ object UnifiedTrailAdapter {
       trailheadItem,
       TrailYamlItem.PromptsTrailItem(promptSteps = promptSteps),
     )
+  }
+
+  /**
+   * `true` if [unified] carries a recording for the device described by [classifiers] (its
+   * broad-first segment list, e.g. `[android, phone]`), resolved with the SAME closest-wins
+   * [TrailblazeClassifierLineage] lowering [lowerToTrailItems] uses — so a family `android:`
+   * recording covers `android-phone`/`android-tablet`, and a CI `requireRecordings` gate that calls
+   * this selects exactly the cases the executor would actually replay for the device.
+   *
+   * "Recorded" here means the device's chain resolves to a DECLARED classifier entry, matching the
+   * 3-state model in [lowerToTrailItems] / [TrailblazeYaml.hasRecordedSteps]:
+   *  - no classifier in the chain matches → [resolveClosestMatch] is `null` → the step runs in LLM
+   *    mode (blaze via AI). This is the "no recording" case, and the only one that returns `false`.
+   *  - a matched non-empty list → a captured deterministic recording.
+   *  - a matched empty list (an explicit `android: []`) → a NON-NULL zero-tool [ToolRecording], a
+   *    deterministic no-op that replays with zero tools (NOT AI). [lowerToTrailItems] carries it
+   *    forward as `recording != null` and [TrailblazeYaml.hasRecordedSteps] counts it, so this gate
+   *    counts it too — otherwise plan-time selection would drop a case the executor deterministically
+   *    replays (the false-negative this gate exists to prevent), and the two "is it recorded?"
+   *    predicates would disagree.
+   *
+   * Returns `false` only when NOTHING on the device's chain resolves to a declared entry — the trail
+   * declares recordings for other classifiers only, or none at all.
+   */
+  fun hasRecordingForDevice(
+    unified: UnifiedTrail,
+    classifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean {
+    val resolutionChain =
+      TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    val stepHasRecording = unified.trail.any { step ->
+      resolveClosestMatch(step.recordings, resolutionChain) != null
+    }
+    if (stepHasRecording) return true
+    return unified.trailhead?.let { resolveClosestMatch(it.recordings, resolutionChain) != null }
+      ?: false
   }
 
   /**
@@ -154,14 +196,14 @@ object UnifiedTrailAdapter {
     resolvedDriver: String? = null,
     resolvedSkip: String? = null,
   ): TrailConfig {
-    val (bridged, plainMetadata) = splitBridgedMetadata(unified.metadata)
+    val (bridgedSource, plainMetadata) = splitBridgedMetadata(unified.metadata)
     return TrailConfig(
       id = unified.id,
       target = unified.target,
       title = unified.title,
       description = unified.description,
-      priority = bridged.priority,
-      source = bridged.source,
+      priority = unified.priority,
+      source = bridgedSource,
       driver = resolvedDriver,
       skip = resolvedSkip,
       tags = unified.tags,
@@ -173,10 +215,10 @@ object UnifiedTrailAdapter {
 
   /**
    * Seed a [UnifiedTrailConfig] from a v1 [TrailConfig], carrying every device-agnostic field:
-   * `id`, `target`, `title`, `description`, `context`, `memory`, `metadata` map one-to-one,
-   * while the informational `priority` / `source` are bridged into the unified `metadata` under
-   * the reserved keys (see [UnifiedTrailConfig.metadata]) — [lowerConfig] lifts them back, so
-   * v1 readers of `TrailConfig.priority`/`.source` see identical values from either format. The
+   * `id`, `target`, `title`, `description`, `priority`, `context`, `memory`, `metadata` map
+   * one-to-one, while the informational `source` is bridged into the unified `metadata` under
+   * the reserved keys (see [UnifiedTrailConfig.metadata]) — [lowerConfig] lifts it back, so
+   * v1 readers of `TrailConfig.source` see identical values from either format. The
    * per-classifier maps (`devices`, `skip`) and the trail-level `tags` are left null for the
    * caller to fill from every contributing file/recording — a single v1 config can't express
    * them. v1's `platform` is dropped (retired — the device set derives from the classifier
@@ -201,6 +243,7 @@ object UnifiedTrailAdapter {
       target = v1.target,
       title = v1.title,
       description = v1.description,
+      priority = v1.priority,
       context = v1.context,
       memory = v1.memory,
       metadata = bridgeMetadata(v1),
@@ -209,14 +252,13 @@ object UnifiedTrailAdapter {
 
   /**
    * The unified `metadata` map for a v1 config: the v1 `metadata` entries (order preserved)
-   * plus the reserved bridge keys carrying `priority:` / `source:`. A bare `source: {}` marker
+   * plus the reserved bridge keys carrying `source:`. A bare `source: {}` marker
    * bridges as an empty-string [UnifiedTrailConfig.METADATA_KEY_SOURCE] so it round-trips.
    * On a key collision the first-class v1 field wins (none exist in the corpus).
    */
   private fun bridgeMetadata(v1: TrailConfig): Map<String, String>? {
     val bridged = linkedMapOf<String, String>()
     v1.metadata?.let { bridged.putAll(it) }
-    v1.priority?.let { bridged[UnifiedTrailConfig.METADATA_KEY_PRIORITY] = it }
     v1.source?.let { source ->
       bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE] = source.type?.name.orEmpty()
       source.reason?.let { bridged[UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON] = it }
@@ -224,10 +266,8 @@ object UnifiedTrailAdapter {
     return bridged.ifEmpty { null }
   }
 
-  private data class BridgedV1Fields(val priority: String?, val source: TrailSource?)
-
   /**
-   * Inverse of [bridgeMetadata]: lift the reserved bridge keys back into the v1 fields and
+   * Inverse of [bridgeMetadata]: lift the reserved bridge keys back into the v1 `source` and
    * return the remaining plain metadata (null when emptied, so a v1 config that had no
    * `metadata:` round-trips byte-equal). A [UnifiedTrailConfig.METADATA_KEY_SOURCE] value that
    * is neither empty nor a known [TrailSourceType] name is NOT treated as a bridge — the key
@@ -235,9 +275,8 @@ object UnifiedTrailAdapter {
    */
   private fun splitBridgedMetadata(
     metadata: Map<String, String>?,
-  ): Pair<BridgedV1Fields, Map<String, String>?> {
-    if (metadata == null) return BridgedV1Fields(priority = null, source = null) to null
-    val priority = metadata[UnifiedTrailConfig.METADATA_KEY_PRIORITY]
+  ): Pair<TrailSource?, Map<String, String>?> {
+    if (metadata == null) return null to null
     val sourceTypeRaw = metadata[UnifiedTrailConfig.METADATA_KEY_SOURCE]
     val parsedSourceType = sourceTypeRaw
       ?.takeIf { it.isNotEmpty() }
@@ -249,10 +288,9 @@ object UnifiedTrailAdapter {
       null
     }
     val remaining = metadata
-      .minus(UnifiedTrailConfig.METADATA_KEY_PRIORITY)
       .let { if (sourceBridges) it - UnifiedTrailConfig.METADATA_KEY_SOURCE - UnifiedTrailConfig.METADATA_KEY_SOURCE_REASON else it }
       .ifEmpty { null }
-    return BridgedV1Fields(priority = priority, source = source) to remaining
+    return source to remaining
   }
 
   /**
@@ -278,6 +316,7 @@ object UnifiedTrailAdapter {
     target = base.target.orIfAbsent(fallback.target),
     title = base.title.orIfAbsent(fallback.title),
     description = base.description.orIfAbsent(fallback.description),
+    priority = base.priority.orIfAbsent(fallback.priority),
     context = base.context.orIfAbsent(fallback.context),
     memory = base.memory.orIfAbsent(fallback.memory),
     metadata = mergeMetadata(base.metadata, fallback.metadata),
@@ -285,10 +324,11 @@ object UnifiedTrailAdapter {
 
   /**
    * Metadata merges per-KEY (union; [base]'s value wins on a shared key), unlike the other
-   * fields' whole-value fill: the reserved bridge keys mean one file's `priority:` and another
-   * file's `source:` land in the same map, and an atomic first-map-wins would re-drop whichever
-   * the first file lacked. `memory` deliberately stays whole-map — it is runtime-load-bearing,
-   * and unioning two platforms' seeds could fabricate a combination no file declared.
+   * fields' whole-value fill: the reserved bridge keys mean one file's `source:` and another
+   * file's plain metadata land in the same map, and an atomic first-map-wins would re-drop
+   * whichever the first file lacked. `memory` deliberately stays whole-map — it is
+   * runtime-load-bearing, and unioning two platforms' seeds could fabricate a combination no
+   * file declared.
    */
   private fun mergeMetadata(
     base: Map<String, String>?,
@@ -427,8 +467,8 @@ object UnifiedTrailAdapter {
 
     // Base config: keep the existing file's config when merging; on a first write seed from the
     // recording's own config. Carry every v1 field the unified config can model so the first write
-    // is lossless: the scalar fields via the shared seed helper (identity/title/context/memory/
-    // electron verbatim; priority/source bridged into metadata's reserved keys), trail-level `tags`
+    // is lossless: the scalar fields via the shared seed helper (identity/title/priority/context/
+    // memory verbatim; source bridged into metadata's reserved keys), trail-level `tags`
     // verbatim, and the v1 scalar `skip` lifted into this classifier's slot of the per-classifier
     // skip map (blank reasons dropped — v1 semantics). The driver is handled per-classifier just
     // below. (v1 `platform` is the one field with no unified home and is not seeded here.)
@@ -525,8 +565,9 @@ object UnifiedTrailAdapter {
   ): UnifiedTrailStep? {
     if (recorded == null) return base
     val step = base?.step ?: recorded.step ?: TrailheadDefinition.DEFAULT_STEP
-    val recordings = if (recorded.tools.isNotEmpty()) {
-      (base?.recordings ?: emptyMap()) + (classifier to recorded.tools)
+    val recordedTools = recorded.tools
+    val recordings = if (!recordedTools.isNullOrEmpty()) {
+      (base?.recordings ?: emptyMap()) + (classifier to recordedTools)
     } else {
       base?.recordings ?: emptyMap()
     }

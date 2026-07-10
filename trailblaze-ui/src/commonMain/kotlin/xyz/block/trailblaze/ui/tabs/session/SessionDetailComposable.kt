@@ -416,10 +416,10 @@ fun SessionDetailComposable(
                                   // Use all classifiers to build expected filename
                                   val expectedFileName = "${classifiers.joinToString("-")}.trail.yaml"
 
-                                  // Check if file already exists
-                                  val fileExists = existingRecordings.any { trail ->
-                                    trail.fileName == expectedFileName
-                                  }
+                                  // "Update" when a recording for this case already exists —
+                                  // per-device filename match OR an existing unified `trail.yaml`
+                                  // this device will merge into. See isAlreadyRecorded.
+                                  val fileExists = isAlreadyRecorded(existingRecordings, expectedFileName)
 
                                   Button(
                                     onClick = {

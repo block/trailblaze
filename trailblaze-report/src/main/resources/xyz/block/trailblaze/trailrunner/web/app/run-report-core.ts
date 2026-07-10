@@ -136,6 +136,20 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       continue;
     }
 
+    // Terminal / failure snapshots (captureFinalScreenshot / captureFailureScreenshot) log a
+    // TrailblazeSnapshotLog carrying a screenshotFile + displayName but no tool/action/prompt.
+    // Without an explicit row they fall through every branch above and are dropped — so the state
+    // after the final action (the tap's result) never shows in the timeline. Render it as its own
+    // trailing cell so the run's end state is visible.
+    if (cls === 'TrailblazeSnapshotLog' && screenshotFile) {
+      asserts = new Map(); closeGroup();
+      const label = log.displayName === 'final_screenshot' ? 'Final state'
+        : log.displayName === 'failure_screenshot' ? 'Failure state'
+        : (log.displayName || 'Snapshot');
+      out.push({ label, _logs: [log], tool: '', ms: log.durationMs || 0, ok: log.displayName !== 'failure_screenshot', err: null, screenshotFile, viewHierarchy, ts });
+      continue;
+    }
+
     if (err) {
       asserts = new Map(); closeGroup();
       out.push({ label: 'Error', _logs: [log], tool: '', ms: 0, ok: false, err, screenshotFile, viewHierarchy, ts });
@@ -623,12 +637,29 @@ function RUN_REPORT_VIEWER(): void {
 
   const idxOf = (i) => Math.max(0, D.trace.findIndex((t) => t.i === i));
   const shotForStep = (i) => {
-    let file = null;
-    for (let k = idxOf(i); k >= 0; k--) { if (D.trace[k] && D.trace[k].screenshotFile) { file = D.trace[k].screenshotFile; break; } }
-    // Nothing captured at or before this step (e.g. the opening objective row): fall forward to the
-    // run's first screenshot so the preview pane isn't empty on open.
-    if (!file) { for (let k = idxOf(i) + 1; k < D.trace.length; k++) { if (D.trace[k].screenshotFile) { file = D.trace[k].screenshotFile; break; } } }
-    return file ? D.shots[file] : null;
+    const at = idxOf(i);
+    // Resolve a row to its inlined screenshot — but only if the image is actually present in
+    // D.shots. A screenshotFile whose inline failed (the Share path skips failed fetches;
+    // run-report-cli skips files dataUri() can't read) must NOT short-circuit the fallbacks and
+    // leave the pane empty.
+    const shot = (r) => (r && r.screenshotFile && D.shots[r.screenshotFile]) ? D.shots[r.screenshotFile] : null;
+    // 1. The row's own frame — the screen it acted on (action/tool rows carry their pre-action frame).
+    let s = shot(D.trace[at]);
+    if (s) return s;
+    // 2. Screenshot-less rows (step/objective headers, agent-reasoning turns) show the NEXT frame —
+    // the screen this step is about to act on. Bounded to THIS step: stop at the next objective
+    // header so a frameless middle step never previews a future step's screen.
+    for (let k = at + 1; k < D.trace.length && !D.trace[k].objective; k++) {
+      s = shot(D.trace[k]);
+      if (s) return s;
+    }
+    // 3. Nothing usable ahead in this step: fall back to the nearest earlier frame so the pane is
+    // never empty.
+    for (let k = at - 1; k >= 0; k--) {
+      s = shot(D.trace[k]);
+      if (s) return s;
+    }
+    return null;
   };
 
   // The report-time action overlay on a step's screenshot: a tap/long-press dot, a swipe arrow, an

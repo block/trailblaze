@@ -68,19 +68,23 @@ sealed interface TrailYamlItem {
  * - **NL-only** — `trailhead: { step: "Sign in fresh" }` (e.g. a cross-platform `blaze.yaml`,
  *   where the per-platform `tools:` are materialized later in each `*.trail.yaml`).
  *
- * At least one of [step] / [tools] must be present — an empty trailhead is meaningless.
+ * [tools] is nullable so "never declared" ([tools] `== null`, blaze via AI) is distinguishable
+ * from "explicitly declared zero tools" ([tools] `== emptyList()`, a deterministic no-op — see
+ * [ToolRecording]'s three-state doc). At least one of [step] / [tools] must be present, and an
+ * explicit-empty [tools] still requires [step] — an empty trailhead with no NL intent at all is
+ * meaningless.
  */
 @Serializable
 data class TrailheadDefinition(
   val step: String? = null,
-  val tools: List<@Contextual TrailblazeToolYamlWrapper> = emptyList(),
+  val tools: List<@Contextual TrailblazeToolYamlWrapper>? = null,
   /** Per-step retry-budget override for the blazed (NL-only / unrecorded) case; mirrors
    *  [PromptStep.maxRetries]. Carried through [toPromptStep] so the unified `trailhead:`'s
    *  `maxRetries:` isn't a silent no-op. Null = trail-wide default. */
   val maxRetries: Int? = null,
 ) {
   init {
-    require(step != null || tools.isNotEmpty()) {
+    require(step != null || !tools.isNullOrEmpty()) {
       "A `trailhead:` must declare a `step:` and/or at least one tool — an empty trailhead is " +
         "meaningless. Use `trailhead: <toolId>` for a single bootstrap tool, or " +
         "`trailhead: { step: ..., tools: [...] }`."
@@ -88,16 +92,17 @@ data class TrailheadDefinition(
   }
 
   /**
-   * Lower this trailhead to the leading [PromptStep] that runners execute as step 0. The tools (if
-   * any) become a deterministic recording — runners invoke this with `useRecordedSteps = true` so the
-   * bootstrap tools always replay (a trailhead is a fixed starting move, not a refreshable recording),
-   * which is why [recordable] is `true` (the recording is only eligible to replay when recordable).
-   * NL-only trailheads (no tools) carry no recording and blaze via AI like any recording-less step.
+   * Lower this trailhead to the leading [PromptStep] that runners execute as step 0. Runners invoke
+   * this with `useRecordedSteps = true` so a non-null [tools] always replays deterministically (a
+   * trailhead is a fixed starting move, not a refreshable recording), which is why [recordable] is
+   * `true`. [tools] `== null` (never declared) carries no recording and blazes via AI; [tools]
+   * `== emptyList()` (explicitly declared empty) carries a zero-tool [ToolRecording] and runs as a
+   * deterministic no-op — neither falls through to AI the same way.
    */
   fun toPromptStep(): PromptStep = DirectionStep(
     step = step ?: DEFAULT_STEP,
     recordable = true,
-    recording = tools.takeIf { it.isNotEmpty() }?.let { ToolRecording(tools = it) },
+    recording = tools?.let { ToolRecording(tools = it) },
     maxRetries = maxRetries,
     isTrailhead = true,
   )

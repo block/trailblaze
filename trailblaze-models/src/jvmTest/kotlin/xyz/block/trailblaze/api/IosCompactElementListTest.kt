@@ -192,6 +192,148 @@ class IosCompactElementListTest {
   }
 
   @Test
+  fun `clickable control hoists a lone icon child resourceId into its id annotation`() {
+    // The overflow-button case: a clickable ButtonView labeled "More" (VoiceOver) wrapping a
+    // single UIImageView that carries the accessibilityIdentifier "ellipsis-horizontal". Neither
+    // node alone is a usable identified-tappable element — the compact view must attribute the
+    // child's id to the clickable control so the agent can target it by id.
+    val icon =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(className = "UIImageView", resourceId = "ellipsis-horizontal"),
+        bounds = TrailblazeNode.Bounds(281, 83, 303, 105),
+      )
+    val button =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "ButtonView",
+            accessibilityText = "More",
+            clickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(272, 74, 312, 114),
+        children = listOf(icon),
+      )
+    val root = node(children = listOf(button))
+
+    val result = IosCompactElementList.build(root)
+    assertContains(result.text, "ButtonView \"More\"")
+    assertContains(result.text, "[id=ellipsis-horizontal]")
+    assertTrue(
+      result.elementNodeIds.contains(button.nodeId),
+      "The clickable control must be emitted with a ref",
+    )
+  }
+
+  @Test
+  fun `a clickable control with a hoisted id is not dropped as a label duplicate`() {
+    // A bottom-nav "More" tab and a top-right "More" overflow button share the VoiceOver label
+    // "More" but are distinct, separately-tappable controls. The overflow button carries a
+    // distinct id (via its icon child), so it must NOT be dedup-dropped just because "More" was
+    // already emitted by the tab.
+    val tab =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "CombinableView",
+            accessibilityText = "More",
+            resourceId = "applet-tab-more",
+            clickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(300, 800, 380, 860),
+      )
+    val icon =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(className = "UIImageView", resourceId = "ellipsis-horizontal"),
+        bounds = TrailblazeNode.Bounds(281, 83, 303, 105),
+      )
+    val overflow =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "ButtonView",
+            accessibilityText = "More",
+            clickable = true,
+          ),
+        bounds = TrailblazeNode.Bounds(272, 74, 312, 114),
+        children = listOf(icon),
+      )
+    val root = node(children = listOf(tab, overflow))
+
+    val result = IosCompactElementList.build(root)
+    assertContains(result.text, "[id=applet-tab-more]")
+    assertContains(result.text, "[id=ellipsis-horizontal]")
+    assertTrue(
+      result.elementNodeIds.contains(overflow.nodeId),
+      "The overflow 'More' control must survive dedup because it carries a distinct id",
+    )
+  }
+
+  @Test
+  fun `label-only duplicate without an id is still deduped`() {
+    // Regression guard: the id-aware dedup relaxation must NOT stop plain label duplicates from
+    // being collapsed. Two identical labels with no distinguishing id → one line.
+    val first =
+      node(
+        detail = DriverNodeDetail.IosMaestro(className = "UILabel", accessibilityText = "Details"),
+        bounds = TrailblazeNode.Bounds(0, 200, 300, 240),
+      )
+    val second =
+      node(
+        detail = DriverNodeDetail.IosMaestro(className = "UILabel", accessibilityText = "Details"),
+        bounds = TrailblazeNode.Bounds(0, 300, 300, 340),
+      )
+    val root = node(children = listOf(first, second))
+
+    val result = IosCompactElementList.build(root)
+    assertEquals(
+      1,
+      Regex("\"Details\"").findAll(result.text).count(),
+      "A label-only duplicate with no distinguishing id must still be deduped",
+    )
+  }
+
+  @Test
+  fun `effectiveIosResourceId returns the node's own id when present`() {
+    val n = node(detail = DriverNodeDetail.IosMaestro(resourceId = "own_id", clickable = true))
+    assertEquals("own_id", effectiveIosResourceId(n))
+  }
+
+  @Test
+  fun `effectiveIosResourceId hoists a lone descendant id onto a clickable control`() {
+    val icon = node(detail = DriverNodeDetail.IosMaestro(resourceId = "ellipsis-horizontal"))
+    val button = node(detail = DriverNodeDetail.IosMaestro(clickable = true), children = listOf(icon))
+    assertEquals("ellipsis-horizontal", effectiveIosResourceId(button))
+  }
+
+  @Test
+  fun `effectiveIosResourceId does not hoist onto a non-clickable wrapper`() {
+    val icon = node(detail = DriverNodeDetail.IosMaestro(resourceId = "ellipsis-horizontal"))
+    val wrapper = node(detail = DriverNodeDetail.IosMaestro(clickable = false), children = listOf(icon))
+    assertEquals(null, effectiveIosResourceId(wrapper))
+  }
+
+  @Test
+  fun `effectiveIosResourceId returns null when descendant ids are ambiguous`() {
+    val a = node(detail = DriverNodeDetail.IosMaestro(resourceId = "id_a"))
+    val b = node(detail = DriverNodeDetail.IosMaestro(resourceId = "id_b"))
+    val button = node(detail = DriverNodeDetail.IosMaestro(clickable = true), children = listOf(a, b))
+    assertEquals(null, effectiveIosResourceId(button))
+  }
+
+  @Test
+  fun `effectiveIosResourceId does not cross a nested clickable boundary`() {
+    // A nested clickable child owns its own subtree; its id must not hoist to the outer control.
+    val nestedIcon = node(detail = DriverNodeDetail.IosMaestro(resourceId = "nested_id"))
+    val nestedButton =
+      node(detail = DriverNodeDetail.IosMaestro(clickable = true), children = listOf(nestedIcon))
+    val outer =
+      node(detail = DriverNodeDetail.IosMaestro(clickable = true), children = listOf(nestedButton))
+    assertEquals(null, effectiveIosResourceId(outer))
+  }
+
+  @Test
   fun `table view becomes container with children indented`() {
     val cell1 =
       node(

@@ -439,10 +439,12 @@ async function createTrailmapComponent(req) {
 // Patches the target: block of a trailmap.yaml (Edit Target), or bootstraps a brand-new trailmap
 // when the request carries createIfMissing (Create Target). Goes through the typed RPC client
 // (window.TbRpc, from app/rpc/daemon.ts); the server's error (e.g. "unknown trailmap") rides in
-// the response's error field, `created`/`warning` in their own fields alongside ok=true.
+// the response's error field, `created`/`warning`/`registeredLive` in their own fields alongside
+// ok=true. `registeredLive` must be threaded through here — the caller reads it to decide whether
+// to skip the "restart to activate" banner, so dropping it would leave the banner always on.
 async function saveTargetConfig(req) {
   const j = await window.TbRpc.saveTargetConfig(req);
-  return j ? { ok: !!j.ok, error: j.error, created: !!j.created, warning: j.warning } : { ok: false, error: 'request failed' };
+  return j ? { ok: !!j.ok, error: j.error, created: !!j.created, warning: j.warning, registeredLive: !!j.registeredLive } : { ok: false, error: 'request failed' };
 }
 
 // ─── Blaze authoring: propose + drafts ────────────────────────────────────────
@@ -603,6 +605,18 @@ async function deleteTrailFolderFile(folderId, name) {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+// Convert a legacy per-platform bundle folder into a single unified `<folder>.trail.yaml` (deleting
+// the per-platform files + blaze.yaml it folds in). The server runs the Kotlin UnifiedTrailMigrator;
+// on refusal (a trailhead / top-level tools / already migrated) it returns { success:false, error }.
+async function migrateTrailFolder(folderId) {
+  try {
+    const r = await fetch(`/trailrunner/api/folder/migrate-unified?id=${encodeURIComponent(folderId)}`, { method: 'POST' });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.success === false) return { success: false, error: body.error || (r.ok ? 'the server refused the migration' : `HTTP ${r.status}`) };
+    return body;
+  } catch (e) { return { success: false, error: String(e) }; }
+}
+
 // Record one variant per device into a committed trail folder. The recorded <platform>.trail.yaml
 // lands back in the bundle on completion. Requires the folder to carry a blaze.yaml to drive the run.
 async function recordTrailFolder(folderId, deviceIds, options) {
@@ -743,5 +757,5 @@ Object.assign(window, {
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
   fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   proposeSteps, createDraft, fetchDraftDetail, fetchDraftFile, updateDraftBlaze, saveDraftTo, deleteDraft, recordDraft,
-  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
+  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, migrateTrailFolder,
 });

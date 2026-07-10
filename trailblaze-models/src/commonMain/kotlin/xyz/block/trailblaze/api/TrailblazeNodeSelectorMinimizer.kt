@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.unescapeForSelector
+
 /**
  * Greedy field-dropping minimizer for [TrailblazeNodeSelector]s.
  *
@@ -177,13 +179,17 @@ internal object TrailblazeNodeSelectorMinimizer {
    * is rejected). Returns an empty match when [match] had no non-null fields.
    */
   private fun keepMostStableField(match: DriverNodeMatch): DriverNodeMatch =
-    minimizeMatch(match) { candidate -> !candidate.isEmpty() }
+    // drops only -- NOT minimizeMatch: this runs under a weaker "non-empty" gate, and
+    // de-escaping (which can broaden a match) is only ever safe behind a real
+    // tree-uniqueness gate. The single field kept here stays in its escaped form.
+    dropFields(match) { candidate -> !candidate.isEmpty() }
 
   /**
-   * Dispatch helper — the per-driver minimizers all follow the same shape but
-   * each driver has a different field set, so they're written out separately.
+   * Dispatch helper — the per-driver field-drop minimizers all follow the same shape but
+   * each driver has a different field set, so they're written out separately. Drops only;
+   * see [minimizeMatch] for the de-escape that follows.
    */
-  private fun minimizeMatch(
+  private fun dropFields(
     match: DriverNodeMatch,
     stillUnique: (DriverNodeMatch) -> Boolean,
   ): DriverNodeMatch = when (match) {
@@ -194,6 +200,17 @@ internal object TrailblazeNodeSelectorMinimizer {
     is DriverNodeMatch.IosMaestro -> minimizeIosMaestro(match, stillUnique)
     is DriverNodeMatch.IosAxe -> minimizeIosAxe(match, stillUnique)
   }
+
+  /**
+   * Drops redundant fields, then prettifies the survivors via [deEscapeProseText]. Both
+   * stages are gated on [stillUnique], so this must be called only with a real
+   * tree-uniqueness predicate -- [keepMostStableField] calls [dropFields] directly to
+   * avoid de-escaping under its weaker "non-empty" gate.
+   */
+  private fun minimizeMatch(
+    match: DriverNodeMatch,
+    stillUnique: (DriverNodeMatch) -> Boolean,
+  ): DriverNodeMatch = deEscapeProseText(dropFields(match, stillUnique), stillUnique)
 
   /**
    * Stability order for AndroidAccessibility, least-stable → most-stable:
@@ -348,6 +365,89 @@ internal object TrailblazeNodeSelectorMinimizer {
       }
     }
     return current
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prose-text de-escaping
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Prettifies survivors: rewrites each prose-text field holding a `\\Q...\\E` escaped
+   * literal back to its bare form, so a price reads `textRegex: $15.00` instead of
+   * `\\Q$15.00\\E`. The resolver's regex->literal fallback (`matchesPattern`, mirrored in
+   * the TS resolver and pinned by the `$3.00` case in `matcher-parity-fixtures.json`)
+   * matches the bare literal identically, so this changes representation, not matching.
+   *
+   * Committed only while the selector still uniquely matches the target (via
+   * [stillUnique]) -- same greedy, uniqueness-gated shape as the field-drop pass; a no-op
+   * rewrite (non-escaped field) short-circuits on equality. The match set is identical to
+   * the escaped form on the recorded hierarchy; a de-escaped live-regex literal can widen
+   * against a hypothetical future sibling, exactly as a dropped field can, which is why
+   * the gate is required. Genuinely ambiguous cases (bare `a.b` would also regex-match a
+   * sibling `axb`) fail the gate and keep their escaping. Only human-visible text fields
+   * are candidates; identifier fields (resourceId, className, testTag) are left alone.
+   */
+  private fun deEscapeProseText(
+    match: DriverNodeMatch,
+    stillUnique: (DriverNodeMatch) -> Boolean,
+  ): DriverNodeMatch = when (match) {
+    is DriverNodeMatch.AndroidAccessibility -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.contentDescriptionRegex)?.let { m.copy(contentDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.hintTextRegex)?.let { m.copy(hintTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.labeledByTextRegex)?.let { m.copy(labeledByTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.stateDescriptionRegex)?.let { m.copy(stateDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.paneTitleRegex)?.let { m.copy(paneTitleRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.roleDescriptionRegex)?.let { m.copy(roleDescriptionRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
+    is DriverNodeMatch.AndroidMaestro -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.accessibilityTextRegex)?.let { m.copy(accessibilityTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.hintTextRegex)?.let { m.copy(hintTextRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
+    is DriverNodeMatch.Web -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.ariaNameRegex)?.let { m.copy(ariaNameRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.ariaDescriptorRegex)?.let { m.copy(ariaDescriptorRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
+    is DriverNodeMatch.Compose -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.editableTextRegex)?.let { m.copy(editableTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.contentDescriptionRegex)?.let { m.copy(contentDescriptionRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
+    is DriverNodeMatch.IosMaestro -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.accessibilityTextRegex)?.let { m.copy(accessibilityTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.hintTextRegex)?.let { m.copy(hintTextRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
+    is DriverNodeMatch.IosAxe -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.labelRegex)?.let { m.copy(labelRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.valueRegex)?.let { m.copy(valueRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.titleRegex)?.let { m.copy(titleRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
   }
 
   // ---------------------------------------------------------------------------

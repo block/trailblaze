@@ -5,11 +5,13 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.builtins.ListSerializer
 import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
@@ -25,10 +27,10 @@ import java.io.File
  * 1. Load every `<classifier>.trail.yaml` in the directory; filename minus
  *    `.trail.yaml` is the classifier.
  * 2. Canonicalize config across every file: for each device-agnostic scalar
- *    (`id` / `target` / `title` / `description` / `context` / `memory`) the
- *    first file to declare it wins (platform files in filename order, then
- *    `blaze.yaml`), so a field only one file carries is never dropped;
- *    `metadata` (which also carries the bridged v1 `priority:` / `source:` —
+ *    (`id` / `target` / `title` / `description` / `priority` / `context` /
+ *    `memory`) the first file to declare it wins (platform files in filename
+ *    order, then `blaze.yaml`), so a field only one file carries is never
+ *    dropped; `metadata` (which also carries the bridged v1 `source:` —
  *    see [xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig.metadata])
  *    merges per-key the same first-wins way. `platform:` is retired (the
  *    device set derives from the classifier slots) and a v1 `electron:` block
@@ -76,6 +78,21 @@ class UnifiedTrailMigrator(
 ) {
 
   /**
+   * Strict-mode sibling of [trailblazeYaml], used only by [TrailRoundTripDropDetector] to detect
+   * input content the lenient decode drops. Built from the full classpath-discovered tool set (as
+   * [TrailblazeYaml.Default] is) so recorded tool args validate against their real schemas. Lazy so
+   * constructing a migrator stays cheap when `migrate()` is never called.
+   *
+   * Invariant: the detector only reports a drop when this strict schema and the lenient
+   * [trailblazeYaml] share the same tool set. That holds because every caller injects
+   * [TrailblazeYaml.Default] (also full-classpath), so strict decode = lenient decode + the
+   * unknown-key throw. Injecting a narrower custom instance would make strict a superset and could
+   * surface false positives — until a `withStrict()`-style affordance lets this derive from the
+   * injected instance, keep `trailblazeYaml` `.Default`-compatible.
+   */
+  private val strictTrailblazeYaml: TrailblazeYaml by lazy { createTrailblazeYaml(strict = true) }
+
+  /**
    * Migrate the per-platform v1 files in [inputDir] to a single [UnifiedTrail]
    * plus a structured [Report]. The caller chooses what to do with the
    * report (typically: print a summary, write the trail to disk).
@@ -86,8 +103,13 @@ class UnifiedTrailMigrator(
       .listFiles { f -> f.isFile && f.name.endsWith(TRAIL_YAML_SUFFIX) && f.name != BLAZE_FILENAME }
       ?.sortedBy { it.name }
       .orEmpty()
-    require(platformFiles.isNotEmpty()) {
-      "No `*.trail.yaml` files found in $inputDir; nothing to migrate."
+    // A blaze.yaml-only directory is migratable: blaze.yaml is a v1 trail file with the same
+    // schema as a `<classifier>.trail.yaml`, just device-agnostic and recording-less. The
+    // blaze.yaml handling below already yields a clean recording-less unified trail, so this
+    // guard only needs to refuse a directory with no v1 source at all.
+    val blazeFile = File(inputDir, BLAZE_FILENAME)
+    require(platformFiles.isNotEmpty() || blazeFile.isFile) {
+      "No `*.trail.yaml` or `blaze.yaml` files found in $inputDir; nothing to migrate."
     }
 
     // Load every platform file as v1.
@@ -114,9 +136,15 @@ class UnifiedTrailMigrator(
     // Every file's scalar config, keyed by classifier (or BLAZE_KEY), retained so scalar
     // disagreements can be surfaced as drift after the fold picks a canonical value.
     val configsBySource = linkedMapOf<String, UnifiedTrailConfig>()
+    // Input content the lenient decode drops (unknown keys the schema can't carry — e.g. malformed
+    // positional anchors). Detected per input file against a strict decode; surfaced as leading
+    // comments so a reviewer sees what vanished rather than catching it by eyeballing the diff.
+    val droppedContent = mutableListOf<DroppedContentEntry>()
     for (file in platformFiles) {
       val classifier = file.name.removeSuffix(TRAIL_YAML_SUFFIX)
-      val items = trailblazeYaml.decodeTrail(file.readText())
+      val fileText = file.readText()
+      droppedContent += detectDroppedContent(file.name, fileText)
+      val items = trailblazeYaml.decodeTrail(fileText)
       assertNoTopLevelTools(items, file.name)
       assertNoTrailhead(items, file.name)
       val v1Config = trailblazeYaml.extractTrailConfig(items)
@@ -142,12 +170,33 @@ class UnifiedTrailMigrator(
     // recordings) and is the authoritative NL source when its step is
     // present — that matches the v1-era convention where blaze.yaml is the
     // hand-authored NL definition that platform files were recorded against.
-    val blazeFile = File(inputDir, BLAZE_FILENAME)
     val blazePrompts: List<PromptStep> = if (blazeFile.isFile) {
-      val items = trailblazeYaml.decodeTrail(blazeFile.readText())
+      val blazeText = blazeFile.readText()
+      droppedContent += detectDroppedContent(blazeFile.name, blazeText)
+      val items = trailblazeYaml.decodeTrail(blazeText)
       assertNoTopLevelTools(items, blazeFile.name)
       assertNoTrailhead(items, blazeFile.name)
       val cfg = trailblazeYaml.extractTrailConfig(items)
+      // A blaze-only migration (no platform files) has no device classifier, and the unified
+      // `skip:`/`devices:` maps are classifier-keyed with no universal-wildcard key. So a
+      // blaze.yaml `skip:`/`driver:` can't be represented and would be silently dropped — a
+      // skipped trail would start running, or a pinned driver fall back to runtime resolution.
+      // Refuse until the case gains a recording (whose classifier the value keys onto) or drops
+      // the field. (With platform files present, `blazeSkip` below propagates onto each classifier
+      // instead, so this only guards the classifier-less case.)
+      if (platformFiles.isEmpty()) {
+        require(cfg?.skip.isNullOrBlank()) {
+          "Cannot migrate a blaze.yaml-only directory in $inputDir: it declares `skip:`, but a " +
+            "recording-less unified trail has no device classifier to key the skip onto, so the " +
+            "skip would be lost. Add a `<device>.trail.yaml` recording or remove the skip first."
+        }
+        require(cfg?.driver.isNullOrBlank()) {
+          "Cannot migrate a blaze.yaml-only directory in $inputDir: it pins `driver:`, but a " +
+            "recording-less unified trail has no device classifier to key the driver onto, so it " +
+            "would fall back to runtime resolution. Add a `<device>.trail.yaml` recording or " +
+            "remove the driver first."
+        }
+      }
       if (cfg != null) {
         val unified = v1ConfigToUnified(cfg)
         configsBySource[BLAZE_KEY] = unified
@@ -285,15 +334,25 @@ class UnifiedTrailMigrator(
       trail = UnifiedTrail(config = mergedConfig, trail = collapsedSteps),
       report = Report(
         platformFilesLoaded = platformFiles.map { it.name },
+        blazeLoaded = blazeFile.isFile,
         drift = driftReports,
         memoryDrift = memoryDrift,
         kindDrift = kindDriftReports,
         configDrift = detectConfigDrift(configsBySource),
         familyCollapses = collapseReports,
         unrecordableSteps = collapsedSteps.withIndex().count { !it.value.recordable },
+        droppedContent = droppedContent,
       ),
     )
   }
+
+  /**
+   * Best-effort wrapper around [TrailRoundTripDropDetector.detect]: a detector failure must never
+   * break a migration, so any throw degrades to "no drops found" for this file.
+   */
+  private fun detectDroppedContent(fileName: String, yamlText: String): List<DroppedContentEntry> =
+    runCatching { TrailRoundTripDropDetector.detect(strictTrailblazeYaml, fileName, yamlText) }
+      .getOrDefault(emptyList())
 
   /**
    * Detect cross-file scalar-config drift: two files meaningfully declaring DIFFERENT values for
@@ -301,7 +360,7 @@ class UnifiedTrailMigrator(
    * surface the disagreement like NL/memory/kind drift so a divergent title or priority isn't
    * invisibly dropped during a bulk migration. "Meaningfully declared" matches the fold's absence
    * rules (blank strings don't count). `metadata` is compared per-KEY (reported as
-   * `metadata.<key>`, e.g. `metadata.priority` for the bridged v1 field) to match its per-key
+   * `metadata.<key>`, e.g. `metadata.source` for the bridged v1 field) to match its per-key
    * merge — files contributing disjoint keys is a clean union, not drift. `memory` has its own
    * dedicated drift pass; per-classifier `devices`/`skip` and the unioned `tags` diverge by
    * design and are not scalars.
@@ -314,6 +373,7 @@ class UnifiedTrailMigrator(
       "target" to { it.target?.takeUnless(String::isBlank) },
       "title" to { it.title?.takeUnless(String::isBlank) },
       "description" to { it.description?.takeUnless(String::isBlank) },
+      "priority" to { it.priority?.takeUnless(String::isBlank) },
       "context" to { it.context?.takeUnless(String::isBlank) },
     )
     val fieldDrift = extractors.mapNotNull { (field, extract) ->
@@ -381,7 +441,7 @@ class UnifiedTrailMigrator(
   // Fold [next] into the canonical config being accumulated: the first file to meaningfully
   // declare a scalar wins, and files seen later only FILL fields the canonical still lacks
   // (blank strings / empty placeholders don't shadow a later populated value; metadata — which
-  // carries the bridged v1 `priority:`/`source:` — merges per-key). Without the fill, a field
+  // carries the bridged v1 `source:` — merges per-key). Without the fill, a field
   // present only in a later file — e.g. `source:` declared in `blaze.yaml` but not in the
   // platform files — was silently dropped because the first config seen became canonical
   // wholesale. The field list lives in the shared [UnifiedTrailAdapter.fillMissingConfigScalars];
@@ -478,6 +538,13 @@ class UnifiedTrailMigrator(
 
   data class Report(
     val platformFilesLoaded: List<String>,
+    /**
+     * True when a `blaze.yaml` in the input directory contributed to the migration (its
+     * device-agnostic NL / config). Distinct from [platformFilesLoaded] because blaze.yaml is
+     * recording-less and carries no device classifier — for a blaze-only case this is the only
+     * source, so `platformFilesLoaded` is empty while this is true.
+     */
+    val blazeLoaded: Boolean = false,
     val drift: List<DriftEntry>,
     val familyCollapses: List<FamilyCollapseEntry>,
     val unrecordableSteps: Int,
@@ -502,6 +569,12 @@ class UnifiedTrailMigrator(
      * invisibly dropped.
      */
     val configDrift: List<ConfigDriftEntry> = emptyList(),
+    /**
+     * Un-round-trippable content — one entry per input key the lenient decode silently drops (a
+     * key the schema doesn't recognize, e.g. a malformed positional anchor). Detected via a strict
+     * re-decode of each input file (see [TrailRoundTripDropDetector]). Empty for clean inputs.
+     */
+    val droppedContent: List<DroppedContentEntry> = emptyList(),
   )
 
   data class ConfigDriftEntry(
@@ -543,7 +616,7 @@ class UnifiedTrailMigrator(
 
   companion object {
     private const val TRAIL_YAML_SUFFIX = ".trail.yaml"
-    private const val BLAZE_FILENAME = "blaze.yaml"
+    private const val BLAZE_FILENAME = TrailRecordings.BLAZE_DOT_YAML
     private const val BLAZE_KEY = "blaze.yaml"
     private const val REASON_KEY = "reason"
 
@@ -636,6 +709,30 @@ class UnifiedTrailMigrator(
         lines += "  ${entry.field}:"
         for ((source, value) in entry.valueBySource) {
           lines += "    $source: \"${value.take(SNIPPET_MAX_LEN).replace('\n', ' ')}\""
+        }
+      }
+      return lines
+    }
+
+    /**
+     * Leading-comment lines naming input content the migration could not carry — keys the lenient
+     * decode silently drops (a malformed positional anchor, a stale/typo'd field, a tool arg the
+     * tool doesn't declare). Unlike the drift warnings (which flag a resolved-but-lossy choice),
+     * this flags content that is simply GONE, so a reviewer can restore or fix it. Groups by file
+     * and names the dropped key, its YAML path, and its source line.
+     */
+    fun droppedContentComments(droppedContent: List<DroppedContentEntry>): List<String> {
+      if (droppedContent.isEmpty()) return emptyList()
+      val lines = mutableListOf(
+        "WARNING: ${droppedContent.size} input key(s) did not round-trip through migration and were DROPPED.",
+        "Each is either a key the schema doesn't recognize (e.g. a malformed positional anchor) or a",
+        "sibling key in a tool entry that the tool decoder ignores — silently discarded on decode.",
+        "Review each and re-author it in a valid shape:",
+      )
+      for ((file, entries) in droppedContent.groupBy { it.file }) {
+        lines += "  $file:"
+        for (entry in entries) {
+          lines += "    dropped `${entry.key}` at ${entry.path} (line ${entry.line})"
         }
       }
       return lines

@@ -6,23 +6,31 @@ import kotlinx.serialization.Serializable
 /**
  * The tool sequence that a step replays at execution time.
  *
- * @property tools The recorded tool calls. Must be non-empty — a recording with no tools is
- *   rejected at construction. Use `recording: null` (omit the block entirely) to signal that
- *   a step has no recording and replay should fall through to AI.
+ * There are three distinct states a step can be in, and they mean different things at replay:
+ * - **`recording == null`** — nothing was ever declared for this step/device. Replay falls
+ *   through to AI (blaze).
+ * - **`recording.tools` is empty** — the author (or a merge that carries forward a
+ *   hand-authored declaration) explicitly said "this step needs zero tools on this device."
+ *   Replay runs zero tools and succeeds deterministically — it does NOT fall through to AI.
+ *   This is the only way to express "explicitly do nothing here" without invoking the LLM.
+ * - **`recording.tools` is non-empty** — replay the recorded tools in order.
+ *
+ * Automated recorders (e.g. [TrailblazeRecordingGenerator]) must never manufacture the empty
+ * state on their own — a live session that happens to capture zero tools for an objective means
+ * "not recorded," not "author declared a no-op," so those call sites emit `recording = null`
+ * rather than `ToolRecording(tools = emptyList())`. The empty state is reserved for deliberate,
+ * hand-authored (or hand-authored-then-merged) declarations.
+ *
+ * @property tools The recorded tool calls, possibly empty (see above). Use `recording: null`
+ *   (omit the block entirely) to signal that a step has no recording and replay should fall
+ *   through to AI.
+ *
+ * [tools] has no default: `recording: { tools: [] }` is a valid, deliberate no-op, but
+ * `recording: {}` (the `tools:` key missing entirely) is malformed input and must fail to decode
+ * rather than silently defaulting to the same empty list — a default here would turn an authoring
+ * mistake (or truncated YAML) into an indistinguishable, silently-accepted no-op.
  */
 @Serializable
 data class ToolRecording(
-  val tools: List<@Contextual TrailblazeToolYamlWrapper> = emptyList(),
-) {
-  init {
-    // A recording with no tools is malformed: either the block was hand-edited and the tool list
-    // accidentally emptied, or an authoring agent fabricated the block without real tool calls.
-    // Either way, an empty recording at replay would silently skip the step (ghost-pass), so we
-    // reject it here at parse/construction time. To express "no recording", omit the `recording:`
-    // block on the step — the replay path will then fall through to AI as designed.
-    require(tools.isNotEmpty()) {
-      "ToolRecording must have non-empty tools. An empty `recording:` block is invalid — " +
-        "omit `recording:` entirely to fall through to AI, or include at least one recorded tool."
-    }
-  }
-}
+  val tools: List<@Contextual TrailblazeToolYamlWrapper>,
+)

@@ -9,10 +9,12 @@ import kotlinx.coroutines.sync.withLock
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailComparator
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -93,10 +95,41 @@ data class Trail(
     }
 
   /**
-   * Returns the set of platforms this trail has variants for.
+   * Returns the set of platforms this trail has variants for. For legacy per-device variants this
+   * is the filename-derived platform; for a unified variant it is every platform its recordings +
+   * `config.devices` declare (see [TrailVariant.platforms]).
    */
   val platforms: Set<TrailblazeDevicePlatform>
-    get() = variants.mapNotNull { it.platform }.toSet()
+    get() = variants.flatMap { it.platforms }.toSet()
+
+  /**
+   * True when any variant is a unified single-file trail. Unified trails don't encode their target
+   * in the filename, so target/platform display derives from the file content instead.
+   */
+  val isUnified: Boolean
+    get() = variants.any { it.isUnified }
+
+  /**
+   * The device classifiers a unified trail covers — the union across variants of every
+   * `config.devices` key and every step/trailhead recording classifier, sorted for display. Empty
+   * for a purely-legacy trail (its coverage is the per-file [platforms] instead).
+   *
+   * In practice a unified trail is a single `trail.yaml`, so at most one variant is unified and the
+   * cross-variant union collapses to that one file; the union keeps this correct for the (currently
+   * unauthored) case of a directory pairing a unified variant with legacy siblings.
+   */
+  val unifiedTargets: List<String>
+    get() = variants.flatMap { it.unifiedClassifiers }.distinct().sorted()
+
+  /**
+   * The unified `config.devices` classifier→driver run matrix, merged across variants. Empty for a
+   * legacy trail or a unified trail that pins no drivers.
+   */
+  val unifiedDevices: Map<String, String>
+    get() = variants.fold(mutableMapOf<String, String>()) { acc, variant ->
+      variant.unifiedDevices.forEach { (device, driver) -> acc.putIfAbsent(device, driver) }
+      acc
+    }
 
   /**
    * Returns true if the natural language steps differ between any of the trail variants.
@@ -152,13 +185,37 @@ data class TrailVariant(
     get() = TrailRecordings.isNlDefinitionFile(fileName)
 
   /**
+   * Whether this is a unified single-file trail (one `trail.yaml` covering every device via
+   * classifier-keyed recordings) rather than a legacy per-device recording. Content-detected via
+   * the cache, so a unified trail authored under a non-`trail.yaml` name is still recognized.
+   */
+  val isUnified: Boolean
+    get() = TrailConfigCache.isUnified(absolutePath)
+
+  /**
+   * For a unified variant, the device classifiers it covers — the union of every `config.devices`
+   * key and every step/trailhead recording classifier (e.g. `android-phone`, `android-tablet`,
+   * `ios`). Empty for a legacy variant, whose target is its filename instead.
+   */
+  val unifiedClassifiers: Set<String>
+    get() = TrailConfigCache.getUnifiedClassifiers(absolutePath)
+
+  /**
+   * For a unified variant, the `config.devices` classifier→driver run matrix. Empty for a legacy
+   * variant or a unified trail that pins no drivers.
+   */
+  val unifiedDevices: Map<String, String>
+    get() = TrailConfigCache.getUnifiedDevices(absolutePath)
+
+  /**
    * The platform classifier (first classifier), if any.
    */
   val platformClassifier: TrailblazeDeviceClassifier?
     get() = classifiers.firstOrNull()
 
   /**
-   * The platform classifier (first classifier), if any.
+   * The platform classifier (first classifier), if any. Filename-derived — meaningful only for
+   * legacy per-device variants (a unified variant's platforms come from [platforms]).
    */
   val platform: TrailblazeDevicePlatform?
     get() = classifiers.firstOrNull()?.let { classifier ->
@@ -168,6 +225,25 @@ data class TrailVariant(
     }
 
   /**
+   * The platforms this single variant covers. A unified variant folds its declared classifiers up
+   * to their platform prefix (`android-tablet` → ANDROID, `ios` → IOS); a legacy variant is its one
+   * filename-derived [platform].
+   */
+  val platforms: Set<TrailblazeDevicePlatform>
+    get() = if (isUnified) {
+      UnifiedTrailTargets.platformsOf(unifiedClassifiers)
+    } else {
+      setOfNotNull(platform)
+    }
+
+  /**
+   * The device-classifier names this variant advertises for filtering — a unified variant's
+   * declared classifiers, or a legacy variant's filename-derived classifier segments.
+   */
+  val classifierNames: List<String>
+    get() = if (isUnified) unifiedClassifiers.toList() else classifiers.map { it.classifier }
+
+  /**
    * Additional classifiers after the platform (e.g., phone, tablet, iphone, ipad).
    */
   val deviceClassifiers: List<TrailblazeDeviceClassifier>
@@ -175,11 +251,12 @@ data class TrailVariant(
 
   /**
    * Display label for this variant.
-   * Examples: "Default", "Android", "Android Phone", "iOS", "iOS iPad"
+   * Examples: "Default", "Unified", "Android", "Android Phone", "iOS", "iOS iPad"
    */
   val displayLabel: String
     get() = when {
       isDefault -> "Default"
+      isUnified -> "Unified"
       classifiers.isEmpty() -> fileName.removeSuffix(".trail.yaml")
       else -> classifiers.joinToString(" ") { it.classifier.classifierDisplayName() }
     }
@@ -251,6 +328,12 @@ object TrailConfigCache {
   private data class CacheEntry(
     val config: TrailConfig?,
     val naturalLanguageSteps: List<String>?,
+    /** True when the file is a unified single-file trail (content-detected). */
+    val isUnified: Boolean,
+    /** Union of declared classifiers for a unified file; empty otherwise. */
+    val unifiedClassifiers: Set<String>,
+    /** The unified `config.devices` classifier→driver map; empty otherwise. */
+    val unifiedDevices: Map<String, String>,
     val lastModified: Long,
   )
 
@@ -275,6 +358,20 @@ object TrailConfigCache {
   fun getNaturalLanguageSteps(absolutePath: String): List<String>? {
     return getCacheEntry(absolutePath)?.naturalLanguageSteps
   }
+
+  /** True when the file is a unified single-file trail (content-detected). */
+  fun isUnified(absolutePath: String): Boolean = getCacheEntry(absolutePath)?.isUnified == true
+
+  /**
+   * The union of device classifiers a unified file declares (`config.devices` keys + every
+   * step/trailhead recording key). Empty for a legacy file or one that couldn't be decoded.
+   */
+  fun getUnifiedClassifiers(absolutePath: String): Set<String> =
+    getCacheEntry(absolutePath)?.unifiedClassifiers.orEmpty()
+
+  /** The unified `config.devices` classifier→driver map. Empty for a legacy file. */
+  fun getUnifiedDevices(absolutePath: String): Map<String, String> =
+    getCacheEntry(absolutePath)?.unifiedDevices.orEmpty()
 
   /**
    * Gets or creates a cache entry for a file, parsing if necessary.
@@ -302,17 +399,48 @@ object TrailConfigCache {
   }
 
   /**
-   * Parses a trail file to extract config and natural language steps.
+   * Parses a trail file to extract config, natural language steps, and — for a unified single-file
+   * trail — the device coverage (declared classifiers + the `config.devices` driver map).
+   *
+   * `isUnified` is content-detected up front (a cheap line scan that never throws) so it is set even
+   * when the fuller decode below fails, e.g. a trail using app-specific tools not on this classpath.
    */
   private fun parseTrailFile(file: File): CacheEntry {
-    return try {
-      val yamlContent = file.readText()
-      val config = trailblazeYaml.extractTrailConfig(yamlContent)
-      val steps = trailComparator.extractNaturalLanguageSteps(yamlContent, trailblazeYaml)
-      CacheEntry(config, steps, file.lastModified())
+    val modified = file.lastModified()
+    val yamlContent = try {
+      file.readText()
     } catch (e: Exception) {
-      CacheEntry(null, null, file.lastModified())
+      return CacheEntry(null, null, isUnified = false, emptySet(), emptyMap(), modified)
     }
+
+    val isUnified = TrailRecordings.isUnifiedTrailContent(yamlContent)
+    val config = try {
+      trailblazeYaml.extractTrailConfig(yamlContent)
+    } catch (e: Exception) {
+      null
+    }
+    val steps = try {
+      trailComparator.extractNaturalLanguageSteps(yamlContent, trailblazeYaml)
+    } catch (e: Exception) {
+      null
+    }
+
+    var classifiers: Set<String> = emptySet()
+    var devices: Map<String, String> = emptyMap()
+    if (isUnified) {
+      try {
+        val trail = trailblazeYaml.decodeUnifiedTrail(yamlContent)
+        classifiers = UnifiedTrailTargets.declaredClassifiers(trail)
+        devices = trail.config.devices.orEmpty()
+      } catch (e: Throwable) {
+        // Content is unified but wouldn't decode here — keep the unified flag, drop the targets.
+        // Most often a trail using app-specific tools not on the desktop classpath. Log once per
+        // file (mtime-cached), so a chip-less unified trail is diagnosable instead of silent.
+        Console.log("[TrailConfigCache] unified trail ${file.name} declares targets but wouldn't decode: ${e.message}")
+      }
+    }
+
+    return CacheEntry(config, steps, isUnified, classifiers, devices, modified)
   }
 
   /**

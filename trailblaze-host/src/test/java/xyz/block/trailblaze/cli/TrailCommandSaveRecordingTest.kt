@@ -499,7 +499,7 @@ class TrailCommandSaveRecordingTest {
     assertTrue(legacy.isFile, "the recording is preserved as a legacy classifier sibling")
     val savedItems = createTrailblazeYaml().decodeTrail(legacy.readText())
     val savedTrailhead = savedItems.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
-    assertEquals(listOf("clearBootstrap", "openBootstrap"), savedTrailhead.tools.map { it.name })
+    assertEquals(listOf("clearBootstrap", "openBootstrap"), savedTrailhead.tools?.map { it.name })
   }
 
   // ---------------------------------------------------------------------------

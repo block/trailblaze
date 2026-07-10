@@ -335,7 +335,16 @@ private val SAFE_TRAILMAP_ID = Regex("^[A-Za-z0-9_][A-Za-z0-9_-]*$")
  * [notifyIconExtractionTriggerCandidates] — fired only for platforms whose `appIds`/`baseUrl` this
  * save actually changed, not for every platform the request happens to mention.
  */
-internal suspend fun buildSaveTargetConfigResponse(request: SaveTargetConfigRequest): SaveTargetConfigResponse =
+internal suspend fun buildSaveTargetConfigResponse(
+  request: SaveTargetConfigRequest,
+  // Registers a freshly-created target id into the running daemon's live target set, returning true
+  // when it's now selectable/runnable without a restart. Injected (not read off a global) so this
+  // function stays unit-testable with plain inputs; null in contexts without a device manager
+  // (tests, a daemon with no target discovery), where a create falls back to the restart flow.
+  // Note: invoking it re-runs full app-target discovery, so it's only called on createIfMissing
+  // saves (create / retry — user-initiated and rare), never on the ordinary edit path.
+  registerLiveTarget: ((String) -> Boolean)? = null,
+): SaveTargetConfigResponse =
   withContext(Dispatchers.IO) {
     val trailmapId = request.trailmapId.trim()
     val base = ToolSourceFiles.trailmapBaseDir(trailmapId)
@@ -439,14 +448,28 @@ internal suspend fun buildSaveTargetConfigResponse(request: SaveTargetConfigRequ
       }.onFailure {
         Console.log("[TrailmapRoutes] icon-extraction trigger notification failed (manifest write already succeeded): ${it.message}")
       }
+      // On EVERY createIfMissing save, not just the bootstrapping one: registration is
+      // idempotent (computeWorkspaceTargetsAfterCreate no-ops when already listed), so a
+      // caller whose earlier registration failed can re-send the same request to re-attempt
+      // it instead of the retry silently taking the edit path and never registering.
+      val warning = if (request.createIfMissing) registerCreatedTargetBestEffort(trailmapId) else null
+      // Now that the trailmap manifest is written and the workspace `targets:` list carries the id,
+      // register it into the running daemon's live target set so it's selectable without a restart.
+      // Best-effort and additive-only: gated on warning == null (a workspace-list write that failed
+      // means discovery can't see the id anyway) and skipped entirely on the edit path or without a
+      // device manager — any failure just leaves registeredLive = false and the restart banner.
+      // The runCatching is defensive: registerNewTarget already swallows its own discovery
+      // failures and returns false, so this only trips if the callback itself throws unexpectedly.
+      val registeredLive = request.createIfMissing && warning == null && registerLiveTarget != null &&
+        runCatching { registerLiveTarget(trailmapId) }.getOrElse {
+          Console.log("[TrailmapRoutes] live registration of created trailmap '$trailmapId' failed (create already succeeded): ${it.message}")
+          false
+        }
       SaveTargetConfigResponse(
         ok = true,
         created = creating,
-        // On EVERY createIfMissing save, not just the bootstrapping one: registration is
-        // idempotent (computeWorkspaceTargetsAfterCreate no-ops when already listed), so a
-        // caller whose earlier registration failed can re-send the same request to re-attempt
-        // it instead of the retry silently taking the edit path and never registering.
-        warning = if (request.createIfMissing) registerCreatedTargetBestEffort(trailmapId) else null,
+        warning = warning,
+        registeredLive = registeredLive,
       )
     }.getOrElse {
       Console.log("[TrailmapRoutes] failed to write ${manifestFile.absolutePath}: ${it.message}")

@@ -209,12 +209,22 @@ function TargetDevicePicker({ go }) {
           onClose={() => setEditingTarget(null)}
           onSaved={(savedId, r) => {
             setIconNonce((n) => n + 1);
-            if (r && r.created) {
-              // App targets load once at daemon startup, so a brand-new one can't be selected
-              // until a restart — flag it through the same state the shell's restart banner and
-              // the per-card "Restart Trail Runner to activate" label already read.
+            if (r && r.created && !r.registeredLive) {
+              // A brand-new target the daemon couldn't register live can't be selected until a
+              // restart — flag it through the same state the shell's restart banner and the
+              // per-card "Restart Trail Runner to activate" label already read.
               const cur = TB.getTargetsRestartNeeded() || [];
               if (!cur.includes(savedId)) TB.setTargetsRestartNeeded([...cur, savedId]);
+            } else if (r && r.registeredLive) {
+              // Registered live — no restart. Re-fetch the per-device installed-apps list (keyed
+              // on appsNonce) alongside the trailmap reload, so a target for an app already on a
+              // connected device renders as selectable now instead of a declared-only "Not
+              // installed" card until the next manual Refresh.
+              setAppsNonce((n) => n + 1);
+              // Defensive: if an earlier attempt had flagged this id for restart, clear it now that
+              // it's live so the stale "Restart Trail Runner to activate" label doesn't linger.
+              const cur = TB.getTargetsRestartNeeded() || [];
+              if (cur.includes(savedId)) TB.setTargetsRestartNeeded(cur.filter((id) => id !== savedId));
             }
             trailmapsResult.reload();
           }}

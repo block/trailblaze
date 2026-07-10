@@ -392,6 +392,55 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
     )
   }
 
+  // Migrate a legacy per-platform bundle folder into a single unified `<folder>.trail.yaml` (deleting
+  // the per-platform inputs + blaze.yaml it consumed). Backs the Trails "Migrate to unified" button.
+  // The heavy lifting is BundleMigration/UnifiedTrailMigrator; this just resolves the folder and maps
+  // the migrator's refusals (top-level tools, trailhead, already-migrated) to a 400 with a reason.
+  post("$PATH_BASE/api/folder/migrate-unified") {
+    val id = call.request.queryParameters["id"]?.trim().orEmpty()
+    if (id.isEmpty()) {
+      call.respond(HttpStatusCode.BadRequest, MigrateFolderResponse(success = false, error = "id is required"))
+      return@post
+    }
+    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
+    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = false) }
+    // resolve() only path-validates — it returns a ResolvedDraft for a directory that doesn't exist.
+    // Without the isDirectory check, a missing folder would fall through to the migrator and surface
+    // as a 400 with its internal "no *.trail.yaml files" message instead of a plain 404.
+    if (resolved == null || !withContext(Dispatchers.IO) { resolved.dir.isDirectory }) {
+      call.respond(HttpStatusCode.NotFound, MigrateFolderResponse(success = false, error = "folder not found"))
+      return@post
+    }
+    val outcome = withContext(Dispatchers.IO) { runCatching { BundleMigration.migrateFolder(resolved.dir) } }
+    outcome.fold(
+      onSuccess = { o ->
+        // The one server-side record of this destructive action — which folder, what was written,
+        // and exactly which inputs were deleted (the response's `removed` list isn't persisted).
+        Console.log(
+          "[BlazeRoutes] migrate-unified '$id': wrote ${o.outputName}, " +
+            "removed [${o.removed.joinToString()}], ${o.driftComments.size} drift warning(s)",
+        )
+        call.respond(
+          MigrateFolderResponse(
+            success = true,
+            outputName = o.outputName,
+            steps = o.steps,
+            driftCount = o.driftComments.size,
+            drift = o.driftComments,
+            removed = o.removed,
+          ),
+        )
+      },
+      onFailure = { e ->
+        // IllegalArgumentException = the migrator (or BundleMigration) refused the input: no v1 files,
+        // a top-level `- tools:` block, a `- trailhead:`, or an already-migrated folder. Everything
+        // else is an unexpected server error.
+        val status = if (e is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.InternalServerError
+        call.respond(status, MigrateFolderResponse(success = false, error = e.message ?: (e::class.simpleName ?: "migration failed")))
+      },
+    )
+  }
+
   // Record one variant per selected device into a committed library folder. Same dispatch as
   // /api/draft/record, but allowCommittedVariantWrite=true so the recorded variant lands back in the
   // committed folder. Requires a blaze.yaml to drive the run.

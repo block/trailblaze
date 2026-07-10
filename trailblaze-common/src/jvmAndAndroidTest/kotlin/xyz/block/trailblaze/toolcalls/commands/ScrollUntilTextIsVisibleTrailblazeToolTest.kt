@@ -2,6 +2,9 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
+import assertk.assertions.isTrue
 import maestro.ScrollDirection
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.ScrollUntilVisibleCommand
@@ -25,6 +28,77 @@ class ScrollUntilTextIsVisibleTrailblazeToolTest {
       visibilityPercentage = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,
       centerElement = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
     )
+
+  @Test
+  fun `plain text builds a substring-matching regex`() {
+    // Existing callers pass `text`; behavior must stay a contains match (wrapped + escaped).
+    val regex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(
+      text = "Loyalty",
+      textRegex = null,
+    )
+    assertThat(regex).isEqualTo(".*\\QLoyalty\\E.*")
+    // A contains match accepts the substring occurrence…
+    assertThat(regex.toRegex().matches("Loyalty Enroll")).isTrue()
+    assertThat(regex.toRegex().matches("Loyalty")).isTrue()
+  }
+
+  @Test
+  fun `plain text is regex-escaped so special characters are literal`() {
+    val regex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(
+      text = "Loading...",
+      textRegex = null,
+    )
+    // The dots must be literal, not any-char wildcards.
+    assertThat(regex.toRegex().matches("Loading...")).isTrue()
+    assertThat(regex.toRegex().matches("LoadingXYZ")).isFalse()
+  }
+
+  @Test
+  fun `textRegex is used verbatim for an anchored full match`() {
+    // The opt-in anchored path: `Loyalty` must match only "Loyalty", not "Loyalty Enroll",
+    // mirroring how selector tools resolve text.
+    val regex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(
+      text = "",
+      textRegex = "Loyalty",
+    )
+    assertThat(regex).isEqualTo("Loyalty")
+    assertThat(regex.toRegex().matches("Loyalty")).isTrue()
+    assertThat(regex.toRegex().matches("Loyalty Enroll")).isFalse()
+  }
+
+  @Test
+  fun `textRegex takes precedence over text when both are provided`() {
+    val regex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(
+      text = "ignored",
+      textRegex = "Loyalty",
+    )
+    assertThat(regex).isEqualTo("Loyalty")
+  }
+
+  @Test
+  fun `blank textRegex falls back to the substring path`() {
+    val regex = ScrollUntilTextIsVisibleTrailblazeTool.buildTargetTextRegex(
+      text = "Loyalty",
+      textRegex = "   ",
+    )
+    assertThat(regex).isEqualTo(".*\\QLoyalty\\E.*")
+  }
+
+  @Test
+  fun `hasScrollTarget requires at least one of text, textRegex, or id`() {
+    // A call with a real target in any single slot is accepted…
+    assertThat(ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget("Loyalty", null, null)).isTrue()
+    assertThat(ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget("", "Loyalty", null)).isTrue()
+    assertThat(ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget("", null, "some_id")).isTrue()
+  }
+
+  @Test
+  fun `hasScrollTarget rejects a target-less call (would match everything)`() {
+    // No text, no textRegex, no id → the tool would build `.*\Q\E.*` (match-all) and false-pass.
+    assertThat(ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget("", null, null)).isFalse()
+    // Blank/whitespace-only values (e.g. a variable that resolved to blank) are also rejected.
+    assertThat(ScrollUntilTextIsVisibleTrailblazeTool.hasScrollTarget("   ", "  ", "  ")).isFalse()
+  }
 
   @Test
   fun `failure message leads with cannot-find-element line`() {

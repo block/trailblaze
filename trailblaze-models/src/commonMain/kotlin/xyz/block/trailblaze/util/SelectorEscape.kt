@@ -30,6 +30,22 @@ fun escapeForSelector(text: String): String =
   if (text.any { it in REGEX_METACHARACTERS }) Regex.escape(text) else text
 
 /**
+ * Inverse of [escapeForSelector] for the whole-string `\\Q...\\E` form that `Regex.escape`
+ * emits on the JVM: returns the bare literal it stands for, or null when [value] is not a
+ * plain quoted literal (so the caller keeps it untouched). Deliberately conservative -- an
+ * intentional regex such as a stable-head anchor (`Item \\d+`) never starts with `\\Q`, and a
+ * malformed or multi-section value (`\\Qa\\E\\Qb\\E`) is rejected rather than partially
+ * un-escaped. Only the `\\Q...\\E` form is handled; other Kotlin targets escape per-character,
+ * but selector generation runs host-side on the JVM, so on any other platform this is a null
+ * no-op and the selector keeps its escaped form.
+ */
+fun unescapeForSelector(value: String?): String? {
+  if (value == null || !value.startsWith("\\Q") || !value.endsWith("\\E")) return null
+  val inner = value.substring(2, value.length - 2)
+  return if (inner.isEmpty() || inner.contains("\\E")) null else inner
+}
+
+/**
  * Escapes an identifier for use in className/resourceId/type selector fields. Like
  * [escapeForSelector] but uses [IDENTIFIER_REGEX_METACHARACTERS] (dot excluded), so
  * identifiers like `com.example.app:id/foo` are emitted without `\Q...\E` quoting.

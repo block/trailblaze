@@ -104,8 +104,18 @@ object IosCompactElementList {
     val isContainer = isContainer(detail, shortClass)
     val indent = "  ".repeat(depth)
 
-    // Skip if label duplicates parent or was already emitted at this scope
-    val isDuplicate = label != null && (label == parentLabel || label in emittedLabels)
+    // Stable identifier for this control, hoisting a lone icon child's accessibilityIdentifier
+    // onto a clickable wrapper that has none of its own (e.g. an "ellipsis-horizontal" overflow
+    // button whose id lives on its UIImageView child). See [effectiveIosResourceId].
+    val effectiveResourceId = effectiveIosResourceId(node)
+
+    // Skip if label duplicates parent or was already emitted at this scope — UNLESS this node
+    // carries a stable identifier. Two genuinely distinct controls can share a VoiceOver label
+    // (e.g. a bottom-nav "More" tab and a top-right "More" overflow button); dropping the second
+    // as a "duplicate" loses a separately-tappable control. A distinct id makes it non-duplicate.
+    val isDuplicate = label != null &&
+      effectiveResourceId == null &&
+      (label == parentLabel || label in emittedLabels)
 
     // Track offscreen
     val offscreen = isOffscreen(node, screenHeight, screenWidth)
@@ -167,7 +177,7 @@ object IosCompactElementList {
           }
           return
         }
-      val annotations = buildAnnotations(detail)
+      val annotations = buildAnnotations(detail, effectiveResourceId)
       val boundsStr = if (includeBounds) boundsAnnotation(node) else ""
       val offscreenStr = if (includeOffscreen && offscreen) " (offscreen)" else ""
       val center = node.bounds?.let { it.centerX to it.centerY } ?: (0 to 0)
@@ -329,11 +339,15 @@ object IosCompactElementList {
    * Leads with `[id=…]` when the element has an `accessibilityIdentifier` (exposed as
    * `resourceId` on [DriverNodeDetail.IosMaestro]). That's the most stable selector an
    * iOS app can provide; exposing it in the compact text lets the LLM prefer it over
-   * brittle text matches.
+   * brittle text matches. [effectiveResourceId] is the node's own id, or one hoisted from a
+   * lone identifying icon child of a clickable control (see [effectiveIosResourceId]).
    */
-  private fun buildAnnotations(detail: DriverNodeDetail.IosMaestro): String {
+  private fun buildAnnotations(
+    detail: DriverNodeDetail.IosMaestro,
+    effectiveResourceId: String?,
+  ): String {
     val parts = mutableListOf<String>()
-    detail.resourceId?.takeIf { it.isNotBlank() }?.let { parts.add("[id=$it]") }
+    effectiveResourceId?.takeIf { it.isNotBlank() }?.let { parts.add("[id=$it]") }
     if (detail.checked) parts.add("[checked]")
     if (detail.selected) parts.add("[selected]")
     if (detail.focused) parts.add("[focused]")

@@ -116,13 +116,13 @@ instant the target appears, so the same step passes whether the screen is fast o
 fixed `delay()`. (That `findMatches` wait budget is the capability PR #3853, "Let TypeScript tools
 wait for an element to appear", added.)
 
-The runnable demo is **pure YAML**: the recorded per-driver variants under
-`trails/android-ondevice-accessibility/loading/wait-for-content/` and
-`trails/android-ondevice-instrumentation/loading/wait-for-content/` do the wait with no custom tool
-at all — `findMatches` with a `timeoutMs` budget on the accessibility driver, and `maestro`'s
-`extendedWaitUntil` on the instrumentation driver. These run anywhere (built-in tools only) and are
-the versions wired into the sample-app CI suites. `trails/loading/wait-for-content/blaze.yaml` is the
-natural-language authoring source.
+The runnable demo is **pure YAML**: the recorded per-driver variants at
+`trails/android-ondevice-accessibility/loading/wait-for-content.trail.yaml` and
+`trails/android-ondevice-instrumentation/loading/wait-for-content.trail.yaml` do the wait with no
+custom tool at all — `findMatches` with a `timeoutMs` budget on the accessibility driver, and
+`maestro`'s `extendedWaitUntil` on the instrumentation driver. These run anywhere (built-in tools
+only) and are the versions wired into the sample-app CI suites.
+`trails/loading/wait-for-content.trail.yaml` is the natural-language authoring source.
 
 Two TypeScript tools accompany it as **authoring references** — how you'd package the same wait as a
 reusable scripted tool. They are validated by their unit tests (no daemon or device needed) and are

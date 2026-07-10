@@ -15,6 +15,7 @@ import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
@@ -46,6 +47,11 @@ class SessionToolSet(
    * The implementation should store a stop callback on [TrailblazeMcpSessionContext.stopCaptureCallback].
    */
   private val startCaptureProvider: ((SessionId, Boolean, Boolean) -> String)? = null,
+  /**
+   * Resolves the unified-recordings rollout gate for saves (env > persisted config; no CLI flag).
+   * The host wiring the daemon supplies the persisted tier — see [TrailFileManager].
+   */
+  private val unifiedRecordingsEnabled: () -> Boolean = { UnifiedRecordingWriter.resolveGate(null, null) },
 ) : ToolSet {
 
   enum class SessionAction {
@@ -413,7 +419,7 @@ class SessionToolSet(
       ).toJson()
     }
 
-    val trailFileManager = TrailFileManager(trailsDirectory)
+    val trailFileManager = TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
     val saveResult = trailFileManager.saveTrail(
       name = trailName,
       steps = steps,
@@ -482,33 +488,19 @@ class SessionToolSet(
     yamlContent: String,
     platform: TrailblazeDevicePlatform?,
   ): String {
-    return try {
-      val sanitizedName = trailNameToDirSlug(trailName)
-      validateTrailNameSlug(sanitizedName)?.let { err ->
-        return SessionResult(error = err).toJson()
-      }
-      val dir = File(trailsDirectory)
-      if (!dir.exists()) dir.mkdirs()
-
-      val trailDir = File(dir, sanitizedName)
-      if (!trailDir.exists()) trailDir.mkdirs()
-
-      val fileName = if (platform != null) {
-        "${platform.name.lowercase()}.trail.yaml"
-      } else {
-        "trail.yaml"
-      }
-      val filePath = File(trailDir, fileName)
-      filePath.writeText(yamlContent)
-
-      Console.log("[session] Trail saved to: ${filePath.absolutePath}")
+    // Route through the shared file manager so this log-backed save (the daemon-default session-save
+    // path) honors the same unified-recordings gate + refusal/merge routing as every other surface.
+    val saveResult = TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
+      .saveTrailYaml(trailName, yamlContent, platform)
+    return if (saveResult.success) {
+      Console.log("[session] Trail saved to: ${saveResult.filePath}")
       SessionResult(
         status = "saved",
-        file = filePath.absolutePath,
-        message = "Trail saved: ${filePath.absolutePath}",
+        file = saveResult.filePath,
+        message = "Trail saved: ${saveResult.filePath}",
       ).toJson()
-    } catch (e: Exception) {
-      SessionResult(error = "Failed to write trail file: ${e.message}").toJson()
+    } else {
+      SessionResult(error = saveResult.error ?: "Failed to write trail file").toJson()
     }
   }
 

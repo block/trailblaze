@@ -184,10 +184,19 @@ class TrailTscValidatorTest {
       findings = listOf(finding(target = "wikipedia")),
       skippedNoSurface = emptyMap(),
       exemptTargets = emptyMap(),
-      allowedUnmodeledTools = emptySet(),
     )
     assertEquals(1, c.fatalFindings.size)
-    assertTrue(c.allowlistedToolFindings.isEmpty())
+  }
+
+  @Test
+  fun `classify makes a finding with no resolved target fatal`() {
+    // A null target can never match an exemption entry, so it must stay fatal.
+    val c = TrailTscValidator.classify(
+      findings = listOf(finding(target = null)),
+      skippedNoSurface = emptyMap(),
+      exemptTargets = mapOf("sampleapp" to "reason"),
+    )
+    assertEquals(1, c.fatalFindings.size)
   }
 
   @Test
@@ -196,21 +205,8 @@ class TrailTscValidatorTest {
       findings = listOf(finding(target = "sampleapp")),
       skippedNoSurface = emptyMap(),
       exemptTargets = mapOf("sampleapp" to "not yet validatable"),
-      allowedUnmodeledTools = emptySet(),
     )
     assertTrue(c.fatalFindings.isEmpty(), "exempt-target finding must not be fatal")
-  }
-
-  @Test
-  fun `classify downgrades an allow-listed unmodeled tool to non-fatal`() {
-    val c = TrailTscValidator.classify(
-      findings = listOf(finding(target = "wikipedia", tool = "eraseText")),
-      skippedNoSurface = emptyMap(),
-      exemptTargets = emptyMap(),
-      allowedUnmodeledTools = setOf("eraseText"),
-    )
-    assertTrue(c.fatalFindings.isEmpty())
-    assertEquals(1, c.allowlistedToolFindings.size)
   }
 
   @Test
@@ -219,7 +215,6 @@ class TrailTscValidatorTest {
       findings = emptyList(),
       skippedNoSurface = mapOf("sampleapp" to 5, "newTarget" to 2, TrailTscValidator.NO_TARGET_KEY to 3),
       exemptTargets = mapOf("sampleapp" to "reason", TrailTscValidator.NO_TARGET_KEY to "no target fixtures"),
-      allowedUnmodeledTools = emptySet(),
     )
     // Only the target that is neither validatable nor exempt is fatal.
     assertEquals(mapOf("newTarget" to 2), c.fatalMissingSurfaceTargets)
@@ -233,24 +228,9 @@ class TrailTscValidatorTest {
       findings = emptyList(),
       skippedNoSurface = mapOf("newTarget" to 2, "another" to 1),
       exemptTargets = emptyMap(),
-      allowedUnmodeledTools = emptySet(),
       failOnMissingSurface = false,
     )
     assertTrue(c.fatalMissingSurfaceTargets.isEmpty(), "scoped run must not fail on missing surfaces")
-  }
-
-  @Test
-  fun `classify counts an allow-listed tool on an exempt target as allow-listed`() {
-    // Allow-listed tools are checked before target exemption so the allow-listed tally stays
-    // accurate even when the finding also sits on an exempt target.
-    val c = TrailTscValidator.classify(
-      findings = listOf(finding(target = "sampleapp", tool = "eraseText")),
-      skippedNoSurface = emptyMap(),
-      exemptTargets = mapOf("sampleapp" to "exempt for other reasons"),
-      allowedUnmodeledTools = setOf("eraseText"),
-    )
-    assertTrue(c.fatalFindings.isEmpty())
-    assertEquals(1, c.allowlistedToolFindings.size, "allow-listed tool counted even on an exempt target")
   }
 
   @Test

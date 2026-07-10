@@ -655,8 +655,8 @@ class CheckCommand : Callable<Int> {
    * set up, so this runs after [runTypecheckPhase]. Fails the build ([EXIT_TYPE_ERROR]) only when the
    * validator reports a FATAL finding — a non-exempt target with type findings, or a non-exempt
    * target that can't be validated at all. Everything else returns [EXIT_OK]:
-   *  - Findings on exempt targets, missing surfaces for exempt targets, and allow-listed unmodeled
-   *    tools are reported but non-fatal (the validator computes this).
+   *  - Findings on exempt targets and missing surfaces for exempt targets are reported but non-fatal
+   *    (the validator computes this).
    *  - Infrastructure problems (bun/tsc missing) and any unexpected exception in the phase are
    *    logged and treated as non-fatal, so a transient environment issue can't spuriously fail a
    *    build — the typecheck phase already gated bun/tsc presence upstream.
@@ -702,7 +702,6 @@ class CheckCommand : Callable<Int> {
         jsRuntime = jsRuntime,
         tscJs = tscJs,
         exemptTargets = buildExemptTargets(trailmaps),
-        allowedUnmodeledTools = TrailTscValidator.DEFAULT_ALLOWED_UNMODELED_TOOLS,
         // A missing surface is only a real "uncovered target" signal on an all-workspace run, which
         // loads every surface. A scoped run (`check <id>` / cwd-scoped) still walks every trail under
         // the workspace but only loaded the selected trailmap's surface, so the OTHER workspace
@@ -1450,9 +1449,8 @@ class CheckCommand : Callable<Int> {
      *  - **[TrailTscValidator.NO_TARGET_KEY]** — trails that declare no `target:` (smoke / eval
      *    fixtures), which have no surface to validate against.
      *
-     * This is the target-name analogue of the tool-name allow-list
-     * ([TrailTscValidator.DEFAULT_ALLOWED_UNMODELED_TOOLS]); both shrink toward empty as fidelity
-     * improves. See docs/devlog/2026-07-01-trail-recording-type-validation.md.
+     * A transitional allow-list that shrinks toward empty as these placeholder targets gain real
+     * surfaces. See docs/devlog/2026-07-01-trail-recording-type-validation.md.
      */
     internal val TRANSITIONAL_EXEMPT_TARGETS: Map<String, String> = mapOf(
       "default" to

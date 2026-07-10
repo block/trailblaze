@@ -624,8 +624,9 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
 
     val selector = assertUniqueMatch(recordedRoot, recorded)
     val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
-    // Same output escapeForSelector would have produced — no generalization of the amount.
-    assertEquals(escapeForSelector("$3.00"), match.textRegex)
+    // De-escaped to the bare literal for readability; the amount is NOT generalized, so a
+    // different amount still won't match (verified below).
+    assertEquals("$3.00", match.textRegex)
 
     val changed = node(detail = DriverNodeDetail.AndroidAccessibility(text = "$4.00"))
     val changedRoot = node(children = listOf(changed))

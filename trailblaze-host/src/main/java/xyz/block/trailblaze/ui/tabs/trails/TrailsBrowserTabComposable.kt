@@ -232,6 +232,11 @@ fun TrailsBrowserTabComposable(
   // Filter and sort trails based on search query, filters, and sort option
   val filteredTrails = remember(trails, searchQuery, selectedPlatform, selectedClassifier, selectedSourceType, selectedMetadataKey, metadataFilterValue, selectedSortOption) {
     trails.filter { trail ->
+      // `trail.platforms` is cache-backed (a filesystem stat per variant), and both the search and
+      // platform filters below consult it. Compute it at most once per trail per pass — `lazy` so a
+      // pass that needs neither (blank search, no platform filter) still skips the cache read.
+      val platforms by lazy(LazyThreadSafetyMode.NONE) { trail.platforms }
+
       // Text search filter
       val matchesSearch = searchQuery.isBlank() ||
         trail.id.contains(searchQuery, ignoreCase = true) ||
@@ -244,16 +249,18 @@ fun TrailsBrowserTabComposable(
           key.contains(searchQuery, ignoreCase = true) ||
             value.contains(searchQuery, ignoreCase = true)
         } ||
-        trail.platforms.any { it.name.contains(searchQuery, ignoreCase = true) }
+        platforms.any { it.name.contains(searchQuery, ignoreCase = true) }
 
-      // Platform filter - check if any variant matches the selected platform
+      // Platform filter - a variant's platforms are filename-derived for legacy files and
+      // recording-derived for a unified single-file trail (see TrailVariant.platforms).
       val matchesPlatform = selectedPlatform == null ||
-        trail.variants.any { it.platform == selectedPlatform }
+        platforms.any { it == selectedPlatform }
 
-      // Classifier filter (e.g., phone, tablet) - check if any variant has this classifier
+      // Classifier filter (e.g., phone, tablet) - check if any variant advertises this classifier
+      // (unified trails advertise their declared recording classifiers, not a filename segment).
       val matchesClassifier = selectedClassifier == null ||
         trail.variants.any { variant ->
-          variant.classifiers.any { it.classifier.equals(selectedClassifier, ignoreCase = true) }
+          variant.classifierNames.any { it.equals(selectedClassifier, ignoreCase = true) }
         }
 
       // Source type filter
@@ -294,7 +301,7 @@ fun TrailsBrowserTabComposable(
   val availableClassifiers = remember(trails) {
     trails.flatMap { trail ->
       trail.variants.flatMap { variant ->
-        variant.classifiers.map { it.classifier.lowercase() }
+        variant.classifierNames.map { it.lowercase() }
       }
     }.distinct().filter { classifier ->
       // Exclude platform names since they have their own filter

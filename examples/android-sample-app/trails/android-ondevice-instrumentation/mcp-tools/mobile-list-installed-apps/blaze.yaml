@@ -14,10 +14,14 @@
 # separately by SampleAppMcpSdkToolsTest's `signUpNewUserSdk` generic callback test; this
 # trail isolates the Kotlin tool from any TS/bun/node setup so its green/red signal on PR
 # is unambiguous.
-- config:
-    id: sample-app/mcp-tools/mobile-list-installed-apps
-    target: xyz.block.trailblaze.examples.sampleapp
-    platform: android
-    driver: ANDROID_ONDEVICE_INSTRUMENTATION
-- tools:
-    - mobile_listInstalledApps: {}
+config:
+  id: sample-app/mcp-tools/mobile-list-installed-apps
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trail:
+  - step: List the apps installed on the device
+    recording:
+      android-phone:
+        - mobile_listInstalledApps: {}

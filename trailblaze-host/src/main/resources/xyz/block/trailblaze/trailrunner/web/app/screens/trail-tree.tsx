@@ -36,7 +36,44 @@ function BundleVariants({ platforms = [], hasBlaze }) {
   );
 }
 
-function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, filterTarget, setFilterTarget, platforms, targets, sortBy, setSortBy, hasUntargeted = false, hasUnplatformed = false, total, selected, selectedFolder, onSelect, onSelectFolder, onRemoveRoot, onChangeWorkspace, help, onNewTrail, onFocusDir, editedOnly, setEditedOnly, roots, addError, addBusy = false, width = 280, favSet = new Set(), onToggleFavorite, targetScopeLabel, targetScopePlatform, onClearTargetScope }) {
+// A trail's on-disk shape reads two ways now: the new UNIFIED single file (`<case>.trail.yaml` — config
+// + trailhead + every platform's recording inline) vs the legacy BUNDLE (a folder with one file per
+// platform). This badge calls that out in the list so the two are never confused. A leaf `.trail.yaml`
+// that isn't a bundle variant or a plain-language blaze is unified; a folder-of-variants row is a bundle.
+// The format badge for a standalone (non-variant) trail leaf, or null when it shouldn't carry one:
+// blaze rows show the flame glyph instead; variant rows sit under a bundle header that already shows
+// the badge. Keys off the file's real on-disk shape (r.format from the backend), so a legacy list
+// file reads 'bundle' and a unified single-file reads 'unified' — never guessed from folder layout.
+function leafFormatKind(r) {
+  if (r.t !== 'trail' || r.variant || r.kind === 'blaze') return null;
+  return r.format === 'unified' ? 'unified' : 'bundle';
+}
+function isUnifiedLeaf(r) { return leafFormatKind(r) === 'unified'; }
+// Cheap inline "layers" glyph for the (potentially hundreds of) unified leaf rows — a static SVG, so
+// unlike <Ico> it costs no per-row lucide useEffect + createElement on flat/sorted renders.
+function UnifiedGlyph({ s = 13, c = 'var(--tb-running)' }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flex: '0 0 auto', display: 'inline-block' }}>
+      <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+      <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+      <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+    </svg>
+  );
+}
+function FormatBadge({ kind }) {
+  const unified = kind === 'unified';
+  const c = unified ? 'var(--tb-running)' : 'var(--text-subtle)';
+  return (
+    <span title={unified
+      ? 'Unified trail — one file, every platform’s recording inline (new format)'
+      : 'Trail bundle — one file per platform (legacy layout)'}
+      style={{ flex: '0 0 auto', fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', lineHeight: 1.7, padding: '0 5px', borderRadius: 4, color: c, background: 'color-mix(in srgb, ' + c + ' 14%, transparent)', whiteSpace: 'nowrap' }}>
+      {unified ? 'unified' : 'bundle'}
+    </span>
+  );
+}
+
+function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, filterTarget, setFilterTarget, filterFormat, setFilterFormat, platforms, targets, sortBy, setSortBy, hasUntargeted = false, hasUnplatformed = false, total, selected, selectedFolder, onSelect, onSelectFolder, onRemoveRoot, onChangeWorkspace, help, onNewTrail, onFocusDir, editedOnly, setEditedOnly, roots, addError, addBusy = false, width = 280, favSet = new Set(), onToggleFavorite, targetScopeLabel, targetScopePlatform, onClearTargetScope }) {
   const targetMap = TB.useTargetAppMap();
   // Container (suite/section) folders collapse independently; the default is all-open. Bundles use a
   // single-open accordion instead — `openBundle` holds the one expanded bundle's acc (null = none), so
@@ -242,6 +279,10 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
             ...targets.map((t) => ({ value: t, label: TB.targetLabel(t, targetMap), glyph: <AppIcon target={t} size={15} radius={4} /> })),
             ...(hasUntargeted ? [{ value: '__none__', label: 'Not specified' }] : []),
           ]} />
+        {setFilterFormat && (
+          <Select compact ico="layers" label="Format" value={filterFormat} onChange={(e) => setFilterFormat(e.target.value)} title="Filter by trail format"
+            options={[['all', 'All formats'], ['unified', 'Unified'], ['bundle', 'Bundle']]} />
+        )}
         {setSortBy && (
           <Select compact ico="arrow-down-up" label="Sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} title="Order of the trail list"
             options={[['path', 'Folder structure'], ['title', 'Title A–Z'], ['priority', 'Priority']]} />
@@ -270,8 +311,11 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
                     onContextMenu={(e) => { e.preventDefault(); onSelect(r.id); setMenu({ x: e.clientX, y: e.clientY, trail: r }); }}>
                     {r.kind === 'blaze'
                       ? <Ico n="flame" s={13} c="var(--tb-amber)" style={{ flex: '0 0 auto' }} />
-                      : <Dot c={STATUS[r.status][1]} s={7} />}
+                      : isUnifiedLeaf(r)
+                        ? <UnifiedGlyph />
+                        : <Dot c={STATUS[r.status][1]} s={7} />}
                     <span className="tb-mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{fileName(r)}</span>
+                    {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
                   </div>
                 ))}
               </div>
@@ -303,6 +347,7 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
               <Ico n="route" s={15} c="var(--tb-running)" style={{ flex: '0 0 auto' }} />
               <PathPrefix prefix={r.prefix} />
               <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>{r.name}</span>
+              <FormatBadge kind="bundle" />
               <span style={{ flex: 1 }} />
               <BundleVariants platforms={r.platforms} hasBlaze={r.hasBlaze} />
               {onToggleFavorite && (() => { const fav = favSet.has(r.acc); return (
@@ -350,7 +395,9 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
             <span style={{ width: 15, flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
               {r.kind === 'blaze'
                 ? <Ico n="flame" s={13} c="var(--tb-amber)" />
-                : <Dot c={STATUS[r.status][1]} s={7} />}
+                : isUnifiedLeaf(r)
+                  ? <UnifiedGlyph />
+                  : <Dot c={STATUS[r.status][1]} s={7} />}
             </span>
             {/* Flat (sorted) rows are standalone trails shown out of their folder, so they read by
                 TITLE + a platform glyph — the filename alone is meaningless once flattened. Folder-mode
@@ -359,6 +406,7 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
               <React.Fragment>
                 <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{r.name}</span>
                 <span style={{ flex: 1 }} />
+                {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
                 {r.platform && <PlatformGlyph platform={r.platform} s={17} c="var(--text-subtle)" title={r.platform} bare />}
               </React.Fragment>
             ) : (
@@ -366,6 +414,7 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
                 <PathPrefix prefix={r.prefix} />
                 <span className="tb-mono" style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{fileName(r)}</span>
                 <span style={{ flex: 1 }} />
+                {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
               </React.Fragment>
             )}
           </div>
@@ -388,14 +437,22 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
         </div>
         <button className="tb-btn ghost sm" style={{ padding: '3px 9px', fontSize: 11 }} title="Reveal the workspace folder in Finder" onClick={() => TB.revealTrailsRoot()}>Reveal in Finder</button>
       </div>
-      {menu && <TrailRowContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && <TrailRowContextMenu menu={menu} onClose={() => setMenu(null)} roots={roots} />}
     </div>
   );
 }
 
 // Right-click menu for a trail file row: reveal it in Finder, open it in the editor,
 // copy its id/path. Mirrors ToolContextMenu / the trailmap component menu.
-function TrailRowContextMenu({ menu, onClose }) {
+// Absolute path of a trail row from the workspace roots + its relative path — so the native shell
+// can reveal it directly (the daemon's headless reveal is unreliable). null when roots aren't known.
+function absTrailPath(r, roots) {
+  if (!r || !r.path || !roots) return null;
+  const base = (r.rootIdx && r.rootIdx > 0) ? ((roots.extras || [])[r.rootIdx - 1]) : roots.primary;
+  return base ? String(base).replace(/\/+$/, '') + '/' + r.path : null;
+}
+
+function TrailRowContextMenu({ menu, onClose, roots }) {
   useLucide();
   React.useEffect(() => {
     const k = (e) => { if (e.key === 'Escape') onClose(); };
@@ -404,8 +461,14 @@ function TrailRowContextMenu({ menu, onClose }) {
   }, []);
   const r = menu.trail;
   const copy = (s) => { try { navigator.clipboard.writeText(s); } catch (_) {} };
+  // Prefer the native shell's Finder reveal (NSWorkspace) — it has the GUI session the headless daemon
+  // lacks. Fall back to the daemon RPC when not running inside the native shell (e.g. a plain browser).
+  const reveal = () => {
+    const abs = absTrailPath(r, roots);
+    if (!(abs && window.trailblazeRevealPath && window.trailblazeRevealPath(abs))) TB.revealTrail(r.id);
+  };
   const items = [
-    { ico: 'folder-open', label: 'Open in Finder', fn: () => { onClose(); TB.revealTrail(r.id); } },
+    { ico: 'folder-open', label: 'Open in Finder', fn: () => { onClose(); reveal(); } },
     { ico: 'pencil', label: 'Open in editor', fn: () => { onClose(); TB.openTrailInEditor(r.id); } },
     { sep: true },
     { ico: 'copy', label: 'Copy trail id', fn: () => { onClose(); copy(r.id); } },

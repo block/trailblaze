@@ -136,14 +136,21 @@ internal fun assetPathFor(trailmapId: String, toolsRelativeStem: String): String
 /**
  * Returns the in-process scripted-tool `.ts` files in [toolsDir] — a `<name>.ts` qualifies when
  * either a sibling `<name>.yaml`'s runtime isn't `subprocess`, or (descriptor-less) the `.ts`
- * declares the tool inline via `trailblaze.tool<…>(…)` without pinning `runtime: subprocess`.
- * Excludes `.test.ts`, `.d.ts`, and helper modules that never call `trailblaze.tool`. Sorted for
- * deterministic task registration order.
+ * declares the tool inline via `trailblaze.tool<…>(…)`. Excludes `.test.ts`, `.d.ts`, and helper
+ * modules that never call `trailblaze.tool`. Sorted for deterministic task registration order.
+ *
+ * A descriptor-less `.ts` is ALWAYS in-process: the inline `trailblaze.tool(...)` spec
+ * (`TrailblazeTypedToolSpec`) has no `runtime` field, so subprocess tools are declared solely via a
+ * YAML sidecar's `runtime: subprocess` — caught by the sibling-yaml branch. Discovery must not try
+ * to infer subprocess-ness from `.ts` text: `runtime: subprocess` only ever appears there in a
+ * comment or an error-message string (e.g. a tool's doc comment documents that it does NOT pin it),
+ * and grepping for it dropped that tool's on-device bundle — it stayed advertised in the target
+ * config but had no `.bundle.js` in the APK, so dispatch failed with "Unknown tool …
+ * not registered".
  */
 internal fun inProcessToolSources(toolsDir: File): List<File> {
   val subprocessRuntimeYaml = Regex("(?m)^\\s*runtime:\\s*subprocess\\s*$")
   val toolExport = Regex("""trailblaze\s*\.\s*tool\s*[<(]""")
-  val subprocessRuntimeTs = Regex("""runtime\s*:\s*["']?subprocess""")
   if (!toolsDir.isDirectory) return emptyList()
   // Recursive so `tools/<subdir>/`-organized tools are bundled too, preserving subpath to match
   // the on-device resolver (ScriptedToolNameDiscoverer.bundleResourcePathForScript).
@@ -159,8 +166,7 @@ internal fun inProcessToolSources(toolsDir: File): List<File> {
           if (yaml.isFile) {
             !subprocessRuntimeYaml.containsMatchIn(yaml.readText())
           } else {
-            val text = f.readText()
-            toolExport.containsMatchIn(text) && !subprocessRuntimeTs.containsMatchIn(text)
+            toolExport.containsMatchIn(f.readText())
           }
         }
     }

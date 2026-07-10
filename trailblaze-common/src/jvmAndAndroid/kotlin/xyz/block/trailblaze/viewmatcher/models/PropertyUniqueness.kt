@@ -70,7 +70,8 @@ data class PropertyUniqueness(
  * - Supports both regex match and exact pattern match
  */
 private fun matchesText(node: ViewHierarchyTreeNode, targetText: String): Boolean {
-  // Maestro uses IGNORE_CASE, DOT_MATCHES_ALL, MULTILINE options
+  // Maestro uses IGNORE_CASE, DOT_MATCHES_ALL, MULTILINE options — same set as the vendored
+  // Orchestra.REGEX_OPTIONS and TrailblazeNodeSelectorResolver.MAESTRO_REGEX_OPTIONS; keep in sync.
   val regex = try {
     targetText.toRegex(setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE))
   } catch (e: Exception) {
@@ -117,7 +118,8 @@ private fun matchesId(node: ViewHierarchyTreeNode, targetId: String): Boolean {
   val nodeId = node.resourceId
   if (nodeId.isNullOrBlank()) return false
 
-  // Maestro uses IGNORE_CASE, DOT_MATCHES_ALL, MULTILINE options
+  // Maestro uses IGNORE_CASE, DOT_MATCHES_ALL, MULTILINE options — same set as the vendored
+  // Orchestra.REGEX_OPTIONS and TrailblazeNodeSelectorResolver.MAESTRO_REGEX_OPTIONS; keep in sync.
   val regex = try {
     targetId.toRegex(setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE))
   } catch (e: Exception) {

@@ -24,9 +24,26 @@ class TrailblazeSettingsRepo(
   val settingsFile: File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}"),
   initialConfig: SavedTrailblazeAppConfig,
   private val defaultHostAppTarget: TrailblazeHostAppTarget,
-  private val allTargetApps: () -> Set<TrailblazeHostAppTarget>,
+  allTargetApps: () -> Set<TrailblazeHostAppTarget>,
   private val supportedDriverTypes: Set<TrailblazeDriverType>,
 ) {
+  @Volatile
+  private var allTargetApps: () -> Set<TrailblazeHostAppTarget> = allTargetApps
+
+  /**
+   * Re-points target resolution ([getCurrentSelectedTargetApp]) at a live provider.
+   *
+   * The repo is constructed before [TrailblazeDeviceManager] (it feeds the desktop config's
+   * startup discovery), so the constructor lambda necessarily reads the startup-frozen
+   * `availableAppTargets` lazy. The manager calls this at its own construction to swap in its
+   * live, additively-updatable set — otherwise a target appended by
+   * `TrailblazeDeviceManager.registerNewTarget` would be selectable but resolve to null here,
+   * dropping it from `GetTargetApps`, recording tool discovery, and run dispatch.
+   */
+  fun bindLiveTargetProvider(provider: () -> Set<TrailblazeHostAppTarget>) {
+    allTargetApps = provider
+  }
+
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
 
   fun saveConfig(trailblazeSettings: SavedTrailblazeAppConfig) {

@@ -1456,6 +1456,8 @@ class Orchestra(
 
   companion object {
 
+    // Mirrored by TrailblazeNodeSelectorResolver.MAESTRO_REGEX_OPTIONS (MatchDialect.MAESTRO in
+    // trailblaze-models) and PropertyUniqueness (trailblaze-common) — keep the three in sync.
     val REGEX_OPTIONS = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE)
 
     private const val MAX_ERASE_CHARACTERS = 50

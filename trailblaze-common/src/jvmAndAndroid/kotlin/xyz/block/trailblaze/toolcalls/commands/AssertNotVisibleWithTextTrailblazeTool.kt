@@ -47,11 +47,36 @@ data class AssertNotVisibleWithTextTrailblazeTool(
   val enabled: Boolean? = null,
   val selected: Boolean? = null,
 ) : MapsToMaestroCommands() {
+
+  companion object {
+    /**
+     * A negative assertion can't be validated at recording time — the element isn't on screen,
+     * so the LLM guesses its casing, and a wrong guess passes vacuously (the assertion succeeds
+     * whether the pattern is right or wrong). Neutralize that: match [text] case-insensitively,
+     * honoring BOTH its regex reading and its escaped-literal reading, so screen text with regex
+     * metacharacters ("$5.00") and deliberate regexes (".*debit 1582.*") both keep working.
+     * A leading `(?-i)` in [text] restores case-sensitivity.
+     */
+    internal fun toLenientPattern(text: String): String {
+      val compilesAsRegex = try {
+        Regex(text)
+        true
+      } catch (_: IllegalArgumentException) {
+        false
+      }
+      return if (compilesAsRegex) {
+        "(?i)(?:$text|${Regex.escape(text)})"
+      } else {
+        "(?i)${Regex.escape(text)}"
+      }
+    }
+  }
+
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     AssertConditionCommand(
       condition = Condition(
         notVisible = ElementSelector(
-          textRegex = memory.interpolateVariables(text),
+          textRegex = toLenientPattern(memory.interpolateVariables(text)),
           idRegex = id,
           index = if (index == 0) null else index.toString(),
           enabled = enabled,
@@ -71,7 +96,7 @@ data class AssertNotVisibleWithTextTrailblazeTool(
 
     val agent = toolExecutionContext.maestroTrailblazeAgent
     if (agent != null) {
-      val interpolatedText = toolExecutionContext.memory.interpolateVariables(text)
+      val interpolatedText = toLenientPattern(toolExecutionContext.memory.interpolateVariables(text))
       val convertedIndex = if (index == 0) null else index
       val platform = toolExecutionContext.trailblazeDeviceInfo.platform
       val driverMatch: DriverNodeMatch = when (platform) {

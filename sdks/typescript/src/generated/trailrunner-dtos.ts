@@ -202,6 +202,16 @@ export interface LlmSettingsDto {
   availableAgents?: AgentOptionDto[];
 }
 
+export interface MigrateFolderResponse {
+  success: boolean;
+  outputName?: string | null;
+  steps?: number;
+  driftCount?: number;
+  drift?: string[];
+  removed?: string[];
+  error?: string | null;
+}
+
 export interface NewComponentRequest {
   trailmap: string;
   kind: string;
@@ -301,6 +311,7 @@ export interface SaveTargetConfigResponse {
   error?: string | null;
   created?: boolean;
   warning?: string | null;
+  registeredLive?: boolean;
 }
 
 export interface SaveTargetPlatformPatch {
@@ -492,6 +503,8 @@ export interface TrailIndexEntry {
   folder: string;
   rootIdx?: number;
   kind?: string;
+  format?: string;
+  configId?: string | null;
 }
 
 export interface TrailIndexResponse {

@@ -2,9 +2,10 @@ package xyz.block.trailblaze.yaml
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
-import org.junit.Assert.assertThrows
+import assertk.assertions.isNotNull
 import org.junit.Test
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
@@ -209,28 +210,28 @@ class PromptSerializationTest {
   }
 
   @Test
-  fun emptyRecordingThrowsAtConstruction() {
-    // A recording with zero tools is malformed — it would silently skip the step at replay
-    // (ghost-pass). The init block rejects it; "no recording" must be expressed by omitting
-    // the `recording:` block entirely so replay falls through to AI.
-    val ex = assertThrows(IllegalArgumentException::class.java) {
-      ToolRecording(tools = emptyList())
-    }
-    assertThat(ex.message!!).contains("non-empty tools")
+  fun emptyToolRecordingIsLegalAndDenotesADeterministicNoOp() {
+    // A `ToolRecording` with zero tools is a deliberate, hand-authored declaration — "this step
+    // needs zero tools on this device" — distinct from `recording == null` ("not recorded, fall
+    // through to AI"). See ToolRecording's 3-state doc.
+    val recording = ToolRecording(tools = emptyList())
+    assertThat(recording.tools).isEmpty()
   }
 
   @Test
-  fun emptyRecordingYamlFailsToParse() {
-    // Malformed YAML with an empty tools list must throw, not silently produce a no-op step.
-    val malformed = """
+  fun emptyRecordingYamlParsesToADeterministicNoOpStep() {
+    // `recording: { tools: [] }` decodes to a non-null, zero-tool recording — a declared no-op —
+    // rather than throwing or silently falling through to AI.
+    val yaml = """
 - prompts:
-  - step: Should not parse
+  - step: Nothing needed here
     recording:
       tools: []
     """.trimIndent()
-    val ex = assertThrows(Exception::class.java) {
-      trailblazeYaml.decodeTrail(malformed)
-    }
-    assertThat(ex.message != null || ex.cause != null).isEqualTo(true)
+    val step = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single()
+    assertThat(step.recording).isNotNull()
+    assertThat(step.recording!!.tools).isEmpty()
   }
 }

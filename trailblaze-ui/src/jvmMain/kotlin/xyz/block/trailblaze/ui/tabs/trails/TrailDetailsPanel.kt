@@ -61,14 +61,37 @@ fun TrailDetailsPanel(
           // File name
           DetailRow(label = "File", value = trail.fileName)
 
-          // Platform
-          trail.platform?.let {
-            DetailRow(label = "Platform", value = it.toString())
-          }
+          // Prefer content detection (the cache line-scans the file), matching the Trails browser,
+          // so a unified trail authored under a non-`trail.yaml` name is still recognized; fall back
+          // to the filename for a bare `trail.yaml` whose content couldn't be read.
+          val isUnified = TrailConfigCache.isUnified(trail.absolutePath) || trail.isUnifiedTrailFile
+          if (isUnified) {
+            // A unified trail encodes no classifier in its filename — its coverage is derived from
+            // the file content (recordings + config.devices), content-detected via the cache.
+            DetailRow(label = "Type", value = "Unified single-file trail")
 
-          // Classifiers
-          if (trail.classifiers.isNotEmpty()) {
-            DetailRow(label = "Classifiers", value = trail.classifiers.joinToString(", "))
+            val targets = TrailConfigCache.getUnifiedClassifiers(trail.absolutePath)
+            if (targets.isNotEmpty()) {
+              DetailRow(label = "Targets", value = targets.sorted().joinToString(", "))
+            }
+
+            val drivers = TrailConfigCache.getUnifiedDevices(trail.absolutePath)
+            if (drivers.isNotEmpty()) {
+              DetailRow(
+                label = "Drivers",
+                value = drivers.toSortedMap().entries.joinToString(", ") { "${it.key} → ${it.value}" },
+              )
+            }
+          } else {
+            // Platform
+            trail.platform?.let {
+              DetailRow(label = "Platform", value = it.toString())
+            }
+
+            // Classifiers
+            if (trail.classifiers.isNotEmpty()) {
+              DetailRow(label = "Classifiers", value = trail.classifiers.joinToString(", "))
+            }
           }
 
           // Path

@@ -324,6 +324,46 @@ class TrailRunnerIntegrationTest {
     )
   }
 
+  // ── POST /api/folder/migrate-unified — status-code mapping the modal relies on ──
+
+  @Test
+  fun `migrate-unified without id returns 400`() = withTrailRunner {
+    val response = client.post("/trailrunner/api/folder/migrate-unified")
+    assertEquals(HttpStatusCode.BadRequest, response.status)
+  }
+
+  @Test
+  fun `migrate-unified for an unknown folder returns 404`() = withTrailRunner {
+    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/nope/missing")
+    assertEquals(HttpStatusCode.NotFound, response.status)
+  }
+
+  @Test
+  fun `migrate-unified maps a migrator refusal to 400 without touching files`() = withTrailRunner {
+    // A folder of already-unified trails is the refusal case the folder back-arrow makes reachable.
+    val file = File(trailsDir, "flows/login.trail.yaml")
+    file.parentFile?.mkdirs()
+    file.writeText("config: {id: login}\ntrail:\n  - step: Log in\n")
+
+    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/flows")
+
+    assertEquals(HttpStatusCode.BadRequest, response.status)
+    assertTrue(file.isFile, "refusal must not delete or rewrite inputs")
+  }
+
+  @Test
+  fun `migrate-unified succeeds for a v1 bundle and reports the written file`() = withTrailRunner {
+    writeTrail("case_1/android-phone.trail.yaml")
+
+    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/case_1")
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val body = response.bodyAsText()
+    assertTrue(body.contains("case_1.trail.yaml"), "expected outputName in body: ${body.take(300)}")
+    assertTrue(File(trailsDir, "case_1/case_1.trail.yaml").isFile)
+    assertTrue(!File(trailsDir, "case_1/android-phone.trail.yaml").exists(), "input should be consumed")
+  }
+
   @Test
   fun `GET Trail Runner api trails body contains fixture trail`() = withTrailRunner {
     writeTrail("smoke/login.trail.yaml", title = "Login smoke")
@@ -441,6 +481,74 @@ class TrailRunnerIntegrationTest {
 
     assertEquals(HttpStatusCode.OK, response.status)
     assertTrue(response.bodyAsText().contains("Cold boot"))
+  }
+
+  @Test
+  fun `bare unified trail_yaml is listed by api trails and resolvable by api trail id`() {
+    // The migrated unified shape is a BARE `trail.yaml` (no `<device>` prefix), so it does NOT end
+    // in `.trail.yaml`. Drive the two routes the browser hits: the index must list it with the
+    // directory-derived id `.../trail`, and the detail route must resolve that id back to the file —
+    // the full walk → build → resolveTrailFile round-trip over HTTP, not just the unit-level resolver.
+    val caseDir = File(trailsDir, "regression/case_5374124").also { it.mkdirs() }
+    File(caseDir, "trail.yaml").writeText(
+      """
+      config:
+        id: regression/case_5374124
+        title: Cold boot flow
+        target: myapp
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+
+    withTrailRunner {
+      val index = client.get("/trailrunner/api/trails").bodyAsText()
+      assertTrue(
+        index.contains("\"0/regression/case_5374124/trail\""),
+        "index should list the bare trail id: ${index.take(500)}",
+      )
+      assertTrue(index.contains("Cold boot flow"), "index should carry the config title: ${index.take(500)}")
+
+      val detail = client.get("/trailrunner/api/trail/0/regression/case_5374124/trail")
+      assertEquals(HttpStatusCode.OK, detail.status)
+      assertTrue(
+        detail.bodyAsText().contains("Open the app"),
+        "detail route should resolve the bare file and render its step",
+      )
+    }
+  }
+
+  @Test
+  fun `api trails edited surfaces a modified bare trail_yaml`() {
+    // `buildEditedTrailsResponse` runs `git status --porcelain` under the workspace and keeps only
+    // trail-shaped basenames. Guards that a migrated bare `trail.yaml` shows up under edited-only
+    // filtering — the previous `endsWith(".trail.yaml")` filter dropped it (bare != `.trail.yaml`).
+    val caseDir = File(trailsDir, "regression/case_5374124").also { it.mkdirs() }
+    val bare = File(caseDir, "trail.yaml")
+    bare.writeText("config:\n  id: regression/case_5374124\ntrail:\n  - step: Open the app\n")
+
+    fun git(vararg args: String) {
+      val p = ProcessBuilder(listOf("git", "-C", trailsDir.absolutePath) + args)
+        .redirectErrorStream(true)
+        .start()
+      val output = p.inputStream.bufferedReader().readText()
+      check(p.waitFor() == 0) { "git ${args.joinToString(" ")} failed: $output" }
+    }
+    git("init", "-q")
+    git("add", "-A")
+    git("-c", "user.email=t@t.t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed")
+    // Modify the now-committed bare trail so `git status --porcelain` reports it as ` M`.
+    bare.appendText("  - step: And another\n")
+
+    withTrailRunner {
+      val response = client.get("/trailrunner/api/trails/edited")
+      assertEquals(HttpStatusCode.OK, response.status)
+      val body = response.bodyAsText()
+      assertTrue(
+        body.contains("regression/case_5374124/trail.yaml"),
+        "edited list should include the modified bare trail: $body",
+      )
+    }
   }
 
   @Test

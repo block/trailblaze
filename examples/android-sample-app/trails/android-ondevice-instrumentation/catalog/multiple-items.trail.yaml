@@ -1,0 +1,72 @@
+config:
+  id: sample-app/catalog/multiple-items
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: REINSTALL
+
+trail:
+  - step: "Navigate to the \"Catalog\" tab"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Catalog
+
+  - verify: "\"Coffee\", \"Coffee Latte\", and \"Coffee Americano\" are all visible in the list"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: Verify "Coffee" is visible in the catalog list.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Coffee
+        - assertVisibleBySelector:
+            reason: Verify "Coffee Latte" is visible in the catalog list.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Coffee Latte
+        - assertVisibleBySelector:
+            reason: Verify "Coffee Americano" is visible in the catalog list.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Coffee Americano
+
+  - step: "Tap on \"Coffee Americano\" specifically"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: Tap precisely on the "Coffee Americano" item to avoid ambiguity with other Coffee items.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Coffee Americano
+
+  - verify: "A dialog showing \"Coffee Americano\" is visible"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: Verify the item detail dialog is showing "Coffee Americano".
+            nodeSelector:
+              androidAccessibility:
+                textRegex: Coffee Americano
+
+  - step: "Tap \"Dismiss\" to close the dialog"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: Tap "Dismiss" to close the detail dialog.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Dismiss

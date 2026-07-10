@@ -2,6 +2,7 @@ package xyz.block.trailblaze.api
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -796,5 +797,143 @@ class TrailblazeNodeSelectorMinimizerTest : TrailblazeNodeSelectorGeneratorTestB
     val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
     assertEquals("Estimates", match.textRegex)
     assertNull(match.classNameRegex)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prose-text de-escaping: metacharacter-bearing literals emit bare (readable)
+  // when the bare form still resolves uniquely, thanks to the resolver's
+  // regex->literal fallback. Ambiguous cases keep their `\\Q...\\E` escaping.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `currency literal is emitted bare, not backslash-escaped`() {
+    // "$15.00" is escaped to `\\Q$15.00\\E` at generation time ($ and . are
+    // metacharacters). The resolver matches the bare string via its literal fallback,
+    // and it resolves uniquely here, so the selector should carry the readable bare form.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "$15.00"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "$8.00"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals("$15.00", match.textRegex)
+  }
+
+  @Test
+  fun `ambiguous literal keeps its escaped form when the bare regex would over-match a sibling`() {
+    // "a.b" is escaped to `\\Qa.b\\E` (a pure literal, no count generalization). Bare "a.b"
+    // as a regex would also match the sibling "axb" (the dot is a wildcard), so
+    // de-escaping would make the selector ambiguous. The uniqueness gate must reject the
+    // bare form and keep the escaped literal.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "a.b"))
+    val sibling = node(detail = DriverNodeDetail.AndroidAccessibility(text = "axb"))
+    val root = node(children = listOf(target, sibling))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals("\\Qa.b\\E", match.textRegex)
+  }
+
+  @Test
+  fun `content-description literal is emitted bare, not backslash-escaped`() {
+    // De-escaping isn't textRegex-only: an icon button identified by its
+    // contentDescription gets the same readable treatment when it resolves uniquely.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(contentDescription = "$5.00"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(contentDescription = "Menu"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals("$5.00", match.contentDescriptionRegex)
+  }
+
+  @Test
+  fun `a generalized run-variable regex is never turned into a bare literal`() {
+    // "Inbox 5" carries a trailing count, so the generator emits a real regex that
+    // generalizes the digits (surviving a count change at replay). That is NOT a
+    // `\Q…\E` literal, so the de-escape pass must leave it exactly as generated --
+    // corrupting it into the bare "Inbox 5" would wrongly pin the count.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Inbox 5"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Sent"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    val textRegex = assertNotNull(match.textRegex)
+    assertTrue(
+      textRegex.contains("\\d"),
+      "expected a generalized digit regex, got: $textRegex",
+    )
+    assertNotEquals("Inbox 5", textRegex, "a run-variable regex must not collapse to a bare literal")
+  }
+
+  @Test
+  fun `de-escaping covers every driver's prose-text fields, not just android`() {
+    // Guards the hand-written per-driver de-escape lists against a copy-paste slip: a
+    // metacharacter literal ("$15.00") must resolve uniquely and emit bare on every
+    // driver, never `\\Q$15.00\\E`.
+    nextId = 1L
+    fun assertBare(
+      target: TrailblazeNode,
+      root: TrailblazeNode,
+      field: (TrailblazeNodeSelector) -> String?,
+    ) {
+      assertEquals("$15.00", field(assertUniqueMatch(root, target)))
+    }
+
+    val am = nodeOf(DriverNodeDetail.AndroidMaestro(text = "$15.00"))
+    val amRoot = nodeOf(
+      DriverNodeDetail.AndroidMaestro(),
+      children = listOf(am, nodeOf(DriverNodeDetail.AndroidMaestro(text = "Total"))),
+    )
+    assertBare(am, amRoot) { it.androidMaestro?.textRegex }
+
+    val im = nodeOf(DriverNodeDetail.IosMaestro(accessibilityText = "$15.00"))
+    val imRoot = nodeOf(
+      DriverNodeDetail.IosMaestro(),
+      children = listOf(im, nodeOf(DriverNodeDetail.IosMaestro(accessibilityText = "Total"))),
+    )
+    assertBare(im, imRoot) { it.iosMaestro?.accessibilityTextRegex }
+
+    val ax = nodeOf(DriverNodeDetail.IosAxe(label = "$15.00"))
+    val axRoot = nodeOf(
+      DriverNodeDetail.IosAxe(),
+      children = listOf(ax, nodeOf(DriverNodeDetail.IosAxe(label = "Total"))),
+    )
+    assertBare(ax, axRoot) { it.iosAxe?.labelRegex }
+
+    // Web's ariaName strategy only fires alongside an ariaRole, so set both.
+    val web = nodeOf(DriverNodeDetail.Web(ariaRole = "text", ariaName = "$15.00"))
+    val webRoot = nodeOf(
+      DriverNodeDetail.Web(),
+      children = listOf(web, nodeOf(DriverNodeDetail.Web(ariaRole = "text", ariaName = "Total"))),
+    )
+    assertBare(web, webRoot) { it.web?.ariaNameRegex }
+
+    val compose = nodeOf(DriverNodeDetail.Compose(text = "$15.00"))
+    val composeRoot = nodeOf(
+      DriverNodeDetail.Compose(),
+      children = listOf(compose, nodeOf(DriverNodeDetail.Compose(text = "Total"))),
+    )
+    assertBare(compose, composeRoot) { it.compose?.textRegex }
+  }
+
+  @Test
+  fun `invalid-regex literal de-escapes via the compile-failure fallback`() {
+    // "C++" escapes to `\\QC++\\E`; bare "C++" is an INVALID regex (`++` has no target), so the
+    // resolver's compile-failure branch matches it by literal equality. Exercises that
+    // catch->literal path, distinct from the valid-but-unmatchable currency path.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "C++"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Java"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertEquals("C++", match.textRegex)
   }
 }

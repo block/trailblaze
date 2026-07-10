@@ -14,7 +14,12 @@ internal fun iosMaestroStrategies(
   parentMap: Map<Long, TrailblazeNode>,
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
   "Resource ID" to {
-    detail.resourceId?.let { rid ->
+    // Prefer the node's own accessibilityIdentifier; for a clickable control whose id lives on a
+    // lone icon child (e.g. an "ellipsis-horizontal" overflow button) fall back to that hoisted id.
+    // In the split case the id resolves to the child node — which taps the same point — so this is
+    // only accepted when it uniquely round-trips; otherwise the generator falls through to a
+    // label/spatial selector. See [effectiveIosResourceId].
+    effectiveIosResourceId(target)?.let { rid ->
       selectorWith(DriverNodeMatch.IosMaestro(resourceIdRegex = escapeForIdentifier(rid)))
     }
   },

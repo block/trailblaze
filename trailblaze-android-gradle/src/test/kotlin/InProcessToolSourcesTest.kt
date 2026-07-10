@@ -48,14 +48,29 @@ class InProcessToolSourcesTest {
     assertEquals(emptyList(), discoveredNames())
   }
 
-  @Test fun `excludes a subprocess tool whether gated by yaml or inline spec`() {
+  @Test fun `excludes a subprocess tool gated by its yaml sidecar`() {
+    // Subprocess is declared ONLY via the YAML sidecar's `runtime: subprocess` — the inline
+    // `trailblaze.tool(...)` spec (`TrailblazeTypedToolSpec`) has no `runtime` field, so a
+    // descriptor-less `.ts` is always in-process. This branch is the sole subprocess gate.
     write("subprocessYaml.ts", toolBody)
     write("subprocessYaml.yaml", "name: subprocessYaml\nruntime: subprocess\n")
-    write(
-      "subprocessInline.ts",
-      "export const x = trailblaze.tool<Foo>({ runtime: \"subprocess\" }, async () => \"ok\")\n",
-    )
     assertEquals(emptyList(), discoveredNames())
+  }
+
+  @Test fun `includes a descriptor-less tool whose comment mentions runtime subprocess`() {
+    // Regression: discovery used to grep the `.ts` text for `runtime: subprocess` to gate out
+    // subprocess tools. But a descriptor-less `.ts` can't declare that (the inline spec has no
+    // `runtime` field), so the phrase only ever appeared in a comment — here, one explaining the
+    // tool does NOT pin it. That false match dropped the tool's on-device bundle: advertised in the
+    // target config but no `.bundle.js` in the APK, failing at runtime with "Unknown tool … not
+    // registered". A descriptor-less tool's comments must not gate it out.
+    write(
+      "commentMentionsSubprocess.ts",
+      "// Bundled on-device because it does NOT pin `runtime: subprocess`.\n" +
+        "/* A sibling with `runtime: subprocess` would be host-only. */\n" +
+        toolBody,
+    )
+    assertEquals(listOf("commentMentionsSubprocess.ts"), discoveredNames())
   }
 
   @Test fun `excludes test fixtures and type declarations`() {

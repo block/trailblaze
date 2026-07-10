@@ -1,0 +1,81 @@
+config:
+  id: sample-app/forms/text-input
+  target: xyz.block.trailblaze.examples.sampleapp
+  devices:
+    android-phone: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android-phone:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: REINSTALL
+
+trail:
+  - step: "Navigate to the \"Forms\" tab"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: 'The ''Forms'' tab (nodeId: 84) is clearly labeled and is part of the bottom navigation bar, which is standard for switching between app sections.'
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Forms
+
+  - step: "Tap the \"Name\" field and type \"Jane Doe\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The nodeId 53 represents the 'Name' EditText field, which needs to be focused to type 'Jane Doe'.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Name
+        - inputText:
+            text: Jane Doe
+
+  - step: "Tap the \"Email\" field and type \"jane@example.com\""
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: To focus the 'Email' field so text can be entered into it.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Email
+        - inputText:
+            text: jane@example.com
+
+  - step: "Tap the \"Submit\" button"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The 'Submit' button corresponds to the TextView 'Submit' within a clickable parent view (nodeId 58). Tapping this parent view should activate the button.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Submit
+
+  - step: "Verify \"Jane Doe\" and \"jane@example.com\" appear in the submission result"
+    recording:
+      android-phone:
+        - assertVisibleBySelector:
+            reason: 'It displays both ''Name: Jane Doe'' and ''Email: jane@example.com'' in the submission result section.'
+            nodeSelector:
+              androidAccessibility:
+                textRegex: |-
+                  Name: Jane Doe
+                  Email: jane@example.com
+
+  - step: "Tap \"Clear All\" and verify \"Jane Doe\" is no longer visible"
+    recording:
+      android-phone:
+        - tapOnElementBySelector:
+            reason: The objective requests to tap "Clear All" to remove submission results associated with Jane Doe.
+            nodeSelector:
+              containsChild:
+                androidAccessibility:
+                  textRegex: Clear All
+        - assertNotVisibleWithText:
+            text: Jane Doe

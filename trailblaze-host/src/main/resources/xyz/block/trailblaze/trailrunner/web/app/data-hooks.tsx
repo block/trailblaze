@@ -71,6 +71,34 @@ function useTools() {
   });
 }
 
+// Session-scoped shared tool catalog for the trail DETAIL view (the Steps tab's cosmetic
+// "open this tool in the catalog" links, and the unified board's tool-arg editor). `getTools()` on
+// the daemon re-runs the whole ToolCatalogBuilder scan (recursive FS walk + a bun subprocess per
+// trailmap), so calling it on EVERY trail switch — which `useTools()` does, because the detail view
+// remounts per trail — saturated the daemon and left the (otherwise cheap) trail-detail fetch hanging,
+// i.e. the "stuck skeleton when moving between trails". This caches the catalog once per session and
+// reuses it across switches; concurrent first-callers share one in-flight request. Invalidated on a
+// workspace change and on tool creation (see `invalidateToolCatalog`). Deliberately NOT the same as
+// `useTools()` — the Tools screen keeps that so its create→`reload()` stays authoritative/fresh.
+let _sharedToolCatalog = null;
+let _sharedToolCatalogInFlight = null;
+function invalidateToolCatalog() {
+  _sharedToolCatalog = null;
+  _sharedToolCatalogInFlight = null;
+}
+if (typeof window !== 'undefined') window.addEventListener('tb:workspace-changed', invalidateToolCatalog);
+function useToolCatalog() {
+  return useFetched(async () => {
+    if (_sharedToolCatalog) return { data: _sharedToolCatalog, mock: false };
+    if (!_sharedToolCatalogInFlight) {
+      _sharedToolCatalogInFlight = Promise.resolve(window.TbRpc.getTools())
+        .then((raw) => { _sharedToolCatalog = raw?.tools ?? []; return _sharedToolCatalog; })
+        .finally(() => { _sharedToolCatalogInFlight = null; });
+    }
+    return { data: await _sharedToolCatalogInFlight, mock: false };
+  });
+}
+
 function useTrailmaps() {
   return useFetched(async () => {
     // Trailmaps come from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
@@ -438,7 +466,7 @@ function useDraftDetail(id) {
 }
 
 Object.assign(window, {
-  useStatus, useFavorites, setFavorite, useTools, useTrailmaps, useToolSource, useScriptedToolParams, useTrails, useSessions,
+  useStatus, useFavorites, setFavorite, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useTrails, useSessions,
   useSessionDetail, useDevices, useTrailDetail, useRunTools, useSessionAnalytics, useSessionEvents, useSessionFiles,
   useDeviceApps, useTrailRoots, useSettings, useIntegrations, useSessionYaml, useTargetAppMap,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,

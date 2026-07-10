@@ -300,11 +300,22 @@ abstract class BaseTrailblazeAgent(
   protected fun nestedToolExecutorFor(
     contextProvider: () -> TrailblazeToolExecutionContext,
   ): suspend (TrailblazeTool) -> TrailblazeToolResult = { nestedTool ->
-    dispatchTools(
-      tools = listOf(nestedTool),
-      context = contextProvider(),
-      elementComparator = NoOpElementComparator,
-    ).result
+    val context = contextProvider()
+    // Mark everything dispatched under this call as a nested `ctx.tools.X()` sub-call so its log is
+    // stamped `isRecordable = false` (see `TrailblazeToolExecutionContext.nestedDispatchDepth` for
+    // the full rationale). The try/finally is load-bearing: it restores the outer level even if the
+    // nested tool THROWS (a throw propagates out of `dispatchTools` uncaught), so a later top-level
+    // tool on this shared context isn't left mis-stamped non-recordable.
+    context.nestedDispatchDepth.incrementAndGet()
+    try {
+      dispatchTools(
+        tools = listOf(nestedTool),
+        context = context,
+        elementComparator = NoOpElementComparator,
+      ).result
+    } finally {
+      context.nestedDispatchDepth.decrementAndGet()
+    }
   }
 
   /**

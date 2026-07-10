@@ -55,6 +55,166 @@ class TrailIndexBuilderTest {
   }
 
   @Test
+  fun `scan classifies on-disk format and carries the declared config id`() {
+    // `format` drives the unified badge + the migrate affordance; `configId` is the trail's
+    // DECLARED config.id (shared by per-platform variants), distinct from the path-derived entry.id.
+    val dir = tmp.newFolder("trails-format-test")
+    File(dir, "legacy.trail.yaml").writeText(v1Trail(id = "demo/login"))
+    File(dir, "single.trail.yaml").writeText(
+      """
+      config:
+        id: demo/unified
+        title: Unified demo
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+
+    val byName = TrailIndexBuilder.scan(dir).associateBy { it.path.substringAfterLast('/') }
+
+    val v1 = byName.getValue("legacy.trail.yaml")
+    assertEquals("v1", v1.format)
+    assertEquals("demo/login", v1.configId)
+    val unified = byName.getValue("single.trail.yaml")
+    assertEquals("unified", unified.format)
+    assertEquals("demo/unified", unified.configId)
+  }
+
+  @Test
+  fun `scan indexes a bare unified trail_yaml with directory-derived id and config title`() {
+    // A migrated unified trail lives as a BARE `trail.yaml` (no `<device>` prefix), so it does
+    // NOT end in `.trail.yaml`. It must still be indexed, taking its identity from the enclosing
+    // directory the way `blaze.yaml` does.
+    val dir = tmp.newFolder("trails")
+    val caseDir = File(dir, "regression/suite_71172/section_946176/case_5374124").also { it.mkdirs() }
+    File(caseDir, "trail.yaml").writeText(
+      """
+      config:
+        id: regression/case_5374124
+        title: Cold boot flow
+        target: myapp
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+
+    val entry = TrailIndexBuilder.scan(dir).single()
+
+    // The id strips only `.yaml` (like `blaze.yaml`), NOT the whole directory, so the browser's
+    // `resolveTrailFile` reconstructs `.../case_5374124/trail.yaml` via its `<id>.yaml` probe.
+    assertEquals("0/regression/suite_71172/section_946176/case_5374124/trail", entry.id)
+    assertEquals("regression/suite_71172/section_946176/case_5374124/trail.yaml", entry.path)
+    assertEquals("Cold boot flow", entry.title)
+    assertEquals("myapp", entry.target)
+    assertEquals("unified", entry.format)
+    assertEquals("regression/case_5374124", entry.configId)
+    assertEquals("trail", entry.kind)
+  }
+
+  @Test
+  fun `a bare unified trail_yaml id round-trips through resolveTrailFile`() {
+    // Guards the P1 contract: the emitted id must resolve back to the on-disk file, because the
+    // browser's detail / save / open / reveal / tool-usage routes all resolve `entry.id` through
+    // `resolveTrailFile`. A directory-only id would 404 (the resolver never probes `.../trail.yaml`).
+    val dir = tmp.newFolder("trails")
+    val caseDir = File(dir, "regression/case_5374124").also { it.mkdirs() }
+    val bare = File(caseDir, "trail.yaml").apply {
+      writeText(
+        """
+        config:
+          id: regression/case_5374124
+        trail:
+          - step: Open the app
+        """.trimIndent(),
+      )
+    }
+
+    val entry = TrailIndexBuilder.scan(dir).single()
+    val resolved = resolveTrailFile(entry.id.split("/"), primary = dir, extras = emptyList())
+
+    assertEquals(bare.canonicalFile, resolved?.second?.canonicalFile)
+  }
+
+  @Test
+  fun `scan indexes a root-level bare unified trail_yaml, deriving title from the scanned root`() {
+    // A bare `trail.yaml` directly in the scanned root has an empty `folder`, so the title falls
+    // back to the on-disk parent directory name and the id is just `0/trail`. Exercises the
+    // `folder.ifEmpty { parentFile?.name }` branch, and confirms the id still round-trips.
+    val dir = tmp.newFolder("cold-boot")
+    val bare = File(dir, "trail.yaml").apply {
+      writeText(
+        """
+        config:
+          id: cold-boot
+        trail:
+          - step: Open the app
+        """.trimIndent(),
+      )
+    }
+
+    val entry = TrailIndexBuilder.scan(dir).single()
+
+    assertEquals("0/trail", entry.id)
+    assertEquals("trail.yaml", entry.path)
+    assertEquals("cold boot", entry.title)
+    assertEquals("unified", entry.format)
+    val resolved = resolveTrailFile(entry.id.split("/"), primary = dir, extras = emptyList())
+    assertEquals(bare.canonicalFile, resolved?.second?.canonicalFile)
+  }
+
+  @Test
+  fun `scan emits separate entries for a bare trail_yaml and a sibling blaze_yaml`() {
+    // Mid-migration a directory can hold both the NL definition (`blaze.yaml`) and the migrated
+    // unified `trail.yaml`. The index surfaces each as its own row with a distinct id and kind — it
+    // does not (yet) suppress the stale blaze entry in favor of the unified one.
+    val root = tmp.newFolder("trails")
+    val caseDir = File(root, "flows/checkout").also { it.mkdirs() }
+    File(caseDir, "blaze.yaml").writeText(
+      """
+      config:
+        id: flows/checkout
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+    File(caseDir, "trail.yaml").writeText(
+      """
+      config:
+        id: flows/checkout
+        title: Checkout
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+
+    val byKind = TrailIndexBuilder.scan(root).associateBy { it.kind }
+
+    assertEquals(2, byKind.size)
+    assertEquals("0/flows/checkout/blaze", byKind.getValue("blaze").id)
+    assertEquals("0/flows/checkout/trail", byKind.getValue("trail").id)
+  }
+
+  @Test
+  fun `scan derives a bare unified trail_yaml title from its directory when config omits title`() {
+    val dir = tmp.newFolder("trails")
+    val caseDir = File(dir, "flows/my-cold-boot").also { it.mkdirs() }
+    File(caseDir, "trail.yaml").writeText(
+      """
+      config:
+        id: flows/my-cold-boot
+      trail:
+        - step: Open the app
+      """.trimIndent(),
+    )
+
+    val entry = TrailIndexBuilder.scan(dir).single()
+
+    assertEquals("my cold boot", entry.title)
+    assertEquals("0/flows/my-cold-boot/trail", entry.id)
+    assertEquals("unified", entry.format)
+  }
+
+  @Test
   fun `scan derives id as 0-slash-relative-path-without-trail-yaml-suffix`() {
     val dir = tmp.newFolder("trails-id-test")
     val sub = File(dir, "myapp/cold-boot").also { it.mkdirs() }

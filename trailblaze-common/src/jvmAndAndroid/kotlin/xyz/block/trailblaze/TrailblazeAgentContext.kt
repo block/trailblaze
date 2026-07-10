@@ -43,10 +43,22 @@ fun TrailblazeAgentContext.logToolExecution(
   dispatchedHostSide: Boolean = false,
 ) {
   // If the tool stamped an override (e.g. TapOnPointTrailblazeTool upgrading to
-  // TapOnTrailblazeTool), record EVERYTHING from the override — instance, toolName, and
-  // isRecordable must all agree, since downstream recording code keys serialization by
-  // toolName while encoding the instance. Mixing them produces a type/serializer mismatch.
+  // TapOnTrailblazeTool), take the recorded instance AND toolName from the override together:
+  // downstream recording code keys serialization by toolName while encoding the instance, so
+  // mixing an override's instance with the original's toolName produces a type/serializer
+  // mismatch. `isRecordable` is NOT read from the override here — it's computed separately just
+  // below (from the override's annotation, unless a nested dispatch forces it false).
   val recordedTool: TrailblazeTool = context.recordedToolOverride ?: tool
+  // A nested `ctx.tools.X()` sub-call is never recordable on its own — only the outermost parent
+  // call is the replayable step. See `TrailblazeToolExecutionContext.nestedDispatchDepth` for the
+  // full rationale (scope, N-deep counter, parallel-callback safety). The log is still emitted; only
+  // its recordability changes. `TRAILBLAZE_DISABLE_NESTED_DISPATCH_RECORDING_FILTER` reverts to
+  // annotation-only recordability (the generator's `dropNestedToolCalls` heuristic still applies).
+  val isRecordable = if (context.nestedDispatchDepth.get() > 0 && !isNestedDispatchRecordingFilterDisabled()) {
+    false
+  } else {
+    recordedTool.getIsRecordableFromAnnotation()
+  }
   val toolLog =
     TrailblazeLog.TrailblazeToolLog(
       trailblazeTool = recordedTool.toLogPayload(),
@@ -58,7 +70,7 @@ fun TrailblazeAgentContext.logToolExecution(
       timestamp = timeBeforeExecution,
       traceId = context.traceId,
       session = sessionProvider.invoke().sessionId,
-      isRecordable = recordedTool.getIsRecordableFromAnnotation(),
+      isRecordable = isRecordable,
       isVerification = recordedTool.isVerificationToolInstance(),
       dispatchedHostSide = dispatchedHostSide,
     )
@@ -72,6 +84,19 @@ fun TrailblazeAgentContext.logToolExecution(
 
   val session = sessionProvider.invoke()
   trailblazeLogger.log(session, toolLog)
+}
+
+/**
+ * Kill-switch for the nested-dispatch recording filter: forces `isRecordable` back to the tool's
+ * annotation value even inside a nested `ctx.tools.*` dispatch. Read per call so it flips on a
+ * running daemon. Degrades gracefully — the generator's `dropNestedToolCalls` span heuristic still
+ * drops most nested internals — so it's a safe one-line revert if the depth filter ever mis-marks a
+ * tool in the field. `1` or `true` (case-insensitive) disables. Mirrors the env-read style of
+ * `TRAILBLAZE_DISABLE_BATCHED_TOOL_EXECUTION`.
+ */
+private fun isNestedDispatchRecordingFilterDisabled(): Boolean {
+  val raw = System.getenv("TRAILBLAZE_DISABLE_NESTED_DISPATCH_RECORDING_FILTER") ?: return false
+  return raw == "1" || raw.equals("true", ignoreCase = true)
 }
 
 fun TrailblazeAgentContext.logDelegatingTool(
@@ -98,6 +123,14 @@ fun TrailblazeAgentContext.logDelegatingTool(
  * [TrailblazeToolExecutionContext]) and dispatch arbitrary [TrailblazeTool]s — Compose's RPC
  * driver fits both shapes. Encapsulates the [toLogPayload] conversion so call sites work with
  * the original tool instance and don't have to know the persisted-log shape.
+ *
+ * NOTE: with no context, this overload cannot read [TrailblazeToolExecutionContext.nestedDispatchDepth],
+ * so it does NOT stamp nested `ctx.tools.*` internals non-recordable. Its callers — Compose RPC
+ * (which also wires a `nestedToolExecutor` that deliberately doesn't bump depth) and the
+ * `HostOnDeviceRpcTrailblazeAgent` catch-all — therefore still rely on the generator's
+ * `dropNestedToolCalls` span heuristic to keep composite internals out of recordings. The
+ * deterministic depth filter covers the Maestro/Playwright drivers that route through the
+ * context-carrying overload above.
  */
 fun TrailblazeAgentContext.logToolExecution(
   tool: TrailblazeTool,
