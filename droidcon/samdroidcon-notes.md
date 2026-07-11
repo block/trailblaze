@@ -176,6 +176,25 @@ Continuity with past talks:
   put in a fix or a new version, and continue. Block mostly tests **binary builds**, but
   still traces issues back to source and finds the commits that caused them.
 
+## Core points round 5 (2026-07-11)
+
+- **Not a test — a user journey / job-to-be-done.** The NL is "the thing that should be
+  possible that we need to ensure is possible." It *materializes* as a test. Today each
+  platform buries its own implementation deep in its codebase — you can never connect
+  "this iOS test IS this Android test" without some mapping. A trail + per-platform
+  recordings = the materialization of the NL succeeding → **unified validation of a user
+  journey**. Focus shifts to what the user should experience.
+- **Recordings are disposable; the journey is not.** Sourced in git, you can drop the
+  recordings for one platform (or all) and re-materialize them — the LLM has the past
+  recording + all its context to do so.
+- **Archived runs = "the last hike down that trail."** A trail alone loses the deep
+  execution context (hierarchies, logs, network, analytics). In CI every run's zip is
+  archived — at any point, pull a test's **latest successful run** for diagnostics: all the
+  pictures and logs from the last time somebody went down that trail. The trail = the steps
+  to follow; along the way you might find an overflowing creek and route around it
+  (self-heal).
+- **Sam asked for a test-lifecycle diagram** in the deck.
+
 ## Answers locked in (2026-07-11)
 
 - **Talk ethos:** developer conferences are about sharing technical thought process and

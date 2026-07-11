@@ -218,6 +218,29 @@ but a human approves before commit. Agent-authored, human-approved.
 This is the answer to "do you just trust the AI?"
 -->
 
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+
+# The trail lifecycle
+
+```mermaid {scale: 0.8}
+flowchart LR
+  NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail<br/>+ recordings"]
+  REC -->|"human accepts"| GIT[("git")]
+  GIT -->|"replay · zero LLM"| CI["CI run"]
+  CI -->|"archive 📦"| ZIP["last successful hike"]
+  CI -.->|"app changed"| HEAL["self-heal 🤖"]
+  HEAL -.->|"recompiled recording"| GIT
+```
+
+<!--
+The one-diagram version of the whole talk. Walk it left to right:
+author once with AI → human accepts → git is the source → CI replays free →
+every run archived → when the app changes, recompile and the loop closes.
+"Last successful hike" gets its own moment in Act 3.
+-->
+
 
 ---
 layout: center
@@ -272,6 +295,25 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 Filenames to say aloud: android-phone.trail.yaml, ios-iphone.trail.yaml, ...
 Real production drift: credentials diverged, steps added to one file and not others.
 The recording pipeline couldn't fix it — each device recorded in isolation.
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+
+# Not a test — a user journey
+
+- Today: each platform's version buried **deep in its own codebase**
+- *"Is this iOS test the same as this Android test?"* — **unknowable**
+- The trail = **the journey** · recordings = its materialization per platform
+- Recordings are **disposable** — drop them, re-materialize
+
+<!--
+"The thing that should be possible, that we need to ensure is possible."
+Unified validation of a user experience. Because it's sourced in git, you can drop the
+recordings for one platform (or all) and have the LLM re-materialize — it has the past
+recording and all its context to work from.
+HAND-OFF: "Here's what that journey looks like as one file."
 -->
 
 ---
@@ -433,6 +475,30 @@ today the same context is what lets the agent solve failures.
 
 <!--
 Kept tight — one slide.
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+
+# The last hike down that trail
+
+<div class="pt-6 text-lg opacity-80">
+
+The trail is just **the steps to follow**.
+
+CI archives every run — so you can always pull
+**the last successful hike**: the pictures, the logs, everything.
+
+</div>
+
+<!--
+Sam's analogy — lean into it. A trail on disk loses the deep execution context;
+the archived zip preserves it per run. At any point: what was the latest successful
+run of this test? Pull it down, diagnose, debug.
+And sometimes on the hike you find the creek overflowing and route around it — self-heal.
 -->
 
 ---
