@@ -46,6 +46,34 @@ Sam's framing: AI is prevalent and at our disposal — how do we get GOOD covera
 -->
 
 ---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+
+# An LLM on every run?
+
+<div class="pt-6 text-2xl">
+
+**Slow.** &nbsp; **Expensive.** &nbsp; **Non-deterministic.**
+
+</div>
+
+<div class="pt-8 text-lg opacity-70">
+
+Great for exploring. Brutal for CI.
+
+</div>
+
+<!--
+The economic hook from the abstract — land it before the seven targets multiply it.
+Deterministic replay answers this, and replay alone is table stakes (Maestro has it too).
+Our leg up: natural language FIRST + custom tools in TypeScript + full per-platform
+fidelity — that's the positioning (backup slide has the head-to-head).
+ASSET A pt 1 is the visual proof: side-by-side wall clocks.
+-->
+
+---
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
@@ -256,10 +284,12 @@ class: text-center
 
 ## Zero-LLM trail replay
 
-<div class="pt-4 opacity-60">~45s pre-recorded clip · replay of a real trail, no AI in the loop</div>
+<div class="pt-4 opacity-60">side-by-side: agent blaze vs. recorded replay · wall clocks running</div>
 
 <!--
-Pre-recorded. Part 2 (the report it generated) plays in Act 3.
+Pre-recorded. The side-by-side IS the thesis: same journey, LLM-driven on the left,
+zero-LLM replay on the right, clocks visible — the economics slide made flesh.
+Part 2 (the report it generated) plays in Act 3.
 -->
 
 ---
@@ -348,6 +378,11 @@ trail:
 Show verify: here — closes the assertions thread from Act 0.
 Q&A hedge: this multi-platform shape = the spec + Block production; the public repo's
 committed unified trails are single-platform so far.
+verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
+assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
+and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
+kept the LLM judging that assertion every run. Zero-LLM replay is true for recorded steps;
+NL-only steps are a per-step choice, not a leak.
 -->
 
 ---
@@ -441,11 +476,8 @@ At hundreds → thousands of trails, this is what makes maintenance survivable.
 
 # A screenshot was worth 1,000 words
 
-Per step:
-
-- 📸 **screenshot** · 🌲 **view hierarchy**
-- 📜 **logcat** · 🌐 **network calls** · 📊 **analytics events**
-- 🤖 **LLM transcript**
+- Every **step**: 📸 **screenshot** · 🌲 **view hierarchy** · 🤖 **LLM transcript**
+- Every **run**: 🎞️ **video** · 📜 **device logs** — on by default
 
 <div class="pt-6 text-xl opacity-80">
 
@@ -454,6 +486,11 @@ Now it's worth 1,000 **tokens** — the LLM has everything it needs to iterate.
 </div>
 
 <!--
+Granularity is deliberate: screenshot/hierarchy/transcript are captured per STEP;
+video + device logs (logcat on Android, scoped log stream on iOS) are per-RUN streams,
+on by default (--no-capture-* to disable). At Block we layer more onto the same reports —
+network calls, analytics events. The point isn't the exact list: whatever context you
+capture, the agent can use.
 "Deep, detailed context of the execution" — this is WHY self-heal recovery works (Act 1
 callback) and why agents can diagnose. With source access, the LLM can trace a failure
 back to the commit that caused it — we mostly test binary builds at Block, and still
@@ -671,6 +708,7 @@ Same discipline as any good API: public surface vs. internals.
 
 - **MCP friction:** configure → restart · code change → disconnect
 - **CLI:** install and use — *in the same session*
+- Driven by **your** agent: Claude Code · Codex · Goose
 - The fear: do we lose the natural language?
 
 <!--
@@ -698,8 +736,26 @@ The link? **Never broken.**
 
 <!--
 THE EMOTIONAL PEAK. 60–90 unhurried seconds. This resolves Act 0.
-📼 ASSET B plays here or immediately after: agent driving via CLI toolbox,
-NL steps attached, ending on the saved trail file.
+📼 ASSET B is the very next slide — let this one land first.
+-->
+
+---
+layout: center
+class: text-center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2</div>
+
+# 📼 ASSET B
+
+## An agent blazing a trail through the CLI toolbox
+
+<div class="pt-4 opacity-60">every tool call carries its NL step · ends on <code>trailblaze step --save</code> → the trail file</div>
+
+<!--
+Pre-recorded. The verbs on screen are real: `trailblaze step --save` while driving,
+then `trailblaze run` to replay what was just saved. First time the audience sees the
+actual CLI — the "blaze" metaphor gets its concrete commands here.
 -->
 
 ---
@@ -732,7 +788,9 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 # ~3x faster: owning the driver
 
-| | Maestro (before) | Accessibility driver (now) |
+<div class="pb-2 opacity-70">Replay was already deterministic — every action still paid a half-second driver tax.</div>
+
+| | UiAutomator (before) | Accessibility driver (now) |
 |---|---|---|
 | Per-action overhead | ~500–700ms | **~100–150ms** |
 | Tree capture | lossy, 3-hop conversion | single-pass, native |
@@ -740,12 +798,17 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 <div class="pt-4 opacity-70">
 
-Honest: **iOS is still on Maestro** · web was always Playwright
+Honest: **iOS still drives through an XCTest runner** (via Maestro) · web was always Playwright
 
 </div>
 
 <!--
-iOS replacement is designed, not landed.
+Setup line answers "what was slow?" — Act 4 fixed authoring; this is the replay half.
+TERMINOLOGY: name the underlying tech, not the wrapper. We drove Android through
+Maestro's stack, and Maestro drives Android WITH UiAutomator (gRPC to an instrumentation
+APK). iOS: Maestro installs an XCTest runner app on the device and talks gRPC to it —
+our own XCTest-based runner with event-based settle is designed (devlog: driver dispatch
+& the iOS settle gap), not landed.
 Maestro was the right first call — "not a permanent coupling" from day one.
 Numbers live on the slide; don't over-narrate.
 HAND-OFF: "We'd protected the language; now the determinism underneath it is fast. So — the map."
@@ -814,6 +877,8 @@ When something's worth repeating — **save it**. It's all been recorded.
 Sam: "you never ever ever need a trail to use Trailblaze." Deliberate design:
 the data is always captured, so a repeatable moment converts to a trail for free.
 2025's close was "incremental adoption is key" — this is that promise, kept.
+HAND-OFF: "That's the map as it exists today. What's next is the part I haven't
+proven yet — and I'm bullish."
 -->
 
 ---
@@ -847,10 +912,14 @@ class: text-center
 
 ## Waypoint graph viewer flythrough
 
-<div class="pt-4 opacity-60">100 waypoints · 64 shortcuts — mapped on Google Calendar (a fixture app, not ours)</div>
+<div class="pt-4 opacity-60">the demo app's waypoint map — every named place, every shortcut between them</div>
 
 <!--
-LABEL THE FIXTURE APP — protects the honest framing.
+Sam's call: this shows the waypoint map OF THE DEMO APP we pick (he'll get the data).
+If the demo app is Google Calendar, the data mostly exists — the public repo ships a
+committed Calendar fixture trailmap (trails/config/trailmaps/calendar/, targeting
+com.google.android.calendar) with waypoint JSONs + screenshots. Label the app honestly
+either way — protects the future framing.
 HAND-OFF: "The whole recipe, one slide."
 -->
 
@@ -952,6 +1021,24 @@ Q&A preempts live behind this divider.
 
 - No — `trailblaze mcp` remains (STDIO→HTTP proxy to the daemon)
 - The **CLI is the primary surface**: same-session install + use, no reconnect churn
+
+---
+
+# Backup · "How is this different from Maestro / Appium / AI recorders?"
+
+- Deterministic replay is **table stakes** — Maestro has it too
+- **Natural language first** — the objective never leaves the artifact
+- **Custom tools in TypeScript** — your app's verbs, composable, contributable
+- **Full per-platform fidelity** — driver-native trees, no lossy conversion
+- One journey → **7 device targets**, plus web via Playwright
+
+<!--
+Sam's framing: the economics differentiate the CATEGORY (replay vs pure-AI runners),
+but Maestro shares that. The leg up is the NL link + TS custom tools + fidelity.
+Fidelity ammo: the generic tree pipeline drops platform detail at every hop (Android
+loses package/long-clickable, web collapses to a resource-id string) — ours keeps the
+driver-native projection.
+-->
 
 ---
 

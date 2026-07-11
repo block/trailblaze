@@ -525,50 +525,67 @@ Could show a wall-clock/step counter on each side.
 
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 
-### Decisions only Sam can make (blocking)
-1. **Demo app** — still undecided; blocks ASSET A/B production. Recommendation on file:
-   DroidconKotlin (option A). DECIDE TODAY.
-2. **Production evidence** — everything shown is a fixture app. One beat of proof Block
-   runs this for real: scrubbed CI report/dashboard screenshot, "last night: N trails ×
-   M devices" number, or cleared Square POS b-roll. What's shareable?
-3. **A reliability stat** — any coarse pass-rate / %-self-healed number for Act 7, or a
-   prepped verbal answer for "does it actually pass?"
-4. **"Recordings are earned, not written"** (slide 29) — approve or reword.
+_Round-1 statuses applied 2026-07-12 after Sam's answers. Deck is now **51 slides**
+(economics slide, ASSET B slide, positioning backup added). ✅ done · 🔶 open · ❌ dropped._
 
-### Content gaps (Claude can fix on approval)
-5. **The abstract's economic hook never lands**: slow/expensive/non-deterministic → painful
-   in CI is nowhere on the main path. Add one Act 0/1 beat; spec ASSET A pt 1 as the
-   side-by-side with wall clocks (notes already say "the side-by-side IS the thesis").
-6. **`verify:` on slide 16 quietly contradicts "zero LLM replay"** — NL assertion with no
-   recording block. Either show a recorded assertion or add the speaker-note answer.
-7. **ASSET B has no slide** — referenced only in slide 32's note. Add placeholder slide.
-8. **The map is never shown as an artifact** — no trailmap.yaml/directory tree/toolbox
-   output anywhere. One slide in Act 4 Beat 1.
-9. **No agenda slide** — Sam's signature style (2016 + 2025 both had one). Add after slide 5.
-10. **Act 5 opens cold** — Maestro first mentioned in the table that replaces it; "other
-    half of slow" has no antecedent. One setup line: "replay was deterministic but every
-    action paid ~600ms of driver tax."
-11. **Slide 37→38 seam** — no hand-off into waypoints. Add: "that's the map today — here's
-    the part I haven't proven yet."
-12. **Whose agent?** — never says Claude Code/Codex IS the driving agent until CTA. One
-    line on slide 31/32. Plus ballpark authoring cost on backup 44.
-13. **CLI verbs** — deck only teaches "blaze" (metaphor); real commands are `step --save`,
-    `run`, `verify`, `check`. Show them once (CTA or ASSET B end-card).
-14. **Slide 21 granularity** — screenshot/hierarchy/transcript are per-step; logcat/network
-    are per-RUN opt-in captures; analytics is Sam's claim not verified in repo. Soften or verify.
-15. **No competitive-positioning backup** — guaranteed Q&A ("vs Maestro AI/Appium/SaaS?").
-    Research file has the ammo ("positioning gold"). One backup slide.
+### Sam's decisions
+1. 🔶 **Demo app — STILL OPEN.** DroidconKotlin REJECTED ("we should use a real app").
+   Direction: a real app on a stock Android device. Candidates per Sam: Gmail (✗ privacy —
+   people would see his email), **Google Calendar** (maybe), usa.droidcon.com (events site —
+   "pretty awesome" as a WEB scenario, less impressive on native mobile).
+   Fact in Calendar's favor: the public repo already ships a committed Calendar fixture
+   trailmap — `trails/config/trailmaps/calendar/` targeting `com.google.android.calendar`,
+   waypoint JSONs + screenshots — so ASSET C's map data mostly exists. Privacy fix for any
+   Google app: fresh test account, never Sam's.
+2. ❌ **Production evidence — OFF THE TABLE** (Sam: it represents the company/product and
+   he can't clear it). Show general user/developer experiences for developer education
+   only. "1.5 years in production" stays as a spoken statement; no internal artifacts,
+   screenshots, or b-roll. Don't re-raise.
+3. ✅ **Reliability — verbal answer only, no number exists.** Banked Q&A wording:
+   "We're still getting to our 100% success rate — reliability is good and improving,
+   and we're seeing **parity across Android and iOS**." Never invent a number.
+4. ✅ **"Recordings are earned, not written"** — approved verbatim (Sam: "love it").
+
+### Content gaps → round-1 status
+5. ✅ Economic hook — new slide 3 ("An LLM on every run? Slow. Expensive. Non-deterministic.").
+   Sam's positioning framing in its note: replay alone is table stakes (Maestro has it);
+   the leg up = NL-first + custom tools in TypeScript + full per-platform fidelity.
+   ASSET A pt 1 (slide 13) re-specced: side-by-side, agent blaze vs. replay, wall clocks.
+6. ✅ verify:-vs-zero-LLM — speaker-note answer on slide 17, verified in UnifiedTrailStep.kt:
+   verify steps are assertion-scoped, auto-terminate, NEVER self-healed; recordable like
+   any step; NL-only = deliberate per-run LLM assertion, not a leak.
+7. ✅ ASSET B slide added (now slide 34, right after the emotional peak).
+8. 🔶 Map-as-artifact — REDIRECTED by Sam: show the **waypoint map of the demo app**
+   (ASSET C, slide 41, subtitle updated). Sam gets the data; if demo app = Calendar it
+   mostly exists in-repo.
+9. ❌ Agenda slide — Sam: not needed.
+10. ✅ Act 5 cold open — setup line added to slide 36 + **DRIVER TERMINOLOGY CORRECTION
+    (Sam):** the before-column is **UiAutomator**, not "Maestro" — Maestro drives Android
+    WITH UiAutomator (gRPC → instrumentation APK). iOS = Maestro's on-device **XCTest
+    runner** (verified: HostIosDriverFactory.kt imports xcuitest.*; devlog 2026-05-12
+    plans the "Maestro divorce" via our own XCTest runner + event-based settle).
+    **Guard: name the underlying tech (UiAutomator / XCTest), not the wrapper.**
+11. ✅ 39→40 seam — hand-off line in slide 39's note.
+12. ✅ Whose-agent — "Driven by your agent: Claude Code · Codex · Goose" on slide 32.
+    🔶 Authoring-cost ballpark for backup 46 still needs a number from Sam (or drop).
+13. ✅ CLI verbs — real commands on the ASSET B slide (`trailblaze step --save`, `run`).
+14. ✅ Slide-22 granularity — verified against CaptureOptions.kt: per-STEP = screenshot /
+    hierarchy / LLM transcript; per-RUN = video + device logs (logcat / scoped iOS log
+    stream), ON by default with `--no-capture-*` opt-outs. Network + analytics are NOT in
+    OSS capture — moved to speaker note as "Block layers more onto the same reports."
+15. ✅ Positioning backup added (slide 49) with Sam's framing + lossy-tree ammo.
 
 ### Production checklist (by Jul 16)
 - Record ASSET A pt1 (side-by-side + wall clocks), A pt2 (report walk), B (CLI toolbox
-  authoring w/ NL steps), C (waypoint graph flythrough) — durations unbudgeted; assign.
-- Square hardware imagery for slide 4 (currently emoji) — squareup.com/us/en/hardware.
-- QR code for slide 41.
-- Timing pinch points: Act 1 (8 slides + video in 5 min), Act 4 (9 slides + peak + ASSET B
-  in 6.5 min). Act 5 has the only slack. Rebalance after assets have durations.
+  authoring w/ NL steps), C (demo-app waypoint map flythrough) — all blocked on demo-app
+  decision; durations unbudgeted.
+- Square hardware imagery for slide 5 (currently emoji) — squareup.com/us/en/hardware.
+- QR code for slide 43.
+- Timing pinch points: Act 1 (8 slides + video in 5 min), Act 4 (now 10 slides + peak +
+  ASSET B in 6.5 min — recheck after asset durations land). Act 5 has the only slack.
 - Density pass (skeleton → Sam's 55–65-slide style) — timebox to ~1 day AFTER ordering freeze.
-- Stale-notes cleanup: the old "YAML stale on slides 6 & 10" item is DONE (slide 16 matches
-  spec); verify `supportedPlatforms` field name + `ctx.tools.tapOn` against the SDK before stage.
+- ✅ SDK snippet verified against sdks/typescript: `trailblaze.tool<I,O>(spec, handler)`
+  overload, `supportedPlatforms` registration-gate field, `ctx.tools.*` all real.
 
 ### Verified clean (no action)
 All 7 core-points rounds represented · accuracy spot-checks pass (3x conservative, waypoint
