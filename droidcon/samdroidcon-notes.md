@@ -625,6 +625,9 @@ iOS to the contacts-only core (create + photo + verify). NOT CI-safe as committe
 example because of the SMS dependency — treat as recorded b-roll.
 
 ### Scenario B — "Invite the new teammate" (Calendar × Contacts; committable + ASSET A candidate)
+**UNIFIED — same NL on Android AND iOS (Sam confirmed wanting the iOS stock version).
+Steps name the JOB, not the platform's UI vocabulary** (Android says "Add people,"
+iOS says "Invitees" — the recordings diverge, the NL never does):
 ```yaml
 - config:
     title: "Cross-app: create a contact, then invite them to the talk"
@@ -632,20 +635,40 @@ example because of the SMS dependency — treat as recorded b-roll.
 - prompts:
     - step: Create a contact "Casey Trailblaze" with email casey.trailblaze.demo@gmail.com
     - verify: The contact shows the name and email
-    - step: Open Google Calendar and go to July 17
+    - step: Open the calendar app and go to July 17
     - step: Create an event "Trailblaze: Map Your App for AI" at 1:00 PM in room "W222 B"
-    - step: Add Casey Trailblaze as a guest
-    - step: Set a 30-minute notification
+    - step: Invite Casey Trailblaze to the event
+    - step: Set a 30-minute reminder
     - step: Save the event
-    - verify: July 17 shows the event with one guest and a 30-minute reminder
+    - verify: July 17 shows the event with Casey invited and a reminder set
 ```
-Every calendar beat lands on a COMMITTED waypoint: quick_create_expanded,
+**Android:** every calendar beat lands on a COMMITTED waypoint: quick_create_expanded,
 add_location, add_people + add_people_typing (guest autocomplete pulling from Contacts
 = the cross-app payoff), notification_picker, event_detail_with_attendees. Fully
-emulator-safe (no SMS, camera optional) → **the durable committed example**, replayable
-zero-LLM for ASSET A, and ASSET C can light up BOTH graphs and trace this trail across
-them. Stretch beat (optional, timing-fiddly): let the reminder fire and snooze it from
-the shade — event_notification_fired + snooze_options waypoints exist.
+emulator-safe → **the durable committed example**, replayable zero-LLM for ASSET A,
+and ASSET C can light up BOTH graphs and trace this trail across them. Stretch beat
+(timing-fiddly): let the reminder fire and snooze from the shade —
+event_notification_fired + snooze_options waypoints exist.
+
+**iOS (stock Apple Contacts + Apple Calendar):** beat-for-beat mirror; Invitees
+autocomplete searches Contacts. **GATE: the Invitees row only appears on an
+invite-capable calendar (iCloud/Google/Exchange) — a bare simulator's local "On My
+iPhone" calendar likely hides it.** Verify FIRST (decides recording device): (a) real
+test iPhone + test Apple ID — cleanest, or (b) 30-min spike: add a Google account to
+simulator Calendar. Contacts half is iOS's STRONG side (typed tools + 103 waypoints).
+
+**Symmetry to narrate:** Android = calendar mapped / contacts thin; iOS = contacts
+mapped / calendar unmapped. Same trail runs on both — closest-wins recordings +
+core-tool fallback absorb it. Stage line: "maps mature independently; the journey
+doesn't care."
+
+**Trailhead detail (feeds slide 19's narration):** Calendar's first Contacts-autocomplete
+triggers a one-time permission dialog → replay non-determinism. Pre-grant in the
+trailhead: `xcrun simctl privacy booted grant contacts com.apple.mobilecal` /
+`adb shell pm grant`. A concrete trailhead story instead of generic "clear app data."
+
+**Caveat:** saving genuinely emails the invite — use a designated test address (stretch
+cut: show the invite landing in the guest's inbox).
 
 ### Scenario C — share-sheet coda (optional 9th step on A)
 Share the finished contact card from Contacts into Messages (share sheet = OS
