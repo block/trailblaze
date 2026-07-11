@@ -57,7 +57,8 @@ LLMs edit best.
 **Fun implementation details (possible talk color):**
 - QuickJS-NG isn't thread-safe; cross-thread re-entry segfaults the JVM — one engine, one
   owning thread, reentrancy tripwires.
-- quickjs-kt async-function JNI bug → all host bindings are sync + runBlocking (issue #194).
+- quickjs-kt async-function JNI bug → all host bindings are sync + runBlocking
+  (public tracker: block/trailblaze#194).
 
 ## Unified trail format (current state in code)
 
